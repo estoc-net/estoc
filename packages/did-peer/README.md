@@ -59,7 +59,7 @@ const converted = toDIDCommDIDDoc(raw);
 
 Resolver composition (did:web, caching, pinning), WASM loading, and secrets
 handling are application policy and stay in the applications. This package is
-the shared lineage of [mediator-ts](https://github.com/estoc-net/mediator-ts)
+the shared lineage of [didcomm-mediator](https://github.com/estoc-net/didcomm-mediator)
 and [didcomm-demo](https://github.com/estoc-net/didcomm-demo), extracted once
 three copies agreed byte-for-byte.
 
