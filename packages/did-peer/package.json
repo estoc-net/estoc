@@ -1,0 +1,45 @@
+{
+  "name": "@estoc/did-peer",
+  "version": "0.1.0",
+  "description": "did:peer:2 and did:peer:4 — encoding, resolution, and conversion to the DIDDoc shape didcomm-rust expects. Pure decoding, no IO; runs in Node, workerd, and the browser.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/did-peer.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.8.0",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "~5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "did",
+    "did-peer",
+    "didcomm",
+    "decentralized-identity"
+  ]
+}
