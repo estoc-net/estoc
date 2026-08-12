@@ -63,6 +63,12 @@ the shared lineage of [didcomm-mediator](https://github.com/estoc-net/didcomm-me
 and [didcomm-demo](https://github.com/estoc-net/didcomm-demo), extracted once
 three copies agreed byte-for-byte.
 
+## Status
+
+Experimental, pre-1.0: the API may still move. This package has not received
+an independent security audit — review it yourself before trusting it with
+anything valuable.
+
 ## License
 
 Apache-2.0
