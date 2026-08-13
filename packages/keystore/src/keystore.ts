@@ -4,11 +4,11 @@ import { didKeySignerFromPrivateKey, generatePrivateKey } from "./signer.js";
 import type { DidKeySigner, KeyInfo, KeystoreDocument } from "./types.js";
 
 /**
- * PBES2 iteration count for new entries (OWASP 2023 for PBKDF2-HMAC-SHA512).
- * On decrypt anything up to MAX_PBES2_ITERATIONS is accepted, so this can be
- * raised later without breaking existing stores.
+ * PBES2 iteration count for new entries (current OWASP recommendation for
+ * PBKDF2-HMAC-SHA512). On decrypt anything up to MAX_PBES2_ITERATIONS is
+ * accepted, so this can be raised later without breaking existing stores.
  */
-const DEFAULT_PBES2_ITERATIONS = 210_000;
+const PBES2_ITERATIONS = 220_000;
 const MAX_PBES2_ITERATIONS = 5_000_000;
 
 const JWE_ALG = "PBES2-HS512+A256KW";
@@ -19,8 +19,6 @@ export interface CreateKeyOptions {
   privateKey?: Uint8Array;
   /** Override the creation timestamp (tests). */
   now?: Date;
-  /** Override the PBES2 iteration count (tests only — never lower this in production). */
-  pbes2Iterations?: number;
 }
 
 /** A new, empty store document. */
@@ -60,9 +58,7 @@ export async function createKey(
     new TextEncoder().encode(JSON.stringify(jwk)),
   )
     .setProtectedHeader({ alg: JWE_ALG, enc: JWE_ENC })
-    .setKeyManagementParameters({
-      p2c: options.pbes2Iterations ?? DEFAULT_PBES2_ITERATIONS,
-    })
+    .setKeyManagementParameters({ p2c: PBES2_ITERATIONS })
     .encrypt(new TextEncoder().encode(passphrase));
 
   const entry = {

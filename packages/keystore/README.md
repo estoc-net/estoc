@@ -17,9 +17,9 @@ Node (≥20), Cloudflare workerd, and the browser: curves from
 WebCrypto.
 
 Only standards inside: private keys are OKP Ed25519 JWKs (RFC 8037), sealed
-as compact JWEs (RFC 7516) with `PBES2-HS512+A256KW` / `A256GCM` at 210k
-iterations. Names and DIDs stay in cleartext — they're public information,
-so listing needs no passphrase.
+as compact JWEs (RFC 7516) with `PBES2-HS512+A256KW` / `A256GCM` at 220k
+iterations (current OWASP recommendation). Names and DIDs stay in
+cleartext — they're public information, so listing needs no passphrase.
 
 ```sh
 npm install @estoc/keystore
