@@ -206,11 +206,15 @@ export class ContactStore {
    * Create or replace the record with this cid; the file follows the name.
    * Readers get copies and writers hand in copies: nothing you hold aliases
    * the cache, so a field changed without `put` is simply not saved —
-   * never half-saved. `updatedAt` is stamped here.
+   * never half-saved. `updatedAt` is stamped here — unless the caller is
+   * relaying a record that already carries its own (a vault merge), where
+   * restamping would make old news look newer than what it merges into.
    */
-  async put(record: ContactRecord): Promise<void> {
+  async put(record: ContactRecord, options: { keepUpdatedAt?: boolean } = {}): Promise<void> {
     const files = await this.load();
-    record.updatedAt = new Date().toISOString();
+    if (!options.keepUpdatedAt || record.updatedAt === undefined) {
+      record.updatedAt = new Date().toISOString();
+    }
     const previous = files.get(record.cid);
     const stem = contactFileStem(record.name);
     let file = `${stem}.json`;

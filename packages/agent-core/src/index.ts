@@ -35,10 +35,18 @@ export {
 export {
   MessageLog,
   newMessageRecord,
+  parseSegment,
+  type DamagedLine,
   type EnvelopeLayer,
   type MessageRecord,
   type PlainMessage,
 } from "./vault/messages.js";
+export {
+  importVault,
+  snapshotVault,
+  type ImportOutcome,
+  type VaultFiles,
+} from "./vault/transfer.js";
 export {
   KEY_ANCHOR,
   KEY_MEDIATOR,

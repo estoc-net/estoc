@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-08-15
+
+- `snapshotVault` / `importVault` (`vault/transfer.ts`): a vault as a
+  path→bytes map, and import with merge semantics — restore into an empty
+  backend, merge into the same identity (new log segment, dedup by `mid`
+  and by wire message, contacts by `updatedAt`, config/keystore kept),
+  refuse a different identity.
+- `parseSegment` exported; `ContactStore.put(record, { keepUpdatedAt })`
+  for relaying records that carry their own stamp.
+
 ## 0.2.0 — 2026-08-15
 
 Hardening after two independent reviews of 0.1.0. No vault format change;

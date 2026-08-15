@@ -162,25 +162,39 @@ export class MessageLog {
       if (bytes === null) {
         continue;
       }
-      // Every element but the last was terminated by "\n"; the last is ""
-      // when the file ended cleanly, otherwise a partial line.
-      const lines = text(bytes).split("\n");
-      lines.forEach((line, i) => {
-        if (line === "") {
-          return;
-        }
-        const where = `${segment}:${i + 1}`;
-        try {
-          records.push(parseLine(line, where));
-        } catch (err) {
-          onDamaged?.({
-            where,
-            line,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      });
+      records.push(...parseSegment(text(bytes), segment, onDamaged));
     }
     return records;
   }
+}
+
+/**
+ * The records in one segment's text, in line order, with the same damaged-line
+ * policy as `read` — shared with vault import, which reads segments that are
+ * not (yet) in any backend.
+ */
+export function parseSegment(
+  content: string,
+  segment: string,
+  onDamaged?: (damaged: DamagedLine) => void
+): MessageRecord[] {
+  const records: MessageRecord[] = [];
+  // Every element but the last was terminated by "\n"; the last is ""
+  // when the file ended cleanly, otherwise a partial line.
+  content.split("\n").forEach((line, i) => {
+    if (line === "") {
+      return;
+    }
+    const where = `${segment}:${i + 1}`;
+    try {
+      records.push(parseLine(line, where));
+    } catch (err) {
+      onDamaged?.({
+        where,
+        line,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+  return records;
 }

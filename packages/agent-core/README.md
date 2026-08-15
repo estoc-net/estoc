@@ -144,6 +144,18 @@ Inbound processing runs one delivery at a time. A socket that closes is
 reopened after a pickup, so nothing queued during the outage waits for the
 next start.
 
+### Moving a vault: snapshot and import
+
+`snapshotVault(backend)` is the vault's files, byte for byte, keyed by
+vault-relative path — the shape a zip holds. `importVault(backend, files)`
+lays them down and **merges, never overwrites**: into an empty backend it
+is a restore; into a vault of the same identity (same anchor DID) the
+snapshot's messages become a new log segment minus what is already here
+(same `mid`, or the same wire message received twice), its contacts win by
+`updatedAt`, and config and keystore stay local (same seed; mediation is a
+fact about this device); a vault of a different identity is refused. How
+the files travel — zip, folder, paste — is the application's business.
+
 ### Backends
 
 `VaultBackend` is five methods over vault-relative paths: `read`, `write`
