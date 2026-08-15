@@ -145,6 +145,34 @@ describe("snapshot + import", () => {
     expect(((await merged.contacts.byCid(bob.cid)) as ContactRecord).name).toBe("Bobby");
   });
 
+  it("carries invitations along: added when missing, marked taken when the other device saw the answer", async () => {
+    const { backend: a, vault: va } = await vaultWith(SEED_A);
+    const { seedKey } = await createSeedKeystore("pw", { seed: SEED_A });
+    // (the seed key of A's keystore is not exposed by vaultWith; deriving on a
+    // parallel keystore of the same seed mints the same DIDs)
+    const first = await va.createInvitation(seedKey, "did:web:mediator.example", "Write to Alice");
+    const { backend: b, vault: vb } = await restoreOf(a);
+    expect((await vb.invitations.byId(first.record.id))?.did).toBe(first.record.did);
+
+    // A issues a second one; B sees the first taken
+    const second = await va.createInvitation(seedKey, "did:web:mediator.example", "Come talk");
+    const takenOnB = { ...(await vb.invitations.byId(first.record.id))!, acceptedBy: "cid-bob", acceptedAt: "2026-08-15T00:00:00.000Z" };
+    await vb.invitations.put(takenOnB);
+
+    // merging B into A: the second stays, the first becomes taken here too
+    const outcome = await importVault(a, await snapshotVault(b));
+    expect(outcome.kind).toBe("merged");
+    if (outcome.kind !== "merged") return;
+    expect(outcome.invitationsAdded).toBe(0);
+    const va2 = await Vault.open(a);
+    expect((await va2.invitations.byId(first.record.id))?.acceptedBy).toBe("cid-bob");
+    expect((await va2.invitations.byId(second.record.id))?.acceptedBy).toBeUndefined();
+    // and A into B: the second arrives
+    const back = await importVault(b, await snapshotVault(a));
+    expect(back.kind === "merged" && back.invitationsAdded).toBe(1);
+    expect((await Vault.open(b).then((v) => v.invitations.all())).map((i) => i.id).sort()).toEqual([first.record.id, second.record.id].sort());
+  });
+
   it("refuses another identity's vault, and things that are not vaults", async () => {
     const { backend: a } = await vaultWith(SEED_A);
     const { backend: b } = await vaultWith(SEED_B, "Mallory");

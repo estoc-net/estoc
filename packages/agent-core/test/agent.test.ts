@@ -8,6 +8,7 @@ import {
   BASIC_MESSAGE,
   ENCRYPTED_MIME,
   FORWARD,
+  KEY_INVITE_PREFIX,
   KEY_PAIRWISE_PREFIX,
   KEY_PUBLIC,
   MemoryBackend,
@@ -17,12 +18,15 @@ import {
   Vault,
   currentDid,
   currentMyDid,
+  invitationUrl,
   mintPeerDid,
+  parseInvitation,
   secretsResolverFor,
   type AgentStatus,
   type ChatMessage,
   type ContactRecord,
   type IMessage,
+  type InvitationRecord,
   type MessageRecord,
 } from "../src/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "./fake-mediator.js";
@@ -43,6 +47,7 @@ interface Party {
   statuses: AgentStatus[];
   messages: { record: MessageRecord; view: ChatMessage }[];
   contacts: ContactRecord[];
+  invitations: InvitationRecord[];
   log: string[];
   /** resolves when the agent reaches "live" */
   live: Promise<void>;
@@ -72,6 +77,7 @@ function attach(
     statuses: [],
     messages: [],
     contacts: [],
+    invitations: [],
     log: [],
   } as unknown as Party;
   let resolveLive!: () => void;
@@ -106,6 +112,9 @@ function attach(
       },
       onContact(contact) {
         party.contacts.push(structuredClone(contact));
+      },
+      onInvitation(invitation) {
+        party.invitations.push(structuredClone(invitation));
       },
       onLog(line) {
         party.log.push(line);
@@ -450,6 +459,145 @@ describe("Agent through a mediator", () => {
     await expect(bob.agent.sendBasicMessage(aliceToBob, "anyone there?")).rejects.toThrow();
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  it("meets through a single-use invitation: both minted, nothing public exchanged, second taker turned away", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 31, mediator);
+    const bob = await newParty("Bob", 32, mediator);
+    const carol = await newParty("Carol", 33, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start(), carol.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live, carol.live]));
+
+    // Alice issues an invitation: a DID minted for nobody yet, registered
+    // with her mediator, and a URL any Estoc client can read `_oob` from
+    const issued = await alice.agent.createInvitation();
+    expect(issued.key).toBe(`${KEY_INVITE_PREFIX}${issued.id}`);
+    expect(issued.did).toMatch(/^did:peer:4/);
+    expect(issued.did).not.toBe(alice.agent.did);
+    expect(issued.registeredAt).toBeDefined();
+    expect(issued.acceptedBy).toBeUndefined();
+    expect(issued.goal).toBe("Write to Alice");
+    expect(mediator.recipients.get(issued.did)).toBe(alice.vault.config.mediation?.me.did);
+    expect(alice.invitations.map((i) => i.id)).toEqual([issued.id]);
+    const url = invitationUrl("https://app.example/", alice.agent.invitationMessage(issued));
+    expect(new URL(url).origin).toBe("https://app.example");
+    const message = parseInvitation(url);
+    expect(message).toMatchObject({ id: issued.id, from: issued.did, body: { goal_code: "connect", goal: "Write to Alice" } });
+    // the bare parameter and the plaintext read the same
+    expect(parseInvitation(new URL(url).searchParams.get("_oob") as string)).toEqual(message);
+    expect(parseInvitation(JSON.stringify(message))).toEqual(message);
+    // her own invitation is refused on her side
+    await expect(alice.agent.acceptInvitation(url, "me?")).rejects.toThrow(/of your own/);
+
+    // Bob accepts it under a petname: Alice's record for him appears on
+    // her side at once, because his introduction goes out with the acceptance
+    const bobsAlice = await bob.agent.acceptInvitation(url, "Alice");
+    expect(bobsAlice.name).toBe("Alice");
+    expect(bobsAlice.invitation).toBe(issued.id);
+    expect(currentDid(bobsAlice)).toBe(issued.did);
+    expect(bobsAlice.profileSharedAt).toBeDefined();
+    const bobToAlice = currentMyDid(bobsAlice)?.did as string;
+    expect(bobToAlice).toMatch(/^did:peer:4/);
+    expect(bobToAlice).not.toBe(bob.agent.did);
+
+    const intro = await withTimeout(alice.next((v) => v.kind === "profile"), 8000, "bob's intro");
+    expect(intro.contactDid).toBe(bobToAlice);
+    // the introduction answered the invitation the out-of-band way — pthid —
+    // and vouched for nothing: neither side ever named a public DID
+    const introRecord = alice.messages.find((m) => m.view.id === intro.id)?.record;
+    expect(introRecord?.msg.pthid).toBe(issued.id);
+    expect(introRecord?.msg.from_prior).toBeUndefined();
+
+    // Alice's side: the invitation is taken by Bob's new contact record,
+    // whose DID of hers is the invitation's — under its own key name
+    await until(() => alice.invitations.some((i) => i.id === issued.id && i.acceptedBy !== undefined));
+    const taken = (await alice.vault.invitations.byId(issued.id)) as InvitationRecord;
+    const alicesBob = (await alice.vault.contacts.byDid(bobToAlice)) as ContactRecord;
+    expect(taken.acceptedBy).toBe(alicesBob.cid);
+    expect(alicesBob.dids.map((u) => u.did)).toEqual([bobToAlice]);
+    expect(alicesBob.myDids).toHaveLength(1);
+    expect(alicesBob.myDids?.[0]).toMatchObject({ did: issued.did, key: issued.key, registeredAt: issued.registeredAt });
+    expect(alicesBob.addressedAs).toBe(issued.did);
+    expect(alicesBob.name).toBe("Bob"); // his claimed name, the record was a placeholder
+
+    // A conversation follows, from those two DIDs, with no from_prior anywhere
+    await alice.agent.sendBasicMessage(bobToAlice, "you found me");
+    const gotByBob = await withTimeout(bob.next((v) => v.content === "you found me"));
+    expect(gotByBob.contactDid).toBe(issued.did);
+    expect(gotByBob.contactCid).toBe(bobsAlice.cid);
+    await bob.agent.sendBasicMessage(issued.did, "and you me");
+    const gotByAlice = await withTimeout(alice.next((v) => v.content === "and you me"));
+    expect(gotByAlice.contactCid).toBe(alicesBob.cid);
+    for (const party of [alice, bob]) {
+      for (const { record } of party.messages) {
+        expect(record.msg.from_prior).toBeUndefined();
+      }
+    }
+    expect((await alice.vault.contacts.byDid(bobToAlice))?.myDids).toHaveLength(1);
+    expect(alice.messages.filter((m) => m.view.contactCid === alicesBob.cid).length).toBeGreaterThanOrEqual(3);
+
+    // Carol got hold of the same URL: single-use, she is turned away
+    await carol.agent.acceptInvitation(url, "Alice?");
+    await until(() => alice.log.some((l) => l.includes("already taken")));
+    expect(alice.messages.filter((m) => m.view.contactDid !== bobToAlice && m.view.direction === "received")).toHaveLength(0);
+    expect(await alice.vault.contacts.all()).toHaveLength(1);
+
+    // A restart re-derives the invitation's DID from the contact record
+    const alice2 = await reopen(alice, mediator);
+    await alice2.agent.start();
+    await withTimeout(alice2.live);
+    await bob.agent.sendBasicMessage(issued.did, "still there?");
+    await withTimeout(alice2.next((v) => v.content === "still there?"));
+
+    // Revoking: only open ones; a second invitation, withdrawn, is gone from the mediator
+    await expect(alice2.agent.revokeInvitation(issued.id)).rejects.toThrow(/taken/);
+    const second = await alice2.agent.createInvitation("Come talk");
+    expect(second.goal).toBe("Come talk");
+    expect(mediator.recipients.has(second.did)).toBe(true);
+    await alice2.agent.revokeInvitation(second.id);
+    expect(mediator.recipients.has(second.did)).toBe(false);
+    expect(await alice2.vault.invitations.byId(second.id)).toBeNull();
+    expect((await alice2.agent.invitations()).map((i) => i.id)).toEqual([issued.id]);
+    await expect(carol.agent.acceptInvitation(
+      invitationUrl("https://app.example/", alice2.agent.invitationMessage(second)), "Alice"
+    )).resolves.toBeDefined();
+    // Carol's answer to the revoked one bounces at the mediator; her side keeps the contact for a later try
+    expect(carol.log.some((l) => l.includes("could not answer the invitation yet"))).toBe(true);
+
+    // a mediator's own invitation is not a person's
+    const mediatorOob = { type: "https://didcomm.org/out-of-band/2.0/invitation", id: "m", typ: "application/didcomm-plain+json", from: mediator.did, body: { goal_code: "request-mediate" } };
+    await expect(bob.agent.acceptInvitation(JSON.stringify(mediatorOob), "Med")).rejects.toThrow(/mediator's invitation/);
+
+    alice2.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("registers an invitation issued while the mediator was unreachable at the next start", async () => {
+    const mediator = await newMediator();
+    const { backend, vault, seedKey } = await newVault("Dana", 34, mediator.did);
+    let offline = false;
+    const flaky: typeof fetch = (input, init) => {
+      if (offline) return Promise.reject(new TypeError("fetch failed"));
+      return mediator.fetch(input, init);
+    };
+    const dana = attach("Dana", backend, vault, seedKey, { ...mediator, fetch: flaky, WebSocket: mediator.WebSocket } as FakeMediator);
+    await dana.agent.start();
+    await withTimeout(dana.live);
+    offline = true;
+    await expect(dana.agent.createInvitation()).rejects.toThrow();
+    // the record is there, unregistered — the URL is not usable yet
+    const [pending] = await dana.vault.invitations.all();
+    expect(pending?.registeredAt).toBeUndefined();
+    expect(mediator.recipients.has(pending?.did as string)).toBe(false);
+    offline = false;
+    const dana2 = await reopen(dana, { ...mediator, fetch: flaky, WebSocket: mediator.WebSocket } as FakeMediator);
+    await dana2.agent.start();
+    await withTimeout(dana2.live);
+    expect((await dana2.vault.invitations.byId(pending?.id as string))?.registeredAt).toBeDefined();
+    expect(mediator.recipients.has(pending?.did as string)).toBe(true);
+    dana2.agent.destroy();
   });
 
   it("reports an error status when the mediator does not resolve", async () => {

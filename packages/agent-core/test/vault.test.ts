@@ -6,7 +6,9 @@ import {
   CONFIG_PATH,
   ContactStore,
   KEYSTORE_PATH,
+  INVITATIONS_DIR,
   KEY_ANCHOR,
+  KEY_INVITE_PREFIX,
   KEY_MEDIATOR,
   KEY_PAIRWISE_PREFIX,
   MemoryBackend,
@@ -19,6 +21,10 @@ import {
   newContact,
   newMessageRecord,
   parseConfig,
+  parseInvitation,
+  parseInvitationRecord,
+  invitationMessage,
+  invitationUrl,
   type ContactRecord,
 } from "../src/index.js";
 
@@ -144,6 +150,41 @@ describe("Vault", () => {
     // deterministic: reopening derives the same DIDs
     const again = await Vault.open(backend);
     await expect(again.peerIdentity(seedKey, currentMyDid((await again.contacts.byCid(contact.cid)) as ContactRecord) as { key: string; did: string }, routing)).resolves.toMatchObject({ did: third.did });
+  });
+
+  it("issues invitations: a DID under invite/<id>, an open record, a URL that reads back", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:mediator.example" });
+    const routing = "did:web:mediator.example";
+    const { record, identity } = await vault.createInvitation(seedKey, routing, "Write to Alice");
+    expect(record.key).toBe(`${KEY_INVITE_PREFIX}${record.id}`);
+    expect(record.did).toBe(identity.did);
+    expect(record.acceptedBy).toBeUndefined();
+    expect((await resolveDIDCommDoc(record.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: routing });
+    // on disk under its id, and read back by id or DID
+    expect(await backend.list(INVITATIONS_DIR)).toEqual([`${record.id}.json`]);
+    expect(await vault.invitations.byId(record.id)).toEqual(record);
+    expect(await vault.invitations.byDid(record.did)).toEqual(record);
+    // reopening derives the same DID from the key ref
+    const again = await Vault.open(backend);
+    await expect(again.peerIdentity(seedKey, record, routing)).resolves.toMatchObject({ did: record.did });
+    expect((await again.invitations.all()).map((i) => i.id)).toEqual([record.id]);
+    // the message and its URL round-trip through the parser
+    const message = invitationMessage(record);
+    expect(message).toMatchObject({ id: record.id, from: record.did, body: { goal_code: "connect", goal: "Write to Alice", accept: ["didcomm/v2"] } });
+    expect(parseInvitation(invitationUrl("https://any.host/x", message))).toEqual(message);
+    // and the parser refuses what is not an invitation
+    expect(() => parseInvitation("did:peer:4abc")).toThrow(/a DID, not an invitation/);
+    expect(() => parseInvitation("not base64 at all!")).toThrow(/does not decode/);
+    expect(() => parseInvitation("https://any.host/?x=1")).toThrow(/carries no _oob/);
+    expect(() => parseInvitation(JSON.stringify({ type: "https://didcomm.org/basicmessage/2.0/message", id: "1", from: "did:x" }))).toThrow(/not an out-of-band/);
+    expect(() => parseInvitation(JSON.stringify({ ...message, from: "nope" }))).toThrow(/names no DID/);
+    expect(() => parseInvitationRecord(JSON.stringify({ id: "1" }), "1.json")).toThrow(/missing key/);
+    // remove
+    await again.invitations.remove(record.id);
+    expect(await again.invitations.all()).toEqual([]);
+    expect(await backend.list(INVITATIONS_DIR)).toEqual([]);
   });
 
   it("refuses to create over an existing vault, or from a used keystore", async () => {

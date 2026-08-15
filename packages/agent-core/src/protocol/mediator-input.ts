@@ -1,6 +1,6 @@
-import { base64urlToUtf8, resolvePeer2, toDIDCommDIDDoc } from "@estoc/did-peer";
+import { resolvePeer2, toDIDCommDIDDoc } from "@estoc/did-peer";
 
-import { OOB_INVITATION } from "./types.js";
+import { parseInvitation } from "./oob.js";
 
 /**
  * A mediator can be handed over three ways, and they converge on its DID:
@@ -33,21 +33,8 @@ export async function resolveMediatorInput(
     throw new Error("not a DID or a URL");
   }
 
-  const oob = url.searchParams.get("_oob");
-  if (oob !== null) {
-    let invitation: { type?: unknown; from?: unknown };
-    try {
-      invitation = JSON.parse(base64urlToUtf8(oob)) as {
-        type?: unknown;
-        from?: unknown;
-      };
-    } catch {
-      throw new Error("_oob does not decode to a JSON message");
-    }
-    if (invitation.type !== OOB_INVITATION || typeof invitation.from !== "string") {
-      throw new Error("_oob is not an out-of-band 2.0 invitation");
-    }
-    return invitation.from;
+  if (url.searchParams.has("_oob")) {
+    return parseInvitation(trimmed).from;
   }
 
   let body: { did?: unknown; dids?: unknown } | null;

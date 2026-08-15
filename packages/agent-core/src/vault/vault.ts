@@ -12,6 +12,7 @@ import type { VaultBackend } from "../backend/types.js";
 import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
 import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
 import { ContactStore, currentMyDid, type ContactRecord } from "./contacts.js";
+import { InvitationStore, type InvitationRecord } from "./invitations.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
 import { MessageLog } from "./messages.js";
 
@@ -30,6 +31,13 @@ export const KEY_MEDIATOR = "mediator";
 export const KEY_PUBLIC = "public";
 /** Pairwise keys are named `pair/<cid>/<n>`: the contact, and the nth DID minted toward them. */
 export const KEY_PAIRWISE_PREFIX = "pair/";
+/** Invitation keys are named `invite/<id>`; the key keeps its name once someone takes the invitation. */
+export const KEY_INVITE_PREFIX = "invite/";
+
+/** Is this keystore entry a DID minted for one relationship — toward a contact, or waiting in an invitation? */
+export function isRelationshipKey(name: string): boolean {
+  return name.startsWith(KEY_PAIRWISE_PREFIX) || name.startsWith(KEY_INVITE_PREFIX);
+}
 
 export interface CreateVaultOptions {
   label: string;
@@ -47,6 +55,7 @@ export interface CreateVaultOptions {
 
 export class Vault {
   readonly contacts: ContactStore;
+  readonly invitations: InvitationStore;
   readonly messages: MessageLog;
 
   private constructor(
@@ -55,6 +64,7 @@ export class Vault {
     public keystore: SeedKeystoreDocument
   ) {
     this.contacts = new ContactStore(backend);
+    this.invitations = new InvitationStore(backend);
     this.messages = new MessageLog(backend);
   }
 
@@ -194,6 +204,32 @@ export class Vault {
     contact.myDids = [...uses, { did: minted.did, key, from: at }];
     await this.contacts.put(contact);
     return minted;
+  }
+
+  /**
+   * Mint the DID a single-use invitation hands out — the key `invite/<id>`,
+   * the mediator's routing DID as its service — and record the invitation
+   * as open. Whoever answers first takes it (see the agent). Registering
+   * the DID with the mediator is, again, the agent's business.
+   */
+  async createInvitation(
+    seedKey: SeedKey,
+    routingDid: string,
+    goal: string,
+    now = new Date()
+  ): Promise<{ record: InvitationRecord; identity: PeerIdentity }> {
+    const id = crypto.randomUUID();
+    const key = `${KEY_INVITE_PREFIX}${id}`;
+    const identity = mintPeerDid(await this.mintKey(seedKey, key, now), routingDid);
+    const record: InvitationRecord = {
+      id,
+      key,
+      did: identity.did,
+      createdAt: now.toISOString(),
+      goal,
+    };
+    await this.invitations.put(record);
+    return { record, identity };
   }
 
   /**

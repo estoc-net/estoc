@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.7.0 — 2026-08-15
+
+- **Single-use invitations** (out-of-band/2.0). `Agent.createInvitation
+  (goal?)` mints a did:peer:4 for whoever answers first — keystore key
+  `invite/<id>`, service = the mediator's routing DID, registered with the
+  mediator (a registration that failed is retried at the next start; the
+  call throws so the URL is not handed out unusable) — and records it under
+  `invitations/<id>.json` (`InvitationStore`, `Vault.invitations`,
+  `Vault.createInvitation`). `invitationMessage(record)` /
+  `Agent.invitationMessage` is the OOB plaintext (`goal_code: connect`,
+  `goal` defaults to "Write to <name>", `accept: didcomm/v2`);
+  `invitationUrl(base, message)` puts it in `?_oob=`; `parseInvitation
+  (input)` reads a URL, the bare parameter, or the JSON back (and
+  `resolveMediatorInput` now uses it). `Agent.acceptInvitation(input,
+  petname)` adds the contact by the DID inside (`ContactRecord.invitation`
+  = its id; our own and a mediator's are refused) and introduces us at
+  once from a DID minted for them, `pthid` naming the invitation on our
+  messages out until the introduction is done. Inbound, the first envelope
+  sealed to an invitation's DID takes it: the DID moves into that
+  contact's `myDids[]` (key name kept), the record is marked
+  `acceptedBy`/`acceptedAt`, `addressedAs` is set so no `from_prior` is
+  owed, and later mail from anyone else to it is dropped. A contact met
+  through their invitation is never sent `from_prior` either — no public
+  DID was involved. `Agent.invitations()`, `Agent.revokeInvitation(id)`
+  (open ones only; the mediator is asked to drop the DID), new event
+  `onInvitation`. Snapshots carry `invitations/`; import adds missing ones
+  and marks taken what the snapshot saw taken (`ImportOutcome.
+  invitationsAdded`).
+- Exports: `INVITATIONS_DIR`, `KEY_INVITE_PREFIX`, `isRelationshipKey`,
+  `InvitationStore`, `isOpenInvitation`, `parseInvitationRecord`,
+  `InvitationRecord`, `GOAL_CONNECT`, `Invitation`. Internally every
+  relationship DID (pairwise or invitation) is re-derived on start and
+  registered when pending.
+
 ## 0.6.0 — 2026-08-15
 
 - **Pairwise DIDs.** The first message to any contact goes out from a

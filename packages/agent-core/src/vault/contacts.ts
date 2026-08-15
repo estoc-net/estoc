@@ -63,6 +63,14 @@ export interface ContactRecord {
    * `from_prior` until one comes back addressed to the new DID.
    */
   addressedAs?: string;
+  /**
+   * The id of the out-of-band invitation of theirs we accepted to meet
+   * them, when that is how it began. They handed us a DID minted for us
+   * alone, so we never knew them — nor they us — by anything public: our
+   * first messages name the invitation as `pthid`, and no `from_prior` is
+   * owed in either direction.
+   */
+  invitation?: string;
   /** ISO time our user-profile announcement went out to them */
   profileSharedAt?: string;
 }
@@ -150,6 +158,9 @@ export function parseContact(json: string, file: string): ContactRecord {
   }
   if (c.addressedAs !== undefined && typeof c.addressedAs !== "string") {
     throw new Error(`${file} has a malformed addressedAs`);
+  }
+  if (c.invitation !== undefined && typeof c.invitation !== "string") {
+    throw new Error(`${file} has a malformed invitation`);
   }
   return c as ContactRecord;
 }

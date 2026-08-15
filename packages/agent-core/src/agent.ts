@@ -15,6 +15,7 @@ import {
   type DidcommApi,
   type IMessage,
 } from "./protocol/didcomm.js";
+import { invitationMessage, parseInvitation, type Invitation } from "./protocol/oob.js";
 import { resolveDid as defaultResolveDid } from "./protocol/resolver.js";
 import {
   BASIC_MESSAGE,
@@ -38,8 +39,9 @@ import {
   type ContactRecord,
   type MyDidUse,
 } from "./vault/contacts.js";
+import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
 import { newMessageRecord, type MessageRecord } from "./vault/messages.js";
-import { KEY_PAIRWISE_PREFIX, KEY_PUBLIC, type Vault } from "./vault/vault.js";
+import { isRelationshipKey, KEY_PUBLIC, type Vault } from "./vault/vault.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -65,6 +67,12 @@ import { KEY_PAIRWISE_PREFIX, KEY_PUBLIC, type Vault } from "./vault/vault.js";
  * back addressed to the new DID. The same rule carries every later
  * rotation. Inbound, a verified `from_prior` whose issuer we know moves that
  * contact to their new DID; attribution stays the envelope's.
+ *
+ * The third way to meet is an invitation: a DID minted for nobody yet,
+ * handed out as an out-of-band URL, taken by the first person to write to
+ * it (see `createInvitation`, `acceptInvitation`, `claimInvitation`). Both
+ * sides then hold a DID minted for the other alone, and nothing public was
+ * ever exchanged — so no `from_prior` is owed by either.
  */
 
 export type AgentStatus =
@@ -81,6 +89,8 @@ export interface AgentEvents {
   onMessage(record: MessageRecord, view: ChatMessage): void;
   /** the agent created or changed a contact (a stranger's first message, a claimed name, a DID minted toward them, a rotation) */
   onContact(contact: ContactRecord): void;
+  /** an invitation of ours was issued, taken, or revoked */
+  onInvitation(invitation: InvitationRecord): void;
   onLog(line: string): void;
 }
 
@@ -144,8 +154,12 @@ export class Agent {
 
   private me: PeerIdentity | null = null;
   private pub: PeerIdentity | null = null;
-  /** every pairwise DID we ever minted toward a contact, current or retired, by DID */
-  private pairwise = new Map<string, PeerIdentity>();
+  /**
+   * Every DID minted for one relationship, by DID: pairwise ones toward
+   * contacts, current or retired, and the ones waiting in open invitations
+   * — all of them ours to open mail for.
+   */
+  private minted = new Map<string, PeerIdentity>();
   private mediatorDoc: DIDDoc | null = null;
   private ws: WebSocket | null = null;
   private destroyed = false;
@@ -195,7 +209,7 @@ export class Agent {
 
   private allSecrets(): Secret[] {
     const secrets = [...(this.me?.secrets ?? []), ...(this.pub?.secrets ?? [])];
-    for (const identity of this.pairwise.values()) {
+    for (const identity of this.minted.values()) {
       secrets.push(...identity.secrets);
     }
     return secrets;
@@ -267,7 +281,7 @@ export class Agent {
           this.seen.add(dedupKey(record.sender ?? null, record.msg.id));
         }
       }
-      await this.loadPairwise();
+      await this.loadMinted();
 
       this.setStatus({ state: "connecting", detail: "resolving mediator" });
       this.mediatorDoc = await this.resolveDid(mediation.mediatorDid);
@@ -553,6 +567,69 @@ export class Agent {
   }
 
   /**
+   * Mail sealed to a DID that is an invitation of ours: the first person to
+   * write takes it — the DID becomes ours toward them, the invitation is
+   * marked taken, and their record starts life addressed to it (so no
+   * `from_prior` is ever owed). Anyone else writing to a taken invitation
+   * is turned away — single-use means single-use, and the URL may have
+   * been passed along. Returns false when the message is to be dropped.
+   */
+  private async claimInvitation(opened: Opened): Promise<boolean> {
+    const { sender, recipient } = opened;
+    if (recipient === null) {
+      return true;
+    }
+    const invitation = await this.vault.invitations.byDid(recipient);
+    if (invitation === null) {
+      return true;
+    }
+    if (sender === null) {
+      this.log("an anonymous message to an invitation; ignoring it");
+      return false;
+    }
+    if (invitation.acceptedBy !== undefined) {
+      const holder = await this.vault.contacts.byCid(invitation.acceptedBy);
+      if (holder !== null && holder.dids.some((use) => use.did === sender)) {
+        return true;
+      }
+      this.log("someone else wrote to an invitation already taken; ignoring them");
+      return false;
+    }
+    const at = new Date().toISOString();
+    let contact = await this.vault.contacts.byDid(sender);
+    const fresh = contact === null;
+    if (contact === null) {
+      contact = newContact(didPlaceholder(sender), sender);
+    }
+    const current = currentMyDid(contact);
+    if (current !== null) {
+      current.until = at;
+    }
+    contact.myDids = [
+      ...(contact.myDids ?? []),
+      {
+        did: invitation.did,
+        key: invitation.key,
+        from: at,
+        ...(invitation.registeredAt === undefined ? {} : { registeredAt: invitation.registeredAt }),
+      },
+    ];
+    contact.addressedAs = recipient;
+    await this.vault.contacts.put(contact);
+    invitation.acceptedBy = contact.cid;
+    invitation.acceptedAt = at;
+    await this.vault.invitations.put(invitation);
+    this.events.onContact?.(contact);
+    this.events.onInvitation?.(invitation);
+    this.log(
+      fresh
+        ? "someone took an invitation of ours; they have a thread now"
+        : `${contact.name} took an invitation of ours; that DID is ours toward them now`
+    );
+    return true;
+  }
+
+  /**
    * Open the inner envelopes riding a delivery message, log each as a
    * received message, then ack — over HTTP even when the delivery arrived
    * on the socket, which is the ritual the mediator's demo-interop test
@@ -601,6 +678,9 @@ export class Agent {
       done();
       const { msg: inner, sender, recipient } = opened;
       await this.applyRotation(opened);
+      if (!(await this.claimInvitation(opened))) {
+        continue;
+      }
 
       if (inner.type === REQUEST_PROFILE) {
         // Someone asked who we are: answer, without asking back — but only
@@ -888,6 +968,11 @@ export class Agent {
     const from = await this.ensurePairwise(contact);
     const to = currentDid(contact);
     const plain = plainMessage(type, from.did, to, body);
+    if (contact.invitation !== undefined && contact.profileSharedAt === undefined) {
+      // answering their invitation: our first messages out — up to and
+      // including the introduction — name it, as out-of-band asks
+      plain.pthid = contact.invitation;
+    }
     await this.attachFromPrior(plain, contact);
     await this.deliverToContact(plain, to);
     return plain;
@@ -912,7 +997,7 @@ export class Agent {
         contact.myDids = [{ did: this.pub.did, key: KEY_PUBLIC, from: contact.createdAt }];
       }
       const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
-      this.pairwise.set(identity.did, identity);
+      this.minted.set(identity.did, identity);
       use = currentMyDid(contact) as MyDidUse;
       this.log(`minted a DID of our own toward ${contact.name}`);
     }
@@ -921,7 +1006,7 @@ export class Agent {
       // the record gained a DID of ours (minted, or now registered): tell the UI
       this.events.onContact?.(contact);
     }
-    const identity = this.pairwise.get(use.did);
+    const identity = this.minted.get(use.did);
     if (identity === undefined) {
       throw new Error(`our DID toward ${contact.name} does not derive from this seed`);
     }
@@ -953,12 +1038,15 @@ export class Agent {
     }
   }
 
-  /** Every pairwise DID minted while the mediator could not be told: tell it now. */
+  /**
+   * Every DID minted while the mediator could not be told — toward a
+   * contact, or in an invitation still open: tell it now.
+   */
   private async registerPending(): Promise<void> {
     const pending: { contact: ContactRecord; use: MyDidUse }[] = [];
     for (const contact of await this.vault.contacts.all()) {
       for (const use of contact.myDids ?? []) {
-        if (use.key.startsWith(KEY_PAIRWISE_PREFIX) && use.registeredAt === undefined) {
+        if (isRelationshipKey(use.key) && use.registeredAt === undefined) {
           pending.push({ contact, use });
         }
       }
@@ -967,27 +1055,40 @@ export class Agent {
       this.log(`registering ${pending.length} pairwise DID(s) with the mediator`);
       await this.registerRecipients(pending);
     }
+    for (const invitation of await this.vault.invitations.all()) {
+      if (isOpenInvitation(invitation) && invitation.registeredAt === undefined) {
+        await this.registerInvitation(invitation);
+      }
+    }
   }
 
   /**
-   * Re-derive every pairwise DID in the contacts' histories, so their mail
-   * — including mail to DIDs we have since moved on from — can be opened.
-   * A record the seed no longer derives is logged and skipped, not fatal.
+   * Re-derive every DID minted for a relationship — those in the
+   * contacts' histories, including DIDs we have since moved on from, and
+   * those waiting in open invitations — so their mail can be opened. A
+   * record the seed no longer derives is logged and skipped, not fatal.
    */
-  private async loadPairwise(): Promise<void> {
+  private async loadMinted(): Promise<void> {
+    const load = async (ref: { key: string; did: string }, what: string) => {
+      if (!isRelationshipKey(ref.key) || this.minted.has(ref.did)) {
+        return;
+      }
+      try {
+        const doc = await this.resolveDid(ref.did);
+        const service = doc === null ? undefined : serviceUris(doc)[0];
+        this.minted.set(ref.did, await this.vault.peerIdentity(this.seedKey, ref, service ?? null));
+      } catch (err) {
+        this.log(`skipping ${what}: ${err instanceof Error ? err.message : err}`);
+      }
+    };
     for (const contact of await this.vault.contacts.all()) {
       for (const use of contact.myDids ?? []) {
-        if (!use.key.startsWith(KEY_PAIRWISE_PREFIX) || this.pairwise.has(use.did)) {
-          continue;
-        }
-        try {
-          const doc = await this.resolveDid(use.did);
-          const service = doc === null ? undefined : serviceUris(doc)[0];
-          const identity = await this.vault.peerIdentity(this.seedKey, use, service ?? null);
-          this.pairwise.set(use.did, identity);
-        } catch (err) {
-          this.log(`skipping our DID toward ${contact.name}: ${err instanceof Error ? err.message : err}`);
-        }
+        await load(use, `our DID toward ${contact.name}`);
+      }
+    }
+    for (const invitation of await this.vault.invitations.all()) {
+      if (isOpenInvitation(invitation)) {
+        await load(invitation, `the DID of an open invitation (${invitation.id})`);
       }
     }
   }
@@ -1000,10 +1101,14 @@ export class Agent {
    * never written to us is taken to know us by the public DID — the
    * business card they most likely got our address from — so a first
    * message from a fresh pairwise DID vouches for itself with it, and the
-   * other side can tie the two together (see `applyRotation`).
+   * other side can tie the two together (see `applyRotation`). A contact
+   * met through their invitation is the exception: they minted us a DID
+   * and we minted them one, and neither ever knew the other's public DID —
+   * there is no prior to vouch with, and no reason to hand them ours.
    */
   private async attachFromPrior(plain: IMessage, contact: ContactRecord): Promise<void> {
-    const prior = contact.addressedAs ?? this.pub?.did;
+    const prior =
+      contact.addressedAs ?? (contact.invitation === undefined ? this.pub?.did : undefined);
     const current = plain.from as string;
     if (prior === undefined || prior === current) {
       return;
@@ -1089,13 +1194,130 @@ export class Agent {
   }
 
   /**
+   * Issue a single-use invitation: a DID minted for whoever answers first,
+   * registered with the mediator so their answer has somewhere to land.
+   * The record is saved before the mediator is asked, so a registration
+   * that fails (offline) is retried at the next start — but the URL is
+   * not usable until it succeeds, so the failure is reported, not hidden.
+   * `goal` is what the invitation says it is for, in words for the person
+   * opening it; the default names us.
+   */
+  async createInvitation(goal?: string): Promise<InvitationRecord> {
+    const routingDid = this.vault.config.mediation?.routingDid ?? null;
+    if (routingDid === null || this.pub === null) {
+      throw new Error(
+        this.vault.config.mediation === null
+          ? "no mediator yet — choose one before inviting anyone"
+          : "no public DID yet — mediation has not completed"
+      );
+    }
+    const { record, identity } = await this.vault.createInvitation(
+      this.seedKey,
+      routingDid,
+      goal ?? `Write to ${this.displayName()}`
+    );
+    this.minted.set(identity.did, identity);
+    await this.registerInvitation(record);
+    this.log("issued an invitation; the first to write to it takes it");
+    this.events.onInvitation?.(record);
+    return record;
+  }
+
+  /** recipient-update add for an invitation's DID; the record is stamped once the mediator accepts. */
+  private async registerInvitation(invitation: InvitationRecord): Promise<void> {
+    const updated = await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+      updates: [{ recipient_did: invitation.did, action: "add" }],
+    });
+    const results = (updated.body.updated ?? []) as { recipient_did?: string; result?: string }[];
+    const result = results.find((r) => r.recipient_did === invitation.did)?.result;
+    if (result !== "success" && result !== "no_change") {
+      throw new Error("the mediator did not accept the invitation's DID");
+    }
+    invitation.registeredAt = new Date().toISOString();
+    await this.vault.invitations.put(invitation);
+  }
+
+  /** The invitations this vault has issued, open and taken, oldest first. */
+  async invitations(): Promise<InvitationRecord[]> {
+    return this.vault.invitations.all();
+  }
+
+  /** The message an invitation of ours stands for — what `invitationUrl` encodes. */
+  invitationMessage(invitation: InvitationRecord): Invitation {
+    return invitationMessage(invitation);
+  }
+
+  /**
+   * Withdraw an open invitation: the mediator is asked to stop accepting
+   * mail for its DID (best effort), and the record goes. A taken invitation
+   * is not revoked — its DID is ours toward someone now; forget the
+   * contact instead.
+   */
+  async revokeInvitation(id: string): Promise<void> {
+    const invitation = await this.vault.invitations.byId(id);
+    if (invitation === null) {
+      return;
+    }
+    if (!isOpenInvitation(invitation)) {
+      throw new Error("that invitation was taken; its DID belongs to a contact now");
+    }
+    if (invitation.registeredAt !== undefined && this.pub !== null) {
+      try {
+        await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+          updates: [{ recipient_did: invitation.did, action: "remove" }],
+        });
+      } catch (err) {
+        this.log(`could not unregister an invitation's DID: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    this.minted.delete(invitation.did);
+    await this.vault.invitations.remove(id);
+    this.events.onInvitation?.(invitation);
+    this.log("revoked an invitation");
+  }
+
+  /**
+   * Accept someone's invitation — a URL, its `_oob` parameter, or the
+   * plaintext — under a petname: they become a contact by the DID the
+   * invitation names, and we introduce ourselves at once (from a DID
+   * minted for them, naming the invitation as `pthid`) so they see us
+   * arrive. If the introduction cannot go out now, it goes with the first
+   * message. Our own invitations, and a mediator's, are refused.
+   */
+  async acceptInvitation(input: string | Invitation, name: string): Promise<ContactRecord> {
+    const invitation = typeof input === "string" ? parseInvitation(input) : input;
+    if (invitation.body.goal_code === "request-mediate") {
+      throw new Error("that is a mediator's invitation, not a person's");
+    }
+    if (this.minted.has(invitation.from) || (await this.vault.invitations.byDid(invitation.from)) !== null) {
+      throw new Error("that is an invitation of your own");
+    }
+    const existing = await this.vault.contacts.byDid(invitation.from);
+    const contact = existing ?? newContact(name, invitation.from);
+    contact.name = name;
+    if (contact.invitation === undefined) {
+      contact.invitation = invitation.id;
+    }
+    await this.vault.contacts.put(contact);
+    this.events.onContact?.(contact);
+    if (this.pub !== null) {
+      try {
+        await this.shareProfileIfNew(invitation.from);
+      } catch (err) {
+        this.log(`could not answer the invitation yet (${err instanceof Error ? err.message : err}); the first message will`);
+      }
+    }
+    return (await this.vault.contacts.byCid(contact.cid)) as ContactRecord;
+  }
+
+  /**
    * Forget a contact: the record goes, and the mediator is asked to stop
    * accepting mail for the DIDs we minted toward them (best effort — the
    * keys stay burned in the keystore either way).
    */
   async removeContact(cid: string): Promise<void> {
     const contact = await this.vault.contacts.byCid(cid);
-    const pairwise = (contact?.myDids ?? []).filter((use) => use.key.startsWith(KEY_PAIRWISE_PREFIX));
+    const pairwise = (contact?.myDids ?? []).filter((use) => isRelationshipKey(use.key));
     if (pairwise.length > 0 && this.pub !== null) {
       try {
         await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
@@ -1106,7 +1328,7 @@ export class Agent {
       }
     }
     for (const use of pairwise) {
-      this.pairwise.delete(use.did);
+      this.minted.delete(use.did);
     }
     await this.vault.contacts.remove(cid);
   }

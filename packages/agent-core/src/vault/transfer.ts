@@ -3,9 +3,11 @@ import { parseSeedKeystore } from "@estoc/keystore";
 import type { VaultBackend } from "../backend/types.js";
 import { parseConfig } from "./config.js";
 import { ContactStore, parseContact } from "./contacts.js";
+import { InvitationStore, parseInvitationRecord } from "./invitations.js";
 import {
   CONFIG_PATH,
   CONTACTS_DIR,
+  INVITATIONS_DIR,
   KEYSTORE_PATH,
   MESSAGES_DIR,
   text,
@@ -25,8 +27,10 @@ import { MessageLog, parseSegment, type DamagedLine, type MessageRecord } from "
  *   - Into a vault of the same identity (same anchor DID) it is a merge:
  *     the snapshot's messages become a new log segment (minus the records
  *     already here — same `mid`, or the same wire message received twice),
- *     its contacts win by `updatedAt`, and its config and keystore are left
- *     alone (same seed, and mediation is a fact about *this* device).
+ *     its contacts win by `updatedAt`, its invitations are added when
+ *     missing (and marked taken when the snapshot knows who took one),
+ *     and its config and keystore are left alone (same seed, and mediation
+ *     is a fact about *this* device).
  *   - Into a vault of a different identity it is refused. Two identities are
  *     two vaults; blending their logs would misattribute every message.
  *
@@ -48,6 +52,7 @@ export type ImportOutcome =
       contactsAdded: number;
       contactsUpdated: number;
       contactsKept: number;
+      invitationsAdded: number;
       damaged: DamagedLine[];
     };
 
@@ -60,7 +65,7 @@ export async function snapshotVault(backend: VaultBackend): Promise<VaultFiles> 
       files[path] = bytes;
     }
   }
-  for (const dir of [CONTACTS_DIR, MESSAGES_DIR]) {
+  for (const dir of [CONTACTS_DIR, INVITATIONS_DIR, MESSAGES_DIR]) {
     for (const name of (await backend.list(dir)).sort()) {
       const bytes = await backend.read(`${dir}/${name}`);
       if (bytes !== null) {
@@ -187,6 +192,25 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
     }
   }
 
+  // invitations: by id; one this vault has open that the snapshot knows
+  // to be taken becomes taken here too — the DID is spent either way
+  const invitations = new InvitationStore(backend);
+  let invitationsAdded = 0;
+  const incomingInvitations = Object.keys(files)
+    .filter((path) => path.startsWith(`${INVITATIONS_DIR}/`) && path.endsWith(".json"))
+    .sort();
+  for (const path of incomingInvitations) {
+    const name = path.slice(INVITATIONS_DIR.length + 1);
+    const record = parseInvitationRecord(text(files[path] as Uint8Array), name);
+    const mine = await invitations.byId(record.id);
+    if (mine === null) {
+      await invitations.put(record);
+      invitationsAdded += 1;
+    } else if (mine.acceptedBy === undefined && record.acceptedBy !== undefined) {
+      await invitations.put({ ...mine, ...record });
+    }
+  }
+
   return {
     kind: "merged",
     messagesAdded: fresh.length,
@@ -195,6 +219,7 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
     contactsAdded,
     contactsUpdated,
     contactsKept,
+    invitationsAdded,
     damaged,
   };
 }

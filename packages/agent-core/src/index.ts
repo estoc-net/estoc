@@ -18,6 +18,7 @@ export {
   CONTACTS_DIR,
   ESTOC_DIR,
   FIRST_SEGMENT,
+  INVITATIONS_DIR,
   KEYSTORE_PATH,
   MESSAGES_DIR,
 } from "./vault/layout.js";
@@ -34,6 +35,12 @@ export {
   type MyDidUse,
 } from "./vault/contacts.js";
 export {
+  InvitationStore,
+  isOpenInvitation,
+  parseInvitationRecord,
+  type InvitationRecord,
+} from "./vault/invitations.js";
+export {
   MessageLog,
   newMessageRecord,
   parseSegment,
@@ -49,10 +56,12 @@ export {
 } from "./vault/transfer.js";
 export {
   KEY_ANCHOR,
+  KEY_INVITE_PREFIX,
   KEY_MEDIATOR,
   KEY_PAIRWISE_PREFIX,
   KEY_PUBLIC,
   Vault,
+  isRelationshipKey,
   type CreateVaultOptions,
 } from "./vault/vault.js";
 
@@ -72,6 +81,13 @@ export {
 } from "./protocol/didcomm.js";
 export { resolveDid } from "./protocol/resolver.js";
 export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
+export {
+  GOAL_CONNECT,
+  invitationMessage,
+  invitationUrl,
+  parseInvitation,
+  type Invitation,
+} from "./protocol/oob.js";
 export { chatView, type ChatMessage } from "./protocol/chat.js";
 
 export {

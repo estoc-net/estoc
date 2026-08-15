@@ -26,6 +26,7 @@ Agent                        mediation · pickup · live delivery · routing
   config.json            label, identity anchor, mediation snapshot
   keystore.json          @estoc/keystore v2 — one sealed seed + a plaintext key index
   contacts/<name>.json   one mutable record per contact, cid-anchored, DID history with evidence
+  invitations/<id>.json  single-use invitations issued: a DID waiting for whoever answers first
   messages/NNNN.jsonl    append-only log; readers concatenate every segment
 ```
 
@@ -77,6 +78,20 @@ Agent                        mediation · pickup · live delivery · routing
   openable, so mail to a retired one is not lost. What pairwise hides is
   the link *between* your contacts; the mediator still sees every
   recipient DID under one account.
+- **Invitations.** The third way to meet, and the only one where nothing
+  public changes hands: `Agent.createInvitation()` mints a did:peer:4 for
+  nobody yet (`invite/<id>`, registered with the mediator), records it
+  under `invitations/<id>.json`, and `invitationUrl(base, message)` makes
+  the out-of-band/2.0 URL to hand over (`goal_code: connect`, `goal` in
+  words; the host is whatever app should open it — every Estoc client
+  reads only `_oob`). `Agent.acceptInvitation(urlOrOob, petname)` on the
+  other side adds the contact by the DID inside and introduces itself at
+  once from a DID minted for them, naming the invitation as `pthid`. The
+  first envelope sealed to an invitation's DID takes it: that DID becomes
+  ours toward the sender (moved into their `myDids[]`), the invitation is
+  marked `acceptedBy`, and anyone else writing to it afterwards is turned
+  away. Neither side owes a `from_prior`, because neither ever knew the
+  other by a public DID. `revokeInvitation` withdraws an open one.
 - **At rest, the vault is plaintext** apart from the seed: messages and
   contacts are readable files. An application wanting encryption at rest
   wraps the backend.
@@ -95,6 +110,7 @@ One seed (keystore v2), keys by name in its index:
 | `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` |
 | `public`   | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant |
 | `pair/<cid>/<n>` | the nth pairwise did:peer:4 toward contact `cid`, same shape as `public`; minted on first message, recorded in the contact's `myDids[]` |
+| `invite/<id>` | the did:peer:4 an invitation hands out, same shape; once taken it is the key behind that contact's `myDids[]` entry, name unchanged |
 
 `mintPeerDid(identity, serviceUri)` is deterministic: same seed, index and
 service → same DID.
@@ -125,6 +141,7 @@ const agent = new Agent({
     onStatus: (s) => console.log(s),
     onMessage: (record, view) => render(view),   // view: ChatMessage projection, homed by view.contactCid
     onContact: (c) => refreshContacts(),
+    onInvitation: (i) => refreshInvitations(),
     onLog: (line) => console.log(line),
   },
 });
@@ -134,6 +151,12 @@ await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the publ
 const history = await agent.history();
 await agent.addContact(bobDid, "Bob");
 await agent.sendBasicMessage(bobDid, "hello");
+
+// or meet without a public DID changing hands: one side issues, the other accepts
+const invitation = await agent.createInvitation();          // "Write to Alice"
+const url = invitationUrl(location.origin, agent.invitationMessage(invitation));
+// … Bob, given the URL:
+await bobAgent.acceptInvitation(url, "Alice");               // adds her, introduces himself
 ```
 
 `Agent` writes to the vault before it tells anyone: log line first, event
@@ -172,8 +195,10 @@ lays them down and **merges, never overwrites**: into an empty backend it
 is a restore; into a vault of the same identity (same anchor DID) the
 snapshot's messages become a new log segment minus what is already here
 (same `mid`, or the same wire message received twice), its contacts win by
-`updatedAt`, and config and keystore stay local (same seed; mediation is a
-fact about this device); a vault of a different identity is refused. How
+`updatedAt`, its invitations are added when missing (and marked taken when
+the snapshot saw the answer), and config and keystore stay local (same
+seed; mediation is a fact about this device); a vault of a different
+identity is refused. How
 the files travel — zip, folder, paste — is the application's business.
 
 ### Backends
