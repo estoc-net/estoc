@@ -131,9 +131,6 @@ npm test        # vitest: backends, vault format, identity, agent × fake mediat
 npm run build   # tsc → dist/
 ```
 
-Until `@estoc/keystore` 0.2.0 is on npm, link it locally:
-`npm install --no-save ../keystore`.
-
 ## License
 
 Apache-2.0
