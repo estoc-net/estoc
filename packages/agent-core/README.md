@@ -39,10 +39,12 @@ Agent                        mediation · pickup · live delivery · routing
   about reachability, taken after the identity exists — and, once taken,
   not swapped behind correspondents' backs (a change is a rotation).
 - **Contacts** are keyed by `cid` (uuidv7). Their DIDs form a history
-  (`dids[]`, closed with `until`, hops proven by `fromPrior`), and — for
-  pairwise relationships — so do ours (`myDids[]` with `keyIndex`). The
-  file name is a readable handle derived from the petname; the record is
-  the truth.
+  (`dids[]`, closed with `until`, hops proven by `fromPrior`), and so do
+  ours toward them (`myDids[]`: the keystore `key` that derives each, and
+  `registeredAt` once the mediator accepts it). `addressedAs` is the DID
+  of ours their latest envelope was sealed to — what decides whether the
+  next message out needs `from_prior`. The file name is a readable handle
+  derived from the petname; the record is the truth.
 - **The message log** stores each event as
   `{mid, at, direction, sender?, msg}`: `mid` is the local primary key
   (uuidv7, assigned at append), `msg` the plaintext exactly as it arrived
@@ -59,6 +61,20 @@ Agent                        mediation · pickup · live delivery · routing
   can type into an anonymous envelope). Anonymous mail is logged with
   `sender: null`, belongs to no contact's thread (`chatView` yields null),
   and cannot rename a contact or be answered with a profile.
+- **Pairwise DIDs, rotation by `from_prior`.** The public DID is a business
+  card: strangers write to it. The first message we send anyone goes out
+  from a did:peer:4 minted for that relationship (`pair/<cid>/1`, service
+  = the mediator's routing DID, registered with the mediator as a
+  recipient before it is used). A contact who wrote to the public DID
+  first is told about the move the DIDComm way — every message out carries
+  `from_prior`, a JWT the DID they know signs over the one we now use,
+  until a reply comes back addressed to the new DID. Inbound, a
+  `from_prior` didcomm-rust verified moves the contact its issuer names to
+  the new DID (old one closed, JWT kept as evidence) — provided the
+  envelope was sealed by that new DID. Every DID we ever minted stays
+  openable, so mail to a retired one is not lost. What pairwise hides is
+  the link *between* your contacts; the mediator still sees every
+  recipient DID under one account.
 - **At rest, the vault is plaintext** apart from the seed: messages and
   contacts are readable files. An application wanting encryption at rest
   wraps the backend.
@@ -75,8 +91,8 @@ One seed (keystore v2), keys by name in its index:
 | ---------- | ---------------------------------------------------------------- |
 | `anchor`   | index 0 — the did:key root; the identity everything hangs off    |
 | `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` |
-| `public`   | did:peer:4 whose service is the mediator's routing DID — what correspondents write to; minted after mediate-grant |
-| (later) `contact:<cid>` | one pairwise did:peer:4 per relationship             |
+| `public`   | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant |
+| `pair/<cid>/<n>` | the nth pairwise did:peer:4 toward contact `cid`, same shape as `public`; minted on first message, recorded in the contact's `myDids[]` |
 
 `mintPeerDid(identity, serviceUri)` is deterministic: same seed, index and
 service → same DID.
@@ -86,7 +102,7 @@ service → same DID.
 ```ts
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import { Agent, OpfsBackend, Vault, resolveDid } from "@estoc/agent-core";
-import { Message } from "./didcomm-wasm.js"; // your runtime's didcomm-rust glue
+import { FromPrior, Message } from "./didcomm-wasm.js"; // your runtime's didcomm-rust glue
 
 const root = await navigator.storage.getDirectory();
 const backend = new OpfsBackend(await root.getDirectoryHandle("vaults/alice", { create: true }));
@@ -102,10 +118,10 @@ const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedK
 const agent = new Agent({
   vault,
   seedKey,
-  didcomm: { Message },
+  didcomm: { Message, FromPrior },
   events: {
     onStatus: (s) => console.log(s),
-    onMessage: (record, view) => render(view),   // view: ChatMessage projection
+    onMessage: (record, view) => render(view),   // view: ChatMessage projection, homed by view.contactCid
     onContact: (c) => refreshContacts(),
     onLog: (line) => console.log(line),
   },
@@ -123,9 +139,9 @@ second. UIs mirror the vault; they are not the record.
 
 ### Didcomm API
 
-The agent takes `{ Message }` from whichever didcomm-rust build your runtime
-loads — `didcomm` (browser/workerd WASM, instantiated your way) or
-`didcomm-node`. Both export the same `Message` class. This package refuses to
+The agent takes `{ Message, FromPrior }` from whichever didcomm-rust build
+your runtime loads — `didcomm` (browser/workerd WASM, instantiated your way)
+or `didcomm-node`. Both export the same classes. This package refuses to
 know how the WASM is instantiated, because every bundler and runtime does it
 differently.
 

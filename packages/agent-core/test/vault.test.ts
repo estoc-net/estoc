@@ -8,11 +8,13 @@ import {
   KEYSTORE_PATH,
   KEY_ANCHOR,
   KEY_MEDIATOR,
+  KEY_PAIRWISE_PREFIX,
   MemoryBackend,
   MessageLog,
   Vault,
   contactFileStem,
   currentDid,
+  currentMyDid,
   mintPeerDid,
   newContact,
   newMessageRecord,
@@ -102,6 +104,46 @@ describe("Vault", () => {
 
     // a mediator, once named, is not swapped behind the public DID's back
     await expect(later.setMediator(seedKey, "did:web:other")).rejects.toThrow(/already has a mediator/);
+  });
+
+  it("mints pairwise DIDs toward a contact: numbered keys, the previous one closed, a crash healed", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:mediator.example" });
+    const routing = "did:web:mediator.example";
+    const contact = newContact("Bob", "did:peer:4bob");
+    await vault.contacts.put(contact);
+
+    const first = await vault.mintPairwise(seedKey, contact, routing);
+    expect(first.did).toMatch(/^did:peer:4/);
+    expect(currentMyDid(contact)).toMatchObject({ did: first.did, key: `${KEY_PAIRWISE_PREFIX}${contact.cid}/1` });
+    expect(currentMyDid(contact)?.registeredAt).toBeUndefined();
+    // the routing DID is the DID's service; the secrets are the DID's own
+    expect((await resolveDIDCommDoc(first.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: routing });
+    expect(first.secrets.map((s) => s.id)).toEqual([`${first.did}#key-1`, `${first.did}#key-2`]);
+    // and the record was saved
+    expect(currentMyDid((await vault.contacts.byCid(contact.cid)) as ContactRecord)?.did).toBe(first.did);
+
+    // a second one closes the first
+    const second = await vault.mintPairwise(seedKey, contact, routing);
+    expect(second.did).not.toBe(first.did);
+    expect(contact.myDids?.map((u) => u.key)).toEqual([`${KEY_PAIRWISE_PREFIX}${contact.cid}/1`, `${KEY_PAIRWISE_PREFIX}${contact.cid}/2`]);
+    expect(contact.myDids?.[0]?.until).toBeDefined();
+    expect(currentMyDid(contact)?.did).toBe(second.did);
+    // each re-derives from its key ref, checked against the recorded DID
+    for (const use of contact.myDids ?? []) {
+      await expect(vault.peerIdentity(seedKey, use, routing)).resolves.toMatchObject({ did: use.did });
+    }
+
+    // a crash between minting the key and saving the contact leaves the key
+    // in the index; the next attempt reuses it instead of choking on the name
+    await vault.mintKey(seedKey, `${KEY_PAIRWISE_PREFIX}${contact.cid}/3`);
+    const third = await vault.mintPairwise(seedKey, contact, routing);
+    expect(currentMyDid(contact)?.key).toBe(`${KEY_PAIRWISE_PREFIX}${contact.cid}/3`);
+    expect(vault.keystore.keys.filter((k) => k.name.startsWith(KEY_PAIRWISE_PREFIX))).toHaveLength(3);
+    // deterministic: reopening derives the same DIDs
+    const again = await Vault.open(backend);
+    await expect(again.peerIdentity(seedKey, currentMyDid((await again.contacts.byCid(contact.cid)) as ContactRecord) as { key: string; did: string }, routing)).resolves.toMatchObject({ did: third.did });
   });
 
   it("refuses to create over an existing vault, or from a used keystore", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Message } from "didcomm-node";
+import { FromPrior, Message } from "didcomm-node";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 
@@ -8,12 +8,15 @@ import {
   BASIC_MESSAGE,
   ENCRYPTED_MIME,
   FORWARD,
+  KEY_PAIRWISE_PREFIX,
   KEY_PUBLIC,
   MemoryBackend,
   PLAIN_TYP,
   PROFILE,
   REQUEST_PROFILE,
   Vault,
+  currentDid,
+  currentMyDid,
   mintPeerDid,
   secretsResolverFor,
   type AgentStatus,
@@ -24,7 +27,7 @@ import {
 } from "../src/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "./fake-mediator.js";
 
-const didcomm = { Message };
+const didcomm = { Message, FromPrior };
 const seedOf = (fill: number) => new Uint8Array(32).map((_, i) => (i * 7 + fill) & 0xff);
 
 async function newMediator(): Promise<FakeMediator> {
@@ -136,6 +139,14 @@ async function until(cond: () => boolean): Promise<void> {
   }
 }
 
+/** The DID `party` currently writes to `contactDid`'s owner from — pairwise, minted on first use. */
+async function myDidToward(party: Party, contactDid: string): Promise<string> {
+  const contact = await party.vault.contacts.byDid(contactDid);
+  const use = contact === null ? null : currentMyDid(contact);
+  if (use === null) throw new Error(`${party.name} has no DID toward ${contactDid.slice(0, 24)}`);
+  return use.did;
+}
+
 describe("Agent through a mediator", () => {
   it("mediates, exchanges basic messages and profiles", async () => {
     const mediator = await newMediator();
@@ -159,39 +170,97 @@ describe("Agent through a mediator", () => {
     expect(sent.kind).toBe("chat");
     expect(sent.direction).toBe("sent");
 
-    // Bob receives it live.
+    // Bob receives it live — from a DID Alice minted for him alone, not
+    // her public one, which she keeps for strangers.
     const got = await withTimeout(bob.next((v) => v.kind === "chat" && v.content === "hello bob"), 8000, "bob's chat");
     expect(got.direction).toBe("received");
-    expect(got.contactDid).toBe(alice.agent.did);
+    const aliceToBob = await myDidToward(alice, bob.agent.did as string);
+    expect(aliceToBob).toMatch(/^did:peer:4/);
+    expect(aliceToBob).not.toBe(alice.agent.did);
+    expect(got.contactDid).toBe(aliceToBob);
+    // that DID is registered with the mediator under Alice's account, and
+    // resolves to a service on the mediator like her public one
+    expect(mediator.recipients.get(aliceToBob)).toBe(alice.vault.config.mediation?.me.did);
+    expect((await resolveDIDCommDoc(aliceToBob))?.service[0]?.serviceEndpoint).toMatchObject({ uri: mediator.did });
+    const alicesBobRecord = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
+    expect(alicesBobRecord.myDids).toHaveLength(1);
+    expect(alicesBobRecord.myDids?.[0]).toMatchObject({ did: aliceToBob, key: `${KEY_PAIRWISE_PREFIX}${alicesBobRecord.cid}/1` });
+    expect(alicesBobRecord.myDids?.[0]?.registeredAt).toBeDefined();
+    // Bob's copy of the thread is homed to his contact for Alice
+    expect(got.contactCid).toBeDefined();
 
     // The stranger contact was created and then took Alice's claimed name;
     // send_back_yours made Bob introduce himself in return.
-    const bobsAlice = await bob.vault.contacts.byDid(alice.agent.did as string);
+    const bobsAlice = await bob.vault.contacts.byDid(aliceToBob);
+    expect(bobsAlice?.cid).toBe(got.contactCid);
     expect(bobsAlice?.name).toBe("Alice");
     expect(bobsAlice?.claimedName).toBe("Alice");
     expect(bobsAlice?.profileSharedAt).toBeDefined();
+    // Alice wrote to Bob's public DID, and the record says so
+    expect(bobsAlice?.addressedAs).toBe(bob.agent.did);
     const bobsIntro = await withTimeout(alice.next((v) => v.kind === "profile" && v.direction === "received"), 8000, "bob's intro");
     expect(bobsIntro.content).toBe("Bob");
-    const alicesBob = await alice.vault.contacts.byDid(bob.agent.did as string);
-    // Alice typed "Bob" herself, so the claim is remembered but does not rename.
-    expect(alicesBob?.name).toBe("Bob");
-    expect(alicesBob?.claimedName).toBe("Bob");
 
-    // Bob replies; Alice receives.
-    await bob.agent.sendBasicMessage(alice.agent.did as string, "hi alice");
+    // Bob's introduction came from a DID of his own toward Alice, with a
+    // from_prior signed by the public DID she wrote to — so on Alice's side
+    // Bob rotated: the public DID closed, the pairwise one current, the
+    // JWT kept as evidence.
+    const bobToAlice = await myDidToward(bob, aliceToBob);
+    expect(bobToAlice).not.toBe(bob.agent.did);
+    const bobsAliceRecord = (await bob.vault.contacts.byDid(aliceToBob)) as ContactRecord;
+    expect(bobsAliceRecord.myDids?.map((u) => u.key)).toEqual([KEY_PUBLIC, `${KEY_PAIRWISE_PREFIX}${bobsAliceRecord.cid}/1`]);
+    expect(bobsAliceRecord.myDids?.[0]?.until).toBeDefined();
+    const alicesBob = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
+    expect(alicesBob.dids.map((u) => u.did)).toEqual([bob.agent.did, bobToAlice]);
+    expect(alicesBob.dids[0]?.until).toBeDefined();
+    expect(alicesBob.dids[1]?.fromPrior).toMatch(/^eyJ/);
+    expect(currentDid(alicesBob)).toBe(bobToAlice);
+    expect(bobsIntro.contactDid).toBe(bobToAlice);
+    expect(bobsIntro.contactCid).toBe(alicesBob.cid);
+    // Alice typed "Bob" herself, so the claim is remembered but does not rename.
+    expect(alicesBob.name).toBe("Bob");
+    expect(alicesBob.claimedName).toBe("Bob");
+    const bobsFirstOut = (await bob.vault.messages.read()).find((r) => r.direction === "out");
+    expect(bobsFirstOut?.msg.from).toBe(bobToAlice);
+    expect(bobsFirstOut?.msg.from_prior).toBe(alicesBob.dids[1]?.fromPrior);
+
+    // Bob replies; Alice receives. Alice has not written to Bob's new DID
+    // yet, so the reply still carries from_prior.
+    await bob.agent.sendBasicMessage(aliceToBob, "hi alice");
     const reply = await withTimeout(alice.next((v) => v.content === "hi alice"), 8000, "alice's reply");
     expect(reply.direction).toBe("received");
+    expect(reply.contactCid).toBe(alicesBob.cid);
+    const bobsChatOut = (await bob.vault.messages.read()).find((r) => r.direction === "out" && r.msg.type === BASIC_MESSAGE);
+    expect(bobsChatOut?.msg.from_prior).toBeDefined();
 
-    // The logs hold the facts: Alice sent profile+chat, got profile+chat.
+    // Alice's next message goes to Bob's new DID; once Bob has seen that,
+    // his messages stop carrying from_prior.
+    await alice.agent.sendBasicMessage(bobToAlice, "seen you move");
+    await withTimeout(bob.next((v) => v.content === "seen you move"));
+    expect((await bob.vault.contacts.byDid(aliceToBob))?.addressedAs).toBe(bobToAlice);
+    await bob.agent.sendBasicMessage(aliceToBob, "good");
+    await withTimeout(alice.next((v) => v.content === "good"));
+    const bobsLastOut = (await bob.vault.messages.read()).filter((r) => r.direction === "out").at(-1);
+    expect(bobsLastOut?.msg.from_prior).toBeUndefined();
+    // and Alice's thread with Bob is one thread, across his two DIDs
+    const aliceHistory = await alice.agent.history();
+    expect(aliceHistory.every((v) => v.contactCid === alicesBob.cid)).toBe(true);
+    expect(aliceHistory.filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["hello bob", "hi alice", "seen you move", "good"]);
+
+    // The logs hold the facts: Alice sent profile+chat, got profile+chat, and so on.
     const aliceLog = await alice.vault.messages.read();
     expect(aliceLog.map((r) => `${r.direction}:${r.msg.type === PROFILE ? "profile" : "chat"}`)).toEqual([
       "out:profile",
       "out:chat",
       "in:profile",
       "in:chat",
+      "out:chat",
+      "in:chat",
     ]);
-    // inbound records carry the envelope-proven sender
-    expect(aliceLog.filter((r) => r.direction === "in").every((r) => r.sender === bob.agent.did)).toBe(true);
+    // inbound records carry the envelope-proven sender: Bob's pairwise DID throughout
+    expect(aliceLog.filter((r) => r.direction === "in").every((r) => r.sender === bobToAlice)).toBe(true);
+    // and everything Alice sent went out from her DID toward Bob
+    expect(aliceLog.filter((r) => r.direction === "out").every((r) => r.msg.from === aliceToBob)).toBe(true);
     // Every message went out with the wire fields the spec wants.
     expect(aliceLog[1]?.msg).toMatchObject({ type: BASIC_MESSAGE, typ: "application/didcomm-plain+json" });
     expect(typeof aliceLog[1]?.msg.created_time).toBe("number");
@@ -279,7 +348,7 @@ describe("Agent through a mediator", () => {
     expect(carol.vault.config.mediation?.mediatorDid).toBe(mediator.did);
     await carol.agent.sendBasicMessage(bob.agent.did as string, "hi from carol");
     const got = await withTimeout(bob.next((v) => v.content === "hi from carol"), 8000, "bob's chat");
-    expect(got.contactDid).toBe(carol.agent.did);
+    expect(got.contactDid).toBe(await myDidToward(carol, bob.agent.did as string));
 
     // and it stays that way across a reload
     const again = await reopen(carol, mediator);
@@ -287,6 +356,90 @@ describe("Agent through a mediator", () => {
     await withTimeout(again.live, 8000, "carol live again");
     expect(again.agent.did).toBe(carol.agent.did);
     again.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("registers a DID minted while the mediator was unreachable as soon as it can", async () => {
+    const mediator = await newMediator();
+    const bob = await newParty("Bob", 8, mediator);
+    const { backend, vault, seedKey } = await newVault("Carol", 9, mediator.did);
+    // Carol's line to the mediator can be cut and restored.
+    let cut = false;
+    const flaky: typeof fetch = (input, init) => {
+      if (cut) return Promise.reject(new TypeError("fetch failed"));
+      return mediator.fetch(input, init);
+    };
+    const carol = attach("Carol", backend, vault, seedKey, { ...mediator, fetch: flaky, WebSocket: mediator.WebSocket } as FakeMediator);
+    await Promise.all([carol.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([carol.live, bob.live]));
+
+    cut = true;
+    await carol.agent.addContact(bob.agent.did as string, "Bob");
+    await expect(carol.agent.sendBasicMessage(bob.agent.did as string, "into the void")).rejects.toThrow(/fetch failed/);
+    // the DID was minted and recorded, but the mediator never heard of it
+    const record = (await carol.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
+    const use = currentMyDid(record);
+    expect(use?.key).toBe(`${KEY_PAIRWISE_PREFIX}${record.cid}/1`);
+    expect(use?.registeredAt).toBeUndefined();
+    expect(mediator.recipients.has(use?.did as string)).toBe(false);
+    // nothing was logged as sent
+    expect((await carol.vault.messages.read()).filter((r) => r.direction === "out")).toHaveLength(0);
+
+    // the line comes back: the next send registers the same DID first, then goes
+    cut = false;
+    await carol.agent.sendBasicMessage(bob.agent.did as string, "hello from carol");
+    await withTimeout(bob.next((v) => v.content === "hello from carol"));
+    const after = (await carol.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
+    expect(after.myDids).toHaveLength(1);
+    expect(currentMyDid(after)?.did).toBe(use?.did);
+    expect(currentMyDid(after)?.registeredAt).toBeDefined();
+    expect(mediator.recipients.get(use?.did as string)).toBe(carol.vault.config.mediation?.me.did);
+    // and Bob can answer to it
+    await bob.agent.sendBasicMessage(use?.did as string, "hi carol");
+    await withTimeout(carol.next((v) => v.content === "hi carol"));
+
+    // a start with unregistered DIDs on record registers them before pickup
+    const dan = await newParty("Dan", 10, mediator);
+    await dan.agent.start();
+    await withTimeout(dan.live);
+    cut = true;
+    await carol.agent.addContact(dan.agent.did as string, "Dan");
+    await expect(carol.agent.sendBasicMessage(dan.agent.did as string, "x")).rejects.toThrow();
+    const carolToDan = await myDidToward(carol, dan.agent.did as string);
+    expect(mediator.recipients.has(carolToDan)).toBe(false);
+    cut = false;
+    const again = await reopen(carol, mediator);
+    await again.agent.start();
+    await withTimeout(again.live);
+    expect(again.log).toContain("registering 1 pairwise DID(s) with the mediator");
+    expect(mediator.recipients.get(carolToDan)).toBe(carol.vault.config.mediation?.me.did);
+    expect(currentMyDid((await again.vault.contacts.byDid(dan.agent.did as string)) as ContactRecord)?.registeredAt).toBeDefined();
+
+    again.agent.destroy();
+    bob.agent.destroy();
+    dan.agent.destroy();
+  });
+
+  it("forgets a contact together with the DIDs minted toward them", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 21, mediator);
+    const bob = await newParty("Bob", 22, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "hello");
+    await withTimeout(bob.next((v) => v.content === "hello"));
+    const aliceToBob = await myDidToward(alice, bob.agent.did as string);
+    expect(mediator.recipients.has(aliceToBob)).toBe(true);
+
+    const record = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
+    await alice.agent.removeContact(record.cid);
+    expect(await alice.vault.contacts.byCid(record.cid)).toBeNull();
+    // the mediator no longer accepts mail for that DID; the key stays burned
+    expect(mediator.recipients.has(aliceToBob)).toBe(false);
+    expect(alice.vault.keystore.keys.some((k) => k.name === `${KEY_PAIRWISE_PREFIX}${record.cid}/1`)).toBe(true);
+    // Bob writing to it now bounces at the mediator
+    await expect(bob.agent.sendBasicMessage(aliceToBob, "anyone there?")).rejects.toThrow();
+    alice.agent.destroy();
     bob.agent.destroy();
   });
 
@@ -338,13 +491,14 @@ describe("Agent under hostile mail", () => {
     await withTimeout(Promise.all([alice.live, bob.live]));
     await alice.agent.sendBasicMessage(bob.agent.did as string, "real");
     await withTimeout(bob.next((v) => v.content === "real"));
+    const aliceToBob = await myDidToward(alice, bob.agent.did as string);
 
     // Mallory seals two messages anonymously to Bob, both claiming to be
     // from Alice: a chat line, and a profile renaming her.
-    const forged = plain(BASIC_MESSAGE, alice.agent.did as string, bob.agent.did as string, { content: "forged" });
+    const forged = plain(BASIC_MESSAGE, aliceToBob, bob.agent.did as string, { content: "forged" });
     const [anon1] = await new Message(forged).pack_encrypted(bob.agent.did as string, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
     await forwardTo(mediator, bob.agent.did as string, anon1);
-    const forgedProfile = plain(PROFILE, alice.agent.did as string, bob.agent.did as string, { profile: { displayName: "Mallory" }, send_back_yours: false });
+    const forgedProfile = plain(PROFILE, aliceToBob, bob.agent.did as string, { profile: { displayName: "Mallory" }, send_back_yours: false });
     const [anon2] = await new Message(forgedProfile).pack_encrypted(bob.agent.did as string, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
     await forwardTo(mediator, bob.agent.did as string, anon2);
     // and, for contrast, a genuine follow-up from Alice
@@ -358,8 +512,8 @@ describe("Agent under hostile mail", () => {
     expect(anonymous.map((r) => r.msg.body.content ?? (r.msg.body.profile as { displayName: string }).displayName)).toEqual(["forged", "Mallory"]);
     expect(bob.messages.map((m) => m.view.content)).not.toContain("forged");
     expect((await bob.agent.history()).map((v) => v.content)).not.toContain("forged");
-    expect((await bob.vault.contacts.byDid(alice.agent.did as string))?.name).toBe("Alice");
-    expect((await bob.vault.contacts.byDid(alice.agent.did as string))?.claimedName).toBe("Alice");
+    expect((await bob.vault.contacts.byDid(aliceToBob))?.name).toBe("Alice");
+    expect((await bob.vault.contacts.byDid(aliceToBob))?.claimedName).toBe("Alice");
     // and they were acked: handled, not stuck
     await withTimeout(until(() => [...mediator.queues.values()].every((q) => q.length === 0)));
     alice.agent.destroy();

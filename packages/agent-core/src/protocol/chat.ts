@@ -15,8 +15,15 @@ export interface ChatMessage {
   id: string;
   kind: "chat" | "profile";
   direction: "sent" | "received";
-  /** the counterparty's DID: the proven sender for inbound, the addressee for outbound */
+  /** the counterparty's DID as it was on the wire: the proven sender for inbound, the addressee for outbound */
   contactDid: string;
+  /**
+   * The contact this belongs to, resolved through the contacts' DID
+   * histories — so a thread survives the contact rotating to a new DID.
+   * Set by the agent (`history()` and `onMessage`); `chatView` alone does
+   * not know the contacts. Absent when no contact has ever used the DID.
+   */
+  contactCid?: string;
   content: string;
   /** epoch milliseconds */
   time: number;

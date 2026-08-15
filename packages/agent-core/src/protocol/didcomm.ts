@@ -1,5 +1,6 @@
 import type {
   DIDResolver,
+  FromPrior as FromPriorClass,
   IMessage,
   Message as MessageClass,
   SecretsResolver,
@@ -13,11 +14,13 @@ import type { DIDDoc, Secret } from "@estoc/did-peer";
  * rather than imported here: the WASM has to be instantiated differently in
  * every runtime (Vite's `?url`, workerd's module import, didcomm-node's
  * native build), and that wiring is the one thing this package refuses to
- * know. Both `didcomm` and `didcomm-node` export a `Message` with this
- * exact shape.
+ * know. Both `didcomm` and `didcomm-node` export `Message` and `FromPrior`
+ * with these exact shapes.
  */
 export interface DidcommApi {
   Message: typeof MessageClass;
+  /** the DID-rotation header, signed by the DID being left behind */
+  FromPrior: typeof FromPriorClass;
 }
 
 export type { DIDResolver, IMessage, SecretsResolver, UnpackMetadata };

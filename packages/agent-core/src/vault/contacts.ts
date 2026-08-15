@@ -26,12 +26,21 @@ export interface DidUse {
   fromPrior?: string;
 }
 
+/**
+ * One of our DIDs toward a contact. The public DID may open the history
+ * (a stranger wrote to it before we minted them a DID of their own); every
+ * later entry is a pairwise did:peer:4 minted for this relationship alone.
+ */
 export interface MyDidUse {
   did: string;
-  /** index in the seed keystore that derives this DID */
-  keyIndex: number;
+  /** the keystore entry that derives this DID (`public`, or `pair/<cid>/<n>`) */
+  key: string;
+  /** ISO time this DID came into use toward them */
   from: string;
+  /** ISO time it stopped, absent while current */
   until?: string;
+  /** ISO time the mediator accepted it as a recipient; absent until it did */
+  registeredAt?: string;
 }
 
 export interface ContactRecord {
@@ -45,8 +54,15 @@ export interface ContactRecord {
   claimedName?: string;
   /** their DIDs, oldest first; the one without `until` is current */
   dids: DidUse[];
-  /** our DIDs toward them (pairwise), oldest first; absent while we use the public DID */
+  /** our DIDs toward them, oldest first; absent while we have never written to them */
   myDids?: MyDidUse[];
+  /**
+   * The DID of ours their latest envelope was sealed to — proven by our
+   * having opened it. When it is not our current DID toward them, they
+   * have not yet seen a rotation, and the next message out carries
+   * `from_prior` until one comes back addressed to the new DID.
+   */
+  addressedAs?: string;
   /** ISO time our user-profile announcement went out to them */
   profileSharedAt?: string;
 }
@@ -61,6 +77,18 @@ export function currentDid(contact: ContactRecord): string {
   }
   // Every DID has been closed out; the last one is still the best name.
   return (contact.dids[contact.dids.length - 1] as DidUse).did;
+}
+
+/** Our current DID toward a contact, or null while we have none. */
+export function currentMyDid(contact: ContactRecord): MyDidUse | null {
+  const uses = contact.myDids ?? [];
+  for (let i = uses.length - 1; i >= 0; i--) {
+    const use = uses[i] as MyDidUse;
+    if (use.until === undefined) {
+      return use;
+    }
+  }
+  return null;
 }
 
 export function newContact(name: string, did: string, now = new Date()): ContactRecord {
@@ -114,11 +142,14 @@ export function parseContact(json: string, file: string): ContactRecord {
       if (
         typeof use?.did !== "string" ||
         typeof use.from !== "string" ||
-        typeof use.keyIndex !== "number"
+        typeof use.key !== "string"
       ) {
         throw new Error(`${file} has a malformed myDids entry`);
       }
     }
+  }
+  if (c.addressedAs !== undefined && typeof c.addressedAs !== "string") {
+    throw new Error(`${file} has a malformed addressedAs`);
   }
   return c as ContactRecord;
 }

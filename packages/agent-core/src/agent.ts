@@ -31,9 +31,15 @@ import {
   STATUS,
   STATUS_REQUEST,
 } from "./protocol/types.js";
-import { currentDid, newContact, type ContactRecord } from "./vault/contacts.js";
+import {
+  currentDid,
+  currentMyDid,
+  newContact,
+  type ContactRecord,
+  type MyDidUse,
+} from "./vault/contacts.js";
 import { newMessageRecord, type MessageRecord } from "./vault/messages.js";
-import { KEY_PUBLIC, type Vault } from "./vault/vault.js";
+import { KEY_PAIRWISE_PREFIX, KEY_PUBLIC, type Vault } from "./vault/vault.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -49,6 +55,16 @@ import { KEY_PUBLIC, type Vault } from "./vault/vault.js";
  * Everything the agent learns is written to the vault before anyone is
  * told: the log line first, then the event. UIs mirror the vault; they are
  * not the record.
+ *
+ * Identity toward contacts is pairwise. The public DID is an address for
+ * strangers — a business card — and the first message we send anyone goes
+ * out from a did:peer:4 minted for that relationship alone (see
+ * `ensurePairwise`). A contact who wrote to the public DID before we had a
+ * DID for them is told about the move the DIDComm way: `from_prior`, a JWT
+ * the old DID signs over the new one, on every message out until one comes
+ * back addressed to the new DID. The same rule carries every later
+ * rotation. Inbound, a verified `from_prior` whose issuer we know moves that
+ * contact to their new DID; attribution stays the envelope's.
  */
 
 export type AgentStatus =
@@ -89,6 +105,17 @@ interface DeliveryAttachment {
   data: { base64?: string; json?: unknown };
 }
 
+/** An envelope opened: the plaintext and what the envelope itself proves. */
+interface Opened {
+  msg: IMessage;
+  /** the DID whose key authenticated the envelope; null when anonymous */
+  sender: string | null;
+  /** the DID of ours it was sealed to */
+  recipient: string | null;
+  /** a `from_prior` header didcomm-rust verified: signed by `iss`, naming `sub` */
+  fromPrior: { iss: string; sub: string; jwt: string } | null;
+}
+
 /** The stand-in petname an auto-created contact carries until something names it. */
 export function didPlaceholder(did: string): string {
   return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
@@ -117,6 +144,8 @@ export class Agent {
 
   private me: PeerIdentity | null = null;
   private pub: PeerIdentity | null = null;
+  /** every pairwise DID we ever minted toward a contact, current or retired, by DID */
+  private pairwise = new Map<string, PeerIdentity>();
   private mediatorDoc: DIDDoc | null = null;
   private ws: WebSocket | null = null;
   private destroyed = false;
@@ -165,19 +194,47 @@ export class Agent {
   }
 
   private allSecrets(): Secret[] {
-    return [...(this.me?.secrets ?? []), ...(this.pub?.secrets ?? [])];
+    const secrets = [...(this.me?.secrets ?? []), ...(this.pub?.secrets ?? [])];
+    for (const identity of this.pairwise.values()) {
+      secrets.push(...identity.secrets);
+    }
+    return secrets;
   }
 
-  /** The chat projection of everything in the log, in log order. */
+  /**
+   * The chat projection of everything in the log, in log order, each
+   * message homed to its contact through the DID histories.
+   */
   async history(): Promise<ChatMessage[]> {
+    const cidOf = new Map<string, string>();
+    for (const contact of await this.vault.contacts.all()) {
+      for (const use of contact.dids) {
+        cidOf.set(use.did, contact.cid);
+      }
+    }
     const views: ChatMessage[] = [];
     for (const record of await this.vault.messages.read()) {
       const view = chatView(record);
       if (view !== null) {
-        views.push(view);
+        const cid = cidOf.get(view.contactDid);
+        views.push(cid === undefined ? view : { ...view, contactCid: cid });
       }
     }
     return views;
+  }
+
+  /** Project a record for the UI and tell it — homed to its contact when one is known. */
+  private async emitMessage(record: MessageRecord): Promise<ChatMessage | null> {
+    const view = chatView(record);
+    if (view === null) {
+      return null;
+    }
+    const contact = await this.vault.contacts.byDid(view.contactDid);
+    if (contact !== null) {
+      view.contactCid = contact.cid;
+    }
+    this.events.onMessage?.(record, view);
+    return view;
   }
 
   /**
@@ -210,6 +267,7 @@ export class Agent {
           this.seen.add(dedupKey(record.sender ?? null, record.msg.id));
         }
       }
+      await this.loadPairwise();
 
       this.setStatus({ state: "connecting", detail: "resolving mediator" });
       this.mediatorDoc = await this.resolveDid(mediation.mediatorDid);
@@ -221,6 +279,7 @@ export class Agent {
         this.setStatus({ state: "connecting", detail: "requesting mediation" });
         await this.establishMediation();
       }
+      await this.registerPending();
 
       this.setStatus({ state: "connecting", detail: "picking up queued mail" });
       await this.drainQueue();
@@ -284,14 +343,25 @@ export class Agent {
     return endpoint;
   }
 
-  private async unpack(packed: string): Promise<{ msg: IMessage; sender: string | null }> {
+  private async unpack(packed: string): Promise<Opened> {
     const [msg, metadata] = await this.didcomm.Message.unpack(
       packed,
       this.didResolver,
       secretsResolverFor(this.allSecrets()),
       {}
     );
-    return { msg: msg.as_value(), sender: didOf(metadata.encrypted_from_kid) };
+    const value = msg.as_value();
+    // the binding hands back null, not undefined, for a header that is not there
+    const rotation = metadata.from_prior ?? null;
+    return {
+      msg: value,
+      sender: didOf(metadata.encrypted_from_kid),
+      recipient: didOf(metadata.encrypted_to_kids?.[0]),
+      fromPrior:
+        rotation === null
+          ? null
+          : { iss: rotation.iss, sub: rotation.sub, jwt: value.from_prior as string },
+    };
   }
 
   /** POST to the mediator and unpack the reply riding the HTTP response. */
@@ -409,16 +479,62 @@ export class Agent {
     await this.mediatorRoundTrip(MESSAGES_RECEIVED, { message_id_list: ids });
   }
 
-  /** The contact who owns `did`, created with a placeholder name if new. */
-  private async ensureContact(did: string): Promise<ContactRecord> {
+  /**
+   * The contact who owns `did`, created with a placeholder name if new.
+   * `addressedAs`, when given, is the DID of ours their envelope was sealed
+   * to — remembered so the next message out knows whether they have seen
+   * our current DID.
+   */
+  private async ensureContact(did: string, addressedAs?: string | null): Promise<ContactRecord> {
     const existing = await this.vault.contacts.byDid(did);
     if (existing !== null) {
+      if (addressedAs && existing.addressedAs !== addressedAs) {
+        existing.addressedAs = addressedAs;
+        await this.vault.contacts.put(existing);
+      }
       return existing;
     }
     const contact = newContact(didPlaceholder(did), did);
+    if (addressedAs) {
+      contact.addressedAs = addressedAs;
+    }
     await this.vault.contacts.put(contact);
     this.events.onContact?.(contact);
     return contact;
+  }
+
+  /**
+   * A verified `from_prior` from a sender we know by its issuer: the contact
+   * moves to the new DID, the old one closes with the JWT as evidence. The
+   * envelope must be the new DID's own — a JWT is public once sent, and
+   * anyone could replay it under their own key. (didcomm-rust already
+   * refuses a plaintext whose `from` is not the JWT's `sub`; comparing
+   * against the envelope's proven sender closes the gap between the
+   * plaintext's claim and the key that sealed it.)
+   */
+  private async applyRotation(opened: Opened): Promise<void> {
+    const { sender, fromPrior } = opened;
+    if (fromPrior === null || sender === null) {
+      return;
+    }
+    if (fromPrior.sub !== sender) {
+      this.log(`from_prior names ${didPlaceholder(fromPrior.sub)} but the envelope is from someone else; ignoring the rotation`);
+      return;
+    }
+    const contact = await this.vault.contacts.byDid(fromPrior.iss);
+    if (contact === null || contact.dids.some((use) => use.did === sender)) {
+      return;
+    }
+    const at = new Date().toISOString();
+    for (const use of contact.dids) {
+      if (use.until === undefined) {
+        use.until = at;
+      }
+    }
+    contact.dids.push({ did: sender, from: at, fromPrior: fromPrior.jwt });
+    await this.vault.contacts.put(contact);
+    this.events.onContact?.(contact);
+    this.log(`${contact.name} moved to a new DID, vouched for by the old one`);
   }
 
   /**
@@ -455,10 +571,9 @@ export class Agent {
         continue;
       }
 
-      let inner: IMessage;
-      let sender: string | null;
+      let opened: Opened;
       try {
-        ({ msg: inner, sender } = await this.unpack(innerPacked));
+        opened = await this.unpack(innerPacked);
       } catch (err) {
         this.log(
           `could not open a delivered envelope; leaving it queued: ${err instanceof Error ? err.message : err}`
@@ -469,6 +584,8 @@ export class Agent {
       // Everything from here on is a decision about an opened message, and
       // every decision — including "ignore" — is final for this attachment.
       done();
+      const { msg: inner, sender, recipient } = opened;
+      await this.applyRotation(opened);
 
       if (inner.type === REQUEST_PROFILE) {
         // Someone asked who we are: answer, without asking back — but only
@@ -480,7 +597,7 @@ export class Agent {
         }
         try {
           this.log("profile requested; sending ours");
-          await this.ensureContact(sender);
+          await this.ensureContact(sender, recipient);
           await this.sendProfile(sender, false);
         } catch (err) {
           // Their reply path being down is their problem, not a reason
@@ -526,7 +643,7 @@ export class Agent {
       // the user typed is never overwritten by what the contact calls
       // themself.
       if (counterparty !== null) {
-        const contact = await this.ensureContact(counterparty);
+        const contact = await this.ensureContact(counterparty, recipient);
         const view = chatView(record);
         if (view !== null && view.kind === "profile" && view.content !== "") {
           contact.claimedName = view.content;
@@ -538,10 +655,7 @@ export class Agent {
         }
       }
 
-      const view = chatView(record);
-      if (view !== null) {
-        this.events.onMessage?.(record, view);
-      }
+      await this.emitMessage(record);
 
       const body = inner.body as { send_back_yours?: unknown };
       if (inner.type === PROFILE && body.send_back_yours === true && counterparty !== null) {
@@ -672,7 +786,7 @@ export class Agent {
 
     const [innerPacked] = await new this.didcomm.Message(plain).pack_encrypted(
       contactDid,
-      (this.pub as PeerIdentity).did,
+      plain.from as string,
       null,
       this.didResolver,
       secretsResolverFor(this.allSecrets()),
@@ -742,9 +856,148 @@ export class Agent {
       msg: plain as unknown as MessageRecord["msg"],
     });
     await this.vault.messages.append(record);
-    const view = chatView(record) as ChatMessage;
-    this.events.onMessage?.(record, view);
-    return view;
+    return (await this.emitMessage(record)) as ChatMessage;
+  }
+
+  /**
+   * Compose and deliver one message to a contact: from our pairwise DID
+   * toward them (minted now if this is the first), to their current DID,
+   * with `from_prior` attached while they still know us by another DID.
+   * Returns the plaintext as sent, for the log.
+   */
+  private async outbound(
+    contact: ContactRecord,
+    type: string,
+    body: Record<string, unknown>
+  ): Promise<IMessage> {
+    const from = await this.ensurePairwise(contact);
+    const to = currentDid(contact);
+    const plain = plainMessage(type, from.did, to, body);
+    await this.attachFromPrior(plain, contact);
+    await this.deliverToContact(plain, to);
+    return plain;
+  }
+
+  /**
+   * Our DID toward a contact, minted on first use: the mediator's routing
+   * DID is its service, and the mediator must accept it as a recipient
+   * before anything can come back — a registration that failed (offline
+   * at the time) is retried here and at every start. A contact who first
+   * reached us at the public DID keeps that as the opening entry of the
+   * history, so the rotation away from it has its prior on record.
+   */
+  private async ensurePairwise(contact: ContactRecord): Promise<PeerIdentity> {
+    const routingDid = this.mediation().routingDid;
+    if (routingDid === null || this.pub === null) {
+      throw new Error("no public DID yet — mediation has not completed");
+    }
+    let use = currentMyDid(contact);
+    if (use === null) {
+      if (contact.addressedAs === this.pub.did && (contact.myDids ?? []).length === 0) {
+        contact.myDids = [{ did: this.pub.did, key: KEY_PUBLIC, from: contact.createdAt }];
+      }
+      const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
+      this.pairwise.set(identity.did, identity);
+      use = currentMyDid(contact) as MyDidUse;
+      this.log(`minted a DID of our own toward ${contact.name}`);
+    }
+    if (use.registeredAt === undefined) {
+      await this.registerRecipients([{ contact, use }]);
+    }
+    const identity = this.pairwise.get(use.did);
+    if (identity === undefined) {
+      throw new Error(`our DID toward ${contact.name} does not derive from this seed`);
+    }
+    return identity;
+  }
+
+  /**
+   * recipient-update for pairwise DIDs the mediator has not accepted yet;
+   * each contact record is stamped as its DID is accepted.
+   */
+  private async registerRecipients(
+    pending: { contact: ContactRecord; use: MyDidUse }[]
+  ): Promise<void> {
+    if (pending.length === 0) {
+      return;
+    }
+    const updated = await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+      updates: pending.map(({ use }) => ({ recipient_did: use.did, action: "add" })),
+    });
+    const results = (updated.body.updated ?? []) as { recipient_did?: string; result?: string }[];
+    const at = new Date().toISOString();
+    for (const { contact, use } of pending) {
+      const result = results.find((r) => r.recipient_did === use.did)?.result;
+      if (result !== "success" && result !== "no_change") {
+        throw new Error(`the mediator did not accept our DID toward ${contact.name}`);
+      }
+      use.registeredAt = at;
+      await this.vault.contacts.put(contact);
+    }
+  }
+
+  /** Every pairwise DID minted while the mediator could not be told: tell it now. */
+  private async registerPending(): Promise<void> {
+    const pending: { contact: ContactRecord; use: MyDidUse }[] = [];
+    for (const contact of await this.vault.contacts.all()) {
+      for (const use of contact.myDids ?? []) {
+        if (use.key.startsWith(KEY_PAIRWISE_PREFIX) && use.registeredAt === undefined) {
+          pending.push({ contact, use });
+        }
+      }
+    }
+    if (pending.length > 0) {
+      this.log(`registering ${pending.length} pairwise DID(s) with the mediator`);
+      await this.registerRecipients(pending);
+    }
+  }
+
+  /**
+   * Re-derive every pairwise DID in the contacts' histories, so their mail
+   * — including mail to DIDs we have since moved on from — can be opened.
+   * A record the seed no longer derives is logged and skipped, not fatal.
+   */
+  private async loadPairwise(): Promise<void> {
+    for (const contact of await this.vault.contacts.all()) {
+      for (const use of contact.myDids ?? []) {
+        if (!use.key.startsWith(KEY_PAIRWISE_PREFIX) || this.pairwise.has(use.did)) {
+          continue;
+        }
+        try {
+          const doc = await this.resolveDid(use.did);
+          const service = doc === null ? undefined : serviceUris(doc)[0];
+          const identity = await this.vault.peerIdentity(this.seedKey, use, service ?? null);
+          this.pairwise.set(use.did, identity);
+        } catch (err) {
+          this.log(`skipping our DID toward ${contact.name}: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * While a contact last wrote to a DID of ours that is not the one we
+   * write from, every message carries `from_prior`: the DID they know
+   * signs over the one we use now. Silence on their side is not consent —
+   * so it rides along until a reply reaches the new DID.
+   */
+  private async attachFromPrior(plain: IMessage, contact: ContactRecord): Promise<void> {
+    const prior = contact.addressedAs;
+    const current = plain.from as string;
+    if (prior === undefined || prior === current) {
+      return;
+    }
+    const secrets = this.allSecrets();
+    if (!secrets.some((secret) => secret.id === `${prior}#key-1`)) {
+      this.log(`${contact.name} knows us by a DID this seed does not hold; sending without from_prior`);
+      return;
+    }
+    const [jwt] = await new this.didcomm.FromPrior({
+      iss: prior,
+      sub: current,
+      iat: Math.floor(Date.now() / 1000),
+    }).pack(`${prior}#key-1`, this.didResolver, secretsResolverFor(secrets));
+    plain.from_prior = jwt;
   }
 
   async sendBasicMessage(contactDid: string, text: string): Promise<ChatMessage> {
@@ -761,10 +1014,8 @@ export class Agent {
     // user-profile/1.0 announcement, asking for theirs back.
     await this.shareProfileIfNew(contactDid);
 
-    const plain = plainMessage(BASIC_MESSAGE, this.pub.did, contactDid, {
-      content: text,
-    });
-    await this.deliverToContact(plain, contactDid);
+    const contact = (await this.vault.contacts.byDid(contactDid)) as ContactRecord;
+    const plain = await this.outbound(contact, BASIC_MESSAGE, { content: text });
     return this.logOutbound(plain);
   }
 
@@ -785,16 +1036,20 @@ export class Agent {
     if (this.pub === null) {
       return;
     }
-    const plain = plainMessage(PROFILE, this.pub.did, contactDid, {
+    const contact = await this.vault.contacts.byDid(contactDid);
+    if (contact === null) {
+      return;
+    }
+    const plain = await this.outbound(contact, PROFILE, {
       profile: { displayName: this.displayName() },
       send_back_yours: sendBackYours,
     });
-    await this.deliverToContact(plain, contactDid);
 
-    const contact = await this.vault.contacts.byDid(contactDid);
-    if (contact !== null && contact.profileSharedAt === undefined) {
-      contact.profileSharedAt = new Date().toISOString();
-      await this.vault.contacts.put(contact);
+    // re-read: `outbound` may have saved a freshly minted DID on the record
+    const saved = (await this.vault.contacts.byDid(contactDid)) as ContactRecord;
+    if (saved.profileSharedAt === undefined) {
+      saved.profileSharedAt = new Date().toISOString();
+      await this.vault.contacts.put(saved);
     }
     await this.logOutbound(plain);
   }
@@ -812,7 +1067,26 @@ export class Agent {
     return contact;
   }
 
+  /**
+   * Forget a contact: the record goes, and the mediator is asked to stop
+   * accepting mail for the DIDs we minted toward them (best effort — the
+   * keys stay burned in the keystore either way).
+   */
   async removeContact(cid: string): Promise<void> {
+    const contact = await this.vault.contacts.byCid(cid);
+    const pairwise = (contact?.myDids ?? []).filter((use) => use.key.startsWith(KEY_PAIRWISE_PREFIX));
+    if (pairwise.length > 0 && this.pub !== null) {
+      try {
+        await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+          updates: pairwise.map((use) => ({ recipient_did: use.did, action: "remove" })),
+        });
+      } catch (err) {
+        this.log(`could not unregister our DIDs toward ${contact?.name}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    for (const use of pairwise) {
+      this.pairwise.delete(use.did);
+    }
     await this.vault.contacts.remove(cid);
   }
 }

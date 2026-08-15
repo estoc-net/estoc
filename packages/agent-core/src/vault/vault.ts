@@ -11,7 +11,7 @@ import {
 import type { VaultBackend } from "../backend/types.js";
 import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
 import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
-import { ContactStore } from "./contacts.js";
+import { ContactStore, currentMyDid, type ContactRecord } from "./contacts.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
 import { MessageLog } from "./messages.js";
 
@@ -28,6 +28,8 @@ import { MessageLog } from "./messages.js";
 export const KEY_ANCHOR = "anchor";
 export const KEY_MEDIATOR = "mediator";
 export const KEY_PUBLIC = "public";
+/** Pairwise keys are named `pair/<cid>/<n>`: the contact, and the nth DID minted toward them. */
+export const KEY_PAIRWISE_PREFIX = "pair/";
 
 export interface CreateVaultOptions {
   label: string;
@@ -159,6 +161,39 @@ export class Vault {
     this.keystore = doc;
     await this.saveKeystore();
     return identity;
+  }
+
+  /**
+   * Mint a fresh pairwise did:peer:4 toward a contact — the nth key under
+   * `pair/<cid>/`, with the mediator's routing DID as its service — and
+   * record it as our current DID toward them, closing the previous one.
+   * The record is saved; registering the DID with the mediator is the
+   * agent's business (`registeredAt` stays unset here). Returns the
+   * identity, whose secrets the agent adds to what it can open.
+   */
+  async mintPairwise(
+    seedKey: SeedKey,
+    contact: ContactRecord,
+    routingDid: string,
+    now = new Date()
+  ): Promise<PeerIdentity> {
+    const uses = contact.myDids ?? [];
+    const n = uses.filter((use) => use.key.startsWith(KEY_PAIRWISE_PREFIX)).length + 1;
+    const key = `${KEY_PAIRWISE_PREFIX}${contact.cid}/${n}`;
+    // a key already in the index is the residue of a crash between minting
+    // it and saving the contact: reuse it, as `establishMediation` does
+    const identity = this.keystore.keys.some((entry) => entry.name === key)
+      ? await this.derive(seedKey, key)
+      : await this.mintKey(seedKey, key, now);
+    const minted = mintPeerDid(identity, routingDid);
+    const at = now.toISOString();
+    const current = currentMyDid(contact);
+    if (current !== null) {
+      current.until = at;
+    }
+    contact.myDids = [...uses, { did: minted.did, key, from: at }];
+    await this.contacts.put(contact);
+    return minted;
   }
 
   /**

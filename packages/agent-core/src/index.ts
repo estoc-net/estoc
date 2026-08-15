@@ -26,6 +26,7 @@ export {
   ContactStore,
   contactFileStem,
   currentDid,
+  currentMyDid,
   newContact,
   parseContact,
   type ContactRecord,
@@ -49,6 +50,7 @@ export {
 export {
   KEY_ANCHOR,
   KEY_MEDIATOR,
+  KEY_PAIRWISE_PREFIX,
   KEY_PUBLIC,
   Vault,
   type CreateVaultOptions,

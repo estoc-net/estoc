@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — 2026-08-15
+
+- **Pairwise DIDs.** The first message to any contact goes out from a
+  did:peer:4 minted for that relationship alone — keystore key
+  `pair/<cid>/<n>`, service = the mediator's routing DID, registered with
+  the mediator as a recipient before use (`Vault.mintPairwise`; the
+  contact's `myDids[]` records `{did, key, from, until?, registeredAt?}`
+  — `key` replaces the never-written `keyIndex`). The public DID stays,
+  as the address strangers write to. A registration the mediator could
+  not be told about (offline) is retried on the next send and at every
+  start; every DID ever minted is re-derived on start so mail to a
+  retired one still opens. `removeContact` asks the mediator to drop the
+  DIDs minted toward that contact.
+- **Rotation by `from_prior`.** `ContactRecord.addressedAs` remembers the
+  DID of ours a contact's latest envelope was sealed to; while it is not
+  the DID we write from, every message out carries a `from_prior` JWT
+  (the DID they know signing over the one we use), until a reply reaches
+  the new DID. Inbound, a verified `from_prior` whose issuer is a contact
+  and whose `sub` is the envelope's proven sender moves that contact to
+  the new DID (`dids[]` closed + appended with the JWT). This is how a
+  stranger who wrote to the public DID gets a DID of their own on our
+  first reply — and the mechanism every later rotation will ride.
+- `ChatMessage.contactCid`: the message's contact, resolved through the
+  DID histories by `Agent.history()` and `onMessage`, so a thread survives
+  its contact changing DIDs. Thread by it, not by `contactDid`.
+- `DidcommApi` now needs `FromPrior` alongside `Message` (both didcomm-rust
+  builds export it). `currentMyDid`, `KEY_PAIRWISE_PREFIX` exported.
+
 ## 0.5.0 — 2026-08-15
 
 - **A mediator is chosen after the identity, not with it.**
