@@ -93,7 +93,7 @@ async function viewsOf(v: Vault): Promise<Identity> {
   }
   return {
     name: v.config.label,
-    mediatorDid: v.config.mediation?.mediatorDid ?? "",
+    mediatorDid: v.config.mediation?.mediatorDid ?? null,
     did: v.config.mediation?.public?.did ?? null,
     contacts: (await v.contacts.all()).map(contactView),
     messages,
@@ -173,16 +173,34 @@ export async function boot(): Promise<void> {
   await open(v, key);
 }
 
-/** Mint an identity: a fresh seed sealed under `passphrase`, a vault around it. */
-export async function createIdentity(name: string, passphrase: string, mediatorDid: string): Promise<void> {
+/**
+ * Mint an identity: a fresh seed sealed under `passphrase`, a vault around
+ * it. No mediator yet — an identity is a seed and a name; how it is reached
+ * is decided afterwards (`chooseMediator`).
+ */
+export async function createIdentity(name: string, passphrase: string): Promise<void> {
   if (backend === null) {
     throw new Error("storage is not available");
   }
   const { doc, seedKey: key } = await createSeedKeystore(passphrase);
-  const v = await Vault.create(backend, { label: name, keystore: doc, seedKey: key, mediatorDid });
+  const v = await Vault.create(backend, { label: name, keystore: doc, seedKey: key });
   await cacheSeedKey(key);
   state.persisted = await persistStorage();
   await open(v, key);
+}
+
+/**
+ * Name the mediator this identity will be reached through, and go live:
+ * mediation, the public DID, pickup. Once, for an identity that has none —
+ * changing it later is a public-DID rotation the app does not offer yet.
+ */
+export async function chooseMediator(mediatorDid: string): Promise<void> {
+  if (agent === null || state.identity === null) {
+    throw new Error("the agent is not running");
+  }
+  await agent.setMediator(mediatorDid);
+  state.identity.mediatorDid = mediatorDid;
+  state.identity.did = agent.did;
 }
 
 /** Restore a backup zip into an empty install, unlocking it with its passphrase. */

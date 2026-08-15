@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import { mediatorLabel } from "../core/mediators.js";
+import { MEDIATOR_CHOICES, mediatorLabel } from "../core/mediators.js";
 import {
+  chooseMediator,
   downloadBackup,
   forgetIdentity,
   lock,
@@ -10,9 +11,31 @@ import {
   state,
 } from "../core/store.js";
 import type { AgentStatus } from "../core/types.js";
+import { CUSTOM, useMediatorInput } from "./mediator-input.js";
 import { bytesOf, shortDid } from "./util.js";
 
 const identity = computed(() => state.identity);
+
+// reachability: an identity is minted without a mediator; this is where one is named
+const { choice, pasted, resolving, error: mediatorError, resolveChoice } = useMediatorInput();
+const choosing = ref(false);
+const chooseError = ref<string | null>(null);
+
+async function pickMediator() {
+  chooseError.value = null;
+  const did = await resolveChoice();
+  if (did === null) {
+    return;
+  }
+  choosing.value = true;
+  try {
+    await chooseMediator(did);
+  } catch (err) {
+    chooseError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    choosing.value = false;
+  }
+}
 
 const copied = ref(false);
 
@@ -42,6 +65,8 @@ function statusText(status: AgentStatus): string {
   switch (status.state) {
     case "live":
       return "live delivery on";
+    case "unmediated":
+      return "not reachable yet — no mediator";
     case "connecting":
       return status.detail;
     case "error":
@@ -120,7 +145,35 @@ function forget() {
       </p>
     </div>
 
-    <div v-if="identity" class="rail-section">
+    <div v-if="identity && identity.mediatorDid === null" class="rail-section">
+      <div class="eyebrow">Choose a mediator to be reached</div>
+      <form class="rail-form" @submit.prevent="pickMediator">
+        <select v-model="choice" class="field">
+          <option v-for="c in MEDIATOR_CHOICES" :key="c.value" :value="c.value">
+            via {{ c.label }}
+          </option>
+          <option :value="CUSTOM">via a pasted invitation…</option>
+        </select>
+        <input
+          v-if="choice === CUSTOM"
+          v-model="pasted"
+          class="field"
+          placeholder="invitation URL, mediator URL, or DID"
+        />
+        <p v-if="chooseError || mediatorError" class="status-line error" style="margin: 0">
+          {{ chooseError ?? mediatorError }}
+        </p>
+        <button class="btn" type="submit" :disabled="choosing || resolving">
+          {{ choosing ? "Mediating…" : "Use this mediator" }}
+        </button>
+      </form>
+      <p class="status-line">
+        A mediator holds sealed envelopes until you pick them up, and its
+        address rides in the DID you hand out.
+      </p>
+    </div>
+
+    <div v-else-if="identity" class="rail-section">
       <div class="eyebrow">Your DID — share it to be reached</div>
       <button
         class="did-chip"
@@ -130,7 +183,7 @@ function forget() {
       >
         {{ copied ? "copied" : identity.did === null ? "minting…" : shortDid(identity.did) }}
       </button>
-      <p class="status-line">via {{ mediatorLabel(identity.mediatorDid) }}</p>
+      <p class="status-line">via {{ mediatorLabel(identity.mediatorDid ?? "") }}</p>
     </div>
 
     <div class="rail-section">

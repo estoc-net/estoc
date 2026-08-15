@@ -15,12 +15,19 @@ your data never touches the place the app was served from.
 
 ## What it does
 
-- **Identity from a seed.** Creating an identity generates a 32-byte seed
-  and seals it under your passphrase ([@estoc/keystore] v2). Every key is
-  derived from that seed: an anchor `did:key`, the `did:peer:4` your
-  mediator knows you by, the public `did:peer:4` you hand to contacts.
-  You type the passphrase once; the unlocked seed stays in this browser as
-  a non-extractable WebCrypto key. **Lock** forgets it and asks again.
+- **Identity from a seed.** Creating an identity takes a name and a
+  passphrase, nothing else: it generates a 32-byte seed and seals it under
+  the passphrase ([@estoc/keystore] v2). Every key is derived from that
+  seed: an anchor `did:key`, and — once you choose a mediator — the
+  `did:peer:4` the mediator knows you by and the public `did:peer:4` you
+  hand to contacts. You type the passphrase once; the unlocked seed stays
+  in this browser as a non-extractable WebCrypto key. **Lock** forgets it
+  and asks again.
+- **A mediator, chosen after.** An identity exists before it can be
+  reached. The rail says *not reachable yet* until you pick a mediator
+  there; the choice mints your public DID, whose address is that
+  mediator's, so it is made once (changing it later means handing out a
+  new DID — rotation, not yet offered).
 - **A vault in the browser.** Contacts and messages live in an `.estoc/`
   directory in this origin's private file system (OPFS) — the same folder
   format every Estoc client reads, written by [@estoc/agent-core]:
@@ -48,10 +55,11 @@ npm install
 npm run dev
 ```
 
-The onboarding dropdown defaults to `mediator.estoc.dev` ([didcomm-mediator]
-on Cloudflare Workers) and also offers a local one (`npm run dev` in the
-mediator repo, minted with `MEDIATOR_PUBLIC_URL=http://localhost:8080`),
-or paste any mediator's out-of-band invitation URL, its URL, or its DID.
+The rail's mediator dropdown defaults to `mediator.estoc.dev`
+([didcomm-mediator] on Cloudflare Workers) and also offers a local one
+(`npm run dev` in the mediator repo, minted with
+`MEDIATOR_PUBLIC_URL=http://localhost:8080`), or paste any mediator's
+out-of-band invitation URL, its URL, or its DID.
 
 ## Deploy your own
 
@@ -79,7 +87,8 @@ node scripts/e2e.mjs https://<your deployment>
 ```
 
 The e2e script (playwright-core, system chromium) mints Alice and Bob in
-isolated browser contexts and walks the whole surface: live delivery
+isolated browser contexts (unreachable first, then each picks the
+mediator) and walks the whole surface: live delivery
 without a reload, history surviving a reload with no passphrase, a second
 tab yielding to the first, lock and unlock (a wrong passphrase refused), a
 backup exported and restored in a fresh browser that then receives mail as

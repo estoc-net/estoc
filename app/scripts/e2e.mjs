@@ -12,7 +12,7 @@
  *   npm run preview        # serves the build on :4173 with the service worker
  *   node scripts/e2e.mjs [app-url]        (default http://localhost:4173)
  *
- * The mediator both identities use is whatever the onboarding dropdown
+ * The mediator both identities use is whatever the rail's dropdown
  * offers — the localhost entry unless E2E_MEDIATOR=estoc (production,
  * did:web:mediator.estoc.dev) or E2E_MEDIATOR=<url> (any other value is a
  * mediator's URL — the entry a VITE_MEDIATOR_DID build labels with that
@@ -73,18 +73,23 @@ async function createIdentity(page, name, invitationUrl = null) {
   await page.fill('input[placeholder="your name, e.g. Alice"]', name);
   await page.fill('input[placeholder^="passphrase (seals"]', PASS[name]);
   await page.fill('input[placeholder="passphrase again"]', PASS[name]);
+  await page.click('button:has-text("Create identity")');
+  // The identity exists before any mediator does: the rail says so, and
+  // offers the choice.
+  await page.waitForSelector("text=not reachable yet", { timeout: 20000 });
+  ok(`${name} minted without a mediator`);
   if (invitationUrl === null) {
-    await page.selectOption("select.field", { label: `via ${MEDIATOR_LABEL}` });
+    await page.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
   } else {
-    await page.selectOption("select.field", { label: "via a pasted invitation…" });
+    await page.selectOption(".rail-form select.field", { label: "via a pasted invitation…" });
     await page.fill('input[placeholder="invitation URL, mediator URL, or DID"]', invitationUrl);
   }
-  await page.click('button:has-text("Create identity")');
+  await page.click('button:has-text("Use this mediator")');
   const did = await waitLive(page);
   if (!did || !did.startsWith("did:peer:4")) {
     throw new Error(`${name} has no public did:peer:4 after mediation`);
   }
-  ok(`${name} minted and mediated; public DID ${did.length} chars`);
+  ok(`${name} mediated; public DID ${did.length} chars`);
   return did;
 }
 

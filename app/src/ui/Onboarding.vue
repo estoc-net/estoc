@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-import { MEDIATOR_CHOICES } from "../core/mediators.js";
 import { createIdentity, restoreIdentity, state } from "../core/store.js";
-import { CUSTOM, useMediatorInput } from "./mediator-input.js";
 import { bytesOf } from "./util.js";
 
 /**
  * First run: mint an identity here, or restore one from a backup zip. Both
  * end in the same place — a vault in this browser's private file system,
- * its seed sealed under the passphrase typed here.
+ * its seed sealed under the passphrase typed here. A mediator is not asked
+ * for: an identity is a name and a seed; being reachable comes after, in
+ * the rail.
  */
 
 const mode = ref<"create" | "restore">("create");
@@ -18,7 +18,6 @@ const mode = ref<"create" | "restore">("create");
 const name = ref("");
 const passphrase = ref("");
 const confirmPass = ref("");
-const { choice, pasted, resolving, error: mediatorError, resolveChoice } = useMediatorInput();
 const creating = ref(false);
 const createError = ref<string | null>(null);
 
@@ -37,13 +36,9 @@ async function create() {
     createError.value = "The two passphrases differ.";
     return;
   }
-  const mediatorDid = await resolveChoice();
-  if (mediatorDid === null) {
-    return;
-  }
   creating.value = true;
   try {
-    await createIdentity(label, passphrase.value, mediatorDid);
+    await createIdentity(label, passphrase.value);
   } catch (err) {
     createError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -119,28 +114,15 @@ async function restore() {
           placeholder="passphrase again"
           autocomplete="new-password"
         />
-        <select v-model="choice" class="field">
-          <option v-for="c in MEDIATOR_CHOICES" :key="c.value" :value="c.value">
-            via {{ c.label }}
-          </option>
-          <option :value="CUSTOM">via a pasted invitation…</option>
-        </select>
-        <input
-          v-if="choice === CUSTOM"
-          v-model="pasted"
-          class="field"
-          placeholder="invitation URL, mediator URL, or DID"
-        />
-        <p v-if="createError || mediatorError" class="status-line error">
-          {{ createError ?? mediatorError }}
-        </p>
-        <button class="btn" type="submit" :disabled="creating || resolving">
+        <p v-if="createError" class="status-line error">{{ createError }}</p>
+        <button class="btn" type="submit" :disabled="creating">
           {{ creating ? "Minting…" : "Create identity" }}
         </button>
         <p class="fine">
           The passphrase is not recoverable: it is the only thing that opens the
           seed. You will rarely type it — this browser keeps the unlocked seed —
-          but a backup on another device needs it.
+          but a backup on another device needs it. Which mediator carries your
+          mail is chosen next, once you are in.
         </p>
       </form>
 

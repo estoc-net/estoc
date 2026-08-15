@@ -131,7 +131,11 @@ watch(
     </div>
 
     <div ref="threadEl" class="thread">
-      <p v-if="contact && thread.length === 0" class="hop-note">
+      <p v-if="contact && identity.mediatorDid === null" class="hop-note">
+        No mediator yet — choose one in the rail before writing to
+        {{ contact.label }}; without one, nothing leaves and nothing arrives.
+      </p>
+      <p v-else-if="contact && thread.length === 0" class="hop-note">
         No messages yet. Whatever you write crosses the mediator sealed to
         {{ contact.label }} alone.
       </p>

@@ -312,6 +312,11 @@ textarea {
   color: #74858c;
 }
 
+/* native dropdown lists paint on white; keep the options readable there */
+.rail-form option {
+  color: var(--ink);
+}
+
 .rail-log {
   flex: 1;
   min-height: 60px;

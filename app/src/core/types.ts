@@ -25,7 +25,8 @@ export interface Contact {
 
 export interface Identity {
   name: string;
-  mediatorDid: string;
+  /** the mediator this identity is reached through; null until one is chosen */
+  mediatorDid: string | null;
   /** the public DID, minted after mediate-grant with the routing DID as its service */
   did: string | null;
   contacts: Contact[];

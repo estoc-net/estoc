@@ -6,9 +6,9 @@ import { MEDIATOR_CHOICES, resolveMediatorInput } from "../core/mediators.js";
 export const CUSTOM = "custom";
 
 /**
- * The mediator half of a mint form, shared by first-run onboarding and the
- * profile rail: a dropdown of known mediators plus a paste field that takes
- * an OOB invitation URL, a bare mediator URL, or a DID.
+ * The mediator picker in the rail, shown until the identity has one: a
+ * dropdown of known mediators plus a paste field that takes an OOB
+ * invitation URL, a bare mediator URL, or a DID.
  */
 export function useMediatorInput() {
   const choice = ref<string>(MEDIATOR_CHOICES[0].value);
