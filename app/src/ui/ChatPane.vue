@@ -7,19 +7,21 @@ import { shortDid, timeOf } from "./util.js";
 
 const props = defineProps<{
   identity: Identity;
-  selectedContactDid: string | null;
+  selectedContactCid: string | null;
 }>();
 
 const emit = defineEmits<{
-  selectContact: [did: string];
+  selectContact: [cid: string];
 }>();
 
 const contact = computed(
-  () => props.identity.contacts.find((c) => c.did === props.selectedContactDid) ?? null
+  () => props.identity.contacts.find((c) => c.cid === props.selectedContactCid) ?? null
 );
 
+// A thread is everything homed to the contact — across every DID either
+// side has used with the other.
 const thread = computed(() =>
-  props.identity.messages.filter((m) => m.contactDid === props.selectedContactDid)
+  props.identity.messages.filter((m) => m.contactCid === props.selectedContactCid)
 );
 
 // A displayName arriving over user-profile/1.0 is only ever a claim; the
@@ -45,15 +47,17 @@ const newLabel = ref("");
 const newDid = ref("");
 const addError = ref("");
 
-function add() {
+async function add() {
   const did = newDid.value.trim();
   const label = newLabel.value.trim() || shortDid(did);
   if (!did.startsWith("did:")) {
     addError.value = "That is not a DID — it should start with did:";
     return;
   }
-  void addContact(did, label);
-  emit("selectContact", did);
+  const added = await addContact(did, label);
+  if (added !== null) {
+    emit("selectContact", added.cid);
+  }
   newLabel.value = "";
   newDid.value = "";
   addError.value = "";
@@ -66,13 +70,13 @@ const sendError = ref("");
 
 async function send() {
   const text = draft.value.trim();
-  if (text === "" || props.selectedContactDid === null || sending.value) {
+  if (text === "" || contact.value === null || sending.value) {
     return;
   }
   sending.value = true;
   sendError.value = "";
   try {
-    await sendMessage(props.selectedContactDid, text);
+    await sendMessage(contact.value.did, text);
     draft.value = "";
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -97,16 +101,23 @@ watch(
     <div class="chat-head">
       <h2>{{ contact?.label ?? "Conversations" }}</h2>
       <span v-if="claimNote" class="claim-note">{{ claimNote }}</span>
-      <span v-if="contact" class="eyebrow" :title="contact.did">{{ shortDid(contact.did) }}</span>
+      <span v-if="contact" class="head-dids">
+        <span class="eyebrow" :title="contact.did">{{ shortDid(contact.did) }}</span>
+        <span
+          v-if="contact.myDid"
+          class="eyebrow"
+          :title="`the DID you write to ${contact.label} from — theirs alone: ${contact.myDid}`"
+        >you as {{ shortDid(contact.myDid) }}</span>
+      </span>
     </div>
 
     <div class="contact-strip">
       <button
         v-for="c in identity.contacts"
-        :key="c.did"
+        :key="c.cid"
         class="contact-chip"
-        :class="{ active: c.did === selectedContactDid }"
-        @click="emit('selectContact', c.did)"
+        :class="{ active: c.cid === selectedContactCid }"
+        @click="emit('selectContact', c.cid)"
       >
         {{ c.label }}
       </button>
@@ -136,8 +147,9 @@ watch(
         {{ contact.label }}; without one, nothing leaves and nothing arrives.
       </p>
       <p v-else-if="contact && thread.length === 0" class="hop-note">
-        No messages yet. Whatever you write crosses the mediator sealed to
-        {{ contact.label }} alone.
+        No messages yet. Your first message mints a DID of yours for
+        {{ contact.label }} alone — nobody else ever sees it — and whatever
+        you write crosses the mediator sealed to them.
       </p>
       <div
         v-for="m in thread"

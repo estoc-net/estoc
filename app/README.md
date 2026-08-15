@@ -28,6 +28,14 @@ your data never touches the place the app was served from.
   there; the choice mints your public DID, whose address is that
   mediator's, so it is made once (changing it later means handing out a
   new DID — rotation, not yet offered).
+- **A DID per conversation.** The public DID on the rail is a business
+  card: what strangers write to. The first message you send anyone goes
+  out from a `did:peer:4` minted for that person alone (the chat head
+  shows it as *you as …*), and someone who first wrote to your public DID
+  is moved to a private one on your first reply — announced the DIDComm
+  way, with `from_prior`, so their side follows without a word from you.
+  Two contacts of yours cannot compare notes and learn they share you; the
+  mediator, which queues for every DID under your account, still can.
 - **A vault in the browser.** Contacts and messages live in an `.estoc/`
   directory in this origin's private file system (OPFS) — the same folder
   format every Estoc client reads, written by [@estoc/agent-core]:
@@ -89,7 +97,9 @@ node scripts/e2e.mjs https://<your deployment>
 The e2e script (playwright-core, system chromium) mints Alice and Bob in
 isolated browser contexts (unreachable first, then each picks the
 mediator) and walks the whole surface: live delivery
-without a reload, history surviving a reload with no passphrase, a second
+without a reload, both writing from pairwise DIDs (and a pasted public
+DID finding the contact its pairwise DID created), history surviving a
+reload with no passphrase, a second
 tab yielding to the first, lock and unlock (a wrong passphrase refused), a
 backup exported and restored in a fresh browser that then receives mail as
 Alice, a backup merged into a live vault with nothing new, and — when a
@@ -121,9 +131,10 @@ service worker is serving — the app opening with the network off.
 
 ## Status
 
-Early. Single public identity per install (pairwise DIDs per contact are
-the next step), no offline outbox yet, no push notifications (a mediator
-extension), keys in the browser under your passphrase. Storage is only
+Early. Pairwise DIDs per contact, but no invitations yet (contacts are
+added by pasting a public DID) and no way to change mediator (a rotation
+of every DID — next); no offline outbox yet; no push notifications (a
+mediator extension); keys in the browser under your passphrase. Storage is only
 guaranteed once the browser grants persistence — install the app, and keep
 a backup either way. Browsers: Chromium and Firefox, and Safari 26 or later
 (the vault is written through OPFS `createWritable()`, which WebKit shipped

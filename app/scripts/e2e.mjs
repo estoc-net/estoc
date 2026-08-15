@@ -139,7 +139,28 @@ try {
   await expectBubble(alice, "introduced themself as “Bob”");
   ok("profiles exchanged both ways; Bob's stranger contact took Alice's claimed name");
 
+  // Pairwise: each side writes from a DID minted for the other alone. The
+  // chat head says which; it is not the public DID on the rail.
+  const aliceHeadMyDid = await alice.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
+  if (!aliceHeadMyDid?.includes("did:peer:4") || aliceHeadMyDid.includes(aliceDid)) {
+    fail("Alice's DID toward Bob should be a pairwise did:peer:4, not her public one");
+  }
+  const bobHeadMyDid = await bob.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
+  if (!bobHeadMyDid?.includes("did:peer:4") || bobHeadMyDid.includes(bobDid)) {
+    fail("Bob's DID toward Alice should be a pairwise did:peer:4, not his public one");
+  }
+  ok("both write from pairwise DIDs, not their public ones");
+
+  // Bob pastes Alice's public DID (her business card) as a contact: it is
+  // the same Alice — her first message vouched for its DID with the public
+  // one — so no twin appears.
   await addContact(bob, "Alice", aliceDid);
+  await bob.waitForTimeout(300);
+  const aliceChips = await bob.locator('.contact-chip:has-text("Alice")').count();
+  if (aliceChips !== 1) {
+    fail(`Bob has ${aliceChips} contacts named Alice; pasting her public DID should find the existing one`);
+  }
+  ok("pasting Alice's public DID finds the contact her pairwise DID created");
   await send(bob, "Alice", "hi alice, got it");
   await expectBubble(alice, "hi alice");
   ok("Alice received Bob's reply live");

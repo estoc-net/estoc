@@ -174,7 +174,7 @@ function forget() {
     </div>
 
     <div v-else-if="identity" class="rail-section">
-      <div class="eyebrow">Your DID — share it to be reached</div>
+      <div class="eyebrow">Your public DID — share it to be reached</div>
       <button
         class="did-chip"
         :title="identity.did ?? 'not minted yet'"
@@ -183,7 +183,10 @@ function forget() {
       >
         {{ copied ? "copied" : identity.did === null ? "minting…" : shortDid(identity.did) }}
       </button>
-      <p class="status-line">via {{ mediatorLabel(identity.mediatorDid ?? "") }}</p>
+      <p class="status-line">
+        via {{ mediatorLabel(identity.mediatorDid ?? "") }} · a business card:
+        each conversation gets a DID of its own
+      </p>
     </div>
 
     <div class="rail-section">

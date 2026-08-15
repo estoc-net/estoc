@@ -5,12 +5,13 @@ import {
   Vault,
   chatView,
   currentDid,
+  currentMyDid,
   type ContactRecord,
   type ImportOutcome,
   type VaultBackend,
 } from "@estoc/agent-core";
 
-import { Message, initDidcomm } from "../didcomm/wasm.js";
+import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
 import { exportBackup, importBackup, saveFile } from "./backup.js";
 import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
 import { acquireVaultLock } from "./lock.js";
@@ -63,6 +64,7 @@ function contactView(record: ContactRecord): Contact {
   return {
     cid: record.cid,
     did: currentDid(record),
+    myDid: currentMyDid(record)?.did ?? null,
     label: record.name,
     ...(record.claimedName === undefined ? {} : { claimedName: record.claimedName }),
   };
@@ -80,12 +82,22 @@ function upsertContact(identity: Identity, record: ContactRecord): void {
 
 /** Project the vault into views. */
 async function viewsOf(v: Vault): Promise<Identity> {
+  // Threads are keyed by contact, not by DID: a contact's DIDs are a
+  // history, and every message is homed through it.
+  const contacts = await v.contacts.all();
+  const cidOf = new Map<string, string>();
+  for (const contact of contacts) {
+    for (const use of contact.dids) {
+      cidOf.set(use.did, contact.cid);
+    }
+  }
   const messages: ChatMessage[] = [];
   let damaged = 0;
   for (const record of await v.messages.read(() => (damaged += 1))) {
     const view = chatView(record);
     if (view !== null) {
-      messages.push(view);
+      const cid = cidOf.get(view.contactDid);
+      messages.push(cid === undefined ? view : { ...view, contactCid: cid });
     }
   }
   if (damaged > 0) {
@@ -95,7 +107,7 @@ async function viewsOf(v: Vault): Promise<Identity> {
     name: v.config.label,
     mediatorDid: v.config.mediation?.mediatorDid ?? null,
     did: v.config.mediation?.public?.did ?? null,
-    contacts: (await v.contacts.all()).map(contactView),
+    contacts: contacts.map(contactView),
     messages,
   };
 }
@@ -108,7 +120,7 @@ async function attachAgent(): Promise<void> {
   const a = new Agent({
     vault,
     seedKey,
-    didcomm: { Message },
+    didcomm: { Message, FromPrior },
     events: {
       onStatus(status) {
         state.status = status;
@@ -299,25 +311,23 @@ export async function mergeBackup(zip: Uint8Array): Promise<ImportOutcome> {
   return outcome;
 }
 
-export async function addContact(did: string, label: string): Promise<void> {
+export async function addContact(did: string, label: string): Promise<Contact | null> {
   if (agent === null || state.identity === null) {
-    return;
+    return null;
   }
   // Adding a DID that already arrived as a stranger renames the auto-created
   // contact instead of duplicating it — the agent handles that.
-  upsertContact(state.identity, await agent.addContact(did, label));
+  const record = await agent.addContact(did, label);
+  upsertContact(state.identity, record);
+  return state.identity.contacts.find((c) => c.cid === record.cid) ?? null;
 }
 
-export async function removeContact(did: string): Promise<void> {
+export async function removeContact(cid: string): Promise<void> {
   if (agent === null || state.identity === null) {
     return;
   }
-  const contact = state.identity.contacts.find((c) => c.did === did);
-  if (contact === undefined) {
-    return;
-  }
-  await agent.removeContact(contact.cid);
-  state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== contact.cid);
+  await agent.removeContact(cid);
+  state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== cid);
 }
 
 export async function sendMessage(contactDid: string, text: string): Promise<void> {

@@ -429,6 +429,14 @@ textarea {
   justify-content: center;
 }
 
+.head-dids {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+}
+
 .claim-note {
   font-style: italic;
   font-size: 12px;

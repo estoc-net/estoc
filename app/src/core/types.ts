@@ -13,6 +13,8 @@ export interface Contact {
   cid: string;
   /** their current DID */
   did: string;
+  /** our DID toward them — pairwise, minted on the first message; null before */
+  myDid: string | null;
   /** our petname for them */
   label: string;
   /**

@@ -9,7 +9,9 @@ import Unlock from "./ui/Unlock.vue";
 
 const identity = computed(() => state.identity);
 
-const selectedContactDid = ref<string | null>(null);
+// Conversations are selected by the contact's cid — their DID is a history
+// that can move under a thread; the cid does not.
+const selectedContactCid = ref<string | null>(null);
 
 // The first contact (added by hand or auto-created by an incoming message)
 // becomes the open conversation if none is.
@@ -17,10 +19,10 @@ watch(
   () => identity.value?.contacts.length ?? 0,
   () => {
     if (
-      selectedContactDid.value === null ||
-      !identity.value?.contacts.some((c) => c.did === selectedContactDid.value)
+      selectedContactCid.value === null ||
+      !identity.value?.contacts.some((c) => c.cid === selectedContactCid.value)
     ) {
-      selectedContactDid.value = identity.value?.contacts[0]?.did ?? null;
+      selectedContactCid.value = identity.value?.contacts[0]?.cid ?? null;
     }
   },
   { immediate: true }
@@ -51,8 +53,8 @@ watch(
     <ChatPane
       v-if="identity"
       :identity="identity"
-      :selected-contact-did="selectedContactDid"
-      @select-contact="(did) => (selectedContactDid = did)"
+      :selected-contact-cid="selectedContactCid"
+      @select-contact="(cid) => (selectedContactCid = cid)"
     />
   </div>
 
