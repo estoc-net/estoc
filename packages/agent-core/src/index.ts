@@ -37,7 +37,6 @@ export {
   newMessageRecord,
   parseSegment,
   type DamagedLine,
-  type EnvelopeLayer,
   type MessageRecord,
   type PlainMessage,
 } from "./vault/messages.js";
@@ -64,7 +63,6 @@ export {
   didOf,
   endpointOf,
   plainMessage,
-  pretty,
   secretsResolverFor,
   serviceUris,
   type DidcommApi,

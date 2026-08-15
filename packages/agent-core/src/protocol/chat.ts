@@ -1,4 +1,4 @@
-import type { EnvelopeLayer, MessageRecord } from "../vault/messages.js";
+import type { MessageRecord } from "../vault/messages.js";
 import { BASIC_MESSAGE, PROFILE } from "./types.js";
 
 /**
@@ -20,7 +20,6 @@ export interface ChatMessage {
   content: string;
   /** epoch milliseconds */
   time: number;
-  layers: EnvelopeLayer[];
 }
 
 export function chatView(record: MessageRecord): ChatMessage | null {
@@ -64,6 +63,5 @@ export function chatView(record: MessageRecord): ChatMessage | null {
         : msg.created_time < 1e12
           ? msg.created_time * 1000
           : msg.created_time,
-    layers: record.layers ?? [],
   };
 }

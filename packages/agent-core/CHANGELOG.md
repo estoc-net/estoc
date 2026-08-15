@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 2026-08-15
+
+- **Envelopes are no longer captured.** `MessageRecord.layers`,
+  `ChatMessage.layers`, the `EnvelopeLayer` type and the `pretty` helper
+  are gone: the log keeps the plaintext and the proven sender, not the
+  ciphertext that carried it (or the UI prose that described it). Records
+  written by earlier versions still parse — the extra field is ignored.
+  A see-through view stays where it belongs, in the demo (on 0.2.x).
+
 ## 0.3.0 — 2026-08-15
 
 - `snapshotVault` / `importVault` (`vault/transfer.ts`): a vault as a

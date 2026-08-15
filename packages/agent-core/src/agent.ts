@@ -10,7 +10,6 @@ import {
   ENCRYPTED_MIME,
   PLAIN_TYP,
   plainMessage,
-  pretty,
   secretsResolverFor,
   serviceUris,
   type DidcommApi,
@@ -33,24 +32,19 @@ import {
   STATUS_REQUEST,
 } from "./protocol/types.js";
 import { currentDid, newContact, type ContactRecord } from "./vault/contacts.js";
-import {
-  newMessageRecord,
-  type EnvelopeLayer,
-  type MessageRecord,
-} from "./vault/messages.js";
+import { newMessageRecord, type MessageRecord } from "./vault/messages.js";
 import { KEY_PUBLIC, type Vault } from "./vault/vault.js";
 
 /**
- * One vault's live agent: mediation, pickup, live delivery, and the layered
- * packing that makes a see-through inspector possible.
+ * One vault's live agent: mediation, pickup, live delivery, and routing.
  *
  * Packing is deliberately done by hand in two steps — inner authcrypt to the
  * recipient, then an explicit forward sealed anonymously to their mediator —
  * instead of letting didcomm-rust wrap the forward internally. Same wire
- * bytes, but every layer passes through our hands, so every layer can be
- * shown. The wire behaviour itself (DID shapes, second timestamps, the
- * WebSocket ritual, acking over HTTP) is what mediator-ts pins in its
- * demo-interop test.
+ * bytes, but every layer passes through our hands, which keeps the routing
+ * DID and the forward's shape ours to decide. The wire behaviour itself
+ * (DID shapes, second timestamps, the WebSocket ritual, acking over HTTP)
+ * is what mediator-ts pins in its demo-interop test.
  *
  * Everything the agent learns is written to the vault before anyone is
  * told: the log line first, then the event. UIs mirror the vault; they are
@@ -373,7 +367,7 @@ export class Agent {
       if (delivery.type !== DELIVERY) {
         return;
       }
-      const acked = await this.enqueueInbound(() => this.processDelivery(delivery, null));
+      const acked = await this.enqueueInbound(() => this.processDelivery(delivery));
       if (acked === 0) {
         this.log("nothing in the queue could be handled now; leaving it for a later pickup");
         return;
@@ -410,9 +404,9 @@ export class Agent {
 
   /**
    * Open the inner envelopes riding a delivery message, log each as a
-   * received message with its full peel, then ack — over HTTP even when
-   * the delivery arrived on the socket, which is the ritual the mediator's
-   * demo-interop test pins. Returns how many attachments were acked.
+   * received message, then ack — over HTTP even when the delivery arrived
+   * on the socket, which is the ritual the mediator's demo-interop test
+   * pins. Returns how many attachments were acked.
    *
    * An attachment is acked once it is dealt with: logged, answered, or
    * ignored on purpose. One that would not open is not — the failure may
@@ -420,10 +414,7 @@ export class Agent {
    * stays queued for the next pickup. Nothing here throws for one bad
    * attachment: the loop moves on, and the ack still goes out for the rest.
    */
-  private async processDelivery(
-    delivery: IMessage,
-    outerPacked: string | null
-  ): Promise<number> {
+  private async processDelivery(delivery: IMessage): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const acked: string[] = [];
 
@@ -492,40 +483,6 @@ export class Agent {
         continue;
       }
 
-      const layers: EnvelopeLayer[] = [];
-      if (outerPacked !== null) {
-        layers.push({
-          kind: "authcrypt",
-          title: "Delivery envelope from your mediator",
-          payload: pretty(outerPacked),
-          visibleTo: "you",
-          note: "The frame that arrived on your WebSocket: a delivery message sealed by the mediator to your mediator-facing DID.",
-        });
-      }
-      layers.push(
-        {
-          kind: "plaintext",
-          title: "Pickup delivery",
-          payload: pretty(delivery as unknown as Record<string, unknown>),
-          visibleTo: "you and your mediator",
-          note: "The mediator hands over what it queued. The attachment is still sealed — the mediator never saw inside it.",
-        },
-        {
-          kind: "authcrypt",
-          title: "Inner envelope — sealed to you",
-          payload: pretty(innerPacked),
-          visibleTo: "you (opened with your key)",
-          note: "Encrypted to your public DID's key agreement key and authenticated by the sender's key. This is the layer the mediator stored without being able to read.",
-        },
-        {
-          kind: "plaintext",
-          title: "Plaintext message",
-          payload: pretty(inner as unknown as Record<string, unknown>),
-          visibleTo: "you and the sender",
-          note: "The message itself, visible to nobody in between.",
-        }
-      );
-
       // Attribution is the envelope's, never the plaintext's: `from` is
       // whatever the sender typed, and an anonymous (anoncrypt) envelope
       // could carry anyone's DID there. Such a message is still a fact
@@ -536,7 +493,6 @@ export class Agent {
         direction: "in",
         sender,
         msg: inner as unknown as MessageRecord["msg"],
-        layers,
       });
       await this.vault.messages.append(record);
       this.seen.add(key);
@@ -636,7 +592,7 @@ export class Agent {
           return;
         }
         if (msg.type === DELIVERY) {
-          await this.enqueueInbound(() => this.processDelivery(msg, text));
+          await this.enqueueInbound(() => this.processDelivery(msg));
           return;
         }
         this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
@@ -681,15 +637,11 @@ export class Agent {
   }
 
   /**
-   * Pack a plaintext message for a contact layer by layer and POST it,
-   * capturing every layer for the inspector: plaintext → authcrypt to the
-   * recipient → (when they live behind a mediator) forward request →
-   * anoncrypt to their mediator.
+   * Pack a plaintext message for a contact layer by layer and POST it:
+   * authcrypt to the recipient, then — when they live behind a mediator —
+   * a forward request sealed anonymously to that mediator.
    */
-  private async deliverToContact(
-    plain: IMessage,
-    contactDid: string
-  ): Promise<EnvelopeLayer[]> {
+  private async deliverToContact(plain: IMessage, contactDid: string): Promise<void> {
     const contactDoc = await this.resolveDid(contactDid);
     if (contactDoc === null) {
       throw new Error("contact DID does not resolve");
@@ -707,23 +659,6 @@ export class Agent {
       secretsResolverFor(this.allSecrets()),
       { forward: false }
     );
-
-    const layers: EnvelopeLayer[] = [
-      {
-        kind: "plaintext",
-        title: "Plaintext message",
-        payload: pretty(plain as unknown as Record<string, unknown>),
-        visibleTo: "you and the recipient",
-        note: "What the recipient reads after peeling every layer. Nobody on the path sees this.",
-      },
-      {
-        kind: "authcrypt",
-        title: "Inner envelope — sealed to the recipient",
-        payload: pretty(innerPacked),
-        visibleTo: "the recipient only",
-        note: "Encrypted to the recipient's key agreement key, authenticated with yours. Their mediator will store this without being able to open it.",
-      },
-    ];
 
     let outboundPacked = innerPacked;
     let endpoint: string;
@@ -763,23 +698,6 @@ export class Agent {
         { forward: false }
       );
 
-      layers.push(
-        {
-          kind: "forward",
-          title: "Forward request",
-          payload: pretty(forward as unknown as Record<string, unknown>),
-          visibleTo: "the recipient's mediator",
-          note: "All the mediator is told: queue the attached envelope for `next`. No sender, no content.",
-        },
-        {
-          kind: "anoncrypt",
-          title: "Outer envelope — anonymous to the mediator",
-          payload: pretty(outerPacked),
-          visibleTo: "the recipient's mediator",
-          note: "Sealed anonymously (anoncrypt): the wire and the mediator see a message from nobody, addressed to the mediator itself.",
-        }
-      );
-
       outboundPacked = outerPacked;
       endpoint = httpEndpoint;
     } else if (contactService.startsWith("http")) {
@@ -797,15 +715,12 @@ export class Agent {
     if (!response.ok) {
       throw new Error(`endpoint answered ${response.status}`);
     }
-
-    return layers;
   }
 
-  private async logOutbound(plain: IMessage, layers: EnvelopeLayer[]): Promise<ChatMessage> {
+  private async logOutbound(plain: IMessage): Promise<ChatMessage> {
     const record = newMessageRecord({
       direction: "out",
       msg: plain as unknown as MessageRecord["msg"],
-      layers,
     });
     await this.vault.messages.append(record);
     const view = chatView(record) as ChatMessage;
@@ -826,8 +741,8 @@ export class Agent {
     const plain = plainMessage(BASIC_MESSAGE, this.pub.did, contactDid, {
       content: text,
     });
-    const layers = await this.deliverToContact(plain, contactDid);
-    return this.logOutbound(plain, layers);
+    await this.deliverToContact(plain, contactDid);
+    return this.logOutbound(plain);
   }
 
   /** Announce our display name once per contact; later renames stay local. */
@@ -851,14 +766,14 @@ export class Agent {
       profile: { displayName: this.displayName() },
       send_back_yours: sendBackYours,
     });
-    const layers = await this.deliverToContact(plain, contactDid);
+    await this.deliverToContact(plain, contactDid);
 
     const contact = await this.vault.contacts.byDid(contactDid);
     if (contact !== null && contact.profileSharedAt === undefined) {
       contact.profileSharedAt = new Date().toISOString();
       await this.vault.contacts.put(contact);
     }
-    await this.logOutbound(plain, layers);
+    await this.logOutbound(plain);
   }
 
   /**

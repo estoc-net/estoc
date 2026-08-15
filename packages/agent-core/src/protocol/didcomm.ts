@@ -69,15 +69,3 @@ export function plainMessage(
 export function didOf(kid: string | null | undefined): string | null {
   return kid ? (kid.split("#")[0] as string) : null;
 }
-
-/** Pretty-print a wire object (JSON text or value) for the inspector. */
-export function pretty(value: unknown): string {
-  if (typeof value === "string") {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
-  }
-  return JSON.stringify(value, null, 2);
-}

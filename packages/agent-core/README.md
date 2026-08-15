@@ -2,9 +2,9 @@
 
 The DIDComm v2 agent behind Estoc's clients: mediation (coordinate-mediation
 3.0), pickup and live delivery (messagepickup 3.0 over HTTP and WebSocket),
-routing 2.0 forwards packed **by hand, layer by layer** — so every envelope
-can be shown — and user-profile/1.0 introductions, all over an `.estoc`
-vault stored through a pluggable backend.
+routing 2.0 forwards packed by hand, layer by layer, and user-profile/1.0
+introductions, all over an `.estoc` vault stored through a pluggable
+backend.
 
 Runs wherever didcomm-rust's WASM does: the browser (Vite), workerd, Node.
 The WASM itself is *not* loaded here — see [Didcomm API](#didcomm-api).
@@ -12,7 +12,7 @@ The WASM itself is *not* loaded here — see [Didcomm API](#didcomm-api).
 ## Layers
 
 ```
-Agent                        mediation · pickup · live delivery · layered packing
+Agent                        mediation · pickup · live delivery · routing
   ├─ protocol/               type URIs, resolver (did:web + did:peer), mediator input, chat projection
   ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v2)
   └─ Vault                   the .estoc format: config · keystore · contacts · message log
@@ -38,10 +38,10 @@ Agent                        mediation · pickup · live delivery · layered pac
   file name is a readable handle derived from the petname; the record is
   the truth.
 - **The message log** stores each event as
-  `{mid, at, direction, sender?, msg, layers?}`: `mid` is the local
-  primary key (uuidv7, assigned at append), `msg` the plaintext exactly as
-  it arrived or left, `sender` the DID the envelope *proved* (didcomm-rust
-  never compares it with `from`), `layers` the captured envelope onion.
+  `{mid, at, direction, sender?, msg}`: `mid` is the local primary key
+  (uuidv7, assigned at append), `msg` the plaintext exactly as it arrived
+  or left, `sender` the DID the envelope *proved* (didcomm-rust never
+  compares it with `from`).
   Whose message it is gets resolved at read time through contact DID
   histories — the log encodes facts, not interpretations. A line that does
   not parse (a crash mid-append, a corrupted byte) is reported to the reader
@@ -53,10 +53,9 @@ Agent                        mediation · pickup · live delivery · layered pac
   can type into an anonymous envelope). Anonymous mail is logged with
   `sender: null`, belongs to no contact's thread (`chatView` yields null),
   and cannot rename a contact or be answered with a profile.
-- **At rest, the vault is plaintext** apart from the seed: messages,
-  captured envelopes and contacts are readable files. That is the
-  see-through deal — an application wanting encryption at rest wraps the
-  backend.
+- **At rest, the vault is plaintext** apart from the seed: messages and
+  contacts are readable files. An application wanting encryption at rest
+  wraps the backend.
 - **One agent per vault at a time.** Two agents (two tabs) on one vault
   would append to the same log and rewrite the same config; the package
   does not arbitrate that. Browsers have the Web Locks API for the job —

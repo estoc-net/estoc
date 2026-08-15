@@ -20,19 +20,6 @@ import { FIRST_SEGMENT, MESSAGES_DIR, text, utf8 } from "./layout.js";
  * dropping its segments in beside ours.
  */
 
-/**
- * One captured layer of a message's envelope onion — the see-through
- * messenger's whole point. `payload` is the exact wire object, pretty
- * printed; `visibleTo` names who could read this layer.
- */
-export interface EnvelopeLayer {
-  kind: "plaintext" | "authcrypt" | "anoncrypt" | "forward";
-  title: string;
-  payload: string;
-  visibleTo: string;
-  note: string;
-}
-
 /** A DIDComm plaintext message as JSON: what didcomm-rust's as_value() yields. */
 export interface PlainMessage {
   id: string;
@@ -64,7 +51,6 @@ export interface MessageRecord {
    */
   sender?: string | null;
   msg: PlainMessage;
-  layers?: EnvelopeLayer[];
 }
 
 export function newMessageRecord(

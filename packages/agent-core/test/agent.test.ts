@@ -137,7 +137,7 @@ async function until(cond: () => boolean): Promise<void> {
 }
 
 describe("Agent through a mediator", () => {
-  it("mediates, exchanges basic messages and profiles, and shows every layer", async () => {
+  it("mediates, exchanges basic messages and profiles", async () => {
     const mediator = await newMediator();
     const alice = await newParty("Alice", 1, mediator);
     const bob = await newParty("Bob", 2, mediator);
@@ -158,13 +158,11 @@ describe("Agent through a mediator", () => {
     const sent = await alice.agent.sendBasicMessage(bob.agent.did as string, "hello bob");
     expect(sent.kind).toBe("chat");
     expect(sent.direction).toBe("sent");
-    expect(sent.layers.map((l) => l.kind)).toEqual(["plaintext", "authcrypt", "forward", "anoncrypt"]);
 
-    // Bob receives it live: outer, delivery, inner, plain.
+    // Bob receives it live.
     const got = await withTimeout(bob.next((v) => v.kind === "chat" && v.content === "hello bob"), 8000, "bob's chat");
     expect(got.direction).toBe("received");
     expect(got.contactDid).toBe(alice.agent.did);
-    expect(got.layers.map((l) => l.kind)).toEqual(["authcrypt", "plaintext", "authcrypt", "plaintext"]);
 
     // The stranger contact was created and then took Alice's claimed name;
     // send_back_yours made Bob introduce himself in return.
