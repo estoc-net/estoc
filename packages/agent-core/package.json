@@ -1,0 +1,51 @@
+{
+  "name": "@estoc/agent-core",
+  "version": "0.1.0",
+  "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery and hand-layered packing over an .estoc vault (config, seed keystore, contacts, append-only message log) stored through a pluggable VaultBackend — OPFS in the browser, memory for tests. Runs wherever didcomm-rust's WASM does.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/agent-core.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run test && npm run build"
+  },
+  "keywords": [
+    "didcomm",
+    "did",
+    "agent",
+    "opfs",
+    "decentralized-identity"
+  ],
+  "dependencies": {
+    "@estoc/did-peer": "^0.1.0",
+    "@estoc/keystore": "^0.2.0",
+    "did-resolver": "^4.1.0",
+    "didcomm": "^0.4.1",
+    "uuid": "^11.1.1",
+    "web-did-resolver": "^2.0.32"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "didcomm-node": "^0.4.1",
+    "typescript": "~5.8.0",
+    "vitest": "^3.2.7"
+  }
+}

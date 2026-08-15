@@ -1,0 +1,787 @@
+import type { SeedKey } from "@estoc/keystore";
+import { base64urlToUtf8 } from "@estoc/did-peer";
+import type { DIDDoc, Secret } from "@estoc/did-peer";
+
+import { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
+import { chatView, type ChatMessage } from "./protocol/chat.js";
+import {
+  didOf,
+  endpointOf,
+  ENCRYPTED_MIME,
+  PLAIN_TYP,
+  plainMessage,
+  pretty,
+  secretsResolverFor,
+  serviceUris,
+  type DidcommApi,
+  type IMessage,
+} from "./protocol/didcomm.js";
+import { resolveDid as defaultResolveDid } from "./protocol/resolver.js";
+import {
+  BASIC_MESSAGE,
+  DELIVERY,
+  DELIVERY_REQUEST,
+  FORWARD,
+  LIVE_DELIVERY_CHANGE,
+  MEDIATE_GRANT,
+  MEDIATE_REQUEST,
+  MESSAGES_RECEIVED,
+  PROFILE,
+  RECIPIENT_UPDATE,
+  REQUEST_PROFILE,
+  STATUS,
+  STATUS_REQUEST,
+} from "./protocol/types.js";
+import { currentDid, newContact, type ContactRecord } from "./vault/contacts.js";
+import {
+  newMessageRecord,
+  type EnvelopeLayer,
+  type MessageRecord,
+} from "./vault/messages.js";
+import { KEY_PUBLIC, type Vault } from "./vault/vault.js";
+
+/**
+ * One vault's live agent: mediation, pickup, live delivery, and the layered
+ * packing that makes a see-through inspector possible.
+ *
+ * Packing is deliberately done by hand in two steps — inner authcrypt to the
+ * recipient, then an explicit forward sealed anonymously to their mediator —
+ * instead of letting didcomm-rust wrap the forward internally. Same wire
+ * bytes, but every layer passes through our hands, so every layer can be
+ * shown. The wire behaviour itself (DID shapes, second timestamps, the
+ * WebSocket ritual, acking over HTTP) is what mediator-ts pins in its
+ * demo-interop test.
+ *
+ * Everything the agent learns is written to the vault before anyone is
+ * told: the log line first, then the event. UIs mirror the vault; they are
+ * not the record.
+ */
+
+export type AgentStatus =
+  | { state: "idle" }
+  | { state: "connecting"; detail: string }
+  | { state: "live" }
+  | { state: "error"; detail: string };
+
+export interface AgentEvents {
+  onStatus(status: AgentStatus): void;
+  /** a chat-visible record was appended (sent or received), with its projection */
+  onMessage(record: MessageRecord, view: ChatMessage): void;
+  /** the agent created or changed a contact (a stranger's first message, a claimed name) */
+  onContact(contact: ContactRecord): void;
+  onLog(line: string): void;
+}
+
+export interface AgentOptions {
+  vault: Vault;
+  seedKey: SeedKey;
+  didcomm: DidcommApi;
+  events?: Partial<AgentEvents>;
+  /** DID resolution; defaults to the package's did:web + did:peer resolver */
+  resolveDid?: (did: string) => Promise<DIDDoc | null>;
+  /** transports, injectable for tests; default to the globals */
+  fetch?: typeof fetch;
+  WebSocket?: typeof WebSocket;
+  /** the name announced over user-profile/1.0; defaults to the vault label */
+  displayName?: () => string;
+  /** how long to wait before reopening a closed socket */
+  reconnectDelayMs?: number;
+}
+
+interface DeliveryAttachment {
+  id?: string;
+  data: { base64?: string; json?: unknown };
+}
+
+/** The stand-in petname an auto-created contact carries until something names it. */
+export function didPlaceholder(did: string): string {
+  return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
+}
+
+export class Agent {
+  readonly vault: Vault;
+  private readonly seedKey: SeedKey;
+  private readonly didcomm: DidcommApi;
+  private readonly events: Partial<AgentEvents>;
+  private readonly resolveDid: (did: string) => Promise<DIDDoc | null>;
+  private readonly fetchFn: typeof fetch;
+  private readonly WebSocketCtor: typeof WebSocket;
+  private readonly displayName: () => string;
+  private readonly reconnectDelayMs: number;
+  private readonly didResolver: { resolve: (did: string) => Promise<DIDDoc | null> };
+
+  private me: PeerIdentity | null = null;
+  private pub: PeerIdentity | null = null;
+  private mediatorDoc: DIDDoc | null = null;
+  private ws: WebSocket | null = null;
+  private destroyed = false;
+  private _status: AgentStatus = { state: "idle" };
+  /** wire ids of inbound messages already in the log */
+  private seen = new Set<string>();
+
+  constructor(options: AgentOptions) {
+    this.vault = options.vault;
+    this.seedKey = options.seedKey;
+    this.didcomm = options.didcomm;
+    this.events = options.events ?? {};
+    this.resolveDid = options.resolveDid ?? defaultResolveDid;
+    // wrapped, not assigned: calling a native fetch with `this` bound to
+    // anything but the global is an "Illegal invocation" in browsers
+    const fetchImpl = options.fetch ?? fetch;
+    this.fetchFn = (input, init) => fetchImpl(input, init);
+    this.WebSocketCtor = options.WebSocket ?? WebSocket;
+    this.displayName = options.displayName ?? (() => this.vault.config.label);
+    this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
+    this.didResolver = { resolve: (did) => this.resolveDid(did) };
+  }
+
+  /** The public DID correspondents write to; null until mediation completes. */
+  get did(): string | null {
+    return this.vault.config.mediation?.public?.did ?? null;
+  }
+
+  get status(): AgentStatus {
+    return this._status;
+  }
+
+  private setStatus(status: AgentStatus): void {
+    this._status = status;
+    this.events.onStatus?.(status);
+  }
+
+  private log(line: string): void {
+    this.events.onLog?.(line);
+  }
+
+  private allSecrets(): Secret[] {
+    return [...(this.me?.secrets ?? []), ...(this.pub?.secrets ?? [])];
+  }
+
+  /** The chat projection of everything in the log, in log order. */
+  async history(): Promise<ChatMessage[]> {
+    const views: ChatMessage[] = [];
+    for (const record of await this.vault.messages.read()) {
+      const view = chatView(record);
+      if (view !== null) {
+        views.push(view);
+      }
+    }
+    return views;
+  }
+
+  async start(): Promise<void> {
+    try {
+      const mediation = this.vault.config.mediation;
+      if (mediation === null) {
+        throw new Error("vault has no mediator configured");
+      }
+      this.setStatus({ state: "connecting", detail: "deriving keys" });
+      this.me = await this.vault.peerIdentity(this.seedKey, mediation.me, null);
+      if (mediation.public !== null) {
+        this.pub = await this.vault.peerIdentity(
+          this.seedKey,
+          mediation.public,
+          mediation.routingDid
+        );
+      }
+      for (const record of await this.vault.messages.read()) {
+        if (record.direction === "in") {
+          this.seen.add(record.msg.id);
+        }
+      }
+
+      this.setStatus({ state: "connecting", detail: "resolving mediator" });
+      this.mediatorDoc = await this.resolveDid(mediation.mediatorDid);
+      if (this.mediatorDoc === null) {
+        throw new Error("mediator DID does not resolve");
+      }
+
+      if (this.pub === null) {
+        this.setStatus({ state: "connecting", detail: "requesting mediation" });
+        await this.establishMediation();
+      }
+
+      this.setStatus({ state: "connecting", detail: "picking up queued mail" });
+      await this.drainQueue();
+
+      this.setStatus({ state: "connecting", detail: "opening live delivery" });
+      this.connectWebSocket();
+    } catch (err) {
+      this.setStatus({
+        state: "error",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.ws?.close();
+    this.ws = null;
+  }
+
+  private mediation() {
+    return this.vault.config.mediation as NonNullable<Vault["config"]["mediation"]>;
+  }
+
+  /**
+   * Seal a message from the mediator-facing DID to the mediator itself.
+   * Every such request declares the connection it arrives on as its return
+   * route — messagepickup 3.0 requires clients to say so explicitly, once
+   * per WebSocket and on every HTTP POST.
+   */
+  private async packForMediator(message: IMessage): Promise<string> {
+    const [packed] = await new this.didcomm.Message({
+      ...message,
+      return_route: "all",
+    } as IMessage).pack_encrypted(
+      this.mediation().mediatorDid,
+      (this.me as PeerIdentity).did,
+      null,
+      this.didResolver,
+      secretsResolverFor(this.allSecrets()),
+      { forward: false }
+    );
+    return packed;
+  }
+
+  private mediatorHttp(): string {
+    const endpoint = endpointOf(this.mediatorDoc as DIDDoc, "http");
+    if (endpoint === null) {
+      throw new Error("mediator has no HTTP endpoint");
+    }
+    return endpoint;
+  }
+
+  private async unpack(packed: string): Promise<{ msg: IMessage; sender: string | null }> {
+    const [msg, metadata] = await this.didcomm.Message.unpack(
+      packed,
+      this.didResolver,
+      secretsResolverFor(this.allSecrets()),
+      {}
+    );
+    return { msg: msg.as_value(), sender: didOf(metadata.encrypted_from_kid) };
+  }
+
+  /** POST to the mediator and unpack the reply riding the HTTP response. */
+  private async mediatorRoundTrip(
+    type: string,
+    body: Record<string, unknown>
+  ): Promise<IMessage> {
+    const message = plainMessage(
+      type,
+      (this.me as PeerIdentity).did,
+      this.mediation().mediatorDid,
+      body
+    );
+    const packed = await this.packForMediator(message);
+    const response = await this.fetchFn(this.mediatorHttp(), {
+      method: "POST",
+      headers: { "Content-Type": ENCRYPTED_MIME },
+      body: packed,
+    });
+    if (!response.ok) {
+      throw new Error(`mediator answered ${response.status} to ${type}`);
+    }
+    return (await this.unpack(await response.text())).msg;
+  }
+
+  /**
+   * mediate-request → grant → mint the public DID on the routing DID →
+   * recipient-update. Every step is safe to repeat, so a crash anywhere in
+   * between is healed by the next start: the grant is idempotent, a key
+   * already in the index is reused, and re-adding a recipient is a
+   * no_change.
+   */
+  private async establishMediation(): Promise<void> {
+    const grant = await this.mediatorRoundTrip(MEDIATE_REQUEST, {});
+    if (grant.type !== MEDIATE_GRANT) {
+      throw new Error(`expected mediate-grant, got ${grant.type}`);
+    }
+    const routing = grant.body.routing_did as string[] | undefined;
+    const routingDid = routing?.[0];
+    if (routingDid === undefined) {
+      throw new Error("mediate-grant carries no routing_did");
+    }
+    this.log("mediate-grant received; routing DID is the mediator");
+
+    const hasKey = this.vault.keystore.keys.some((entry) => entry.name === KEY_PUBLIC);
+    const identity = hasKey
+      ? await this.vault.derive(this.seedKey, KEY_PUBLIC)
+      : await this.vault.mintKey(this.seedKey, KEY_PUBLIC);
+    const pub = mintPeerDid(identity, routingDid);
+    // The public DID's secrets must be resolvable before anything is
+    // sealed to it; the mediator's recipient-update-response is.
+    this.pub = pub;
+
+    const updated = await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+      updates: [{ recipient_did: pub.did, action: "add" }],
+    });
+    const results = updated.body.updated as { result?: string }[] | undefined;
+    const result = results?.[0]?.result;
+    if (result !== "success" && result !== "no_change") {
+      this.pub = null;
+      throw new Error("recipient-update was not accepted");
+    }
+
+    this.vault.config.mediation = {
+      ...this.mediation(),
+      routingDid,
+      public: { key: KEY_PUBLIC, did: pub.did },
+    };
+    await this.vault.saveConfig();
+    this.log("public DID registered with the mediator");
+  }
+
+  /** The pickup loop: status → delivery-request → unpack each → ack. */
+  private async drainQueue(): Promise<void> {
+    for (let round = 0; round < 10; round++) {
+      const status = await this.mediatorRoundTrip(STATUS_REQUEST, {});
+      const count =
+        status.type === STATUS ? (status.body.message_count as number) : 0;
+      if (count === 0) {
+        return;
+      }
+      this.log(`${count} message(s) queued at the mediator`);
+
+      const delivery = await this.mediatorRoundTrip(DELIVERY_REQUEST, {
+        limit: count,
+      });
+      if (delivery.type !== DELIVERY) {
+        return;
+      }
+      await this.processDelivery(delivery, null);
+    }
+  }
+
+  private async ack(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await this.mediatorRoundTrip(MESSAGES_RECEIVED, { message_id_list: ids });
+  }
+
+  /** The contact who owns `did`, created with a placeholder name if new. */
+  private async ensureContact(did: string): Promise<ContactRecord> {
+    const existing = await this.vault.contacts.byDid(did);
+    if (existing !== null) {
+      return existing;
+    }
+    const contact = newContact(didPlaceholder(did), did);
+    await this.vault.contacts.put(contact);
+    this.events.onContact?.(contact);
+    return contact;
+  }
+
+  /**
+   * Open the inner envelopes riding a delivery message, log each as a
+   * received message with its full peel, then ack — over HTTP even when
+   * the delivery arrived on the socket, which is the ritual the mediator's
+   * demo-interop test pins.
+   */
+  private async processDelivery(
+    delivery: IMessage,
+    outerPacked: string | null
+  ): Promise<void> {
+    const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
+    const acked: string[] = [];
+
+    for (const attachment of attachments) {
+      if (attachment.id !== undefined) {
+        acked.push(attachment.id);
+      }
+
+      let innerPacked: string | null = null;
+      if (typeof attachment.data.base64 === "string") {
+        innerPacked = base64urlToUtf8(attachment.data.base64);
+      } else if (attachment.data.json !== undefined) {
+        innerPacked = JSON.stringify(attachment.data.json);
+      }
+      if (innerPacked === null) {
+        continue;
+      }
+
+      let inner: IMessage;
+      let sender: string | null;
+      try {
+        ({ msg: inner, sender } = await this.unpack(innerPacked));
+      } catch (err) {
+        this.log(
+          `could not open a delivered envelope: ${err instanceof Error ? err.message : err}`
+        );
+        continue;
+      }
+
+      if (inner.type === REQUEST_PROFILE) {
+        // Someone asked who we are: answer, without asking back.
+        const asker = sender ?? inner.from;
+        if (asker !== undefined && asker !== null) {
+          this.log("profile requested; sending ours");
+          await this.ensureContact(asker);
+          await this.sendProfile(asker, false);
+        }
+        continue;
+      }
+
+      if (inner.type !== BASIC_MESSAGE && inner.type !== PROFILE) {
+        this.log(`received a ${inner.type ?? "typeless"} message; ignoring`);
+        continue;
+      }
+
+      if (this.seen.has(inner.id)) {
+        continue;
+      }
+
+      const layers: EnvelopeLayer[] = [];
+      if (outerPacked !== null) {
+        layers.push({
+          kind: "authcrypt",
+          title: "Delivery envelope from your mediator",
+          payload: pretty(outerPacked),
+          visibleTo: "you",
+          note: "The frame that arrived on your WebSocket: a delivery message sealed by the mediator to your mediator-facing DID.",
+        });
+      }
+      layers.push(
+        {
+          kind: "plaintext",
+          title: "Pickup delivery",
+          payload: pretty(delivery as unknown as Record<string, unknown>),
+          visibleTo: "you and your mediator",
+          note: "The mediator hands over what it queued. The attachment is still sealed — the mediator never saw inside it.",
+        },
+        {
+          kind: "authcrypt",
+          title: "Inner envelope — sealed to you",
+          payload: pretty(innerPacked),
+          visibleTo: "you (opened with your key)",
+          note: "Encrypted to your public DID's key agreement key and authenticated by the sender's key. This is the layer the mediator stored without being able to read.",
+        },
+        {
+          kind: "plaintext",
+          title: "Plaintext message",
+          payload: pretty(inner as unknown as Record<string, unknown>),
+          visibleTo: "you and the sender",
+          note: "The message itself, visible to nobody in between.",
+        }
+      );
+
+      const counterparty = sender ?? inner.from ?? null;
+      const record = newMessageRecord({
+        direction: "in",
+        sender,
+        msg: inner as unknown as MessageRecord["msg"],
+        layers,
+      });
+      await this.vault.messages.append(record);
+      this.seen.add(inner.id);
+
+      // A first message from a stranger creates the contact, so it has a
+      // thread to land in; the petname is the DID until something names it.
+      // An announced displayName is remembered as a claim, and becomes the
+      // petname only while the petname is still the placeholder — a name
+      // the user typed is never overwritten by what the contact calls
+      // themself.
+      if (counterparty !== null) {
+        const contact = await this.ensureContact(counterparty);
+        const view = chatView(record);
+        if (view !== null && view.kind === "profile" && view.content !== "") {
+          contact.claimedName = view.content;
+          if (contact.name === didPlaceholder(currentDid(contact))) {
+            contact.name = view.content;
+          }
+          await this.vault.contacts.put(contact);
+          this.events.onContact?.(contact);
+        }
+      }
+
+      const view = chatView(record);
+      if (view !== null) {
+        this.events.onMessage?.(record, view);
+      }
+
+      const body = inner.body as { send_back_yours?: unknown };
+      if (inner.type === PROFILE && body.send_back_yours === true && counterparty !== null) {
+        try {
+          await this.shareProfileIfNew(counterparty);
+        } catch (err) {
+          this.log(
+            `could not send our profile back: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
+    }
+
+    try {
+      await this.ack(acked);
+    } catch (err) {
+      this.log(
+        `ack failed (${err instanceof Error ? err.message : err}); messages stay queued and will be deduplicated on the next pickup`
+      );
+    }
+  }
+
+  private connectWebSocket(): void {
+    const wsUri = endpointOf(this.mediatorDoc as DIDDoc, "ws");
+    if (wsUri === null) {
+      this.setStatus({
+        state: "error",
+        detail: "mediator has no WebSocket endpoint",
+      });
+      return;
+    }
+
+    const ws = new this.WebSocketCtor(wsUri);
+    this.ws = ws;
+
+    ws.onopen = async () => {
+      // live-delivery-change is the first frame the socket ever carries.
+      const packed = await this.packForMediator(
+        plainMessage(
+          LIVE_DELIVERY_CHANGE,
+          (this.me as PeerIdentity).did,
+          this.mediation().mediatorDid,
+          { live_delivery: true }
+        )
+      );
+      ws.send(packed);
+    };
+
+    ws.onmessage = async (event: MessageEvent) => {
+      const text =
+        typeof event.data === "string" ? event.data : await (event.data as Blob).text();
+      try {
+        const { msg } = await this.unpack(text);
+        if (msg.type === STATUS) {
+          if (msg.body.live_delivery === true) {
+            this.setStatus({ state: "live" });
+            this.log("live delivery is on");
+          }
+          return;
+        }
+        if (msg.type === DELIVERY) {
+          await this.processDelivery(msg, text);
+          return;
+        }
+        this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
+      } catch (err) {
+        this.log(
+          `could not unpack a socket frame: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    };
+
+    ws.onclose = () => {
+      if (this.destroyed) {
+        return;
+      }
+      this.setStatus({
+        state: "connecting",
+        detail: "socket closed; reconnecting",
+      });
+      setTimeout(() => {
+        if (!this.destroyed) {
+          this.connectWebSocket();
+        }
+      }, this.reconnectDelayMs);
+    };
+  }
+
+  /**
+   * Pack a plaintext message for a contact layer by layer and POST it,
+   * capturing every layer for the inspector: plaintext → authcrypt to the
+   * recipient → (when they live behind a mediator) forward request →
+   * anoncrypt to their mediator.
+   */
+  private async deliverToContact(
+    plain: IMessage,
+    contactDid: string
+  ): Promise<EnvelopeLayer[]> {
+    const contactDoc = await this.resolveDid(contactDid);
+    if (contactDoc === null) {
+      throw new Error("contact DID does not resolve");
+    }
+    const contactService = serviceUris(contactDoc)[0];
+    if (contactService === undefined) {
+      throw new Error("contact DID names no service endpoint");
+    }
+
+    const [innerPacked] = await new this.didcomm.Message(plain).pack_encrypted(
+      contactDid,
+      (this.pub as PeerIdentity).did,
+      null,
+      this.didResolver,
+      secretsResolverFor(this.allSecrets()),
+      { forward: false }
+    );
+
+    const layers: EnvelopeLayer[] = [
+      {
+        kind: "plaintext",
+        title: "Plaintext message",
+        payload: pretty(plain as unknown as Record<string, unknown>),
+        visibleTo: "you and the recipient",
+        note: "What the recipient reads after peeling every layer. Nobody on the path sees this.",
+      },
+      {
+        kind: "authcrypt",
+        title: "Inner envelope — sealed to the recipient",
+        payload: pretty(innerPacked),
+        visibleTo: "the recipient only",
+        note: "Encrypted to the recipient's key agreement key, authenticated with yours. Their mediator will store this without being able to open it.",
+      },
+    ];
+
+    let outboundPacked = innerPacked;
+    let endpoint: string;
+
+    if (contactService.startsWith("did:")) {
+      // The contact lives behind a mediator: wrap a forward and seal it
+      // anonymously to that mediator.
+      const routingDid = contactService;
+      const routingDoc = await this.resolveDid(routingDid);
+      const httpEndpoint = routingDoc === null ? null : endpointOf(routingDoc, "http");
+      if (httpEndpoint === null) {
+        throw new Error("contact's mediator has no HTTP endpoint");
+      }
+
+      const forward = {
+        id: crypto.randomUUID(),
+        typ: PLAIN_TYP,
+        type: FORWARD,
+        to: [routingDid],
+        created_time: Math.floor(Date.now() / 1000),
+        body: { next: contactDid },
+        attachments: [
+          {
+            id: crypto.randomUUID(),
+            media_type: ENCRYPTED_MIME,
+            data: { json: JSON.parse(innerPacked) as unknown },
+          },
+        ],
+      } as IMessage;
+
+      const [outerPacked] = await new this.didcomm.Message(forward).pack_encrypted(
+        routingDid,
+        null,
+        null,
+        this.didResolver,
+        secretsResolverFor(this.allSecrets()),
+        { forward: false }
+      );
+
+      layers.push(
+        {
+          kind: "forward",
+          title: "Forward request",
+          payload: pretty(forward as unknown as Record<string, unknown>),
+          visibleTo: "the recipient's mediator",
+          note: "All the mediator is told: queue the attached envelope for `next`. No sender, no content.",
+        },
+        {
+          kind: "anoncrypt",
+          title: "Outer envelope — anonymous to the mediator",
+          payload: pretty(outerPacked),
+          visibleTo: "the recipient's mediator",
+          note: "Sealed anonymously (anoncrypt): the wire and the mediator see a message from nobody, addressed to the mediator itself.",
+        }
+      );
+
+      outboundPacked = outerPacked;
+      endpoint = httpEndpoint;
+    } else if (contactService.startsWith("http")) {
+      // No mediator in the way — the inner envelope goes straight to them.
+      endpoint = contactService;
+    } else {
+      throw new Error(`unroutable service endpoint: ${contactService}`);
+    }
+
+    const response = await this.fetchFn(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": ENCRYPTED_MIME },
+      body: outboundPacked,
+    });
+    if (!response.ok) {
+      throw new Error(`endpoint answered ${response.status}`);
+    }
+
+    return layers;
+  }
+
+  private async logOutbound(plain: IMessage, layers: EnvelopeLayer[]): Promise<ChatMessage> {
+    const record = newMessageRecord({
+      direction: "out",
+      msg: plain as unknown as MessageRecord["msg"],
+      layers,
+    });
+    await this.vault.messages.append(record);
+    const view = chatView(record) as ChatMessage;
+    this.events.onMessage?.(record, view);
+    return view;
+  }
+
+  async sendBasicMessage(contactDid: string, text: string): Promise<ChatMessage> {
+    if (this.pub === null) {
+      throw new Error("no public DID yet — mediation has not completed");
+    }
+    await this.ensureContact(contactDid);
+
+    // The first message to anyone is preceded by an introduction: our
+    // user-profile/1.0 announcement, asking for theirs back.
+    await this.shareProfileIfNew(contactDid);
+
+    const plain = plainMessage(BASIC_MESSAGE, this.pub.did, contactDid, {
+      content: text,
+    });
+    const layers = await this.deliverToContact(plain, contactDid);
+    return this.logOutbound(plain, layers);
+  }
+
+  /** Announce our display name once per contact; later renames stay local. */
+  private async shareProfileIfNew(contactDid: string): Promise<void> {
+    const contact = await this.vault.contacts.byDid(contactDid);
+    if (contact?.profileSharedAt !== undefined) {
+      return;
+    }
+    await this.sendProfile(contactDid, true);
+  }
+
+  /**
+   * Send a user-profile/1.0 `profile` message: the displayName the contact
+   * will see is whatever we claim it is — a receiving UI should say as much.
+   */
+  private async sendProfile(contactDid: string, sendBackYours: boolean): Promise<void> {
+    if (this.pub === null) {
+      return;
+    }
+    const plain = plainMessage(PROFILE, this.pub.did, contactDid, {
+      profile: { displayName: this.displayName() },
+      send_back_yours: sendBackYours,
+    });
+    const layers = await this.deliverToContact(plain, contactDid);
+
+    const contact = await this.vault.contacts.byDid(contactDid);
+    if (contact !== null && contact.profileSharedAt === undefined) {
+      contact.profileSharedAt = new Date().toISOString();
+      await this.vault.contacts.put(contact);
+    }
+    await this.logOutbound(plain, layers);
+  }
+
+  /**
+   * Name a contact. A DID that already arrived as a stranger is renamed
+   * rather than duplicated; a new DID gets a new record.
+   */
+  async addContact(did: string, name: string): Promise<ContactRecord> {
+    const existing = await this.vault.contacts.byDid(did);
+    const contact = existing ?? newContact(name, did);
+    contact.name = name;
+    await this.vault.contacts.put(contact);
+    this.events.onContact?.(contact);
+    return contact;
+  }
+
+  async removeContact(cid: string): Promise<void> {
+    await this.vault.contacts.remove(cid);
+  }
+}

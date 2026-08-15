@@ -1,0 +1,61 @@
+import type { EnvelopeLayer, MessageRecord } from "../vault/messages.js";
+import { BASIC_MESSAGE, PROFILE } from "./types.js";
+
+/**
+ * The chat projection of a log record: what a thread view renders. Only
+ * basicmessage/2.0 and user-profile/1.0 profile messages project; the
+ * mediator's coordination traffic and anything unknown yield null.
+ * A projection, not a copy — the log record stays the fact.
+ */
+export interface ChatMessage {
+  /** the log record's mid */
+  mid: string;
+  /** the wire message id — dedup key and thread reference */
+  id: string;
+  kind: "chat" | "profile";
+  direction: "sent" | "received";
+  /** the counterparty's DID: the proven sender for inbound, the addressee for outbound */
+  contactDid: string;
+  content: string;
+  /** epoch milliseconds */
+  time: number;
+  layers: EnvelopeLayer[];
+}
+
+export function chatView(record: MessageRecord): ChatMessage | null {
+  const { msg } = record;
+  if (msg.type !== BASIC_MESSAGE && msg.type !== PROFILE) {
+    return null;
+  }
+  const contactDid =
+    record.direction === "in"
+      ? (record.sender ?? msg.from ?? "unknown")
+      : (msg.to?.[0] ?? "unknown");
+  const body = msg.body as {
+    content?: unknown;
+    profile?: { displayName?: unknown };
+  };
+  const content =
+    msg.type === PROFILE
+      ? typeof body.profile?.displayName === "string"
+        ? body.profile.displayName
+        : ""
+      : String(body.content ?? "");
+  return {
+    mid: record.mid,
+    id: msg.id,
+    kind: msg.type === PROFILE ? "profile" : "chat",
+    direction: record.direction === "in" ? "received" : "sent",
+    contactDid,
+    content,
+    // created_time is spec'd in epoch seconds; tolerate senders that used
+    // milliseconds. Outbound records use their own append time.
+    time:
+      record.direction === "out" || typeof msg.created_time !== "number"
+        ? Date.parse(record.at)
+        : msg.created_time < 1e12
+          ? msg.created_time * 1000
+          : msg.created_time,
+    layers: record.layers ?? [],
+  };
+}
