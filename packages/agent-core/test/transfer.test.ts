@@ -94,7 +94,9 @@ describe("snapshot + import", () => {
     await vb.messages.append(
       newMessageRecord({ direction: "in", sender: "did:peer:4bob", msg: shared }, new Date(6_500))
     );
-    // B renames Bob later than A last touched him; B also meets Carol
+    // B renames Bob later than A last touched him (a tick later: put stamps
+    // updatedAt to the millisecond, and a tie keeps ours); B also meets Carol
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const bobOnB = (await vb.contacts.byCid(bob.cid)) as ContactRecord;
     bobOnB.name = "Robert";
     await vb.contacts.put(bobOnB);
@@ -135,6 +137,7 @@ describe("snapshot + import", () => {
     expect((await a.list(MESSAGES_DIR)).sort()).toEqual(["0001.jsonl", "0002.jsonl"]);
 
     // A's local rename beats an older stamp from B on the way back
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const bobOnA = (await merged.contacts.byCid(bob.cid)) as ContactRecord;
     bobOnA.name = "Bobby";
     await merged.contacts.put(bobOnA);
