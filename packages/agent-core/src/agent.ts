@@ -79,7 +79,7 @@ export interface AgentEvents {
   onStatus(status: AgentStatus): void;
   /** a chat-visible record was appended (sent or received), with its projection */
   onMessage(record: MessageRecord, view: ChatMessage): void;
-  /** the agent created or changed a contact (a stranger's first message, a claimed name) */
+  /** the agent created or changed a contact (a stranger's first message, a claimed name, a DID minted toward them, a rotation) */
   onContact(contact: ContactRecord): void;
   onLog(line: string): void;
 }
@@ -918,6 +918,8 @@ export class Agent {
     }
     if (use.registeredAt === undefined) {
       await this.registerRecipients([{ contact, use }]);
+      // the record gained a DID of ours (minted, or now registered): tell the UI
+      this.events.onContact?.(contact);
     }
     const identity = this.pairwise.get(use.did);
     if (identity === undefined) {
