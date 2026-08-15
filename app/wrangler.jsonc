@@ -1,0 +1,18 @@
+// Static-assets Worker: `wrangler deploy` runs the vite build (build.command
+// below) and ships dist/. Deployable on any account as-is — the "Deploy to
+// Cloudflare" button in the README serves it from workers.dev. Attach custom
+// domains in the dashboard rather than here, so this file stays deployable
+// anywhere. Set VITE_MEDIATOR_DID at build time so the app defaults to your
+// mediator (see README).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "estoc-app",
+  "compatibility_date": "2026-08-15",
+  "build": {
+    "command": "npm run build"
+  },
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}

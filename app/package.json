@@ -1,0 +1,33 @@
+{
+  "name": "estoc-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Estoc: an offline-first DIDComm v2 messenger you install as a PWA. One identity from one seed, your vault in the browser's private file system, a zip you can walk away with.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "vue-tsc -b",
+    "icons": "node scripts/icons.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@estoc/agent-core": "file:../agent-core",
+    "@estoc/keystore": "^0.2.0",
+    "didcomm": "^0.4.1",
+    "fflate": "^0.8.2",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
+    "playwright-core": "^1.62.1",
+    "typescript": "~5.8.0",
+    "vite": "^6.3.0",
+    "vite-plugin-pwa": "^1.0.0",
+    "vue-tsc": "^2.2.0",
+    "wrangler": "^4.122.0"
+  }
+}
