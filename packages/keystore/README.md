@@ -1,7 +1,7 @@
 # @estoc/keystore
 
-An encrypted did:key keystore as a plain JSON document, and the `Signer`
-handle that keeps private keys where they belong.
+An encrypted did:key keystore as a plain JSON document — per-key (v1) or
+seed-derived (v2) — and the `Signer` handle that keeps private keys where they belong.
 
 The design rule: **the store's API never yields private key bytes.** Opening
 an entry returns a `Signer` — the same contract as a WebCrypto
@@ -64,7 +64,71 @@ The two capabilities are deliberately separate interfaces: hardware devices
 commonly sign Ed25519 but don't do X25519 ECDH, so a hardware-backed
 `Signer` may never implement the second one.
 
-## Document format
+## Seed keystore (v2): one seed, every key derived
+
+The v1 store seals each key on its own, which is fine for a handful of keys
+and wrong for pairwise DIDs (one identity per relationship means dozens of
+keys and one PBKDF2 run per key on every unlock). The v2 store seals a
+single 32-byte seed and derives every key from it with HKDF-SHA256
+(`info = estoc/v1/<ed25519|x25519>/<index>`). The Ed25519 and X25519 halves of
+an identity are derived independently — no Ed→X conversion — so a future
+hardware signer can hold one while software holds the other.
+
+```ts
+import {
+  addDerivedKey,
+  createSeedKeystore,
+  openDerivedKey,
+  parseSeedKeystore,
+  serializeKeystore,
+  unlockSeedKeystore,
+} from "@estoc/keystore";
+
+// Once: create (or restore) the store; the seed key comes back already imported.
+let { doc, seedKey } = await createSeedKeystore(passphrase);
+let identity;
+({ doc, identity } = await addDerivedKey(doc, seedKey, "root"));
+identity.did;                 // did:key:z6Mk... (the Ed25519 half)
+identity.signer;              // DidKeySigner: sign + X25519 ECDH
+identity.privateJwks();       // escape hatch: OKP JWKs for libraries that run their own crypto
+
+// Once per installation: unlock → a non-extractable WebCrypto HKDF key.
+const loaded = parseSeedKeystore(json);
+seedKey = await unlockSeedKeystore(loaded, passphrase);
+// Keep `seedKey` (it survives structured clone, so IndexedDB works);
+// every later derivation is passphrase-free:
+const root = await openDerivedKey(loaded, seedKey, "root");
+```
+
+Derivation is deterministic: the seed plus a list of indices rebuilds every
+identity, so the seed is the only thing that cannot be regenerated.
+Indices are never reused, even after `removeDerivedKey` — reuse would
+resurrect a removed DID. `changeSeedPassphrase` re-seals the seed;
+`listKeys` and `serializeKeystore` accept either store version.
+
+On the escape hatch: the rule "the API never yields private key bytes"
+holds for `signer`. `privateJwks()` exists because some libraries
+(didcomm-rust's secrets resolver, for one) cannot call out to a Signer;
+use it only where that is the case, and note the non-extractable seed key
+still means the *seed* is never handed out — only individual derived keys.
+
+## Document formats
+
+v2 (seed):
+
+```json
+{
+  "version": 2,
+  "seedJwe": "eyJhbGciOiJQQkVTMi1IUzUxMitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIi...",
+  "nextIndex": 2,
+  "keys": [
+    { "name": "root", "index": 0, "did": "did:key:z6Mk...", "createdAt": "2026-08-15T00:00:00.000Z" },
+    { "name": "alice", "index": 1, "did": "did:key:z6Mk...", "createdAt": "2026-08-15T00:00:00.000Z" }
+  ]
+}
+```
+
+v1 (per-key):
 
 ```json
 {

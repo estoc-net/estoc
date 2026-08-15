@@ -1,7 +1,7 @@
 {
   "name": "@estoc/keystore",
-  "version": "0.1.0",
-  "description": "Encrypted did:key keystore — JWK private keys sealed as PBES2 JWEs inside a plain JSON document, opened as non-extractable Signer handles. Pure data-in/data-out, no filesystem IO; runs in Node, workerd, and the browser.",
+  "version": "0.2.0",
+  "description": "Encrypted did:key keystore — per-key PBES2 JWEs (v1) or one sealed seed with HKDF-derived Ed25519/X25519 identities (v2) inside a plain JSON document, opened as non-extractable Signer handles. Pure data-in/data-out, no filesystem IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {

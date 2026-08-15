@@ -1,7 +1,7 @@
 import { CompactEncrypt, compactDecrypt, base64url } from "jose";
 import { ed25519 } from "@noble/curves/ed25519";
 import { didKeySignerFromPrivateKey, generatePrivateKey } from "./signer.js";
-import type { DidKeySigner, KeyInfo, KeystoreDocument } from "./types.js";
+import type { DidKeySigner, KeyInfo, KeystoreDocument, SeedKeystoreDocument } from "./types.js";
 
 /**
  * PBES2 iteration count for new entries (current OWASP recommendation for
@@ -26,8 +26,8 @@ export function emptyKeystore(): KeystoreDocument {
   return { version: 1, keys: [] };
 }
 
-/** The public contents — no passphrase involved. */
-export function listKeys(doc: KeystoreDocument): KeyInfo[] {
+/** The public contents — no passphrase involved. Works for both store versions. */
+export function listKeys(doc: KeystoreDocument | SeedKeystoreDocument): KeyInfo[] {
   return doc.keys.map(({ name, did, createdAt }) => ({ name, did, createdAt }));
 }
 
@@ -117,8 +117,8 @@ export function removeKey(doc: KeystoreDocument, name: string): KeystoreDocument
   return { version: 1, keys: doc.keys.filter((k) => k.name !== name) };
 }
 
-/** Serialize for persistence. Stable field order, trailing newline, 0600-worthy. */
-export function serializeKeystore(doc: KeystoreDocument): string {
+/** Serialize either store version for persistence. Stable field order, trailing newline, 0600-worthy. */
+export function serializeKeystore(doc: KeystoreDocument | SeedKeystoreDocument): string {
   return JSON.stringify(doc, null, 2) + "\n";
 }
 
@@ -134,6 +134,9 @@ export function parseKeystore(json: string): KeystoreDocument {
     throw new Error("keystore file must be a JSON object");
   }
   const doc = raw as { version?: unknown; keys?: unknown };
+  if (doc.version === 2) {
+    throw new Error("this is a v2 seed keystore; use parseSeedKeystore");
+  }
   if (doc.version !== 1) {
     throw new Error(`unsupported keystore version: ${String(doc.version)}`);
   }

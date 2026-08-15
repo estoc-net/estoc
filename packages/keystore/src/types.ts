@@ -47,13 +47,39 @@ export interface KeyEntry {
   privateKeyJwe: string;
 }
 
-/** The whole store — the JSON document an application persists wherever it likes. */
+/** The v1 store — independently sealed keys. The JSON document an application persists wherever it likes. */
 export interface KeystoreDocument {
   version: 1;
   keys: KeyEntry[];
 }
 
-/** What `listKeys` reveals without a passphrase. */
+/** One derived key in a v2 store. Nothing here is secret: the private material lives in the seed. */
+export interface DerivedKeyEntry {
+  /** Local, store-unique label. Never leaves the machine. */
+  name: string;
+  /** HKDF derivation index — with the seed, everything about this key follows from it. */
+  index: number;
+  /** did:key of the Ed25519 half, cached so listing needs no unlock. */
+  did: string;
+  /** ISO 8601 creation time. */
+  createdAt: string;
+}
+
+/**
+ * The v2 store — one sealed seed, every key derived from it. Unlock once,
+ * keep the SeedKey, derive forever; the seed is the only thing that cannot
+ * be regenerated.
+ */
+export interface SeedKeystoreDocument {
+  version: 2;
+  /** The 32-byte seed as a compact JWE (PBES2-HS512+A256KW / A256GCM). */
+  seedJwe: string;
+  /** Next unused derivation index. Only ever grows; removed keys do not free theirs. */
+  nextIndex: number;
+  keys: DerivedKeyEntry[];
+}
+
+/** What `listKeys` reveals without a passphrase (both store versions). */
 export interface KeyInfo {
   name: string;
   did: string;
