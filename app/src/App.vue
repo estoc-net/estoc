@@ -2,9 +2,7 @@
 import { computed, ref, watch } from "vue";
 
 import { state } from "./core/store.js";
-import type { ChatMessage } from "./core/types.js";
 import ChatPane from "./ui/ChatPane.vue";
-import InspectorPane from "./ui/InspectorPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
 import Unlock from "./ui/Unlock.vue";
@@ -12,7 +10,6 @@ import Unlock from "./ui/Unlock.vue";
 const identity = computed(() => state.identity);
 
 const selectedContactDid = ref<string | null>(null);
-const selectedMessageId = ref<string | null>(null);
 
 // The first contact (added by hand or auto-created by an incoming message)
 // becomes the open conversation if none is.
@@ -24,14 +21,9 @@ watch(
       !identity.value?.contacts.some((c) => c.did === selectedContactDid.value)
     ) {
       selectedContactDid.value = identity.value?.contacts[0]?.did ?? null;
-      selectedMessageId.value = null;
     }
   },
   { immediate: true }
-);
-
-const selectedMessage = computed<ChatMessage | null>(
-  () => identity.value?.messages.find((m) => m.id === selectedMessageId.value) ?? null
 );
 </script>
 
@@ -60,16 +52,7 @@ const selectedMessage = computed<ChatMessage | null>(
       v-if="identity"
       :identity="identity"
       :selected-contact-did="selectedContactDid"
-      :selected-message-id="selectedMessageId"
-      @select-contact="(did) => { selectedContactDid = did; selectedMessageId = null; }"
-      @select-message="(id) => (selectedMessageId = id)"
-    />
-    <InspectorPane
-      v-if="identity"
-      :message="selectedMessage"
-      :contacts="identity.contacts"
-      :profile-name="identity.name"
-      @close="selectedMessageId = null"
+      @select-contact="(did) => (selectedContactDid = did)"
     />
   </div>
 

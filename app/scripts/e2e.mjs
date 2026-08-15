@@ -1,8 +1,8 @@
 /**
  * Full-flow smoke against a running mediator and a served build: two
  * isolated browser contexts mint Alice and Bob, exchange DIDs and message
- * each other (live delivery, no reload; four envelope layers on both
- * sides); then the app's own promises get exercised — history survives a
+ * each other (live delivery, no reload); then the app's own promises get
+ * exercised — history survives a
  * reload, a second tab yields to the first, lock asks for the passphrase,
  * a backup zip restores the identity in a fresh browser and receives mail
  * there, importing a backup into a live vault merges instead of clobbering,
@@ -104,12 +104,6 @@ async function expectBubble(page, text, timeout = 15000) {
   await page.waitForSelector(`.bubble:has-text("${text}")`, { timeout });
 }
 
-async function peelLayers(page, text) {
-  await page.click(`.bubble:has-text("${text}")`);
-  await page.waitForSelector(".inspector .layer");
-  return page.locator(".inspector .layer").count();
-}
-
 const browser = await chromium.launch({ executablePath });
 try {
   const aliceCtx = await browser.newContext();
@@ -144,18 +138,6 @@ try {
   await send(bob, "Alice", "hi alice, got it");
   await expectBubble(alice, "hi alice");
   ok("Alice received Bob's reply live");
-
-  for (const [page, text, what] of [
-    [alice, "hello bob", "sent"],
-    [bob, "hello bob", "received"],
-  ]) {
-    const layers = await peelLayers(page, text);
-    if (layers === 4) {
-      ok(`${what} message peels into 4 layers`);
-    } else {
-      fail(`${what} message shows ${layers} layers, expected 4`);
-    }
-  }
 
   // Reload: history and identity come back from the OPFS vault, no passphrase.
   await bob.reload();

@@ -133,13 +133,12 @@ textarea {
 
 .frame {
   display: grid;
-  grid-template-columns: 250px minmax(340px, 1fr) minmax(340px, 1.1fr);
+  grid-template-columns: 250px minmax(340px, 1fr);
   height: 100%;
 }
 
 .rail,
-.chat,
-.inspector {
+.chat {
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -153,11 +152,6 @@ textarea {
 
 .chat {
   background: var(--paper);
-  border-right: 1px solid var(--line);
-}
-
-.inspector {
-  background: var(--panel);
 }
 
 /* ---- rail ---- */
@@ -389,10 +383,7 @@ textarea {
   border: 1px solid var(--line);
   background: #fff;
   padding: 8px 12px 6px;
-  cursor: pointer;
   text-align: left;
-  font: inherit;
-  color: inherit;
 }
 
 .bubble .meta {
@@ -440,13 +431,10 @@ textarea {
   white-space: nowrap;
 }
 
-.bubble.selected {
-  outline: 2px solid var(--ink);
-  outline-offset: 1px;
-}
-
-.bubble:hover .peel-hint {
-  color: var(--verdigris-deep);
+.hop-note {
+  font-size: 13px;
+  color: var(--steel);
+  margin: 0 0 18px;
 }
 
 .composer {
@@ -502,165 +490,6 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-/* ---- inspector ---- */
-
-.inspector-head {
-  padding: 14px 18px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.inspector-head h2 {
-  font-size: 16px;
-  font-weight: normal;
-  margin: 2px 0 0;
-}
-
-.inspector-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px;
-}
-
-.hops {
-  display: flex;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--steel);
-  margin-bottom: 16px;
-}
-
-.hops .stop {
-  border: 1px solid var(--line);
-  background: #fff;
-  padding: 4px 9px;
-  white-space: nowrap;
-}
-
-.hops .stop.blind {
-  border-style: dashed;
-}
-
-.hops .leg {
-  flex: 1;
-  border-top: 1px solid var(--steel);
-  min-width: 14px;
-}
-
-.hop-note {
-  font-size: 13px;
-  color: var(--steel);
-  margin: 0 0 18px;
-}
-
-/* the onion: each layer nests inside the previous one */
-
-.layer {
-  border: 1px solid var(--line);
-  background: #fff;
-  padding: 10px 12px 12px;
-}
-
-.layer + .layer,
-.layer .layer {
-  margin-top: 10px;
-}
-
-.layer.authcrypt {
-  border-color: var(--verdigris);
-  background: var(--verdigris-wash);
-}
-
-.layer.anoncrypt {
-  border-color: var(--steel);
-  background: #eceff0;
-}
-
-.layer.forward {
-  border-style: dashed;
-  border-color: var(--steel);
-  background: #f2f4f4;
-}
-
-.layer.plaintext {
-  border: 3px double var(--ink);
-  background: #fff;
-}
-
-.layer-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.layer-title {
-  font-size: 14px;
-}
-
-.layer-kind {
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--steel);
-  white-space: nowrap;
-}
-
-.layer-kind.authcrypt {
-  color: var(--verdigris-deep);
-}
-
-.layer-kind.anoncrypt {
-  color: var(--steel);
-}
-
-.layer-visible {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--verdigris-deep);
-  margin: 4px 0 0;
-}
-
-.layer-note {
-  font-size: 13px;
-  color: var(--steel);
-  margin: 4px 0 0;
-}
-
-.layer details {
-  margin-top: 8px;
-}
-
-.layer summary {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--steel);
-  cursor: pointer;
-}
-
-.layer summary:hover {
-  color: var(--verdigris-deep);
-}
-
-.layer pre {
-  margin: 8px 0 0;
-  padding: 10px;
-  background: var(--ink);
-  color: #c6ced1;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  line-height: 1.55;
-  overflow-x: auto;
-  max-height: 300px;
-  overflow-y: auto;
 }
 
 /* ---- app: onboarding tabs, rail actions, update chip ---- */
@@ -754,17 +583,6 @@ textarea {
 @media (max-width: 1100px) {
   .frame {
     grid-template-columns: 220px 1fr;
-  }
-  .inspector {
-    position: fixed;
-    inset: 0 0 0 auto;
-    width: min(480px, 100vw);
-    border-left: 1px solid var(--line);
-    box-shadow: -12px 0 32px #1d252822;
-    z-index: 10;
-  }
-  .inspector.hidden {
-    display: none;
   }
 }
 

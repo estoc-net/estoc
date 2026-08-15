@@ -8,12 +8,10 @@ import { shortDid, timeOf } from "./util.js";
 const props = defineProps<{
   identity: Identity;
   selectedContactDid: string | null;
-  selectedMessageId: string | null;
 }>();
 
 const emit = defineEmits<{
   selectContact: [did: string];
-  selectMessage: [id: string];
 }>();
 
 const contact = computed(
@@ -134,22 +132,20 @@ watch(
 
     <div ref="threadEl" class="thread">
       <p v-if="contact && thread.length === 0" class="hop-note">
-        No messages yet. Whatever you write crosses the mediator sealed — send
-        one, then select it to peel the envelopes.
+        No messages yet. Whatever you write crosses the mediator sealed to
+        {{ contact.label }} alone.
       </p>
-      <button
+      <div
         v-for="m in thread"
         :key="m.id"
         class="bubble"
-        :class="[m.direction, { selected: m.id === selectedMessageId, system: m.kind === 'profile' }]"
-        @click="emit('selectMessage', m.id)"
+        :class="[m.direction, { system: m.kind === 'profile' }]"
       >
         <div>{{ m.kind === "profile" ? profileLine(m.direction, m.content) : m.content }}</div>
         <div class="meta">
           <span>{{ timeOf(m.time) }}</span>
-          <span class="peel-hint">peel ({{ m.layers.length }} layers)</span>
         </div>
-      </button>
+      </div>
     </div>
 
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>

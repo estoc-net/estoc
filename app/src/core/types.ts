@@ -1,6 +1,6 @@
-import type { AgentStatus, ChatMessage, EnvelopeLayer, ImportOutcome } from "@estoc/agent-core";
+import type { AgentStatus, ChatMessage, ImportOutcome } from "@estoc/agent-core";
 
-export type { AgentStatus, ChatMessage, EnvelopeLayer, ImportOutcome };
+export type { AgentStatus, ChatMessage, ImportOutcome };
 
 /**
  * What the UI renders: reactive views mirrored from the vault. The vault

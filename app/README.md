@@ -6,8 +6,7 @@ An offline-first DIDComm v2 messenger you install as a web app. One
 identity from one seed, minted in your browser; your contacts and message
 history in a vault the browser keeps for you; a zip you can walk away with.
 Mail travels through a mediator of your choosing, sealed so the mediator
-carries envelopes it cannot open — and every message keeps its envelopes,
-so you can peel them and see exactly that.
+carries envelopes it cannot open.
 
 Estoc runs on nothing of ours. This repository is a static site: deploy it
 anywhere (the button above puts a copy on your own Cloudflare account),
@@ -41,9 +40,6 @@ your data never touches the place the app was served from.
   is next; today a send with no network fails and stays in the composer.)
 - **One agent per vault.** A second tab of the same browser waits for the
   first (Web Locks) rather than opening a second agent onto the same log.
-- **See-through.** Select any message and the inspector peels its
-  envelopes — plaintext, authcrypt to the recipient, the routing forward,
-  anoncrypt to the mediator — naming at each layer who could read it.
 
 ## Run it
 
@@ -84,22 +80,21 @@ node scripts/e2e.mjs https://<your deployment>
 
 The e2e script (playwright-core, system chromium) mints Alice and Bob in
 isolated browser contexts and walks the whole surface: live delivery
-without a reload, four envelope layers on both sides, history surviving a
-reload with no passphrase, a second tab yielding to the first, lock and
-unlock (a wrong passphrase refused), a backup exported and restored in a
-fresh browser that then receives mail as Alice, a backup merged into a live
-vault with nothing new, and — when a service worker is serving — the app
-opening with the network off.
+without a reload, history surviving a reload with no passphrase, a second
+tab yielding to the first, lock and unlock (a wrong passphrase refused), a
+backup exported and restored in a fresh browser that then receives mail as
+Alice, a backup merged into a live vault with nothing new, and — when a
+service worker is serving — the app opening with the network off.
 
 ## How it hangs together
 
 - **The agent is [@estoc/agent-core]**: mediation (coordinate-mediation
   3.0), pickup and live delivery (messagepickup 3.0 over HTTP and
-  WebSocket), routing 2.0 forwards packed by hand layer by layer,
-  user-profile/1.0 introductions, and the `.estoc` vault format over an
-  OPFS backend. `src/core/store.ts` mirrors the vault into Vue views and
-  forwards agent events; `src/core/backup.ts` is the zip on either side of
-  agent-core's `snapshotVault` / `importVault`.
+  WebSocket), routing 2.0 forwards, user-profile/1.0 introductions, and
+  the `.estoc` vault format over an OPFS backend. `src/core/store.ts`
+  mirrors the vault into Vue views and forwards agent events;
+  `src/core/backup.ts` is the zip on either side of agent-core's
+  `snapshotVault` / `importVault`.
 - **Screens follow the disk**: nothing there → onboarding (create or
   restore); a vault without its cached seed → unlock; otherwise straight
   in. `src/core/lock.ts` takes the vault lock first; `src/core/keycache.ts`
@@ -109,10 +104,9 @@ opening with the network off.
   nod (a chip offers to reload); `navigator.storage.persist()` is asked
   for when the vault is created, and the rail says whether the browser
   granted it. Icons render from `public/icon.svg` via `npm run icons`.
-- **Renderers stay at arm's length**: chat bubbles and the inspector take
-  their data through props and never import the store — the seam along
-  which type-dispatched renderers (and, later, sandboxed third-party ones)
-  slot in.
+- **Renderers stay at arm's length**: chat bubbles take their data through
+  props and never import the store — the seam along which type-dispatched
+  renderers (and, later, sandboxed third-party ones) slot in.
 - **The didcomm WASM** is instantiated by `src/didcomm/wasm.ts` (the npm
   package's entry is webpack-shaped) and handed to the agent.
 
