@@ -122,7 +122,10 @@ Early. Single public identity per install (pairwise DIDs per contact are
 the next step), no offline outbox yet, no push notifications (a mediator
 extension), keys in the browser under your passphrase. Storage is only
 guaranteed once the browser grants persistence — install the app, and keep
-a backup either way. Nothing here has had an independent security audit.
+a backup either way. Browsers: Chromium and Firefox, and Safari 26 or later
+(the vault is written through OPFS `createWritable()`, which WebKit shipped
+in Safari 26; older Safari gets a plain error at onboarding). Nothing here
+has had an independent security audit.
 
 ## License
 
