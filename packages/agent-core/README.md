@@ -32,6 +32,12 @@ Agent                        mediation · pickup · live delivery · routing
 - **DIDs in config are snapshots**, recorded when minted, and checked against
   the seed on open (`Vault.peerIdentity`). Rotating a mediator later never
   silently renames an identity.
+- **The mediator is not part of the identity.** A vault is created from a
+  seed and a name alone (`mediation: null`); `Vault.setMediator` names a
+  mediator later and mints the DID it will know the vault by. The public
+  DID embeds the mediator's routing DID, so choosing one is a decision
+  about reachability, taken after the identity exists — and, once taken,
+  not swapped behind correspondents' backs (a change is a rotation).
 - **Contacts** are keyed by `cid` (uuidv7). Their DIDs form a history
   (`dids[]`, closed with `until`, hops proven by `fromPrior`), and — for
   pairwise relationships — so do ours (`myDids[]` with `keyIndex`). The
@@ -68,7 +74,7 @@ One seed (keystore v2), keys by name in its index:
 | key        | what it mints                                                    |
 | ---------- | ---------------------------------------------------------------- |
 | `anchor`   | index 0 — the did:key root; the identity everything hangs off    |
-| `mediator` | did:peer:4, no service — the DID the mediator knows this vault by |
+| `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` |
 | `public`   | did:peer:4 whose service is the mediator's routing DID — what correspondents write to; minted after mediate-grant |
 | (later) `contact:<cid>` | one pairwise did:peer:4 per relationship             |
 
@@ -85,14 +91,9 @@ import { Message } from "./didcomm-wasm.js"; // your runtime's didcomm-rust glue
 const root = await navigator.storage.getDirectory();
 const backend = new OpfsBackend(await root.getDirectoryHandle("vaults/alice", { create: true }));
 
-// first run: create
+// first run: create — an identity needs no mediator to exist
 const { doc, seedKey } = await createSeedKeystore(passphrase);
-const vault = await Vault.create(backend, {
-  label: "Alice",
-  keystore: doc,
-  seedKey,
-  mediatorDid: "did:web:mediator.estoc.dev",
-});
+const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey });
 
 // later runs: open, unlock however your app keeps the seed
 // const vault = await Vault.open(backend);
@@ -109,7 +110,9 @@ const agent = new Agent({
     onLog: (line) => console.log(line),
   },
 });
-await agent.start();               // mediate (first time), drain the queue, go live
+await agent.start();               // no mediator yet → status "unmediated"; history still reads
+await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the public DID, go live
+// later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
 const history = await agent.history();
 await agent.addContact(bobDid, "Bob");
 await agent.sendBasicMessage(bobDid, "hello");

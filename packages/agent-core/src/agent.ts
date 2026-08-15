@@ -53,6 +53,8 @@ import { KEY_PUBLIC, type Vault } from "./vault/vault.js";
 
 export type AgentStatus =
   | { state: "idle" }
+  /** the vault names no mediator: history reads, nothing moves until `setMediator` */
+  | { state: "unmediated" }
   | { state: "connecting"; detail: string }
   | { state: "live" }
   | { state: "error"; detail: string };
@@ -178,11 +180,18 @@ export class Agent {
     return views;
   }
 
+  /**
+   * Bring the agent up: derive the mediator-facing keys, replay the log's
+   * inbound ids for dedup, request mediation on first run, drain the queue,
+   * open live delivery. A vault without a mediator stops at `unmediated` —
+   * an identity is complete without one; it just cannot be reached yet.
+   */
   async start(): Promise<void> {
     try {
       const mediation = this.vault.config.mediation;
       if (mediation === null) {
-        throw new Error("vault has no mediator configured");
+        this.setStatus({ state: "unmediated" });
+        return;
       }
       this.setStatus({ state: "connecting", detail: "deriving keys" });
       this.me = await this.vault.peerIdentity(this.seedKey, mediation.me, null);
@@ -224,6 +233,16 @@ export class Agent {
         detail: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  /**
+   * Name the mediator for a vault that has none, then start: mediate,
+   * mint the public DID, go live. The mediator is chosen after the identity
+   * exists, not with it. See `Vault.setMediator` for why only once.
+   */
+  async setMediator(mediatorDid: string): Promise<void> {
+    await this.vault.setMediator(this.seedKey, mediatorDid);
+    await this.start();
   }
 
   destroy(): void {
@@ -730,7 +749,11 @@ export class Agent {
 
   async sendBasicMessage(contactDid: string, text: string): Promise<ChatMessage> {
     if (this.pub === null) {
-      throw new Error("no public DID yet — mediation has not completed");
+      throw new Error(
+        this.vault.config.mediation === null
+          ? "no mediator yet — choose one before sending"
+          : "no public DID yet — mediation has not completed"
+      );
     }
     await this.ensureContact(contactDid);
 

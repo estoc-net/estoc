@@ -256,6 +256,40 @@ describe("Agent through a mediator", () => {
     carol.agent.destroy();
   });
 
+  it("starts unmediated without a mediator, and goes live once one is chosen", async () => {
+    const mediator = await newMediator();
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await createSeedKeystore("", { seed: seedOf(7) });
+    const vault = await Vault.create(backend, { label: "Carol", keystore: doc, seedKey });
+    const carol = attach("Carol", backend, vault, seedKey, mediator);
+    const bob = await newParty("Bob", 2, mediator);
+    await Promise.all([carol.agent.start(), bob.agent.start()]);
+    await withTimeout(bob.live, 8000, "bob live");
+
+    // an identity, not yet reachable: no public DID, nothing sent
+    expect(carol.agent.status).toEqual({ state: "unmediated" });
+    expect(carol.agent.did).toBeNull();
+    await carol.agent.addContact(bob.agent.did as string, "Bob");
+    await expect(carol.agent.sendBasicMessage(bob.agent.did as string, "hi")).rejects.toThrow(/no mediator yet/);
+
+    // the mediator is chosen after the fact; mediation runs to live
+    await carol.agent.setMediator(mediator.did);
+    await withTimeout(carol.live, 8000, "carol live");
+    expect(carol.agent.did).toMatch(/^did:peer:4/);
+    expect(carol.vault.config.mediation?.mediatorDid).toBe(mediator.did);
+    await carol.agent.sendBasicMessage(bob.agent.did as string, "hi from carol");
+    const got = await withTimeout(bob.next((v) => v.content === "hi from carol"), 8000, "bob's chat");
+    expect(got.contactDid).toBe(carol.agent.did);
+
+    // and it stays that way across a reload
+    const again = await reopen(carol, mediator);
+    await again.agent.start();
+    await withTimeout(again.live, 8000, "carol live again");
+    expect(again.agent.did).toBe(carol.agent.did);
+    again.agent.destroy();
+    bob.agent.destroy();
+  });
+
   it("reports an error status when the mediator does not resolve", async () => {
     const mediator = await newMediator();
     const { backend, vault, seedKey } = await newVault("Dan", 6, "did:web:nowhere.invalid");

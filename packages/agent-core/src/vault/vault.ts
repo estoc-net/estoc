@@ -34,8 +34,12 @@ export interface CreateVaultOptions {
   /** a fresh v2 keystore document (from createSeedKeystore) — the vault adds its keys to it */
   keystore: SeedKeystoreDocument;
   seedKey: SeedKey;
-  /** the mediator this vault will ask for mediation; null for a vault that has none yet */
-  mediatorDid: string | null;
+  /**
+   * The mediator this vault will ask for mediation. Optional: an identity
+   * needs no mediator to exist, only to be reached — `setMediator` names
+   * one later.
+   */
+  mediatorDid?: string | null;
   now?: Date;
 }
 
@@ -74,10 +78,11 @@ export class Vault {
   }
 
   /**
-   * Lay down a new vault: the anchor (index 0, a did:key) and, when a
-   * mediator is named, the mediator-facing did:peer:4 (no service). The
-   * public DID waits for mediate-grant, since its service is the routing
-   * DID the grant hands out.
+   * Lay down a new vault: the anchor (index 0, a did:key), and nothing
+   * else — an identity is a seed and a name. Naming a mediator here is a
+   * convenience for `setMediator`, which adds the mediator-facing
+   * did:peer:4 (no service); the public DID waits for mediate-grant, since
+   * its service is the routing DID the grant hands out.
    */
   static async create(backend: VaultBackend, options: CreateVaultOptions): Promise<Vault> {
     if (await Vault.exists(backend)) {
@@ -87,34 +92,48 @@ export class Vault {
       throw new Error("createVault wants a fresh keystore with no keys");
     }
     const now = options.now ?? new Date();
-    let keystore = options.keystore;
-
-    const anchor = await addDerivedKey(keystore, options.seedKey, KEY_ANCHOR, { now });
-    keystore = anchor.doc;
-
-    let mediation: VaultConfig["mediation"] = null;
-    if (options.mediatorDid !== null) {
-      const me = await addDerivedKey(keystore, options.seedKey, KEY_MEDIATOR, { now });
-      keystore = me.doc;
-      mediation = {
-        mediatorDid: options.mediatorDid,
-        me: { key: KEY_MEDIATOR, did: mintPeerDid(me.identity, null).did },
-        routingDid: null,
-        public: null,
-      };
-    }
+    const anchor = await addDerivedKey(options.keystore, options.seedKey, KEY_ANCHOR, { now });
 
     const config: VaultConfig = {
       format: "estoc",
       version: 1,
       label: options.label,
       identity: { anchor: { key: KEY_ANCHOR, did: anchor.identity.did } },
-      mediation,
+      mediation: null,
     };
-    const vault = new Vault(backend, config, keystore);
+    const vault = new Vault(backend, config, anchor.doc);
     await vault.saveKeystore();
     await vault.saveConfig();
+    if (options.mediatorDid !== null && options.mediatorDid !== undefined) {
+      await vault.setMediator(options.seedKey, options.mediatorDid, now);
+    }
     return vault;
+  }
+
+  /**
+   * Name the mediator this vault will ask for mediation, and mint the
+   * did:peer:4 the mediator will know it by (the `mediator` key, no
+   * service). Reachability is a decision taken after the identity exists,
+   * and this is where it is taken. Only for a vault without a mediator:
+   * replacing one means re-minting the public DID correspondents hold,
+   * which is a rotation they must be told about (from_prior) — not yet
+   * offered.
+   */
+  async setMediator(seedKey: SeedKey, mediatorDid: string, now = new Date()): Promise<void> {
+    if (this.config.mediation !== null) {
+      throw new Error("vault already has a mediator; changing it is not supported yet");
+    }
+    const hasKey = this.keystore.keys.some((entry) => entry.name === KEY_MEDIATOR);
+    const me = hasKey
+      ? await this.derive(seedKey, KEY_MEDIATOR)
+      : await this.mintKey(seedKey, KEY_MEDIATOR, now);
+    this.config.mediation = {
+      mediatorDid,
+      me: { key: KEY_MEDIATOR, did: mintPeerDid(me, null).did },
+      routingDid: null,
+      public: null,
+    };
+    await this.saveConfig();
   }
 
   async saveConfig(): Promise<void> {

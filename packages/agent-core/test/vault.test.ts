@@ -75,6 +75,35 @@ describe("Vault", () => {
     expect(did.slice(0, 40)).toBe("did:peer:4zQmTKyYhKfZg48DSSVAL1bcba2AYPC");
   });
 
+  it("mints an identity with no mediator, and names one later — same DIDs as naming it at once", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey });
+    expect(vault.config.mediation).toBeNull();
+    expect(vault.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR]);
+
+    // reopened from disk, still unmediated; then the mediator is chosen
+    const later = await Vault.open(backend);
+    await later.setMediator(seedKey, "did:web:mediator.example");
+    expect(later.config.mediation?.mediatorDid).toBe("did:web:mediator.example");
+    expect(later.config.mediation?.me.key).toBe(KEY_MEDIATOR);
+    expect(later.config.mediation?.public).toBeNull();
+    expect(later.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, KEY_MEDIATOR]);
+    expect((await Vault.open(backend)).config).toEqual(later.config);
+
+    // choosing later or at creation lands on the same mediator-facing DID
+    const atOnce = await Vault.create(new MemoryBackend(), {
+      label: "Alice",
+      keystore: (await freshKeystore()).doc,
+      seedKey,
+      mediatorDid: "did:web:mediator.example",
+    });
+    expect(atOnce.config.mediation?.me.did).toBe(later.config.mediation?.me.did);
+
+    // a mediator, once named, is not swapped behind the public DID's back
+    await expect(later.setMediator(seedKey, "did:web:other")).rejects.toThrow(/already has a mediator/);
+  });
+
   it("refuses to create over an existing vault, or from a used keystore", async () => {
     const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();

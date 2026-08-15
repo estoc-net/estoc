@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — 2026-08-15
+
+- **A mediator is chosen after the identity, not with it.**
+  `Vault.create`'s `mediatorDid` is now optional (default: none); a vault
+  is an anchor and a seed until `Vault.setMediator(seedKey, did)` names a
+  mediator and mints the mediator-facing DID. `Agent.start()` on such a
+  vault no longer throws: it reports the new status `{ state: "unmediated" }`
+  (history reads, contacts can be added, sending says "no mediator yet"),
+  and `Agent.setMediator(did)` names one and starts — mediation, public
+  DID, live delivery. Once named, a mediator is not swapped (that would
+  re-mint the public DID correspondents hold; rotation with `from_prior`
+  is later work).
+
 ## 0.4.0 — 2026-08-15
 
 - **Envelopes are no longer captured.** `MessageRecord.layers`,
