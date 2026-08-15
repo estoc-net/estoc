@@ -190,9 +190,16 @@ describe("Agent through a mediator", () => {
     expect(got.contactCid).toBeDefined();
 
     // The stranger contact was created and then took Alice's claimed name;
-    // send_back_yours made Bob introduce himself in return.
+    // send_back_yours made Bob introduce himself in return. Alice's first
+    // message vouched for its fresh DID with her public one (from_prior),
+    // so Bob's record for her opens with the public DID, closed — pasting
+    // her business card later finds this contact instead of making a twin.
     const bobsAlice = await bob.vault.contacts.byDid(aliceToBob);
     expect(bobsAlice?.cid).toBe(got.contactCid);
+    expect(bobsAlice?.dids.map((u) => u.did)).toEqual([alice.agent.did, aliceToBob]);
+    expect(bobsAlice?.dids[0]?.until).toBeDefined();
+    expect(bobsAlice?.dids[1]?.fromPrior).toMatch(/^eyJ/);
+    expect((await bob.vault.contacts.byDid(alice.agent.did as string))?.cid).toBe(bobsAlice?.cid);
     expect(bobsAlice?.name).toBe("Alice");
     expect(bobsAlice?.claimedName).toBe("Alice");
     expect(bobsAlice?.profileSharedAt).toBeDefined();
@@ -259,8 +266,10 @@ describe("Agent through a mediator", () => {
     ]);
     // inbound records carry the envelope-proven sender: Bob's pairwise DID throughout
     expect(aliceLog.filter((r) => r.direction === "in").every((r) => r.sender === bobToAlice)).toBe(true);
-    // and everything Alice sent went out from her DID toward Bob
+    // and everything Alice sent went out from her DID toward Bob — the first
+    // two vouched for by the public DID, the last not (Bob had written to it)
     expect(aliceLog.filter((r) => r.direction === "out").every((r) => r.msg.from === aliceToBob)).toBe(true);
+    expect(aliceLog.filter((r) => r.direction === "out").map((r) => r.msg.from_prior !== undefined)).toEqual([true, true, false]);
     // Every message went out with the wire fields the spec wants.
     expect(aliceLog[1]?.msg).toMatchObject({ type: BASIC_MESSAGE, typ: "application/didcomm-plain+json" });
     expect(typeof aliceLog[1]?.msg.created_time).toBe("number");

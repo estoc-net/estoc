@@ -68,7 +68,9 @@ Agent                        mediation · pickup · live delivery · routing
   recipient before it is used). A contact who wrote to the public DID
   first is told about the move the DIDComm way — every message out carries
   `from_prior`, a JWT the DID they know signs over the one we now use,
-  until a reply comes back addressed to the new DID. Inbound, a
+  until a reply comes back addressed to the new DID (a contact who never
+  wrote to us is taken to know the public DID, so a first message vouches
+  for its fresh DID with it, and their side can tie the two). Inbound, a
   `from_prior` didcomm-rust verified moves the contact its issuer names to
   the new DID (old one closed, JWT kept as evidence) — provided the
   envelope was sealed by that new DID. Every DID we ever minted stays

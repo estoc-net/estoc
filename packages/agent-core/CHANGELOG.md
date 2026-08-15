@@ -21,7 +21,12 @@
   and whose `sub` is the envelope's proven sender moves that contact to
   the new DID (`dids[]` closed + appended with the JWT). This is how a
   stranger who wrote to the public DID gets a DID of their own on our
-  first reply — and the mechanism every later rotation will ride.
+  first reply — and the mechanism every later rotation will ride. A
+  contact who has never written to us is taken to know us by the public
+  DID, so the first message from a fresh pairwise DID vouches for itself
+  with it; on the receiving side a stranger arriving that way opens with
+  the public DID as the closed first entry of their history — pasting that
+  business card later finds the same contact instead of making a twin.
 - `ChatMessage.contactCid`: the message's contact, resolved through the
   DID histories by `Agent.history()` and `onMessage`, so a thread survives
   its contact changing DIDs. Thread by it, not by `contactDid`.

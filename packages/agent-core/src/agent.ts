@@ -521,11 +521,26 @@ export class Agent {
       this.log(`from_prior names ${didPlaceholder(fromPrior.sub)} but the envelope is from someone else; ignoring the rotation`);
       return;
     }
+    const at = new Date().toISOString();
     const contact = await this.vault.contacts.byDid(fromPrior.iss);
-    if (contact === null || contact.dids.some((use) => use.did === sender)) {
+    if (contact === null) {
+      // A stranger, arriving from a DID minted for us, who signs it over
+      // from a DID they used elsewhere (their public one, most likely):
+      // the record opens with that DID as its closed first entry, so the
+      // day someone pastes it as "Bob" it finds this contact, not a twin.
+      if ((await this.vault.contacts.byDid(sender)) !== null) {
+        return;
+      }
+      const stranger = newContact(didPlaceholder(sender), sender);
+      stranger.dids = [{ did: fromPrior.iss, from: at, until: at }, { did: sender, from: at, fromPrior: fromPrior.jwt }];
+      await this.vault.contacts.put(stranger);
+      this.events.onContact?.(stranger);
+      this.log("a stranger introduced themself with a DID they used before");
       return;
     }
-    const at = new Date().toISOString();
+    if (contact.dids.some((use) => use.did === sender)) {
+      return;
+    }
     for (const use of contact.dids) {
       if (use.until === undefined) {
         use.until = at;
@@ -979,10 +994,14 @@ export class Agent {
    * While a contact last wrote to a DID of ours that is not the one we
    * write from, every message carries `from_prior`: the DID they know
    * signs over the one we use now. Silence on their side is not consent —
-   * so it rides along until a reply reaches the new DID.
+   * so it rides along until a reply reaches the new DID. A contact who has
+   * never written to us is taken to know us by the public DID — the
+   * business card they most likely got our address from — so a first
+   * message from a fresh pairwise DID vouches for itself with it, and the
+   * other side can tie the two together (see `applyRotation`).
    */
   private async attachFromPrior(plain: IMessage, contact: ContactRecord): Promise<void> {
-    const prior = contact.addressedAs;
+    const prior = contact.addressedAs ?? this.pub?.did;
     const current = plain.from as string;
     if (prior === undefined || prior === current) {
       return;
