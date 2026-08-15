@@ -36,6 +36,14 @@ your data never touches the place the app was served from.
   way, with `from_prior`, so their side follows without a word from you.
   Two contacts of yours cannot compare notes and learn they share you; the
   mediator, which queues for every DID under your account, still can.
+- **Invitation links.** *New invitation link* on the rail mints a DID for
+  one person and puts it in a link (and a QR code) — this deployment's URL
+  carrying `?_oob=`, the DIDComm out-of-band invitation, which any Estoc
+  opens; whoever opens it is asked to name you and accept, and you see them
+  arrive. The first person to write to it takes it; a second is turned
+  away. Neither side's public DID is ever involved, so neither has to move
+  anywhere afterwards. Open links can be revoked from the rail; a pasted
+  link also works in *+ contact*, next to a pasted DID.
 - **A vault in the browser.** Contacts and messages live in an `.estoc/`
   directory in this origin's private file system (OPFS) — the same folder
   format every Estoc client reads, written by [@estoc/agent-core]:
@@ -67,7 +75,9 @@ The rail's mediator dropdown defaults to `mediator.estoc.dev`
 ([didcomm-mediator] on Cloudflare Workers) and also offers a local one
 (`npm run dev` in the mediator repo, minted with
 `MEDIATOR_PUBLIC_URL=http://localhost:8080`), or paste any mediator's
-out-of-band invitation URL, its URL, or its DID.
+out-of-band invitation URL, its URL, or its DID. Opening the app through a
+mediator's invitation link (`?_oob=` with `goal_code: request-mediate`)
+pre-fills that field.
 
 ## Deploy your own
 
@@ -98,7 +108,10 @@ The e2e script (playwright-core, system chromium) mints Alice and Bob in
 isolated browser contexts (unreachable first, then each picks the
 mediator) and walks the whole surface: live delivery
 without a reload, both writing from pairwise DIDs (and a pasted public
-DID finding the contact its pairwise DID created), history surviving a
+DID finding the contact its pairwise DID created), an invitation link Bob
+issues and a third identity, Carol, opens before she exists — onboarding,
+mediator, then accepting it — after which the two talk over the DIDs it
+minted, history surviving a
 reload with no passphrase, a second
 tab yielding to the first, lock and unlock (a wrong passphrase refused), a
 backup exported and restored in a fresh browser that then receives mail as
@@ -131,9 +144,9 @@ service worker is serving — the app opening with the network off.
 
 ## Status
 
-Early. Pairwise DIDs per contact, but no invitations yet (contacts are
-added by pasting a public DID) and no way to change mediator (a rotation
-of every DID — next); no offline outbox yet; no push notifications (a
+Early. Pairwise DIDs per contact and single-use invitation links, but no
+way to change mediator yet (a rotation of every DID — next); no offline
+outbox yet; no push notifications (a
 mediator extension); keys in the browser under your passphrase. Storage is only
 guaranteed once the browser grants persistence — install the app, and keep
 a backup either way. Browsers: Chromium and Firefox, and Safari 26 or later

@@ -1,6 +1,6 @@
-import type { AgentStatus, ChatMessage, ImportOutcome } from "@estoc/agent-core";
+import type { AgentStatus, ChatMessage, ImportOutcome, Invitation } from "@estoc/agent-core";
 
-export type { AgentStatus, ChatMessage, ImportOutcome };
+export type { AgentStatus, ChatMessage, ImportOutcome, Invitation };
 
 /**
  * What the UI renders: reactive views mirrored from the vault. The vault
@@ -25,6 +25,20 @@ export interface Contact {
   claimedName?: string;
 }
 
+/** An invitation this identity issued: a link for one person, open until someone takes it. */
+export interface InvitationView {
+  id: string;
+  /** what the link says it is for */
+  goal: string;
+  createdAt: string;
+  /** the URL to hand over — this deployment's origin carrying `?_oob=`; every Estoc client reads only the parameter */
+  url: string;
+  /** whether the mediator has accepted its DID yet — before that, the link leads nowhere */
+  ready: boolean;
+  /** the cid of the contact who took it, once someone has */
+  takenBy: string | null;
+}
+
 export interface Identity {
   name: string;
   /** the mediator this identity is reached through; null until one is chosen */
@@ -32,6 +46,7 @@ export interface Identity {
   /** the public DID, minted after mediate-grant with the routing DID as its service */
   did: string | null;
   contacts: Contact[];
+  invitations: InvitationView[];
   messages: ChatMessage[];
 }
 

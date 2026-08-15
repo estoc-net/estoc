@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 
-import { addContact, sendMessage } from "../core/store.js";
+import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
 import { shortDid, timeOf } from "./util.js";
 
@@ -46,22 +46,60 @@ const showAddForm = ref(false);
 const newLabel = ref("");
 const newDid = ref("");
 const addError = ref("");
+const adding = ref(false);
+
+// The page may have been opened with someone's invitation link: it is
+// offered here, under the name the person adding it chooses.
+const pending = computed(() => state.pendingInvitation);
+const pendingLabel = ref("");
+const pendingError = ref("");
 
 async function add() {
-  const did = newDid.value.trim();
-  const label = newLabel.value.trim() || shortDid(did);
-  if (!did.startsWith("did:")) {
-    addError.value = "That is not a DID — it should start with did:";
+  const input = newDid.value.trim();
+  const label = newLabel.value.trim() || (input.startsWith("did:") ? shortDid(input) : "invited");
+  if (input === "") {
+    addError.value = "Paste their DID, or an invitation link.";
     return;
   }
-  const added = await addContact(did, label);
-  if (added !== null) {
-    emit("selectContact", added.cid);
+  adding.value = true;
+  try {
+    const added = await addContactFrom(input, label);
+    if (added !== null) {
+      emit("selectContact", added.cid);
+    }
+    newLabel.value = "";
+    newDid.value = "";
+    addError.value = "";
+    showAddForm.value = false;
+  } catch (err) {
+    addError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    adding.value = false;
   }
-  newLabel.value = "";
-  newDid.value = "";
-  addError.value = "";
-  showAddForm.value = false;
+}
+
+async function acceptPending() {
+  if (pending.value === null) {
+    return;
+  }
+  const label = pendingLabel.value.trim();
+  if (label === "") {
+    pendingError.value = "Give them a name first.";
+    return;
+  }
+  adding.value = true;
+  try {
+    const added = await acceptInvitation(pending.value, label);
+    if (added !== null) {
+      emit("selectContact", added.cid);
+    }
+    pendingLabel.value = "";
+    pendingError.value = "";
+  } catch (err) {
+    pendingError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    adding.value = false;
+  }
 }
 
 const draft = ref("");
@@ -124,19 +162,42 @@ watch(
       <button class="contact-chip" @click="showAddForm = !showAddForm">+ contact</button>
     </div>
 
-    <div v-if="showAddForm || identity.contacts.length === 0" class="hollow" style="flex: none">
+    <div v-if="pending" class="hollow invited" style="flex: none">
+      <div class="hollow-card" style="width: 100%">
+        <div class="eyebrow">You were handed an invitation</div>
+        <p>
+          <em v-if="pending.body.goal">“{{ pending.body.goal }}”</em>
+          <template v-else>Someone made a link for one person to write to them.</template>
+          Name them and add them: they will see you arrive, and the two of you
+          write from DIDs minted for each other alone.
+        </p>
+        <form @submit.prevent="acceptPending">
+          <input v-model="pendingLabel" class="field" placeholder="what you call them, e.g. Alice" />
+          <p v-if="pendingError" class="compose-error" style="padding: 0">{{ pendingError }}</p>
+          <div class="rail-actions" style="gap: 8px">
+            <button class="btn" type="submit" :disabled="adding">Accept invitation</button>
+            <button class="btn-quiet" type="button" @click="dismissPendingInvitation">Not now</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="showAddForm || (identity.contacts.length === 0 && !pending)" class="hollow" style="flex: none">
       <div class="hollow-card" style="width: 100%">
         <p v-if="identity.contacts.length === 0">
-          To talk to someone, add them as a contact: they copy their DID from
-          their own rail and send it to you any way they like. Anyone who has
-          yours can write to you the same way — a stranger's first message
-          opens a conversation here on its own.
+          To talk to someone, add them as a contact: paste an invitation link
+          they made for you (the rail makes yours), or the DID from their
+          rail, sent any way they like. Anyone who has your public DID can
+          write to you too — a stranger's first message opens a conversation
+          here on its own.
         </p>
         <form @submit.prevent="add">
           <input v-model="newLabel" class="field" placeholder="name, e.g. Bob" />
-          <input v-model="newDid" class="field" placeholder="paste their DID (did:peer:4… or did:web:…)" />
+          <input v-model="newDid" class="field" placeholder="paste their invitation link or DID" />
           <p v-if="addError" class="compose-error" style="padding: 0">{{ addError }}</p>
-          <button class="btn" type="submit">Add contact</button>
+          <button class="btn" type="submit" :disabled="adding">
+            {{ adding ? "Adding…" : "Add contact" }}
+          </button>
         </form>
       </div>
     </div>

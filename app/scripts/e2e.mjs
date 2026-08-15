@@ -39,7 +39,7 @@ if (E2E_MEDIATOR === "estoc" || E2E_MEDIATOR === "web") {
 }
 
 const executablePath = "/usr/bin/chromium";
-const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026" };
+const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026", Carol: "carol-carries-cardamom" };
 
 function fail(message) {
   console.error(`✗ ${message}`);
@@ -68,8 +68,8 @@ async function waitLive(page) {
   return page.getAttribute(".did-chip", "title");
 }
 
-async function createIdentity(page, name, invitationUrl = null) {
-  await page.goto(APP_URL);
+async function createIdentity(page, name, invitationUrl = null, startUrl = APP_URL) {
+  await page.goto(startUrl);
   await page.fill('input[placeholder="your name, e.g. Alice"]', name);
   await page.fill('input[placeholder^="passphrase (seals"]', PASS[name]);
   await page.fill('input[placeholder="passphrase again"]', PASS[name]);
@@ -96,7 +96,7 @@ async function createIdentity(page, name, invitationUrl = null) {
 async function addContact(page, label, did) {
   await page.click('button:has-text("+ contact")');
   await page.fill('input[placeholder="name, e.g. Bob"]', label);
-  await page.fill('input[placeholder="paste their DID (did:peer:4… or did:web:…)"]', did);
+  await page.fill('input[placeholder="paste their invitation link or DID"]', did);
   await page.click('button:has-text("Add contact")');
 }
 
@@ -164,6 +164,60 @@ try {
   await send(bob, "Alice", "hi alice, got it");
   await expectBubble(alice, "hi alice");
   ok("Alice received Bob's reply live");
+
+  // Invitations: Bob makes a link for one person. Carol, new to Estoc,
+  // opens it — onboarding, mediator, then the invitation waiting for her —
+  // and accepts under a name of her choosing. Nothing public changes hands:
+  // Bob writes to her from the invitation's DID, she to him from one minted
+  // for him.
+  await bob.click('button:has-text("New invitation link")');
+  await bob.waitForSelector("[data-invitation-url]", { timeout: 20000 });
+  const inviteUrl = await bob.getAttribute("[data-invitation-url]", "title");
+  if (!inviteUrl?.startsWith(APP_URL.replace(/\/$/, "")) || !inviteUrl.includes("_oob=")) {
+    fail(`invitation link should be this app's URL carrying _oob; got ${inviteUrl}`);
+  }
+  const inviteDid = JSON.parse(
+    Buffer.from(new URL(inviteUrl).searchParams.get("_oob"), "base64url").toString()
+  ).from;
+  if (!inviteDid?.startsWith("did:peer:4") || inviteDid === bobDid) {
+    fail("the invitation should carry a did:peer:4 minted for it, not Bob's public DID");
+  }
+  const qrCells = await bob.locator(".invitation .qr svg").count();
+  if (qrCells !== 1) {
+    fail("the invitation should show as a QR code too");
+  }
+  ok("Bob issued a single-use invitation link (with a QR) carrying a DID of its own");
+
+  const carolCtx = await browser.newContext();
+  const carol = await carolCtx.newPage();
+  watch(carol, "Carol");
+  const carolDid = await createIdentity(carol, "Carol", null, inviteUrl);
+  await carol.waitForSelector("text=You were handed an invitation", { timeout: 10000 });
+  await carol.waitForSelector('text=“Write to Bob”');
+  ok("Carol opened the link before she had an identity; it waited through onboarding");
+  await carol.fill('input[placeholder="what you call them, e.g. Alice"]', "Bob (invited)");
+  await carol.click('button:has-text("Accept invitation")');
+  await carol.waitForSelector('.contact-chip.active:has-text("Bob (invited)")', { timeout: 15000 });
+  await bob.waitForSelector('.contact-chip:has-text("Carol")', { timeout: 20000 });
+  ok("Bob saw Carol arrive the moment she accepted (her introduction, pthid = the invitation)");
+  await bob.waitForFunction(() => !document.body.innerText.includes("open link"), { timeout: 10000 });
+  await bob.waitForSelector("[data-invitation-taken]:has-text('Carol')", { timeout: 10000 });
+  await bob.click('.contact-chip:has-text("Carol")');
+  const bobHeadToCarol = await bob.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
+  if (!bobHeadToCarol?.includes(inviteDid)) {
+    fail("Bob's DID toward Carol should be the invitation's DID");
+  }
+  const carolHeadToBob = await carol.getAttribute('.head-dids .eyebrow:has-text("you as")', "title");
+  if (!carolHeadToBob?.includes("did:peer:4") || carolHeadToBob.includes(carolDid)) {
+    fail("Carol's DID toward Bob should be one minted for him, not her public one");
+  }
+  ok("the invitation is taken: Bob writes to Carol as its DID, Carol to Bob from a pairwise one");
+  await send(bob, "Carol", "welcome carol");
+  await expectBubble(carol, "welcome carol");
+  await send(carol, "Bob (invited)", "thanks bob");
+  await expectBubble(bob, "thanks bob");
+  ok("Bob and Carol talk both ways over the invitation");
+  await carolCtx.close();
 
   // Reload: history and identity come back from the OPFS vault, no passphrase.
   await bob.reload();

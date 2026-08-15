@@ -6,8 +6,13 @@ import {
   chatView,
   currentDid,
   currentMyDid,
+  invitationMessage,
+  invitationUrl,
+  parseInvitation,
   type ContactRecord,
   type ImportOutcome,
+  type Invitation,
+  type InvitationRecord,
   type VaultBackend,
 } from "@estoc/agent-core";
 
@@ -17,7 +22,14 @@ import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
 import { acquireVaultLock } from "./lock.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage, vaultBackend, wipeVault } from "./storage.js";
-import type { AgentStatus, ChatMessage, Contact, Identity, Phase } from "./types.js";
+import type {
+  AgentStatus,
+  ChatMessage,
+  Contact,
+  Identity,
+  InvitationView,
+  Phase,
+} from "./types.js";
 
 /**
  * The one store: this install's identity as Vue-reactive views, plus the
@@ -46,6 +58,14 @@ export const state = reactive({
   applyUpdate: null as (() => void) | null,
   /** true once the service worker has the shell cached */
   offlineReady: false,
+  /**
+   * An invitation this page was opened with (`?_oob=` in the URL) and has
+   * not acted on yet: a person's waits for the chat pane to offer "add
+   * them"; a mediator's is offered where a mediator is chosen. Kept here,
+   * not in the URL, so it survives onboarding and unlocking.
+   */
+  pendingInvitation: null as Invitation | null,
+  pendingMediatorInvitation: null as string | null,
 });
 
 let backend: VaultBackend | null = null;
@@ -57,6 +77,42 @@ function log(line: string): void {
   state.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
   if (state.log.length > 200) {
     state.log.shift();
+  }
+}
+
+/**
+ * The link an invitation of ours is handed over as: this deployment's
+ * origin, so tapping it opens *an* Estoc — the same one that issued it,
+ * or any other; only `_oob` matters to the app that opens it.
+ */
+export function invitationLink(record: InvitationRecord): string {
+  return invitationUrl(`${location.origin}${location.pathname}`, invitationMessage(record));
+}
+
+function invitationView(record: InvitationRecord): InvitationView {
+  return {
+    id: record.id,
+    goal: record.goal,
+    createdAt: record.createdAt,
+    url: invitationLink(record),
+    ready: record.registeredAt !== undefined,
+    takenBy: record.acceptedBy ?? null,
+  };
+}
+
+function upsertInvitation(identity: Identity, record: InvitationRecord, gone = false): void {
+  const index = identity.invitations.findIndex((i) => i.id === record.id);
+  if (gone) {
+    if (index !== -1) {
+      identity.invitations.splice(index, 1);
+    }
+    return;
+  }
+  const view = invitationView(record);
+  if (index === -1) {
+    identity.invitations.push(view);
+  } else {
+    identity.invitations[index] = view;
   }
 }
 
@@ -108,6 +164,7 @@ async function viewsOf(v: Vault): Promise<Identity> {
     mediatorDid: v.config.mediation?.mediatorDid ?? null,
     did: v.config.mediation?.public?.did ?? null,
     contacts: contacts.map(contactView),
+    invitations: (await v.invitations.all()).map(invitationView),
     messages,
   };
 }
@@ -131,6 +188,12 @@ async function attachAgent(): Promise<void> {
       },
       onContact(record) {
         upsertContact(identity, record);
+      },
+      onInvitation(record) {
+        // issued or taken: the record; revoked: the record, no longer in the vault
+        void a.vault.invitations.byId(record.id).then((still) => {
+          upsertInvitation(identity, record, still === null);
+        });
       },
       onLog: log,
     },
@@ -158,6 +221,7 @@ async function open(v: Vault, key: CryptoKey): Promise<void> {
  * without its cached seed, or straight in.
  */
 export async function boot(): Promise<void> {
+  takePendingInvitation();
   setupPwa({
     onUpdateReady: (apply) => (state.applyUpdate = apply),
     onOfflineReady: () => (state.offlineReady = true),
@@ -183,6 +247,31 @@ export async function boot(): Promise<void> {
     return;
   }
   await open(v, key);
+}
+
+/**
+ * An `_oob` in this page's URL is an invitation someone handed over as a
+ * link. Take it off the URL (a reload should not re-offer it, and it should
+ * not ride into a bookmark) and hold it until a screen can act on it.
+ */
+function takePendingInvitation(): void {
+  const params = new URLSearchParams(location.search);
+  const oob = params.get("_oob");
+  if (oob === null) {
+    return;
+  }
+  const clean = `${location.pathname}${location.hash}`;
+  try {
+    const invitation = parseInvitation(oob);
+    if (invitation.body.goal_code === "request-mediate") {
+      state.pendingMediatorInvitation = location.href;
+    } else {
+      state.pendingInvitation = invitation;
+    }
+  } catch (err) {
+    log(`the link this page was opened with is not an invitation: ${err instanceof Error ? err.message : err}`);
+  }
+  history.replaceState(null, "", clean);
 }
 
 /**
@@ -328,6 +417,72 @@ export async function removeContact(cid: string): Promise<void> {
   }
   await agent.removeContact(cid);
   state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== cid);
+}
+
+/**
+ * Add a contact from whatever was pasted: an invitation link (or its
+ * `_oob`) is accepted — the contact by the DID inside, our introduction
+ * sent at once — and a DID is added as before.
+ */
+export async function addContactFrom(input: string, label: string): Promise<Contact | null> {
+  const trimmed = input.trim();
+  if (trimmed.startsWith("did:")) {
+    return addContact(trimmed, label);
+  }
+  let invitation: Invitation;
+  try {
+    invitation = parseInvitation(trimmed);
+  } catch {
+    throw new Error("that is neither a DID (did:…) nor an invitation link");
+  }
+  return acceptInvitation(invitation, label);
+}
+
+export async function acceptInvitation(input: string | Invitation, label: string): Promise<Contact | null> {
+  if (agent === null || state.identity === null) {
+    return null;
+  }
+  const invitation = typeof input === "string" ? parseInvitation(input) : input;
+  const record = await agent.acceptInvitation(invitation, label);
+  upsertContact(state.identity, record);
+  if (state.pendingInvitation?.id === invitation.id) {
+    state.pendingInvitation = null;
+  }
+  return state.identity.contacts.find((c) => c.cid === record.cid) ?? null;
+}
+
+/** Decline the invitation this page was opened with; nothing is written. */
+export function dismissPendingInvitation(): void {
+  state.pendingInvitation = null;
+}
+
+/** Issue a single-use invitation link: the first person to open it and write becomes a contact. */
+export async function createInvitation(): Promise<InvitationView> {
+  if (agent === null || state.identity === null) {
+    throw new Error("the agent is not running");
+  }
+  const identity = state.identity;
+  const a = agent;
+  try {
+    const record = await a.createInvitation();
+    upsertInvitation(identity, record);
+    return invitationView(record);
+  } catch (err) {
+    // the record may exist unregistered (the mediator could not be told):
+    // show it as not ready rather than pretend nothing happened
+    for (const record of await a.vault.invitations.all()) {
+      upsertInvitation(identity, record);
+    }
+    throw err;
+  }
+}
+
+export async function revokeInvitation(id: string): Promise<void> {
+  if (agent === null || state.identity === null) {
+    return;
+  }
+  await agent.revokeInvitation(id);
+  state.identity.invitations = state.identity.invitations.filter((i) => i.id !== id);
 }
 
 export async function sendMessage(contactDid: string, text: string): Promise<void> {

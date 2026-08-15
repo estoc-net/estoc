@@ -15,10 +15,11 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@estoc/agent-core": "^0.6.0",
+    "@estoc/agent-core": "^0.7.0",
     "@estoc/keystore": "^0.2.0",
     "didcomm": "^0.4.1",
     "fflate": "^0.8.2",
+    "qrcode-generator": "^2.0.4",
     "vue": "^3.5.0"
   },
   "devDependencies": {

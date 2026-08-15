@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import qrcode from "qrcode-generator";
 
 import { MEDIATOR_CHOICES, mediatorLabel } from "../core/mediators.js";
 import {
   chooseMediator,
+  createInvitation,
   downloadBackup,
   forgetIdentity,
   lock,
   mergeBackup,
+  revokeInvitation,
   state,
 } from "../core/store.js";
 import type { AgentStatus } from "../core/types.js";
@@ -20,6 +23,19 @@ const identity = computed(() => state.identity);
 const { choice, pasted, resolving, error: mediatorError, resolveChoice } = useMediatorInput();
 const choosing = ref(false);
 const chooseError = ref<string | null>(null);
+
+// opened with a mediator's invitation link: offer it, do not pick it
+watch(
+  () => state.pendingMediatorInvitation,
+  (url) => {
+    if (url !== null) {
+      choice.value = CUSTOM;
+      pasted.value = url;
+      state.pendingMediatorInvitation = null;
+    }
+  },
+  { immediate: true }
+);
 
 async function pickMediator() {
   chooseError.value = null;
@@ -46,6 +62,64 @@ async function copyDid() {
   await navigator.clipboard.writeText(identity.value.did);
   copied.value = true;
   setTimeout(() => (copied.value = false), 1500);
+}
+
+// invitations: a link for one person; the QR is the same link, for a phone
+const openInvitations = computed(() =>
+  (identity.value?.invitations ?? []).filter((i) => i.takenBy === null)
+);
+const inviting = ref(false);
+const inviteError = ref<string | null>(null);
+const shownInvitation = ref<string | null>(null);
+const invitationCopied = ref(false);
+
+async function invite() {
+  inviteError.value = null;
+  inviting.value = true;
+  try {
+    const made = await createInvitation();
+    shownInvitation.value = made.id;
+  } catch (err) {
+    inviteError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    inviting.value = false;
+  }
+}
+
+const shown = computed(
+  () => openInvitations.value.find((i) => i.id === shownInvitation.value) ?? null
+);
+// the link on screen was taken while it was showing: say by whom
+const shownTakenBy = computed(() => {
+  const record = identity.value?.invitations.find((i) => i.id === shownInvitation.value);
+  if (record === undefined || record.takenBy === null) {
+    return null;
+  }
+  return identity.value?.contacts.find((c) => c.cid === record.takenBy)?.label ?? "someone";
+});
+
+const qrSvg = computed(() => {
+  if (shown.value === null) {
+    return "";
+  }
+  // a did:peer:4 invitation is ~1.6 KB: byte mode, low correction, auto size
+  const qr = qrcode(0, "L");
+  qr.addData(shown.value.url, "Byte");
+  qr.make();
+  return qr.createSvgTag({ cellSize: 2, margin: 2, scalable: true });
+});
+
+async function copyInvitation(url: string) {
+  await navigator.clipboard.writeText(url);
+  invitationCopied.value = true;
+  setTimeout(() => (invitationCopied.value = false), 1500);
+}
+
+async function revoke(id: string) {
+  await revokeInvitation(id);
+  if (shownInvitation.value === id) {
+    shownInvitation.value = null;
+  }
 }
 
 function lampClass(status: AgentStatus): string {
@@ -186,6 +260,43 @@ function forget() {
       <p class="status-line">
         via {{ mediatorLabel(identity.mediatorDid ?? "") }} · a business card:
         each conversation gets a DID of its own
+      </p>
+    </div>
+
+    <div v-if="identity && identity.mediatorDid !== null" class="rail-section">
+      <div class="eyebrow">Invite someone</div>
+      <div class="rail-actions" style="margin-top: 0">
+        <button class="btn-quiet" :disabled="inviting || identity.did === null" @click="invite">
+          {{ inviting ? "minting…" : "New invitation link" }}
+        </button>
+      </div>
+      <p v-if="inviteError" class="status-line error">{{ inviteError }}</p>
+      <div v-if="shown" class="invitation">
+        <button
+          class="did-chip"
+          :title="shown.url"
+          data-invitation-url
+          @click="copyInvitation(shown.url)"
+        >
+          {{ invitationCopied ? "copied" : "copy the link" }}
+        </button>
+        <div class="qr" v-html="qrSvg"></div>
+        <p class="status-line" style="margin-top: 4px">
+          for one person: whoever opens it and writes first is the one it is
+          for. Nothing public changes hands — you each get a DID minted for
+          the other.
+        </p>
+      </div>
+      <p v-if="shownTakenBy" class="status-line" data-invitation-taken>
+        that link was taken — {{ shownTakenBy }} is a contact now
+      </p>
+      <p v-if="openInvitations.length" class="status-line">
+        {{ openInvitations.length }} open link{{ openInvitations.length === 1 ? "" : "s" }}
+        <template v-for="i in openInvitations" :key="i.id">
+          ·
+          <button class="link-quiet" :title="i.url" @click="shownInvitation = i.id">{{ i.ready ? "show" : "not registered yet" }}</button>
+          <button class="link-quiet danger" @click="revoke(i.id)">revoke</button>
+        </template>
       </p>
     </div>
 
