@@ -43,9 +43,24 @@ Agent                        mediation · pickup · live delivery · layered pac
   it arrived or left, `sender` the DID the envelope *proved* (didcomm-rust
   never compares it with `from`), `layers` the captured envelope onion.
   Whose message it is gets resolved at read time through contact DID
-  histories — the log encodes facts, not interpretations. Truncated last
-  lines (a crash mid-append) are skipped; the next pickup redelivers and
-  `msg.id` deduplication absorbs it.
+  histories — the log encodes facts, not interpretations. A line that does
+  not parse (a crash mid-append, a corrupted byte) is reported to the reader
+  and skipped, never fatal; the next append after a cut-short line first
+  gives the fragment its own terminator so the two never fuse. Appends are
+  serialised per `MessageLog` instance.
+- **Attribution is the envelope's.** Inbound mail is attributed to the DID
+  the authcrypt layer proves, never to the plaintext `from` (which anyone
+  can type into an anonymous envelope). Anonymous mail is logged with
+  `sender: null`, belongs to no contact's thread (`chatView` yields null),
+  and cannot rename a contact or be answered with a profile.
+- **At rest, the vault is plaintext** apart from the seed: messages,
+  captured envelopes and contacts are readable files. That is the
+  see-through deal — an application wanting encryption at rest wraps the
+  backend.
+- **One agent per vault at a time.** Two agents (two tabs) on one vault
+  would append to the same log and rewrite the same config; the package
+  does not arbitrate that. Browsers have the Web Locks API for the job —
+  the application's page, not this one.
 
 ### Identity
 
@@ -112,8 +127,22 @@ loads — `didcomm` (browser/workerd WASM, instantiated your way) or
 know how the WASM is instantiated, because every bundler and runtime does it
 differently.
 
+`didcomm` is a peer dependency for its types only; install the build you
+inject.
+
 `fetch`, `WebSocket` and `resolveDid` are injectable too; the tests run two
 agents against an in-process fake mediator that way (`test/fake-mediator.ts`).
+
+### What the agent does with the mediator's queue
+
+Every pickup step is safe to repeat. An attachment is acked once it is dealt
+with — logged, answered, or ignored on purpose; one that will not open (a
+resolver hiccup, a corrupt envelope) is *not* acked, because the mediator's
+copy is the only copy, and stays queued for the next start. A drain round
+that acks nothing stops the loop instead of fetching the same mail again.
+Inbound processing runs one delivery at a time. A socket that closes is
+reopened after a pickup, so nothing queued during the outage waits for the
+next start.
 
 ### Backends
 

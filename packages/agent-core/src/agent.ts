@@ -98,6 +98,15 @@ export function didPlaceholder(did: string): string {
   return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
 }
 
+/**
+ * The dedup key of an inbound message: proven sender plus wire id, so one
+ * sender's choice of id cannot shadow another's. Anonymous mail keys on the
+ * id alone.
+ */
+function dedupKey(sender: string | null, id: string): string {
+  return `${sender ?? ""}\u0000${id}`;
+}
+
 export class Agent {
   readonly vault: Vault;
   private readonly seedKey: SeedKey;
@@ -116,8 +125,14 @@ export class Agent {
   private ws: WebSocket | null = null;
   private destroyed = false;
   private _status: AgentStatus = { state: "idle" };
-  /** wire ids of inbound messages already in the log */
+  /** inbound messages already in the log, keyed by proven sender + wire id */
   private seen = new Set<string>();
+  /**
+   * Inbound handling runs one delivery at a time. Socket frames arrive as
+   * concurrent async callbacks; two deliveries interleaving would race the
+   * dedup check and the log append.
+   */
+  private inbound: Promise<unknown> = Promise.resolve();
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
@@ -184,9 +199,12 @@ export class Agent {
           mediation.routingDid
         );
       }
-      for (const record of await this.vault.messages.read()) {
+      const records = await this.vault.messages.read((damaged) => {
+        this.log(`skipping a damaged log line at ${damaged.where}: ${damaged.error}`);
+      });
+      for (const record of records) {
         if (record.direction === "in") {
-          this.seen.add(record.msg.id);
+          this.seen.add(dedupKey(record.sender ?? null, record.msg.id));
         }
       }
 
@@ -333,7 +351,12 @@ export class Agent {
     this.log("public DID registered with the mediator");
   }
 
-  /** The pickup loop: status → delivery-request → unpack each → ack. */
+  /**
+   * The pickup loop: status → delivery-request → unpack each → ack, until
+   * the queue is empty or a round acks nothing — mail that could not be
+   * opened stays queued for a later start (see `processDelivery`), and
+   * asking for it again in the same breath would only fetch it again.
+   */
   private async drainQueue(): Promise<void> {
     for (let round = 0; round < 10; round++) {
       const status = await this.mediatorRoundTrip(STATUS_REQUEST, {});
@@ -350,8 +373,20 @@ export class Agent {
       if (delivery.type !== DELIVERY) {
         return;
       }
-      await this.processDelivery(delivery, null);
+      const acked = await this.enqueueInbound(() => this.processDelivery(delivery, null));
+      if (acked === 0) {
+        this.log("nothing in the queue could be handled now; leaving it for a later pickup");
+        return;
+      }
     }
+    this.log("pickup stopped after ten rounds with mail still queued");
+  }
+
+  /** Run one inbound step after every earlier one has finished. */
+  private enqueueInbound<T>(step: () => Promise<T>): Promise<T> {
+    const run = this.inbound.then(step);
+    this.inbound = run.catch(() => undefined);
+    return run;
   }
 
   private async ack(ids: string[]): Promise<void> {
@@ -377,20 +412,27 @@ export class Agent {
    * Open the inner envelopes riding a delivery message, log each as a
    * received message with its full peel, then ack — over HTTP even when
    * the delivery arrived on the socket, which is the ritual the mediator's
-   * demo-interop test pins.
+   * demo-interop test pins. Returns how many attachments were acked.
+   *
+   * An attachment is acked once it is dealt with: logged, answered, or
+   * ignored on purpose. One that would not open is not — the failure may
+   * be a resolver hiccup, and the mediator's copy is the only copy — so it
+   * stays queued for the next pickup. Nothing here throws for one bad
+   * attachment: the loop moves on, and the ack still goes out for the rest.
    */
   private async processDelivery(
     delivery: IMessage,
     outerPacked: string | null
-  ): Promise<void> {
+  ): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const acked: string[] = [];
 
     for (const attachment of attachments) {
-      if (attachment.id !== undefined) {
-        acked.push(attachment.id);
-      }
-
+      const done = () => {
+        if (attachment.id !== undefined) {
+          acked.push(attachment.id);
+        }
+      };
       let innerPacked: string | null = null;
       if (typeof attachment.data.base64 === "string") {
         innerPacked = base64urlToUtf8(attachment.data.base64);
@@ -398,6 +440,8 @@ export class Agent {
         innerPacked = JSON.stringify(attachment.data.json);
       }
       if (innerPacked === null) {
+        // nothing inside to open, ever
+        done();
         continue;
       }
 
@@ -407,18 +451,33 @@ export class Agent {
         ({ msg: inner, sender } = await this.unpack(innerPacked));
       } catch (err) {
         this.log(
-          `could not open a delivered envelope: ${err instanceof Error ? err.message : err}`
+          `could not open a delivered envelope; leaving it queued: ${err instanceof Error ? err.message : err}`
         );
         continue;
       }
 
+      // Everything from here on is a decision about an opened message, and
+      // every decision — including "ignore" — is final for this attachment.
+      done();
+
       if (inner.type === REQUEST_PROFILE) {
-        // Someone asked who we are: answer, without asking back.
-        const asker = sender ?? inner.from;
-        if (asker !== undefined && asker !== null) {
+        // Someone asked who we are: answer, without asking back — but only
+        // someone the envelope proves; an anonymous ask names nobody to
+        // answer, and a plaintext `from` is just a claim.
+        if (sender === null) {
+          this.log("anonymous profile request; ignoring");
+          continue;
+        }
+        try {
           this.log("profile requested; sending ours");
-          await this.ensureContact(asker);
-          await this.sendProfile(asker, false);
+          await this.ensureContact(sender);
+          await this.sendProfile(sender, false);
+        } catch (err) {
+          // Their reply path being down is their problem, not a reason
+          // for us to stop reading mail.
+          this.log(
+            `could not answer a profile request: ${err instanceof Error ? err.message : err}`
+          );
         }
         continue;
       }
@@ -428,7 +487,8 @@ export class Agent {
         continue;
       }
 
-      if (this.seen.has(inner.id)) {
+      const key = dedupKey(sender, inner.id);
+      if (this.seen.has(key)) {
         continue;
       }
 
@@ -466,7 +526,12 @@ export class Agent {
         }
       );
 
-      const counterparty = sender ?? inner.from ?? null;
+      // Attribution is the envelope's, never the plaintext's: `from` is
+      // whatever the sender typed, and an anonymous (anoncrypt) envelope
+      // could carry anyone's DID there. Such a message is still a fact
+      // worth logging — with sender null — but it belongs to no contact's
+      // thread and cannot rename anyone.
+      const counterparty = sender;
       const record = newMessageRecord({
         direction: "in",
         sender,
@@ -474,7 +539,10 @@ export class Agent {
         layers,
       });
       await this.vault.messages.append(record);
-      this.seen.add(inner.id);
+      this.seen.add(key);
+      if (counterparty === null) {
+        this.log(`logged an anonymous ${inner.type === PROFILE ? "profile" : "message"}; it is attributed to nobody`);
+      }
 
       // A first message from a stranger creates the contact, so it has a
       // thread to land in; the petname is the DID until something names it.
@@ -519,6 +587,7 @@ export class Agent {
         `ack failed (${err instanceof Error ? err.message : err}); messages stay queued and will be deduplicated on the next pickup`
       );
     }
+    return acked.length;
   }
 
   private connectWebSocket(): void {
@@ -536,15 +605,22 @@ export class Agent {
 
     ws.onopen = async () => {
       // live-delivery-change is the first frame the socket ever carries.
-      const packed = await this.packForMediator(
-        plainMessage(
-          LIVE_DELIVERY_CHANGE,
-          (this.me as PeerIdentity).did,
-          this.mediation().mediatorDid,
-          { live_delivery: true }
-        )
-      );
-      ws.send(packed);
+      try {
+        const packed = await this.packForMediator(
+          plainMessage(
+            LIVE_DELIVERY_CHANGE,
+            (this.me as PeerIdentity).did,
+            this.mediation().mediatorDid,
+            { live_delivery: true }
+          )
+        );
+        ws.send(packed);
+      } catch (err) {
+        // an unhandled rejection here would leave the socket open and
+        // live delivery never switched on; closing it re-enters reconnect
+        this.log(`could not open live delivery: ${err instanceof Error ? err.message : err}`);
+        ws.close();
+      }
     };
 
     ws.onmessage = async (event: MessageEvent) => {
@@ -560,7 +636,7 @@ export class Agent {
           return;
         }
         if (msg.type === DELIVERY) {
-          await this.processDelivery(msg, text);
+          await this.enqueueInbound(() => this.processDelivery(msg, text));
           return;
         }
         this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
@@ -581,10 +657,27 @@ export class Agent {
       });
       setTimeout(() => {
         if (!this.destroyed) {
-          this.connectWebSocket();
+          void this.reconnect();
         }
       }, this.reconnectDelayMs);
     };
+  }
+
+  /**
+   * Live delivery only pushes what arrives while the socket is up; mail
+   * queued during an outage waits for a pickup. So a reconnect drains
+   * first, then reopens the socket — and a mediator still unreachable
+   * simply fails the drain, and the socket's close reschedules us.
+   */
+  private async reconnect(): Promise<void> {
+    try {
+      await this.drainQueue();
+    } catch (err) {
+      this.log(`pickup on reconnect failed: ${err instanceof Error ? err.message : err}`);
+    }
+    if (!this.destroyed) {
+      this.connectWebSocket();
+    }
   }
 
   /**

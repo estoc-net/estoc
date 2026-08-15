@@ -17,6 +17,7 @@ import {
   newContact,
   newMessageRecord,
   parseConfig,
+  type ContactRecord,
 } from "../src/index.js";
 
 const FIXED_SEED = new Uint8Array(32).map((_, i) => i);
@@ -206,16 +207,34 @@ describe("ContactStore", () => {
     expect(contactFileStem("王小明")).toBe("王小明");
   });
 
-  it("refuses a directory where one cid lives in two files", async () => {
+  it("heals a rename that crashed between writing the new file and removing the old", async () => {
     const backend = new MemoryBackend();
     const store = new ContactStore(backend);
     const a = newContact("A", "did:peer:4a");
     await store.put(a);
-    await backend.write(
-      ".estoc/contacts/copy.json",
-      (await backend.read(".estoc/contacts/A.json")) as Uint8Array
-    );
-    await expect(new ContactStore(backend).all()).rejects.toThrow(/appears in both/);
+    // the crash: the record renamed to "B" is written, A.json is still there
+    await new Promise((r) => setTimeout(r, 2));
+    const renamed = { ...structuredClone(a), name: "B", updatedAt: new Date().toISOString() };
+    await backend.write(".estoc/contacts/B.json", new TextEncoder().encode(JSON.stringify(renamed)));
+    const reloaded = new ContactStore(backend);
+    expect((await reloaded.all()).map((c) => c.name)).toEqual(["B"]);
+    // the older file is gone, and later puts keep following the name
+    expect(await backend.list(".estoc/contacts")).toEqual(["B.json"]);
+    const b = (await reloaded.byCid(a.cid)) as ContactRecord;
+    b.name = "C";
+    await reloaded.put(b);
+    expect(await backend.list(".estoc/contacts")).toEqual(["C.json"]);
+  });
+
+  it("hands out copies: a field changed without put is not saved and does not leak into the cache", async () => {
+    const backend = new MemoryBackend();
+    const store = new ContactStore(backend);
+    const a = newContact("A", "did:peer:4a");
+    await store.put(a);
+    const got = (await store.byDid("did:peer:4a")) as ContactRecord;
+    got.name = "changed in place";
+    expect((await store.byCid(a.cid))?.name).toBe("A");
+    expect((await new ContactStore(backend).byCid(a.cid))?.name).toBe("A");
   });
 });
 
@@ -260,12 +279,54 @@ describe("MessageLog", () => {
     expect((await log.read()).map((r) => r.msg.id)).toEqual(["old", "mine"]);
   });
 
-  it("treats a bad line in the middle as corruption", async () => {
+  it("skips a damaged line, reports it, and keeps the rest", async () => {
     const backend = new MemoryBackend();
+    const good = newMessageRecord({ direction: "in", msg: msg("x") });
     await backend.write(
       ".estoc/messages/0001.jsonl",
-      new TextEncoder().encode('{"nope":true}\n' + JSON.stringify(newMessageRecord({ direction: "in", msg: msg("x") })) + "\n")
+      new TextEncoder().encode('{"nope":true}\n' + JSON.stringify(good) + "\n")
     );
-    await expect(new MessageLog(backend).read()).rejects.toThrow(/0001.jsonl:1/);
+    const damaged: string[] = [];
+    const records = await new MessageLog(backend).read((d) => damaged.push(d.where));
+    expect(records.map((r) => r.msg.id)).toEqual(["x"]);
+    expect(damaged).toEqual(["0001.jsonl:1"]);
+  });
+
+  it("does not fuse a cut-short line with the next append", async () => {
+    const backend = new MemoryBackend();
+    const first = newMessageRecord({ direction: "out", msg: msg("1") });
+    await new MessageLog(backend).append(first);
+    // the crash: half a line, no terminator
+    await backend.append(".estoc/messages/0001.jsonl", new TextEncoder().encode('{"mid":"01'));
+    // a fresh log instance (the next session) appends
+    const log = new MessageLog(backend);
+    const second = newMessageRecord({ direction: "in", sender: "did:peer:4b", msg: msg("2") });
+    await log.append(second);
+    const damaged: string[] = [];
+    expect((await log.read((d) => damaged.push(d.line))).map((r) => r.msg.id)).toEqual(["1", "2"]);
+    expect(damaged).toEqual(['{"mid":"01']);
+    // and a further append on the same instance stays whole too
+    await log.append(newMessageRecord({ direction: "in", sender: "did:peer:4b", msg: msg("3") }));
+    expect((await log.read()).map((r) => r.msg.id)).toEqual(["1", "2", "3"]);
+  });
+
+  it("serialises concurrent appends so none overwrites another", async () => {
+    // a backend whose append yields between reading the size and writing,
+    // the way OPFS does — unserialised, two appends would land on one offset
+    const backend = new MemoryBackend();
+    const inner = backend.append.bind(backend);
+    let inFlight = 0;
+    let overlapped = false;
+    backend.append = async (path, data) => {
+      inFlight++;
+      if (inFlight > 1) overlapped = true;
+      await new Promise((r) => setTimeout(r, 1));
+      await inner(path, data);
+      inFlight--;
+    };
+    const log = new MessageLog(backend);
+    await Promise.all([1, 2, 3, 4, 5].map((i) => log.append(newMessageRecord({ direction: "out", msg: msg(String(i)) }))));
+    expect(overlapped).toBe(false);
+    expect((await log.read()).map((r) => r.msg.id)).toEqual(["1", "2", "3", "4", "5"]);
   });
 });

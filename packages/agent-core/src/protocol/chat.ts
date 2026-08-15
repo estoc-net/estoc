@@ -4,7 +4,8 @@ import { BASIC_MESSAGE, PROFILE } from "./types.js";
 /**
  * The chat projection of a log record: what a thread view renders. Only
  * basicmessage/2.0 and user-profile/1.0 profile messages project; the
- * mediator's coordination traffic and anything unknown yield null.
+ * mediator's coordination traffic, anything unknown, and inbound mail the
+ * envelope did not attribute to anyone yield null.
  * A projection, not a copy — the log record stays the fact.
  */
 export interface ChatMessage {
@@ -27,9 +28,16 @@ export function chatView(record: MessageRecord): ChatMessage | null {
   if (msg.type !== BASIC_MESSAGE && msg.type !== PROFILE) {
     return null;
   }
+  // An inbound record without a proven sender belongs to no thread: the
+  // plaintext `from` is unverified and an anonymous envelope could carry
+  // anyone's DID there. The record stays in the log; the chat does not
+  // show it.
+  if (record.direction === "in" && (record.sender ?? null) === null) {
+    return null;
+  }
   const contactDid =
     record.direction === "in"
-      ? (record.sender ?? msg.from ?? "unknown")
+      ? (record.sender as string)
       : (msg.to?.[0] ?? "unknown");
   const body = msg.body as {
     content?: unknown;

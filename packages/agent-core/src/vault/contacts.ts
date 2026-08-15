@@ -39,6 +39,8 @@ export interface ContactRecord {
   /** petname: what we call them; free to change */
   name: string;
   createdAt: string;
+  /** ISO time of the last `put`; absent on records written before it existed */
+  updatedAt?: string;
   /** what they announced over user-profile/1.0 — a claim, never verified */
   claimedName?: string;
   /** their DIDs, oldest first; the one without `until` is current */
@@ -67,6 +69,7 @@ export function newContact(name: string, did: string, now = new Date()): Contact
     cid: uuidv7({ msecs: now.getTime() }),
     name,
     createdAt: at,
+    updatedAt: at,
     dids: [{ did, from: at }],
   };
 }
@@ -91,6 +94,9 @@ export function parseContact(json: string, file: string): ContactRecord {
   }
   if (typeof c.name !== "string" || typeof c.createdAt !== "string") {
     throw new Error(`${file} is missing name or createdAt`);
+  }
+  if (c.updatedAt !== undefined && typeof c.updatedAt !== "string") {
+    throw new Error(`${file} has a malformed updatedAt`);
   }
   if (!isStringArrayish(c.dids) || c.dids.length === 0) {
     throw new Error(`${file} has no DID history`);
@@ -134,6 +140,13 @@ export class ContactStore {
 
   constructor(private readonly backend: VaultBackend) {}
 
+  /**
+   * Read every contact file once. Two files carrying the same cid are the
+   * residue of a rename that crashed between writing the new file and
+   * removing the old (see `put`): the later `updatedAt` is the survivor,
+   * the other file is dropped here — the store heals on open rather than
+   * refusing to.
+   */
   private async load(): Promise<Map<string, string>> {
     if (this.files !== null) {
       return this.files;
@@ -148,10 +161,14 @@ export class ContactStore {
         continue;
       }
       const record = parseContact(text(bytes), file);
-      if (files.has(record.cid)) {
-        throw new Error(
-          `contact cid ${record.cid} appears in both ${files.get(record.cid)} and ${file}`
-        );
+      const rival = this.records.get(record.cid);
+      if (rival !== undefined) {
+        const rivalFile = files.get(record.cid) as string;
+        const keepNew = (record.updatedAt ?? "") > (rival.updatedAt ?? "");
+        await this.backend.remove(`${CONTACTS_DIR}/${keepNew ? rivalFile : file}`);
+        if (!keepNew) {
+          continue;
+        }
       }
       files.set(record.cid, file);
       this.records.set(record.cid, record);
@@ -163,12 +180,15 @@ export class ContactStore {
   /** Every contact, in creation order (cids are time-ordered). */
   async all(): Promise<ContactRecord[]> {
     await this.load();
-    return [...this.records.values()].sort((a, b) => (a.cid < b.cid ? -1 : 1));
+    return [...this.records.values()]
+      .sort((a, b) => (a.cid < b.cid ? -1 : 1))
+      .map((record) => structuredClone(record));
   }
 
   async byCid(cid: string): Promise<ContactRecord | null> {
     await this.load();
-    return this.records.get(cid) ?? null;
+    const record = this.records.get(cid);
+    return record === undefined ? null : structuredClone(record);
   }
 
   /** The contact who has ever used `did`, current or historical. */
@@ -176,15 +196,21 @@ export class ContactStore {
     await this.load();
     for (const record of this.records.values()) {
       if (record.dids.some((use) => use.did === did)) {
-        return record;
+        return structuredClone(record);
       }
     }
     return null;
   }
 
-  /** Create or replace the record with this cid; the file follows the name. */
+  /**
+   * Create or replace the record with this cid; the file follows the name.
+   * Readers get copies and writers hand in copies: nothing you hold aliases
+   * the cache, so a field changed without `put` is simply not saved —
+   * never half-saved. `updatedAt` is stamped here.
+   */
   async put(record: ContactRecord): Promise<void> {
     const files = await this.load();
+    record.updatedAt = new Date().toISOString();
     const previous = files.get(record.cid);
     const stem = contactFileStem(record.name);
     let file = `${stem}.json`;
@@ -194,13 +220,11 @@ export class ContactStore {
     if (taken) {
       file = `${stem}-${record.cid.slice(0, 8)}.json`;
     }
+    await this.backend.write(`${CONTACTS_DIR}/${file}`, utf8(prettyJson(record)));
     if (previous !== undefined && previous !== file) {
-      // rename: write the new handle first, then drop the old, so a crash
-      // in between duplicates rather than loses
-      await this.backend.write(`${CONTACTS_DIR}/${file}`, utf8(prettyJson(record)));
+      // rename: the new file is already down, so a crash here leaves two
+      // files with one cid, which `load` resolves by updatedAt
       await this.backend.remove(`${CONTACTS_DIR}/${previous}`);
-    } else if (previous === undefined || previous === file) {
-      await this.backend.write(`${CONTACTS_DIR}/${file}`, utf8(prettyJson(record)));
     }
     files.set(record.cid, file);
     this.records.set(record.cid, structuredClone(record));

@@ -262,6 +262,11 @@ export class FakeMediator {
     }
   }
 
+  /** The mediator dropping an account's socket — an outage seen from the client. */
+  dropSocket(account: string): void {
+    this.sockets.get(account)?.close();
+  }
+
   socketClosed(socket: FakeSocket): void {
     for (const [account, s] of this.sockets) {
       if (s === socket) {
