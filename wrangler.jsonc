@@ -1,0 +1,22 @@
+// The workspace deploys one thing: the app in ./app, as a static-assets
+// Worker. `wrangler deploy` here (or `pnpm run deploy`) runs build.command
+// below — the workspace libraries and then the app, in dependency order —
+// and ships app/dist. This file lives at the workspace root so that the
+// "Deploy to Cloudflare" button in app/README.md, which seeds a copy of the
+// whole repository into your account, finds it: the app is built from the
+// libraries in that copy, not from whatever npm has. Deployable on any
+// account as-is; attach custom domains in the dashboard rather than here.
+// Set VITE_MEDIATOR_DID at build time so the app defaults to your mediator
+// (see app/README.md).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "estoc-app",
+  "compatibility_date": "2026-08-15",
+  "build": {
+    "command": "pnpm --filter 'estoc-app...' run build"
+  },
+  "assets": {
+    "directory": "./app/dist",
+    "not_found_handling": "single-page-application"
+  }
+}

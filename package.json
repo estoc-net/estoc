@@ -2,13 +2,18 @@
   "name": "estoc-pwa",
   "private": true,
   "packageManager": "pnpm@9.15.9",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck",
     "dev": "pnpm -r --parallel run dev",
     "e2e": "pnpm --filter estoc-app run e2e",
-    "deploy": "pnpm --filter estoc-app run deploy"
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.122.0"
   }
 }

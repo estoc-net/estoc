@@ -1,6 +1,6 @@
 # Estoc
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/pwa/tree/main/app)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/pwa)
 
 An offline-first DIDComm v2 messenger you install as a web app. One
 identity from one seed, minted in your browser; your contacts and message
@@ -93,10 +93,12 @@ pre-fills that field.
 
 ## Deploy your own
 
-The button clones the workspace into your GitHub account and deploys this
-directory to workers.dev; `pnpm run deploy` from a checkout does the same (both
-run the build first, via `build.command` in `wrangler.jsonc`, which builds
-the workspace libraries and then this app). Custom domains
+The button seeds a copy of the whole workspace into your GitHub account and
+deploys it to workers.dev; `pnpm run deploy` from a checkout (here or at
+the workspace root) does the same. Both run the build first, via
+`build.command` in the root `wrangler.jsonc`, which builds the workspace
+libraries and then this app — so what you deploy is built from the
+libraries in your copy, not from npm. Custom domains
 attach in the Cloudflare dashboard, not in `wrangler.jsonc`, so the config
 deploys on any account unchanged.
 

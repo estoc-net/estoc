@@ -32,9 +32,18 @@ pnpm dev              # tsc --watch on the libraries + vite dev server for the a
 
 Anything package-specific runs from that package's directory or via
 `pnpm --filter <name> …`; each package's README has the details. The app's
-e2e (`pnpm e2e`, after `pnpm build && pnpm --filter estoc-app preview`) and
-deploy (`pnpm run deploy` — `run` because `pnpm deploy` is a pnpm builtin)
-are documented in [`app/README.md`](app/README.md).
+e2e (`pnpm e2e`, after `pnpm build && pnpm --filter estoc-app preview`) is
+documented in [`app/README.md`](app/README.md).
+
+## Deploy the app
+
+`wrangler.jsonc` sits at the workspace root and describes one Worker: the
+app, as static assets from `app/dist`, built by `pnpm --filter 'estoc-app...'
+run build`. `pnpm run deploy` here ships it (`run` because `pnpm deploy` is
+a pnpm builtin). It is at the root rather than in `app/` because the
+"Deploy to Cloudflare" button seeds a copy of the whole repository into the
+deployer's account — that copy has the workspace, so the app is built from
+the libraries beside it, not from npm.
 
 ## Publish a library
 
