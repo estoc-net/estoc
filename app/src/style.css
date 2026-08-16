@@ -131,10 +131,15 @@ textarea {
 
 /* ---- app frame ---- */
 
+/* The frame is the window and nothing more: the row is pinned to the
+   viewport so a tall rail scrolls inside itself instead of growing the
+   page out from under the composer. */
 .frame {
   display: grid;
   grid-template-columns: 250px minmax(340px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  overflow: hidden;
 }
 
 .rail,
@@ -145,6 +150,7 @@ textarea {
 }
 
 .rail {
+  overflow-y: auto;
   background: var(--ink);
   color: var(--paper);
   border-right: 1px solid var(--ink);
@@ -408,6 +414,16 @@ textarea {
   color: var(--paper);
 }
 
+/* Asides above the thread — a handed invitation, the add-contact form —
+   give up room and scroll themselves before they can push the composer
+   off the bottom. `.chat >` outranks .hollow's flex: 1; `safe` keeps the
+   top of an overflowing card reachable instead of centred out of reach. */
+.chat > .chat-block {
+  flex: 0 1 auto;
+  align-items: safe center;
+  overflow-y: auto;
+}
+
 .thread {
   flex: 1;
   min-height: 0;
@@ -637,7 +653,7 @@ textarea {
 @media (max-width: 720px) {
   .frame {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
   .rail {
     max-height: 40vh;

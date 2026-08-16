@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
@@ -116,6 +116,7 @@ async function send() {
   try {
     await sendMessage(contact.value.did, text);
     draft.value = "";
+    void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
   } finally {
@@ -125,13 +126,55 @@ async function send() {
 
 const threadEl = ref<HTMLElement | null>(null);
 
-watch(
-  () => thread.value.length,
-  async () => {
-    await nextTick();
-    threadEl.value?.scrollTo({ top: threadEl.value.scrollHeight });
+// The thread rests at its foot: the newest message is the one you want in
+// view. Someone scrolled up reading history is left where they are — an
+// arriving message does not yank the page out from under them — but
+// opening a conversation, and writing in one, always come back to the end.
+let resting = true;
+
+function atFoot(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= 80;
+}
+
+function noteScroll() {
+  const el = threadEl.value;
+  if (el !== null) {
+    resting = atFoot(el);
   }
-);
+}
+
+async function toFoot() {
+  await nextTick();
+  const el = threadEl.value;
+  if (el !== null) {
+    el.scrollTop = el.scrollHeight;
+    resting = true;
+  }
+}
+
+watch(() => props.selectedContactCid, toFoot, { immediate: true });
+
+watch(() => thread.value.length, () => {
+  if (resting) {
+    void toFoot();
+  }
+});
+
+// A window that shrinks — or a phone keyboard opening — must not lift the
+// newest message off the foot and leave it floating in the middle.
+onMounted(() => {
+  const el = threadEl.value;
+  if (el === null) {
+    return;
+  }
+  const observer = new ResizeObserver(() => {
+    if (resting) {
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+  observer.observe(el);
+  onUnmounted(() => observer.disconnect());
+});
 </script>
 
 <template>
@@ -162,7 +205,7 @@ watch(
       <button class="contact-chip" @click="showAddForm = !showAddForm">+ contact</button>
     </div>
 
-    <div v-if="pending" class="hollow invited" style="flex: none">
+    <div v-if="pending" class="hollow invited chat-block">
       <div class="hollow-card" style="width: 100%">
         <div class="eyebrow">You were handed an invitation</div>
         <p>
@@ -182,7 +225,7 @@ watch(
       </div>
     </div>
 
-    <div v-if="showAddForm || (identity.contacts.length === 0 && !pending)" class="hollow" style="flex: none">
+    <div v-if="showAddForm || (identity.contacts.length === 0 && !pending)" class="hollow chat-block">
       <div class="hollow-card" style="width: 100%">
         <p v-if="identity.contacts.length === 0">
           To talk to someone, add them as a contact: paste an invitation link
@@ -202,7 +245,7 @@ watch(
       </div>
     </div>
 
-    <div ref="threadEl" class="thread">
+    <div ref="threadEl" class="thread" @scroll.passive="noteScroll">
       <p v-if="contact && identity.mediatorDid === null" class="hop-note">
         No mediator yet — choose one in the rail before writing to
         {{ contact.label }}; without one, nothing leaves and nothing arrives.
