@@ -1,0 +1,47 @@
+{
+  "name": "@estoc/keystore",
+  "version": "0.2.0",
+  "description": "Encrypted did:key keystore — per-key PBES2 JWEs (v1) or one sealed seed with HKDF-derived Ed25519/X25519 identities (v2) inside a plain JSON document, opened as non-extractable Signer handles. Pure data-in/data-out, no filesystem IO; runs in Node, workerd, and the browser.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/keystore.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.0",
+    "bs58": "^6.0.0",
+    "jose": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "~5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "did",
+    "did-key",
+    "keystore",
+    "jwe",
+    "decentralized-identity"
+  ]
+}

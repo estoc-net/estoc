@@ -1,0 +1,116 @@
+import { ed25519, x25519 } from "@noble/curves/ed25519";
+import { base64url } from "jose";
+import { didKeyFromPublicKey } from "./did-key.js";
+import type { DidKeySigner } from "./types.js";
+
+/**
+ * A 32-byte master seed imported into WebCrypto as a non-extractable HKDF
+ * key. It can derive but never be read back, and it survives structured
+ * cloning — an application can keep it in IndexedDB and derive every key
+ * without asking for the passphrase again.
+ */
+export type SeedKey = CryptoKey;
+
+export const SEED_LENGTH = 32;
+
+/** HKDF salt — fixed and public; domain-separates this scheme from any other use of the same seed. */
+const HKDF_SALT = new TextEncoder().encode("estoc-keystore");
+
+/** A fresh random 32-byte seed. */
+export function generateSeed(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(SEED_LENGTH));
+}
+
+/**
+ * Import raw seed bytes as a non-extractable HKDF key. The caller should
+ * drop its copy of the bytes afterwards; the returned key is all that is
+ * needed from here on.
+ */
+export async function importSeed(seed: Uint8Array): Promise<SeedKey> {
+  if (seed.length !== SEED_LENGTH) {
+    throw new Error(`seed must be ${SEED_LENGTH} bytes, got ${seed.length}`);
+  }
+  return crypto.subtle.importKey("raw", seed, "HKDF", false, ["deriveBits"]);
+}
+
+/**
+ * The derivation path label for one key of one identity. Versioned so the
+ * scheme can change without silently changing existing DIDs.
+ */
+function info(index: number, purpose: "ed25519" | "x25519"): Uint8Array {
+  return new TextEncoder().encode(`estoc/v1/${purpose}/${index}`);
+}
+
+async function deriveBits32(seedKey: SeedKey, index: number, purpose: "ed25519" | "x25519"): Promise<Uint8Array> {
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: HKDF_SALT, info: info(index, purpose) },
+    seedKey,
+    256,
+  );
+  return new Uint8Array(bits);
+}
+
+/** One identity derived from the seed at a given index. */
+export interface DerivedIdentity {
+  index: number;
+  /** did:key of the Ed25519 half — the identity's canonical name. */
+  did: string;
+  /**
+   * Signing and X25519 key agreement with the private material closed over.
+   * Note the X25519 key is derived independently of the Ed25519 key (not by
+   * the did:key Ed→X conversion), so publish it explicitly (did:peer,
+   * did:web) rather than relying on did:key resolution for keyAgreement.
+   */
+  signer: DidKeySigner;
+  /**
+   * Escape hatch: the private keys as OKP JWKs (RFC 8037), for libraries
+   * that run their own crypto and cannot call a Signer (didcomm-rust's
+   * secrets resolver, for one). Prefer `signer` wherever it suffices; each
+   * call returns fresh copies.
+   */
+  privateJwks(): { ed25519: JsonWebKey; x25519: JsonWebKey };
+}
+
+/**
+ * Derive the identity at `index`. Deterministic: the same seed and index
+ * always yield the same keys, so a seed plus a list of indices rebuilds
+ * every identity.
+ */
+export async function deriveIdentity(seedKey: SeedKey, index: number): Promise<DerivedIdentity> {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`derivation index must be a non-negative integer, got ${index}`);
+  }
+  const [edPriv, xPriv] = await Promise.all([
+    deriveBits32(seedKey, index, "ed25519"),
+    deriveBits32(seedKey, index, "x25519"),
+  ]);
+  const edPub = ed25519.getPublicKey(edPriv);
+  const xPub = x25519.getPublicKey(xPriv);
+  const did = didKeyFromPublicKey(edPub);
+
+  return {
+    index,
+    did,
+    signer: {
+      did: () => did,
+      publicKey: () => edPub.slice(),
+      sign: async (data) => ed25519.sign(data, edPriv),
+      x25519PublicKey: () => xPub.slice(),
+      deriveSharedSecret: async (theirs) => x25519.getSharedSecret(xPriv, theirs),
+    },
+    privateJwks: () => ({
+      ed25519: {
+        kty: "OKP",
+        crv: "Ed25519",
+        x: base64url.encode(edPub),
+        d: base64url.encode(edPriv),
+      },
+      x25519: {
+        kty: "OKP",
+        crv: "X25519",
+        x: base64url.encode(xPub),
+        d: base64url.encode(xPriv),
+      },
+    }),
+  };
+}
