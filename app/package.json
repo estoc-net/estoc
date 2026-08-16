@@ -15,8 +15,8 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@estoc/agent-core": "^0.8.0",
-    "@estoc/keystore": "^0.2.0",
+    "@estoc/agent-core": "workspace:^",
+    "@estoc/keystore": "workspace:^",
     "didcomm": "^0.4.1",
     "fflate": "^0.8.2",
     "qrcode-generator": "^2.0.4",
@@ -29,6 +29,7 @@
     "vite": "^6.3.0",
     "vite-plugin-pwa": "^1.0.0",
     "vue-tsc": "^2.2.0",
+    "workbox-window": "^7.4.1",
     "wrangler": "^4.122.0"
   }
 }

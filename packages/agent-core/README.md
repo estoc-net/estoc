@@ -235,8 +235,8 @@ conformance suite any backend should pass.
 ## Development
 
 ```
-npm test        # vitest: backends, vault format, identity, agent × fake mediator
-npm run build   # tsc → dist/
+pnpm test       # vitest: backends, vault format, identity, agent × fake mediator
+pnpm build      # tsc → dist/
 ```
 
 ## License

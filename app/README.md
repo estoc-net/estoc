@@ -1,6 +1,6 @@
 # Estoc
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/app)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/pwa/tree/main/app)
 
 An offline-first DIDComm v2 messenger you install as a web app. One
 identity from one seed, minted in your browser; your contacts and message
@@ -8,7 +8,7 @@ history in a vault the browser keeps for you; a zip you can walk away with.
 Mail travels through a mediator of your choosing, sealed so the mediator
 carries envelopes it cannot open.
 
-Estoc runs on nothing of ours. This repository is a static site: deploy it
+Estoc runs on nothing of ours. This app is a static site: deploy it
 anywhere (the button above puts a copy on your own Cloudflare account),
 point it at any mediator ([didcomm-mediator] is one anyone can run), and
 your data never touches the place the app was served from.
@@ -71,14 +71,21 @@ your data never touches the place the app was served from.
 
 ## Run it
 
+This directory is one package of the [estoc-net/pwa] workspace, alongside
+the libraries it is built from (`packages/{did-peer,keystore,agent-core}`),
+which it takes straight from the tree — no publish step between a library
+change and the app seeing it. From the workspace root:
+
 ```sh
-npm install
-npm run dev
+pnpm install
+pnpm dev             # tsc --watch on every library + vite here
 ```
+
+or `pnpm dev` in this directory once the libraries have been built.
 
 The rail's mediator dropdown defaults to `mediator.estoc.dev`
 ([didcomm-mediator] on Cloudflare Workers) and also offers a local one
-(`npm run dev` in the mediator repo, minted with
+(`npm run dev` in the [didcomm-mediator] repo, minted with
 `MEDIATOR_PUBLIC_URL=http://localhost:8080`), or paste any mediator's
 out-of-band invitation URL, its URL, or its DID. Opening the app through a
 mediator's invitation link (`?_oob=` with `goal_code: request-mediate`)
@@ -86,26 +93,27 @@ pre-fills that field.
 
 ## Deploy your own
 
-The button clones this repository into your GitHub account and deploys it
-to workers.dev; `npm run deploy` from a checkout does the same (both run
-the build first, via `build.command` in `wrangler.jsonc`). Custom domains
+The button clones the workspace into your GitHub account and deploys this
+directory to workers.dev; `pnpm run deploy` from a checkout does the same (both
+run the build first, via `build.command` in `wrangler.jsonc`, which builds
+the workspace libraries and then this app). Custom domains
 attach in the Cloudflare dashboard, not in `wrangler.jsonc`, so the config
 deploys on any account unchanged.
 
 To make your own mediator the default, set `VITE_MEDIATOR_DID=<its DID>`
-at build time — in `.env.production` before `npm run deploy`, or, on a
+at build time — in `.env.production` before `pnpm run deploy`, or, on a
 button deploy, prefixed to the **deploy command** on the setup page
-(`VITE_MEDIATOR_DID=… npm run deploy`; it has to ride the deploy command,
+(`VITE_MEDIATOR_DID=… pnpm run deploy`; it has to ride the deploy command,
 whose build is the one that ships). Change it later under the Worker's
 **Settings → Build → Build variables** and push any commit.
 
 ## Verify
 
 ```sh
-npm run typecheck
-npm run build && npm run preview     # serves dist/ on :4173 with the service worker
-npm run e2e                          # against localhost:8080 (a local mediator)
-E2E_MEDIATOR=estoc npm run e2e       # against mediator.estoc.dev
+pnpm typecheck
+pnpm build && pnpm preview           # serves dist/ on :4173 with the service worker
+pnpm e2e                             # against localhost:8080 (a local mediator)
+E2E_MEDIATOR=estoc pnpm e2e          # against mediator.estoc.dev
 node scripts/e2e.mjs https://<your deployment>
 ```
 
@@ -145,7 +153,7 @@ service worker is serving — the app opening with the network off.
   worker precaching the shell (scripts, styles, WASM). Updates wait for a
   nod (a chip offers to reload); `navigator.storage.persist()` is asked
   for when the vault is created, and the rail says whether the browser
-  granted it. Icons render from `public/icon.svg` via `npm run icons`.
+  granted it. Icons render from `public/icon.svg` via `pnpm icons`.
 - **Renderers stay at arm's length**: chat bubbles take their data through
   props and never import the store — the seam along which type-dispatched
   renderers (and, later, sandboxed third-party ones) slot in.
@@ -168,7 +176,8 @@ has had an independent security audit.
 
 Apache-2.0
 
-[@estoc/agent-core]: https://github.com/estoc-net/agent-core
-[@estoc/keystore]: https://github.com/estoc-net/keystore
+[@estoc/agent-core]: https://github.com/estoc-net/pwa/tree/main/packages/agent-core
+[@estoc/keystore]: https://github.com/estoc-net/pwa/tree/main/packages/keystore
 [didcomm-mediator]: https://github.com/estoc-net/didcomm-mediator
 [vite-plugin-pwa]: https://vite-pwa-org.netlify.app/
+[estoc-net/pwa]: https://github.com/estoc-net/pwa
