@@ -37,6 +37,13 @@ if (E2E_MEDIATOR === "estoc" || E2E_MEDIATOR === "web") {
   MEDIATOR_URL = E2E_MEDIATOR;
   MEDIATOR_LABEL = new URL(E2E_MEDIATOR).host;
 }
+// The mediator Bob moves to, by its dropdown label: production under its
+// other DID when the run is already there, production otherwise (so a
+// local run needs the internet for this one step). E2E_OTHER_MEDIATOR
+// names another entry.
+const OTHER_LABEL =
+  process.env.E2E_OTHER_MEDIATOR ??
+  (MEDIATOR_LABEL === "mediator.estoc.dev" ? "mediator.estoc.dev (did:peer:2)" : "mediator.estoc.dev");
 
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026", Carol: "carol-carries-cardamom" };
@@ -218,6 +225,54 @@ try {
   await expectBubble(bob, "thanks bob");
   ok("Bob and Carol talk both ways over the invitation");
   await carolCtx.close();
+
+  // Changing mediator: Bob moves. Every DID of his is minted anew there —
+  // the public one on the rail, the ones toward Alice and Carol — and each
+  // contact is told from the new DID (from_prior), so Alice follows without
+  // Bob writing to her. An open invitation link is withdrawn: it led to the
+  // old mediator.
+  await bob.click('button:has-text("New invitation link")');
+  await bob.waitForSelector("[data-invitation-url]", { timeout: 20000 });
+  const bobHeadToAliceBefore = bobHeadMyDid;
+  await bob.click("[data-change-mediator]");
+  await bob.selectOption(".rail-form select.field", { label: `via ${OTHER_LABEL}` });
+  await bob.click('button:has-text("Move to this mediator")');
+  await bob.waitForFunction(
+    (old) => {
+      const did = document.querySelector(".did-chip")?.getAttribute("title");
+      return did?.startsWith("did:peer:4") && did !== old && document.body.innerText.includes("live delivery on");
+    },
+    bobDid,
+    { timeout: 40000 }
+  );
+  const bobDid2 = await bob.getAttribute(".did-chip", "title");
+  await bob.waitForSelector(`text=via ${OTHER_LABEL}`);
+  ok(`Bob moved to ${OTHER_LABEL}: new public DID, live again`);
+  if (await bob.locator("[data-invitation-url]").count() !== 0 || (await bob.innerText("body")).includes("open link")) {
+    fail("Bob's open invitation link should have been withdrawn by the move");
+  }
+  ok("the open invitation link was withdrawn");
+  await bob.click('.contact-chip:has-text("Alice")');
+  await bob.waitForFunction(
+    (before) => {
+      const heads = [...document.querySelectorAll(".head-dids .eyebrow")];
+      const mine = heads.find((h) => h.textContent?.includes("you as"));
+      return mine !== undefined && mine.getAttribute("title") !== before;
+    },
+    bobHeadToAliceBefore,
+    { timeout: 10000 }
+  );
+  ok("Bob writes to Alice as a fresh DID now");
+  await alice.waitForSelector('.rail-log:has-text("Bob moved to a new DID, vouched for by the old one")', { timeout: 30000 });
+  ok("Alice was told by from_prior and moved Bob to his new DID — no message from Bob needed");
+  await send(alice, "Bob", "still there after the move?");
+  await expectBubble(bob, "still there after the move?");
+  await send(bob, "Alice", `here, via ${OTHER_LABEL}`);
+  await expectBubble(alice, `here, via ${OTHER_LABEL}`);
+  ok("Alice and Bob talk across mediators over the new DIDs");
+  if (bobDid2 === bobDid) {
+    fail("Bob's public DID should have changed with the mediator");
+  }
 
   // Reload: history and identity come back from the OPFS vault, no passphrase.
   await bob.reload();

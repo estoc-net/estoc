@@ -23,11 +23,16 @@ your data never touches the place the app was served from.
   hand to contacts. You type the passphrase once; the unlocked seed stays
   in this browser as a non-extractable WebCrypto key. **Lock** forgets it
   and asks again.
-- **A mediator, chosen after.** An identity exists before it can be
-  reached. The rail says *not reachable yet* until you pick a mediator
-  there; the choice mints your public DID, whose address is that
-  mediator's, so it is made once (changing it later means handing out a
-  new DID — rotation, not yet offered).
+- **A mediator, chosen after — and changeable.** An identity exists before
+  it can be reached. The rail says *not reachable yet* until you pick a
+  mediator there; the choice mints your public DID, whose address is that
+  mediator's. *Change mediator* on the rail moves you: every DID of yours
+  is minted anew on the new mediator, each contact you have written to is
+  told from the new one (a DIDComm `from_prior` on a trust-ping, so they
+  follow before you say a word), open invitation links are withdrawn, and
+  the old mediator is asked to stop taking mail for you. What cannot
+  follow is a business card already handed out: it names the old
+  mediator, and a stranger who only has it is bounced there.
 - **A DID per conversation.** The public DID on the rail is a business
   card: what strangers write to. The first message you send anyone goes
   out from a `did:peer:4` minted for that person alone (the chat head
@@ -111,7 +116,12 @@ without a reload, both writing from pairwise DIDs (and a pasted public
 DID finding the contact its pairwise DID created), an invitation link Bob
 issues and a third identity, Carol, opens before she exists — onboarding,
 mediator, then accepting it — after which the two talk over the DIDs it
-minted, history surviving a
+minted, Bob moving to another mediator (his public DID replaced, an open
+invitation link withdrawn, Alice told by `from_prior` and writing to him
+there without a word from him — the target is `mediator.estoc.dev`, or
+its did:peer:2 name when the run is already there, so a local run needs
+the internet for that step; `E2E_OTHER_MEDIATOR=<label>` picks another
+entry), history surviving a
 reload with no passphrase, a second
 tab yielding to the first, lock and unlock (a wrong passphrase refused), a
 backup exported and restored in a fresh browser that then receives mail as
@@ -144,10 +154,10 @@ service worker is serving — the app opening with the network off.
 
 ## Status
 
-Early. Pairwise DIDs per contact and single-use invitation links, but no
-way to change mediator yet (a rotation of every DID — next); no offline
-outbox yet; no push notifications (a
-mediator extension); keys in the browser under your passphrase. Storage is only
+Early. Pairwise DIDs per contact, single-use invitation links, and a
+change of mediator that rotates every DID; no offline outbox yet; no push
+notifications (a mediator extension); keys in the browser under your
+passphrase. Storage is only
 guaranteed once the browser grants persistence — install the app, and keep
 a backup either way. Browsers: Chromium and Firefox, and Safari 26 or later
 (the vault is written through OPFS `createWritable()`, which WebKit shipped

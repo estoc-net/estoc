@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import qrcode from "qrcode-generator";
 
-import { MEDIATOR_CHOICES, mediatorLabel } from "../core/mediators.js";
+import { mediatorLabel } from "../core/mediators.js";
 import {
   chooseMediator,
   createInvitation,
@@ -14,43 +14,18 @@ import {
   state,
 } from "../core/store.js";
 import type { AgentStatus } from "../core/types.js";
-import { CUSTOM, useMediatorInput } from "./mediator-input.js";
+import MediatorForm from "./MediatorForm.vue";
 import { bytesOf, shortDid } from "./util.js";
 
 const identity = computed(() => state.identity);
 
-// reachability: an identity is minted without a mediator; this is where one is named
-const { choice, pasted, resolving, error: mediatorError, resolveChoice } = useMediatorInput();
-const choosing = ref(false);
-const chooseError = ref<string | null>(null);
+// reachability: an identity is minted without a mediator; the rail is where
+// one is named — and, later, where it is changed (a rotation of every DID)
+const changingMediator = ref(false);
 
-// opened with a mediator's invitation link: offer it, do not pick it
-watch(
-  () => state.pendingMediatorInvitation,
-  (url) => {
-    if (url !== null) {
-      choice.value = CUSTOM;
-      pasted.value = url;
-      state.pendingMediatorInvitation = null;
-    }
-  },
-  { immediate: true }
-);
-
-async function pickMediator() {
-  chooseError.value = null;
-  const did = await resolveChoice();
-  if (did === null) {
-    return;
-  }
-  choosing.value = true;
-  try {
-    await chooseMediator(did);
-  } catch (err) {
-    chooseError.value = err instanceof Error ? err.message : String(err);
-  } finally {
-    choosing.value = false;
-  }
+async function moveMediator(did: string) {
+  await chooseMediator(did);
+  changingMediator.value = false;
 }
 
 const copied = ref(false);
@@ -221,26 +196,7 @@ function forget() {
 
     <div v-if="identity && identity.mediatorDid === null" class="rail-section">
       <div class="eyebrow">Choose a mediator to be reached</div>
-      <form class="rail-form" @submit.prevent="pickMediator">
-        <select v-model="choice" class="field">
-          <option v-for="c in MEDIATOR_CHOICES" :key="c.value" :value="c.value">
-            via {{ c.label }}
-          </option>
-          <option :value="CUSTOM">via a pasted invitation…</option>
-        </select>
-        <input
-          v-if="choice === CUSTOM"
-          v-model="pasted"
-          class="field"
-          placeholder="invitation URL, mediator URL, or DID"
-        />
-        <p v-if="chooseError || mediatorError" class="status-line error" style="margin: 0">
-          {{ chooseError ?? mediatorError }}
-        </p>
-        <button class="btn" type="submit" :disabled="choosing || resolving">
-          {{ choosing ? "Mediating…" : "Use this mediator" }}
-        </button>
-      </form>
+      <MediatorForm submit-label="Use this mediator" busy-label="Mediating…" :pick="chooseMediator" />
       <p class="status-line">
         A mediator holds sealed envelopes until you pick them up, and its
         address rides in the DID you hand out.
@@ -259,8 +215,25 @@ function forget() {
       </button>
       <p class="status-line">
         via {{ mediatorLabel(identity.mediatorDid ?? "") }} · a business card:
-        each conversation gets a DID of its own
+        each conversation gets a DID of its own ·
+        <button class="link-quiet" data-change-mediator @click="changingMediator = !changingMediator">
+          {{ changingMediator ? "keep it" : "change mediator" }}
+        </button>
       </p>
+      <template v-if="changingMediator">
+        <MediatorForm
+          submit-label="Move to this mediator"
+          busy-label="Moving…"
+          :current="identity.mediatorDid"
+          :pick="moveMediator"
+        />
+        <p class="status-line">
+          Moving mints every DID of yours anew on the new mediator. Contacts
+          you have written to are told, and follow; the business card above
+          is replaced — copies already handed out stop working; open
+          invitation links are withdrawn.
+        </p>
+      </template>
     </div>
 
     <div v-if="identity && identity.mediatorDid !== null" class="rail-section">

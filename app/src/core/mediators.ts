@@ -66,11 +66,19 @@ export const MEDIATOR_CHOICES: MediatorChoice[] =
         LOCAL_CHOICE,
       ];
 
-/** A human name for a mediator DID: the known label, or its HTTP endpoint host. */
+/**
+ * A human name for a mediator DID: the known label, or its HTTP endpoint
+ * host — with the method when it is a did:peer:2, since one host may be
+ * reached under more than one name (and the picker offers both).
+ */
 export function mediatorLabel(did: string): string {
   const known = MEDIATOR_CHOICES.find((choice) => choice.value === did);
   if (known !== undefined) {
     return known.label;
   }
-  return didHost(did) ?? "custom mediator";
+  const host = didHost(did);
+  if (host === undefined) {
+    return "custom mediator";
+  }
+  return did.startsWith("did:peer:2") ? `${host} (did:peer:2)` : host;
 }

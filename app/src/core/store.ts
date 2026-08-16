@@ -292,8 +292,11 @@ export async function createIdentity(name: string, passphrase: string): Promise<
 
 /**
  * Name the mediator this identity will be reached through, and go live:
- * mediation, the public DID, pickup. Once, for an identity that has none —
- * changing it later is a public-DID rotation the app does not offer yet.
+ * mediation, the public DID, pickup. For an identity that has one already
+ * this is a move: every DID is minted anew on the new mediator (the agent
+ * tells each contact by `from_prior`; open invitations are withdrawn —
+ * the contact and invitation events keep the views current), and the
+ * public DID on the rail is replaced.
  */
 export async function chooseMediator(mediatorDid: string): Promise<void> {
   if (agent === null || state.identity === null) {
