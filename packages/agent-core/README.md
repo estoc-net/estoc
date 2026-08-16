@@ -37,8 +37,9 @@ Agent                        mediation · pickup · live delivery · routing
   seed and a name alone (`mediation: null`); `Vault.setMediator` names a
   mediator later and mints the DID it will know the vault by. The public
   DID embeds the mediator's routing DID, so choosing one is a decision
-  about reachability, taken after the identity exists — and, once taken,
-  not swapped behind correspondents' backs (a change is a rotation).
+  about reachability, taken after the identity exists — and changing it
+  is a rotation of every DID that named the old one, never a silent
+  rename (see *Changing mediator* below).
 - **Contacts** are keyed by `cid` (uuidv7). Their DIDs form a history
   (`dids[]`, closed with `until`, hops proven by `fromPrior`), and so do
   ours toward them (`myDids[]`: the keystore `key` that derives each, and
@@ -78,6 +79,27 @@ Agent                        mediation · pickup · live delivery · routing
   openable, so mail to a retired one is not lost. What pairwise hides is
   the link *between* your contacts; the mediator still sees every
   recipient DID under one account.
+- **Changing mediator.** `Agent.setMediator(did)` on a vault that has one
+  moves it: the old mediator is asked to drop every DID it knew us by, open
+  invitations are withdrawn (their DIDs led there), the vault records the
+  move (`Vault.setMediator`: a fresh mediator-facing key, `mediator/<n>`,
+  and — for every contact who wrote to the public DID and was never
+  answered — that public DID as the closed first entry of their `myDids[]`,
+  the prior a later reply will name), and the agent starts against the new
+  one: mediate-grant, a new public DID under `public/<n>`, and then the
+  invariant every start checks — every current DID toward a contact rides
+  the current routing DID; one that does not is closed for a fresh one —
+  so a move cut short by a crash finishes at the next start. Each contact
+  we have introduced ourselves to is then sent a trust-ping (2.0, no
+  response asked) from the new DID with `from_prior` attached, so they
+  move at once instead of at our next message; the same `from_prior` rides
+  on that message anyway. Retired keys stay in the keystore, and their
+  DIDs stay derivable, because a retired public DID may still have to sign
+  a `from_prior` for someone who only ever wrote to it. What no rotation
+  can carry: a business card already handed out names the old mediator,
+  and a stranger who only has the card cannot follow — the old mediator
+  bounces them (a contact who knows us finds us by it: their record's DID
+  history includes it).
 - **Invitations.** The third way to meet, and the only one where nothing
   public changes hands: `Agent.createInvitation()` mints a did:peer:4 for
   nobody yet (`invite/<id>`, registered with the mediator), records it
@@ -107,8 +129,8 @@ One seed (keystore v2), keys by name in its index:
 | key        | what it mints                                                    |
 | ---------- | ---------------------------------------------------------------- |
 | `anchor`   | index 0 — the did:key root; the identity everything hangs off    |
-| `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` |
-| `public`   | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant |
+| `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` (`mediator/2`, `mediator/3`… after each change of mediator) |
+| `public`   | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant (`public/<n>` for the nth mediation) |
 | `pair/<cid>/<n>` | the nth pairwise did:peer:4 toward contact `cid`, same shape as `public`; minted on first message, recorded in the contact's `myDids[]` |
 | `invite/<id>` | the did:peer:4 an invitation hands out, same shape; once taken it is the key behind that contact's `myDids[]` entry, name unchanged |
 
@@ -146,7 +168,7 @@ const agent = new Agent({
   },
 });
 await agent.start();               // no mediator yet → status "unmediated"; history still reads
-await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the public DID, go live
+await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the public DID, go live — or, later, move to another
 // later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
 const history = await agent.history();
 await agent.addContact(bobDid, "Bob");

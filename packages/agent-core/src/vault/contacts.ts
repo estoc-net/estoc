@@ -99,6 +99,22 @@ export function currentMyDid(contact: ContactRecord): MyDidUse | null {
   return null;
 }
 
+/**
+ * The DID of ours toward a contact that the current one succeeded — the
+ * latest closed entry — or null when there is none. When the contact has
+ * never written to us, this is the DID they are likeliest to know us by.
+ */
+export function previousMyDid(contact: ContactRecord): MyDidUse | null {
+  const uses = contact.myDids ?? [];
+  for (let i = uses.length - 1; i >= 0; i--) {
+    const use = uses[i] as MyDidUse;
+    if (use.until !== undefined) {
+      return use;
+    }
+  }
+  return null;
+}
+
 export function newContact(name: string, did: string, now = new Date()): ContactRecord {
   const at = now.toISOString();
   return {

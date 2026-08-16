@@ -20,4 +20,6 @@ export const FORWARD = "https://didcomm.org/routing/2.0/forward";
 export const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
 export const PROFILE = "https://didcomm.org/user-profile/1.0/profile";
 export const REQUEST_PROFILE = "https://didcomm.org/user-profile/1.0/request-profile";
+export const TRUST_PING = "https://didcomm.org/trust-ping/2.0/ping";
+export const TRUST_PING_RESPONSE = "https://didcomm.org/trust-ping/2.0/ping-response";
 export const OOB_INVITATION = "https://didcomm.org/out-of-band/2.0/invitation";

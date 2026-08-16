@@ -29,6 +29,7 @@ export {
   currentDid,
   currentMyDid,
   newContact,
+  previousMyDid,
   parseContact,
   type ContactRecord,
   type DidUse,
@@ -62,6 +63,8 @@ export {
   KEY_PUBLIC,
   Vault,
   isRelationshipKey,
+  mediationGeneration,
+  mediationKeyName,
   type CreateVaultOptions,
 } from "./vault/vault.js";
 

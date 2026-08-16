@@ -27,8 +27,27 @@ import { MessageLog } from "./messages.js";
 
 /** Names of the keys every mediated vault has in its keystore index. */
 export const KEY_ANCHOR = "anchor";
+/**
+ * The mediator-facing key and the public key are minted once per
+ * mediation: `mediator` and `public` for the first, `mediator/2` and
+ * `public/2` after the first change of mediator, and so on — a mediator
+ * change re-mints both (see `Vault.setMediator`), and the retired public
+ * key stays in the index because contacts may still be told about the
+ * move by it.
+ */
 export const KEY_MEDIATOR = "mediator";
 export const KEY_PUBLIC = "public";
+
+/** The nth mediation's name for a key: bare for the first, `/n` after. */
+export function mediationKeyName(base: string, n: number): string {
+  return n === 1 ? base : `${base}/${n}`;
+}
+
+/** Which mediation a `mediator`/`public` key belongs to: `mediator` → 1, `mediator/3` → 3. */
+export function mediationGeneration(keyName: string): number {
+  const slash = keyName.indexOf("/");
+  return slash === -1 ? 1 : Number(keyName.slice(slash + 1));
+}
 /** Pairwise keys are named `pair/<cid>/<n>`: the contact, and the nth DID minted toward them. */
 export const KEY_PAIRWISE_PREFIX = "pair/";
 /** Invitation keys are named `invite/<id>`; the key keeps its name once someone takes the invitation. */
@@ -124,28 +143,56 @@ export class Vault {
 
   /**
    * Name the mediator this vault will ask for mediation, and mint the
-   * did:peer:4 the mediator will know it by (the `mediator` key, no
+   * did:peer:4 the mediator will know it by (a `mediator` key, no
    * service). Reachability is a decision taken after the identity exists,
-   * and this is where it is taken. Only for a vault without a mediator:
-   * replacing one means re-minting the public DID correspondents hold,
-   * which is a rotation they must be told about (from_prior) — not yet
-   * offered.
+   * and this is where it is taken — and retaken: a vault that already has
+   * a mediator moves. Moving means every DID whose service is the old
+   * mediator's routing DID is retired: the public one here (a new one is
+   * minted after the new grant, under `public/<n>`), and the DIDs toward
+   * contacts, which the agent re-mints once it holds the new routing DID.
+   * What this layer does for the move is the bookkeeping the old public DID
+   * needs: a contact who wrote to it and was never answered gets it as the
+   * closed first entry of `myDids`, so the answer, whenever it comes, can
+   * be signed over from it (`from_prior`). Open invitations are the
+   * agent's to withdraw — their DIDs lead to the old mediator too.
    */
   async setMediator(seedKey: SeedKey, mediatorDid: string, now = new Date()): Promise<void> {
-    if (this.config.mediation !== null) {
-      throw new Error("vault already has a mediator; changing it is not supported yet");
+    const before = this.config.mediation;
+    if (before !== null && before.mediatorDid === mediatorDid) {
+      throw new Error("this vault is already reached via that mediator");
     }
-    const hasKey = this.keystore.keys.some((entry) => entry.name === KEY_MEDIATOR);
-    const me = hasKey
-      ? await this.derive(seedKey, KEY_MEDIATOR)
-      : await this.mintKey(seedKey, KEY_MEDIATOR, now);
+    const at = now.toISOString();
+    if (before?.public != null) {
+      await this.retirePublicDid(before.public, at);
+    }
+    const generation = before === null ? 1 : mediationGeneration(before.me.key) + 1;
+    const key = mediationKeyName(KEY_MEDIATOR, generation);
+    const hasKey = this.keystore.keys.some((entry) => entry.name === key);
+    const me = hasKey ? await this.derive(seedKey, key) : await this.mintKey(seedKey, key, now);
     this.config.mediation = {
       mediatorDid,
-      me: { key: KEY_MEDIATOR, did: mintPeerDid(me, null).did },
+      me: { key, did: mintPeerDid(me, null).did },
       routingDid: null,
       public: null,
     };
     await this.saveConfig();
+  }
+
+  /**
+   * The public DID is about to stop being ours to receive at: every
+   * contact whose latest envelope was sealed to it, and who has no DID of
+   * ours toward them yet, records it as the (closed) opening entry of
+   * their `myDids` — the prior a later `from_prior` will name.
+   */
+  private async retirePublicDid(pub: KeyRef, at: string): Promise<void> {
+    for (const contact of await this.contacts.all()) {
+      const uses = contact.myDids ?? [];
+      if (contact.addressedAs !== pub.did || uses.some((use) => use.did === pub.did)) {
+        continue;
+      }
+      contact.myDids = [{ did: pub.did, key: pub.key, from: contact.createdAt, until: at }, ...uses];
+      await this.contacts.put(contact);
+    }
   }
 
   async saveConfig(): Promise<void> {

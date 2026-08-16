@@ -44,7 +44,11 @@ function multibase(prefix: number[], key: Uint8Array): string {
 }
 
 /** A did:peer:4 with both an HTTP and a WebSocket service. */
-export function mintMediatorIdentity(identity: DerivedIdentity): { did: string; secrets: Secret[] } {
+export function mintMediatorIdentity(
+  identity: DerivedIdentity,
+  http = MEDIATOR_HTTP,
+  ws = MEDIATOR_WS
+): { did: string; secrets: Secret[] } {
   const jwks = identity.privateJwks();
   const did = encodeLongForm({
     "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
@@ -55,8 +59,8 @@ export function mintMediatorIdentity(identity: DerivedIdentity): { did: string; 
     authentication: ["#key-1"],
     keyAgreement: ["#key-2"],
     service: [
-      { id: "#http", type: "DIDCommMessaging", serviceEndpoint: { uri: MEDIATOR_HTTP, accept: ["didcomm/v2"] } },
-      { id: "#ws", type: "DIDCommMessaging", serviceEndpoint: { uri: MEDIATOR_WS, accept: ["didcomm/v2"] } },
+      { id: "#http", type: "DIDCommMessaging", serviceEndpoint: { uri: http, accept: ["didcomm/v2"] } },
+      { id: "#ws", type: "DIDCommMessaging", serviceEndpoint: { uri: ws, accept: ["didcomm/v2"] } },
     ],
   });
   return {
@@ -117,13 +121,18 @@ export class FakeMediator {
   /** the fake `WebSocket` constructor bound to this mediator */
   readonly WebSocket: typeof WebSocket;
 
-  constructor(identity: DerivedIdentity) {
-    const minted = mintMediatorIdentity(identity);
+  /** Two mediators in one test tell apart by their endpoints; see `network`. */
+  constructor(
+    identity: DerivedIdentity,
+    readonly http = MEDIATOR_HTTP,
+    readonly wsUrl = MEDIATOR_WS
+  ) {
+    const minted = mintMediatorIdentity(identity, http, wsUrl);
     this.did = minted.did;
     this.secrets = minted.secrets;
     this.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url !== MEDIATOR_HTTP) {
+      if (url !== this.http) {
         return new Response("not found", { status: 404 });
       }
       const reply = await this.handleHttp(String(init?.body));
@@ -274,4 +283,26 @@ export class FakeMediator {
       }
     }
   }
+}
+
+/**
+ * Several mediators reachable from one agent: a `fetch` and a `WebSocket`
+ * that route by URL to whichever mediator owns the endpoint.
+ */
+export function network(...mediators: FakeMediator[]): Pick<FakeMediator, "fetch" | "WebSocket"> {
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const owner = mediators.find((m) => m.http === url);
+    return owner === undefined ? new Response("not found", { status: 404 }) : owner.fetch(input, init);
+  }) as typeof fetch;
+  const WebSocketCtor = class {
+    constructor(url: string) {
+      const owner = mediators.find((m) => m.wsUrl === url);
+      if (owner === undefined) {
+        throw new Error(`no mediator listens at ${url}`);
+      }
+      return new owner.WebSocket(url);
+    }
+  } as unknown as typeof WebSocket;
+  return { fetch: fetchFn, WebSocket: WebSocketCtor };
 }

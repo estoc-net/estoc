@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.0 — 2026-08-16
+
+- **Changing mediator = rotating every DID.** `Vault.setMediator` and
+  `Agent.setMediator` now accept a vault that already has one (the same
+  mediator again is refused). The agent asks the old mediator to drop every
+  DID it knew us by, withdraws open invitations (`onInvitation` for each),
+  and the vault records the move: a fresh mediator-facing key named
+  `mediator/<n>` (`mediationKeyName`, `mediationGeneration`), and the
+  retired public DID written as the closed first `myDids[]` entry of every
+  contact who wrote to it and was never answered. `start` then mediates
+  anew (public key `public/<n>`), and enforces an invariant checked at
+  every start: a current DID toward a contact whose service is not the
+  current routing DID is closed for a fresh one (`rotateStale`) — so a
+  move interrupted by a crash completes at the next start. Contacts we
+  have introduced ourselves to are sent a trust-ping/2.0 `ping`
+  (`response_requested: false`) from the new DID with `from_prior`
+  attached; inbound pings from a known contact are acknowledged (and
+  answered with `ping-response` when asked), a stranger's ignored, neither
+  logged. `from_prior`'s prior is now `addressedAs`, else the DID of ours
+  they were last written to from (`previousMyDid`), else the public one
+  (never for an invitation contact) — so a rotation before any reply still
+  vouches with the DID they know. Every DID in a contact's `myDids[]` —
+  retired public ones included — is re-derived on start. Closing the socket
+  on purpose (destroy, a move) no longer schedules a reconnect.
+- Exports: `TRUST_PING`, `TRUST_PING_RESPONSE`, `previousMyDid`,
+  `mediationKeyName`, `mediationGeneration`.
+
 ## 0.7.0 — 2026-08-15
 
 - **Single-use invitations** (out-of-band/2.0). `Agent.createInvitation

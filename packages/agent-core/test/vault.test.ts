@@ -11,12 +11,15 @@ import {
   KEY_INVITE_PREFIX,
   KEY_MEDIATOR,
   KEY_PAIRWISE_PREFIX,
+  KEY_PUBLIC,
   MemoryBackend,
   MessageLog,
   Vault,
   contactFileStem,
   currentDid,
   currentMyDid,
+  mediationGeneration,
+  mediationKeyName,
   mintPeerDid,
   newContact,
   newMessageRecord,
@@ -108,8 +111,55 @@ describe("Vault", () => {
     });
     expect(atOnce.config.mediation?.me.did).toBe(later.config.mediation?.me.did);
 
-    // a mediator, once named, is not swapped behind the public DID's back
-    await expect(later.setMediator(seedKey, "did:web:other")).rejects.toThrow(/already has a mediator/);
+    // the same mediator again is nothing to do
+    await expect(later.setMediator(seedKey, "did:web:mediator.example")).rejects.toThrow(/already reached via/);
+  });
+
+  it("changes mediator: fresh mediator/public keys per mediation, the retired public DID kept on record for the unanswered", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:one" });
+    // as the agent would after mediate-grant: a public DID on the routing DID
+    const pub = mintPeerDid(await vault.mintKey(seedKey, KEY_PUBLIC), "did:web:one");
+    vault.config.mediation = { ...vault.config.mediation!, routingDid: "did:web:one", public: { key: KEY_PUBLIC, did: pub.did } };
+    await vault.saveConfig();
+    // Bob wrote to the public DID and was never answered; Carol was answered from a pairwise DID (public opens her history); Dan we wrote to first
+    const bob = newContact("Bob", "did:peer:4bob");
+    bob.addressedAs = pub.did;
+    await vault.contacts.put(bob);
+    const carol = newContact("Carol", "did:peer:4carol");
+    carol.addressedAs = pub.did;
+    carol.myDids = [{ did: pub.did, key: KEY_PUBLIC, from: carol.createdAt }];
+    await vault.mintPairwise(seedKey, carol, "did:web:one");
+    const dan = newContact("Dan", "did:peer:4dan");
+    await vault.mintPairwise(seedKey, dan, "did:web:one");
+
+    const before = vault.config.mediation!;
+    await vault.setMediator(seedKey, "did:web:two", new Date("2026-08-16T10:00:00Z"));
+    const after = vault.config.mediation!;
+    expect(after.mediatorDid).toBe("did:web:two");
+    expect(after.me.key).toBe("mediator/2");
+    expect(after.me.did).not.toBe(before.me.did);
+    expect(after.routingDid).toBeNull();
+    expect(after.public).toBeNull();
+    expect(mediationGeneration(after.me.key)).toBe(2);
+    expect(mediationKeyName(KEY_PUBLIC, 2)).toBe("public/2");
+    // the old keys stay in the index — retired DIDs may still have to sign a from_prior
+    expect(vault.keystore.keys.map((k) => k.name)).toEqual(
+      expect.arrayContaining([KEY_ANCHOR, KEY_MEDIATOR, KEY_PUBLIC, "mediator/2"])
+    );
+    // Bob's record now remembers the DID he wrote to, closed at the move
+    const bobAfter = (await vault.contacts.byCid(bob.cid))!;
+    expect(bobAfter.myDids).toEqual([{ did: pub.did, key: KEY_PUBLIC, from: bob.createdAt, until: "2026-08-16T10:00:00.000Z" }]);
+    expect(currentMyDid(bobAfter)).toBeNull();
+    // Carol already had it; Dan never knew it: both untouched by the vault (their pairwise DIDs are the agent's to rotate)
+    expect((await vault.contacts.byCid(carol.cid))!.myDids).toEqual((carol.myDids ?? []));
+    expect((await vault.contacts.byCid(dan.cid))!.myDids).toHaveLength(1);
+    // idempotent under a retry, and a third mediation numbers on
+    await expect(vault.setMediator(seedKey, "did:web:two")).rejects.toThrow(/already reached via/);
+    await vault.setMediator(seedKey, "did:web:three");
+    expect(vault.config.mediation?.me.key).toBe("mediator/3");
+    expect((await Vault.open(backend)).config).toEqual(vault.config);
   });
 
   it("mints pairwise DIDs toward a contact: numbered keys, the previous one closed, a crash healed", async () => {

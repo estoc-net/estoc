@@ -30,18 +30,21 @@ import {
   RECIPIENT_UPDATE,
   REQUEST_PROFILE,
   STATUS,
+  TRUST_PING,
+  TRUST_PING_RESPONSE,
   STATUS_REQUEST,
 } from "./protocol/types.js";
 import {
   currentDid,
   currentMyDid,
+  previousMyDid,
   newContact,
   type ContactRecord,
   type MyDidUse,
 } from "./vault/contacts.js";
 import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
 import { newMessageRecord, type MessageRecord } from "./vault/messages.js";
-import { isRelationshipKey, KEY_PUBLIC, type Vault } from "./vault/vault.js";
+import { isRelationshipKey, KEY_PUBLIC, mediationGeneration, mediationKeyName, type Vault } from "./vault/vault.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -73,6 +76,17 @@ import { isRelationshipKey, KEY_PUBLIC, type Vault } from "./vault/vault.js";
  * it (see `createInvitation`, `acceptInvitation`, `claimInvitation`). Both
  * sides then hold a DID minted for the other alone, and nothing public was
  * ever exchanged — so no `from_prior` is owed by either.
+ *
+ * Every DID of ours carries the mediator's routing DID as its service, so
+ * changing mediator (`setMediator` on a vault that has one) is a rotation
+ * of all of them: the public DID is re-minted after the new grant, every
+ * DID toward a contact is re-minted on the new routing DID (`rotateStale`
+ * — an invariant checked at every start, so a crash midway heals), open
+ * invitations are withdrawn, and each contact we have introduced ourselves
+ * to is pinged from the new DID with `from_prior` (`announceMove`), so
+ * they move without waiting for our next message. Mail sent to the old
+ * DIDs after that lands at the old mediator, which is asked to stop
+ * accepting it; the DIDComm rotation is what carries a contact across.
  */
 
 export type AgentStatus =
@@ -293,7 +307,12 @@ export class Agent {
         this.setStatus({ state: "connecting", detail: "requesting mediation" });
         await this.establishMediation();
       }
+      const moved = await this.rotateStale();
       await this.registerPending();
+      if (moved.length > 0) {
+        this.setStatus({ state: "connecting", detail: "telling contacts about the move" });
+        await this.announceMove(moved);
+      }
 
       this.setStatus({ state: "connecting", detail: "picking up queued mail" });
       await this.drainQueue();
@@ -309,19 +328,82 @@ export class Agent {
   }
 
   /**
-   * Name the mediator for a vault that has none, then start: mediate,
-   * mint the public DID, go live. The mediator is chosen after the identity
-   * exists, not with it. See `Vault.setMediator` for why only once.
+   * Name the mediator, then start: mediate, mint the public DID, go live.
+   * The mediator is chosen after the identity exists, not with it — and
+   * may be changed later, which retires every DID that named the old one
+   * (see the class notes): the old mediator is asked to drop them and open
+   * invitations are withdrawn here, the vault records the move
+   * (`Vault.setMediator`), and `start` mints what the new one calls for.
    */
   async setMediator(mediatorDid: string): Promise<void> {
+    const before = this.vault.config.mediation;
+    if (before !== null) {
+      if (before.mediatorDid === mediatorDid) {
+        throw new Error("already reached via that mediator");
+      }
+      await this.leaveMediator();
+    }
     await this.vault.setMediator(this.seedKey, mediatorDid);
+    this.me = null;
+    this.pub = null;
+    this.mediatorDoc = null;
     await this.start();
+  }
+
+  /**
+   * Leaving a mediator: the socket goes, open invitations are withdrawn
+   * (their DIDs would lead mail to the old mediator), and the old mediator
+   * is asked — best effort, in one breath — to stop accepting mail for
+   * every DID it knew us by, so a message sent to a stale DID fails at the
+   * sender rather than queueing where nobody will look.
+   */
+  private async leaveMediator(): Promise<void> {
+    this.closeSocket();
+    this.setStatus({ state: "connecting", detail: "leaving the old mediator" });
+    const open = (await this.vault.invitations.all()).filter(isOpenInvitation);
+    if (this.pub !== null) {
+      const dids = new Set<string>([this.pub.did]);
+      for (const contact of await this.vault.contacts.all()) {
+        for (const use of contact.myDids ?? []) {
+          if (isRelationshipKey(use.key) && use.registeredAt !== undefined) {
+            dids.add(use.did);
+          }
+        }
+      }
+      for (const invitation of open) {
+        if (invitation.registeredAt !== undefined) {
+          dids.add(invitation.did);
+        }
+      }
+      try {
+        await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
+          updates: [...dids].map((did) => ({ recipient_did: did, action: "remove" })),
+        });
+        this.log(`asked the old mediator to drop ${dids.size} DID(s) of ours`);
+      } catch (err) {
+        this.log(`could not tell the old mediator we are leaving: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    for (const invitation of open) {
+      this.minted.delete(invitation.did);
+      await this.vault.invitations.remove(invitation.id);
+      this.events.onInvitation?.(invitation);
+    }
+    if (open.length > 0) {
+      this.log(`withdrew ${open.length} open invitation link(s); they led to the old mediator`);
+    }
   }
 
   destroy(): void {
     this.destroyed = true;
-    this.ws?.close();
+    this.closeSocket();
+  }
+
+  /** Close the socket on purpose: its close handler sees it is no longer ours and does not reconnect. */
+  private closeSocket(): void {
+    const ws = this.ws;
     this.ws = null;
+    ws?.close();
   }
 
   private mediation() {
@@ -420,10 +502,12 @@ export class Agent {
     }
     this.log("mediate-grant received; routing DID is the mediator");
 
-    const hasKey = this.vault.keystore.keys.some((entry) => entry.name === KEY_PUBLIC);
+    // the public key of this mediation: `public` for the first, `public/<n>` after a change
+    const key = mediationKeyName(KEY_PUBLIC, mediationGeneration(this.mediation().me.key));
+    const hasKey = this.vault.keystore.keys.some((entry) => entry.name === key);
     const identity = hasKey
-      ? await this.vault.derive(this.seedKey, KEY_PUBLIC)
-      : await this.vault.mintKey(this.seedKey, KEY_PUBLIC);
+      ? await this.vault.derive(this.seedKey, key)
+      : await this.vault.mintKey(this.seedKey, key);
     const pub = mintPeerDid(identity, routingDid);
     // The public DID's secrets must be resolvable before anything is
     // sealed to it; the mediator's recipient-update-response is.
@@ -442,7 +526,7 @@ export class Agent {
     this.vault.config.mediation = {
       ...this.mediation(),
       routingDid,
-      public: { key: KEY_PUBLIC, did: pub.did },
+      public: { key, did: pub.did },
     };
     await this.vault.saveConfig();
     this.log("public DID registered with the mediator");
@@ -704,6 +788,26 @@ export class Agent {
         continue;
       }
 
+      if (inner.type === TRUST_PING) {
+        // a contact saying "here I am" — after a move, from their new DID
+        // (the rotation above did the work); a stranger's ping names nobody
+        const known = sender === null ? null : await this.vault.contacts.byDid(sender);
+        if (known === null) {
+          this.log("pinged by someone we do not know; ignoring");
+          continue;
+        }
+        const contact = await this.ensureContact(sender as string, recipient);
+        this.log(`${contact.name} pinged us`);
+        if ((inner.body as { response_requested?: unknown }).response_requested === true) {
+          try {
+            await this.outbound(contact, TRUST_PING_RESPONSE, {}, inner.id);
+          } catch (err) {
+            this.log(`could not answer ${contact.name}'s ping: ${err instanceof Error ? err.message : err}`);
+          }
+        }
+        continue;
+      }
+
       if (inner.type !== BASIC_MESSAGE && inner.type !== PROFILE) {
         this.log(`received a ${inner.type ?? "typeless"} message; ignoring`);
         continue;
@@ -832,7 +936,8 @@ export class Agent {
     };
 
     ws.onclose = () => {
-      if (this.destroyed) {
+      // closed by us (destroy, or a move to another mediator): not ours to reopen
+      if (this.destroyed || this.ws !== ws) {
         return;
       }
       this.setStatus({
@@ -840,8 +945,8 @@ export class Agent {
         detail: "socket closed; reconnecting",
       });
       setTimeout(() => {
-        if (!this.destroyed) {
-          void this.reconnect();
+        if (!this.destroyed && this.ws === ws) {
+          void this.reconnect(ws);
         }
       }, this.reconnectDelayMs);
     };
@@ -853,13 +958,13 @@ export class Agent {
    * first, then reopens the socket — and a mediator still unreachable
    * simply fails the drain, and the socket's close reschedules us.
    */
-  private async reconnect(): Promise<void> {
+  private async reconnect(closed: WebSocket): Promise<void> {
     try {
       await this.drainQueue();
     } catch (err) {
       this.log(`pickup on reconnect failed: ${err instanceof Error ? err.message : err}`);
     }
-    if (!this.destroyed) {
+    if (!this.destroyed && this.ws === closed) {
       this.connectWebSocket();
     }
   }
@@ -963,11 +1068,15 @@ export class Agent {
   private async outbound(
     contact: ContactRecord,
     type: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    thid?: string
   ): Promise<IMessage> {
     const from = await this.ensurePairwise(contact);
     const to = currentDid(contact);
     const plain = plainMessage(type, from.did, to, body);
+    if (thid !== undefined) {
+      plain.thid = thid;
+    }
     if (contact.invitation !== undefined && contact.profileSharedAt === undefined) {
       // answering their invitation: our first messages out — up to and
       // including the introduction — name it, as out-of-band asks
@@ -994,7 +1103,7 @@ export class Agent {
     let use = currentMyDid(contact);
     if (use === null) {
       if (contact.addressedAs === this.pub.did && (contact.myDids ?? []).length === 0) {
-        contact.myDids = [{ did: this.pub.did, key: KEY_PUBLIC, from: contact.createdAt }];
+        contact.myDids = [{ did: this.pub.did, key: this.mediation().public?.key ?? KEY_PUBLIC, from: contact.createdAt }];
       }
       const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
       this.minted.set(identity.did, identity);
@@ -1063,14 +1172,17 @@ export class Agent {
   }
 
   /**
-   * Re-derive every DID minted for a relationship — those in the
-   * contacts' histories, including DIDs we have since moved on from, and
-   * those waiting in open invitations — so their mail can be opened. A
-   * record the seed no longer derives is logged and skipped, not fatal.
+   * Re-derive every DID of ours that appears in a contact's history —
+   * pairwise ones, current or since moved on from, and a public DID a
+   * mediator change retired (its mail no longer arrives, but a `from_prior`
+   * may still have to be signed by it) — and those waiting in open
+   * invitations, so their mail can be opened. The current public DID is
+   * `pub`, loaded already. A record the seed no longer derives is logged
+   * and skipped, not fatal.
    */
   private async loadMinted(): Promise<void> {
     const load = async (ref: { key: string; did: string }, what: string) => {
-      if (!isRelationshipKey(ref.key) || this.minted.has(ref.did)) {
+      if (ref.did === this.pub?.did || this.minted.has(ref.did)) {
         return;
       }
       try {
@@ -1094,6 +1206,62 @@ export class Agent {
   }
 
   /**
+   * The invariant a mediator change leaves to `start`: every current DID
+   * toward a contact rides the current routing DID. One that rides another
+   * — the mediator was changed, whether or not this process saw it — is
+   * closed for a fresh one on the new routing DID; the contact is told by
+   * `from_prior` on whatever goes out next, starting with `announceMove`.
+   * Returns the contacts moved (registration is `registerPending`'s).
+   */
+  private async rotateStale(): Promise<ContactRecord[]> {
+    const routingDid = this.mediation().routingDid;
+    if (routingDid === null) {
+      return [];
+    }
+    const moved: ContactRecord[] = [];
+    for (const contact of await this.vault.contacts.all()) {
+      const use = currentMyDid(contact);
+      if (use === null || !isRelationshipKey(use.key)) {
+        continue;
+      }
+      const doc = await this.resolveDid(use.did);
+      const service = doc === null ? null : (serviceUris(doc)[0] ?? null);
+      if (service === routingDid) {
+        continue;
+      }
+      const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
+      this.minted.set(identity.did, identity);
+      this.events.onContact?.(contact);
+      moved.push(contact);
+    }
+    if (moved.length > 0) {
+      this.log(`minted a fresh DID toward ${moved.length} contact(s); the old ones named the old mediator`);
+    }
+    return moved;
+  }
+
+  /**
+   * After a move: a trust-ping (no response asked) to every moved contact
+   * we have introduced ourselves to, from the new DID, `from_prior`
+   * attached — so they learn the new address now rather than at our next
+   * message. Best effort per contact; the next message carries it anyway.
+   */
+  private async announceMove(moved: ContactRecord[]): Promise<void> {
+    for (const stale of moved) {
+      const contact = await this.vault.contacts.byCid(stale.cid);
+      if (contact === null || contact.profileSharedAt === undefined) {
+        continue;
+      }
+      try {
+        await this.outbound(contact, TRUST_PING, { response_requested: false });
+        this.log(`told ${contact.name} about our new DID`);
+      } catch (err) {
+        this.log(`could not tell ${contact.name} about our new DID (${err instanceof Error ? err.message : err}); the next message will`);
+      }
+    }
+  }
+
+  /**
    * While a contact last wrote to a DID of ours that is not the one we
    * write from, every message carries `from_prior`: the DID they know
    * signs over the one we use now. Silence on their side is not consent —
@@ -1101,14 +1269,18 @@ export class Agent {
    * never written to us is taken to know us by the public DID — the
    * business card they most likely got our address from — so a first
    * message from a fresh pairwise DID vouches for itself with it, and the
-   * other side can tie the two together (see `applyRotation`). A contact
-   * met through their invitation is the exception: they minted us a DID
-   * and we minted them one, and neither ever knew the other's public DID —
-   * there is no prior to vouch with, and no reason to hand them ours.
+   * other side can tie the two together (see `applyRotation`) — unless we
+   * have already written to them from a DID since retired, which is then
+   * the one they know. A contact met through their invitation and never
+   * written to before is the exception: they minted us a DID and we minted
+   * them one, and neither ever knew the other's public DID — there is no
+   * prior to vouch with, and no reason to hand them ours.
    */
   private async attachFromPrior(plain: IMessage, contact: ContactRecord): Promise<void> {
     const prior =
-      contact.addressedAs ?? (contact.invitation === undefined ? this.pub?.did : undefined);
+      contact.addressedAs ??
+      previousMyDid(contact)?.did ??
+      (contact.invitation === undefined ? this.pub?.did : undefined);
     const current = plain.from as string;
     if (prior === undefined || prior === current) {
       return;
@@ -1219,11 +1391,10 @@ export class Agent {
     this.minted.set(identity.did, identity);
     await this.registerInvitation(record);
     this.log("issued an invitation; the first to write to it takes it");
-    this.events.onInvitation?.(record);
     return record;
   }
 
-  /** recipient-update add for an invitation's DID; the record is stamped once the mediator accepts. */
+  /** recipient-update add for an invitation's DID; the record is stamped — and announced — once the mediator accepts. */
   private async registerInvitation(invitation: InvitationRecord): Promise<void> {
     const updated = await this.mediatorRoundTrip(RECIPIENT_UPDATE, {
       updates: [{ recipient_did: invitation.did, action: "add" }],
@@ -1235,6 +1406,7 @@ export class Agent {
     }
     invitation.registeredAt = new Date().toISOString();
     await this.vault.invitations.put(invitation);
+    this.events.onInvitation?.(invitation);
   }
 
   /** The invitations this vault has issued, open and taken, oldest first. */
