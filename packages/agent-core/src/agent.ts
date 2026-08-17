@@ -41,6 +41,7 @@ import {
   type MyDidUse,
 } from "./vault/contacts.js";
 import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
+import { foldDeliveries, type DeliveryEvent, type DeliveryState } from "./vault/deliveries.js";
 import { counterpartyOf, newMessageRecord, type MessageRecord } from "./vault/messages.js";
 import { isRelationshipKey, KEY_PUBLIC, mediationGeneration, mediationKeyName, type Vault } from "./vault/vault.js";
 
@@ -58,6 +59,19 @@ import { isRelationshipKey, KEY_PUBLIC, mediationGeneration, mediationKeyName, t
  * Everything the agent learns is written to the vault before anyone is
  * told: the log line first, then the event. UIs mirror the vault; they are
  * not the record.
+ *
+ * Sending is write-first. `send` composes the message, appends it to the
+ * log, and only then tries to deliver it; the outcome of that try is a
+ * line in the delivery log (`vault.deliveries`), never a change to the
+ * message. What is written and not yet delivered is the outbox: it is
+ * tried again at every start, whenever the socket to the mediator comes
+ * back, and before the next message to the same contact — in order per
+ * contact, stopping at the first failure so a conversation never arrives
+ * shuffled — and by hand through `retry`. A message written offline is
+ * thus a message, not an error; the DIDComm `id` it carries never changes,
+ * so a try that reached the far side unnoticed is dropped there as a
+ * duplicate. What an import brings in undelivered is held, not tried (see
+ * `vault/transfer.ts`).
  *
  * Identity toward contacts is pairwise. The public DID is an address for
  * strangers — a business card — and the first message we send anyone goes
@@ -104,6 +118,13 @@ export interface AgentEvents {
    * the application's projection.
    */
   onMessage(record: MessageRecord, contact: ContactRecord | null): void;
+  /**
+   * A try at delivering an outbound record ended — sent, or failed with a
+   * reason — and the event is in the delivery log. Fold events per `mid`
+   * for the message's state (`foldDeliveries`); a record with none is
+   * pending.
+   */
+  onDelivery(event: DeliveryEvent, record: MessageRecord): void;
   /** the agent created or changed a contact (a stranger's first message, a claimed name, a DID minted toward them, a rotation) */
   onContact(contact: ContactRecord): void;
   /** an invitation of ours was issued, taken, or revoked */
@@ -125,6 +146,8 @@ export interface AgentOptions {
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
   reconnectDelayMs?: number;
+  /** how long one delivery may take before it counts as failed (and is retried later); default 15s */
+  deliveryTimeoutMs?: number;
   /**
    * Application-protocol handlers, added to the built-in basicmessage/2.0
    * and user-profile/1.0 ones; a handler naming a type a built-in covers
@@ -168,6 +191,7 @@ export class Agent {
   private readonly WebSocketCtor: typeof WebSocket;
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
+  private readonly deliveryTimeoutMs: number;
   private readonly didResolver: { resolve: (did: string) => Promise<DIDDoc | null> };
   /** application-protocol handlers by message type */
   private readonly handlers = new Map<string, ProtocolHandler>();
@@ -185,9 +209,20 @@ export class Agent {
   private mediatorDoc: DIDDoc | null = null;
   private ws: WebSocket | null = null;
   private destroyed = false;
+  /** a start that failed is tried again, later and later — this is the pending try */
+  private startTimer: ReturnType<typeof setTimeout> | null = null;
+  private startFailures = 0;
   private _status: AgentStatus = { state: "idle" };
   /** inbound messages already in the log, keyed by proven sender + wire id */
   private seen = new Set<string>();
+  /** outbound records not yet delivered, by mid; the delivery log's fold decides membership */
+  private outbox = new Map<string, MessageRecord>();
+  /** the delivery log folded, kept current as events are appended */
+  private deliveryStates = new Map<string, DeliveryState>();
+  /** outbox passes run one at a time, so two triggers cannot try the same record twice */
+  private outboxChain: Promise<unknown> = Promise.resolve();
+  /** per-key critical sections (see `locked`) */
+  private locks = new Map<string, Promise<unknown>>();
   /**
    * Inbound handling runs one delivery at a time. Socket frames arrive as
    * concurrent async callbacks; two deliveries interleaving would race the
@@ -208,6 +243,7 @@ export class Agent {
     this.WebSocketCtor = options.WebSocket ?? WebSocket;
     this.displayName = options.displayName ?? (() => this.vault.config.label);
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
+    this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 15_000;
     this.didResolver = { resolve: (did) => this.resolveDid(did) };
     for (const handler of [basicmessageHandler, userProfileHandler, ...(options.handlers ?? [])]) {
       for (const type of handler.types) {
@@ -250,6 +286,23 @@ export class Agent {
     return secrets;
   }
 
+  /**
+   * Run `step` after every earlier step under the same key has finished:
+   * how two calls that would each create the same contact, mint the same
+   * DID or introduce us twice are made to take turns instead.
+   */
+  private locked<T>(key: string, step: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(key) ?? Promise.resolve()).then(step);
+    const parked = run.catch(() => undefined);
+    this.locks.set(key, parked);
+    void parked.then(() => {
+      if (this.locks.get(key) === parked) {
+        this.locks.delete(key);
+      }
+    });
+    return run;
+  }
+
   /** Tell the application about a record — homed to its contact when one is known. */
   private async emitMessage(record: MessageRecord): Promise<void> {
     const did = counterpartyOf(record);
@@ -268,8 +321,17 @@ export class Agent {
    * inbound ids for dedup, request mediation on first run, drain the queue,
    * open live delivery. A vault without a mediator stops at `unmediated` —
    * an identity is complete without one; it just cannot be reached yet.
+   *
+   * A start that fails — offline, or the mediator away — reports `error`
+   * and tries again by itself, at `reconnectDelayMs` doubling up to a
+   * minute, until it comes up or the agent is destroyed: an app opened
+   * with no network must not need reopening when the network returns.
    */
   async start(): Promise<void> {
+    if (this.startTimer !== null) {
+      clearTimeout(this.startTimer);
+      this.startTimer = null;
+    }
     try {
       const mediation = this.vault.config.mediation;
       if (mediation === null) {
@@ -288,9 +350,16 @@ export class Agent {
       const records = await this.vault.messages.read((damaged) => {
         this.log(`skipping a damaged log line at ${damaged.where}: ${damaged.error}`);
       });
+      this.deliveryStates = foldDeliveries(
+        await this.vault.deliveries.read((damaged) => {
+          this.log(`skipping a damaged delivery line at ${damaged.where}: ${damaged.error}`);
+        })
+      );
       for (const record of records) {
         if (record.direction === "in") {
           this.seen.add(dedupKey(record.sender ?? null, record.msg.id));
+        } else if (this.deliveryStates.get(record.mid)?.status !== "sent") {
+          this.outbox.set(record.mid, record);
         }
       }
       await this.loadMinted();
@@ -314,14 +383,29 @@ export class Agent {
 
       this.setStatus({ state: "connecting", detail: "picking up queued mail" });
       await this.drainQueue();
+      if (this.outbox.size > 0) {
+        this.setStatus({ state: "connecting", detail: "sending queued mail" });
+        await this.drainOutbox();
+      }
 
       this.setStatus({ state: "connecting", detail: "opening live delivery" });
+      this.startFailures = 0;
       this.connectWebSocket();
     } catch (err) {
       this.setStatus({
         state: "error",
         detail: err instanceof Error ? err.message : String(err),
       });
+      if (!this.destroyed) {
+        const delay = Math.min(this.reconnectDelayMs * 2 ** this.startFailures, 60_000);
+        this.startFailures += 1;
+        this.startTimer = setTimeout(() => {
+          this.startTimer = null;
+          if (!this.destroyed) {
+            void this.start();
+          }
+        }, delay);
+      }
     }
   }
 
@@ -394,6 +478,10 @@ export class Agent {
 
   destroy(): void {
     this.destroyed = true;
+    if (this.startTimer !== null) {
+      clearTimeout(this.startTimer);
+      this.startTimer = null;
+    }
     this.closeSocket();
   }
 
@@ -581,22 +669,24 @@ export class Agent {
    * to — remembered so the next message out knows whether they have seen
    * our current DID.
    */
-  private async ensureContact(did: string, addressedAs?: string | null): Promise<ContactRecord> {
-    const existing = await this.vault.contacts.byDid(did);
-    if (existing !== null) {
-      if (addressedAs && existing.addressedAs !== addressedAs) {
-        existing.addressedAs = addressedAs;
-        await this.vault.contacts.put(existing);
+  private ensureContact(did: string, addressedAs?: string | null): Promise<ContactRecord> {
+    return this.locked(`contact ${did}`, async () => {
+      const existing = await this.vault.contacts.byDid(did);
+      if (existing !== null) {
+        if (addressedAs && existing.addressedAs !== addressedAs) {
+          existing.addressedAs = addressedAs;
+          await this.vault.contacts.put(existing);
+        }
+        return existing;
       }
-      return existing;
-    }
-    const contact = newContact(didPlaceholder(did), did);
-    if (addressedAs) {
-      contact.addressedAs = addressedAs;
-    }
-    await this.vault.contacts.put(contact);
-    this.events.onContact?.(contact);
-    return contact;
+      const contact = newContact(didPlaceholder(did), did);
+      if (addressedAs) {
+        contact.addressedAs = addressedAs;
+      }
+      await this.vault.contacts.put(contact);
+      this.events.onContact?.(contact);
+      return contact;
+    });
   }
 
   /**
@@ -933,12 +1023,15 @@ export class Agent {
   /**
    * Live delivery only pushes what arrives while the socket is up; mail
    * queued during an outage waits for a pickup. So a reconnect drains
-   * first, then reopens the socket — and a mediator still unreachable
-   * simply fails the drain, and the socket's close reschedules us.
+   * first — the mediator's queue for us, then our outbox, since a socket
+   * coming back is the sign the network did — then reopens the socket; a
+   * mediator still unreachable simply fails the drain, and the socket's
+   * close reschedules us.
    */
   private async reconnect(closed: WebSocket): Promise<void> {
     try {
       await this.drainQueue();
+      await this.drainOutbox();
     } catch (err) {
       this.log(`pickup on reconnect failed: ${err instanceof Error ? err.message : err}`);
     }
@@ -1022,29 +1115,32 @@ export class Agent {
       method: "POST",
       headers: { "Content-Type": ENCRYPTED_MIME },
       body: outboundPacked,
+      signal: AbortSignal.timeout(this.deliveryTimeoutMs),
     });
     if (!response.ok) {
       throw new Error(`endpoint answered ${response.status}`);
     }
   }
 
+  /** Append an outbound plaintext to the log — into the outbox, until a try delivers it. */
   private async logOutbound(plain: IMessage): Promise<MessageRecord> {
     const record = newMessageRecord({
       direction: "out",
       msg: plain as unknown as MessageRecord["msg"],
     });
     await this.vault.messages.append(record);
+    this.outbox.set(record.mid, record);
     await this.emitMessage(record);
     return record;
   }
 
   /**
-   * Compose and deliver one message to a contact: from our pairwise DID
-   * toward them (minted now if this is the first), to their current DID,
-   * with `from_prior` attached while they still know us by another DID.
-   * Returns the plaintext as sent, for the log.
+   * Compose one message to a contact: from our pairwise DID toward them
+   * (minted now if this is the first), to their current DID, with
+   * `from_prior` attached while they still know us by another DID. Returns
+   * the plaintext, ready for the log; delivery is a separate step.
    */
-  private async outbound(
+  private async compose(
     contact: ContactRecord,
     type: string,
     body: Record<string, unknown>,
@@ -1067,49 +1163,196 @@ export class Agent {
       plain.attachments = options.attachments as IMessage["attachments"];
     }
     await this.attachFromPrior(plain, contact);
-    await this.deliverToContact(plain, to);
     return plain;
   }
 
-  /** Compose, deliver and log one message to a contact — no introduction. */
+  /**
+   * Compose, log and deliver one message to a contact — no introduction.
+   * Resolves once the record is in the log and its first delivery has been
+   * tried; the try's outcome is a delivery event, not this promise's — a
+   * message the network refused is still a message, waiting in the outbox.
+   * Anything already waiting for the same contact goes first, in order.
+   */
   private async reply(
     contact: ContactRecord,
     type: string,
     body: Record<string, unknown>,
     options?: SendOptions
   ): Promise<MessageRecord> {
-    const plain = await this.outbound(contact, type, body, options);
-    return this.logOutbound(plain);
+    const plain = await this.compose(contact, type, body, options);
+    const record = await this.logOutbound(plain);
+    await this.drainOutbox({ cid: contact.cid });
+    return record;
+  }
+
+  /**
+   * One pass over the outbox: every record not yet delivered, oldest
+   * first, each tried once — narrowed to one contact or one record when
+   * asked. A failure for a contact stops the pass for that contact, so
+   * their messages never overtake one another; other contacts go on. Held
+   * records (see `vault/deliveries.ts`) are skipped unless named by `mid`
+   * — that is what a retry by hand is. Passes are serialised, so a start,
+   * a reconnect and a send cannot try one record at the same time.
+   */
+  private drainOutbox(only: { cid?: string; mid?: string } = {}): Promise<DeliveryEvent[]> {
+    const run = this.outboxChain.then(async () => {
+      const events: DeliveryEvent[] = [];
+      const stalled = new Set<string>();
+      for (const mid of [...this.outbox.keys()].sort()) {
+        const record = this.outbox.get(mid);
+        if (record === undefined || (only.mid !== undefined && mid !== only.mid)) {
+          continue;
+        }
+        if (only.mid === undefined && this.deliveryStates.get(mid)?.status === "held") {
+          continue;
+        }
+        const did = counterpartyOf(record);
+        const contact = did === null ? null : await this.vault.contacts.byDid(did);
+        if (only.cid !== undefined && contact?.cid !== only.cid) {
+          continue;
+        }
+        if (contact !== null && stalled.has(contact.cid)) {
+          continue;
+        }
+        const event = await this.attemptDelivery(record, contact);
+        events.push(event);
+        if (event.status !== "sent" && contact !== null) {
+          stalled.add(contact.cid);
+        }
+      }
+      return events;
+    });
+    this.outboxChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * One try at delivering a logged record: the mediator is told about the
+   * DID it goes from if it has not been yet, the plaintext is sealed to
+   * the contact's *current* DID (they may have moved since it was
+   * written; the line in the log keeps the address it was written to),
+   * and posted. Whatever happens is appended to the delivery log and told
+   * to the application; nothing here throws.
+   */
+  private async attemptDelivery(record: MessageRecord, contact: ContactRecord | null): Promise<DeliveryEvent> {
+    const attempt = (this.deliveryStates.get(record.mid)?.attempts ?? 0) + 1;
+    let to: string | undefined;
+    let event: DeliveryEvent;
+    try {
+      if (this.pub === null) {
+        throw new Error("no public DID yet — mediation has not completed");
+      }
+      if (contact === null) {
+        throw new Error("no contact for the DID this was written to");
+      }
+      const from = record.msg.from;
+      const use = (contact.myDids ?? []).find((candidate) => candidate.did === from);
+      if (from === undefined || use === undefined) {
+        throw new Error(`the DID this was written from is not one of ours toward ${contact.name}`);
+      }
+      if (!this.minted.has(from)) {
+        throw new Error(`our DID toward ${contact.name} does not derive from this seed`);
+      }
+      if (use.registeredAt === undefined) {
+        await this.registerRecipients([{ contact, use }]);
+        this.events.onContact?.(contact);
+      }
+      to = currentDid(contact);
+      await this.deliverToContact(record.msg as unknown as IMessage, to);
+      event = { mid: record.mid, at: new Date().toISOString(), status: "sent", attempt, to };
+    } catch (err) {
+      event = {
+        mid: record.mid,
+        at: new Date().toISOString(),
+        status: "failed",
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+      };
+      if (to !== undefined) {
+        event.to = to;
+      }
+      this.log(`could not deliver ${record.msg.type.split("/").slice(-3).join("/")} (try ${attempt}): ${event.error}`);
+    }
+    await this.vault.deliveries.append(event);
+    this.deliveryStates.set(record.mid, {
+      status: event.status,
+      attempts: attempt,
+      at: event.at,
+      ...(event.to !== undefined ? { to: event.to } : {}),
+      ...(event.error !== undefined ? { error: event.error } : {}),
+    });
+    if (event.status === "sent") {
+      this.outbox.delete(record.mid);
+    }
+    this.events.onDelivery?.(event, record);
+    return event;
+  }
+
+  /**
+   * Try everything waiting in the outbox now — what an application calls
+   * when it learns the network is back before the socket does (a browser's
+   * `online` event). Held records stay held. Resolves when the pass ends.
+   */
+  async flush(): Promise<void> {
+    if (this.pub === null || this.outbox.size === 0) {
+      return;
+    }
+    await this.drainOutbox();
+  }
+
+  /**
+   * Try again to deliver one message of ours, held or failed — by hand,
+   * so a held one is tried too. Resolves to the try's event.
+   */
+  async retry(mid: string): Promise<DeliveryEvent> {
+    const record = this.outbox.get(mid);
+    if (record === undefined) {
+      throw new Error("that message is not waiting to be sent");
+    }
+    if (this.pub === null) {
+      throw new Error(
+        this.vault.config.mediation === null
+          ? "no mediator yet — choose one before sending"
+          : "no public DID yet — mediation has not completed"
+      );
+    }
+    const [event] = await this.drainOutbox({ mid });
+    if (event === undefined) {
+      throw new Error("that message is not waiting to be sent");
+    }
+    return event;
   }
 
   /**
    * Our DID toward a contact, minted on first use: the mediator's routing
    * DID is its service, and the mediator must accept it as a recipient
-   * before anything can come back — a registration that failed (offline
-   * at the time) is retried here and at every start. A contact who first
-   * reached us at the public DID keeps that as the opening entry of the
-   * history, so the rotation away from it has its prior on record.
+   * before anything can come back — which the first delivery attempt
+   * from it sees to (`attemptDelivery`), and every start retries. A
+   * contact who first reached us at the public DID keeps that as the
+   * opening entry of the history, so the rotation away from it has its
+   * prior on record.
    */
   private async ensurePairwise(contact: ContactRecord): Promise<PeerIdentity> {
     const routingDid = this.mediation().routingDid;
     if (routingDid === null || this.pub === null) {
       throw new Error("no public DID yet — mediation has not completed");
     }
-    let use = currentMyDid(contact);
-    if (use === null) {
-      if (contact.addressedAs === this.pub.did && (contact.myDids ?? []).length === 0) {
-        contact.myDids = [{ did: this.pub.did, key: this.mediation().public?.key ?? KEY_PUBLIC, from: contact.createdAt }];
+    const pub = this.pub;
+    const use = await this.locked(`mint ${contact.cid}`, async () => {
+      const current = currentMyDid(contact);
+      if (current !== null) {
+        return current;
+      }
+      if (contact.addressedAs === pub.did && (contact.myDids ?? []).length === 0) {
+        contact.myDids = [{ did: pub.did, key: this.mediation().public?.key ?? KEY_PUBLIC, from: contact.createdAt }];
       }
       const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
       this.minted.set(identity.did, identity);
-      use = currentMyDid(contact) as MyDidUse;
       this.log(`minted a DID of our own toward ${contact.name}`);
-    }
-    if (use.registeredAt === undefined) {
-      await this.registerRecipients([{ contact, use }]);
-      // the record gained a DID of ours (minted, or now registered): tell the UI
+      // the record gained a DID of ours: tell the UI
       this.events.onContact?.(contact);
-    }
+      return currentMyDid(contact) as MyDidUse;
+    });
     const identity = this.minted.get(use.did);
     if (identity === undefined) {
       throw new Error(`our DID toward ${contact.name} does not derive from this seed`);
@@ -1248,8 +1491,12 @@ export class Agent {
         continue;
       }
       try {
-        await this.reply(contact, TRUST_PING, { response_requested: false });
-        this.log(`told ${contact.name} about our new DID`);
+        const record = await this.reply(contact, TRUST_PING, { response_requested: false });
+        if (this.outbox.has(record.mid)) {
+          this.log(`could not tell ${contact.name} about our new DID yet; the outbox will`);
+        } else {
+          this.log(`told ${contact.name} about our new DID`);
+        }
       } catch (err) {
         this.log(`could not tell ${contact.name} about our new DID (${err instanceof Error ? err.message : err}); the next message will`);
       }
@@ -1295,9 +1542,13 @@ export class Agent {
 
   /**
    * Send a message of any application protocol to a contact; resolves to
-   * the appended log record. The first message to anyone is preceded by
-   * an introduction — every handler that has one to make (user-profile
-   * announces our name and asks for theirs) makes it, once per contact.
+   * the appended log record once its first delivery has been tried —
+   * whether that try succeeded is a delivery event (`onDelivery`), not an
+   * error here: what could not go now waits in the outbox. Throws only
+   * when nothing can be composed at all (no mediator yet). The first
+   * message to anyone is preceded by an introduction — every handler that
+   * has one to make (user-profile announces our name and asks for theirs)
+   * makes it, once per contact.
    */
   async send(
     contactDid: string,
@@ -1314,9 +1565,15 @@ export class Agent {
     }
     let contact = await this.ensureContact(contactDid);
     if (contact.profileSharedAt === undefined) {
-      await this.introduce(contact);
-      // the introduction may have saved a freshly minted DID on the record
-      contact = (await this.vault.contacts.byCid(contact.cid)) as ContactRecord;
+      contact = await this.locked(`introduce ${contact.cid}`, async () => {
+        // re-read: a send that took its turn before us may have introduced us already
+        const current = (await this.vault.contacts.byCid(contact.cid)) as ContactRecord;
+        if (current.profileSharedAt === undefined) {
+          await this.introduce(current);
+        }
+        // the introduction may have saved a freshly minted DID on the record
+        return (await this.vault.contacts.byCid(contact.cid)) as ContactRecord;
+      });
     }
     return this.reply(contact, type, body, options);
   }
@@ -1436,8 +1693,8 @@ export class Agent {
    * plaintext — under a petname: they become a contact by the DID the
    * invitation names, and we introduce ourselves at once (from a DID
    * minted for them, naming the invitation as `pthid`) so they see us
-   * arrive. If the introduction cannot go out now, it goes with the first
-   * message. Our own invitations, and a mediator's, are refused.
+   * arrive — or, offline, waits in the outbox ahead of our first message.
+   * Our own invitations, and a mediator's, are refused.
    */
   async acceptInvitation(input: string | Invitation, name: string): Promise<ContactRecord> {
     const invitation = typeof input === "string" ? parseInvitation(input) : input;

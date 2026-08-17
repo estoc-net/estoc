@@ -7,6 +7,7 @@ import {
   counterpartyOf,
   currentDid,
   currentMyDid,
+  foldDeliveries,
   invitationMessage,
   invitationUrl,
   parseInvitation,
@@ -157,8 +158,9 @@ async function viewsOf(v: Vault): Promise<Identity> {
     const did = counterpartyOf(record);
     messages.push(entryOf(record, did === null ? null : (cidOf.get(did) ?? null)));
   }
+  const deliveries = Object.fromEntries(foldDeliveries(await v.deliveries.read(() => (damaged += 1))));
   if (damaged > 0) {
-    log(`skipped ${damaged} damaged line${damaged === 1 ? "" : "s"} in the message log`);
+    log(`skipped ${damaged} damaged line${damaged === 1 ? "" : "s"} in the logs`);
   }
   return {
     name: v.config.label,
@@ -167,6 +169,7 @@ async function viewsOf(v: Vault): Promise<Identity> {
     contacts: contacts.map(contactView),
     invitations: (await v.invitations.all()).map(invitationView),
     messages,
+    deliveries,
   };
 }
 
@@ -187,6 +190,16 @@ async function attachAgent(): Promise<void> {
       onMessage(record, contact) {
         identity.messages.push(entryOf(record, contact?.cid ?? null));
       },
+      onDelivery(event) {
+        const prior = identity.deliveries[event.mid];
+        identity.deliveries[event.mid] = {
+          status: event.status,
+          attempts: Math.max(prior?.attempts ?? 0, event.attempt),
+          at: event.at,
+          ...(event.to === undefined ? {} : { to: event.to }),
+          ...(event.error === undefined ? {} : { error: event.error }),
+        };
+      },
       onContact(record) {
         upsertContact(identity, record);
       },
@@ -203,6 +216,26 @@ async function attachAgent(): Promise<void> {
   await initDidcomm();
   await a.start();
 }
+
+/**
+ * The network came back (the browser says so). An agent that could not
+ * come up without it — a start that failed offline — would try again by
+ * itself in a while; it is told to try now. A live one sends what waited
+ * in the outbox without waiting for the socket to notice.
+ */
+async function backOnline(): Promise<void> {
+  if (agent === null || state.phase !== "open") {
+    return;
+  }
+  if (state.status.state === "error") {
+    await agent.start();
+  } else if (state.status.state === "live") {
+    await agent.flush();
+  }
+}
+window.addEventListener("online", () => {
+  void backOnline().catch((err) => log(`back online: ${err instanceof Error ? err.message : String(err)}`));
+});
 
 /** A vault and its unlocked seed are in hand: project, start, show. */
 async function open(v: Vault, key: CryptoKey): Promise<void> {
@@ -395,7 +428,8 @@ export async function mergeBackup(zip: Uint8Array): Promise<ImportOutcome> {
     log(
       `merged a backup: ${outcome.messagesAdded} new message${outcome.messagesAdded === 1 ? "" : "s"}, ` +
         `${outcome.contactsAdded} new contact${outcome.contactsAdded === 1 ? "" : "s"}, ` +
-        `${outcome.contactsUpdated} updated`
+        `${outcome.contactsUpdated} updated` +
+        (outcome.held === 0 ? "" : `; ${outcome.held} unsent message${outcome.held === 1 ? "" : "s"} held for you to retry`)
     );
   }
   agent?.destroy();
@@ -509,4 +543,16 @@ export async function send(
 /** A line of chat: basicmessage/2.0. */
 export async function sendMessage(contactDid: string, text: string): Promise<void> {
   await send(contactDid, BASIC_MESSAGE, { content: text });
+}
+
+/**
+ * Try again to deliver one message of ours that did not go — failed, or
+ * held since a backup brought it in. The outcome lands through
+ * `onDelivery` like any other try.
+ */
+export async function retry(mid: string): Promise<void> {
+  if (agent === null) {
+    throw new Error("the agent is not running");
+  }
+  await agent.retry(mid);
 }

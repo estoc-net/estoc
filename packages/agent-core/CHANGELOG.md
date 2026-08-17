@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.11.0 — 2026-08-17
+
+- **Write first, then deliver: the outbox.** `Agent.send` (and every
+  `reply` a handler makes) appends the record to the log and *then* tries
+  to deliver it; it resolves to the record once the try has ended, and
+  no longer rejects when the network does — a message written offline is
+  a message, waiting. What became of each try is an event in a new
+  **delivery log** (`.estoc/deliveries/NNNN.jsonl`, `Vault.deliveries`,
+  `DeliveryLog`): `{mid, at, status: sent | failed | held, attempt, to?,
+  error?}`. `foldDeliveries(events)` gives one `DeliveryState` per `mid`
+  (`sent` is final); `deliveryStatusOf(record, states)` says `pending`
+  for an outbound record with no event. Undelivered records are tried
+  again at every start (after pickup, before the socket), on every socket
+  reconnect, and ahead of the next message to the same contact — oldest
+  first, stopping per contact at the first failure so nothing overtakes
+  — by **`Agent.flush()`** when the application knows the network is
+  back before the socket does, and by hand through **`Agent.retry(mid)`**.
+  The wire `id` is the
+  same on every try; the far side's dedup drops a duplicate. New event
+  **`onDelivery(event, record)`**; new option `deliveryTimeoutMs`
+  (default 15 s) aborts a POST that hangs so it fails and is retried later.
+- **Registration moved into the try.** A pairwise DID is minted when the
+  message is composed (offline is fine); the mediator is told about it on
+  the first delivery attempt from it, and at every start as before.
+- **Import holds what arrives undelivered.** `importVault` appends a
+  `held` event for every outbound record it brings in (restore or merge)
+  that has no `sent` behind it: not tried unasked, `retry(mid)` sends it.
+  Delivery events merge like messages (into a new segment, by
+  `(mid, attempt, status)`); another device's `held` does not travel.
+  `ImportOutcome` gains `held` (both kinds) and `deliveriesAdded` (merged).
+- **`SegmentedLog<T>`** (`vault/log.ts`): the segmented JSONL log
+  extracted from `MessageLog`, which is now an instance of it beside
+  `DeliveryLog`; `parseSegment` (messages) is unchanged. `DELIVERIES_DIR`
+  is exported.
+- **A failed start tries again by itself** — `reconnectDelayMs` doubling
+  up to a minute, until it comes up or `destroy()` — so an app opened
+  offline comes up when the network returns, and drains its outbox then.
+  `start()` called from outside cancels the pending retry and goes now.
+- **Concurrent sends to a new contact** no longer create the contact,
+  mint the DID or send the introduction more than once (per-key turns
+  inside the agent).
+
 ## 0.10.0 — 2026-08-17
 
 - **Protocols in three layers.** `protocol/types.ts` is split by what

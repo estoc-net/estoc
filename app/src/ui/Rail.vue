@@ -153,7 +153,8 @@ async function importZip(event: Event) {
       importNote.value =
         outcome.messagesAdded === 0 && outcome.contactsAdded === 0 && outcome.contactsUpdated === 0
           ? "nothing new in that backup"
-          : `merged: ${outcome.messagesAdded} messages, ${outcome.contactsAdded + outcome.contactsUpdated} contacts`;
+          : `merged: ${outcome.messagesAdded} messages, ${outcome.contactsAdded + outcome.contactsUpdated} contacts` +
+            (outcome.held === 0 ? "" : `; ${outcome.held} unsent held — retry them from the thread`);
     }
   } catch (err) {
     importNote.value = err instanceof Error ? err.message : String(err);

@@ -453,6 +453,24 @@ textarea {
   gap: 10px;
 }
 
+/* what became of a sent message — the delivery log's word, in the meta line */
+.bubble .delivery.pending {
+  color: var(--steel);
+}
+
+.bubble .delivery.failed,
+.bubble .delivery.held {
+  color: #b5674f;
+}
+
+.bubble .delivery .link-quiet {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  margin-left: 4px;
+}
+
 .bubble.sent {
   align-self: flex-end;
   border-left: 3px solid var(--copper);

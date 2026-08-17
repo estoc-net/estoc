@@ -1,7 +1,7 @@
-import type { AgentStatus, ImportOutcome, Invitation } from "@estoc/agent-core";
+import type { AgentStatus, DeliveryState, DeliveryStatus, ImportOutcome, Invitation } from "@estoc/agent-core";
 import type { Entry } from "./entries.js";
 
-export type { AgentStatus, Entry, ImportOutcome, Invitation };
+export type { AgentStatus, DeliveryState, DeliveryStatus, Entry, ImportOutcome, Invitation };
 
 /**
  * What the UI renders: reactive views mirrored from the vault. The vault
@@ -50,6 +50,12 @@ export interface Identity {
   invitations: InvitationView[];
   /** every log record, homed to its contact; what a thread shows of them is the renderers' call */
   messages: Entry[];
+  /**
+   * The delivery log folded, by mid: what became of each message of ours.
+   * A sent entry with no state here is pending — written, not yet tried.
+   * Received entries have none.
+   */
+  deliveries: Record<string, DeliveryState>;
 }
 
 /**

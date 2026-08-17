@@ -59,13 +59,19 @@ your data never touches the place the app was served from.
   identity's home. **Import backup** into a live vault *merges*: new
   messages become a new log segment, contacts win by their last change,
   nothing already here is touched — so backups from two devices fold
-  together instead of overwriting each other. A backup from a different
+  together instead of overwriting each other. Either way, a message the
+  backup holds unsent is *held*, not sent on its own — a backup is a move,
+  not a sync — until you retry it. A backup from a different
   identity is refused.
 - **Offline.** Installed, Estoc opens with no network at all: the app
   shell and the didcomm WASM are cached by a service worker, the vault is
-  on disk. Reading history needs nothing; sending and receiving resume
-  when the mediator is reachable. (An outbox for messages written offline
-  is next; today a send with no network fails and stays in the composer.)
+  on disk. Reading history needs nothing. Writing needs nothing either: a
+  message is appended to the log before any delivery is tried, and what
+  could not go waits in the outbox — marked *sending…* or *not sent* under
+  the bubble — and goes when the mediator is back (at the next start, when
+  the socket reconnects, or ahead of your next message to that contact),
+  in order, never twice; *retry* sends one by hand. Receiving resumes when
+  the mediator is reachable.
 - **One agent per vault.** A second tab of the same browser waits for the
   first (Web Locks) rather than opening a second agent onto the same log.
 
@@ -136,7 +142,10 @@ reload with no passphrase, a second
 tab yielding to the first, lock and unlock (a wrong passphrase refused), a
 backup exported and restored in a fresh browser that then receives mail as
 Alice, a backup merged into a live vault with nothing new, and — when a
-service worker is serving — the app opening with the network off.
+service worker is serving — a message written with the network off (in
+the thread at once, marked *not sent*, still there after an offline
+reload) that reaches Bob by itself once the network is back, and the app
+shell opening offline.
 
 ## How it hangs together
 
@@ -172,9 +181,10 @@ service worker is serving — the app opening with the network off.
 
 ## Status
 
-Early. Pairwise DIDs per contact, single-use invitation links, and a
-change of mediator that rotates every DID; no offline outbox yet; no push
-notifications (a mediator extension); keys in the browser under your
+Early. Pairwise DIDs per contact, single-use invitation links, an
+outbox for what is written offline, and a change of mediator that rotates
+every DID; no push notifications (a mediator extension); keys in the
+browser under your
 passphrase. Storage is only
 guaranteed once the browser grants persistence — install the app, and keep
 a backup either way. Browsers: Chromium and Firefox, and Safari 26 or later

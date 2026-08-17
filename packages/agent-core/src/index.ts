@@ -16,6 +16,7 @@ export { segmentsOf, type VaultBackend } from "./backend/types.js";
 export {
   CONFIG_PATH,
   CONTACTS_DIR,
+  DELIVERIES_DIR,
   ESTOC_DIR,
   FIRST_SEGMENT,
   INVITATIONS_DIR,
@@ -47,10 +48,19 @@ export {
   counterpartyOf,
   newMessageRecord,
   parseSegment,
-  type DamagedLine,
   type MessageRecord,
   type PlainMessage,
 } from "./vault/messages.js";
+export { SegmentedLog, type DamagedLine, type LineParser } from "./vault/log.js";
+export {
+  DeliveryLog,
+  deliveryKey,
+  deliveryStatusOf,
+  foldDeliveries,
+  type DeliveryEvent,
+  type DeliveryState,
+  type DeliveryStatus,
+} from "./vault/deliveries.js";
 export {
   importVault,
   snapshotVault,

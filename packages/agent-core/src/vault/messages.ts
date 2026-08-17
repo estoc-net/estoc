@@ -1,7 +1,10 @@
 import { v7 as uuidv7 } from "uuid";
 
 import type { VaultBackend } from "../backend/types.js";
-import { FIRST_SEGMENT, MESSAGES_DIR, text, utf8 } from "./layout.js";
+import { MESSAGES_DIR } from "./layout.js";
+import { SegmentedLog, parseSegment as parseLog, type DamagedLine } from "./log.js";
+
+export type { DamagedLine } from "./log.js";
 
 /**
  * The message log: append-only JSONL, one event per line, `mid` (uuidv7,
@@ -17,7 +20,7 @@ import { FIRST_SEGMENT, MESSAGES_DIR, text, utf8 } from "./layout.js";
  *
  * Writers append to one segment; readers concatenate every `*.jsonl` in
  * name order — so a merge (importing another copy of the vault) is just
- * dropping its segments in beside ours.
+ * dropping its segments in beside ours (see `SegmentedLog`).
  */
 
 /** A DIDComm plaintext message as JSON: what didcomm-rust's as_value() yields. */
@@ -95,105 +98,20 @@ function parseLine(line: string, where: string): MessageRecord {
   return record as MessageRecord;
 }
 
-/** A line that would not parse — reported to `read`'s caller, then skipped. */
-export interface DamagedLine {
-  /** `<segment>:<line number>` */
-  where: string;
-  line: string;
-  error: string;
-}
-
-export class MessageLog {
-  /** appends run one at a time; two in flight would compute the same offset */
-  private chain: Promise<unknown> = Promise.resolve();
-  /** whether this instance has checked the segment's tail for a cut-short line */
-  private tailChecked = false;
-
-  constructor(
-    private readonly backend: VaultBackend,
-    private readonly segment: string = FIRST_SEGMENT
-  ) {}
-
-  private get path(): string {
-    return `${MESSAGES_DIR}/${this.segment}`;
-  }
-
-  /**
-   * Append one record. Appends are serialised through this instance: the
-   * backend's append is read-size-then-write, so two in flight would land
-   * on the same offset and one would overwrite the other.
-   *
-   * The first append also heals a crash: a segment that does not end in a
-   * newline holds a line whose append was cut short, and writing straight
-   * after it would fuse the fragment and the new record into one bad line
-   * — the fragment gets its own line terminator first, so it stays a
-   * skippable damaged line and the new record stays whole.
-   */
-  append(record: MessageRecord): Promise<void> {
-    const run = this.chain.then(async () => {
-      if (!this.tailChecked) {
-        const bytes = await this.backend.read(this.path);
-        if (bytes !== null && bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) {
-          await this.backend.append(this.path, utf8("\n"));
-        }
-        this.tailChecked = true;
-      }
-      await this.backend.append(this.path, utf8(JSON.stringify(record) + "\n"));
-    });
-    this.chain = run.catch(() => undefined);
-    return run;
-  }
-
-  /**
-   * Every record across every segment, in segment order then line order.
-   * A line that does not parse — a cut-short append, a corrupted byte — is
-   * reported through `onDamaged` and skipped, never fatal: one bad line
-   * must not take the whole history with it. Callers wanting to know pass
-   * a callback; the log itself never invents records to fill the gap.
-   */
-  async read(onDamaged?: (damaged: DamagedLine) => void): Promise<MessageRecord[]> {
-    const segments = (await this.backend.list(MESSAGES_DIR))
-      .filter((name) => name.endsWith(".jsonl"))
-      .sort();
-    const records: MessageRecord[] = [];
-    for (const segment of segments) {
-      const bytes = await this.backend.read(`${MESSAGES_DIR}/${segment}`);
-      if (bytes === null) {
-        continue;
-      }
-      records.push(...parseSegment(text(bytes), segment, onDamaged));
-    }
-    return records;
+export class MessageLog extends SegmentedLog<MessageRecord> {
+  constructor(backend: VaultBackend, segment?: string) {
+    super(backend, MESSAGES_DIR, parseLine, segment);
   }
 }
 
 /**
- * The records in one segment's text, in line order, with the same damaged-line
- * policy as `read` — shared with vault import, which reads segments that are
- * not (yet) in any backend.
+ * The message records in one segment's text — shared with vault import,
+ * which reads segments that are not (yet) in any backend.
  */
 export function parseSegment(
   content: string,
   segment: string,
   onDamaged?: (damaged: DamagedLine) => void
 ): MessageRecord[] {
-  const records: MessageRecord[] = [];
-  // Every element but the last was terminated by "\n"; the last is ""
-  // when the file ended cleanly, otherwise a partial line.
-  content.split("\n").forEach((line, i) => {
-    if (line === "") {
-      return;
-    }
-    const where = `${segment}:${i + 1}`;
-    try {
-      records.push(parseLine(line, where));
-    } catch (err) {
-      onDamaged?.({
-        where,
-        line,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  });
-  return records;
+  return parseLog(content, segment, parseLine, onDamaged);
 }

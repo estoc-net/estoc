@@ -14,6 +14,7 @@ import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
 import { ContactStore, currentMyDid, type ContactRecord } from "./contacts.js";
 import { InvitationStore, type InvitationRecord } from "./invitations.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
+import { DeliveryLog } from "./deliveries.js";
 import { MessageLog } from "./messages.js";
 
 /**
@@ -76,6 +77,7 @@ export class Vault {
   readonly contacts: ContactStore;
   readonly invitations: InvitationStore;
   readonly messages: MessageLog;
+  readonly deliveries: DeliveryLog;
 
   private constructor(
     private readonly backend: VaultBackend,
@@ -85,6 +87,7 @@ export class Vault {
     this.contacts = new ContactStore(backend);
     this.invitations = new InvitationStore(backend);
     this.messages = new MessageLog(backend);
+    this.deliveries = new DeliveryLog(backend);
   }
 
   /** Is there a vault (a config.json) at this backend's root? */

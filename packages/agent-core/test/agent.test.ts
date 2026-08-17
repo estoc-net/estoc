@@ -20,15 +20,19 @@ import {
   Vault,
   currentDid,
   currentMyDid,
+  foldDeliveries,
   invitationUrl,
   mintPeerDid,
   parseInvitation,
   secretsResolverFor,
   type AgentStatus,
   type ContactRecord,
+  type DeliveryEvent,
   type IMessage,
   type InvitationRecord,
   type MessageRecord,
+  importVault,
+  snapshotVault,
 } from "../src/index.js";
 import { chatView, history, type ChatMessage } from "./chat-view.js";
 import { FakeMediator, MEDIATOR_HTTP, network } from "./fake-mediator.js";
@@ -48,6 +52,7 @@ interface Party {
   seedKey: CryptoKey;
   statuses: AgentStatus[];
   messages: { record: MessageRecord; view: ChatMessage }[];
+  deliveries: DeliveryEvent[];
   contacts: ContactRecord[];
   invitations: InvitationRecord[];
   log: string[];
@@ -79,6 +84,7 @@ function attach(
     seedKey,
     statuses: [],
     messages: [],
+    deliveries: [],
     contacts: [],
     invitations: [],
     log: [],
@@ -117,6 +123,9 @@ function attach(
           }
         }
       },
+      onDelivery(event) {
+        party.deliveries.push(event);
+      },
       onContact(contact) {
         party.contacts.push(structuredClone(contact));
       },
@@ -153,6 +162,28 @@ async function until(cond: () => boolean): Promise<void> {
   while (!cond()) {
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+/**
+ * A send that could not be delivered: the record is in the log all the
+ * same, not sent — its own try failed, or an earlier message to the same
+ * contact did and it was not tried behind it — and the latest failure's
+ * event says why. Resolves to the record.
+ */
+async function undelivered(party: Party, sending: Promise<MessageRecord>, error?: RegExp): Promise<MessageRecord> {
+  const before = party.deliveries.length;
+  const record = await sending;
+  const own = party.deliveries.filter((e) => e.mid === record.mid).at(-1);
+  expect(own?.status ?? "pending").not.toBe("sent");
+  const failure = party.deliveries.slice(before).filter((e) => e.status === "failed").at(-1);
+  expect(failure).toBeDefined();
+  if (error !== undefined) expect(failure?.error).toMatch(error);
+  return record;
+}
+
+/** The delivery state of `party`'s record, folded from the vault. */
+async function deliveryOf(party: Party, mid: string) {
+  return foldDeliveries(await party.vault.deliveries.read()).get(mid);
 }
 
 /** The DID `party` currently writes to `contactDid`'s owner from — pairwise, minted on first use. */
@@ -400,20 +431,29 @@ describe("Agent through a mediator", () => {
 
     cut = true;
     await carol.agent.addContact(bob.agent.did as string, "Bob");
-    await expect(carol.agent.sendBasicMessage(bob.agent.did as string, "into the void")).rejects.toThrow(/fetch failed/);
+    const voided = await undelivered(carol, carol.agent.sendBasicMessage(bob.agent.did as string, "into the void"), /fetch failed/);
     // the DID was minted and recorded, but the mediator never heard of it
     const record = (await carol.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     const use = currentMyDid(record);
     expect(use?.key).toBe(`${KEY_PAIRWISE_PREFIX}${record.cid}/1`);
     expect(use?.registeredAt).toBeUndefined();
     expect(mediator.recipients.has(use?.did as string)).toBe(false);
-    // nothing was logged as sent
-    expect((await carol.vault.messages.read()).filter((r) => r.direction === "out")).toHaveLength(0);
+    // the message is a fact in the log — written, not delivered: the
+    // introduction and the message itself both wait in the outbox
+    const outbound = (await carol.vault.messages.read()).filter((r) => r.direction === "out");
+    expect(outbound.map((r) => r.msg.type)).toEqual([PROFILE, BASIC_MESSAGE]);
+    // the introduction failed first — tried again ahead of the message, and
+    // failed again — and the message was not even tried behind it
+    expect(carol.deliveries.filter((e) => e.mid === outbound[0]!.mid).map((e) => e.status)).toEqual(["failed", "failed"]);
+    expect(await deliveryOf(carol, voided.mid)).toBeUndefined();
 
-    // the line comes back: the next send registers the same DID first, then goes
+    // the line comes back: the next send registers the same DID first, then
+    // sends what waited, in order, then the new message
     cut = false;
     await carol.agent.sendBasicMessage(bob.agent.did as string, "hello from carol");
     await withTimeout(bob.next((v) => v.content === "hello from carol"));
+    expect(bob.messages.filter((m) => m.view.kind === "chat").map((m) => m.view.content)).toEqual(["into the void", "hello from carol"]);
+    expect((await deliveryOf(carol, voided.mid))?.status).toBe("sent");
     const after = (await carol.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     expect(after.myDids).toHaveLength(1);
     expect(currentMyDid(after)?.did).toBe(use?.did);
@@ -423,13 +463,14 @@ describe("Agent through a mediator", () => {
     await bob.agent.sendBasicMessage(use?.did as string, "hi carol");
     await withTimeout(carol.next((v) => v.content === "hi carol"));
 
-    // a start with unregistered DIDs on record registers them before pickup
+    // a start with unregistered DIDs on record registers them before
+    // pickup, and sends what waited in the outbox
     const dan = await newParty("Dan", 10, mediator);
     await dan.agent.start();
     await withTimeout(dan.live);
     cut = true;
     await carol.agent.addContact(dan.agent.did as string, "Dan");
-    await expect(carol.agent.sendBasicMessage(dan.agent.did as string, "x")).rejects.toThrow();
+    const parked = await undelivered(carol, carol.agent.sendBasicMessage(dan.agent.did as string, "x"));
     const carolToDan = await myDidToward(carol, dan.agent.did as string);
     expect(mediator.recipients.has(carolToDan)).toBe(false);
     cut = false;
@@ -439,6 +480,10 @@ describe("Agent through a mediator", () => {
     expect(again.log).toContain("registering 1 pairwise DID(s) with the mediator");
     expect(mediator.recipients.get(carolToDan)).toBe(carol.vault.config.mediation?.me.did);
     expect(currentMyDid((await again.vault.contacts.byDid(dan.agent.did as string)) as ContactRecord)?.registeredAt).toBeDefined();
+    await withTimeout(dan.next((v) => v.content === "x"));
+    expect((await deliveryOf(again, parked.mid))?.status).toBe("sent");
+    // the reload changed nothing about the record itself: same id on the wire
+    expect(dan.messages.find((m) => m.view.content === "x")?.record.msg.id).toBe(parked.msg.id);
 
     again.agent.destroy();
     bob.agent.destroy();
@@ -463,7 +508,7 @@ describe("Agent through a mediator", () => {
     expect(mediator.recipients.has(aliceToBob)).toBe(false);
     expect(alice.vault.keystore.keys.some((k) => k.name === `${KEY_PAIRWISE_PREFIX}${record.cid}/1`)).toBe(true);
     // Bob writing to it now bounces at the mediator
-    await expect(bob.agent.sendBasicMessage(aliceToBob, "anyone there?")).rejects.toThrow();
+    await undelivered(bob, bob.agent.sendBasicMessage(aliceToBob, "anyone there?"));
     alice.agent.destroy();
     bob.agent.destroy();
   });
@@ -569,8 +614,8 @@ describe("Agent through a mediator", () => {
     await expect(carol.agent.acceptInvitation(
       invitationUrl("https://app.example/", alice2.agent.invitationMessage(second)), "Alice"
     )).resolves.toBeDefined();
-    // Carol's answer to the revoked one bounces at the mediator; her side keeps the contact for a later try
-    expect(carol.log.some((l) => l.includes("could not answer the invitation yet"))).toBe(true);
+    // Carol's answer to the revoked one bounces at the mediator; her side keeps the contact, the answer waits in her outbox
+    expect(carol.log.some((l) => l.startsWith("could not deliver user-profile/1.0/profile"))).toBe(true);
 
     // a mediator's own invitation is not a person's
     const mediatorOob = { type: "https://didcomm.org/out-of-band/2.0/invitation", id: "m", typ: "application/didcomm-plain+json", from: mediator.did, body: { goal_code: "request-mediate" } };
@@ -614,6 +659,26 @@ describe("Agent through a mediator", () => {
     await dan.agent.start();
     expect(dan.agent.status).toEqual({ state: "error", detail: "mediator DID does not resolve" });
     await expect(dan.agent.sendBasicMessage("did:peer:4x", "x")).rejects.toThrow(/no public DID/);
+    dan.agent.destroy();
+  });
+
+  it("comes up by itself once a mediator it could not reach at start is back", async () => {
+    const mediator = await newMediator();
+    const { backend, vault, seedKey } = await newVault("Eve", 7, mediator.did);
+    let down = true;
+    const flaky: typeof fetch = (input, init) =>
+      down ? Promise.reject(new TypeError("fetch failed")) : mediator.fetch(input, init);
+    const eve = attach("Eve", backend, vault, seedKey, { fetch: flaky, WebSocket: mediator.WebSocket });
+    await eve.agent.start();
+    expect(eve.agent.status.state).toBe("error");
+    // the retries keep failing while it is down…
+    await new Promise((r) => setTimeout(r, 60));
+    expect(eve.agent.status.state).toBe("error");
+    // …and the next one after it is back brings the agent up, no start() from outside
+    down = false;
+    await withTimeout(eve.live);
+    expect(eve.agent.did?.startsWith("did:peer:4")).toBe(true);
+    eve.agent.destroy();
   });
 
   it("moves to another mediator: every DID re-minted, contacts follow by from_prior, the old address dead", async () => {
@@ -729,7 +794,7 @@ describe("Agent through a mediator", () => {
     // for someone who only ever held the card, it is dead — the old mediator bounces it
     await bob.agent.sendBasicMessage(alicePub1, "old card, same alice");
     await withTimeout(alice.next((v) => v.content === "old card, same alice"));
-    await expect(dan.agent.sendBasicMessage(alicePub1, "old card")).rejects.toThrow();
+    await undelivered(dan, dan.agent.sendBasicMessage(alicePub1, "old card"));
     // the same mediator again is refused, nothing torn down
     await expect(alice.agent.setMediator(two.did)).rejects.toThrow(/already reached via/);
     expect(alice.agent.status.state).toBe("live");
@@ -859,6 +924,120 @@ describe("Agent with application protocols", () => {
   });
 });
 
+describe("Agent with an outbox", () => {
+  /** A party whose line to the mediator can be cut and restored. */
+  async function flakyParty(name: string, fill: number, mediator: FakeMediator) {
+    const { backend, vault, seedKey } = await newVault(name, fill, mediator.did);
+    const line = { cut: false };
+    const flaky: typeof fetch = (input, init) => {
+      if (line.cut) return Promise.reject(new TypeError("fetch failed"));
+      return mediator.fetch(input, init);
+    };
+    const party = attach(name, backend, vault, seedKey, { fetch: flaky, WebSocket: mediator.WebSocket });
+    return { party, line };
+  }
+
+  it("keeps what is written offline, sends it in order when the socket comes back, and never twice", async () => {
+    const mediator = await newMediator();
+    const { party: alice, line } = await flakyParty("Alice", 51, mediator);
+    const bob = await newParty("Bob", 52, mediator);
+    const carol = await newParty("Carol", 53, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start(), carol.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live, carol.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    await withTimeout(bob.next((v) => v.content === "one"));
+
+    // offline: two to Bob, one to Carol (never written to before: her
+    // introduction waits too). Every send resolves; every record is logged;
+    // nothing is sent.
+    line.cut = true;
+    const two = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "two"), /fetch failed/);
+    const three = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "three"));
+    const toCarol = await undelivered(alice, alice.agent.sendBasicMessage(carol.agent.did as string, "hi carol"));
+    expect(alice.messages.filter((m) => m.view.kind === "chat" && m.view.direction === "sent").map((m) => m.view.content)).toEqual(["one", "two", "three", "hi carol"]);
+    // "two" was tried (and failed) twice: once on its own send, once ahead
+    // of "three" — which itself was never tried, so as not to overtake it
+    expect(alice.deliveries.filter((e) => e.mid === two.mid).map((e) => e.status)).toEqual(["failed", "failed"]);
+    expect(await deliveryOf(alice, three.mid)).toBeUndefined();
+    expect((await deliveryOf(alice, two.mid))?.error).toMatch(/fetch failed/);
+
+    // the line comes back and the mediator drops Alice's socket: the
+    // reconnect drains the outbox, in order per contact
+    line.cut = false;
+    mediator.dropSocket(alice.vault.config.mediation!.me.did);
+    await withTimeout(bob.next((v) => v.content === "three"));
+    await withTimeout(carol.next((v) => v.content === "hi carol"));
+    expect(bob.messages.filter((m) => m.view.kind === "chat").map((m) => m.view.content)).toEqual(["one", "two", "three"]);
+    // Carol was introduced first, then written to
+    expect(carol.messages.filter((m) => m.view.direction === "received").map((m) => m.view.kind)).toEqual(["profile", "chat"]);
+    for (const record of [two, three, toCarol]) {
+      expect((await deliveryOf(alice, record.mid))?.status).toBe("sent");
+    }
+    // the wire ids never changed across the retries
+    expect(bob.messages.find((m) => m.view.content === "two")?.record.msg.id).toBe(two.msg.id);
+    // and a try that reached Bob but looked failed to Alice is not a second message for Bob
+    const inner = mediator.fetch;
+    let dropAnswerOnce = true;
+    (mediator as { fetch: typeof fetch }).fetch = async (input, init) => {
+      const response = await inner(input, init);
+      if (dropAnswerOnce && String(init?.body).includes("ciphertext")) {
+        dropAnswerOnce = false;
+        throw new TypeError("connection reset after the POST");
+      }
+      return response;
+    };
+    const four = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "four"), /connection reset/);
+    await withTimeout(bob.next((v) => v.content === "four"));
+    // by hand: the retry goes, and Bob keeps one "four"
+    expect((await alice.agent.retry(four.mid)).status).toBe("sent");
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "five");
+    await withTimeout(bob.next((v) => v.content === "five"));
+    expect(bob.messages.filter((m) => m.view.content === "four")).toHaveLength(1);
+    expect((await bob.vault.messages.read()).filter((r) => (r.msg.body as { content?: string }).content === "four")).toHaveLength(1);
+    await expect(alice.agent.retry(four.mid)).rejects.toThrow(/not waiting/);
+
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("does not send what an import brought in undelivered until asked by hand", async () => {
+    const mediator = await newMediator();
+    const { party: alice, line } = await flakyParty("Alice", 54, mediator);
+    const bob = await newParty("Bob", 55, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "sent before the backup");
+    await withTimeout(bob.next((v) => v.content === "sent before the backup"));
+    line.cut = true;
+    const stuck = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "written offline"));
+    const files = await snapshotVault(alice.backend);
+    alice.agent.destroy();
+
+    // restored on another device (same seed, so every DID derives): the
+    // start does not send it, though the line is up
+    const other = new MemoryBackend();
+    expect(await importVault(other, files)).toMatchObject({ kind: "restored", held: 1 });
+    const again = attach("Alice again", other, await Vault.open(other), alice.seedKey, mediator);
+    await again.agent.start();
+    await withTimeout(again.live);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
+    expect((await deliveryOf(again, stuck.mid))).toMatchObject({ status: "held", attempts: 1 });
+    // a new message to Bob goes, and does not drag the held one along
+    await again.agent.sendBasicMessage(bob.agent.did as string, "from the new device");
+    await withTimeout(bob.next((v) => v.content === "from the new device"));
+    expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
+    // by hand it goes — from the DID it was written from, which this device derives too
+    expect((await again.agent.retry(stuck.mid))).toMatchObject({ status: "sent", attempt: 2 });
+    await withTimeout(bob.next((v) => v.content === "written offline"));
+    expect((await deliveryOf(again, stuck.mid))?.status).toBe("sent");
+
+    again.agent.destroy();
+    bob.agent.destroy();
+  });
+});
+
 describe("Agent under hostile mail", () => {
   it("does not attribute an anonymous envelope to whoever its plaintext names", async () => {
     const mediator = await newMediator();
@@ -921,12 +1100,15 @@ describe("Agent under hostile mail", () => {
     await withTimeout(bob.live);
     expect(bob.agent.status).toEqual({ state: "live" });
     await withTimeout(until(() => mediator.queues.get(bob.vault.config.mediation!.me.did)?.length === 0));
-    expect(bob.log.some((l) => l.startsWith("handling a https://didcomm.org/user-profile/1.0/request-profile message from") && l.includes("failed"))).toBe(true);
+    expect(bob.log.some((l) => l.startsWith("could not deliver user-profile/1.0/profile"))).toBe(true);
     expect(bob.log).toContain(`logged an anonymous ${REQUEST_PROFILE} message; it is attributed to nobody`);
-    // the proven asker became a contact; nothing was sent for the anonymous one
+    // the proven asker became a contact and got an answer — logged, waiting
+    // in the outbox since her endpoint is dead; nothing for the anonymous one
     expect(await bob.vault.contacts.byDid(mallory.did)).not.toBeNull();
     const log = await bob.vault.messages.read();
-    expect(log.filter((r) => r.direction === "out")).toHaveLength(0);
+    const answers = log.filter((r) => r.direction === "out");
+    expect(answers.map((r) => [r.msg.type, r.msg.to?.[0]])).toEqual([[PROFILE, mallory.did]]);
+    expect((await deliveryOf(bob, answers[0]!.mid))?.status).toBe("failed");
     // both asks are facts in the log — one attributed, one not
     expect(log.filter((r) => r.msg.type === REQUEST_PROFILE).map((r) => r.sender)).toEqual([mallory.did, null]);
     bob.agent.destroy();

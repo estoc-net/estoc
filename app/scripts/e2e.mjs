@@ -362,10 +362,23 @@ try {
     await expectBubble(alice2, "hello bob", 20000);
     await alice2.waitForFunction(() => navigator.serviceWorker.controller !== null, { timeout: 10000 });
     await alice2Ctx.setOffline(true);
+    // written with no network: logged at once, marked as not sent
+    await send(alice2, "Bob", "written offline, sent later");
+    await alice2.waitForSelector('.bubble:has-text("written offline") .delivery:has-text("not sent")', { timeout: 15000 });
+    ok("offline: a message written with no network is in the thread, marked not sent");
     await alice2.reload();
     await expectBubble(alice2, "hello bob", 20000);
-    ok("offline: the app shell and history open with no network");
+    await alice2.waitForSelector('.bubble:has-text("written offline") .delivery:has-text("not sent")', { timeout: 15000 });
+    ok("offline: the app shell and history open with no network — the unsent message and its mark included");
     await alice2Ctx.setOffline(false);
+    // the network is back: the outbox delivers, the mark clears
+    await expectBubble(bob, "written offline, sent later", 30000);
+    await alice2.waitForFunction(
+      () => ![...document.querySelectorAll(".bubble")].some((b) => b.textContent.includes("written offline") && b.querySelector(".delivery") !== null),
+      null,
+      { timeout: 15000 }
+    );
+    ok("back online: the outbox delivered it to Bob and the mark cleared");
   } else {
     console.log("· no service worker (dev server?) — offline check skipped");
   }

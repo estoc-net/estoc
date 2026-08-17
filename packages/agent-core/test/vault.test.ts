@@ -12,9 +12,12 @@ import {
   KEY_MEDIATOR,
   KEY_PAIRWISE_PREFIX,
   KEY_PUBLIC,
+  DeliveryLog,
   MemoryBackend,
   MessageLog,
   Vault,
+  deliveryStatusOf,
+  foldDeliveries,
   contactFileStem,
   currentDid,
   currentMyDid,
@@ -490,5 +493,41 @@ describe("MessageLog", () => {
     await Promise.all([1, 2, 3, 4, 5].map((i) => log.append(newMessageRecord({ direction: "out", msg: msg(String(i)) }))));
     expect(overlapped).toBe(false);
     expect((await log.read()).map((r) => r.msg.id)).toEqual(["1", "2", "3", "4", "5"]);
+  });
+});
+
+describe("DeliveryLog", () => {
+  it("appends events, skips a damaged line, and folds them into one state per message", async () => {
+    const backend = new MemoryBackend();
+    const log = new DeliveryLog(backend);
+    await log.append({ mid: "m1", at: "2026-08-17T00:00:01.000Z", status: "failed", attempt: 1, error: "fetch failed" });
+    await log.append({ mid: "m1", at: "2026-08-17T00:00:02.000Z", status: "sent", attempt: 2, to: "did:peer:4bob" });
+    await log.append({ mid: "m2", at: "2026-08-17T00:00:03.000Z", status: "held", attempt: 0, error: "imported" });
+    await backend.append(".estoc/deliveries/0001.jsonl", new TextEncoder().encode('{"mid":"m3","status":"lost"}\n'));
+    const damaged: string[] = [];
+    const events = await log.read((d) => damaged.push(d.where));
+    expect(events.map((e) => `${e.mid}:${e.status}`)).toEqual(["m1:failed", "m1:sent", "m2:held"]);
+    expect(damaged).toEqual(["0001.jsonl:4"]);
+
+    const states = foldDeliveries(events);
+    expect(states.get("m1")).toEqual({ status: "sent", attempts: 2, at: "2026-08-17T00:00:02.000Z", to: "did:peer:4bob" });
+    expect(states.get("m2")).toEqual({ status: "held", attempts: 0, at: "2026-08-17T00:00:03.000Z", error: "imported" });
+    expect(deliveryStatusOf({ mid: "m1", direction: "out" }, states)).toBe("sent");
+    expect(deliveryStatusOf({ mid: "m9", direction: "out" }, states)).toBe("pending");
+    expect(deliveryStatusOf({ mid: "m1", direction: "in" }, states)).toBeNull();
+  });
+
+  it("folds sent as final, and lets time break ties across segments", () => {
+    // a merge lays another device's events in a later segment: an older
+    // failure there must not shadow our newer sent, and nothing shadows sent
+    const states = foldDeliveries([
+      { mid: "m1", at: "2026-08-17T00:00:05.000Z", status: "sent", attempt: 2 },
+      { mid: "m1", at: "2026-08-17T00:00:01.000Z", status: "failed", attempt: 1, error: "old" },
+      { mid: "m1", at: "2026-08-17T00:00:09.000Z", status: "held", attempt: 2 },
+      { mid: "m2", at: "2026-08-17T00:00:05.000Z", status: "failed", attempt: 2, error: "later" },
+      { mid: "m2", at: "2026-08-17T00:00:01.000Z", status: "failed", attempt: 1, error: "earlier" },
+    ]);
+    expect(states.get("m1")).toMatchObject({ status: "sent", attempts: 2 });
+    expect(states.get("m2")).toMatchObject({ status: "failed", attempts: 2, error: "later" });
   });
 });

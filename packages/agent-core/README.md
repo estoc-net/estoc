@@ -57,6 +57,7 @@ application's projection of the log, not the agent's decision.
   contacts/<name>.json   one mutable record per contact, cid-anchored, DID history with evidence
   invitations/<id>.json  single-use invitations issued: a DID waiting for whoever answers first
   messages/NNNN.jsonl    append-only log; readers concatenate every segment
+  deliveries/NNNN.jsonl  what became of each outbound message: sent / failed / held, per try
 ```
 
 - **DIDs in config are snapshots**, recorded when minted, and checked against
@@ -86,7 +87,24 @@ application's projection of the log, not the agent's decision.
   not parse (a crash mid-append, a corrupted byte) is reported to the reader
   and skipped, never fatal; the next append after a cut-short line first
   gives the fragment its own terminator so the two never fuse. Appends are
-  serialised per `MessageLog` instance.
+  serialised per `MessageLog` instance. (`SegmentedLog` is the shared
+  shape; the delivery log is another instance of it.)
+- **The delivery log** is where sending lives. `send` appends the record
+  first and only then tries to deliver it; the outcome of every try is an
+  event `{mid, at, status: sent | failed | held, attempt, to?, error?}` in
+  `deliveries/`, never a change to the message line. `foldDeliveries`
+  turns the events into one state per `mid` (newest wins, `sent` is
+  final); an outbound record with no event is *pending*. What is not
+  sent is the **outbox**: tried again at every start, when the mediator's
+  socket comes back, and ahead of the next message to the same contact —
+  in order per contact, stopping at that contact's first failure so a
+  conversation never arrives shuffled — on `agent.flush()` when the
+  application learns the network is back, and by hand through
+  `agent.retry(mid)`. The wire `id` never changes across tries, so a try
+  that reached the far side unnoticed is dropped there as a duplicate.
+  A record an import brings in undelivered is `held`: not tried unasked
+  (a backup is a move, not a sync), retried by hand only. `onDelivery`
+  reports every event.
 - **Attribution is the envelope's.** Inbound mail is attributed to the DID
   the authcrypt layer proves, never to the plaintext `from` (which anyone
   can type into an anonymous envelope). Anonymous mail is logged with
@@ -97,8 +115,9 @@ application's projection of the log, not the agent's decision.
   card: strangers write to it. The first message we send anyone goes out
   from a did:peer:4 minted for that relationship (`pair/<cid>/1`, service
   = the mediator's routing DID, registered with the mediator as a
-  recipient before it is used). A contact who wrote to the public DID
-  first is told about the move the DIDComm way — every message out carries
+  recipient on the first delivery from it, or at the next start). A
+  contact who wrote to the public DID first is told about the move the
+  DIDComm way — every message out carries
   `from_prior`, a JWT the DID they know signs over the one we now use,
   until a reply comes back addressed to the new DID (a contact who never
   wrote to us is taken to know the public DID, so a first message vouches
@@ -192,6 +211,7 @@ const agent = new Agent({
   events: {
     onStatus: (s) => console.log(s),
     onMessage: (record, contact) => render(record, contact), // the log record + the contact it is homed to (or null)
+    onDelivery: (event, record) => mark(record, event.status), // a try at delivering one of ours ended: sent, or failed with a reason
     onContact: (c) => refreshContacts(),
     onInvitation: (i) => refreshInvitations(),
     onLog: (line) => console.log(line),
@@ -202,7 +222,8 @@ await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the publ
 // later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
 const records = await vault.messages.read();   // the facts; what a record looks like on screen is yours to decide
 await agent.addContact(bobDid, "Bob");
-await agent.sendBasicMessage(bobDid, "hello");                 // = agent.send(bobDid, BASIC_MESSAGE, { content: "hello" })
+await agent.sendBasicMessage(bobDid, "hello");                 // = agent.send(bobDid, BASIC_MESSAGE, { content: "hello" }); logged first, then delivered — offline it waits in the outbox
+await agent.retry(mid);                                        // try one waiting message again by hand (a held one, or a failed one now)
 await agent.send(bobDid, "https://example.org/poll/1.0/question", { q: "lunch?" }, { thid }); // any protocol
 
 // an application protocol of your own: the agent logs and homes the message; you answer inside it
@@ -255,12 +276,15 @@ vault-relative path — the shape a zip holds. `importVault(backend, files)`
 lays them down and **merges, never overwrites**: into an empty backend it
 is a restore; into a vault of the same identity (same anchor DID) the
 snapshot's messages become a new log segment minus what is already here
-(same `mid`, or the same wire message received twice), its contacts win by
-`updatedAt`, its invitations are added when missing (and marked taken when
-the snapshot saw the answer), and config and keystore stay local (same
-seed; mediation is a fact about this device); a vault of a different
-identity is refused. How
-the files travel — zip, folder, paste — is the application's business.
+(same `mid`, or the same wire message received twice), its delivery
+events likewise (minus tries already here; a `held` is one device's own
+and does not travel), its contacts win by `updatedAt`, its invitations
+are added when missing (and marked taken when the snapshot saw the
+answer), and config and keystore stay local (same seed; mediation is a
+fact about this device); a vault of a different identity is refused.
+Either way, an outbound message that arrives undelivered is held for a
+retry by hand (`held` in the outcome). How the files travel — zip,
+folder, paste — is the application's business.
 
 ### Backends
 

@@ -4,16 +4,18 @@ import type { VaultBackend } from "../backend/types.js";
 import { parseConfig } from "./config.js";
 import { ContactStore, parseContact } from "./contacts.js";
 import { InvitationStore, parseInvitationRecord } from "./invitations.js";
+import { DeliveryLog, deliveryKey, foldDeliveries, type DeliveryState } from "./deliveries.js";
 import {
   CONFIG_PATH,
   CONTACTS_DIR,
+  DELIVERIES_DIR,
   INVITATIONS_DIR,
   KEYSTORE_PATH,
   MESSAGES_DIR,
   text,
-  utf8,
 } from "./layout.js";
-import { MessageLog, parseSegment, type DamagedLine, type MessageRecord } from "./messages.js";
+import type { DamagedLine, SegmentedLog } from "./log.js";
+import { MessageLog, type MessageRecord } from "./messages.js";
 
 /**
  * Moving a vault between backends: the zip a browser exports, the folder a
@@ -27,12 +29,19 @@ import { MessageLog, parseSegment, type DamagedLine, type MessageRecord } from "
  *   - Into a vault of the same identity (same anchor DID) it is a merge:
  *     the snapshot's messages become a new log segment (minus the records
  *     already here — same `mid`, or the same wire message received twice),
- *     its contacts win by `updatedAt`, its invitations are added when
+ *     its delivery events likewise (minus the tries already here), its
+ *     contacts win by `updatedAt`, its invitations are added when
  *     missing (and marked taken when the snapshot knows who took one),
  *     and its config and keystore are left alone (same seed, and mediation
  *     is a fact about *this* device).
  *   - Into a vault of a different identity it is refused. Two identities are
  *     two vaults; blending their logs would misattribute every message.
+ *
+ * Either way, an outbound message that arrives undelivered is **held**: a
+ * delivery event says so, and the agent will not try it unasked. A backup
+ * is a move, not a sync — what another copy wrote and never sent is not
+ * this copy's to send on its own, and after a merge this device may not
+ * even derive the DID it was to go from. The user retries by hand.
  *
  * Nothing here decides *how* the files travel — zip, folder upload, a
  * paste of JSON — only what they mean once they arrive.
@@ -42,13 +51,22 @@ import { MessageLog, parseSegment, type DamagedLine, type MessageRecord } from "
 export type VaultFiles = Record<string, Uint8Array>;
 
 export type ImportOutcome =
-  | { kind: "restored"; files: number }
+  | {
+      kind: "restored";
+      files: number;
+      /** outbound messages that arrived undelivered, now held for a retry by hand */
+      held: number;
+    }
   | {
       kind: "merged";
       messagesAdded: number;
       messagesSkipped: number;
       /** the new log segment, or null when nothing was new */
       segment: string | null;
+      /** delivery events not already here */
+      deliveriesAdded: number;
+      /** outbound messages that arrived undelivered, now held for a retry by hand */
+      held: number;
       contactsAdded: number;
       contactsUpdated: number;
       contactsKept: number;
@@ -65,7 +83,7 @@ export async function snapshotVault(backend: VaultBackend): Promise<VaultFiles> 
       files[path] = bytes;
     }
   }
-  for (const dir of [CONTACTS_DIR, INVITATIONS_DIR, MESSAGES_DIR]) {
+  for (const dir of [CONTACTS_DIR, INVITATIONS_DIR, MESSAGES_DIR, DELIVERIES_DIR]) {
     for (const name of (await backend.list(dir)).sort()) {
       const bytes = await backend.read(`${dir}/${name}`);
       if (bytes !== null) {
@@ -74,17 +92,6 @@ export async function snapshotVault(backend: VaultBackend): Promise<VaultFiles> 
     }
   }
   return files;
-}
-
-function nextSegment(existing: string[]): string {
-  let max = 0;
-  for (const name of existing) {
-    const match = /^(\d+)\.jsonl$/.exec(name);
-    if (match !== null) {
-      max = Math.max(max, Number(match[1]));
-    }
-  }
-  return `${String(max + 1).padStart(4, "0")}.jsonl`;
 }
 
 /** The two identities a record can carry: its local key, and the wire message it holds. */
@@ -121,7 +128,8 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
       await backend.write(path, files[path] as Uint8Array);
     }
     await backend.write(CONFIG_PATH, configBytes);
-    return { kind: "restored", files: paths.length + 1 };
+    const held = await holdUndelivered(backend, await new MessageLog(backend).read());
+    return { kind: "restored", files: paths.length + 1, held };
   }
 
   const local = parseConfig(text(localConfigBytes));
@@ -134,40 +142,20 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
 
   // messages: whatever is not already here goes into one new segment
   const damaged: DamagedLine[] = [];
-  const seen = new Set<string>();
-  for (const record of await new MessageLog(backend).read((d) => damaged.push(d))) {
-    for (const key of recordKeys(record)) {
-      seen.add(key);
-    }
-  }
-  const fresh: MessageRecord[] = [];
-  let messagesSkipped = 0;
-  const incomingSegments = Object.keys(files)
-    .filter((path) => path.startsWith(`${MESSAGES_DIR}/`) && path.endsWith(".jsonl"))
-    .sort();
-  for (const path of incomingSegments) {
-    const name = path.slice(MESSAGES_DIR.length + 1);
-    const records = parseSegment(text(files[path] as Uint8Array), name, (d) => damaged.push(d));
-    for (const record of records) {
-      const keys = recordKeys(record);
-      if (keys.some((key) => seen.has(key))) {
-        messagesSkipped += 1;
-        continue;
-      }
-      for (const key of keys) {
-        seen.add(key);
-      }
-      fresh.push(record);
-    }
-  }
-  let segment: string | null = null;
-  if (fresh.length > 0) {
-    segment = nextSegment(await backend.list(MESSAGES_DIR));
-    await backend.write(
-      `${MESSAGES_DIR}/${segment}`,
-      utf8(fresh.map((record) => JSON.stringify(record)).join("\n") + "\n")
-    );
-  }
+  const messages = await mergeLog(new MessageLog(backend), files, MESSAGES_DIR, recordKeys, damaged);
+
+  // deliveries: every try not already here — a hold is not a try but the
+  // other device's own decision, and stays there — then a hold on
+  // whatever arrived undelivered
+  const deliveries = await mergeLog(
+    new DeliveryLog(backend),
+    files,
+    DELIVERIES_DIR,
+    (event) => [deliveryKey(event)],
+    damaged,
+    (event) => event.status !== "held"
+  );
+  const held = await holdUndelivered(backend, messages.fresh);
 
   // contacts: by cid, the later updatedAt wins; a tie keeps ours
   const contacts = new ContactStore(backend);
@@ -213,13 +201,89 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
 
   return {
     kind: "merged",
-    messagesAdded: fresh.length,
-    messagesSkipped,
-    segment,
+    messagesAdded: messages.fresh.length,
+    messagesSkipped: messages.skipped,
+    segment: messages.segment,
+    deliveriesAdded: deliveries.fresh.length,
+    held,
     contactsAdded,
     contactsUpdated,
     contactsKept,
     invitationsAdded,
     damaged,
   };
+}
+
+/**
+ * Merge the incoming segments of one log into `log`: what is not already
+ * here (by `keysOf`) and passes `accept` is laid down as one new segment.
+ * Returns what was new, what was skipped, and the segment written (null
+ * when nothing was).
+ */
+async function mergeLog<T>(
+  log: SegmentedLog<T>,
+  files: VaultFiles,
+  dir: string,
+  keysOf: (record: T) => string[],
+  damaged: DamagedLine[],
+  accept: (record: T) => boolean = () => true
+): Promise<{ fresh: T[]; skipped: number; segment: string | null }> {
+  const seen = new Set<string>();
+  for (const record of await log.read((d) => damaged.push(d))) {
+    for (const key of keysOf(record)) {
+      seen.add(key);
+    }
+  }
+  const fresh: T[] = [];
+  let skipped = 0;
+  const incoming = Object.keys(files)
+    .filter((path) => path.startsWith(`${dir}/`) && path.endsWith(".jsonl"))
+    .sort();
+  for (const path of incoming) {
+    const name = path.slice(dir.length + 1);
+    for (const record of log.parse(text(files[path] as Uint8Array), name, (d) => damaged.push(d))) {
+      const keys = keysOf(record);
+      if (!accept(record) || keys.some((key) => seen.has(key))) {
+        skipped += 1;
+        continue;
+      }
+      for (const key of keys) {
+        seen.add(key);
+      }
+      fresh.push(record);
+    }
+  }
+  const segment = fresh.length > 0 ? await log.writeSegment(fresh) : null;
+  return { fresh, skipped, segment };
+}
+
+/**
+ * Hold every outbound message among `arrived` — the records an import just
+ * brought in, or on a restore every record there is — that has no `sent`
+ * behind it: append one `held` event each. Returns how many.
+ */
+async function holdUndelivered(backend: VaultBackend, arrived: MessageRecord[]): Promise<number> {
+  const outbound = arrived.filter((record) => record.direction === "out");
+  if (outbound.length === 0) {
+    return 0;
+  }
+  const deliveries = new DeliveryLog(backend);
+  const states = foldDeliveries(await deliveries.read());
+  const at = new Date().toISOString();
+  let held = 0;
+  for (const record of outbound) {
+    const state: DeliveryState | undefined = states.get(record.mid);
+    if (state?.status === "sent" || state?.status === "held") {
+      continue;
+    }
+    await deliveries.append({
+      mid: record.mid,
+      at,
+      status: "held",
+      attempt: state?.attempts ?? 0,
+      error: "imported undelivered; retry by hand",
+    });
+    held += 1;
+  }
+  return held;
 }

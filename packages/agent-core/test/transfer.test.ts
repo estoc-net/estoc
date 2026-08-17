@@ -3,9 +3,12 @@ import { createSeedKeystore } from "@estoc/keystore";
 
 import {
   CONFIG_PATH,
+  DELIVERIES_DIR,
   MESSAGES_DIR,
   MemoryBackend,
   Vault,
+  deliveryStatusOf,
+  foldDeliveries,
   importVault,
   newContact,
   newMessageRecord,
@@ -62,14 +65,60 @@ describe("snapshot + import", () => {
     ]);
 
     const other = new MemoryBackend();
-    expect(await importVault(other, files)).toEqual({ kind: "restored", files: 4 });
+    // m1 was written and never delivered: restored, it is held for a retry by hand
+    expect(await importVault(other, files)).toEqual({ kind: "restored", files: 4, held: 1 });
     for (const path of Object.keys(files)) {
       expect(dec.decode((await other.read(path)) as Uint8Array)).toBe(dec.decode(files[path] as Uint8Array));
     }
     const restored = await Vault.open(other);
     expect(restored.config.identity.anchor.did).toBe(vault.config.identity.anchor.did);
-    expect((await restored.messages.read()).map((r) => r.msg.id)).toEqual(["m1", "m2"]);
+    const records = await restored.messages.read();
+    expect(records.map((r) => r.msg.id)).toEqual(["m1", "m2"]);
     expect((await restored.contacts.all()).map((c) => c.name)).toEqual(["Bob"]);
+    const states = foldDeliveries(await restored.deliveries.read());
+    expect(deliveryStatusOf(records[0]!, states)).toBe("held");
+    expect(deliveryStatusOf(records[1]!, states)).toBeNull();
+    expect((await other.list(DELIVERIES_DIR)).sort()).toEqual(["0001.jsonl"]);
+  });
+
+  it("carries deliveries along: sent stays sent, undelivered is held, and a hold is one device's own", async () => {
+    const { backend: a, vault: va } = await vaultWith(SEED_A);
+    const sent = newMessageRecord({ direction: "out", msg: msg("sent") }, new Date(2_000));
+    const failed = newMessageRecord({ direction: "out", msg: msg("failed") }, new Date(3_000));
+    const pending = newMessageRecord({ direction: "out", msg: msg("pending") }, new Date(4_000));
+    for (const record of [sent, failed, pending]) await va.messages.append(record);
+    await va.deliveries.append({ mid: sent.mid, at: "2026-08-17T00:00:01.000Z", status: "sent", attempt: 1, to: "did:peer:4bob" });
+    await va.deliveries.append({ mid: failed.mid, at: "2026-08-17T00:00:02.000Z", status: "failed", attempt: 1, error: "fetch failed" });
+
+    // restored elsewhere: the sent one is sent, the other two held — the
+    // failed one keeping its count of tries
+    const { backend: b, vault: vb } = await restoreOf(a);
+    const onB = foldDeliveries(await vb.deliveries.read());
+    expect(onB.get(sent.mid)).toMatchObject({ status: "sent", attempts: 1 });
+    expect(onB.get(failed.mid)).toMatchObject({ status: "held", attempts: 1, error: expect.stringMatching(/retry by hand/) });
+    expect(onB.get(pending.mid)).toMatchObject({ status: "held", attempts: 0 });
+
+    // B tries the failed one by hand and it goes; B also writes one of its own and never sends it
+    await vb.deliveries.append({ mid: failed.mid, at: "2026-08-17T00:01:00.000Z", status: "sent", attempt: 2, to: "did:peer:4bob" });
+    const b1 = newMessageRecord({ direction: "out", msg: msg("b1") }, new Date(5_000));
+    await vb.messages.append(b1);
+
+    // B into A: A learns the failed one went (2 tries), b1 arrives and is
+    // held here, and B's holds on A's own messages do not travel — the
+    // pending one is still A's to send
+    const outcome = await importVault(a, await snapshotVault(b));
+    expect(outcome).toMatchObject({ kind: "merged", messagesAdded: 1, deliveriesAdded: 1, held: 1 });
+    const onA = foldDeliveries(await va.deliveries.read());
+    expect(onA.get(sent.mid)).toMatchObject({ status: "sent", attempts: 1 });
+    expect(onA.get(failed.mid)).toMatchObject({ status: "sent", attempts: 2 });
+    expect(onA.get(pending.mid)).toBeUndefined();
+    expect(onA.get(b1.mid)).toMatchObject({ status: "held", attempts: 0 });
+    expect((await a.list(DELIVERIES_DIR)).sort()).toEqual(["0001.jsonl", "0002.jsonl"]);
+
+    // again: nothing new, nothing held twice
+    expect(await importVault(a, await snapshotVault(b))).toMatchObject({ deliveriesAdded: 0, held: 0 });
+    // A's tries after the merge count on from what it knows
+    expect(foldDeliveries(await va.deliveries.read()).get(b1.mid)?.attempts).toBe(0);
   });
 
   it("merges a second device's snapshot: new messages in a new segment, contacts by updatedAt, nothing twice", async () => {
@@ -110,6 +159,8 @@ describe("snapshot + import", () => {
       messagesAdded: 1, // b1
       messagesSkipped: 3, // a1, a2 (same mid), shared (same wire message)
       segment: "0002.jsonl",
+      deliveriesAdded: 0,
+      held: 1, // b1: written on B, never sent
       contactsAdded: 1, // Carol
       contactsUpdated: 1, // Bob → Robert
       contactsKept: 0,
