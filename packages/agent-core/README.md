@@ -18,7 +18,7 @@ Agent                        envelopes · attribution · the log · mediation ·
   ├─ protocol/handler        the seam for application protocols; basicmessage 2.0 and user-profile 1.0 ship as handlers
   ├─ protocol/               resolver (did:web + did:peer), mediator input, out-of-band helpers
   ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v3)
-  └─ Vault                   the .estoc format: config · keystore · contacts · message log
+  └─ Vault                   the .estoc format: config · keystore · contacts · invitations · message log · delivery log
        └─ VaultBackend       bytes: OpfsBackend (browser) · MemoryBackend (tests, snapshots)
 ```
 
@@ -59,9 +59,9 @@ the repository root; this package is its reference implementation.
   keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a plaintext cache of key names
   contacts/<cid>.json    record: one mutable file per contact, DID history with evidence
   invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
-  messages/<uuid>.jsonl  log: append-only; segments named by uuidv7, read in name order
-  deliveries/<uuid>.jsonl log: what became of each outbound message: sent / failed / held, per try
-  state/ blobs/ cache/   reserved (per-person state · attachment bytes · rebuildable, never snapshotted)
+  messages/<uuidv7>.jsonl    log: append-only; segments named by uuidv7, read in name order
+  deliveries/<uuidv7>.jsonl  log: what became of each outbound message: sent / failed / held, per try
+  state/ blobs/ cache/       reserved (per-person state · attachment bytes · rebuildable, never snapshotted)
 ```
 
 - **Key names are derivation paths.** The seed and a name give the key
@@ -73,8 +73,11 @@ the repository root; this package is its reference implementation.
   mediation's uuidv7, `pair/<cid>/<uuidv7>`, `invite/<id>`.
 
 - **DIDs in config are snapshots**, recorded when minted, and checked against
-  the seed on open (`Vault.peerIdentity`). Rotating a mediator later never
-  silently renames an identity.
+  the seed rather than recomputed: the anchor first, at every start
+  (`Vault.verifyAnchor` — a seed that does not derive it is the wrong
+  keystore for this vault), every other ref as it comes into use
+  (`Vault.peerIdentity`). Rotating a mediator later never silently renames
+  an identity.
 - **The mediator is not part of the identity.** A vault is created from a
   seed and a name alone (`mediation: null`); `Vault.setMediator` names a
   mediator later and mints the DID it will know the vault by. The public
@@ -88,7 +91,8 @@ the repository root; this package is its reference implementation.
   `registeredAt` once the mediator accepts it). `addressedAs` is the DID
   of ours their latest envelope was sealed to — what decides whether the
   next message out needs `from_prior`. The file is named by `cid`, so a
-  record has one home for life; the petname lives inside it.
+  record has one home for life; the petname lives inside it, and
+  `updatedAt`, stamped on every write, is what a merge compares.
 - **The message log** stores each event as
   `{mid, at, direction, sender?, msg}`: `mid` is the local primary key
   (uuidv7, assigned at append), `msg` the plaintext exactly as it arrived
@@ -125,7 +129,7 @@ the repository root; this package is its reference implementation.
   and reaches no handler — there is nobody to answer.
 - **Pairwise DIDs, rotation by `from_prior`.** The public DID is a business
   card: strangers write to it. The first message we send anyone goes out
-  from a did:peer:4 minted for that relationship (`pair/<cid>/<uuid>`, service
+  from a did:peer:4 minted for that relationship (`pair/<cid>/<uuidv7>`, service
   = the mediator's routing DID, registered with the mediator as a
   recipient on the first delivery from it, or at the next start). A
   contact who wrote to the public DID first is told about the move the
@@ -294,7 +298,8 @@ segment minus what is already here (same `mid`, or the same wire message
 received twice), its delivery events likewise (minus tries already here;
 a `held` is one device's own and does not travel), its contacts win by
 `updatedAt`, its invitations are added when missing (and marked taken
-when the snapshot saw the answer), its config stays local (mediation is a
+when the snapshot saw the answer — only `acceptedBy`/`acceptedAt` cross
+over; `registeredAt` is this device's own), its config stays local (mediation is a
 fact about this device), its keystore's key cache is unioned by name over
 this device's sealed seed, and any other path is copied when absent and
 never overwritten; a vault of a different identity is refused.
