@@ -18,7 +18,7 @@ import {
   Vault,
   deliveryStatusOf,
   foldDeliveries,
-  contactFileStem,
+  contactFile,
   currentDid,
   currentMyDid,
   mediationGeneration,
@@ -326,19 +326,20 @@ describe("config.json", () => {
 });
 
 describe("ContactStore", () => {
-  it("puts, finds by any historical DID, renames the file, survives reload", async () => {
+  it("puts, finds by any historical DID, keeps one cid-named file through renames, survives reload", async () => {
     const backend = new MemoryBackend();
     const store = new ContactStore(backend);
     const alice = newContact("Alice", "did:peer:4old");
     await store.put(alice);
-    expect(await backend.list(".estoc/contacts")).toEqual(["Alice.json"]);
+    expect(await backend.list(".estoc/contacts")).toEqual([`${alice.cid}.json`]);
+    expect(contactFile(alice.cid)).toBe(`.estoc/contacts/${alice.cid}.json`);
 
     // She rotates: the old DID closes, the new one opens with evidence.
     alice.dids[0]!.until = "2026-08-15T00:00:00.000Z";
     alice.dids.push({ did: "did:peer:4new", from: "2026-08-15T00:00:00.000Z", fromPrior: "eyJ" });
     alice.name = "Alice Liddell";
     await store.put(alice);
-    expect(await backend.list(".estoc/contacts")).toEqual(["Alice_Liddell.json"]);
+    expect(await backend.list(".estoc/contacts")).toEqual([`${alice.cid}.json`]);
 
     const reloaded = new ContactStore(backend);
     expect((await reloaded.byDid("did:peer:4old"))?.cid).toBe(alice.cid);
@@ -348,47 +349,20 @@ describe("ContactStore", () => {
     expect((await reloaded.all()).map((c) => c.name)).toEqual(["Alice Liddell"]);
   });
 
-  it("keeps two contacts with the same petname in different files", async () => {
+  it("keeps two contacts with the same petname apart, and removes by cid", async () => {
     const backend = new MemoryBackend();
     const store = new ContactStore(backend);
     const a = newContact("Sam", "did:peer:4a", new Date(1_000));
     const b = newContact("Sam", "did:peer:4b", new Date(2_000));
     await store.put(a);
     await store.put(b);
-    const files = (await backend.list(".estoc/contacts")).sort();
-    expect(files).toEqual(["Sam.json", `Sam-${b.cid.slice(0, 8)}.json`].sort());
+    expect((await backend.list(".estoc/contacts")).sort()).toEqual([`${a.cid}.json`, `${b.cid}.json`].sort());
     const reloaded = new ContactStore(backend);
     expect((await reloaded.all()).map((c) => c.cid)).toEqual([a.cid, b.cid]);
     await reloaded.remove(a.cid);
     expect(await reloaded.byDid("did:peer:4a")).toBeNull();
-    expect((await backend.list(".estoc/contacts")).length).toBe(1);
-  });
-
-  it("derives safe file stems", () => {
-    expect(contactFileStem("Alice")).toBe("Alice");
-    expect(contactFileStem("did:peer:4zQm…abcdef")).toBe("did_peer_4zQm...abcdef");
-    expect(contactFileStem("../../etc")).toBe("etc");
-    expect(contactFileStem("   ")).toBe("contact");
-    expect(contactFileStem("王小明")).toBe("王小明");
-  });
-
-  it("heals a rename that crashed between writing the new file and removing the old", async () => {
-    const backend = new MemoryBackend();
-    const store = new ContactStore(backend);
-    const a = newContact("A", "did:peer:4a");
-    await store.put(a);
-    // the crash: the record renamed to "B" is written, A.json is still there
-    await new Promise((r) => setTimeout(r, 2));
-    const renamed = { ...structuredClone(a), name: "B", updatedAt: new Date().toISOString() };
-    await backend.write(".estoc/contacts/B.json", new TextEncoder().encode(JSON.stringify(renamed)));
-    const reloaded = new ContactStore(backend);
-    expect((await reloaded.all()).map((c) => c.name)).toEqual(["B"]);
-    // the older file is gone, and later puts keep following the name
-    expect(await backend.list(".estoc/contacts")).toEqual(["B.json"]);
-    const b = (await reloaded.byCid(a.cid)) as ContactRecord;
-    b.name = "C";
-    await reloaded.put(b);
-    expect(await backend.list(".estoc/contacts")).toEqual(["C.json"]);
+    expect(await backend.list(".estoc/contacts")).toEqual([`${b.cid}.json`]);
+    await reloaded.remove("no-such-cid");
   });
 
   it("hands out copies: a field changed without put is not saved and does not leak into the cache", async () => {

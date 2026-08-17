@@ -10,10 +10,10 @@ import { CONTACTS_DIR, prettyJson, text, utf8 } from "./layout.js";
  * evidence — a `from_prior` JWT signed by the old DID proves the hop — so
  * a message from any DID the contact ever used still finds its person.
  *
- * File names are a readable handle derived from the petname; the record
- * inside is the truth. Renaming moves the file, and a name that collides
- * with another contact's file gets a cid suffix — the directory stays
- * greppable without ever being the source of identity.
+ * Files are named by cid — `contacts/<cid>.json` — so a record has one
+ * home for life: renaming rewrites it in place, two petnames alike never
+ * collide, and a `put` is a single write with nothing to clean up after.
+ * The petname is inside the record, where it belongs.
  */
 
 export interface DidUse {
@@ -186,78 +186,52 @@ export function parseContact(json: string, file: string): ContactRecord {
   return c as ContactRecord;
 }
 
-/** A file-name-safe handle for a petname; never empty. */
-export function contactFileStem(name: string): string {
-  const stem = name
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
-    .replace(/^[._]+|[._]+$/g, "")
-    .slice(0, 64);
-  return stem === "" ? "contact" : stem;
+/** The file a contact record lives in. */
+export function contactFile(cid: string): string {
+  return `${CONTACTS_DIR}/${cid}.json`;
 }
 
 export class ContactStore {
-  /** cid → file name, once loaded */
-  private files: Map<string, string> | null = null;
-  private records = new Map<string, ContactRecord>();
+  private records: Map<string, ContactRecord> | null = null;
 
   constructor(private readonly backend: VaultBackend) {}
 
-  /**
-   * Read every contact file once. Two files carrying the same cid are the
-   * residue of a rename that crashed between writing the new file and
-   * removing the old (see `put`): the later `updatedAt` is the survivor,
-   * the other file is dropped here — the store heals on open rather than
-   * refusing to.
-   */
-  private async load(): Promise<Map<string, string>> {
-    if (this.files !== null) {
-      return this.files;
+  /** Read every contact file once. */
+  private async load(): Promise<Map<string, ContactRecord>> {
+    if (this.records !== null) {
+      return this.records;
     }
-    const files = new Map<string, string>();
+    const records = new Map<string, ContactRecord>();
     for (const file of await this.backend.list(CONTACTS_DIR)) {
       if (!file.endsWith(".json")) {
         continue;
       }
       const bytes = await this.backend.read(`${CONTACTS_DIR}/${file}`);
-      if (bytes === null) {
-        continue;
+      if (bytes !== null) {
+        const record = parseContact(text(bytes), file);
+        records.set(record.cid, record);
       }
-      const record = parseContact(text(bytes), file);
-      const rival = this.records.get(record.cid);
-      if (rival !== undefined) {
-        const rivalFile = files.get(record.cid) as string;
-        const keepNew = (record.updatedAt ?? "") > (rival.updatedAt ?? "");
-        await this.backend.remove(`${CONTACTS_DIR}/${keepNew ? rivalFile : file}`);
-        if (!keepNew) {
-          continue;
-        }
-      }
-      files.set(record.cid, file);
-      this.records.set(record.cid, record);
     }
-    this.files = files;
-    return files;
+    this.records = records;
+    return records;
   }
 
   /** Every contact, in creation order (cids are time-ordered). */
   async all(): Promise<ContactRecord[]> {
-    await this.load();
-    return [...this.records.values()]
+    const records = await this.load();
+    return [...records.values()]
       .sort((a, b) => (a.cid < b.cid ? -1 : 1))
       .map((record) => structuredClone(record));
   }
 
   async byCid(cid: string): Promise<ContactRecord | null> {
-    await this.load();
-    const record = this.records.get(cid);
+    const record = (await this.load()).get(cid);
     return record === undefined ? null : structuredClone(record);
   }
 
   /** The contact who has ever used `did`, current or historical. */
   async byDid(did: string): Promise<ContactRecord | null> {
-    await this.load();
-    for (const record of this.records.values()) {
+    for (const record of (await this.load()).values()) {
       if (record.dids.some((use) => use.did === did)) {
         return structuredClone(record);
       }
@@ -266,7 +240,7 @@ export class ContactStore {
   }
 
   /**
-   * Create or replace the record with this cid; the file follows the name.
+   * Create or replace the record with this cid — one write to its file.
    * Readers get copies and writers hand in copies: nothing you hold aliases
    * the cache, so a field changed without `put` is simply not saved —
    * never half-saved. `updatedAt` is stamped here — unless the caller is
@@ -274,37 +248,20 @@ export class ContactStore {
    * restamping would make old news look newer than what it merges into.
    */
   async put(record: ContactRecord, options: { keepUpdatedAt?: boolean } = {}): Promise<void> {
-    const files = await this.load();
+    const records = await this.load();
     if (!options.keepUpdatedAt || record.updatedAt === undefined) {
       record.updatedAt = new Date().toISOString();
     }
-    const previous = files.get(record.cid);
-    const stem = contactFileStem(record.name);
-    let file = `${stem}.json`;
-    const taken = [...files.entries()].some(
-      ([cid, name]) => cid !== record.cid && name === file
-    );
-    if (taken) {
-      file = `${stem}-${record.cid.slice(0, 8)}.json`;
-    }
-    await this.backend.write(`${CONTACTS_DIR}/${file}`, utf8(prettyJson(record)));
-    if (previous !== undefined && previous !== file) {
-      // rename: the new file is already down, so a crash here leaves two
-      // files with one cid, which `load` resolves by updatedAt
-      await this.backend.remove(`${CONTACTS_DIR}/${previous}`);
-    }
-    files.set(record.cid, file);
-    this.records.set(record.cid, structuredClone(record));
+    await this.backend.write(contactFile(record.cid), utf8(prettyJson(record)));
+    records.set(record.cid, structuredClone(record));
   }
 
   async remove(cid: string): Promise<void> {
-    const files = await this.load();
-    const file = files.get(cid);
-    if (file === undefined) {
+    const records = await this.load();
+    if (!records.has(cid)) {
       return;
     }
-    await this.backend.remove(`${CONTACTS_DIR}/${file}`);
-    files.delete(cid);
-    this.records.delete(cid);
+    await this.backend.remove(contactFile(cid));
+    records.delete(cid);
   }
 }

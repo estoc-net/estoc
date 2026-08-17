@@ -5,7 +5,7 @@
  *   .estoc/
  *     config.json          label, identity anchor, mediation snapshot
  *     keystore.json        @estoc/keystore v2: one sealed seed + key index
- *     contacts/<name>.json one mutable record per contact, cid-anchored
+ *     contacts/<cid>.json  one mutable record per contact
  *     invitations/<id>.json  single-use invitations issued, by message id
  *     messages/NNNN.jsonl  append-only log; readers take every segment
  *     deliveries/NNNN.jsonl  what became of each outbound message, same shape

@@ -59,7 +59,7 @@ describe("snapshot + import", () => {
     const files = await snapshotVault(backend);
     expect(Object.keys(files).sort()).toEqual([
       ".estoc/config.json",
-      ".estoc/contacts/Bob.json",
+      `.estoc/contacts/${bob.cid}.json`,
       ".estoc/keystore.json",
       ".estoc/messages/0001.jsonl",
     ]);
@@ -170,8 +170,8 @@ describe("snapshot + import", () => {
     const merged = await Vault.open(a);
     expect((await merged.messages.read()).map((r) => r.msg.id)).toEqual(["a1", "a2", "a3", "shared", "b1"]);
     expect((await merged.contacts.all()).map((c) => c.name)).toEqual(["Robert", "Carol"]);
-    // the file followed the name, and the old one is gone
-    expect((await a.list(".estoc/contacts")).sort()).toEqual(["Carol.json", "Robert.json"]);
+    // one cid-named file each: the rename rewrote Bob's in place
+    expect((await a.list(".estoc/contacts")).sort()).toEqual([`${bob.cid}.json`, `${carol.cid}.json`].sort());
     // B's stamp survived the merge (no restamping on relay)
     expect(((await merged.contacts.byCid(bob.cid)) as ContactRecord).updatedAt).toBe(bobOnB.updatedAt);
 

@@ -26,7 +26,7 @@ export {
 export { parseConfig, type KeyRef, type Mediation, type VaultConfig } from "./vault/config.js";
 export {
   ContactStore,
-  contactFileStem,
+  contactFile,
   currentDid,
   currentMyDid,
   didPlaceholder,

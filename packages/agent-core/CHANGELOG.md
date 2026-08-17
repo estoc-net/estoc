@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0 — 2026-08-17
+
+- **Contact files are named by cid.** `contacts/<cid>.json` replaces
+  `contacts/<petname>.json`: a record has one home for life, so a rename
+  is one write in place (no write-then-remove window to heal), two alike
+  petnames never collide, and the store keeps no name map. `contactFile
+  (cid)` gives the path; `contactFileStem` is gone. No migration: no
+  vault outside the author's hands predates this.
+
 ## 0.11.0 — 2026-08-17
 
 - **Write first, then deliver: the outbox.** `Agent.send` (and every

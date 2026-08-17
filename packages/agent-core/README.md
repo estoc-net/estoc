@@ -54,7 +54,7 @@ application's projection of the log, not the agent's decision.
 .estoc/
   config.json            label, identity anchor, mediation snapshot
   keystore.json          @estoc/keystore v2 — one sealed seed + a plaintext key index
-  contacts/<name>.json   one mutable record per contact, cid-anchored, DID history with evidence
+  contacts/<cid>.json    one mutable record per contact, DID history with evidence
   invitations/<id>.json  single-use invitations issued: a DID waiting for whoever answers first
   messages/NNNN.jsonl    append-only log; readers concatenate every segment
   deliveries/NNNN.jsonl  what became of each outbound message: sent / failed / held, per try
@@ -75,8 +75,8 @@ application's projection of the log, not the agent's decision.
   ours toward them (`myDids[]`: the keystore `key` that derives each, and
   `registeredAt` once the mediator accepts it). `addressedAs` is the DID
   of ours their latest envelope was sealed to — what decides whether the
-  next message out needs `from_prior`. The file name is a readable handle
-  derived from the petname; the record is the truth.
+  next message out needs `from_prior`. The file is named by `cid`, so a
+  record has one home for life; the petname lives inside it.
 - **The message log** stores each event as
   `{mid, at, direction, sender?, msg}`: `mid` is the local primary key
   (uuidv7, assigned at append), `msg` the plaintext exactly as it arrived
