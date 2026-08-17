@@ -61,8 +61,9 @@ Agent                        mediation · pickup · live delivery · routing
 - **Attribution is the envelope's.** Inbound mail is attributed to the DID
   the authcrypt layer proves, never to the plaintext `from` (which anyone
   can type into an anonymous envelope). Anonymous mail is logged with
-  `sender: null`, belongs to no contact's thread (`chatView` yields null),
-  and cannot rename a contact or be answered with a profile.
+  `sender: null`, belongs to no contact (`counterpartyOf` yields null, and
+  `onMessage` hands it over with no contact), and cannot rename a contact
+  or be answered with a profile.
 - **Pairwise DIDs, rotation by `from_prior`.** The public DID is a business
   card: strangers write to it. The first message we send anyone goes out
   from a did:peer:4 minted for that relationship (`pair/<cid>/1`, service
@@ -161,16 +162,16 @@ const agent = new Agent({
   didcomm: { Message, FromPrior },
   events: {
     onStatus: (s) => console.log(s),
-    onMessage: (record, view) => render(view),   // view: ChatMessage projection, homed by view.contactCid
+    onMessage: (record, contact) => render(record, contact), // the log record + the contact it is homed to (or null)
     onContact: (c) => refreshContacts(),
     onInvitation: (i) => refreshInvitations(),
     onLog: (line) => console.log(line),
   },
 });
-await agent.start();               // no mediator yet → status "unmediated"; history still reads
+await agent.start();               // no mediator yet → status "unmediated"; the log still reads
 await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the public DID, go live — or, later, move to another
 // later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
-const history = await agent.history();
+const records = await vault.messages.read();   // the facts; what a record looks like on screen is yours to decide
 await agent.addContact(bobDid, "Bob");
 await agent.sendBasicMessage(bobDid, "hello");
 

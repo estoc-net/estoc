@@ -43,6 +43,7 @@ export {
 } from "./vault/invitations.js";
 export {
   MessageLog,
+  counterpartyOf,
   newMessageRecord,
   parseSegment,
   type DamagedLine,
@@ -91,7 +92,6 @@ export {
   parseInvitation,
   type Invitation,
 } from "./protocol/oob.js";
-export { chatView, type ChatMessage } from "./protocol/chat.js";
 
 export {
   Agent,

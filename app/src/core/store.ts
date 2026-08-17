@@ -3,7 +3,6 @@ import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import {
   Agent,
   Vault,
-  chatView,
   currentDid,
   currentMyDid,
   invitationMessage,
@@ -18,6 +17,7 @@ import {
 
 import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
 import { exportBackup, importBackup, saveFile } from "./backup.js";
+import { chatView } from "./chat.js";
 import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
 import { acquireVaultLock } from "./lock.js";
 import { isInstalled, setupPwa } from "./pwa.js";
@@ -183,7 +183,10 @@ async function attachAgent(): Promise<void> {
         state.status = status;
         identity.did = a.did;
       },
-      onMessage(_record, view: ChatMessage) {
+      onMessage(record, contact) {
+        const view = chatView(record);
+        if (view === null) return;
+        if (contact !== null) view.contactCid = contact.cid;
         identity.messages.push(view);
       },
       onContact(record) {

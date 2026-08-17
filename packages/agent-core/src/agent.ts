@@ -3,7 +3,6 @@ import { base64urlToUtf8 } from "@estoc/did-peer";
 import type { DIDDoc, Secret } from "@estoc/did-peer";
 
 import { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
-import { chatView, type ChatMessage } from "./protocol/chat.js";
 import {
   didOf,
   endpointOf,
@@ -43,7 +42,7 @@ import {
   type MyDidUse,
 } from "./vault/contacts.js";
 import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
-import { newMessageRecord, type MessageRecord } from "./vault/messages.js";
+import { counterpartyOf, newMessageRecord, type MessageRecord } from "./vault/messages.js";
 import { isRelationshipKey, KEY_PUBLIC, mediationGeneration, mediationKeyName, type Vault } from "./vault/vault.js";
 
 /**
@@ -99,8 +98,13 @@ export type AgentStatus =
 
 export interface AgentEvents {
   onStatus(status: AgentStatus): void;
-  /** a chat-visible record was appended (sent or received), with its projection */
-  onMessage(record: MessageRecord, view: ChatMessage): void;
+  /**
+   * A record was appended to the log (sent or received), with the contact
+   * it is homed to through the DID histories — null when the envelope was
+   * anonymous or no contact has ever used that DID. What to show of it is
+   * the application's projection.
+   */
+  onMessage(record: MessageRecord, contact: ContactRecord | null): void;
   /** the agent created or changed a contact (a stranger's first message, a claimed name, a DID minted toward them, a rotation) */
   onContact(contact: ContactRecord): void;
   /** an invitation of ours was issued, taken, or revoked */
@@ -143,6 +147,13 @@ interface Opened {
 /** The stand-in petname an auto-created contact carries until something names it. */
 export function didPlaceholder(did: string): string {
   return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
+}
+
+/** The displayName a user-profile/1.0 `profile` message announces, or null when it names none. */
+function announcedName(profile: IMessage): string | null {
+  const body = profile.body as { profile?: { displayName?: unknown } };
+  const name = body.profile?.displayName;
+  return typeof name === "string" && name !== "" ? name : null;
 }
 
 /**
@@ -229,40 +240,11 @@ export class Agent {
     return secrets;
   }
 
-  /**
-   * The chat projection of everything in the log, in log order, each
-   * message homed to its contact through the DID histories.
-   */
-  async history(): Promise<ChatMessage[]> {
-    const cidOf = new Map<string, string>();
-    for (const contact of await this.vault.contacts.all()) {
-      for (const use of contact.dids) {
-        cidOf.set(use.did, contact.cid);
-      }
-    }
-    const views: ChatMessage[] = [];
-    for (const record of await this.vault.messages.read()) {
-      const view = chatView(record);
-      if (view !== null) {
-        const cid = cidOf.get(view.contactDid);
-        views.push(cid === undefined ? view : { ...view, contactCid: cid });
-      }
-    }
-    return views;
-  }
-
-  /** Project a record for the UI and tell it — homed to its contact when one is known. */
-  private async emitMessage(record: MessageRecord): Promise<ChatMessage | null> {
-    const view = chatView(record);
-    if (view === null) {
-      return null;
-    }
-    const contact = await this.vault.contacts.byDid(view.contactDid);
-    if (contact !== null) {
-      view.contactCid = contact.cid;
-    }
-    this.events.onMessage?.(record, view);
-    return view;
+  /** Tell the application about a record — homed to its contact when one is known. */
+  private async emitMessage(record: MessageRecord): Promise<void> {
+    const did = counterpartyOf(record);
+    const contact = did === null ? null : await this.vault.contacts.byDid(did);
+    this.events.onMessage?.(record, contact);
   }
 
   /**
@@ -843,11 +825,11 @@ export class Agent {
       // themself.
       if (counterparty !== null) {
         const contact = await this.ensureContact(counterparty, recipient);
-        const view = chatView(record);
-        if (view !== null && view.kind === "profile" && view.content !== "") {
-          contact.claimedName = view.content;
+        const claimed = inner.type === PROFILE ? announcedName(inner) : null;
+        if (claimed !== null) {
+          contact.claimedName = claimed;
           if (contact.name === didPlaceholder(currentDid(contact))) {
-            contact.name = view.content;
+            contact.name = claimed;
           }
           await this.vault.contacts.put(contact);
           this.events.onContact?.(contact);
@@ -1050,13 +1032,14 @@ export class Agent {
     }
   }
 
-  private async logOutbound(plain: IMessage): Promise<ChatMessage> {
+  private async logOutbound(plain: IMessage): Promise<MessageRecord> {
     const record = newMessageRecord({
       direction: "out",
       msg: plain as unknown as MessageRecord["msg"],
     });
     await this.vault.messages.append(record);
-    return (await this.emitMessage(record)) as ChatMessage;
+    await this.emitMessage(record);
+    return record;
   }
 
   /**
@@ -1298,7 +1281,8 @@ export class Agent {
     plain.from_prior = jwt;
   }
 
-  async sendBasicMessage(contactDid: string, text: string): Promise<ChatMessage> {
+  /** Send a basicmessage/2.0; resolves to the appended log record. */
+  async sendBasicMessage(contactDid: string, text: string): Promise<MessageRecord> {
     if (this.pub === null) {
       throw new Error(
         this.vault.config.mediation === null

@@ -64,6 +64,19 @@ export function newMessageRecord(
   };
 }
 
+/**
+ * The DID on the other side of a record: for inbound mail the DID the
+ * envelope proved sent it, for outbound the addressee. Null for an
+ * anonymous inbound envelope — the plaintext `from` is unverified and is
+ * never used for attribution, so such a record belongs to nobody.
+ */
+export function counterpartyOf(record: MessageRecord): string | null {
+  if (record.direction === "in") {
+    return record.sender ?? null;
+  }
+  return record.msg.to?.[0] ?? null;
+}
+
 function parseLine(line: string, where: string): MessageRecord {
   const record = JSON.parse(line) as Partial<MessageRecord>;
   if (

@@ -1,6 +1,6 @@
 {
   "name": "@estoc/agent-core",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery and hand-layered packing over an .estoc vault (config, seed keystore, contacts, append-only message log) stored through a pluggable VaultBackend — OPFS in the browser, memory for tests. Runs wherever didcomm-rust's WASM does.",
   "license": "Apache-2.0",
   "author": "merely",

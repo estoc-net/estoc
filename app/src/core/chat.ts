@@ -1,12 +1,13 @@
-import type { MessageRecord } from "../vault/messages.js";
-import { BASIC_MESSAGE, PROFILE } from "./types.js";
+import { BASIC_MESSAGE, PROFILE, type MessageRecord } from "@estoc/agent-core";
 
 /**
  * The chat projection of a log record: what a thread view renders. Only
  * basicmessage/2.0 and user-profile/1.0 profile messages project; the
  * mediator's coordination traffic, anything unknown, and inbound mail the
  * envelope did not attribute to anyone yield null.
- * A projection, not a copy — the log record stays the fact.
+ * A projection, not a copy — the log record in the vault stays the fact.
+ * This lives in the app, not agent-core: the library hands out records
+ * and the contact they belong to; how they look on screen is ours.
  */
 export interface ChatMessage {
   /** the log record's mid */
@@ -20,8 +21,7 @@ export interface ChatMessage {
   /**
    * The contact this belongs to, resolved through the contacts' DID
    * histories — so a thread survives the contact rotating to a new DID.
-   * Set by the agent (`history()` and `onMessage`); `chatView` alone does
-   * not know the contacts. Absent when no contact has ever used the DID.
+   * Absent when no contact has ever used the DID.
    */
   contactCid?: string;
   content: string;

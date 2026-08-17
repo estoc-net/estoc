@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0 — 2026-08-17
+
+- **The chat projection leaves the library.** `chatView`, `ChatMessage`
+  and `Agent.history()` are gone: agent-core hands out log records and
+  says which contact they belong to; what a record looks like on screen
+  (which types show, what "content" is, sent/received wording) is the
+  application's projection, not the protocol layer's. `onMessage` is now
+  `(record: MessageRecord, contact: ContactRecord | null)` — the contact
+  the record is homed to through the DID histories, null for an anonymous
+  envelope or a DID no contact has used (the attribution rule stays here:
+  the plaintext `from` is never consulted). It fires for every appended
+  record, anonymous ones included. `sendBasicMessage` resolves to the
+  appended `MessageRecord`. New `counterpartyOf(record)`: the proven sender
+  for inbound, the addressee for outbound, null for anonymous mail. Read the
+  log with `vault.messages.read()` and project it yourself — the app's copy
+  of the old projection is `app/src/core/chat.ts`.
+
 ## 0.8.0 — 2026-08-16
 
 - **Changing mediator = rotating every DID.** `Vault.setMediator` and

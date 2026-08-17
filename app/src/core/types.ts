@@ -1,4 +1,5 @@
-import type { AgentStatus, ChatMessage, ImportOutcome, Invitation } from "@estoc/agent-core";
+import type { AgentStatus, ImportOutcome, Invitation } from "@estoc/agent-core";
+import type { ChatMessage } from "./chat.js";
 
 export type { AgentStatus, ChatMessage, ImportOutcome, Invitation };
 

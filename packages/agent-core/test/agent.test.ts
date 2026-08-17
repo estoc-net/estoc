@@ -24,12 +24,12 @@ import {
   parseInvitation,
   secretsResolverFor,
   type AgentStatus,
-  type ChatMessage,
   type ContactRecord,
   type IMessage,
   type InvitationRecord,
   type MessageRecord,
 } from "../src/index.js";
+import { chatView, history, type ChatMessage } from "./chat-view.js";
 import { FakeMediator, MEDIATOR_HTTP, network } from "./fake-mediator.js";
 
 const didcomm = { Message, FromPrior };
@@ -102,7 +102,10 @@ function attach(
         party.statuses.push(status);
         if (status.state === "live") resolveLive();
       },
-      onMessage(record, view) {
+      onMessage(record, contact) {
+        const view = chatView(record);
+        if (view === null) return;
+        if (contact !== null) view.contactCid = contact.cid;
         party.messages.push({ record, view });
         for (const w of [...waiters]) {
           if (w.pred(view)) {
@@ -177,8 +180,8 @@ describe("Agent through a mediator", () => {
     // Alice names Bob and writes; the intro (user-profile) rides ahead.
     await alice.agent.addContact(bob.agent.did as string, "Bob");
     const sent = await alice.agent.sendBasicMessage(bob.agent.did as string, "hello bob");
-    expect(sent.kind).toBe("chat");
-    expect(sent.direction).toBe("sent");
+    expect(sent.msg.type).toBe(BASIC_MESSAGE);
+    expect(sent.direction).toBe("out");
 
     // Bob receives it live — from a DID Alice minted for him alone, not
     // her public one, which she keeps for strangers.
@@ -260,7 +263,7 @@ describe("Agent through a mediator", () => {
     const bobsLastOut = (await bob.vault.messages.read()).filter((r) => r.direction === "out").at(-1);
     expect(bobsLastOut?.msg.from_prior).toBeUndefined();
     // and Alice's thread with Bob is one thread, across his two DIDs
-    const aliceHistory = await alice.agent.history();
+    const aliceHistory = await history(alice.agent);
     expect(aliceHistory.every((v) => v.contactCid === alicesBob.cid)).toBe(true);
     expect(aliceHistory.filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["hello bob", "hi alice", "seen you move", "good"]);
 
@@ -313,9 +316,9 @@ describe("Agent through a mediator", () => {
     await bob.agent.start();
     await withTimeout(bob.live);
     expect(bob.agent.did).toBe(publicBefore);
-    const history = await bob.agent.history();
-    expect(history.filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["one", "two"]);
-    expect(history.filter((v) => v.content === "one")).toHaveLength(1);
+    const replayed = await history(bob.agent);
+    expect(replayed.filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["one", "two"]);
+    expect(replayed.filter((v) => v.content === "one")).toHaveLength(1);
     // the reopened agent did not re-request mediation
     expect(mediator.seenTypes.filter((t) => t.endsWith("mediate-request"))).toHaveLength(2);
 
@@ -324,7 +327,7 @@ describe("Agent through a mediator", () => {
     alice = await reopen(alice, mediator);
     await alice.agent.start();
     await withTimeout(alice.live);
-    expect((await alice.agent.history()).map((v) => v.content)).toEqual(["Alice", "one", "Bob", "two"]);
+    expect((await history(alice.agent)).map((v) => v.content)).toEqual(["Alice", "one", "Bob", "two"]);
     alice.agent.destroy();
   });
 
@@ -825,7 +828,7 @@ describe("Agent under hostile mail", () => {
     const anonymous = log.filter((r) => r.direction === "in" && r.sender === null);
     expect(anonymous.map((r) => r.msg.body.content ?? (r.msg.body.profile as { displayName: string }).displayName)).toEqual(["forged", "Mallory"]);
     expect(bob.messages.map((m) => m.view.content)).not.toContain("forged");
-    expect((await bob.agent.history()).map((v) => v.content)).not.toContain("forged");
+    expect((await history(bob.agent)).map((v) => v.content)).not.toContain("forged");
     expect((await bob.vault.contacts.byDid(aliceToBob))?.name).toBe("Alice");
     expect((await bob.vault.contacts.byDid(aliceToBob))?.claimedName).toBe("Alice");
     // and they were acked: handled, not stuck
@@ -883,7 +886,7 @@ describe("Agent under hostile mail", () => {
     bob = await reopen(bob, mediator);
     await bob.agent.start();
     await withTimeout(bob.live);
-    expect((await bob.agent.history()).filter((v) => v.direction === "received").map((v) => v.content)).toEqual(["Alice", "after the garbage"]);
+    expect((await history(bob.agent)).filter((v) => v.direction === "received").map((v) => v.content)).toEqual(["Alice", "after the garbage"]);
     // the garbage is still there for a later, maybe luckier, pickup — and
     // the drain did not spin on it
     expect(mediator.queues.get(account)).toHaveLength(1);
@@ -915,7 +918,7 @@ describe("Agent under hostile mail", () => {
     await withTimeout(until(() => bob.statuses.filter((s) => s.state === "live").length > liveCount));
     await alice.agent.sendBasicMessage(bob.agent.did as string, "after");
     await withTimeout(bob.next((v) => v.content === "after"));
-    expect((await bob.agent.history()).filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["before", "during", "after"]);
+    expect((await history(bob.agent)).filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["before", "during", "after"]);
     alice.agent.destroy();
     bob.agent.destroy();
   });
@@ -942,7 +945,7 @@ describe("Agent under hostile mail", () => {
     await Promise.all(texts.map((t) => alice.agent.sendBasicMessage(bob.agent.did as string, t)));
     await withTimeout(Promise.all(texts.map((t) => bob.next((v) => v.content === t))));
     expect(overlapped).toBe(false);
-    const chats = (await bob.agent.history()).filter((v) => v.kind === "chat").map((v) => v.content);
+    const chats = (await history(bob.agent)).filter((v) => v.kind === "chat").map((v) => v.content);
     expect(chats.sort()).toEqual([...texts].sort());
     alice.agent.destroy();
     bob.agent.destroy();
