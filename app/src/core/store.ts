@@ -2,7 +2,9 @@ import { reactive } from "vue";
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import {
   Agent,
+  BASIC_MESSAGE,
   Vault,
+  counterpartyOf,
   currentDid,
   currentMyDid,
   invitationMessage,
@@ -12,20 +14,22 @@ import {
   type ImportOutcome,
   type Invitation,
   type InvitationRecord,
+  type MessageRecord,
+  type SendOptions,
   type VaultBackend,
 } from "@estoc/agent-core";
 
 import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
 import { exportBackup, importBackup, saveFile } from "./backup.js";
-import { chatView } from "./chat.js";
+import { entryOf } from "./entries.js";
 import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
 import { acquireVaultLock } from "./lock.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage, vaultBackend, wipeVault } from "./storage.js";
 import type {
   AgentStatus,
-  ChatMessage,
   Contact,
+  Entry,
   Identity,
   InvitationView,
   Phase,
@@ -147,14 +151,11 @@ async function viewsOf(v: Vault): Promise<Identity> {
       cidOf.set(use.did, contact.cid);
     }
   }
-  const messages: ChatMessage[] = [];
+  const messages: Entry[] = [];
   let damaged = 0;
   for (const record of await v.messages.read(() => (damaged += 1))) {
-    const view = chatView(record);
-    if (view !== null) {
-      const cid = cidOf.get(view.contactDid);
-      messages.push(cid === undefined ? view : { ...view, contactCid: cid });
-    }
+    const did = counterpartyOf(record);
+    messages.push(entryOf(record, did === null ? null : (cidOf.get(did) ?? null)));
   }
   if (damaged > 0) {
     log(`skipped ${damaged} damaged line${damaged === 1 ? "" : "s"} in the message log`);
@@ -184,10 +185,7 @@ async function attachAgent(): Promise<void> {
         identity.did = a.did;
       },
       onMessage(record, contact) {
-        const view = chatView(record);
-        if (view === null) return;
-        if (contact !== null) view.contactCid = contact.cid;
-        identity.messages.push(view);
+        identity.messages.push(entryOf(record, contact?.cid ?? null));
       },
       onContact(record) {
         upsertContact(identity, record);
@@ -491,9 +489,24 @@ export async function revokeInvitation(id: string): Promise<void> {
   state.identity.invitations = state.identity.invitations.filter((i) => i.id !== id);
 }
 
-export async function sendMessage(contactDid: string, text: string): Promise<void> {
+/**
+ * Send a message of any type to a contact. The agent introduces us on the
+ * first message and logs the record; the record comes back through
+ * `onMessage` and lands in the views like any other.
+ */
+export async function send(
+  contactDid: string,
+  type: string,
+  body: Record<string, unknown>,
+  options?: SendOptions
+): Promise<MessageRecord> {
   if (agent === null) {
     throw new Error("the agent is not running");
   }
-  await agent.sendBasicMessage(contactDid, text);
+  return agent.send(contactDid, type, body, options);
+}
+
+/** A line of chat: basicmessage/2.0. */
+export async function sendMessage(contactDid: string, text: string): Promise<void> {
+  await send(contactDid, BASIC_MESSAGE, { content: text });
 }

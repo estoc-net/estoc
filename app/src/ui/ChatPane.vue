@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
-import { shortDid, timeOf } from "./util.js";
+import { rendererFor, showsInThread } from "../renderers/index.js";
+import { shortDid } from "./util.js";
 
 const props = defineProps<{
   identity: Identity;
@@ -19,9 +20,14 @@ const contact = computed(
 );
 
 // A thread is everything homed to the contact — across every DID either
-// side has used with the other.
+// side has used with the other — that its renderer wants shown. Every
+// record is in the log; which of them take a line is the renderers' call.
 const thread = computed(() =>
-  props.identity.messages.filter((m) => m.contactCid === props.selectedContactCid)
+  props.selectedContactCid === null
+    ? []
+    : props.identity.messages.filter(
+        (e) => e.contactCid === props.selectedContactCid && showsInThread(e)
+      )
 );
 
 // A displayName arriving over user-profile/1.0 is only ever a claim; the
@@ -35,12 +41,6 @@ const claimNote = computed(() => {
     ? "a self-styled name"
     : `calls themself “${c.claimedName}”`;
 });
-
-function profileLine(direction: "sent" | "received", name: string): string {
-  return direction === "sent"
-    ? `you introduced yourself as “${name}”`
-    : `introduced themself as “${name}”`;
-}
 
 const showAddForm = ref(false);
 const newLabel = ref("");
@@ -255,17 +255,13 @@ onMounted(() => {
         {{ contact.label }} alone — nobody else ever sees it — and whatever
         you write crosses the mediator sealed to them.
       </p>
-      <div
-        v-for="m in thread"
-        :key="m.id"
-        class="bubble"
-        :class="[m.direction, { system: m.kind === 'profile' }]"
-      >
-        <div>{{ m.kind === "profile" ? profileLine(m.direction, m.content) : m.content }}</div>
-        <div class="meta">
-          <span>{{ timeOf(m.time) }}</span>
-        </div>
-      </div>
+      <component
+        :is="rendererFor(e.type).component"
+        v-for="e in thread"
+        :key="e.mid"
+        :entry="e"
+        :contact="contact"
+      />
     </div>
 
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>

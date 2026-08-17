@@ -660,3 +660,27 @@ textarea {
     overflow-y: auto;
   }
 }
+
+/* a message nobody has a renderer for: named, body on request */
+.generic-message summary {
+  cursor: pointer;
+}
+
+.generic-message code {
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.generic-message pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  text-align: left;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 11px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}

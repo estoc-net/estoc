@@ -156,9 +156,17 @@ service worker is serving — the app opening with the network off.
   nod (a chip offers to reload); `navigator.storage.persist()` is asked
   for when the vault is created, and the rail says whether the browser
   granted it. Icons render from `public/icon.svg` via `pnpm icons`.
-- **Renderers stay at arm's length**: chat bubbles take their data through
-  props and never import the store — the seam along which type-dispatched
-  renderers (and, later, sandboxed third-party ones) slot in.
+- **Every record, homed; renderers by type**: the store keeps each log
+  record as an `Entry` (`src/core/entries.ts`: the record plus the contact
+  it belongs to and its time), whatever its type. `src/renderers/` maps
+  message types to Vue components — basicmessage bubbles, profile
+  introductions, a generic one for anything nobody registered (it names
+  the protocol and shows the body), and a silent one for heartbeats and
+  profile requests. A renderer takes its entry through props and never
+  imports the store: that seam is where third-party renderers (in a
+  sandboxed frame, or arriving in the vault) would slot in. Sending is
+  the same shape: `send(contactDid, type, body)` in the store; the
+  composer is just the basicmessage caller of it.
 - **The didcomm WASM** is instantiated by `src/didcomm/wasm.ts` (the npm
   package's entry is webpack-shaped) and handed to the agent.
 

@@ -1,7 +1,7 @@
 import type { AgentStatus, ImportOutcome, Invitation } from "@estoc/agent-core";
-import type { ChatMessage } from "./chat.js";
+import type { Entry } from "./entries.js";
 
-export type { AgentStatus, ChatMessage, ImportOutcome, Invitation };
+export type { AgentStatus, Entry, ImportOutcome, Invitation };
 
 /**
  * What the UI renders: reactive views mirrored from the vault. The vault
@@ -48,7 +48,8 @@ export interface Identity {
   did: string | null;
   contacts: Contact[];
   invitations: InvitationView[];
-  messages: ChatMessage[];
+  /** every log record, homed to its contact; what a thread shows of them is the renderers' call */
+  messages: Entry[];
 }
 
 /**
