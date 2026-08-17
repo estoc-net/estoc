@@ -269,8 +269,11 @@ describe("snapshot + import", () => {
     const { backend: b, vault: vb } = await restoreOf(a);
     expect((await vb.invitations.byId(first.record.id))?.did).toBe(first.record.did);
 
-    // A issues a second one; B sees the first taken
+    // A issues a second one and registers the first with its mediator; B
+    // sees the first taken (and, being another device, records nothing
+    // about registration)
     const second = await va.createInvitation(seedKey, "did:web:mediator.example", "Come talk");
+    await va.invitations.put({ ...(await va.invitations.byId(first.record.id))!, registeredAt: "2026-08-14T00:00:00.000Z" });
     const takenOnB = { ...(await vb.invitations.byId(first.record.id))!, acceptedBy: "cid-bob", acceptedAt: "2026-08-15T00:00:00.000Z" };
     await vb.invitations.put(takenOnB);
 
@@ -280,7 +283,11 @@ describe("snapshot + import", () => {
     if (outcome.kind !== "merged") return;
     expect(outcome.invitationsAdded).toBe(0);
     const va2 = await Vault.open(a);
-    expect((await va2.invitations.byId(first.record.id))?.acceptedBy).toBe("cid-bob");
+    const firstOnA = (await va2.invitations.byId(first.record.id))!;
+    expect(firstOnA.acceptedBy).toBe("cid-bob");
+    expect(firstOnA.acceptedAt).toBe("2026-08-15T00:00:00.000Z");
+    // only the taking crossed over; what A knew about its own mediator stays
+    expect(firstOnA.registeredAt).toBe("2026-08-14T00:00:00.000Z");
     expect((await va2.invitations.byId(second.record.id))?.acceptedBy).toBeUndefined();
     // and A into B: the second arrives
     const back = await importVault(b, await snapshotVault(a));

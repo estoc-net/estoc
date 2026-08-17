@@ -294,6 +294,18 @@ describe("Vault", () => {
     ).rejects.toThrow(/does not derive its recorded DID/);
   });
 
+  it("verifyAnchor: the seed in hand must derive the anchor, whether or not the cache lists it", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const vault = await Vault.create(backend, { label: "a", keystore: doc, seedKey, mediatorDid: null });
+    await expect(vault.verifyAnchor(seedKey)).resolves.toBeUndefined();
+    // a keystore around another seed, with no cache entry to disagree first
+    const otherSeed = await importSeed(new Uint8Array(32).map((_, i) => 31 - i));
+    vault.keystore = { ...vault.keystore, keys: [] };
+    await expect(vault.verifyAnchor(otherSeed)).rejects.toThrow(/does not derive this vault's anchor DID/);
+    await expect(vault.verifyAnchor(seedKey)).resolves.toBeUndefined();
+  });
+
   it("mintPeerDid is deterministic and service-sensitive", async () => {
     const { doc, seedKey } = await freshKeystore();
     const vault = await Vault.create(new MemoryBackend(), {
@@ -386,6 +398,18 @@ describe("ContactStore", () => {
     expect(currentDid((await reloaded.byCid(alice.cid))!)).toBe("did:peer:4new");
     expect(await reloaded.byDid("did:peer:4nobody")).toBeNull();
     expect((await reloaded.all()).map((c) => c.name)).toEqual(["Alice Liddell"]);
+  });
+
+  it("stamps updatedAt on every put, and a record without one is not a contact", async () => {
+    const backend = new MemoryBackend();
+    const store = new ContactStore(backend);
+    const alice = newContact("Alice", "did:peer:4a", new Date(1_000));
+    expect(alice.updatedAt).toBe(alice.createdAt);
+    await store.put(alice);
+    expect(alice.updatedAt > alice.createdAt).toBe(true);
+    const { updatedAt: _dropped, ...without } = alice;
+    await backend.write(contactFile(alice.cid), new TextEncoder().encode(JSON.stringify(without)));
+    await expect(new ContactStore(backend).all()).rejects.toThrow(/updatedAt/);
   });
 
   it("keeps two contacts with the same petname apart, and removes by cid", async () => {

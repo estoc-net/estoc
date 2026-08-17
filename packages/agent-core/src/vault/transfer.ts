@@ -195,7 +195,7 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
     if (mine === null) {
       await contacts.put(record, { keepUpdatedAt: true });
       contactsAdded += 1;
-    } else if ((record.updatedAt ?? "") > (mine.updatedAt ?? "")) {
+    } else if (record.updatedAt > mine.updatedAt) {
       await contacts.put(record, { keepUpdatedAt: true });
       contactsUpdated += 1;
     } else {
@@ -204,7 +204,10 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
   }
 
   // invitations: by id; one this vault has open that the snapshot knows
-  // to be taken becomes taken here too — the DID is spent either way
+  // to be taken becomes taken here too — the DID is spent either way.
+  // Only the taking crosses over: `registeredAt` is this device's own
+  // fact about its mediator, and everything else in the record was
+  // identical from the moment the invitation was minted
   const invitations = new InvitationStore(backend);
   let invitationsAdded = 0;
   const incomingInvitations = Object.keys(files)
@@ -218,7 +221,7 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
       await invitations.put(record);
       invitationsAdded += 1;
     } else if (mine.acceptedBy === undefined && record.acceptedBy !== undefined) {
-      await invitations.put({ ...mine, ...record });
+      await invitations.put({ ...mine, acceptedBy: record.acceptedBy, acceptedAt: record.acceptedAt });
     }
   }
 

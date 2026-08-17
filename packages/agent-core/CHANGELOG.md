@@ -36,6 +36,15 @@ author's hands.
   after an import carries on behind what came in); `newSegment` and
   `isSegment` are exported. Nothing may read chronology off segment order.
 - `parseConfig` keeps fields it does not know, at every level it rewrites.
+- **`Vault.verifyAnchor(seedKey)`**: the seed must derive
+  `config.identity.anchor.did`; `Agent.start` checks it first, before any
+  other key is derived, so a keystore around the wrong seed fails with
+  "wrong keystore for this vault" rather than at the first DID it cannot
+  open.
+- `ContactRecord.updatedAt` is required (`parseContact` refuses a record
+  without it); it was always stamped by `put`.
+- Merging invitations carries over only `acceptedBy`/`acceptedAt`;
+  `registeredAt` is this device's fact about its mediator and stays.
 
 ## 0.12.0 — 2026-08-17
 

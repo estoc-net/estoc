@@ -214,6 +214,24 @@ export class Vault {
   }
 
   /**
+   * The seed in hand must be the seed this vault was made from: the key
+   * named by `config.identity.anchor` must derive its recorded DID. Every
+   * other DID is checked as it comes into use; this one is checked first,
+   * before anything is derived or sent, because it is what "the same
+   * identity" means — a keystore around a different seed would open none
+   * of this vault's mail and sign as nobody its contacts know.
+   */
+  async verifyAnchor(seedKey: SeedKey): Promise<void> {
+    const anchor = this.config.identity.anchor;
+    const identity = await this.derive(seedKey, anchor.key);
+    if (identity.did !== anchor.did) {
+      throw new Error(
+        `the seed does not derive this vault's anchor DID (${anchor.did}): wrong keystore for this vault`
+      );
+    }
+  }
+
+  /**
    * The seed-derived identity a key name derives. The keystore's cache
    * entry, when there is one, must agree with it; a name the cache has
    * not seen — minted on another device, or lost to a crash before the

@@ -1,11 +1,11 @@
 # The `.estoc` vault format, version 1
 
-Status: **contract** — 2026-08-17. This document freezes the on-disk format
-every Estoc client reads and writes. `@estoc/agent-core` is the reference
+Status: **contract** — version 1, frozen 2026-08-17. This document is the
+on-disk format every Estoc client reads and writes. `@estoc/agent-core`
+(0.13 and later, over `@estoc/keystore` 0.3 and later) is the reference
 implementation; where the two disagree, this document is what the code has
-to be brought back to. It describes the format *as decided*, which differs
-from what agent-core ≤ 0.12 writes in the ways listed at the end; no vault
-exists outside development, so there is no migration from those.
+to be brought back to. Nothing earlier than those releases wrote a vault
+outside development, so there is nothing to migrate from.
 
 ## 1. What a vault is
 
@@ -29,14 +29,14 @@ say which of them it obeys.
    - a **record** — a small, mutable thing with an id, one JSON file, named
      by its id, rewritten whole; merged by id, later `updatedAt` wins;
    - a **log** — immutable events, append-only JSONL in segments named by
-     uuid; merged by union, deduplicated by a per-log key, never rewritten;
+     uuidv7; merged by union, deduplicated by a per-log key, never rewritten;
    - a **singleton** — `config.json`, `keystore.json`: one per vault, kept
-     local on merge (see §7 for the one exception, the keystore's key list).
-2. **Files are named by ids, never by names.** A contact file is
-   `<cid>.json`, not `<petname>.json`; a key is `pair/<cid>/<id>`, not
-   `pair/<cid>/<n>`. Ids are minted at creation and never computed from
-   the state of anything else — no counters, no "next index", no "count of
-   what exists so far". Petnames, DIDs, key indices are clothing.
+     local on merge (with one exception, the keystore's key list; §6.2).
+2. **Files are named by ids, never by names or counters.** A contact file
+   is `<cid>.json`, not `<petname>.json`; a key is `pair/<cid>/<id>`, not
+   "the nth key toward this contact". Ids are minted at creation and never
+   computed from the state of anything else — nothing that depends on what
+   already exists. Petnames and DIDs are clothing.
 3. **Files encode facts, not interpretations.** Which contact a message
    belongs to is resolved at read time through DID histories; whether a
    message was delivered is a separate event beside it; how any of it
@@ -62,8 +62,8 @@ say which of them it obeys.
   keystore.json             singleton — @estoc/keystore v3: one sealed seed + a cache of key names
   contacts/<cid>.json       record — one per contact
   invitations/<id>.json     record — one per single-use invitation issued
-  messages/<uuid>.jsonl     log — every message between this vault and its contacts
-  deliveries/<uuid>.jsonl   log — what became of each outbound message, per try
+  messages/<uuidv7>.jsonl   log — every message between this vault and its contacts
+  deliveries/<uuidv7>.jsonl log — what became of each outbound message, per try
   state/                    reserved — high-churn per-person state (read cursors, drafts); §6.7
   blobs/                    reserved — content-addressed bytes lifted out of messages; §6.8
   cache/                    reserved — rebuildable indexes; never backed up, never merged; §6.9
@@ -75,9 +75,9 @@ trailing newline; JSONL lines are compact JSON terminated by `\n`.
 
 ## 4. Identifiers and time
 
-- **Local ids** — `cid`, `mid`, a mediation's `id`, a pairwise DID's id —
-  are UUIDv7 (time-ordered; sortable as strings; a generator per client
-  is fine). They never leave the machine.
+- **Local ids** — `cid`, `mid`, a mediation's `id`, a pairwise DID's id, a
+  log segment's name — are UUIDv7 (time-ordered; sortable as strings; a
+  generator per client is fine). They never leave the machine.
 - **Wire ids** — a DIDComm message `id`, an invitation's `id` (the
   out-of-band message id) — are what the protocol makes them (random
   UUIDs). A wire id is a claim by whoever sent it: a deduplication key and
@@ -115,9 +115,8 @@ belongs to — the one fixed name is the root:
 | `pair/<cid>/<id>` | did:peer:4 toward contact `cid`, service = routing DID | that `myDids[]` entry (its id is only ever the key's suffix) |
 | `invite/<id>` | did:peer:4 an invitation hands out | the invitation (its out-of-band message id) |
 
-There is no counter anywhere in a name: not a generation, not "the nth
-key toward this contact". Two devices minting toward the same contact
-mint two keys; a merge keeps both (§7).
+Nothing in a name depends on local state (rule 2), so two devices minting
+toward the same contact mint two keys, and a merge keeps both (§7).
 
 `anchor` is the one thing recoverable from the seed with no other file:
 two vaults are the same identity iff their anchor DIDs are equal, and that
@@ -125,9 +124,8 @@ is the check every merge starts with.
 
 The keystore document version is 3 and the derivation label is `estoc/v3`:
 the two move together, so one number identifies both the document shape
-and the derivation scheme. Earlier keystore documents — v1
-(independently sealed keys) and v2 (index-derived, label `estoc/v1`) —
-are refused, not migrated: v3 is the only store.
+and the derivation scheme. A reader refuses any other keystore version
+(§8).
 
 ## 6. Files
 
@@ -154,7 +152,10 @@ are refused, not migrated: v3 is the only store.
 - `format` and `version` govern the whole vault (§8). Readers refuse a
   version they do not know.
 - Every `{key, did}` is a **key ref**: the keystore name and the DID it
-  was minted as (a snapshot, §2.4). Open re-derives and compares.
+  was minted as (a snapshot, §2.4). A client re-derives and compares: the
+  anchor at every start, before anything else is derived or sent — a seed
+  that does not derive it is the wrong seed for this vault — and every
+  other ref as it comes into use.
 - `mediation` is the *current* reachability decision, one at a time. A
   change of mediator replaces it wholesale with a fresh `id` and fresh
   `me`/`public` keys (so two mediators cannot correlate one vault by a
@@ -172,7 +173,7 @@ are refused, not migrated: v3 is the only store.
 {
   "version": 3,
   "seedJwe": "eyJhbGciOiJQQkVTMi1IUzUxMitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIi…",   // the 32-byte seed, PBES2-HS512+A256KW / A256GCM
-  "keys": [
+  "keys": [                                                                    // did:key of each key's Ed25519 half — not the DID minted from it
     { "name": "anchor",                    "did": "did:key:z6Mk…", "createdAt": "…" },
     { "name": "mediation/0198…/me",        "did": "did:key:z6Mk…", "createdAt": "…" },
     { "name": "pair/0198…/0198…",          "did": "did:key:z6Mk…", "createdAt": "…" }
@@ -204,7 +205,7 @@ are refused, not migrated: v3 is the only store.
   "cid": "0198…",                     // uuidv7; the anchor every other file refers to
   "name": "alice",                    // petname; free to change
   "createdAt": "…",
-  "updatedAt": "…",                   // stamped on every write; the merge tiebreak
+  "updatedAt": "…",                   // required; stamped on every write; the merge tiebreak
   "claimedName": "Alice L.",          // what they said over user-profile — a claim, never verified
   "dids": [                           // theirs, oldest first; the one without `until` is current
     { "did": "did:peer:4…old", "from": "…", "until": "…" },
@@ -260,9 +261,12 @@ are refused, not migrated: v3 is the only store.
   (name unchanged), and the invitation is marked. Anyone else writing to
   it afterwards is turned away.
 - Merge: by `id`; added when missing; an open one here that the incoming
-  copy knows to be taken becomes taken (the DID is spent either way).
+  copy knows to be taken becomes taken (the DID is spent either way) —
+  only `acceptedBy` and `acceptedAt` cross over. `registeredAt` is this
+  device's own fact about its mediator and stays; every other field has
+  been the same since the invitation was minted.
 
-### 6.5 `messages/<uuid>.jsonl` — log
+### 6.5 `messages/<uuidv7>.jsonl` — log
 
 One line per message that passed between this vault and anyone who is
 not its mediator, in either direction:
@@ -287,7 +291,7 @@ not its mediator, in either direction:
   Whether a record is *shown* is the application's projection.
 - Dedup keys for merge: `mid`, and `(direction, sender, msg.id)`.
 
-### 6.6 `deliveries/<uuid>.jsonl` — log
+### 6.6 `deliveries/<uuidv7>.jsonl` — log
 
 One line per outcome of one try to deliver one outbound message:
 
@@ -310,8 +314,9 @@ One line per outcome of one try to deliver one outbound message:
   line itself.
 - Dedup key for merge: `(mid, attempt, status)`. `held` events do not
   merge in from another copy (they are that copy's own decision); instead
-  every outbound message a merge or restore brings in without a `sent`
-  behind it gets a fresh `held` here.
+  every outbound message a merge or restore brings in whose fold is not
+  already `sent` (or `held`, on a restore that carried the events along)
+  gets a fresh `held` here.
 
 ### 6.7 `state/` — reserved
 
@@ -324,7 +329,8 @@ Rules fixed now, shape later: files under `state/` are small JSON, keyed by
 what they are about (a `cid`, a `thid`); they travel with the vault (a
 restore on a new device keeps your place); they merge **per key** by their
 own timestamp — the newest wins, and for cursors that is equivalent to
-`max`.
+`max`. Until the shape exists, an importer treats `state/` as it treats
+any path it has no rule for (§7): copied when absent, never overwritten.
 
 Per-contact *decisions* that change rarely (pinned, muted, archived) are
 petname-class facts and belong in the contact record, not here.
@@ -359,7 +365,8 @@ and records. It is **not** part of a snapshot and is never merged.
     logs by union under their dedup keys, each log's new records laid down
     as one new segment; records by their rules (§6.3, §6.4); `config.json`
     kept local; `keystore.json`'s `keys[]` unioned by name, `seedJwe`
-    kept local; `state/` per key by timestamp; `blobs/` by union;
+    kept local; `state/` per key by timestamp and `blobs/` by union once
+    those have a shape (§6.7, §6.8), and until then as any other path;
     `cache/` ignored; **any other path copied when absent, never
     overwritten**;
   - into a vault with a **different anchor DID** it is refused: two
@@ -368,12 +375,11 @@ and records. It is **not** part of a snapshot and is never merged.
   express (a deletion made on one side) it does not attempt.
 - Log segments are `<uuidv7>.jsonl` (lowercase); the name is minted when
   the segment is made, never computed from what else is in the directory
-  (rule 2 — no "highest number plus one"). Readers concatenate segments in
-  name order, which is creation order; **nothing may rely on cross-segment
-  order for chronology** — a merge lays older records down in a newer
-  segment — records carry their own `at`. A writer appends to the newest
-  segment present, or mints one. Files in a log directory that are not
-  `<uuidv7>.jsonl` are not segments.
+  (rule 2). Readers concatenate segments in name order, which is creation
+  order; **nothing may rely on cross-segment order for chronology** — a
+  merge lays older records down in a newer segment — records carry their
+  own `at`. A writer appends to the newest segment present, or mints one.
+  Files in a log directory that are not `<uuidv7>.jsonl` are not segments.
 
 ## 8. Versioning
 
@@ -426,33 +432,3 @@ and records. It is **not** part of a snapshot and is never merged.
   index would go, and it is disposable).
 - **The person's half of the folder** — documents, renderers, anything
   outside `.estoc/` — is unspecified here.
-
-## 11. From agent-core 0.12 to this document
-
-What the reference implementation had to change to match — done in
-`@estoc/keystore` 0.3.0 and `@estoc/agent-core` 0.13.0 (2026-08-17); kept
-here as the record of what moved. Nothing here migrates a 0.12 vault;
-there were none to migrate.
-
-1. **`@estoc/keystore` 0.3.0** — document v3: drop `nextIndex` and every
-   `index`; `keys[]` entries are `{name, did, createdAt}`; derivation
-   `info = estoc/v3/<purpose>/<name>`; `deriveIdentity(seedKey, name)`;
-   `addDerivedKey` idempotent by name (same name → same key; refuse a
-   name that fails the grammar); `openDerivedKey` derives from the name
-   whether or not the cache lists it; retire v2 parsing (v1 stays).
-2. **agent-core key names** — `mediation/<id>/me`, `mediation/<id>/public`,
-   `pair/<cid>/<uuidv7>`; `invite/<id>` unchanged; `anchor` unchanged.
-   Delete `mediationKeyName`, `mediationGeneration`, the pair counter in
-   `mintPairwise`, and the "reuse the key a crash left in the index"
-   branches; write the record before the cache entry.
-3. **`config.mediation.id`** (uuidv7, minted in `Vault.setMediator`).
-4. **Snapshot = everything under `.estoc/`** except `cache/`: `VaultBackend`
-   gains a way to list subdirectories (or a recursive walk); `snapshotVault`
-   walks; `importVault` merges by kind and copies unknown paths when absent.
-5. **Segment names** — `<uuidv7>.jsonl`, minted (no counter); readers
-   order by name and drop non-segment files.
-6. **Readers preserve unknown fields** in records they rewrite (contacts,
-   invitations): parse into the typed shape without dropping extras.
-7. Re-pin the fixed-seed test vector (anchor and the `mediation/…/me` DID
-   under `FIXED_SEED`); update README "Identity" table and CHANGELOGs;
-   the app needs no format code, only a wipe of development vaults.

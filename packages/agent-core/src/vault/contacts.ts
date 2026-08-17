@@ -33,7 +33,7 @@ export interface DidUse {
  */
 export interface MyDidUse {
   did: string;
-  /** the keystore entry that derives this DID (`public`, or `pair/<cid>/<n>`) */
+  /** the keystore entry that derives this DID: `pair/<cid>/<id>`, or a retired `mediation/<id>/public` */
   key: string;
   /** ISO time this DID came into use toward them */
   from: string;
@@ -48,8 +48,8 @@ export interface ContactRecord {
   /** petname: what we call them; free to change */
   name: string;
   createdAt: string;
-  /** ISO time of the last `put`; absent on records written before it existed */
-  updatedAt?: string;
+  /** ISO time of the last `put` — the merge tiebreak (later wins) */
+  updatedAt: string;
   /** what they announced over user-profile/1.0 — a claim, never verified */
   claimedName?: string;
   /** their DIDs, oldest first; the one without `until` is current */
@@ -149,11 +149,8 @@ export function parseContact(json: string, file: string): ContactRecord {
   if (typeof c.cid !== "string" || c.cid === "") {
     throw new Error(`${file} is missing a cid`);
   }
-  if (typeof c.name !== "string" || typeof c.createdAt !== "string") {
-    throw new Error(`${file} is missing name or createdAt`);
-  }
-  if (c.updatedAt !== undefined && typeof c.updatedAt !== "string") {
-    throw new Error(`${file} has a malformed updatedAt`);
+  if (typeof c.name !== "string" || typeof c.createdAt !== "string" || typeof c.updatedAt !== "string") {
+    throw new Error(`${file} is missing name, createdAt or updatedAt`);
   }
   if (!isStringArrayish(c.dids) || c.dids.length === 0) {
     throw new Error(`${file} has no DID history`);
@@ -249,7 +246,7 @@ export class ContactStore {
    */
   async put(record: ContactRecord, options: { keepUpdatedAt?: boolean } = {}): Promise<void> {
     const records = await this.load();
-    if (!options.keepUpdatedAt || record.updatedAt === undefined) {
+    if (!options.keepUpdatedAt) {
       record.updatedAt = new Date().toISOString();
     }
     await this.backend.write(contactFile(record.cid), utf8(prettyJson(record)));

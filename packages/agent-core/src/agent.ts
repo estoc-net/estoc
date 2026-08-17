@@ -333,6 +333,8 @@ export class Agent {
       this.startTimer = null;
     }
     try {
+      // first of all: is this the seed the vault was made from?
+      await this.vault.verifyAnchor(this.seedKey);
       const mediation = this.vault.config.mediation;
       if (mediation === null) {
         this.setStatus({ state: "unmediated" });
