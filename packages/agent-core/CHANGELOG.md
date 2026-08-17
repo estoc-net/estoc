@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.13.0 — 2026-08-17
+
+The vault now matches `docs/vault-format.md` (the format contract at the
+repository root). No migration from 0.12 vaults: none exist outside the
+author's hands.
+
+- **Key names are derivation paths** (`@estoc/keystore` 0.3.0, document
+  v3, `estoc/v3/<purpose>/<name>`). `keystore.json` lists no `nextIndex`
+  and no `index`; its `keys[]` is a cache, and every mint writes the
+  record that names the key (config, `myDids[]`, an invitation) *before*
+  the cache entry. `Vault.derive` derives whether or not the cache lists
+  the name; `Vault.mintKey` is idempotent. Every derived DID changes.
+- **No counters in names.** `mediation/<id>/me` and
+  `mediation/<id>/public` replace `mediator`/`public` and their `/<n>`
+  generations, where `<id>` is a uuidv7 minted by `Vault.setMediator` and
+  recorded as **`config.mediation.id`** (required; a config without it is
+  refused). `pair/<cid>/<uuidv7>` replaces `pair/<cid>/<n>`. Gone:
+  `KEY_MEDIATOR`, `KEY_PUBLIC`, `mediationGeneration`, the "reuse the key
+  a crash left in the index" branches; `mediationKeyName(id, "me" |
+  "public")` and `KEY_MEDIATION_PREFIX` are new.
+- **A snapshot is the whole `.estoc/` tree** except `cache/` — a
+  recursive walk, not an allowlist. `VaultBackend` gains `dirs(dir)`
+  (subdirectory names; `MemoryBackend` and `OpfsBackend` implement it),
+  and `walk(backend, dir)` is exported. Import merges the keystore's key
+  cache by name over the local seed (`keysAdded`), copies any path it has
+  no rule for when absent and never overwrites (`filesCopied`), and
+  ignores `cache/` on restore too. `STATE_DIR`, `BLOBS_DIR`, `CACHE_DIR`
+  name the reserved directories.
+- **Log segments read in numeric order** (`orderSegments`; `10000.jsonl`
+  after `0002.jsonl`), and only `<decimal>.jsonl` files count as segments.
+- `parseConfig` keeps fields it does not know, at every level it rewrites.
+
 ## 0.12.0 — 2026-08-17
 
 - **Contact files are named by cid.** `contacts/<cid>.json` replaces

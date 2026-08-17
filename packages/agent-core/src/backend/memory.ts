@@ -38,16 +38,30 @@ export class MemoryBackend implements VaultBackend {
   }
 
   async list(dir: string): Promise<string[]> {
+    return this.children(dir).files;
+  }
+
+  async dirs(dir: string): Promise<string[]> {
+    return this.children(dir).dirs;
+  }
+
+  /** A directory exists here exactly when some file lives below it. */
+  private children(dir: string): { files: string[]; dirs: string[] } {
     const prefix = segmentsOf(dir).join("/") + "/";
-    const names: string[] = [];
+    const files: string[] = [];
+    const dirs = new Set<string>();
     for (const key of this.files.keys()) {
-      if (key.startsWith(prefix)) {
-        const rest = key.slice(prefix.length);
-        if (!rest.includes("/")) {
-          names.push(rest);
-        }
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const rest = key.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash === -1) {
+        files.push(rest);
+      } else {
+        dirs.add(rest.slice(0, slash));
       }
     }
-    return names;
+    return { files, dirs: [...dirs] };
   }
 }

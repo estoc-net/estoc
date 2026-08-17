@@ -8,6 +8,8 @@ import {
   type SeedKeystoreDocument,
 } from "@estoc/keystore";
 
+import { v7 as uuidv7 } from "uuid";
+
 import type { VaultBackend } from "../backend/types.js";
 import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
 import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
@@ -19,49 +21,50 @@ import { MessageLog } from "./messages.js";
 
 /**
  * A vault: the `.estoc` directory as an object. Holds the config and the
- * keystore index in memory (both small, both ours to write), and exposes
- * the contact store and message log. Deriving keys needs the unlocked
- * seed, which the vault never keeps — callers hold the `SeedKey` and pass
- * it in, so how a passphrase becomes a seed (typed once, cached in
- * IndexedDB, or a demo's empty passphrase) stays application policy.
+ * keystore document in memory (both small, both ours to write), and
+ * exposes the contact store and message log. Deriving keys needs the
+ * unlocked seed, which the vault never keeps — callers hold the `SeedKey`
+ * and pass it in, so how a passphrase becomes a seed (typed once, cached
+ * in IndexedDB, or a demo's empty passphrase) stays application policy.
+ *
+ * The keystore's key list is a cache; the records are the truth about
+ * which keys exist. So every mint here writes the record that names the
+ * key first and the cache entry second: a crash between the two leaves a
+ * name the next open derives on demand, never a key nobody references.
  */
 
-/** Names of the keys every mediated vault has in its keystore index. */
+/**
+ * Key names are derivation paths (`@estoc/keystore` v3): the seed and the
+ * name give the key, so a name is never a counter and never reused. Every
+ * name is `<kind>/…/<id>` where the id is the id of the thing the key
+ * belongs to; the one fixed name is the root.
+ */
 export const KEY_ANCHOR = "anchor";
 /**
- * The mediator-facing key and the public key are minted once per
- * mediation: `mediator` and `public` for the first, `mediator/2` and
- * `public/2` after the first change of mediator, and so on — a mediator
- * change re-mints both (see `Vault.setMediator`), and the retired public
- * key stays in the index because contacts may still be told about the
- * move by it.
+ * The two keys of a mediation, named by its `config.mediation.id`:
+ * `mediation/<id>/me` is the DID the mediator knows this vault by (no
+ * service), `mediation/<id>/public` the address strangers write to (its
+ * service is the routing DID). A change of mediator mints a new id and
+ * both keys anew (`Vault.setMediator`); the retired public key stays
+ * derivable — contacts may still be told about the move by it.
  */
-export const KEY_MEDIATOR = "mediator";
-export const KEY_PUBLIC = "public";
-
-/** The nth mediation's name for a key: bare for the first, `/n` after. */
-export function mediationKeyName(base: string, n: number): string {
-  return n === 1 ? base : `${base}/${n}`;
+export const KEY_MEDIATION_PREFIX = "mediation/";
+export function mediationKeyName(mediationId: string, role: "me" | "public"): string {
+  return `${KEY_MEDIATION_PREFIX}${mediationId}/${role}`;
 }
-
-/** Which mediation a `mediator`/`public` key belongs to: `mediator` → 1, `mediator/3` → 3. */
-export function mediationGeneration(keyName: string): number {
-  const slash = keyName.indexOf("/");
-  return slash === -1 ? 1 : Number(keyName.slice(slash + 1));
-}
-/** Pairwise keys are named `pair/<cid>/<n>`: the contact, and the nth DID minted toward them. */
+/** Pairwise keys are named `pair/<cid>/<uuidv7>`: the contact, and one id per DID minted toward them. */
 export const KEY_PAIRWISE_PREFIX = "pair/";
 /** Invitation keys are named `invite/<id>`; the key keeps its name once someone takes the invitation. */
 export const KEY_INVITE_PREFIX = "invite/";
 
-/** Is this keystore entry a DID minted for one relationship — toward a contact, or waiting in an invitation? */
+/** Is this key a DID minted for one relationship — toward a contact, or waiting in an invitation? */
 export function isRelationshipKey(name: string): boolean {
   return name.startsWith(KEY_PAIRWISE_PREFIX) || name.startsWith(KEY_INVITE_PREFIX);
 }
 
 export interface CreateVaultOptions {
   label: string;
-  /** a fresh v2 keystore document (from createSeedKeystore) — the vault adds its keys to it */
+  /** a fresh v3 keystore document (from createSeedKeystore) — the vault adds its keys to it */
   keystore: SeedKeystoreDocument;
   seedKey: SeedKey;
   /**
@@ -112,8 +115,8 @@ export class Vault {
   }
 
   /**
-   * Lay down a new vault: the anchor (index 0, a did:key), and nothing
-   * else — an identity is a seed and a name. Naming a mediator here is a
+   * Lay down a new vault: the anchor (the key named `anchor`, a did:key),
+   * and nothing else — an identity is a seed and a name. Naming a mediator here is a
    * convenience for `setMediator`, which adds the mediator-facing
    * did:peer:4 (no service); the public DID waits for mediate-grant, since
    * its service is the routing DID the grant hands out.
@@ -136,6 +139,8 @@ export class Vault {
       mediation: null,
     };
     const vault = new Vault(backend, config, anchor.doc);
+    // the keystore first here, alone: `exists` is "config.json is there",
+    // so a crash between the two leaves no vault rather than a headless one
     await vault.saveKeystore();
     await vault.saveConfig();
     if (options.mediatorDid !== null && options.mediatorDid !== undefined) {
@@ -146,12 +151,13 @@ export class Vault {
 
   /**
    * Name the mediator this vault will ask for mediation, and mint the
-   * did:peer:4 the mediator will know it by (a `mediator` key, no
-   * service). Reachability is a decision taken after the identity exists,
-   * and this is where it is taken — and retaken: a vault that already has
-   * a mediator moves. Moving means every DID whose service is the old
+   * did:peer:4 the mediator will know it by (the `mediation/<id>/me` key,
+   * no service; the id is a fresh uuidv7 recorded as `mediation.id`).
+   * Reachability is a decision taken after the identity exists, and this
+   * is where it is taken — and retaken: a vault that already has a
+   * mediator moves. Moving means every DID whose service is the old
    * mediator's routing DID is retired: the public one here (a new one is
-   * minted after the new grant, under `public/<n>`), and the DIDs toward
+   * minted after the new grant, under the new id), and the DIDs toward
    * contacts, which the agent re-mints once it holds the new routing DID.
    * What this layer does for the move is the bookkeeping the old public DID
    * needs: a contact who wrote to it and was never answered gets it as the
@@ -168,17 +174,18 @@ export class Vault {
     if (before?.public != null) {
       await this.retirePublicDid(before.public, at);
     }
-    const generation = before === null ? 1 : mediationGeneration(before.me.key) + 1;
-    const key = mediationKeyName(KEY_MEDIATOR, generation);
-    const hasKey = this.keystore.keys.some((entry) => entry.name === key);
-    const me = hasKey ? await this.derive(seedKey, key) : await this.mintKey(seedKey, key, now);
+    const id = uuidv7({ msecs: now.getTime() });
+    const key = mediationKeyName(id, "me");
+    const me = await this.derive(seedKey, key);
     this.config.mediation = {
+      id,
       mediatorDid,
       me: { key, did: mintPeerDid(me, null).did },
       routingDid: null,
       public: null,
     };
     await this.saveConfig();
+    await this.rememberKey(seedKey, key, now);
   }
 
   /**
@@ -206,30 +213,45 @@ export class Vault {
     await this.backend.write(KEYSTORE_PATH, utf8(serializeKeystore(this.keystore)));
   }
 
-  /** The seed-derived identity behind a keystore entry. */
+  /**
+   * The seed-derived identity a key name derives. The keystore's cache
+   * entry, when there is one, must agree with it; a name the cache has
+   * not seen — minted on another device, or lost to a crash before the
+   * cache was written — derives all the same.
+   */
   async derive(seedKey: SeedKey, name: string): Promise<DerivedIdentity> {
     return openDerivedKey(this.keystore, seedKey, name);
   }
 
   /**
-   * Add a key to the index and derive it. The caller decides what DID to
-   * mint from it and records that DID where it belongs (config or a
-   * contact's myDids) — the keystore only knows the did:key of the index.
+   * Derive a key and list it in the keystore's cache. The caller decides
+   * what DID to mint from it and records that DID where it belongs
+   * (config, a contact's myDids, an invitation) — and does so *before*
+   * calling this, so the record is never behind the cache. Idempotent:
+   * a name already listed is derived and checked, not re-added.
    */
   async mintKey(seedKey: SeedKey, name: string, now = new Date()): Promise<DerivedIdentity> {
     const { doc, identity } = await addDerivedKey(this.keystore, seedKey, name, { now });
-    this.keystore = doc;
-    await this.saveKeystore();
+    if (doc !== this.keystore) {
+      this.keystore = doc;
+      await this.saveKeystore();
+    }
     return identity;
   }
 
+  /** `mintKey` for a key already derived and recorded: cache it. */
+  private async rememberKey(seedKey: SeedKey, name: string, now: Date): Promise<void> {
+    await this.mintKey(seedKey, name, now);
+  }
+
   /**
-   * Mint a fresh pairwise did:peer:4 toward a contact — the nth key under
-   * `pair/<cid>/`, with the mediator's routing DID as its service — and
-   * record it as our current DID toward them, closing the previous one.
-   * The record is saved; registering the DID with the mediator is the
-   * agent's business (`registeredAt` stays unset here). Returns the
-   * identity, whose secrets the agent adds to what it can open.
+   * Mint a fresh pairwise did:peer:4 toward a contact — the key
+   * `pair/<cid>/<uuidv7>`, with the mediator's routing DID as its service
+   * — and record it as our current DID toward them, closing the previous
+   * one. The record is saved, then the key cached; registering the DID
+   * with the mediator is the agent's business (`registeredAt` stays unset
+   * here). Returns the identity, whose secrets the agent adds to what it
+   * can open.
    */
   async mintPairwise(
     seedKey: SeedKey,
@@ -238,14 +260,8 @@ export class Vault {
     now = new Date()
   ): Promise<PeerIdentity> {
     const uses = contact.myDids ?? [];
-    const n = uses.filter((use) => use.key.startsWith(KEY_PAIRWISE_PREFIX)).length + 1;
-    const key = `${KEY_PAIRWISE_PREFIX}${contact.cid}/${n}`;
-    // a key already in the index is the residue of a crash between minting
-    // it and saving the contact: reuse it, as `establishMediation` does
-    const identity = this.keystore.keys.some((entry) => entry.name === key)
-      ? await this.derive(seedKey, key)
-      : await this.mintKey(seedKey, key, now);
-    const minted = mintPeerDid(identity, routingDid);
+    const key = `${KEY_PAIRWISE_PREFIX}${contact.cid}/${uuidv7({ msecs: now.getTime() })}`;
+    const minted = mintPeerDid(await this.derive(seedKey, key), routingDid);
     const at = now.toISOString();
     const current = currentMyDid(contact);
     if (current !== null) {
@@ -253,14 +269,16 @@ export class Vault {
     }
     contact.myDids = [...uses, { did: minted.did, key, from: at }];
     await this.contacts.put(contact);
+    await this.rememberKey(seedKey, key, now);
     return minted;
   }
 
   /**
    * Mint the DID a single-use invitation hands out — the key `invite/<id>`,
    * the mediator's routing DID as its service — and record the invitation
-   * as open. Whoever answers first takes it (see the agent). Registering
-   * the DID with the mediator is, again, the agent's business.
+   * as open, then cache the key. Whoever answers first takes it (see the
+   * agent). Registering the DID with the mediator is, again, the agent's
+   * business.
    */
   async createInvitation(
     seedKey: SeedKey,
@@ -270,7 +288,7 @@ export class Vault {
   ): Promise<{ record: InvitationRecord; identity: PeerIdentity }> {
     const id = crypto.randomUUID();
     const key = `${KEY_INVITE_PREFIX}${id}`;
-    const identity = mintPeerDid(await this.mintKey(seedKey, key, now), routingDid);
+    const identity = mintPeerDid(await this.derive(seedKey, key), routingDid);
     const record: InvitationRecord = {
       id,
       key,
@@ -279,6 +297,7 @@ export class Vault {
       goal,
     };
     await this.invitations.put(record);
+    await this.rememberKey(seedKey, key, now);
     return { record, identity };
   }
 

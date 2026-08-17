@@ -134,8 +134,8 @@ export function parseKeystore(json: string): KeystoreDocument {
     throw new Error("keystore file must be a JSON object");
   }
   const doc = raw as { version?: unknown; keys?: unknown };
-  if (doc.version === 2) {
-    throw new Error("this is a v2 seed keystore; use parseSeedKeystore");
+  if (doc.version === 2 || doc.version === 3) {
+    throw new Error(`this is a v${doc.version} seed keystore; use parseSeedKeystore`);
   }
   if (doc.version !== 1) {
     throw new Error(`unsupported keystore version: ${String(doc.version)}`);

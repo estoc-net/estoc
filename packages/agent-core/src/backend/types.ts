@@ -20,6 +20,24 @@ export interface VaultBackend {
   remove(path: string): Promise<void>;
   /** Names of the files (not directories) directly inside `dir`, unsorted; [] if missing. */
   list(dir: string): Promise<string[]>;
+  /** Names of the directories directly inside `dir`, unsorted; [] if missing. */
+  dirs(dir: string): Promise<string[]>;
+}
+
+/**
+ * Every file under `dir`, recursively, as vault-relative paths, sorted.
+ * The whole-tree view a snapshot wants: not a list of the directories
+ * this version knows, but whatever is there.
+ */
+export async function walk(backend: VaultBackend, dir: string): Promise<string[]> {
+  const paths: string[] = [];
+  for (const name of await backend.list(dir)) {
+    paths.push(`${dir}/${name}`);
+  }
+  for (const name of await backend.dirs(dir)) {
+    paths.push(...(await walk(backend, `${dir}/${name}`)));
+  }
+  return paths.sort();
 }
 
 /** Split a vault-relative path into segments, rejecting anything unsafe. */

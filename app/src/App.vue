@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 
-import { state } from "./core/store.js";
+import { forgetIdentity, state } from "./core/store.js";
 import ChatPane from "./ui/ChatPane.vue";
 import Onboarding from "./ui/Onboarding.vue";
 import Rail from "./ui/Rail.vue";
 import Unlock from "./ui/Unlock.vue";
 
 const identity = computed(() => state.identity);
+
+function forget() {
+  if (confirm("Delete this vault from this browser? There is no way back except a backup zip.")) {
+    void forgetIdentity();
+  }
+}
 
 // Conversations are selected by the contact's cid — their DID is a history
 // that can move under a thread; the cid does not.
@@ -45,6 +51,23 @@ watch(
   </div>
 
   <Onboarding v-else-if="state.phase === 'onboarding'" />
+
+  <div v-else-if="state.phase === 'unreadable'" class="hollow" style="height: 100%">
+    <div class="hollow-card">
+      <div class="eyebrow">Estoc</div>
+      <h1>Vault not readable</h1>
+      <p>
+        There is a vault in this browser, but this version of the app cannot
+        open it{{ state.status.state === "error" ? `: ${state.status.detail}` : "." }}
+      </p>
+      <p class="fine">
+        Nothing has been changed. If it came from a newer version, update the app.
+        If it is from an older, pre-release format, there is no upgrade path:
+        <button class="link" @click="forget">start over</button> deletes it and
+        begins a new identity.
+      </p>
+    </div>
+  </div>
 
   <Unlock v-else-if="state.phase === 'locked'" />
 

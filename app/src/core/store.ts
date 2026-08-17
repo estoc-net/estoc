@@ -273,7 +273,17 @@ export async function boot(): Promise<void> {
     state.phase = "onboarding";
     return;
   }
-  const v = await Vault.open(backend);
+  let v: Vault;
+  try {
+    v = await Vault.open(backend);
+  } catch (err) {
+    // a vault this version cannot read: written by a newer client, or by
+    // an older format this one does not migrate — say so, and leave the
+    // bytes alone until the person decides
+    state.status = { state: "error", detail: err instanceof Error ? err.message : String(err) };
+    state.phase = "unreadable";
+    return;
+  }
   const key = await cachedSeedKey();
   if (key === null) {
     vault = v;

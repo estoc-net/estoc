@@ -23,6 +23,8 @@ export {
   generateSeed,
   importSeed,
   deriveIdentity,
+  isValidKeyName,
+  KEY_NAME_PATTERN,
   SEED_LENGTH,
   type SeedKey,
   type DerivedIdentity,

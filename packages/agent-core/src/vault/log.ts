@@ -3,8 +3,9 @@ import { FIRST_SEGMENT, text, utf8 } from "./layout.js";
 
 /**
  * An append-only JSONL log kept as segments in one directory: writers
- * append to one segment, readers concatenate every `*.jsonl` in name
- * order. Segments are not about size — they are how a merge works:
+ * append to one segment, readers concatenate every `<decimal>.jsonl` in
+ * numeric order (`0001`, `0002`, … `10000` — never lexically, which would
+ * put `10000` before `0002`). Segments are not about size — they are how a merge works:
  * importing another copy of the vault drops what is new into a segment of
  * its own, and nothing already here is rewritten. The message log and the
  * delivery log are both this, with their own line shape.
@@ -72,7 +73,7 @@ export class SegmentedLog<T> {
    * a callback; the log itself never invents records to fill the gap.
    */
   async read(onDamaged?: (damaged: DamagedLine) => void): Promise<T[]> {
-    const segments = (await this.backend.list(this.dir)).filter((name) => name.endsWith(".jsonl")).sort();
+    const segments = orderSegments(await this.backend.list(this.dir));
     const records: T[] = [];
     for (const segment of segments) {
       const bytes = await this.backend.read(`${this.dir}/${segment}`);
@@ -132,14 +133,30 @@ export function parseSegment<T>(
   return records;
 }
 
-/** The next segment name after the highest-numbered `NNNN.jsonl` in `existing`. */
+/** The number of a `<decimal>.jsonl` segment name, or null for any other file. */
+export function segmentNumber(name: string): number | null {
+  const match = /^(\d+)\.jsonl$/.exec(name);
+  return match === null ? null : Number(match[1]);
+}
+
+/**
+ * The segment files among `names`, in numeric order. Files that are not
+ * `<decimal>.jsonl` are not segments and are left out — a stray file in
+ * the directory is not history.
+ */
+export function orderSegments(names: string[]): string[] {
+  return names
+    .map((name) => [name, segmentNumber(name)] as const)
+    .filter((pair): pair is readonly [string, number] => pair[1] !== null)
+    .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
+    .map(([name]) => name);
+}
+
+/** The next segment name after the highest-numbered `<decimal>.jsonl` in `existing`. */
 export function nextSegment(existing: string[]): string {
   let max = 0;
   for (const name of existing) {
-    const match = /^(\d+)\.jsonl$/.exec(name);
-    if (match !== null) {
-      max = Math.max(max, Number(match[1]));
-    }
+    max = Math.max(max, segmentNumber(name) ?? 0);
   }
   return `${String(max + 1).padStart(4, "0")}.jsonl`;
 }

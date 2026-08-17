@@ -43,7 +43,7 @@ import {
 import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
 import { foldDeliveries, type DeliveryEvent, type DeliveryState } from "./vault/deliveries.js";
 import { counterpartyOf, newMessageRecord, type MessageRecord } from "./vault/messages.js";
-import { isRelationshipKey, KEY_PUBLIC, mediationGeneration, mediationKeyName, type Vault } from "./vault/vault.js";
+import { isRelationshipKey, mediationKeyName, type Vault } from "./vault/vault.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -572,9 +572,9 @@ export class Agent {
   /**
    * mediate-request → grant → mint the public DID on the routing DID →
    * recipient-update. Every step is safe to repeat, so a crash anywhere in
-   * between is healed by the next start: the grant is idempotent, a key
-   * already in the index is reused, and re-adding a recipient is a
-   * no_change.
+   * between is healed by the next start: the grant is idempotent, the
+   * public key's name is fixed by the mediation id so it derives the same
+   * DID again, and re-adding a recipient is a no_change.
    */
   private async establishMediation(): Promise<void> {
     const grant = await this.mediatorRoundTrip(MEDIATE_REQUEST, {});
@@ -588,13 +588,9 @@ export class Agent {
     }
     this.log("mediate-grant received; routing DID is the mediator");
 
-    // the public key of this mediation: `public` for the first, `public/<n>` after a change
-    const key = mediationKeyName(KEY_PUBLIC, mediationGeneration(this.mediation().me.key));
-    const hasKey = this.vault.keystore.keys.some((entry) => entry.name === key);
-    const identity = hasKey
-      ? await this.vault.derive(this.seedKey, key)
-      : await this.vault.mintKey(this.seedKey, key);
-    const pub = mintPeerDid(identity, routingDid);
+    // the public key of this mediation, named by the mediation's id
+    const key = mediationKeyName(this.mediation().id, "public");
+    const pub = mintPeerDid(await this.vault.derive(this.seedKey, key), routingDid);
     // The public DID's secrets must be resolvable before anything is
     // sealed to it; the mediator's recipient-update-response is.
     this.pub = pub;
@@ -615,6 +611,8 @@ export class Agent {
       public: { key, did: pub.did },
     };
     await this.vault.saveConfig();
+    // the record (config) is written; now the keystore's cache
+    await this.vault.mintKey(this.seedKey, key);
     this.log("public DID registered with the mediator");
   }
 
@@ -1344,7 +1342,7 @@ export class Agent {
         return current;
       }
       if (contact.addressedAs === pub.did && (contact.myDids ?? []).length === 0) {
-        contact.myDids = [{ did: pub.did, key: this.mediation().public?.key ?? KEY_PUBLIC, from: contact.createdAt }];
+        contact.myDids = [{ did: pub.did, key: mediationKeyName(this.mediation().id, "public"), from: contact.createdAt }];
       }
       const identity = await this.vault.mintPairwise(this.seedKey, contact, routingDid);
       this.minted.set(identity.did, identity);

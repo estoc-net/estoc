@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { VaultBackend } from "../src/index.js";
+import { walk, type VaultBackend } from "../src/index.js";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -35,13 +35,24 @@ export function backendSuite(name: string, fresh: () => Promise<VaultBackend>): 
       );
     });
 
-    it("lists files (not subdirectories) directly inside a dir", async () => {
+    it("lists files and directories separately, and walks the tree", async () => {
       const b = await fresh();
+      await b.write(".estoc/config.json", enc.encode("{}"));
       await b.write(".estoc/contacts/alice.json", enc.encode("{}"));
       await b.write(".estoc/contacts/bob.json", enc.encode("{}"));
       await b.write(".estoc/contacts/deeper/carol.json", enc.encode("{}"));
       expect((await b.list(".estoc/contacts")).sort()).toEqual(["alice.json", "bob.json"]);
-      expect(await b.list(".estoc")).toEqual([]);
+      expect(await b.dirs(".estoc/contacts")).toEqual(["deeper"]);
+      expect(await b.list(".estoc")).toEqual(["config.json"]);
+      expect(await b.dirs(".estoc")).toEqual(["contacts"]);
+      expect(await b.dirs(".estoc/nope")).toEqual([]);
+      expect(await walk(b, ".estoc")).toEqual([
+        ".estoc/config.json",
+        ".estoc/contacts/alice.json",
+        ".estoc/contacts/bob.json",
+        ".estoc/contacts/deeper/carol.json",
+      ]);
+      expect(await walk(b, ".estoc/nope")).toEqual([]);
     });
 
     it("removes, and removing a missing file is fine", async () => {

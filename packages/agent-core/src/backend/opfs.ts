@@ -112,6 +112,14 @@ export class OpfsBackend implements VaultBackend {
   }
 
   async list(dir: string): Promise<string[]> {
+    return this.entries(dir, "file");
+  }
+
+  async dirs(dir: string): Promise<string[]> {
+    return this.entries(dir, "directory");
+  }
+
+  private async entries(dir: string, kind: FileSystemHandleKind): Promise<string[]> {
     const handle = await this.dir(segmentsOf(dir), false);
     if (handle === null) {
       return [];
@@ -120,7 +128,7 @@ export class OpfsBackend implements VaultBackend {
     for await (const [name, entry] of handle as unknown as AsyncIterable<
       [string, FileSystemHandle]
     >) {
-      if (entry.kind === "file") {
+      if (entry.kind === kind) {
         names.push(name);
       }
     }

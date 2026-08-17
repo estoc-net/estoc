@@ -63,4 +63,4 @@ export interface Identity {
  * booting → (elsewhere: another tab has the vault) → onboarding (no vault)
  * | locked (a vault, no cached seed) → open.
  */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "locked" | "open";
+export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open";

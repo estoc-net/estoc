@@ -17,7 +17,7 @@ Agent                        envelopes · attribution · the log · mediation ·
   ├─ protocol/mediation      coordinate-mediation 3.0 · messagepickup 3.0 — transport with the mediator, never logged
   ├─ protocol/handler        the seam for application protocols; basicmessage 2.0 and user-profile 1.0 ship as handlers
   ├─ protocol/               resolver (did:web + did:peer), mediator input, out-of-band helpers
-  ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v2)
+  ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v3)
   └─ Vault                   the .estoc format: config · keystore · contacts · message log
        └─ VaultBackend       bytes: OpfsBackend (browser) · MemoryBackend (tests, snapshots)
 ```
@@ -50,15 +50,27 @@ application's projection of the log, not the agent's decision.
 
 ### The vault format
 
+The contract is [`docs/vault-format.md`](../../docs/vault-format.md) at
+the repository root; this package is its reference implementation.
+
 ```
 .estoc/
-  config.json            label, identity anchor, mediation snapshot
-  keystore.json          @estoc/keystore v2 — one sealed seed + a plaintext key index
-  contacts/<cid>.json    one mutable record per contact, DID history with evidence
-  invitations/<id>.json  single-use invitations issued: a DID waiting for whoever answers first
-  messages/NNNN.jsonl    append-only log; readers concatenate every segment
-  deliveries/NNNN.jsonl  what became of each outbound message: sent / failed / held, per try
+  config.json            singleton: label, identity anchor, mediation snapshot
+  keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a plaintext cache of key names
+  contacts/<cid>.json    record: one mutable file per contact, DID history with evidence
+  invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
+  messages/NNNN.jsonl    log: append-only; readers concatenate every segment in numeric order
+  deliveries/NNNN.jsonl  log: what became of each outbound message: sent / failed / held, per try
+  state/ blobs/ cache/   reserved (per-person state · attachment bytes · rebuildable, never snapshotted)
 ```
+
+- **Key names are derivation paths.** The seed and a name give the key
+  (`estoc/v3/<purpose>/<name>`), so `keystore.json`'s key list is a cache
+  and the records are the truth: every mint writes the record naming the
+  key (config, a contact's `myDids[]`, an invitation) before the cache
+  entry, and a name the cache never heard of derives all the same. No
+  name is a counter and none is reused: `mediation/<id>/…` by the
+  mediation's uuidv7, `pair/<cid>/<uuidv7>`, `invite/<id>`.
 
 - **DIDs in config are snapshots**, recorded when minted, and checked against
   the seed on open (`Vault.peerIdentity`). Rotating a mediator later never
@@ -113,7 +125,7 @@ application's projection of the log, not the agent's decision.
   and reaches no handler — there is nobody to answer.
 - **Pairwise DIDs, rotation by `from_prior`.** The public DID is a business
   card: strangers write to it. The first message we send anyone goes out
-  from a did:peer:4 minted for that relationship (`pair/<cid>/1`, service
+  from a did:peer:4 minted for that relationship (`pair/<cid>/<uuid>`, service
   = the mediator's routing DID, registered with the mediator as a
   recipient on the first delivery from it, or at the next start). A
   contact who wrote to the public DID first is told about the move the
@@ -131,11 +143,11 @@ application's projection of the log, not the agent's decision.
 - **Changing mediator.** `Agent.setMediator(did)` on a vault that has one
   moves it: the old mediator is asked to drop every DID it knew us by, open
   invitations are withdrawn (their DIDs led there), the vault records the
-  move (`Vault.setMediator`: a fresh mediator-facing key, `mediator/<n>`,
+  move (`Vault.setMediator`: a fresh mediation id and mediator-facing key, `mediation/<id>/me`,
   and — for every contact who wrote to the public DID and was never
   answered — that public DID as the closed first entry of their `myDids[]`,
   the prior a later reply will name), and the agent starts against the new
-  one: mediate-grant, a new public DID under `public/<n>`, and then the
+  one: mediate-grant, a new public DID under `mediation/<id>/public`, and then the
   invariant every start checks — every current DID toward a contact rides
   the current routing DID; one that does not is closed for a fresh one —
   so a move cut short by a crash finishes at the next start. Each contact
@@ -173,17 +185,18 @@ application's projection of the log, not the agent's decision.
 
 ### Identity
 
-One seed (keystore v2), keys by name in its index:
+One seed (keystore v3); every key is derived from it by name, and the
+name is the id of the thing the key belongs to:
 
 | key        | what it mints                                                    |
 | ---------- | ---------------------------------------------------------------- |
-| `anchor`   | index 0 — the did:key root; the identity everything hangs off    |
-| `mediator` | did:peer:4, no service — the DID the mediator knows this vault by; added by `setMediator` (`mediator/2`, `mediator/3`… after each change of mediator) |
-| `public`   | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant (`public/<n>` for the nth mediation) |
-| `pair/<cid>/<n>` | the nth pairwise did:peer:4 toward contact `cid`, same shape as `public`; minted on first message, recorded in the contact's `myDids[]` |
+| `anchor`   | the did:key root; the identity everything hangs off (the one fixed name — the seed alone recovers it) |
+| `mediation/<id>/me` | did:peer:4, no service — the DID the mediator knows this vault by; `id` is the mediation's uuidv7 (`config.mediation.id`), minted by `setMediator` — fresh on every change of mediator |
+| `mediation/<id>/public` | did:peer:4 whose service is the mediator's routing DID — the address for strangers; minted after mediate-grant, under the same id |
+| `pair/<cid>/<uuidv7>` | a pairwise did:peer:4 toward contact `cid`, same shape as `public`; one uuid per DID minted toward them, recorded in the contact's `myDids[]` |
 | `invite/<id>` | the did:peer:4 an invitation hands out, same shape; once taken it is the key behind that contact's `myDids[]` entry, name unchanged |
 
-`mintPeerDid(identity, serviceUri)` is deterministic: same seed, index and
+`mintPeerDid(identity, serviceUri)` is deterministic: same seed, name and
 service → same DID.
 
 ## Usage
@@ -271,25 +284,30 @@ next start.
 
 ### Moving a vault: snapshot and import
 
-`snapshotVault(backend)` is the vault's files, byte for byte, keyed by
-vault-relative path — the shape a zip holds. `importVault(backend, files)`
-lays them down and **merges, never overwrites**: into an empty backend it
-is a restore; into a vault of the same identity (same anchor DID) the
-snapshot's messages become a new log segment minus what is already here
-(same `mid`, or the same wire message received twice), its delivery
-events likewise (minus tries already here; a `held` is one device's own
-and does not travel), its contacts win by `updatedAt`, its invitations
-are added when missing (and marked taken when the snapshot saw the
-answer), and config and keystore stay local (same seed; mediation is a
-fact about this device); a vault of a different identity is refused.
+`snapshotVault(backend)` is every file under `.estoc/` except `cache/`,
+byte for byte, keyed by vault-relative path — the shape a zip holds, and
+not an allowlist: what another client wrote travels too.
+`importVault(backend, files)` lays them down and **merges, never
+overwrites**: into an empty backend it is a restore; into a vault of the
+same identity (same anchor DID) the snapshot's messages become a new log
+segment minus what is already here (same `mid`, or the same wire message
+received twice), its delivery events likewise (minus tries already here;
+a `held` is one device's own and does not travel), its contacts win by
+`updatedAt`, its invitations are added when missing (and marked taken
+when the snapshot saw the answer), its config stays local (mediation is a
+fact about this device), its keystore's key cache is unioned by name over
+this device's sealed seed, and any other path is copied when absent and
+never overwritten; a vault of a different identity is refused.
 Either way, an outbound message that arrives undelivered is held for a
 retry by hand (`held` in the outcome). How the files travel — zip,
 folder, paste — is the application's business.
 
 ### Backends
 
-`VaultBackend` is five methods over vault-relative paths: `read`, `write`
-(whole-file, atomic), `append`, `remove`, `list`. `MemoryBackend` is the test
+`VaultBackend` is six methods over vault-relative paths: `read`, `write`
+(whole-file, atomic), `append`, `remove`, `list` (files), `dirs`
+(subdirectories); `walk(backend, dir)` builds the recursive view a
+snapshot takes. `MemoryBackend` is the test
 double and the shape a zip unpacks into; `OpfsBackend` wraps a
 `FileSystemDirectoryHandle` (needs `createWritable()`). A Node `fs` backend
 is a page, if a client ever wants one. `test/backend-suite.ts` is the

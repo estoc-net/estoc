@@ -6,14 +6,21 @@
  * an identity out from under them.
  */
 
-/** A key in the keystore's index, and the DID it was minted as. */
+/** A key by its keystore name (the derivation path), and the DID it was minted as. */
 export interface KeyRef {
-  /** the entry name in keystore.json (`keys[].name`) */
+  /** the key's name in the keystore — derives it with the seed alone */
   key: string;
   did: string;
 }
 
 export interface Mediation {
+  /**
+   * uuidv7 minted when this mediation was decided (`Vault.setMediator`).
+   * The two keys of a mediation are named by it — `mediation/<id>/me`,
+   * `mediation/<id>/public` — so a change of mediator, which mints both
+   * anew, never reuses a name.
+   */
+  id: string;
   mediatorDid: string;
   /**
    * The DID the mediator knows this vault by. No service: its mail is
@@ -35,10 +42,12 @@ export interface VaultConfig {
   /** human label for this vault (the profile's display name in the demo) */
   label: string;
   identity: {
-    /** the did:key root: index 0 of the seed, the anchor everything else hangs off */
+    /** the did:key root: the key named `anchor`, which everything else hangs off */
     anchor: KeyRef;
   };
   mediation: Mediation | null;
+  /** fields this version does not know are kept and written back as they were */
+  [extra: string]: unknown;
 }
 
 function isKeyRef(value: unknown): value is KeyRef {
@@ -74,7 +83,7 @@ export function parseConfig(json: string): VaultConfig {
   let mediation: Mediation | null = null;
   if (config.mediation !== null && config.mediation !== undefined) {
     const m = config.mediation as Partial<Mediation>;
-    if (typeof m.mediatorDid !== "string" || !isKeyRef(m.me)) {
+    if (typeof m.id !== "string" || m.id === "" || typeof m.mediatorDid !== "string" || !isKeyRef(m.me)) {
       throw new Error("config.json has a malformed mediation section");
     }
     if (m.routingDid !== null && typeof m.routingDid !== "string") {
@@ -84,6 +93,8 @@ export function parseConfig(json: string): VaultConfig {
       throw new Error("config.json mediation.public must be a key ref or null");
     }
     mediation = {
+      ...m,
+      id: m.id,
       mediatorDid: m.mediatorDid,
       me: m.me,
       routingDid: m.routingDid ?? null,
@@ -91,10 +102,11 @@ export function parseConfig(json: string): VaultConfig {
     };
   }
   return {
+    ...config,
     format: "estoc",
     version: 1,
     label: config.label,
-    identity: { anchor: config.identity.anchor },
+    identity: { ...config.identity, anchor: config.identity.anchor },
     mediation,
   };
 }

@@ -34,25 +34,44 @@ export async function importSeed(seed: Uint8Array): Promise<SeedKey> {
 }
 
 /**
- * The derivation path label for one key of one identity. Versioned so the
- * scheme can change without silently changing existing DIDs.
+ * Key names are derivation paths: `[A-Za-z0-9._/-]+`. The same seed and the
+ * same name always give the same key, so a name is never renamed and never
+ * reused for a different key.
  */
-function info(index: number, purpose: "ed25519" | "x25519"): Uint8Array {
-  return new TextEncoder().encode(`estoc/v1/${purpose}/${index}`);
+export const KEY_NAME_PATTERN = /^[A-Za-z0-9._/-]+$/;
+
+export function isValidKeyName(name: string): boolean {
+  return KEY_NAME_PATTERN.test(name);
 }
 
-async function deriveBits32(seedKey: SeedKey, index: number, purpose: "ed25519" | "x25519"): Promise<Uint8Array> {
+function assertKeyName(name: string): void {
+  if (typeof name !== "string" || !isValidKeyName(name)) {
+    throw new Error(`invalid key name ${JSON.stringify(name)}: must match [A-Za-z0-9._/-]+`);
+  }
+}
+
+/**
+ * The HKDF info label for one half of one identity. `estoc/v3` names this
+ * derivation scheme (and the document version that carries it); changing
+ * either silently renames every DID, so it moves only with a new version.
+ */
+function info(name: string, purpose: "ed25519" | "x25519"): Uint8Array {
+  return new TextEncoder().encode(`estoc/v3/${purpose}/${name}`);
+}
+
+async function deriveBits32(seedKey: SeedKey, name: string, purpose: "ed25519" | "x25519"): Promise<Uint8Array> {
   const bits = await crypto.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: HKDF_SALT, info: info(index, purpose) },
+    { name: "HKDF", hash: "SHA-256", salt: HKDF_SALT, info: info(name, purpose) },
     seedKey,
     256,
   );
   return new Uint8Array(bits);
 }
 
-/** One identity derived from the seed at a given index. */
+/** One identity derived from the seed under a name. */
 export interface DerivedIdentity {
-  index: number;
+  /** The derivation path this identity was derived under. */
+  name: string;
   /** did:key of the Ed25519 half — the identity's canonical name. */
   did: string;
   /**
@@ -72,24 +91,22 @@ export interface DerivedIdentity {
 }
 
 /**
- * Derive the identity at `index`. Deterministic: the same seed and index
- * always yield the same keys, so a seed plus a list of indices rebuilds
- * every identity.
+ * Derive the identity named `name`. Deterministic: the same seed and name
+ * always yield the same keys, so a seed plus the names in use rebuilds
+ * every identity — no table required.
  */
-export async function deriveIdentity(seedKey: SeedKey, index: number): Promise<DerivedIdentity> {
-  if (!Number.isInteger(index) || index < 0) {
-    throw new Error(`derivation index must be a non-negative integer, got ${index}`);
-  }
+export async function deriveIdentity(seedKey: SeedKey, name: string): Promise<DerivedIdentity> {
+  assertKeyName(name);
   const [edPriv, xPriv] = await Promise.all([
-    deriveBits32(seedKey, index, "ed25519"),
-    deriveBits32(seedKey, index, "x25519"),
+    deriveBits32(seedKey, name, "ed25519"),
+    deriveBits32(seedKey, name, "x25519"),
   ]);
   const edPub = ed25519.getPublicKey(edPriv);
   const xPub = x25519.getPublicKey(xPriv);
   const did = didKeyFromPublicKey(edPub);
 
   return {
-    index,
+    name,
     did,
     signer: {
       did: () => did,

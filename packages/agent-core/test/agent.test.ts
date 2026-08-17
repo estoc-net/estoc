@@ -10,7 +10,7 @@ import {
   FORWARD,
   KEY_INVITE_PREFIX,
   KEY_PAIRWISE_PREFIX,
-  KEY_PUBLIC,
+  mediationKeyName,
   MemoryBackend,
   PLAIN_TYP,
   PROFILE,
@@ -41,7 +41,7 @@ const didcomm = { Message, FromPrior };
 const seedOf = (fill: number) => new Uint8Array(32).map((_, i) => (i * 7 + fill) & 0xff);
 
 async function newMediator(): Promise<FakeMediator> {
-  return new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), 0));
+  return new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), "anchor"));
 }
 
 interface Party {
@@ -206,7 +206,8 @@ describe("Agent through a mediator", () => {
     // registered it; the config snapshot and the keystore agree.
     expect(alice.agent.did).toMatch(/^did:peer:4/);
     expect(alice.vault.config.mediation?.routingDid).toBe(mediator.did);
-    expect(alice.vault.config.mediation?.public?.key).toBe(KEY_PUBLIC);
+    expect(alice.vault.config.mediation?.public?.key).toBe(mediationKeyName(alice.vault.config.mediation!.id, "public"));
+    expect(alice.vault.keystore.keys.map((k) => k.name)).toContain(alice.vault.config.mediation?.public?.key);
     expect(mediator.recipients.get(alice.agent.did as string)).toBe(alice.vault.config.mediation?.me.did);
     const aliceDoc = await resolveDIDCommDoc(alice.agent.did as string);
     expect(aliceDoc?.service[0]?.serviceEndpoint).toMatchObject({ uri: mediator.did });
@@ -231,7 +232,7 @@ describe("Agent through a mediator", () => {
     expect((await resolveDIDCommDoc(aliceToBob))?.service[0]?.serviceEndpoint).toMatchObject({ uri: mediator.did });
     const alicesBobRecord = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     expect(alicesBobRecord.myDids).toHaveLength(1);
-    expect(alicesBobRecord.myDids?.[0]).toMatchObject({ did: aliceToBob, key: `${KEY_PAIRWISE_PREFIX}${alicesBobRecord.cid}/1` });
+    expect(alicesBobRecord.myDids?.[0]).toMatchObject({ did: aliceToBob, key: expect.stringMatching(`^${KEY_PAIRWISE_PREFIX}${alicesBobRecord.cid}/`) });
     expect(alicesBobRecord.myDids?.[0]?.registeredAt).toBeDefined();
     // Bob's copy of the thread is homed to his contact for Alice
     expect(got.contactCid).toBeDefined();
@@ -262,7 +263,10 @@ describe("Agent through a mediator", () => {
     const bobToAlice = await myDidToward(bob, aliceToBob);
     expect(bobToAlice).not.toBe(bob.agent.did);
     const bobsAliceRecord = (await bob.vault.contacts.byDid(aliceToBob)) as ContactRecord;
-    expect(bobsAliceRecord.myDids?.map((u) => u.key)).toEqual([KEY_PUBLIC, `${KEY_PAIRWISE_PREFIX}${bobsAliceRecord.cid}/1`]);
+    expect(bobsAliceRecord.myDids?.map((u) => u.key)).toEqual([
+      mediationKeyName(bob.vault.config.mediation!.id, "public"),
+      expect.stringMatching(`^${KEY_PAIRWISE_PREFIX}${bobsAliceRecord.cid}/`),
+    ]);
     expect(bobsAliceRecord.myDids?.[0]?.until).toBeDefined();
     const alicesBob = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     expect(alicesBob.dids.map((u) => u.did)).toEqual([bob.agent.did, bobToAlice]);
@@ -365,19 +369,27 @@ describe("Agent through a mediator", () => {
     alice.agent.destroy();
   });
 
-  it("heals a mediation interrupted after the public key was minted", async () => {
+  it("heals a mediation interrupted between recording the public DID and caching its key", async () => {
     const mediator = await newMediator();
     const { backend, vault, seedKey } = await newVault("Carol", 5, mediator.did);
-    // The crash: the key exists in the keystore, config knows nothing yet.
-    await vault.mintKey(seedKey, KEY_PUBLIC);
-    const carol = attach("Carol", backend, vault, seedKey, mediator);
+    let carol = attach("Carol", backend, vault, seedKey, mediator);
     await carol.agent.start();
     await withTimeout(carol.live);
-    expect(carol.vault.config.mediation?.public?.key).toBe(KEY_PUBLIC);
-    // and the recorded DID is the one the existing key derives
-    const again = await Vault.open(backend);
-    await expect(again.peerIdentity(seedKey, again.config.mediation!.public!, mediator.did)).resolves.toBeDefined();
-    expect(again.keystore.keys.filter((k) => k.name === KEY_PUBLIC)).toHaveLength(1);
+    const pub = carol.vault.config.mediation!.public!;
+    expect(pub.key).toBe(mediationKeyName(carol.vault.config.mediation!.id, "public"));
+    carol.agent.destroy();
+    // The crash: config records the public DID, the keystore's cache never
+    // heard of the key. The name is the derivation path, so nothing is lost.
+    vault.keystore = { ...vault.keystore, keys: vault.keystore.keys.filter((k) => k.name !== pub.key) };
+    await vault.saveKeystore();
+    carol = await reopen(carol, mediator);
+    await carol.agent.start();
+    await withTimeout(carol.live);
+    expect(carol.agent.did).toBe(pub.did);
+    expect(carol.vault.config.mediation?.public).toEqual(pub);
+    await expect(carol.vault.peerIdentity(seedKey, pub, mediator.did)).resolves.toMatchObject({ did: pub.did });
+    // and the mediator did not have to be asked again
+    expect(mediator.seenTypes.filter((t) => t.endsWith("mediate-request"))).toHaveLength(1);
     carol.agent.destroy();
   });
 
@@ -435,7 +447,7 @@ describe("Agent through a mediator", () => {
     // the DID was minted and recorded, but the mediator never heard of it
     const record = (await carol.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     const use = currentMyDid(record);
-    expect(use?.key).toBe(`${KEY_PAIRWISE_PREFIX}${record.cid}/1`);
+    expect(use?.key).toMatch(new RegExp(`^${KEY_PAIRWISE_PREFIX}${record.cid}/`));
     expect(use?.registeredAt).toBeUndefined();
     expect(mediator.recipients.has(use?.did as string)).toBe(false);
     // the message is a fact in the log — written, not delivered: the
@@ -504,9 +516,9 @@ describe("Agent through a mediator", () => {
     const record = (await alice.vault.contacts.byDid(bob.agent.did as string)) as ContactRecord;
     await alice.agent.removeContact(record.cid);
     expect(await alice.vault.contacts.byCid(record.cid)).toBeNull();
-    // the mediator no longer accepts mail for that DID; the key stays burned
+    // the mediator no longer accepts mail for that DID; the key stays listed (a name is never reused)
     expect(mediator.recipients.has(aliceToBob)).toBe(false);
-    expect(alice.vault.keystore.keys.some((k) => k.name === `${KEY_PAIRWISE_PREFIX}${record.cid}/1`)).toBe(true);
+    expect(alice.vault.keystore.keys.some((k) => k.name.startsWith(`${KEY_PAIRWISE_PREFIX}${record.cid}/`))).toBe(true);
     // Bob writing to it now bounces at the mediator
     await undelivered(bob, bob.agent.sendBasicMessage(aliceToBob, "anyone there?"));
     alice.agent.destroy();
@@ -683,7 +695,7 @@ describe("Agent through a mediator", () => {
 
   it("moves to another mediator: every DID re-minted, contacts follow by from_prior, the old address dead", async () => {
     const one = await newMediator();
-    const two = new FakeMediator(await deriveIdentity(await importSeed(seedOf(201)), 0), "http://other-mediator/", "ws://other-mediator/ws");
+    const two = new FakeMediator(await deriveIdentity(await importSeed(seedOf(201)), "anchor"), "http://other-mediator/", "ws://other-mediator/ws");
     const net = network(one, two);
     const party = async (name: string, fill: number) => {
       const { backend, vault, seedKey } = await newVault(name, fill, one.did);
@@ -716,6 +728,7 @@ describe("Agent through a mediator", () => {
     await withTimeout(dan.next((v) => v.kind === "profile" && v.direction === "received"));
     const open = await alice.agent.createInvitation();
     const alicePub1 = alice.agent.did as string;
+    const before = alice.vault.config.mediation!;
     // Alice knows Dan by the DID he minted toward her, never his public one
     const danDid = await myDidToward(dan, invitation.did);
     const aliceToDan1 = await myDidToward(alice, danDid);
@@ -728,8 +741,9 @@ describe("Agent through a mediator", () => {
     await withTimeout(until(() => alice.agent.status.state === "live"));
     const mediation = alice.vault.config.mediation!;
     expect(mediation.mediatorDid).toBe(two.did);
-    expect(mediation.me.key).toBe("mediator/2");
-    expect(mediation.public?.key).toBe("public/2");
+    expect(mediation.id).not.toBe(before.id);
+    expect(mediation.me.key).toBe(mediationKeyName(mediation.id, "me"));
+    expect(mediation.public?.key).toBe(mediationKeyName(mediation.id, "public"));
     expect(mediation.routingDid).toBe(two.did);
     const alicePub2 = alice.agent.did as string;
     expect(alicePub2).not.toBe(alicePub1);
@@ -813,7 +827,7 @@ describe("Agent through a mediator", () => {
 
   it("heals a move interrupted before the DIDs were re-minted at the next start", async () => {
     const one = await newMediator();
-    const two = new FakeMediator(await deriveIdentity(await importSeed(seedOf(202)), 0), "http://other-mediator/", "ws://other-mediator/ws");
+    const two = new FakeMediator(await deriveIdentity(await importSeed(seedOf(202)), "anchor"), "http://other-mediator/", "ws://other-mediator/ws");
     const net = network(one, two);
     const { backend, vault, seedKey } = await newVault("Alice", 45, one.did);
     let alice = attach("Alice", backend, vault, seedKey, net);
@@ -865,7 +879,7 @@ async function forwardTo(mediator: FakeMediator, recipientDid: string, innerPack
 
 /** A stranger with keys but no mediator: a did:peer:4 whose service is `endpoint`. */
 async function stranger(fill: number, endpoint: string) {
-  const identity = await deriveIdentity(await importSeed(seedOf(fill)), 0);
+  const identity = await deriveIdentity(await importSeed(seedOf(fill)), "anchor");
   return mintPeerDid(identity, endpoint);
 }
 

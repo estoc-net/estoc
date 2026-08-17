@@ -11,7 +11,7 @@
 
 export { MemoryBackend } from "./backend/memory.js";
 export { OpfsBackend } from "./backend/opfs.js";
-export { segmentsOf, type VaultBackend } from "./backend/types.js";
+export { segmentsOf, walk, type VaultBackend } from "./backend/types.js";
 
 export {
   CONFIG_PATH,
@@ -51,7 +51,7 @@ export {
   type MessageRecord,
   type PlainMessage,
 } from "./vault/messages.js";
-export { SegmentedLog, type DamagedLine, type LineParser } from "./vault/log.js";
+export { SegmentedLog, orderSegments, type DamagedLine, type LineParser } from "./vault/log.js";
 export {
   DeliveryLog,
   deliveryKey,
@@ -70,12 +70,10 @@ export {
 export {
   KEY_ANCHOR,
   KEY_INVITE_PREFIX,
-  KEY_MEDIATOR,
+  KEY_MEDIATION_PREFIX,
   KEY_PAIRWISE_PREFIX,
-  KEY_PUBLIC,
   Vault,
   isRelationshipKey,
-  mediationGeneration,
   mediationKeyName,
   type CreateVaultOptions,
 } from "./vault/vault.js";

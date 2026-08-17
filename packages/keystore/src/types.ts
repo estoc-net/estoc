@@ -53,29 +53,30 @@ export interface KeystoreDocument {
   keys: KeyEntry[];
 }
 
-/** One derived key in a v2 store. Nothing here is secret: the private material lives in the seed. */
+/**
+ * One derived key in a v3 store. Nothing here is secret, and nothing here
+ * is needed to derive the key: the name alone is the derivation path. The
+ * entry is a cache so listing needs no unlock.
+ */
 export interface DerivedKeyEntry {
-  /** Local, store-unique label. Never leaves the machine. */
+  /** The derivation path — see `isValidKeyName`. Never renamed, never reused. */
   name: string;
-  /** HKDF derivation index — with the seed, everything about this key follows from it. */
-  index: number;
   /** did:key of the Ed25519 half, cached so listing needs no unlock. */
   did: string;
-  /** ISO 8601 creation time. */
+  /** ISO 8601 time this store first derived the key. */
   createdAt: string;
 }
 
 /**
- * The v2 store — one sealed seed, every key derived from it. Unlock once,
- * keep the SeedKey, derive forever; the seed is the only thing that cannot
- * be regenerated.
+ * The v3 store — one sealed seed, every key derived from it by name.
+ * Unlock once, keep the SeedKey, derive forever; the seed is the only thing
+ * that cannot be regenerated. `keys` is a cache: two stores around the
+ * same seed can list different keys and still derive each other's.
  */
 export interface SeedKeystoreDocument {
-  version: 2;
+  version: 3;
   /** The 32-byte seed as a compact JWE (PBES2-HS512+A256KW / A256GCM). */
   seedJwe: string;
-  /** Next unused derivation index. Only ever grows; removed keys do not free theirs. */
-  nextIndex: number;
   keys: DerivedKeyEntry[];
 }
 

@@ -9,9 +9,8 @@ import {
   INVITATIONS_DIR,
   KEY_ANCHOR,
   KEY_INVITE_PREFIX,
-  KEY_MEDIATOR,
+  KEY_MEDIATION_PREFIX,
   KEY_PAIRWISE_PREFIX,
-  KEY_PUBLIC,
   DeliveryLog,
   MemoryBackend,
   MessageLog,
@@ -21,11 +20,11 @@ import {
   contactFile,
   currentDid,
   currentMyDid,
-  mediationGeneration,
   mediationKeyName,
   mintPeerDid,
   newContact,
   newMessageRecord,
+  orderSegments,
   parseConfig,
   parseInvitation,
   parseInvitationRecord,
@@ -36,6 +35,7 @@ import {
 
 const FIXED_SEED = new Uint8Array(32).map((_, i) => i);
 const dec = new TextDecoder();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 async function freshKeystore() {
   // The seed is fixed for determinism; the passphrase only guards seedJwe,
@@ -55,10 +55,13 @@ describe("Vault", () => {
     });
     expect(vault.config.identity.anchor.key).toBe(KEY_ANCHOR);
     expect(vault.config.identity.anchor.did).toMatch(/^did:key:z6Mk/);
-    expect(vault.config.mediation?.me.key).toBe(KEY_MEDIATOR);
-    expect(vault.config.mediation?.me.did).toMatch(/^did:peer:4/);
-    expect(vault.config.mediation?.public).toBeNull();
-    expect(vault.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, KEY_MEDIATOR]);
+    const mediation = vault.config.mediation!;
+    expect(mediation.id).toMatch(UUID);
+    expect(mediation.me.key).toBe(`${KEY_MEDIATION_PREFIX}${mediation.id}/me`);
+    expect(mediation.me.key).toBe(mediationKeyName(mediation.id, "me"));
+    expect(mediation.me.did).toMatch(/^did:peer:4/);
+    expect(mediation.public).toBeNull();
+    expect(vault.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, mediation.me.key]);
 
     // Both files landed, and they are the source of truth for a reopen.
     expect(backend.files.has(CONFIG_PATH)).toBe(true);
@@ -72,21 +75,18 @@ describe("Vault", () => {
     expect(me.secrets.map((s) => s.id)).toEqual([`${me.did}#key-1`, `${me.did}#key-2`]);
   });
 
-  it("pins the mediator-facing DID for the fixed seed", async () => {
-    // Index 1 of FIXED_SEED, no service. Any change to derivation or to the
-    // did:peer:4 document shape shows up here.
+  it("pins the anchor and a mediator-facing DID for the fixed seed", async () => {
+    // Any change to derivation (`estoc/v3/<purpose>/<name>`) or to the
+    // did:peer:4 document shape shows up here. The mediation id is
+    // random per vault, so the peer DID is pinned under a fixed name.
     const { doc, seedKey } = await freshKeystore();
-    const vault = await Vault.create(new MemoryBackend(), {
-      label: "x",
-      keystore: doc,
-      seedKey,
-      mediatorDid: "did:web:m",
-    });
-    const did = vault.config.mediation!.me.did;
-    const resolved = await resolveDIDCommDoc(did);
+    const vault = await Vault.create(new MemoryBackend(), { label: "x", keystore: doc, seedKey });
+    expect(vault.config.identity.anchor.did).toBe("did:key:z6Mkk4RzvEvh61iNGk7gJVk9UPSrGofjLgLDrtEqzdCATJ5A");
+    const me = mintPeerDid(await vault.derive(seedKey, mediationKeyName("0198b7c0-0000-7000-8000-000000000000", "me")), null);
+    const resolved = await resolveDIDCommDoc(me.did);
     expect(resolved?.verificationMethod).toHaveLength(2);
     expect(resolved?.service).toEqual([]);
-    expect(did.slice(0, 40)).toBe("did:peer:4zQmTKyYhKfZg48DSSVAL1bcba2AYPC");
+    expect(me.did.slice(0, 40)).toBe("did:peer:4zQmRG8Tb4SW5rtKZZUwZxTVHAmCy8N");
   });
 
   it("mints an identity with no mediator, and names one later — same DIDs as naming it at once", async () => {
@@ -99,30 +99,39 @@ describe("Vault", () => {
     // reopened from disk, still unmediated; then the mediator is chosen
     const later = await Vault.open(backend);
     await later.setMediator(seedKey, "did:web:mediator.example");
-    expect(later.config.mediation?.mediatorDid).toBe("did:web:mediator.example");
-    expect(later.config.mediation?.me.key).toBe(KEY_MEDIATOR);
-    expect(later.config.mediation?.public).toBeNull();
-    expect(later.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, KEY_MEDIATOR]);
+    const mediation = later.config.mediation!;
+    expect(mediation.mediatorDid).toBe("did:web:mediator.example");
+    expect(mediation.me.key).toBe(mediationKeyName(mediation.id, "me"));
+    expect(mediation.public).toBeNull();
+    expect(later.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, mediation.me.key]);
     expect((await Vault.open(backend)).config).toEqual(later.config);
+    // the DID re-derives from its name alone — with or without the cache entry
+    expect((await later.peerIdentity(seedKey, mediation.me, null)).did).toBe(mediation.me.did);
+    later.keystore = { ...later.keystore, keys: later.keystore.keys.filter((k) => k.name === KEY_ANCHOR) };
+    expect((await later.peerIdentity(seedKey, mediation.me, null)).did).toBe(mediation.me.did);
 
-    // choosing later or at creation lands on the same mediator-facing DID
+    // every mediation decision gets its own id, hence its own DID: choosing
+    // the same mediator on another vault of the same seed does not collide
     const atOnce = await Vault.create(new MemoryBackend(), {
       label: "Alice",
       keystore: (await freshKeystore()).doc,
       seedKey,
       mediatorDid: "did:web:mediator.example",
     });
-    expect(atOnce.config.mediation?.me.did).toBe(later.config.mediation?.me.did);
+    expect(atOnce.config.mediation?.id).not.toBe(mediation.id);
+    expect(atOnce.config.mediation?.me.did).not.toBe(mediation.me.did);
 
     // the same mediator again is nothing to do
     await expect(later.setMediator(seedKey, "did:web:mediator.example")).rejects.toThrow(/already reached via/);
   });
 
-  it("changes mediator: fresh mediator/public keys per mediation, the retired public DID kept on record for the unanswered", async () => {
+  it("changes mediator: a fresh id and fresh me/public keys per mediation, the retired public DID kept on record for the unanswered", async () => {
     const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();
     const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:one" });
     // as the agent would after mediate-grant: a public DID on the routing DID
+    const KEY_PUBLIC = mediationKeyName(vault.config.mediation!.id, "public");
+    const KEY_MEDIATOR = vault.config.mediation!.me.key;
     const pub = mintPeerDid(await vault.mintKey(seedKey, KEY_PUBLIC), "did:web:one");
     vault.config.mediation = { ...vault.config.mediation!, routingDid: "did:web:one", public: { key: KEY_PUBLIC, did: pub.did } };
     await vault.saveConfig();
@@ -141,15 +150,15 @@ describe("Vault", () => {
     await vault.setMediator(seedKey, "did:web:two", new Date("2026-08-16T10:00:00Z"));
     const after = vault.config.mediation!;
     expect(after.mediatorDid).toBe("did:web:two");
-    expect(after.me.key).toBe("mediator/2");
+    expect(after.id).toMatch(UUID);
+    expect(after.id).not.toBe(before.id);
+    expect(after.me.key).toBe(mediationKeyName(after.id, "me"));
     expect(after.me.did).not.toBe(before.me.did);
     expect(after.routingDid).toBeNull();
     expect(after.public).toBeNull();
-    expect(mediationGeneration(after.me.key)).toBe(2);
-    expect(mediationKeyName(KEY_PUBLIC, 2)).toBe("public/2");
-    // the old keys stay in the index — retired DIDs may still have to sign a from_prior
+    // the old keys stay in the cache — retired DIDs may still have to sign a from_prior
     expect(vault.keystore.keys.map((k) => k.name)).toEqual(
-      expect.arrayContaining([KEY_ANCHOR, KEY_MEDIATOR, KEY_PUBLIC, "mediator/2"])
+      expect.arrayContaining([KEY_ANCHOR, KEY_MEDIATOR, KEY_PUBLIC, after.me.key])
     );
     // Bob's record now remembers the DID he wrote to, closed at the move
     const bobAfter = (await vault.contacts.byCid(bob.cid))!;
@@ -158,14 +167,15 @@ describe("Vault", () => {
     // Carol already had it; Dan never knew it: both untouched by the vault (their pairwise DIDs are the agent's to rotate)
     expect((await vault.contacts.byCid(carol.cid))!.myDids).toEqual((carol.myDids ?? []));
     expect((await vault.contacts.byCid(dan.cid))!.myDids).toHaveLength(1);
-    // idempotent under a retry, and a third mediation numbers on
+    // idempotent under a retry, and a third mediation gets a third id
     await expect(vault.setMediator(seedKey, "did:web:two")).rejects.toThrow(/already reached via/);
     await vault.setMediator(seedKey, "did:web:three");
-    expect(vault.config.mediation?.me.key).toBe("mediator/3");
+    expect(vault.config.mediation?.id).not.toBe(after.id);
+    expect(vault.config.mediation?.me.key).toBe(mediationKeyName(vault.config.mediation!.id, "me"));
     expect((await Vault.open(backend)).config).toEqual(vault.config);
   });
 
-  it("mints pairwise DIDs toward a contact: numbered keys, the previous one closed, a crash healed", async () => {
+  it("mints pairwise DIDs toward a contact: uuid-named keys, the previous one closed, the record before the cache", async () => {
     const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();
     const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:mediator.example" });
@@ -175,7 +185,10 @@ describe("Vault", () => {
 
     const first = await vault.mintPairwise(seedKey, contact, routing);
     expect(first.did).toMatch(/^did:peer:4/);
-    expect(currentMyDid(contact)).toMatchObject({ did: first.did, key: `${KEY_PAIRWISE_PREFIX}${contact.cid}/1` });
+    const firstKey = currentMyDid(contact)!.key;
+    expect(firstKey.startsWith(`${KEY_PAIRWISE_PREFIX}${contact.cid}/`)).toBe(true);
+    expect(firstKey.slice(`${KEY_PAIRWISE_PREFIX}${contact.cid}/`.length)).toMatch(UUID);
+    expect(currentMyDid(contact)).toMatchObject({ did: first.did, key: firstKey });
     expect(currentMyDid(contact)?.registeredAt).toBeUndefined();
     // the routing DID is the DID's service; the secrets are the DID's own
     expect((await resolveDIDCommDoc(first.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: routing });
@@ -186,7 +199,9 @@ describe("Vault", () => {
     // a second one closes the first
     const second = await vault.mintPairwise(seedKey, contact, routing);
     expect(second.did).not.toBe(first.did);
-    expect(contact.myDids?.map((u) => u.key)).toEqual([`${KEY_PAIRWISE_PREFIX}${contact.cid}/1`, `${KEY_PAIRWISE_PREFIX}${contact.cid}/2`]);
+    const secondKey = currentMyDid(contact)!.key;
+    expect(secondKey).not.toBe(firstKey);
+    expect(contact.myDids?.map((u) => u.key)).toEqual([firstKey, secondKey]);
     expect(contact.myDids?.[0]?.until).toBeDefined();
     expect(currentMyDid(contact)?.did).toBe(second.did);
     // each re-derives from its key ref, checked against the recorded DID
@@ -194,12 +209,21 @@ describe("Vault", () => {
       await expect(vault.peerIdentity(seedKey, use, routing)).resolves.toMatchObject({ did: use.did });
     }
 
-    // a crash between minting the key and saving the contact leaves the key
-    // in the index; the next attempt reuses it instead of choking on the name
-    await vault.mintKey(seedKey, `${KEY_PAIRWISE_PREFIX}${contact.cid}/3`);
+    // the record is written before the keystore's cache: a crash between
+    // the two leaves a contact naming a key the cache has not seen, and
+    // the key derives from its name regardless
+    const writes: string[] = [];
+    const spy = backend.write.bind(backend);
+    backend.write = async (path, data) => {
+      writes.push(path);
+      await spy(path, data);
+    };
     const third = await vault.mintPairwise(seedKey, contact, routing);
-    expect(currentMyDid(contact)?.key).toBe(`${KEY_PAIRWISE_PREFIX}${contact.cid}/3`);
+    expect(writes).toEqual([contactFile(contact.cid), KEYSTORE_PATH]);
     expect(vault.keystore.keys.filter((k) => k.name.startsWith(KEY_PAIRWISE_PREFIX))).toHaveLength(3);
+    const thirdKey = currentMyDid(contact)!.key;
+    vault.keystore = { ...vault.keystore, keys: vault.keystore.keys.filter((k) => k.name !== thirdKey) };
+    await expect(vault.peerIdentity(seedKey, currentMyDid(contact)!, routing)).resolves.toMatchObject({ did: third.did });
     // deterministic: reopening derives the same DIDs
     const again = await Vault.open(backend);
     await expect(again.peerIdentity(seedKey, currentMyDid((await again.contacts.byCid(contact.cid)) as ContactRecord) as { key: string; did: string }, routing)).resolves.toMatchObject({ did: third.did });
@@ -312,16 +336,29 @@ describe("config.json", () => {
     expect(() =>
       parseConfig(JSON.stringify({ ...good, mediation: { mediatorDid: "did:web:m" } }))
     ).toThrow(/mediation/);
+    // a mediation without an id is a 0.12 vault, not this format
+    expect(() =>
+      parseConfig(JSON.stringify({ ...good, mediation: { mediatorDid: "did:web:m", me: { key: "mediator", did: "did:peer:4a" }, routingDid: null, public: null } }))
+    ).toThrow(/mediation/);
     const mediated = {
       ...good,
       mediation: {
+        id: "0198b7c0-0000-7000-8000-000000000000",
         mediatorDid: "did:web:m",
-        me: { key: "mediator", did: "did:peer:4a" },
+        me: { key: "mediation/0198b7c0-0000-7000-8000-000000000000/me", did: "did:peer:4a" },
         routingDid: null,
         public: null,
       },
     };
     expect(parseConfig(JSON.stringify(mediated))).toEqual(mediated);
+    // fields this version does not know are kept, at every level it rewrites
+    const future = {
+      ...mediated,
+      theme: "dark",
+      identity: { ...mediated.identity, avatar: "blob:1" },
+      mediation: { ...mediated.mediation, pushEndpoint: "https://x" },
+    };
+    expect(parseConfig(JSON.stringify(future))).toEqual(future);
   });
 });
 
@@ -402,20 +439,24 @@ describe("MessageLog", () => {
     expect(r1.at).toBe("1970-01-01T00:00:01.000Z");
   });
 
-  it("concatenates segments in name order and skips a truncated tail", async () => {
+  it("concatenates segments in numeric order, ignores what is not a segment, and skips a truncated tail", async () => {
     const backend = new MemoryBackend();
     const log = new MessageLog(backend);
-    const older = newMessageRecord({ direction: "in", msg: msg("old") });
-    // a segment that arrived from elsewhere (an import) sorts first by name
-    await backend.write(
-      ".estoc/messages/0000-imported.jsonl",
-      new TextEncoder().encode(JSON.stringify(older) + "\n")
-    );
+    const line = (id: string) => new TextEncoder().encode(JSON.stringify(newMessageRecord({ direction: "in", msg: msg(id) })) + "\n");
     const mine = newMessageRecord({ direction: "out", msg: msg("mine") });
     await log.append(mine);
+    // segments from merges: numeric order, not lexical (10000 after 0002), and
+    // a writer that did not zero-pad still counts
+    await backend.write(".estoc/messages/0002.jsonl", line("two"));
+    await backend.write(".estoc/messages/10000.jsonl", line("ten-thousand"));
+    await backend.write(".estoc/messages/3.jsonl", line("three"));
+    // a stray file in the directory is not history
+    await backend.write(".estoc/messages/notes.txt", line("stray"));
+    await backend.write(".estoc/messages/0000-imported.jsonl", line("stray-too"));
     // a crash mid-append leaves half a line
     await backend.append(".estoc/messages/0001.jsonl", new TextEncoder().encode('{"mid":"01'));
-    expect((await log.read()).map((r) => r.msg.id)).toEqual(["old", "mine"]);
+    expect((await log.read()).map((r) => r.msg.id)).toEqual(["mine", "two", "three", "ten-thousand"]);
+    expect(orderSegments(["10000.jsonl", "x.jsonl", "0002.jsonl", "3.jsonl"])).toEqual(["0002.jsonl", "3.jsonl", "10000.jsonl"]);
   });
 
   it("skips a damaged line, reports it, and keeps the rest", async () => {

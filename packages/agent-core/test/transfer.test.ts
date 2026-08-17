@@ -81,6 +81,61 @@ describe("snapshot + import", () => {
     expect((await other.list(DELIVERIES_DIR)).sort()).toEqual(["0001.jsonl"]);
   });
 
+  it("snapshots the whole tree but cache/, unions the key cache, and copies unknown paths only when absent", async () => {
+    const enc = new TextEncoder();
+    const { backend: a, vault: va } = await vaultWith(SEED_A);
+    const bob = newContact("Bob", "did:peer:4bob", new Date(1_000));
+    await va.contacts.put(bob);
+    // things this version has no rule for, and one it never carries
+    await a.write(".estoc/state/cursors.json", enc.encode('{"a":1}'));
+    await a.write(".estoc/blobs/sha256-aaaa", enc.encode("blob-a"));
+    await a.write(".estoc/other-client/notes/todo.md", enc.encode("from a"));
+    await a.write(".estoc/cache/index.sqlite", enc.encode("rebuildable"));
+    const files = await snapshotVault(a);
+    expect(Object.keys(files)).toEqual([
+      ".estoc/blobs/sha256-aaaa",
+      ".estoc/config.json",
+      `.estoc/contacts/${bob.cid}.json`,
+      ".estoc/keystore.json",
+      ".estoc/other-client/notes/todo.md",
+      ".estoc/state/cursors.json",
+    ]);
+
+    // restore: everything as it was — and a cache/ someone zipped by hand stays out
+    const other = new MemoryBackend();
+    const outcome = await importVault(other, { ...files, ".estoc/cache/x": enc.encode("no") });
+    expect(outcome).toMatchObject({ kind: "restored", files: 6 });
+    expect(await other.read(".estoc/cache/x")).toBeNull();
+    expect(dec.decode((await other.read(".estoc/other-client/notes/todo.md"))!)).toBe("from a");
+
+    // B (the restore) mints a key A has never seen, and edits/creates unknown files
+    const vb = await Vault.open(other);
+    const { seedKey } = await createSeedKeystore("pw", { seed: SEED_A });
+    const carol = newContact("Carol", "did:peer:4carol", new Date(2_000));
+    await vb.mintPairwise(seedKey, carol, "did:web:mediator.example");
+    const carolKey = carol.myDids![0]!.key;
+    await other.write(".estoc/state/cursors.json", enc.encode('{"b":2}'));
+    await other.write(".estoc/blobs/sha256-bbbb", enc.encode("blob-b"));
+    await other.write(".estoc/other-client/notes/todo.md", enc.encode("from b"));
+    await other.write(".estoc/cache/index.sqlite", enc.encode("b's cache"));
+
+    // B into A: the key cache gains B's name (A can derive it: same seed),
+    // absent files arrive, present ones are not overwritten, cache/ never travels
+    const merged = await importVault(a, { ...(await snapshotVault(other)), ".estoc/cache/x": enc.encode("no") });
+    expect(merged).toMatchObject({ kind: "merged", contactsAdded: 1, keysAdded: 1, filesCopied: 1 });
+    const va2 = await Vault.open(a);
+    expect(va2.keystore.keys.map((k) => k.name)).toContain(carolKey);
+    expect(va2.keystore.seedJwe).toBe(va.keystore.seedJwe);
+    await expect(va2.peerIdentity(seedKey, carol.myDids![0]!, "did:web:mediator.example")).resolves.toMatchObject({ did: carol.myDids![0]!.did });
+    expect(dec.decode((await a.read(".estoc/blobs/sha256-bbbb"))!)).toBe("blob-b");
+    expect(dec.decode((await a.read(".estoc/state/cursors.json"))!)).toBe('{"a":1}');
+    expect(dec.decode((await a.read(".estoc/other-client/notes/todo.md"))!)).toBe("from a");
+    expect(dec.decode((await a.read(".estoc/cache/index.sqlite"))!)).toBe("rebuildable");
+    expect(await a.read(".estoc/cache/x")).toBeNull();
+    // again: nothing to add
+    expect(await importVault(a, await snapshotVault(other))).toMatchObject({ keysAdded: 0, filesCopied: 0 });
+  });
+
   it("carries deliveries along: sent stays sent, undelivered is held, and a hold is one device's own", async () => {
     const { backend: a, vault: va } = await vaultWith(SEED_A);
     const sent = newMessageRecord({ direction: "out", msg: msg("sent") }, new Date(2_000));

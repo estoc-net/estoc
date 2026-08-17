@@ -1,39 +1,47 @@
-import { parseSeedKeystore } from "@estoc/keystore";
+import { parseSeedKeystore, serializeKeystore, type DerivedKeyEntry } from "@estoc/keystore";
 
-import type { VaultBackend } from "../backend/types.js";
+import { walk, type VaultBackend } from "../backend/types.js";
 import { parseConfig } from "./config.js";
 import { ContactStore, parseContact } from "./contacts.js";
 import { InvitationStore, parseInvitationRecord } from "./invitations.js";
 import { DeliveryLog, deliveryKey, foldDeliveries, type DeliveryState } from "./deliveries.js";
 import {
+  CACHE_DIR,
   CONFIG_PATH,
   CONTACTS_DIR,
   DELIVERIES_DIR,
+  ESTOC_DIR,
   INVITATIONS_DIR,
   KEYSTORE_PATH,
   MESSAGES_DIR,
   text,
+  utf8,
 } from "./layout.js";
-import type { DamagedLine, SegmentedLog } from "./log.js";
+import { orderSegments, type DamagedLine, type SegmentedLog } from "./log.js";
 import { MessageLog, type MessageRecord } from "./messages.js";
 
 /**
  * Moving a vault between backends: the zip a browser exports, the folder a
- * device restores from. A snapshot is the vault's files, byte for byte, keyed
- * by their vault-relative paths (`.estoc/config.json`, …) — no conversion,
- * because the files *are* the format. Import lays a snapshot down over a
- * backend, and there the one interesting rule lives: **import merges, never
- * overwrites.**
+ * device restores from. A snapshot is every file under `.estoc/` (except
+ * `cache/`), byte for byte, keyed by vault-relative path
+ * (`.estoc/config.json`, …) — no conversion and no allowlist, because the
+ * files *are* the format and a client must not drop from a backup what
+ * another client wrote. Import lays a snapshot down over a backend, and
+ * there the one interesting rule lives: **import merges, never overwrites.**
  *
  *   - Into an empty backend it is a restore: every file as it was.
- *   - Into a vault of the same identity (same anchor DID) it is a merge:
- *     the snapshot's messages become a new log segment (minus the records
- *     already here — same `mid`, or the same wire message received twice),
- *     its delivery events likewise (minus the tries already here), its
- *     contacts win by `updatedAt`, its invitations are added when
- *     missing (and marked taken when the snapshot knows who took one),
- *     and its config and keystore are left alone (same seed, and mediation
- *     is a fact about *this* device).
+ *   - Into a vault of the same identity (same anchor DID) it is a merge, by
+ *     kind of file: the snapshot's messages become a new log segment
+ *     (minus the records already here — same `mid`, or the same wire
+ *     message received twice), its delivery events likewise (minus the
+ *     tries already here), its contacts win by `updatedAt`, its
+ *     invitations are added when missing (and marked taken when the
+ *     snapshot knows who took one), its config is left alone (mediation is
+ *     a fact about *this* device), its keystore's key cache is unioned by
+ *     name over this device's sealed seed (same seed either way; the cache
+ *     is only a cache), and any other path — a reserved directory this
+ *     version has no rule for yet, a file another client keeps — is copied
+ *     when absent and never overwritten.
  *   - Into a vault of a different identity it is refused. Two identities are
  *     two vaults; blending their logs would misattribute every message.
  *
@@ -71,27 +79,41 @@ export type ImportOutcome =
       contactsUpdated: number;
       contactsKept: number;
       invitationsAdded: number;
+      /** key names the snapshot's keystore listed that this one did not */
+      keysAdded: number;
+      /** files under paths this version has no merge rule for, copied because absent here */
+      filesCopied: number;
       damaged: DamagedLine[];
     };
 
-/** Every file of the vault at `backend`, keyed by vault-relative path. */
+/** Is this path under `.estoc/cache/` — rebuildable, and no part of a snapshot? */
+function isCachePath(path: string): boolean {
+  return path === CACHE_DIR || path.startsWith(`${CACHE_DIR}/`);
+}
+
+/** Every file of the vault at `backend` — the whole `.estoc/` tree but `cache/` — keyed by vault-relative path. */
 export async function snapshotVault(backend: VaultBackend): Promise<VaultFiles> {
   const files: VaultFiles = {};
-  for (const path of [CONFIG_PATH, KEYSTORE_PATH]) {
+  for (const path of await walk(backend, ESTOC_DIR)) {
+    if (isCachePath(path)) {
+      continue;
+    }
     const bytes = await backend.read(path);
     if (bytes !== null) {
       files[path] = bytes;
     }
   }
-  for (const dir of [CONTACTS_DIR, INVITATIONS_DIR, MESSAGES_DIR, DELIVERIES_DIR]) {
-    for (const name of (await backend.list(dir)).sort()) {
-      const bytes = await backend.read(`${dir}/${name}`);
-      if (bytes !== null) {
-        files[`${dir}/${name}`] = bytes;
-      }
-    }
-  }
   return files;
+}
+
+/** The paths of `files` that a merge has a rule for — everything else is copied when absent. */
+function isMergedPath(path: string): boolean {
+  if (path === CONFIG_PATH || path === KEYSTORE_PATH) {
+    return true;
+  }
+  return [CONTACTS_DIR, INVITATIONS_DIR, MESSAGES_DIR, DELIVERIES_DIR].some((dir) =>
+    path.startsWith(`${dir}/`)
+  );
 }
 
 /** The two identities a record can carry: its local key, and the wire message it holds. */
@@ -117,13 +139,14 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
   if (keystoreBytes === undefined) {
     throw new Error("not a vault: no .estoc/keystore.json inside");
   }
-  parseSeedKeystore(text(keystoreBytes));
+  const incomingKeystore = parseSeedKeystore(text(keystoreBytes));
 
   const localConfigBytes = await backend.read(CONFIG_PATH);
   if (localConfigBytes === null) {
-    // restore: the files as they were, config last so a crash midway
-    // leaves "no vault" rather than a vault missing pieces
-    const paths = Object.keys(files).filter((path) => path !== CONFIG_PATH);
+    // restore: the files as they were (a cache/ someone zipped by hand
+    // stays out), config last so a crash midway leaves "no vault" rather
+    // than a vault missing pieces
+    const paths = Object.keys(files).filter((path) => path !== CONFIG_PATH && !isCachePath(path));
     for (const path of paths) {
       await backend.write(path, files[path] as Uint8Array);
     }
@@ -199,6 +222,34 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
     }
   }
 
+  // keystore: the seed stays ours (same seed, our passphrase); the key
+  // cache is the union by name — a name minted over there derives here too
+  const localKeystoreBytes = await backend.read(KEYSTORE_PATH);
+  let keysAdded = 0;
+  if (localKeystoreBytes !== null) {
+    const mine = parseSeedKeystore(text(localKeystoreBytes));
+    const known = new Set(mine.keys.map((key) => key.name));
+    const fresh: DerivedKeyEntry[] = incomingKeystore.keys.filter((key) => !known.has(key.name));
+    if (fresh.length > 0) {
+      await backend.write(KEYSTORE_PATH, utf8(serializeKeystore({ ...mine, keys: [...mine.keys, ...fresh] })));
+      keysAdded = fresh.length;
+    }
+  }
+
+  // anything else: a path this version has no rule for (state/, blobs/, a
+  // file another client keeps) is copied when absent, never overwritten;
+  // cache/ is not even that
+  let filesCopied = 0;
+  for (const path of Object.keys(files).sort()) {
+    if (isMergedPath(path) || isCachePath(path)) {
+      continue;
+    }
+    if ((await backend.read(path)) === null) {
+      await backend.write(path, files[path] as Uint8Array);
+      filesCopied += 1;
+    }
+  }
+
   return {
     kind: "merged",
     messagesAdded: messages.fresh.length,
@@ -210,6 +261,8 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
     contactsUpdated,
     contactsKept,
     invitationsAdded,
+    keysAdded,
+    filesCopied,
     damaged,
   };
 }
@@ -236,11 +289,11 @@ async function mergeLog<T>(
   }
   const fresh: T[] = [];
   let skipped = 0;
-  const incoming = Object.keys(files)
-    .filter((path) => path.startsWith(`${dir}/`) && path.endsWith(".jsonl"))
-    .sort();
-  for (const path of incoming) {
-    const name = path.slice(dir.length + 1);
+  const names = Object.keys(files)
+    .filter((path) => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes("/"))
+    .map((path) => path.slice(dir.length + 1));
+  for (const name of orderSegments(names)) {
+    const path = `${dir}/${name}`;
     for (const record of log.parse(text(files[path] as Uint8Array), name, (d) => damaged.push(d))) {
       const keys = keysOf(record);
       if (!accept(record) || keys.some((key) => seen.has(key))) {
