@@ -29,7 +29,7 @@ async function create() {
     return;
   }
   if (passphrase.value.length < 8) {
-    createError.value = "Use a passphrase of at least 8 characters — it seals your backup.";
+    createError.value = "Use a passphrase of at least 8 characters — it seals your seed.";
     return;
   }
   if (passphrase.value !== confirmPass.value) {
@@ -104,7 +104,7 @@ async function restore() {
           v-model="passphrase"
           class="field"
           type="password"
-          placeholder="passphrase (seals your seed and your backups)"
+          placeholder="passphrase (seals your seed; backups carry it sealed)"
           autocomplete="new-password"
         />
         <input
