@@ -2,7 +2,7 @@ import { base64urlToUtf8, utf8ToBase64url } from "@estoc/did-peer";
 
 import type { InvitationRecord } from "../vault/invitations.js";
 import { PLAIN_TYP } from "./didcomm.js";
-import { OOB_INVITATION } from "./types.js";
+import { OOB_INVITATION } from "./spec.js";
 
 /**
  * out-of-band/2.0 invitations, as the DIDComm v2 spec has them: a plaintext

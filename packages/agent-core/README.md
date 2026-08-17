@@ -12,12 +12,41 @@ The WASM itself is *not* loaded here — see [Didcomm API](#didcomm-api).
 ## Layers
 
 ```
-Agent                        mediation · pickup · live delivery · routing
-  ├─ protocol/               type URIs, resolver (did:web + did:peer), mediator input, chat projection
+Agent                        envelopes · attribution · the log · mediation · pickup · live delivery
+  ├─ protocol/spec           what the DIDComm v2 spec defines: routing (forward), trust-ping, out-of-band, from_prior — wired into Agent
+  ├─ protocol/mediation      coordinate-mediation 3.0 · messagepickup 3.0 — transport with the mediator, never logged
+  ├─ protocol/handler        the seam for application protocols; basicmessage 2.0 and user-profile 1.0 ship as handlers
+  ├─ protocol/               resolver (did:web + did:peer), mediator input, out-of-band helpers
   ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v2)
   └─ Vault                   the .estoc format: config · keystore · contacts · message log
        └─ VaultBackend       bytes: OpfsBackend (browser) · MemoryBackend (tests, snapshots)
 ```
+
+### Three kinds of protocol
+
+- **Specification protocols** (`protocol/spec.ts`) are the agent's own:
+  how an envelope is forwarded, how a `from_prior` rotation is verified,
+  how an invitation is claimed, how a ping is answered. They are not
+  registrable — an application cannot swap them out.
+- **Mediation and pickup** (`protocol/mediation.ts`) are community
+  protocols the agent uses as its transport. That traffic runs between
+  the agent and its mediator, not between the user and a contact, and a
+  delivery is only an envelope around the real mail — none of it enters
+  the log.
+- **Application protocols** (`protocol/handler.ts`) are everything between
+  the user and a contact. The agent's part is fixed and the same for every
+  type — open, attribute, log, home to a contact, `onMessage` — and a
+  `ProtocolHandler` adds behaviour on top, looked up by type after the
+  record is in the log: `onInbound` to answer or update a contact,
+  `introduce` to say something before the first message to anyone.
+  `basicmessage/2.0` and `user-profile/1.0` are built-in handlers;
+  `AgentOptions.handlers` adds more (or replaces a built-in for a type).
+  A message of a type nobody handles is still logged, still handed to
+  `onMessage` — the application decides what to make of it.
+
+**Everything between contacts is logged, whatever its type** — chat,
+profiles, pings, a protocol nobody here speaks. Whether it shows is the
+application's projection of the log, not the agent's decision.
 
 ### The vault format
 
@@ -62,8 +91,8 @@ Agent                        mediation · pickup · live delivery · routing
   the authcrypt layer proves, never to the plaintext `from` (which anyone
   can type into an anonymous envelope). Anonymous mail is logged with
   `sender: null`, belongs to no contact (`counterpartyOf` yields null, and
-  `onMessage` hands it over with no contact), and cannot rename a contact
-  or be answered with a profile.
+  `onMessage` hands it over with no contact), cannot rename a contact,
+  and reaches no handler — there is nobody to answer.
 - **Pairwise DIDs, rotation by `from_prior`.** The public DID is a business
   card: strangers write to it. The first message we send anyone goes out
   from a did:peer:4 minted for that relationship (`pair/<cid>/1`, service
@@ -173,7 +202,16 @@ await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the publ
 // later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
 const records = await vault.messages.read();   // the facts; what a record looks like on screen is yours to decide
 await agent.addContact(bobDid, "Bob");
-await agent.sendBasicMessage(bobDid, "hello");
+await agent.sendBasicMessage(bobDid, "hello");                 // = agent.send(bobDid, BASIC_MESSAGE, { content: "hello" })
+await agent.send(bobDid, "https://example.org/poll/1.0/question", { q: "lunch?" }, { thid }); // any protocol
+
+// an application protocol of your own: the agent logs and homes the message; you answer inside it
+new Agent({ ..., handlers: [{
+  types: ["https://example.org/poll/1.0/question"],
+  async onInbound(record, contact, agent) {
+    await agent.reply(contact, "https://example.org/poll/1.0/vote", { choice: "rice" }, { thid: record.msg.id });
+  },
+}] });
 
 // or meet without a public DID changing hands: one side issues, the other accepts
 const invitation = await agent.createInvitation();          // "Write to Alice"

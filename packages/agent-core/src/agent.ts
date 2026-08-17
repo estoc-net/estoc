@@ -16,26 +16,25 @@ import {
 } from "./protocol/didcomm.js";
 import { invitationMessage, parseInvitation, type Invitation } from "./protocol/oob.js";
 import { resolveDid as defaultResolveDid } from "./protocol/resolver.js";
+import { FORWARD, TRUST_PING, TRUST_PING_RESPONSE, isSpecType } from "./protocol/spec.js";
 import {
-  BASIC_MESSAGE,
   DELIVERY,
   DELIVERY_REQUEST,
-  FORWARD,
   LIVE_DELIVERY_CHANGE,
   MEDIATE_GRANT,
   MEDIATE_REQUEST,
   MESSAGES_RECEIVED,
-  PROFILE,
   RECIPIENT_UPDATE,
-  REQUEST_PROFILE,
   STATUS,
-  TRUST_PING,
-  TRUST_PING_RESPONSE,
   STATUS_REQUEST,
-} from "./protocol/types.js";
+} from "./protocol/mediation.js";
+import type { HandlerContext, ProtocolHandler, SendOptions } from "./protocol/handler.js";
+import { BASIC_MESSAGE, basicmessageHandler } from "./protocol/basicmessage.js";
+import { userProfileHandler } from "./protocol/user-profile.js";
 import {
   currentDid,
   currentMyDid,
+  didPlaceholder,
   previousMyDid,
   newContact,
   type ContactRecord,
@@ -126,6 +125,12 @@ export interface AgentOptions {
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
   reconnectDelayMs?: number;
+  /**
+   * Application-protocol handlers, added to the built-in basicmessage/2.0
+   * and user-profile/1.0 ones; a handler naming a type a built-in covers
+   * replaces the built-in for that type.
+   */
+  handlers?: ProtocolHandler[];
 }
 
 interface DeliveryAttachment {
@@ -142,18 +147,6 @@ interface Opened {
   recipient: string | null;
   /** a `from_prior` header didcomm-rust verified: signed by `iss`, naming `sub` */
   fromPrior: { iss: string; sub: string; jwt: string } | null;
-}
-
-/** The stand-in petname an auto-created contact carries until something names it. */
-export function didPlaceholder(did: string): string {
-  return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
-}
-
-/** The displayName a user-profile/1.0 `profile` message announces, or null when it names none. */
-function announcedName(profile: IMessage): string | null {
-  const body = profile.body as { profile?: { displayName?: unknown } };
-  const name = body.profile?.displayName;
-  return typeof name === "string" && name !== "" ? name : null;
 }
 
 /**
@@ -176,6 +169,10 @@ export class Agent {
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
   private readonly didResolver: { resolve: (did: string) => Promise<DIDDoc | null> };
+  /** application-protocol handlers by message type */
+  private readonly handlers = new Map<string, ProtocolHandler>();
+  /** the face the handlers see of this agent */
+  private readonly handlerContext: HandlerContext;
 
   private me: PeerIdentity | null = null;
   private pub: PeerIdentity | null = null;
@@ -212,6 +209,19 @@ export class Agent {
     this.displayName = options.displayName ?? (() => this.vault.config.label);
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
     this.didResolver = { resolve: (did) => this.resolveDid(did) };
+    for (const handler of [basicmessageHandler, userProfileHandler, ...(options.handlers ?? [])]) {
+      for (const type of handler.types) {
+        this.handlers.set(type, handler);
+      }
+    }
+    this.handlerContext = {
+      vault: this.vault,
+      send: (contactDid, type, body, sendOptions) => this.send(contactDid, type, body, sendOptions),
+      reply: (contact, type, body, sendOptions) => this.reply(contact, type, body, sendOptions),
+      saveContact: (contact) => this.saveContact(contact),
+      displayName: () => this.displayName(),
+      log: (line) => this.log(line),
+    };
   }
 
   /** The public DID correspondents write to; null until mediation completes. */
@@ -245,6 +255,12 @@ export class Agent {
     const did = counterpartyOf(record);
     const contact = did === null ? null : await this.vault.contacts.byDid(did);
     this.events.onMessage?.(record, contact);
+  }
+
+  /** Save a contact record and tell the application it changed. */
+  private async saveContact(contact: ContactRecord): Promise<void> {
+    await this.vault.contacts.put(contact);
+    this.events.onContact?.(contact);
   }
 
   /**
@@ -748,64 +764,18 @@ export class Agent {
         continue;
       }
 
-      if (inner.type === REQUEST_PROFILE) {
-        // Someone asked who we are: answer, without asking back — but only
-        // someone the envelope proves; an anonymous ask names nobody to
-        // answer, and a plaintext `from` is just a claim.
-        if (sender === null) {
-          this.log("anonymous profile request; ignoring");
-          continue;
-        }
-        try {
-          this.log("profile requested; sending ours");
-          await this.ensureContact(sender, recipient);
-          await this.sendProfile(sender, false);
-        } catch (err) {
-          // Their reply path being down is their problem, not a reason
-          // for us to stop reading mail.
-          this.log(
-            `could not answer a profile request: ${err instanceof Error ? err.message : err}`
-          );
-        }
-        continue;
-      }
-
-      if (inner.type === TRUST_PING) {
-        // a contact saying "here I am" — after a move, from their new DID
-        // (the rotation above did the work); a stranger's ping names nobody
-        const known = sender === null ? null : await this.vault.contacts.byDid(sender);
-        if (known === null) {
-          this.log("pinged by someone we do not know; ignoring");
-          continue;
-        }
-        const contact = await this.ensureContact(sender as string, recipient);
-        this.log(`${contact.name} pinged us`);
-        if ((inner.body as { response_requested?: unknown }).response_requested === true) {
-          try {
-            await this.outbound(contact, TRUST_PING_RESPONSE, {}, inner.id);
-          } catch (err) {
-            this.log(`could not answer ${contact.name}'s ping: ${err instanceof Error ? err.message : err}`);
-          }
-        }
-        continue;
-      }
-
-      if (inner.type !== BASIC_MESSAGE && inner.type !== PROFILE) {
-        this.log(`received a ${inner.type ?? "typeless"} message; ignoring`);
-        continue;
-      }
-
       const key = dedupKey(sender, inner.id);
       if (this.seen.has(key)) {
         continue;
       }
 
-      // Attribution is the envelope's, never the plaintext's: `from` is
-      // whatever the sender typed, and an anonymous (anoncrypt) envelope
-      // could carry anyone's DID there. Such a message is still a fact
-      // worth logging — with sender null — but it belongs to no contact's
-      // thread and cannot rename anyone.
-      const counterparty = sender;
+      // Every message between us and a contact is a fact for the log,
+      // whatever its type — the ones the specification defines and the
+      // ones an application protocol does. Attribution is the envelope's,
+      // never the plaintext's: `from` is whatever the sender typed, and an
+      // anonymous (anoncrypt) envelope could carry anyone's DID there.
+      // Anonymous mail is logged too — with sender null — but belongs to
+      // no contact's thread, cannot rename anyone, and gets no answer.
       const record = newMessageRecord({
         direction: "in",
         sender,
@@ -813,40 +783,38 @@ export class Agent {
       });
       await this.vault.messages.append(record);
       this.seen.add(key);
-      if (counterparty === null) {
-        this.log(`logged an anonymous ${inner.type === PROFILE ? "profile" : "message"}; it is attributed to nobody`);
+
+      if (isSpecType(inner.type)) {
+        await this.handleSpecMessage(record, sender);
+        continue;
+      }
+
+      if (sender === null) {
+        this.log(`logged an anonymous ${inner.type} message; it is attributed to nobody`);
+        this.events.onMessage?.(record, null);
+        continue;
       }
 
       // A first message from a stranger creates the contact, so it has a
       // thread to land in; the petname is the DID until something names it.
-      // An announced displayName is remembered as a claim, and becomes the
-      // petname only while the petname is still the placeholder — a name
-      // the user typed is never overwritten by what the contact calls
-      // themself.
-      if (counterparty !== null) {
-        const contact = await this.ensureContact(counterparty, recipient);
-        const claimed = inner.type === PROFILE ? announcedName(inner) : null;
-        if (claimed !== null) {
-          contact.claimedName = claimed;
-          if (contact.name === didPlaceholder(currentDid(contact))) {
-            contact.name = claimed;
-          }
-          await this.vault.contacts.put(contact);
-          this.events.onContact?.(contact);
-        }
+      const contact = await this.ensureContact(sender, recipient);
+      this.events.onMessage?.(record, contact);
+
+      const handler = this.handlers.get(inner.type);
+      if (handler === undefined) {
+        this.log(`received a ${inner.type} message from ${contact.name}; logged, no handler for it`);
+        continue;
       }
-
-      await this.emitMessage(record);
-
-      const body = inner.body as { send_back_yours?: unknown };
-      if (inner.type === PROFILE && body.send_back_yours === true && counterparty !== null) {
-        try {
-          await this.shareProfileIfNew(counterparty);
-        } catch (err) {
-          this.log(
-            `could not send our profile back: ${err instanceof Error ? err.message : err}`
-          );
-        }
+      if (handler.onInbound === undefined) {
+        continue;
+      }
+      try {
+        await handler.onInbound(record, contact, this.handlerContext);
+      } catch (err) {
+        // A handler that could not answer — the contact's reply path being
+        // down, most likely — is their problem, not a reason to stop
+        // reading mail. The message is logged and stays handled.
+        this.log(`handling a ${inner.type} message from ${contact.name} failed: ${err instanceof Error ? err.message : err}`);
       }
     }
 
@@ -858,6 +826,34 @@ export class Agent {
       );
     }
     return acked.length;
+  }
+
+  /**
+   * A message in a protocol the specification defines, already logged:
+   * trust-ping is answered when asked and the sender is a contact — a
+   * stranger's ping names nobody worth confirming our existence to, and
+   * makes no contact either: pinging is not writing. A ping-response, an
+   * invitation or a forward that reached us as mail are facts with nothing
+   * to do.
+   */
+  private async handleSpecMessage(record: MessageRecord, sender: string | null): Promise<void> {
+    const contact = sender === null ? null : await this.vault.contacts.byDid(sender);
+    this.events.onMessage?.(record, contact);
+    if (record.msg.type !== TRUST_PING) {
+      return;
+    }
+    if (contact === null) {
+      this.log(sender === null ? "an anonymous ping; ignoring" : "pinged by someone we do not know; ignoring");
+      return;
+    }
+    this.log(`${contact.name} pinged us`);
+    if ((record.msg.body as { response_requested?: unknown }).response_requested === true) {
+      try {
+        await this.reply(contact, TRUST_PING_RESPONSE, {}, { thid: record.msg.id });
+      } catch (err) {
+        this.log(`could not answer ${contact.name}'s ping: ${err instanceof Error ? err.message : err}`);
+      }
+    }
   }
 
   private connectWebSocket(): void {
@@ -1052,22 +1048,38 @@ export class Agent {
     contact: ContactRecord,
     type: string,
     body: Record<string, unknown>,
-    thid?: string
+    options: SendOptions = {}
   ): Promise<IMessage> {
     const from = await this.ensurePairwise(contact);
     const to = currentDid(contact);
     const plain = plainMessage(type, from.did, to, body);
-    if (thid !== undefined) {
-      plain.thid = thid;
+    if (options.thid !== undefined) {
+      plain.thid = options.thid;
     }
-    if (contact.invitation !== undefined && contact.profileSharedAt === undefined) {
+    if (options.pthid !== undefined) {
+      plain.pthid = options.pthid;
+    } else if (contact.invitation !== undefined && contact.profileSharedAt === undefined) {
       // answering their invitation: our first messages out — up to and
       // including the introduction — name it, as out-of-band asks
       plain.pthid = contact.invitation;
     }
+    if (options.attachments !== undefined) {
+      plain.attachments = options.attachments as IMessage["attachments"];
+    }
     await this.attachFromPrior(plain, contact);
     await this.deliverToContact(plain, to);
     return plain;
+  }
+
+  /** Compose, deliver and log one message to a contact — no introduction. */
+  private async reply(
+    contact: ContactRecord,
+    type: string,
+    body: Record<string, unknown>,
+    options?: SendOptions
+  ): Promise<MessageRecord> {
+    const plain = await this.outbound(contact, type, body, options);
+    return this.logOutbound(plain);
   }
 
   /**
@@ -1236,7 +1248,7 @@ export class Agent {
         continue;
       }
       try {
-        await this.outbound(contact, TRUST_PING, { response_requested: false });
+        await this.reply(contact, TRUST_PING, { response_requested: false });
         this.log(`told ${contact.name} about our new DID`);
       } catch (err) {
         this.log(`could not tell ${contact.name} about our new DID (${err instanceof Error ? err.message : err}); the next message will`);
@@ -1281,8 +1293,18 @@ export class Agent {
     plain.from_prior = jwt;
   }
 
-  /** Send a basicmessage/2.0; resolves to the appended log record. */
-  async sendBasicMessage(contactDid: string, text: string): Promise<MessageRecord> {
+  /**
+   * Send a message of any application protocol to a contact; resolves to
+   * the appended log record. The first message to anyone is preceded by
+   * an introduction — every handler that has one to make (user-profile
+   * announces our name and asks for theirs) makes it, once per contact.
+   */
+  async send(
+    contactDid: string,
+    type: string,
+    body: Record<string, unknown>,
+    options?: SendOptions
+  ): Promise<MessageRecord> {
     if (this.pub === null) {
       throw new Error(
         this.vault.config.mediation === null
@@ -1290,50 +1312,27 @@ export class Agent {
           : "no public DID yet — mediation has not completed"
       );
     }
-    await this.ensureContact(contactDid);
-
-    // The first message to anyone is preceded by an introduction: our
-    // user-profile/1.0 announcement, asking for theirs back.
-    await this.shareProfileIfNew(contactDid);
-
-    const contact = (await this.vault.contacts.byDid(contactDid)) as ContactRecord;
-    const plain = await this.outbound(contact, BASIC_MESSAGE, { content: text });
-    return this.logOutbound(plain);
+    let contact = await this.ensureContact(contactDid);
+    if (contact.profileSharedAt === undefined) {
+      await this.introduce(contact);
+      // the introduction may have saved a freshly minted DID on the record
+      contact = (await this.vault.contacts.byCid(contact.cid)) as ContactRecord;
+    }
+    return this.reply(contact, type, body, options);
   }
 
-  /** Announce our display name once per contact; later renames stay local. */
-  private async shareProfileIfNew(contactDid: string): Promise<void> {
-    const contact = await this.vault.contacts.byDid(contactDid);
-    if (contact?.profileSharedAt !== undefined) {
-      return;
+  /** Every handler's introduction to a contact not yet introduced to. */
+  private async introduce(contact: ContactRecord): Promise<void> {
+    for (const handler of new Set(this.handlers.values())) {
+      if (handler.introduce !== undefined) {
+        await handler.introduce(contact, this.handlerContext);
+      }
     }
-    await this.sendProfile(contactDid, true);
   }
 
-  /**
-   * Send a user-profile/1.0 `profile` message: the displayName the contact
-   * will see is whatever we claim it is — a receiving UI should say as much.
-   */
-  private async sendProfile(contactDid: string, sendBackYours: boolean): Promise<void> {
-    if (this.pub === null) {
-      return;
-    }
-    const contact = await this.vault.contacts.byDid(contactDid);
-    if (contact === null) {
-      return;
-    }
-    const plain = await this.outbound(contact, PROFILE, {
-      profile: { displayName: this.displayName() },
-      send_back_yours: sendBackYours,
-    });
-
-    // re-read: `outbound` may have saved a freshly minted DID on the record
-    const saved = (await this.vault.contacts.byDid(contactDid)) as ContactRecord;
-    if (saved.profileSharedAt === undefined) {
-      saved.profileSharedAt = new Date().toISOString();
-      await this.vault.contacts.put(saved);
-    }
-    await this.logOutbound(plain);
+  /** Send a basicmessage/2.0; resolves to the appended log record. */
+  sendBasicMessage(contactDid: string, text: string): Promise<MessageRecord> {
+    return this.send(contactDid, BASIC_MESSAGE, { content: text });
   }
 
   /**
@@ -1456,9 +1455,9 @@ export class Agent {
     }
     await this.vault.contacts.put(contact);
     this.events.onContact?.(contact);
-    if (this.pub !== null) {
+    if (this.pub !== null && contact.profileSharedAt === undefined) {
       try {
-        await this.shareProfileIfNew(invitation.from);
+        await this.introduce(contact);
       } catch (err) {
         this.log(`could not answer the invitation yet (${err instanceof Error ? err.message : err}); the first message will`);
       }

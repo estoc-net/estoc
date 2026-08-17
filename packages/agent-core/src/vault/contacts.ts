@@ -115,6 +115,11 @@ export function previousMyDid(contact: ContactRecord): MyDidUse | null {
   return null;
 }
 
+/** The stand-in petname an auto-created contact carries until something names it. */
+export function didPlaceholder(did: string): string {
+  return did.length <= 30 ? did : `${did.slice(0, 20)}…${did.slice(-6)}`;
+}
+
 export function newContact(name: string, did: string, now = new Date()): ContactRecord {
   const at = now.toISOString();
   return {

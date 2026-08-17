@@ -28,6 +28,7 @@ export {
   contactFileStem,
   currentDid,
   currentMyDid,
+  didPlaceholder,
   newContact,
   previousMyDid,
   parseContact,
@@ -71,7 +72,24 @@ export {
 
 export { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
 
-export * from "./protocol/types.js";
+// DIDComm v2 specification protocols — the agent's own
+export * from "./protocol/spec.js";
+// community protocols the agent uses as transport
+export * from "./protocol/mediation.js";
+// community protocols handled as application mail, through the handler seam
+export {
+  type HandlerContext,
+  type ProtocolHandler,
+  type SendOptions,
+} from "./protocol/handler.js";
+export { BASIC_MESSAGE, basicmessageHandler } from "./protocol/basicmessage.js";
+export {
+  PROFILE,
+  REQUEST_PROFILE,
+  announcedName,
+  shareProfile,
+  userProfileHandler,
+} from "./protocol/user-profile.js";
 export {
   ENCRYPTED_MIME,
   PLAIN_TYP,
@@ -95,7 +113,6 @@ export {
 
 export {
   Agent,
-  didPlaceholder,
   type AgentEvents,
   type AgentOptions,
   type AgentStatus,

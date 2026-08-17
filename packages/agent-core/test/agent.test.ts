@@ -16,6 +16,7 @@ import {
   PROFILE,
   REQUEST_PROFILE,
   TRUST_PING,
+  type ProtocolHandler,
   Vault,
   currentDid,
   currentMyDid,
@@ -68,7 +69,8 @@ function attach(
   backend: MemoryBackend,
   vault: Vault,
   seedKey: CryptoKey,
-  mediator: Pick<FakeMediator, "fetch" | "WebSocket">
+  mediator: Pick<FakeMediator, "fetch" | "WebSocket">,
+  handlers: ProtocolHandler[] = []
 ): Party {
   const party = {
     name,
@@ -97,6 +99,7 @@ function attach(
     fetch: mediator.fetch,
     WebSocket: mediator.WebSocket,
     reconnectDelayMs: 10,
+    handlers,
     events: {
       onStatus(status) {
         party.statuses.push(status);
@@ -128,9 +131,9 @@ function attach(
   return party;
 }
 
-async function newParty(name: string, fill: number, mediator: FakeMediator): Promise<Party> {
+async function newParty(name: string, fill: number, mediator: FakeMediator, handlers: ProtocolHandler[] = []): Promise<Party> {
   const { backend, vault, seedKey } = await newVault(name, fill, mediator.did);
-  return attach(name, backend, vault, seedKey, mediator);
+  return attach(name, backend, vault, seedKey, mediator, handlers);
 }
 
 /** The same vault, opened fresh from its bytes — a page reload. */
@@ -700,8 +703,13 @@ describe("Agent through a mediator", () => {
     expect(bob.log).toContain("Alice pinged us");
     const dansAlice = (await dan.vault.contacts.byDid(aliceToDan2))!;
     expect(dansAlice.dids.map((d) => d.did)).toEqual([aliceToDan1, aliceToDan2]);
-    // the ping is transport, not a message: nothing landed in Bob's log
-    expect((await bob.vault.messages.read()).some((r) => r.msg.type === TRUST_PING)).toBe(false);
+    // the ping is a fact between contacts, so it is in both logs — Alice's
+    // as sent, Bob's as received from the new DID; showing it or not is
+    // the application's projection (chatView here yields nothing for it)
+    const bobsPing = (await bob.vault.messages.read()).filter((r) => r.msg.type === TRUST_PING);
+    expect(bobsPing.map((r) => [r.direction, r.sender])).toEqual([["in", aliceToBob2]]);
+    expect((await alice.vault.messages.read()).filter((r) => r.msg.type === TRUST_PING && r.direction === "out")).toHaveLength(3);
+    expect(bob.messages.some((m) => m.record.msg.type === TRUST_PING)).toBe(false);
 
     // they write to the new DIDs; the mail arrives through the new mediator
     await bob.agent.sendBasicMessage(aliceToBob2, "still there?");
@@ -799,6 +807,58 @@ async function stranger(fill: number, endpoint: string) {
 const plain = (type: string, from: string | null, to: string, body: Record<string, unknown>) =>
   ({ id: crypto.randomUUID(), typ: PLAIN_TYP, type, ...(from === null ? {} : { from }), to: [to], created_time: Math.floor(Date.now() / 1000), body }) as IMessage;
 
+describe("Agent with application protocols", () => {
+  it("logs every message between contacts whatever its type, and lets a handler answer inside its protocol", async () => {
+    const POLL = "https://estoc.dev/poll/1.0/question";
+    const VOTE = "https://estoc.dev/poll/1.0/vote";
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 21, mediator);
+    // Bob's application speaks a poll protocol: a question gets a vote back on the thread
+    const seenByHandler: string[] = [];
+    const bob = await newParty("Bob", 22, mediator, [
+      {
+        types: [POLL, VOTE],
+        async onInbound(record, contact, agent) {
+          seenByHandler.push(`${contact.name}:${record.msg.type}`);
+          if (record.msg.type === POLL) {
+            await agent.reply(contact, VOTE, { choice: (record.msg.body.options as string[])[1] }, { thid: record.msg.id });
+          }
+        },
+      },
+    ]);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+
+    // Alice, whose agent has no poll handler, still sends one: `send` takes any type
+    const question = await alice.agent.send(bob.agent.did as string, POLL, { question: "lunch?", options: ["rice", "noodles"] });
+    expect(question.msg.type).toBe(POLL);
+    const aliceToBob = await myDidToward(alice, bob.agent.did as string);
+
+    // Bob's handler saw it under Alice's contact and voted on the thread;
+    // Alice logged the vote though nothing of hers handles it.
+    await withTimeout(until(() => alice.log.some((l) => l.startsWith(`received a ${VOTE} message from`) && l.endsWith("logged, no handler for it"))));
+    // (Alice's introduction arrived first, so the handler already saw her by name)
+    expect(seenByHandler).toEqual([`Alice:${POLL}`]);
+    const aliceLog = await alice.vault.messages.read();
+    const vote = aliceLog.find((r) => r.msg.type === VOTE);
+    expect(vote?.direction).toBe("in");
+    expect(vote?.sender).toBe(await myDidToward(bob, aliceToBob));
+    expect(vote?.msg.thid).toBe(question.msg.id);
+    expect(vote?.msg.body).toEqual({ choice: "noodles" });
+    // the introduction still preceded the first message, and every fact is in order
+    expect(aliceLog.map((r) => `${r.direction}:${r.msg.type.split("/").at(-1)}`)).toEqual([
+      "out:profile",
+      "out:question",
+      "in:profile",
+      "in:vote",
+    ]);
+    // the application saw the vote through onMessage, homed to Bob, and chatView (rightly) made nothing of it
+    expect(alice.messages.every((m) => m.record.msg.type !== VOTE)).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+});
+
 describe("Agent under hostile mail", () => {
   it("does not attribute an anonymous envelope to whoever its plaintext names", async () => {
     const mediator = await newMediator();
@@ -861,11 +921,14 @@ describe("Agent under hostile mail", () => {
     await withTimeout(bob.live);
     expect(bob.agent.status).toEqual({ state: "live" });
     await withTimeout(until(() => mediator.queues.get(bob.vault.config.mediation!.me.did)?.length === 0));
-    expect(bob.log.some((l) => l.startsWith("could not answer a profile request"))).toBe(true);
-    expect(bob.log).toContain("anonymous profile request; ignoring");
+    expect(bob.log.some((l) => l.startsWith("handling a https://didcomm.org/user-profile/1.0/request-profile message from") && l.includes("failed"))).toBe(true);
+    expect(bob.log).toContain(`logged an anonymous ${REQUEST_PROFILE} message; it is attributed to nobody`);
     // the proven asker became a contact; nothing was sent for the anonymous one
     expect(await bob.vault.contacts.byDid(mallory.did)).not.toBeNull();
-    expect((await bob.vault.messages.read()).filter((r) => r.direction === "out")).toHaveLength(0);
+    const log = await bob.vault.messages.read();
+    expect(log.filter((r) => r.direction === "out")).toHaveLength(0);
+    // both asks are facts in the log — one attributed, one not
+    expect(log.filter((r) => r.msg.type === REQUEST_PROFILE).map((r) => r.sender)).toEqual([mallory.did, null]);
     bob.agent.destroy();
   });
 

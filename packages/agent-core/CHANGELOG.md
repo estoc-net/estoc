@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.10.0 — 2026-08-17
+
+- **Protocols in three layers.** `protocol/types.ts` is split by what
+  each protocol is to the agent: `protocol/spec.ts` (what the DIDComm v2
+  specification defines — `FORWARD`, `TRUST_PING`, `TRUST_PING_RESPONSE`,
+  `OOB_INVITATION`, `isSpecType`) is wired into `Agent`;
+  `protocol/mediation.ts` (coordinate-mediation 3.0, messagepickup 3.0) is
+  the transport with the mediator; and application protocols go through a
+  new handler seam. Every constant is still exported from the package root.
+- **The handler seam.** `ProtocolHandler { types, onInbound?, introduce? }`
+  and `HandlerContext { vault, send, reply, saveContact, displayName, log }`
+  (`protocol/handler.ts`). `basicmessage/2.0` and `user-profile/1.0` are
+  now built-in handlers (`basicmessageHandler`, `userProfileHandler`; the
+  profile logic — answering `request-profile`, remembering `claimedName`,
+  sending ours back on `send_back_yours`, introducing before the first
+  message — moved out of `Agent` into `protocol/user-profile.ts`).
+  `AgentOptions.handlers` registers more; one naming a built-in's type
+  replaces it. A handler runs after the record is logged and `onMessage`
+  has fired; a throwing handler is logged, and the message stays handled.
+- **`Agent.send(contactDid, type, body, { thid?, pthid?, attachments? })`**
+  sends any application-protocol message and resolves to the log record;
+  the introduction still precedes the first message to anyone.
+  `sendBasicMessage` is a one-line wrapper over it.
+- **Everything between contacts is logged, whatever its type.** Before,
+  an inbound message of a type the agent did not speak was acked and
+  dropped, and pings and profile requests were answered without a trace.
+  Now every opened message that is not mediator transport is appended and
+  handed to `onMessage` — pings and pongs (in and out, including the pings
+  that announce a move), profile requests, and unknown types alike;
+  anonymous ones with `sender: null`. Showing them or not is the
+  application's projection (the app's `chatView` still yields nothing for
+  them). Log lines changed accordingly (`received a <type> message from
+  <name>; logged, no handler for it`, `logged an anonymous <type> message;
+  it is attributed to nobody`). Trust-ping stays spec-level: a stranger's
+  ping is logged but neither answered nor turned into a contact.
+- `didPlaceholder` moved to `vault/contacts.ts` (still exported from the
+  root); `announcedName` and `shareProfile` are exported.
+
 ## 0.9.0 — 2026-08-17
 
 - **The chat projection leaves the library.** `chatView`, `ChatMessage`

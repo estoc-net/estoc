@@ -1,4 +1,11 @@
-/** Message type URIs the agent speaks. */
+/**
+ * The community protocols the agent uses as its transport: mediation and
+ * pickup with its mediator (didcomm.org registry, not the specification).
+ * Traffic in these protocols runs between the agent and its mediator, not
+ * between the user and a contact, and a delivery is only an envelope
+ * around the real mail — so none of it enters the message log.
+ */
+
 export const MEDIATE_REQUEST =
   "https://didcomm.org/coordinate-mediation/3.0/mediate-request";
 export const MEDIATE_GRANT =
@@ -16,10 +23,3 @@ export const MESSAGES_RECEIVED =
   "https://didcomm.org/messagepickup/3.0/messages-received";
 export const LIVE_DELIVERY_CHANGE =
   "https://didcomm.org/messagepickup/3.0/live-delivery-change";
-export const FORWARD = "https://didcomm.org/routing/2.0/forward";
-export const BASIC_MESSAGE = "https://didcomm.org/basicmessage/2.0/message";
-export const PROFILE = "https://didcomm.org/user-profile/1.0/profile";
-export const REQUEST_PROFILE = "https://didcomm.org/user-profile/1.0/request-profile";
-export const TRUST_PING = "https://didcomm.org/trust-ping/2.0/ping";
-export const TRUST_PING_RESPONSE = "https://didcomm.org/trust-ping/2.0/ping-response";
-export const OOB_INVITATION = "https://didcomm.org/out-of-band/2.0/invitation";
