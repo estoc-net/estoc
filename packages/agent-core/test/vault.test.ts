@@ -24,6 +24,8 @@ import {
   mintPeerDid,
   newContact,
   newMessageRecord,
+  isSegment,
+  newSegment,
   orderSegments,
   parseConfig,
   parseInvitation,
@@ -431,7 +433,11 @@ describe("MessageLog", () => {
     const r2 = newMessageRecord({ direction: "in", sender: "did:peer:4b", msg: msg("2") }, new Date(2_000));
     await log.append(r1);
     await log.append(r2);
-    const raw = dec.decode((await backend.read(".estoc/messages/0001.jsonl")) as Uint8Array);
+    // one segment, minted on first append, named by a uuidv7 — no numbering
+    const [segment, ...rest] = await backend.list(".estoc/messages");
+    expect(rest).toEqual([]);
+    expect(isSegment(segment!)).toBe(true);
+    const raw = dec.decode((await backend.read(`.estoc/messages/${segment}`)) as Uint8Array);
     expect(raw.split("\n")).toHaveLength(3);
     expect(raw.endsWith("\n")).toBe(true);
     expect(await log.read()).toEqual([r1, r2]);
@@ -439,37 +445,60 @@ describe("MessageLog", () => {
     expect(r1.at).toBe("1970-01-01T00:00:01.000Z");
   });
 
-  it("concatenates segments in numeric order, ignores what is not a segment, and skips a truncated tail", async () => {
+  it("concatenates segments in name order, ignores what is not a segment, and skips a truncated tail", async () => {
     const backend = new MemoryBackend();
     const log = new MessageLog(backend);
     const line = (id: string) => new TextEncoder().encode(JSON.stringify(newMessageRecord({ direction: "in", msg: msg(id) })) + "\n");
     const mine = newMessageRecord({ direction: "out", msg: msg("mine") });
     await log.append(mine);
-    // segments from merges: numeric order, not lexical (10000 after 0002), and
-    // a writer that did not zero-pad still counts
-    await backend.write(".estoc/messages/0002.jsonl", line("two"));
-    await backend.write(".estoc/messages/10000.jsonl", line("ten-thousand"));
-    await backend.write(".estoc/messages/3.jsonl", line("three"));
-    // a stray file in the directory is not history
+    const [own] = orderSegments(await backend.list(".estoc/messages"));
+    // segments from merges: uuidv7 names, so name order is creation order
+    const s2 = newSegment(new Date(Date.now() + 1_000));
+    const s3 = newSegment(new Date(Date.now() + 2_000));
+    const s4 = newSegment(new Date(Date.now() + 3_000));
+    await backend.write(`.estoc/messages/${s3}`, line("three"));
+    await backend.write(`.estoc/messages/${s4}`, line("four"));
+    await backend.write(`.estoc/messages/${s2}`, line("two"));
+    // a stray file in the directory is not history — nor is a numbered file
+    // from before segments had ids, nor an uppercase uuid
     await backend.write(".estoc/messages/notes.txt", line("stray"));
-    await backend.write(".estoc/messages/0000-imported.jsonl", line("stray-too"));
+    await backend.write(".estoc/messages/0001.jsonl", line("stray-too"));
+    await backend.write(`.estoc/messages/${s2.toUpperCase()}`, line("stray-three"));
     // a crash mid-append leaves half a line
-    await backend.append(".estoc/messages/0001.jsonl", new TextEncoder().encode('{"mid":"01'));
-    expect((await log.read()).map((r) => r.msg.id)).toEqual(["mine", "two", "three", "ten-thousand"]);
-    expect(orderSegments(["10000.jsonl", "x.jsonl", "0002.jsonl", "3.jsonl"])).toEqual(["0002.jsonl", "3.jsonl", "10000.jsonl"]);
+    await backend.append(`.estoc/messages/${own}`, new TextEncoder().encode('{"mid":"01'));
+    expect((await log.read()).map((r) => r.msg.id)).toEqual(["mine", "two", "three", "four"]);
+    expect(orderSegments([s4, "x.jsonl", "0002.jsonl", s2, s3])).toEqual([s2, s3, s4]);
+    expect(isSegment("0001.jsonl")).toBe(false);
+    expect(newSegment()).toMatch(/^[0-9a-f-]{36}\.jsonl$/);
+  });
+
+  it("a later session appends behind the newest segment, so a merge is carried on, not written around", async () => {
+    const backend = new MemoryBackend();
+    const first = new MessageLog(backend);
+    await first.append(newMessageRecord({ direction: "out", msg: msg("1") }));
+    const imported = await first.writeSegment([newMessageRecord({ direction: "in", sender: "did:peer:4b", msg: msg("2") })]);
+    const later = new MessageLog(backend);
+    await later.append(newMessageRecord({ direction: "out", msg: msg("3") }));
+    expect(orderSegments(await backend.list(".estoc/messages"))).toHaveLength(2);
+    expect(dec.decode((await backend.read(`.estoc/messages/${imported}`)) as Uint8Array).split("\n")).toHaveLength(3);
+    expect((await later.read()).map((r) => r.msg.id)).toEqual(["1", "2", "3"]);
+    // the instance that opened before the import keeps its own segment
+    await first.append(newMessageRecord({ direction: "out", msg: msg("4") }));
+    expect((await later.read()).map((r) => r.msg.id)).toEqual(["1", "4", "2", "3"]);
   });
 
   it("skips a damaged line, reports it, and keeps the rest", async () => {
     const backend = new MemoryBackend();
     const good = newMessageRecord({ direction: "in", msg: msg("x") });
+    const segment = newSegment();
     await backend.write(
-      ".estoc/messages/0001.jsonl",
+      `.estoc/messages/${segment}`,
       new TextEncoder().encode('{"nope":true}\n' + JSON.stringify(good) + "\n")
     );
     const damaged: string[] = [];
     const records = await new MessageLog(backend).read((d) => damaged.push(d.where));
     expect(records.map((r) => r.msg.id)).toEqual(["x"]);
-    expect(damaged).toEqual(["0001.jsonl:1"]);
+    expect(damaged).toEqual([`${segment}:1`]);
   });
 
   it("does not fuse a cut-short line with the next append", async () => {
@@ -477,7 +506,8 @@ describe("MessageLog", () => {
     const first = newMessageRecord({ direction: "out", msg: msg("1") });
     await new MessageLog(backend).append(first);
     // the crash: half a line, no terminator
-    await backend.append(".estoc/messages/0001.jsonl", new TextEncoder().encode('{"mid":"01'));
+    const [segment] = await backend.list(".estoc/messages");
+    await backend.append(`.estoc/messages/${segment}`, new TextEncoder().encode('{"mid":"01'));
     // a fresh log instance (the next session) appends
     const log = new MessageLog(backend);
     const second = newMessageRecord({ direction: "in", sender: "did:peer:4b", msg: msg("2") });
@@ -518,11 +548,12 @@ describe("DeliveryLog", () => {
     await log.append({ mid: "m1", at: "2026-08-17T00:00:01.000Z", status: "failed", attempt: 1, error: "fetch failed" });
     await log.append({ mid: "m1", at: "2026-08-17T00:00:02.000Z", status: "sent", attempt: 2, to: "did:peer:4bob" });
     await log.append({ mid: "m2", at: "2026-08-17T00:00:03.000Z", status: "held", attempt: 0, error: "imported" });
-    await backend.append(".estoc/deliveries/0001.jsonl", new TextEncoder().encode('{"mid":"m3","status":"lost"}\n'));
+    const [segment] = await backend.list(".estoc/deliveries");
+    await backend.append(`.estoc/deliveries/${segment}`, new TextEncoder().encode('{"mid":"m3","status":"lost"}\n'));
     const damaged: string[] = [];
     const events = await log.read((d) => damaged.push(d.where));
     expect(events.map((e) => `${e.mid}:${e.status}`)).toEqual(["m1:failed", "m1:sent", "m2:held"]);
-    expect(damaged).toEqual(["0001.jsonl:4"]);
+    expect(damaged).toEqual([`${segment}:4`]);
 
     const states = foldDeliveries(events);
     expect(states.get("m1")).toEqual({ status: "sent", attempts: 2, at: "2026-08-17T00:00:02.000Z", to: "did:peer:4bob" });

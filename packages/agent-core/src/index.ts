@@ -18,7 +18,6 @@ export {
   CONTACTS_DIR,
   DELIVERIES_DIR,
   ESTOC_DIR,
-  FIRST_SEGMENT,
   INVITATIONS_DIR,
   KEYSTORE_PATH,
   MESSAGES_DIR,
@@ -51,7 +50,7 @@ export {
   type MessageRecord,
   type PlainMessage,
 } from "./vault/messages.js";
-export { SegmentedLog, orderSegments, type DamagedLine, type LineParser } from "./vault/log.js";
+export { SegmentedLog, orderSegments, isSegment, newSegment, type DamagedLine, type LineParser } from "./vault/log.js";
 export {
   DeliveryLog,
   deliveryKey,

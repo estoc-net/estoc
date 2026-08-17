@@ -155,7 +155,22 @@ export function removeDerivedKey(doc: SeedKeystoreDocument, name: string): SeedK
   return { ...doc, keys: doc.keys.filter((k) => k.name !== name) };
 }
 
-/** Parse and structurally validate a persisted seed store. Unknown fields are kept. */
+/** The public contents — no passphrase involved: the cache of names and DIDs. */
+export function listKeys(doc: SeedKeystoreDocument): DerivedKeyEntry[] {
+  return doc.keys.map(({ name, did, createdAt }) => ({ name, did, createdAt }));
+}
+
+/** Serialize a store for persistence. Stable field order, trailing newline, 0600-worthy. */
+export function serializeKeystore(doc: SeedKeystoreDocument): string {
+  return JSON.stringify(doc, null, 2) + "\n";
+}
+
+/**
+ * Parse and structurally validate a persisted seed store. Unknown fields
+ * are kept. Earlier formats are refused, not migrated: v1 sealed each key
+ * on its own and v2 derived by index — neither holds keys this version
+ * can reach by name.
+ */
 export function parseSeedKeystore(json: string): SeedKeystoreDocument {
   let raw: unknown;
   try {
@@ -167,6 +182,9 @@ export function parseSeedKeystore(json: string): SeedKeystoreDocument {
     throw new Error("keystore file must be a JSON object");
   }
   const doc = raw as { version?: unknown; seedJwe?: unknown; keys?: unknown };
+  if (doc.version === 1) {
+    throw new Error("v1 (per-key) keystores are no longer supported");
+  }
   if (doc.version === 2) {
     throw new Error("v2 (index-derived) seed keystores are no longer supported");
   }

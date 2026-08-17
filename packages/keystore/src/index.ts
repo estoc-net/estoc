@@ -1,24 +1,5 @@
-export type {
-  Signer,
-  DidKeySigner,
-  KeyEntry,
-  KeystoreDocument,
-  KeyInfo,
-  DerivedKeyEntry,
-  SeedKeystoreDocument,
-} from "./types.js";
+export type { Signer, DidKeySigner, DerivedKeyEntry, SeedKeystoreDocument } from "./types.js";
 export { didKeyFromPublicKey, publicKeyFromDidKey } from "./did-key.js";
-export { didKeySignerFromPrivateKey, generatePrivateKey } from "./signer.js";
-export {
-  emptyKeystore,
-  listKeys,
-  createKey,
-  openKey,
-  removeKey,
-  serializeKeystore,
-  parseKeystore,
-  type CreateKeyOptions,
-} from "./keystore.js";
 export {
   generateSeed,
   importSeed,
@@ -36,6 +17,8 @@ export {
   addDerivedKey,
   openDerivedKey,
   removeDerivedKey,
+  listKeys,
+  serializeKeystore,
   parseSeedKeystore,
   type CreateSeedKeystoreOptions,
   type AddDerivedKeyOptions,

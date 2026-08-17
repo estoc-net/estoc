@@ -78,8 +78,8 @@ function parseLine(line: string, where: string): DeliveryEvent {
 }
 
 export class DeliveryLog extends SegmentedLog<DeliveryEvent> {
-  constructor(backend: VaultBackend, segment?: string) {
-    super(backend, DELIVERIES_DIR, parseLine, segment);
+  constructor(backend: VaultBackend) {
+    super(backend, DELIVERIES_DIR, parseLine);
   }
 }
 

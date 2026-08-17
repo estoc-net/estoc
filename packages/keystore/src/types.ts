@@ -32,27 +32,6 @@ export interface DidKeySigner extends Signer {
   deriveSharedSecret(theirX25519PublicKey: Uint8Array): Promise<Uint8Array>;
 }
 
-/** One key in the store. Only `privateKeyJwe` is secret. */
-export interface KeyEntry {
-  /** Local, store-unique label. Never leaves the machine. */
-  name: string;
-  /** did:key of the public half — public information, kept in cleartext so listing needs no passphrase. */
-  did: string;
-  /** ISO 8601 creation time. */
-  createdAt: string;
-  /**
-   * The private key as an OKP Ed25519 JWK (RFC 8037), serialized and
-   * encrypted as a compact JWE with PBES2-HS512+A256KW / A256GCM.
-   */
-  privateKeyJwe: string;
-}
-
-/** The v1 store — independently sealed keys. The JSON document an application persists wherever it likes. */
-export interface KeystoreDocument {
-  version: 1;
-  keys: KeyEntry[];
-}
-
 /**
  * One derived key in a v3 store. Nothing here is secret, and nothing here
  * is needed to derive the key: the name alone is the derivation path. The
@@ -78,11 +57,4 @@ export interface SeedKeystoreDocument {
   /** The 32-byte seed as a compact JWE (PBES2-HS512+A256KW / A256GCM). */
   seedJwe: string;
   keys: DerivedKeyEntry[];
-}
-
-/** What `listKeys` reveals without a passphrase (both store versions). */
-export interface KeyInfo {
-  name: string;
-  did: string;
-  createdAt: string;
 }

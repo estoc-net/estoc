@@ -28,8 +28,13 @@ author's hands.
   no rule for when absent and never overwrites (`filesCopied`), and
   ignores `cache/` on restore too. `STATE_DIR`, `BLOBS_DIR`, `CACHE_DIR`
   name the reserved directories.
-- **Log segments read in numeric order** (`orderSegments`; `10000.jsonl`
-  after `0002.jsonl`), and only `<decimal>.jsonl` files count as segments.
+- **Log segments are `<uuidv7>.jsonl`**, minted like every other id — no
+  more `0001.jsonl` and "highest number plus one" (`nextSegment`,
+  `FIRST_SEGMENT`, `segmentNumber` are gone). `orderSegments` keeps only
+  `<uuidv7>.jsonl` names and sorts them, which is creation order; a
+  writer appends to the newest segment present or mints one (so a session
+  after an import carries on behind what came in); `newSegment` and
+  `isSegment` are exported. Nothing may read chronology off segment order.
 - `parseConfig` keeps fields it does not know, at every level it rewrites.
 
 ## 0.12.0 — 2026-08-17

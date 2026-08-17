@@ -17,7 +17,7 @@ your data never touches the place the app was served from.
 
 - **Identity from a seed.** Creating an identity takes a name and a
   passphrase, nothing else: it generates a 32-byte seed and seals it under
-  the passphrase ([@estoc/keystore] v2). Every key is derived from that
+  the passphrase ([@estoc/keystore] v3). Every key is derived from that
   seed: an anchor `did:key`, and — once you choose a mediator — the
   `did:peer:4` the mediator knows you by and the public `did:peer:4` you
   hand to contacts. You type the passphrase once; the unlocked seed stays

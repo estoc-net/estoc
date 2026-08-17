@@ -11,7 +11,6 @@ import {
   isValidKeyName,
   listKeys,
   openDerivedKey,
-  parseKeystore,
   parseSeedKeystore,
   publicKeyFromDidKey,
   removeDerivedKey,
@@ -149,11 +148,15 @@ describe("seed keystore", () => {
   it("parser validates structure, keeps unknown fields, and refuses other versions", async () => {
     const { doc } = await createSeedKeystore("pw");
     expect(() => parseSeedKeystore("nope")).toThrow(/valid JSON/);
-    expect(() => parseSeedKeystore('{"version":1,"keys":[]}')).toThrow(/unsupported seed keystore version/);
+    expect(() => parseSeedKeystore('"str"')).toThrow(/JSON object/);
+    expect(() => parseSeedKeystore('{"version":1,"keys":[]}')).toThrow(/v1 .* no longer supported/);
     expect(() => parseSeedKeystore('{"version":2,"seedJwe":"x","nextIndex":0,"keys":[]}')).toThrow(
       /v2 .* no longer supported/,
     );
-    expect(() => parseKeystore(serializeKeystore(doc))).toThrow(/v3 seed keystore/);
+    expect(() => parseSeedKeystore('{"version":4,"seedJwe":"x","keys":[]}')).toThrow(/unsupported seed keystore version/);
+    expect(() => parseSeedKeystore('{"version":3,"keys":[]}')).toThrow(/seedJwe must be a string/);
+    expect(() => parseSeedKeystore('{"version":3,"seedJwe":"x"}')).toThrow(/must be an array/);
+    expect(() => parseSeedKeystore('{"version":3,"seedJwe":"x","keys":[{"name":"x"}]}')).toThrow(/missing string field/);
     const bad = { ...doc, keys: [{ name: "bad name", did: "did:key:z", createdAt: "" }] };
     expect(() => parseSeedKeystore(JSON.stringify(bad))).toThrow(/invalid name/);
     const dup = { ...doc, keys: [

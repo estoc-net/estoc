@@ -8,8 +8,8 @@
  *     keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a cache of key names
  *     contacts/<cid>.json    record: one mutable file per contact
  *     invitations/<id>.json  record: single-use invitations issued, by message id
- *     messages/NNNN.jsonl    log: append-only; readers take every segment, in numeric order
- *     deliveries/NNNN.jsonl  log: what became of each outbound message
+ *     messages/<uuid>.jsonl    log: append-only; readers take every segment, in name order
+ *     deliveries/<uuid>.jsonl  log: what became of each outbound message
  *     state/                 reserved: high-churn per-person state (cursors, drafts)
  *     blobs/<hash>           reserved: content-addressed attachment bytes
  *     cache/                 reserved: rebuildable; never in a snapshot, never merged
@@ -27,8 +27,6 @@ export const DELIVERIES_DIR = `${ESTOC_DIR}/deliveries`;
 export const STATE_DIR = `${ESTOC_DIR}/state`;
 export const BLOBS_DIR = `${ESTOC_DIR}/blobs`;
 export const CACHE_DIR = `${ESTOC_DIR}/cache`;
-/** The one segment the v1 writer appends to; readers never assume it is the only one. */
-export const FIRST_SEGMENT = "0001.jsonl";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

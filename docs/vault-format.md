@@ -28,8 +28,8 @@ say which of them it obeys.
 1. **Three kinds of file, three merge rules.** Every file is one of:
    - a **record** — a small, mutable thing with an id, one JSON file, named
      by its id, rewritten whole; merged by id, later `updatedAt` wins;
-   - a **log** — immutable events, append-only JSONL in numbered segments;
-     merged by union, deduplicated by a per-log key, never rewritten;
+   - a **log** — immutable events, append-only JSONL in segments named by
+     uuid; merged by union, deduplicated by a per-log key, never rewritten;
    - a **singleton** — `config.json`, `keystore.json`: one per vault, kept
      local on merge (see §7 for the one exception, the keystore's key list).
 2. **Files are named by ids, never by names.** A contact file is
@@ -62,8 +62,8 @@ say which of them it obeys.
   keystore.json             singleton — @estoc/keystore v3: one sealed seed + a cache of key names
   contacts/<cid>.json       record — one per contact
   invitations/<id>.json     record — one per single-use invitation issued
-  messages/<n>.jsonl        log — every message between this vault and its contacts
-  deliveries/<n>.jsonl      log — what became of each outbound message, per try
+  messages/<uuid>.jsonl     log — every message between this vault and its contacts
+  deliveries/<uuid>.jsonl   log — what became of each outbound message, per try
   state/                    reserved — high-churn per-person state (read cursors, drafts); §6.7
   blobs/                    reserved — content-addressed bytes lifted out of messages; §6.8
   cache/                    reserved — rebuildable indexes; never backed up, never merged; §6.9
@@ -125,9 +125,9 @@ is the check every merge starts with.
 
 The keystore document version is 3 and the derivation label is `estoc/v3`:
 the two move together, so one number identifies both the document shape
-and the derivation scheme. Keystore v1 (independently sealed keys)
-remains a separate document kind the keystore package understands; v2
-(index-derived, label `estoc/v1`) is retired.
+and the derivation scheme. Earlier keystore documents — v1
+(independently sealed keys) and v2 (index-derived, label `estoc/v1`) —
+are refused, not migrated: v3 is the only store.
 
 ## 6. Files
 
@@ -262,7 +262,7 @@ remains a separate document kind the keystore package understands; v2
 - Merge: by `id`; added when missing; an open one here that the incoming
   copy knows to be taken becomes taken (the DID is spent either way).
 
-### 6.5 `messages/<n>.jsonl` — log
+### 6.5 `messages/<uuid>.jsonl` — log
 
 One line per message that passed between this vault and anyone who is
 not its mediator, in either direction:
@@ -287,7 +287,7 @@ not its mediator, in either direction:
   Whether a record is *shown* is the application's projection.
 - Dedup keys for merge: `mid`, and `(direction, sender, msg.id)`.
 
-### 6.6 `deliveries/<n>.jsonl` — log
+### 6.6 `deliveries/<uuid>.jsonl` — log
 
 One line per outcome of one try to deliver one outbound message:
 
@@ -366,9 +366,14 @@ and records. It is **not** part of a snapshot and is never merged.
     identities are two vaults.
 - Merge never rewrites a line and never deletes a file. What it cannot
   express (a deletion made on one side) it does not attempt.
-- Log segments are `<decimal>.jsonl`; writers zero-pad to four digits;
-  **readers order segments numerically**, not lexically. A merge writes
-  its new records as the next number after the highest present.
+- Log segments are `<uuidv7>.jsonl` (lowercase); the name is minted when
+  the segment is made, never computed from what else is in the directory
+  (rule 2 — no "highest number plus one"). Readers concatenate segments in
+  name order, which is creation order; **nothing may rely on cross-segment
+  order for chronology** — a merge lays older records down in a newer
+  segment — records carry their own `at`. A writer appends to the newest
+  segment present, or mints one. Files in a log directory that are not
+  `<uuidv7>.jsonl` are not segments.
 
 ## 8. Versioning
 
@@ -444,7 +449,8 @@ there were none to migrate.
 4. **Snapshot = everything under `.estoc/`** except `cache/`: `VaultBackend`
    gains a way to list subdirectories (or a recursive walk); `snapshotVault`
    walks; `importVault` merges by kind and copies unknown paths when absent.
-5. **Segment order** — readers sort segment names numerically.
+5. **Segment names** — `<uuidv7>.jsonl`, minted (no counter); readers
+   order by name and drop non-segment files.
 6. **Readers preserve unknown fields** in records they rewrite (contacts,
    invitations): parse into the typed shape without dropping extras.
 7. Re-pin the fixed-seed test vector (anchor and the `mediation/…/me` DID

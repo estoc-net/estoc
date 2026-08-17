@@ -59,8 +59,8 @@ the repository root; this package is its reference implementation.
   keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a plaintext cache of key names
   contacts/<cid>.json    record: one mutable file per contact, DID history with evidence
   invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
-  messages/NNNN.jsonl    log: append-only; readers concatenate every segment in numeric order
-  deliveries/NNNN.jsonl  log: what became of each outbound message: sent / failed / held, per try
+  messages/<uuid>.jsonl  log: append-only; segments named by uuidv7, read in name order
+  deliveries/<uuid>.jsonl log: what became of each outbound message: sent / failed / held, per try
   state/ blobs/ cache/   reserved (per-person state · attachment bytes · rebuildable, never snapshotted)
 ```
 

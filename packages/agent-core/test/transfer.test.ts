@@ -10,13 +10,17 @@ import {
   deliveryStatusOf,
   foldDeliveries,
   importVault,
+  isSegment,
   newContact,
   newMessageRecord,
+  orderSegments,
   snapshotVault,
   type ContactRecord,
   type PlainMessage,
   type VaultBackend,
 } from "../src/index.js";
+
+const segmentsIn = (names: string[]) => orderSegments(names).length;
 
 const SEED_A = new Uint8Array(32).map((_, i) => i);
 const SEED_B = new Uint8Array(32).map((_, i) => 255 - i);
@@ -57,11 +61,13 @@ describe("snapshot + import", () => {
     );
 
     const files = await snapshotVault(backend);
+    const [segment] = await backend.list(MESSAGES_DIR);
+    expect(isSegment(segment!)).toBe(true);
     expect(Object.keys(files).sort()).toEqual([
       ".estoc/config.json",
       `.estoc/contacts/${bob.cid}.json`,
       ".estoc/keystore.json",
-      ".estoc/messages/0001.jsonl",
+      `.estoc/messages/${segment}`,
     ]);
 
     const other = new MemoryBackend();
@@ -78,7 +84,7 @@ describe("snapshot + import", () => {
     const states = foldDeliveries(await restored.deliveries.read());
     expect(deliveryStatusOf(records[0]!, states)).toBe("held");
     expect(deliveryStatusOf(records[1]!, states)).toBeNull();
-    expect((await other.list(DELIVERIES_DIR)).sort()).toEqual(["0001.jsonl"]);
+    expect(segmentsIn(await other.list(DELIVERIES_DIR))).toBe(1);
   });
 
   it("snapshots the whole tree but cache/, unions the key cache, and copies unknown paths only when absent", async () => {
@@ -168,7 +174,7 @@ describe("snapshot + import", () => {
     expect(onA.get(failed.mid)).toMatchObject({ status: "sent", attempts: 2 });
     expect(onA.get(pending.mid)).toBeUndefined();
     expect(onA.get(b1.mid)).toMatchObject({ status: "held", attempts: 0 });
-    expect((await a.list(DELIVERIES_DIR)).sort()).toEqual(["0001.jsonl", "0002.jsonl"]);
+    expect(segmentsIn(await a.list(DELIVERIES_DIR))).toBe(2);
 
     // again: nothing new, nothing held twice
     expect(await importVault(a, await snapshotVault(b))).toMatchObject({ deliveriesAdded: 0, held: 0 });
@@ -213,7 +219,7 @@ describe("snapshot + import", () => {
       kind: "merged",
       messagesAdded: 1, // b1
       messagesSkipped: 3, // a1, a2 (same mid), shared (same wire message)
-      segment: "0002.jsonl",
+      segment: expect.stringMatching(/\.jsonl$/),
       deliveriesAdded: 0,
       held: 1, // b1: written on B, never sent
       contactsAdded: 1, // Carol
@@ -221,7 +227,10 @@ describe("snapshot + import", () => {
       contactsKept: 0,
       damaged: [],
     });
-    expect((await a.list(MESSAGES_DIR)).sort()).toEqual(["0001.jsonl", "0002.jsonl"]);
+    // the merge's segment is a fresh uuidv7 — no "highest number plus one" — and lands after A's own
+    const segments = orderSegments(await a.list(MESSAGES_DIR));
+    expect(segments).toHaveLength(2);
+    expect(segments[1]).toBe(outcome.kind === "merged" ? outcome.segment : null);
     const merged = await Vault.open(a);
     expect((await merged.messages.read()).map((r) => r.msg.id)).toEqual(["a1", "a2", "a3", "shared", "b1"]);
     expect((await merged.contacts.all()).map((c) => c.name)).toEqual(["Robert", "Carol"]);
@@ -240,7 +249,7 @@ describe("snapshot + import", () => {
       contactsUpdated: 0,
       contactsKept: 2,
     });
-    expect((await a.list(MESSAGES_DIR)).sort()).toEqual(["0001.jsonl", "0002.jsonl"]);
+    expect(segmentsIn(await a.list(MESSAGES_DIR))).toBe(2);
 
     // A's local rename beats an older stamp from B on the way back
     await new Promise((resolve) => setTimeout(resolve, 5));

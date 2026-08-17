@@ -18,7 +18,7 @@ export type { DamagedLine } from "./log.js";
  * which is what lets a contact's rotation, merge, or re-creation re-home
  * old messages without rewriting a line.
  *
- * Writers append to one segment; readers concatenate every `*.jsonl` in
+ * Writers append to one segment; readers concatenate every `<uuidv7>.jsonl` in
  * name order — so a merge (importing another copy of the vault) is just
  * dropping its segments in beside ours (see `SegmentedLog`).
  */
@@ -99,8 +99,8 @@ function parseLine(line: string, where: string): MessageRecord {
 }
 
 export class MessageLog extends SegmentedLog<MessageRecord> {
-  constructor(backend: VaultBackend, segment?: string) {
-    super(backend, MESSAGES_DIR, parseLine, segment);
+  constructor(backend: VaultBackend) {
+    super(backend, MESSAGES_DIR, parseLine);
   }
 }
 

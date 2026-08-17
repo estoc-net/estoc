@@ -1,14 +1,21 @@
+import { v7 as uuidv7 } from "uuid";
 import type { VaultBackend } from "../backend/types.js";
-import { FIRST_SEGMENT, text, utf8 } from "./layout.js";
+import { text, utf8 } from "./layout.js";
 
 /**
  * An append-only JSONL log kept as segments in one directory: writers
- * append to one segment, readers concatenate every `<decimal>.jsonl` in
- * numeric order (`0001`, `0002`, … `10000` — never lexically, which would
- * put `10000` before `0002`). Segments are not about size — they are how a merge works:
+ * append to one segment, readers concatenate every `<uuidv7>.jsonl` in
+ * name order. Segments are not about size — they are how a merge works:
  * importing another copy of the vault drops what is new into a segment of
  * its own, and nothing already here is rewritten. The message log and the
  * delivery log are both this, with their own line shape.
+ *
+ * A segment's name is minted when the segment is created, never computed
+ * from what else is in the directory (no "highest number plus one"): the
+ * same rule as every other id in the vault. uuidv7 makes name order the
+ * order segments were made, which is all `read` promises — nothing may
+ * lean on cross-segment order for chronology; records carry their own
+ * time.
  */
 
 /** A line that would not parse — reported to `read`'s caller, then skipped. */
@@ -25,41 +32,43 @@ export type LineParser<T> = (line: string, where: string) => T;
 export class SegmentedLog<T> {
   /** appends run one at a time; two in flight would compute the same offset */
   private chain: Promise<unknown> = Promise.resolve();
-  /** whether this instance has checked the segment's tail for a cut-short line */
-  private tailChecked = false;
+  /**
+   * The segment this instance appends to — the newest one present when it
+   * first appends, or a fresh one if the directory is empty; null until then.
+   */
+  private segment: string | null = null;
 
   constructor(
     private readonly backend: VaultBackend,
     readonly dir: string,
-    private readonly parseLine: LineParser<T>,
-    private readonly segment: string = FIRST_SEGMENT
+    private readonly parseLine: LineParser<T>
   ) {}
-
-  private get path(): string {
-    return `${this.dir}/${this.segment}`;
-  }
 
   /**
    * Append one record. Appends are serialised through this instance: the
    * backend's append is read-size-then-write, so two in flight would land
    * on the same offset and one would overwrite the other.
    *
-   * The first append also heals a crash: a segment that does not end in a
-   * newline holds a line whose append was cut short, and writing straight
-   * after it would fuse the fragment and the new record into one bad line
-   * — the fragment gets its own line terminator first, so it stays a
-   * skippable damaged line and the new record stays whole.
+   * The first append picks the segment — the newest one there is, so a
+   * session after an import carries on behind what came in — and heals a
+   * crash: a segment that does not end in a newline holds a line whose
+   * append was cut short, and writing straight after it would fuse the
+   * fragment and the new record into one bad line — the fragment gets its
+   * own line terminator first, so it stays a skippable damaged line and
+   * the new record stays whole.
    */
   append(record: T): Promise<void> {
     const run = this.chain.then(async () => {
-      if (!this.tailChecked) {
-        const bytes = await this.backend.read(this.path);
+      if (this.segment === null) {
+        const segments = orderSegments(await this.backend.list(this.dir));
+        this.segment = segments.at(-1) ?? newSegment();
+        const path = `${this.dir}/${this.segment}`;
+        const bytes = await this.backend.read(path);
         if (bytes !== null && bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) {
-          await this.backend.append(this.path, utf8("\n"));
+          await this.backend.append(path, utf8("\n"));
         }
-        this.tailChecked = true;
       }
-      await this.backend.append(this.path, utf8(JSON.stringify(record) + "\n"));
+      await this.backend.append(`${this.dir}/${this.segment}`, utf8(JSON.stringify(record) + "\n"));
     });
     this.chain = run.catch(() => undefined);
     return run;
@@ -90,9 +99,9 @@ export class SegmentedLog<T> {
     return parseSegment(content, segment, this.parseLine, onDamaged);
   }
 
-  /** Lay `records` down as a new segment, named after the highest one present. */
+  /** Lay `records` down as a segment of their own, under a fresh name. */
   async writeSegment(records: T[]): Promise<string> {
-    const segment = nextSegment(await this.backend.list(this.dir));
+    const segment = newSegment();
     await this.backend.write(
       `${this.dir}/${segment}`,
       utf8(records.map((record) => JSON.stringify(record)).join("\n") + "\n")
@@ -133,30 +142,28 @@ export function parseSegment<T>(
   return records;
 }
 
-/** The number of a `<decimal>.jsonl` segment name, or null for any other file. */
-export function segmentNumber(name: string): number | null {
-  const match = /^(\d+)\.jsonl$/.exec(name);
-  return match === null ? null : Number(match[1]);
+const SEGMENT_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$/;
+
+/** Whether `name` is a segment file: `<uuidv7>.jsonl`, lowercase. */
+export function isSegment(name: string): boolean {
+  return SEGMENT_NAME.test(name);
 }
 
 /**
- * The segment files among `names`, in numeric order. Files that are not
- * `<decimal>.jsonl` are not segments and are left out — a stray file in
+ * The segment files among `names`, in name order — which, the names being
+ * uuidv7, is the order the segments were made. Files that are not
+ * `<uuidv7>.jsonl` are not segments and are left out — a stray file in
  * the directory is not history.
  */
 export function orderSegments(names: string[]): string[] {
-  return names
-    .map((name) => [name, segmentNumber(name)] as const)
-    .filter((pair): pair is readonly [string, number] => pair[1] !== null)
-    .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
-    .map(([name]) => name);
+  return names.filter(isSegment).sort();
 }
 
-/** The next segment name after the highest-numbered `<decimal>.jsonl` in `existing`. */
-export function nextSegment(existing: string[]): string {
-  let max = 0;
-  for (const name of existing) {
-    max = Math.max(max, segmentNumber(name) ?? 0);
-  }
-  return `${String(max + 1).padStart(4, "0")}.jsonl`;
+/**
+ * A fresh segment name. Left to itself, uuidv7 keeps names monotonic within
+ * a process even inside one millisecond; `now` pins the time part instead
+ * (tests) and gives that up.
+ */
+export function newSegment(now?: Date): string {
+  return `${now === undefined ? uuidv7() : uuidv7({ msecs: now.getTime() })}.jsonl`;
 }
