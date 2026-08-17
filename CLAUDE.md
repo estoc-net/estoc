@@ -1,4 +1,4 @@
-# estoc-net/pwa — workspace notes
+# estoc-net/estoc — workspace notes
 
 pnpm workspace (`pnpm-workspace.yaml`): `packages/{did-peer,keystore,agent-core}` are
 published libraries, `app/` is the PWA. Internal deps are `workspace:^` — never bump

@@ -1,6 +1,6 @@
 # Estoc
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/pwa)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/estoc-net/estoc)
 
 An offline-first DIDComm v2 messenger you install as a web app. One
 identity from one seed, minted in your browser; your contacts and message
@@ -71,7 +71,7 @@ your data never touches the place the app was served from.
 
 ## Run it
 
-This directory is one package of the [estoc-net/pwa] workspace, alongside
+This directory is one package of the [estoc-net/estoc] workspace, alongside
 the libraries it is built from (`packages/{did-peer,keystore,agent-core}`),
 which it takes straight from the tree — no publish step between a library
 change and the app seeing it. From the workspace root:
@@ -178,8 +178,8 @@ has had an independent security audit.
 
 Apache-2.0
 
-[@estoc/agent-core]: https://github.com/estoc-net/pwa/tree/main/packages/agent-core
-[@estoc/keystore]: https://github.com/estoc-net/pwa/tree/main/packages/keystore
+[@estoc/agent-core]: https://github.com/estoc-net/estoc/tree/main/packages/agent-core
+[@estoc/keystore]: https://github.com/estoc-net/estoc/tree/main/packages/keystore
 [didcomm-mediator]: https://github.com/estoc-net/didcomm-mediator
 [vite-plugin-pwa]: https://vite-pwa-org.netlify.app/
-[estoc-net/pwa]: https://github.com/estoc-net/pwa
+[estoc-net/estoc]: https://github.com/estoc-net/estoc

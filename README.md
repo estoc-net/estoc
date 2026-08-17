@@ -1,4 +1,4 @@
-# estoc-net/pwa
+# estoc-net/estoc
 
 The Estoc web app and the libraries it is made of, in one pnpm workspace:
 

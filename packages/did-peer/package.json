@@ -6,7 +6,7 @@
   "author": "merely",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/estoc-net/pwa.git",
+    "url": "git+https://github.com/estoc-net/estoc.git",
     "directory": "packages/did-peer"
   },
   "type": "module",
