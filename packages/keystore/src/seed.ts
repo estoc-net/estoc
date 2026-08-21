@@ -30,7 +30,7 @@ export async function importSeed(seed: Uint8Array): Promise<SeedKey> {
   if (seed.length !== SEED_LENGTH) {
     throw new Error(`seed must be ${SEED_LENGTH} bytes, got ${seed.length}`);
   }
-  return crypto.subtle.importKey("raw", seed, "HKDF", false, ["deriveBits"]);
+  return crypto.subtle.importKey("raw", seed as Uint8Array<ArrayBuffer>, "HKDF", false, ["deriveBits"]);
 }
 
 /**
@@ -55,7 +55,7 @@ function assertKeyName(name: string): void {
  * derivation scheme (and the document version that carries it); changing
  * either silently renames every DID, so it moves only with a new version.
  */
-function info(name: string, purpose: "ed25519" | "x25519"): Uint8Array {
+function info(name: string, purpose: "ed25519" | "x25519"): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(`estoc/v3/${purpose}/${name}`);
 }
 

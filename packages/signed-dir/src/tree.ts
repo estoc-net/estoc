@@ -6,7 +6,6 @@
 
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
-import * as dagJson from "@ipld/dag-json";
 import { decodeDirNode, encodeDirNode, fileCid, isDirCid } from "./cid.js";
 import type { DirEntry, HashedTree, TreeFiles } from "./types.js";
 import { segmentsOf } from "./path.js";
