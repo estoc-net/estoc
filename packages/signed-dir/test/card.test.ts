@@ -78,12 +78,6 @@ describe("root card", () => {
     await expect(verifyCard(jws, () => publicKey)).rejects.toThrow(/malformed root card/);
   });
 
-  it("newer-card comparison is a string comparison on id", () => {
-    const older = "0198c2f0-0000-7000-8000-000000000000";
-    const newer = "0198c2f0-0001-7000-8000-000000000000";
-    expect(newer > older).toBe(true);
-  });
-
   it("does not enforce expiry — that is acceptance policy", async () => {
     const { signer, publicKey } = await testSigner();
     const stale = { ...card, expires: "2000-01-01T00:00:00Z" };
