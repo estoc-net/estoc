@@ -59,12 +59,13 @@ export interface RootCard {
   /** ISO 8601 instant after which the card is stale (the DNS-TTL analogue). */
   expires: string;
   /**
-   * CID of the root directory node. Absent means takedown: the owner
-   * asserts "I publish nothing". Absence is the only encoding — a
-   * present-but-null `root` is a malformed card, so exactly one byte
-   * sequence says takedown.
+   * CID of the root directory node, or null for a takedown card: the
+   * owner's assertion "I publish nothing". Null is the only encoding —
+   * a card *missing* the field is malformed. A takedown is destructive,
+   * so it must be written deliberately, never minted by a producer bug
+   * that drops a field (RFC 7386's null-means-removal idiom).
    */
-  root?: string;
+  root: string | null;
 }
 
 /**

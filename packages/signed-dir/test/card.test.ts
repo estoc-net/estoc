@@ -62,18 +62,19 @@ describe("root card", () => {
     await expect(verifyCard(jws, () => null)).rejects.toThrow(/unknown kid/);
   });
 
-  it("round-trips a takedown card (no root)", async () => {
+  it("round-trips a takedown card (root: null)", async () => {
     const { signer, publicKey } = await testSigner();
-    const takedown: RootCard = { did: card.did, id: card.id, expires: card.expires };
+    const takedown: RootCard = { did: card.did, id: card.id, expires: card.expires, root: null };
     const jws = await createCard(takedown, signer, kid);
     const verified = await verifyCard(jws, () => publicKey);
     expect(verified.card).toEqual(takedown);
-    expect("root" in verified.card).toBe(false);
+    expect(verified.card.root).toBeNull();
   });
 
-  it("rejects root: null — absence is the only takedown encoding", async () => {
+  it("rejects a card missing root — null is the only takedown encoding", async () => {
     const { signer, publicKey } = await testSigner();
-    const jws = await createCard({ ...card, root: null } as unknown as RootCard, signer, kid);
+    const { root: _root, ...fieldless } = card;
+    const jws = await createCard(fieldless as RootCard, signer, kid);
     await expect(verifyCard(jws, () => publicKey)).rejects.toThrow(/malformed root card/);
   });
 

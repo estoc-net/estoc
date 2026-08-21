@@ -23,19 +23,20 @@ function checkCardShape(value: unknown): RootCard {
     typeof did !== "string" ||
     typeof id !== "string" ||
     typeof expires !== "string" ||
-    (root !== undefined && typeof root !== "string")
+    (root !== null && typeof root !== "string")
   ) {
     throw new Error("malformed root card");
   }
-  return root === undefined ? { did, id, expires } : { did, id, expires, root };
+  return { did, id, expires, root };
 }
 
 /**
  * Sign a root card into a compact JWS. `kid` should name the owner's
  * verification method (usually `<did>#<fragment>`); the payload is the
  * card as given — minting rules (fresh uuidv7 id greater than the last,
- * a sane expires) are the caller's. A card without `root` is a takedown
- * card; JSON.stringify keeps the absent field absent on the wire.
+ * a sane expires) are the caller's. A card with `root: null` is a
+ * takedown card; null is the only takedown encoding — a payload missing
+ * the field does not verify.
  */
 export async function createCard(
   card: RootCard,
