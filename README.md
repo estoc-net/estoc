@@ -5,7 +5,7 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 | path | package | what |
 |---|---|---|
 | `app/` | `estoc-app` | the offline-first DIDComm v2 messenger you install as a web app — [app.estoc.dev](https://app.estoc.dev) |
-| `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, over an `.estoc` vault |
+| `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, public folders, over an `.estoc` vault |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |
 | `packages/signed-dir/` | `@estoc/signed-dir` | owner-signed directory trees — IPLD-notation merkle hashing + signed root card (not yet on npm) |

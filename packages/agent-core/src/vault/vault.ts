@@ -18,6 +18,7 @@ import { InvitationStore, type InvitationRecord } from "./invitations.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
 import { DeliveryLog } from "./deliveries.js";
 import { MessageLog } from "./messages.js";
+import { PublicFolderStore } from "./public-folder.js";
 
 /**
  * A vault: the `.estoc` directory as an object. Holds the config and the
@@ -81,6 +82,7 @@ export class Vault {
   readonly invitations: InvitationStore;
   readonly messages: MessageLog;
   readonly deliveries: DeliveryLog;
+  readonly publicFolder: PublicFolderStore;
 
   private constructor(
     private readonly backend: VaultBackend,
@@ -91,6 +93,7 @@ export class Vault {
     this.invitations = new InvitationStore(backend);
     this.messages = new MessageLog(backend);
     this.deliveries = new DeliveryLog(backend);
+    this.publicFolder = new PublicFolderStore(backend);
   }
 
   /** Is there a vault (a config.json) at this backend's root? */

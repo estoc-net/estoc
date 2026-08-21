@@ -3,10 +3,13 @@ import type { IMessage } from "didcomm-node";
 import { encodeLongForm, resolveDIDCommDoc } from "@estoc/did-peer";
 import type { Secret } from "@estoc/did-peer";
 import bs58 from "bs58";
-import { base64urlToBytes } from "@estoc/did-peer";
+import { base64urlToBytes, bytesToBase64url } from "@estoc/did-peer";
 import type { DerivedIdentity } from "@estoc/keystore";
 
+import { decodeDirNode, verifyCard, type RootCard } from "@estoc/signed-dir";
+
 import {
+  DAG_JSON_MEDIA_TYPE,
   DELIVERY,
   DELIVERY_REQUEST,
   FORWARD,
@@ -15,10 +18,19 @@ import {
   MEDIATE_REQUEST,
   MESSAGES_RECEIVED,
   PLAIN_TYP,
+  PROBLEM_REPORT,
+  PUBLIC_FOLDER_ANSWER,
+  PUBLIC_FOLDER_PUBLISH,
+  PUBLIC_FOLDER_PUBLISHED,
+  PUBLIC_FOLDER_PUBLISH_RESULT,
+  PUBLIC_FOLDER_QUERY,
+  RAW_MEDIA_TYPE,
   RECIPIENT_UPDATE,
   RECIPIENT_UPDATE_RESPONSE,
   STATUS,
   STATUS_REQUEST,
+  authenticationKeyOf,
+  decodeCard,
   didOf,
   secretsResolverFor,
 } from "../src/index.js";
@@ -116,6 +128,16 @@ export class FakeMediator {
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
   readonly seenTypes: string[] = [];
+  /** the relay role: owner DID → current card (compact JWS) */
+  readonly cards = new Map<string, string>();
+  /** the relay's object store, CID → bytes */
+  readonly objects = new Map<string, Uint8Array>();
+  /** every CID received as a publish attachment, in order — for incremental-push assertions */
+  readonly receivedObjects: string[] = [];
+  /** answer attachments above this many bytes go by link instead of inline */
+  answerInlineLimit = 256 * 1024;
+  /** `retain_until` for published receipts; undefined = this relay never collects */
+  retainUntil: string | undefined;
   /** the fake `fetch`: the mediator's endpoint, or 404 */
   readonly fetch: typeof fetch;
   /** the fake `WebSocket` constructor bound to this mediator */
@@ -132,13 +154,27 @@ export class FakeMediator {
     this.secrets = minted.secrets;
     this.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url !== this.http) {
-        return new Response("not found", { status: 404 });
+      if (url === this.http) {
+        const reply = await this.handleHttp(String(init?.body));
+        return reply === null
+          ? new Response(null, { status: 202 })
+          : new Response(reply, { status: 200, headers: { "content-type": "application/didcomm-encrypted+json" } });
       }
-      const reply = await this.handleHttp(String(init?.body));
-      return reply === null
-        ? new Response(null, { status: 202 })
-        : new Response(reply, { status: 200, headers: { "content-type": "application/didcomm-encrypted+json" } });
+      // the relay's trustless read endpoints, GET only
+      if (url.startsWith(`${this.http}objects/`)) {
+        const bytes = this.objects.get(url.slice(`${this.http}objects/`.length));
+        return bytes === undefined
+          ? new Response("not found", { status: 404 })
+          : new Response(bytes.slice() as unknown as BodyInit, { status: 200 });
+      }
+      if (url.startsWith(`${this.http}card/`)) {
+        const did = decodeURIComponent(url.slice(`${this.http}card/`.length));
+        const jws = this.cards.get(did);
+        return jws === undefined
+          ? new Response("not found", { status: 404 })
+          : new Response(jws, { status: 200, headers: { "content-type": "application/jose" } });
+      }
+      return new Response("not found", { status: 404 });
     }) as typeof fetch;
     const mediator = this;
     this.WebSocket = class extends FakeSocket {
@@ -249,9 +285,148 @@ export class FakeMediator {
       }
       case LIVE_DELIVERY_CHANGE:
         return this.reply(STATUS, from as string, { live_delivery: (msg.body as { live_delivery: boolean }).live_delivery }, msg.id);
+      case PUBLIC_FOLDER_PUBLISH:
+        return this.handlePublish(msg, from as string);
+      case PUBLIC_FOLDER_QUERY:
+        return this.handleQuery(msg, from as string);
       default:
         throw new Error(`fake mediator cannot handle ${msg.type}`);
     }
+  }
+
+  /**
+   * The relay role of public-folder/1.0, just enough of it: verify the
+   * card, take the attached objects, report what is missing under the
+   * root, serve the proof chain back. No policy, no refcounts, no purge.
+   */
+  private async handlePublish(msg: IMessage, from: string): Promise<IMessage> {
+    const jws = (msg.body as { card?: unknown }).card;
+    if (typeof jws !== "string") {
+      return this.reply(PROBLEM_REPORT, from, { code: "e.p.card.invalid", comment: "no card" }, msg.id);
+    }
+    let card: RootCard;
+    try {
+      ({ card } = await verifyCard(jws, async (kid) => {
+        const did = didOf(kid);
+        const doc = did === null ? null : await resolveDIDCommDoc(did);
+        return doc === null ? null : authenticationKeyOf(doc, kid);
+      }));
+    } catch (err) {
+      return this.reply(
+        PROBLEM_REPORT,
+        from,
+        { code: "e.p.card.invalid", comment: err instanceof Error ? err.message : String(err) },
+        msg.id
+      );
+    }
+    for (const attachment of msg.attachments ?? []) {
+      const { id, data } = attachment as { id?: string; data?: { base64?: string } };
+      if (typeof id === "string" && typeof data?.base64 === "string") {
+        this.objects.set(id, base64urlToBytes(data.base64));
+        this.receivedObjects.push(id);
+      }
+    }
+    if (card.root !== null) {
+      const missing = this.missingFrom(card.root);
+      if (missing.length > 0) {
+        return this.reply(PUBLIC_FOLDER_PUBLISH_RESULT, from, { missing }, msg.id);
+      }
+    }
+    this.cards.set(card.did, jws);
+    return this.reply(
+      PUBLIC_FOLDER_PUBLISHED,
+      from,
+      {
+        did: card.did,
+        card_id: card.id,
+        ...(this.retainUntil === undefined ? {} : { retain_until: this.retainUntil }),
+      },
+      msg.id
+    );
+  }
+
+  /** CIDs reachable from `root` that the store does not hold — an absent directory node hides its subtree. */
+  private missingFrom(root: string): string[] {
+    const missing: string[] = [];
+    const seen = new Set<string>([root]);
+    const dirs = [root];
+    while (dirs.length > 0) {
+      const cid = dirs.shift() as string;
+      const bytes = this.objects.get(cid);
+      if (bytes === undefined) {
+        missing.push(cid);
+        continue;
+      }
+      for (const entry of decodeDirNode(bytes)) {
+        if (seen.has(entry.hash)) {
+          continue;
+        }
+        seen.add(entry.hash);
+        if (entry.type === "dir") {
+          dirs.push(entry.hash);
+        } else if (!this.objects.has(entry.hash)) {
+          missing.push(entry.hash);
+        }
+      }
+    }
+    return missing;
+  }
+
+  private async handleQuery(msg: IMessage, from: string): Promise<IMessage> {
+    const body = msg.body as { did?: string; path?: string; card_only?: boolean };
+    const jws = typeof body.did === "string" ? this.cards.get(body.did) : undefined;
+    if (jws === undefined) {
+      return this.reply(
+        PROBLEM_REPORT,
+        from,
+        { code: "e.p.did.unknown", comment: `This relay holds no card for ${body.did}` },
+        msg.id
+      );
+    }
+    const card = decodeCard(jws);
+    if (card.root === null || body.card_only === true) {
+      return this.reply(PUBLIC_FOLDER_ANSWER, from, { card: jws }, msg.id);
+    }
+    const chain: { cid: string; bytes: Uint8Array; dir: boolean }[] = [];
+    let cid = card.root;
+    let dir = true;
+    const segments =
+      typeof body.path === "string" && body.path !== "" ? body.path.split("/") : [];
+    for (;;) {
+      const bytes = this.objects.get(cid);
+      if (bytes === undefined) {
+        return this.reply(PROBLEM_REPORT, from, { code: "e.p.me.res.storage" }, msg.id);
+      }
+      chain.push({ cid, bytes, dir });
+      const segment = segments.shift();
+      if (segment === undefined) {
+        break;
+      }
+      const entry = dir ? decodeDirNode(bytes).find((e) => e.name === segment) : undefined;
+      if (entry === undefined) {
+        return this.reply(
+          PROBLEM_REPORT,
+          from,
+          { code: "e.p.path.not-found", comment: `No such path: ${body.path}` },
+          msg.id
+        );
+      }
+      cid = entry.hash;
+      dir = entry.type === "dir";
+    }
+    return {
+      ...this.reply(PUBLIC_FOLDER_ANSWER, from, { card: jws }, msg.id),
+      attachments: chain.map(({ cid, bytes, dir }) => ({
+        id: cid,
+        media_type: dir ? DAG_JSON_MEDIA_TYPE : RAW_MEDIA_TYPE,
+        data:
+          bytes.length <= this.answerInlineLimit
+            ? { base64: bytesToBase64url(bytes) }
+            : // didcomm-rust requires `hash` on links data; readers here verify
+              // by the CID on every hop, so the CID stands in for the multihash
+              { links: [`${this.http}objects/${cid}`], hash: cid },
+      })),
+    } as IMessage;
   }
 
   async handleHttp(text: string): Promise<string | null> {
@@ -292,7 +467,7 @@ export class FakeMediator {
 export function network(...mediators: FakeMediator[]): Pick<FakeMediator, "fetch" | "WebSocket"> {
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const owner = mediators.find((m) => m.http === url);
+    const owner = mediators.find((m) => url.startsWith(m.http));
     return owner === undefined ? new Response("not found", { status: 404 }) : owner.fetch(input, init);
   }) as typeof fetch;
   const WebSocketCtor = class {

@@ -63,6 +63,9 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@estoc/signed-dir':
+        specifier: workspace:^
+        version: link:../signed-dir
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
