@@ -1,6 +1,6 @@
 {
   "name": "@estoc/signed-dir",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Owner-signed directory trees: IPLD-notation merkle hashing (raw file CIDs + dag-json dir nodes) and the signed root card. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",

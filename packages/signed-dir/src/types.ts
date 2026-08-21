@@ -58,8 +58,13 @@ export interface RootCard {
   id: string;
   /** ISO 8601 instant after which the card is stale (the DNS-TTL analogue). */
   expires: string;
-  /** CID of the root directory node. */
-  root: string;
+  /**
+   * CID of the root directory node. Absent means takedown: the owner
+   * asserts "I publish nothing". Absence is the only encoding — a
+   * present-but-null `root` is a malformed card, so exactly one byte
+   * sequence says takedown.
+   */
+  root?: string;
 }
 
 /**

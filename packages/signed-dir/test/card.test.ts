@@ -62,6 +62,21 @@ describe("root card", () => {
     await expect(verifyCard(jws, () => null)).rejects.toThrow(/unknown kid/);
   });
 
+  it("round-trips a takedown card (no root)", async () => {
+    const { signer, publicKey } = await testSigner();
+    const takedown: RootCard = { did: card.did, id: card.id, expires: card.expires };
+    const jws = await createCard(takedown, signer, kid);
+    const verified = await verifyCard(jws, () => publicKey);
+    expect(verified.card).toEqual(takedown);
+    expect("root" in verified.card).toBe(false);
+  });
+
+  it("rejects root: null — absence is the only takedown encoding", async () => {
+    const { signer, publicKey } = await testSigner();
+    const jws = await createCard({ ...card, root: null } as unknown as RootCard, signer, kid);
+    await expect(verifyCard(jws, () => publicKey)).rejects.toThrow(/malformed root card/);
+  });
+
   it("newer-card comparison is a string comparison on id", () => {
     const older = "0198c2f0-0000-7000-8000-000000000000";
     const newer = "0198c2f0-0001-7000-8000-000000000000";
