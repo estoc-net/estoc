@@ -224,6 +224,28 @@ describe("public folder", () => {
     third.destroy();
   });
 
+  it("renews when the relay's lease nears its end, even under a fresh card", async () => {
+    const mediator = await newMediator();
+    const { vault, seedKey, agent } = await newOwner(mediator);
+    const did = agent.did as string;
+
+    mediator.retainUntil = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    await agent.publishPublicFolder(folder());
+    const before = mediator.cards.get(did) as string;
+    agent.destroy();
+
+    const second = new Agent({
+      vault,
+      seedKey,
+      didcomm,
+      fetch: mediator.fetch,
+      WebSocket: mediator.WebSocket,
+    });
+    await second.start();
+    expect(mediator.cards.get(did)).not.toBe(before);
+    second.destroy();
+  });
+
   it("re-sends only what changed on the next publish", async () => {
     const mediator = await newMediator();
     const { agent } = await newOwner(mediator);

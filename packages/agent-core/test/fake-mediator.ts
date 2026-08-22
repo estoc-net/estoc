@@ -136,8 +136,8 @@ export class FakeMediator {
   readonly receivedObjects: string[] = [];
   /** answer attachments above this many bytes go by link instead of inline */
   answerInlineLimit = 256 * 1024;
-  /** `retain_until` for published receipts; undefined = this relay never collects */
-  retainUntil: string | undefined;
+  /** `retain_until` for published receipts (REQUIRED by spec — a never-collecting relay states a generous bound) */
+  retainUntil = "2099-01-01T00:00:00Z";
   /** the fake `fetch`: the mediator's endpoint, or 404 */
   readonly fetch: typeof fetch;
   /** the fake `WebSocket` constructor bound to this mediator */
@@ -339,7 +339,7 @@ export class FakeMediator {
       {
         did: card.did,
         card_id: card.id,
-        ...(this.retainUntil === undefined ? {} : { retain_until: this.retainUntil }),
+        retain_until: this.retainUntil,
       },
       msg.id
     );

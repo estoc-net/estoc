@@ -749,15 +749,17 @@ export class Agent {
       );
       if (reply.type === PUBLIC_FOLDER_PUBLISHED) {
         const body = reply.body as { did?: string; card_id?: string; retain_until?: string };
-        if (typeof body.did !== "string" || typeof body.card_id !== "string") {
-          throw new Error("the published receipt is missing did or card_id");
+        if (
+          typeof body.did !== "string" ||
+          typeof body.card_id !== "string" ||
+          typeof body.retain_until !== "string"
+        ) {
+          throw new Error("the published receipt is missing did, card_id or retain_until");
         }
         const receipt: PublishedReceipt = {
           did: body.did,
           card_id: body.card_id,
-          ...(typeof body.retain_until === "string"
-            ? { retain_until: body.retain_until }
-            : {}),
+          retain_until: body.retain_until,
         };
         await this.vault.publicFolder.put({
           card: jws,
@@ -833,7 +835,7 @@ export class Agent {
       }
       const horizon = Date.now() + PUBLIC_FOLDER_RENEW_DAYS * DAY_MS;
       const lease = state.receipt.retain_until;
-      if (Date.parse(card.expires) >= horizon && (lease === undefined || Date.parse(lease) >= horizon)) {
+      if (Date.parse(card.expires) >= horizon && Date.parse(lease) >= horizon) {
         return;
       }
       await this.renewPublicFolder();

@@ -19,8 +19,8 @@ export const PUBLIC_FOLDER_STATE_PATH = `${STATE_DIR}/public-folder.json`;
 export interface PublishedReceipt {
   did: string;
   card_id: string;
-  /** how long the relay commits to keeping the publication; absent = it never collects */
-  retain_until?: string;
+  /** how long the relay commits to keeping the publication — always a date (spec: REQUIRED) */
+  retain_until: string;
 }
 
 export interface PublicFolderState {
@@ -39,7 +39,7 @@ export function parsePublicFolderState(json: string): PublicFolderState {
     typeof raw.publishedAt !== "string" ||
     typeof receipt?.did !== "string" ||
     typeof receipt.card_id !== "string" ||
-    !(receipt.retain_until === undefined || typeof receipt.retain_until === "string")
+    typeof receipt.retain_until !== "string"
   ) {
     throw new Error("state/public-folder.json is not a public-folder state");
   }
@@ -49,7 +49,7 @@ export function parsePublicFolderState(json: string): PublicFolderState {
     receipt: {
       did: receipt.did,
       card_id: receipt.card_id,
-      ...(receipt.retain_until === undefined ? {} : { retain_until: receipt.retain_until }),
+      retain_until: receipt.retain_until,
     },
   };
 }

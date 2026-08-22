@@ -19,7 +19,9 @@ the mediator.
 - **Vault**: `state/public-folder.json` (`vault.publicFolder`), the one
   record kept — the current card (compact JWS) and the relay's
   `published` receipt. Carried by snapshots like everything under
-  `state/`.
+  `state/`. The receipt's `retain_until` is required, matching the
+  spec (2026-08-22): an absent lease could mean "forever" or "no
+  commitment", so a receipt without one is rejected.
 - **Renewal at start**: when the card's `expires` or the receipt's
   `retain_until` is within 10 days, the card is re-signed and
   republished (best effort; failure logs and the next start retries).
