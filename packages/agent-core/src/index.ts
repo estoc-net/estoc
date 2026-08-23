@@ -109,37 +109,6 @@ export {
   type IMessage,
 } from "./protocol/didcomm.js";
 export { resolveDid } from "./protocol/resolver.js";
-export {
-  DAG_JSON_MEDIA_TYPE,
-  PROBLEM_REPORT,
-  PUBLIC_FOLDER_ANSWER,
-  PUBLIC_FOLDER_PUBLISH,
-  PUBLIC_FOLDER_PUBLISHED,
-  PUBLIC_FOLDER_PUBLISH_RESULT,
-  PUBLIC_FOLDER_QUERY,
-  RAW_MEDIA_TYPE,
-  authenticationKeyOf,
-  decodeCard,
-  discoverRelay,
-  httpObjects,
-  queryPublicFolder,
-  readPublicFolder,
-  verifyPublicFolder,
-  type GetObject,
-  type PublicFolderResult,
-  type QueryPublicFolderOptions,
-  type ReadPublicFolderOptions,
-  type VerifyPublicFolderOptions,
-} from "./protocol/public-folder.js";
-export {
-  PUBLIC_FOLDER_STATE_PATH,
-  PublicFolderStore,
-  parsePublicFolderState,
-  type PublicFolderState,
-  type PublishedReceipt,
-} from "./vault/public-folder.js";
-// the tree/card shapes the public-folder surfaces speak, re-exported for applications
-export type { DirEntry, Resolved, RootCard, TreeFiles } from "@estoc/signed-dir";
 export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
 export {
   GOAL_CONNECT,

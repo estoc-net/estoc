@@ -1,8 +1,6 @@
 import type { SeedKey } from "@estoc/keystore";
-import { base64urlToUtf8, bytesToBase64url } from "@estoc/did-peer";
+import { base64urlToUtf8 } from "@estoc/did-peer";
 import type { DIDDoc, Secret } from "@estoc/did-peer";
-import { createCard, hashTree, isDirCid, type RootCard, type TreeFiles } from "@estoc/signed-dir";
-import { v7 as uuidv7 } from "uuid";
 
 import { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
 import {
@@ -30,15 +28,6 @@ import {
   STATUS,
   STATUS_REQUEST,
 } from "./protocol/mediation.js";
-import {
-  DAG_JSON_MEDIA_TYPE,
-  PROBLEM_REPORT,
-  PUBLIC_FOLDER_PUBLISH,
-  PUBLIC_FOLDER_PUBLISHED,
-  PUBLIC_FOLDER_PUBLISH_RESULT,
-  RAW_MEDIA_TYPE,
-  decodeCard,
-} from "./protocol/public-folder.js";
 import type { HandlerContext, ProtocolHandler, SendOptions } from "./protocol/handler.js";
 import { BASIC_MESSAGE, basicmessageHandler } from "./protocol/basicmessage.js";
 import { userProfileHandler } from "./protocol/user-profile.js";
@@ -55,7 +44,6 @@ import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js"
 import { foldDeliveries, type DeliveryEvent, type DeliveryState } from "./vault/deliveries.js";
 import { counterpartyOf, newMessageRecord, type MessageRecord } from "./vault/messages.js";
 import { isRelationshipKey, mediationKeyName, type Vault } from "./vault/vault.js";
-import type { PublishedReceipt } from "./vault/public-folder.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -189,14 +177,6 @@ interface Opened {
  * sender's choice of id cannot shadow another's. Anonymous mail keys on the
  * id alone.
  */
-const DAY_MS = 86_400_000;
-/** How long a fresh card stays fresh (spec: on the order of weeks; exact magnitudes are still open). */
-const PUBLIC_FOLDER_EXPIRES_DAYS = 30;
-/** Renew at start when less than this remains of the card's `expires` or the relay's lease. */
-const PUBLIC_FOLDER_RENEW_DAYS = 10;
-/** How many object bytes ride inline in one publish round; the rest wait for the next round. */
-const PUBLISH_ROUND_INLINE_LIMIT = 4 * 1024 * 1024;
-
 function dedupKey(sender: string | null, id: string): string {
   return `${sender ?? ""}\u0000${id}`;
 }
@@ -402,7 +382,6 @@ export class Agent {
         this.setStatus({ state: "connecting", detail: "telling contacts about the move" });
         await this.announceMove(moved);
       }
-      await this.renewPublicFolderIfDue();
 
       this.setStatus({ state: "connecting", detail: "picking up queued mail" });
       await this.drainQueue();
@@ -572,18 +551,14 @@ export class Agent {
   /** POST to the mediator and unpack the reply riding the HTTP response. */
   private async mediatorRoundTrip(
     type: string,
-    body: Record<string, unknown>,
-    attachments?: IMessage["attachments"]
+    body: Record<string, unknown>
   ): Promise<IMessage> {
-    const message = {
-      ...plainMessage(
-        type,
-        (this.me as PeerIdentity).did,
-        this.mediation().mediatorDid,
-        body
-      ),
-      ...(attachments === undefined ? {} : { attachments }),
-    };
+    const message = plainMessage(
+      type,
+      (this.me as PeerIdentity).did,
+      this.mediation().mediatorDid,
+      body
+    );
     const packed = await this.packForMediator(message);
     const response = await this.fetchFn(this.mediatorHttp(), {
       method: "POST",
@@ -641,209 +616,6 @@ export class Agent {
     // the record (config) is written; now the keystore's cache
     await this.vault.mintKey(this.seedKey, key);
     this.log("public DID registered with the mediator");
-  }
-
-  /**
-   * Publish a folder as this identity's public folder (public-folder/1.0,
-   * owner role). The folder itself is the application's projection of
-   * vault facts — regenerable, so the agent keeps no copy of it and none
-   * of its objects; what the vault records is the signed card and the
-   * relay's receipt (`state/public-folder.json`), enough to renew and to
-   * know what is live. The card is signed by the public DID's key — the
-   * DID strangers already write to is the DID the folder answers for.
-   *
-   * Like every conversation with the mediator, none of this enters the
-   * message log. Idempotent the way mediation is: a crash mid-exchange is
-   * healed by publishing again — the relay's missing list picks up where
-   * the last round left off, and unchanged subtrees never travel twice.
-   */
-  async publishPublicFolder(
-    files: TreeFiles,
-    options?: { expiresInDays?: number }
-  ): Promise<PublishedReceipt> {
-    const tree = await hashTree(files);
-    const jws = await this.signFolderCard(tree.root, options?.expiresInDays);
-    return this.publishExchange(jws, (cid) => {
-      const node = tree.nodes.get(cid);
-      if (node !== undefined) {
-        return node;
-      }
-      const path = tree.files.get(cid);
-      return path === undefined ? null : (files[path] ?? null);
-    });
-  }
-
-  /**
-   * Publish the signed statement that this DID publishes nothing — a
-   * takedown card (`root: null`). Deliberately a publish, not a delete:
-   * the gone state traces to an owner signature like every other, the
-   * previous version's storage protection ends at once, and letting the
-   * card lapse afterwards is how the DID is eventually forgotten.
-   */
-  async takedownPublicFolder(): Promise<PublishedReceipt> {
-    const jws = await this.signFolderCard(null);
-    return this.publishExchange(jws, () => null);
-  }
-
-  /**
-   * Re-sign the currently published root under a fresh card id and a fresh
-   * `expires`, and publish it — one motion renews both clocks: the card's
-   * freshness toward readers and the relay's storage lease. The relay
-   * holds the objects while the lease lives, so this normally completes
-   * without a byte of content travelling; a relay that lost them answers
-   * with a missing list this method cannot fill, and the error says to
-   * publish the folder itself again.
-   */
-  async renewPublicFolder(): Promise<PublishedReceipt> {
-    const state = await this.vault.publicFolder.get();
-    if (state === null) {
-      throw new Error("no public folder has been published");
-    }
-    const current = decodeCard(state.card);
-    if (current.did !== this.pub?.did) {
-      throw new Error(
-        "the published folder names a previous mediation's DID; publish it anew to bring it back"
-      );
-    }
-    const jws = await this.signFolderCard(current.root);
-    return this.publishExchange(jws, () => null);
-  }
-
-  /** Sign a root card as the public DID: `mediation/<id>/public` is the key, `#key-1` its authentication id. */
-  private async signFolderCard(
-    root: string | null,
-    expiresInDays = PUBLIC_FOLDER_EXPIRES_DAYS
-  ): Promise<string> {
-    if (this.pub === null) {
-      throw new Error("publishing a public folder needs mediation: no public DID yet");
-    }
-    const card: RootCard = {
-      did: this.pub.did,
-      id: uuidv7(),
-      expires: new Date(Date.now() + expiresInDays * DAY_MS).toISOString(),
-      root,
-    };
-    const key = mediationKeyName(this.mediation().id, "public");
-    const identity = await this.vault.derive(this.seedKey, key);
-    return createCard(card, identity.signer, `${this.pub.did}#key-1`);
-  }
-
-  /**
-   * The publish exchange: send the card, feed the relay whatever it
-   * reports missing (`bytesFor` looks a CID up in the tree being
-   * published; renewal and takedown have nothing to offer), until
-   * `published`. The receipt is written to the vault before it is
-   * returned — the record outlives the call.
-   */
-  private async publishExchange(
-    jws: string,
-    bytesFor: (cid: string) => Uint8Array | null
-  ): Promise<PublishedReceipt> {
-    const supplied = new Set<string>();
-    let attachments: IMessage["attachments"];
-    for (;;) {
-      const reply = await this.mediatorRoundTrip(
-        PUBLIC_FOLDER_PUBLISH,
-        { card: jws },
-        attachments
-      );
-      if (reply.type === PUBLIC_FOLDER_PUBLISHED) {
-        const body = reply.body as { did?: string; card_id?: string; retain_until?: string };
-        if (
-          typeof body.did !== "string" ||
-          typeof body.card_id !== "string" ||
-          typeof body.retain_until !== "string"
-        ) {
-          throw new Error("the published receipt is missing did, card_id or retain_until");
-        }
-        const receipt: PublishedReceipt = {
-          did: body.did,
-          card_id: body.card_id,
-          retain_until: body.retain_until,
-        };
-        await this.vault.publicFolder.put({
-          card: jws,
-          receipt,
-          publishedAt: new Date().toISOString(),
-        });
-        this.log(`public folder version ${receipt.card_id} is live at the relay`);
-        return receipt;
-      }
-      if (reply.type === PUBLIC_FOLDER_PUBLISH_RESULT) {
-        const missing = (reply.body as { missing?: unknown }).missing;
-        if (!Array.isArray(missing) || missing.length === 0) {
-          throw new Error("publish-result carries no missing list");
-        }
-        attachments = [];
-        let inline = 0;
-        for (const cid of missing as string[]) {
-          if (supplied.has(cid)) {
-            // sent and still missing: the relay discarded it, and resending
-            // the same bytes would loop forever
-            throw new Error(`the relay did not keep object ${cid}`);
-          }
-          const bytes = bytesFor(cid);
-          if (bytes === null) {
-            throw new Error(
-              `the relay is missing ${cid}, which this publish cannot supply — publish the folder itself again`
-            );
-          }
-          if (attachments.length > 0 && inline + bytes.length > PUBLISH_ROUND_INLINE_LIMIT) {
-            break;
-          }
-          supplied.add(cid);
-          inline += bytes.length;
-          attachments.push({
-            id: cid,
-            media_type: isDirCid(cid) ? DAG_JSON_MEDIA_TYPE : RAW_MEDIA_TYPE,
-            data: { base64: bytesToBase64url(bytes) },
-          });
-        }
-        continue;
-      }
-      if (reply.type === PROBLEM_REPORT) {
-        const body = reply.body as { code?: string; comment?: string };
-        throw new Error(
-          `the relay refused the publish: ${body.code ?? "unknown"}${body.comment ? ` — ${body.comment}` : ""}`
-        );
-      }
-      throw new Error(`expected publish-result or published, got ${reply.type}`);
-    }
-  }
-
-  /**
-   * The renewal check every start runs: if the published card's `expires`
-   * or the relay's lease is inside the renewal window, re-sign and
-   * republish. Best effort — a folder that cannot be renewed right now is
-   * a stale folder, not a broken agent, and the next start tries again.
-   * A card left over from a previous mediation is only pointed out: its
-   * DID is dead, and bringing the folder back under the new one takes the
-   * application's regenerated files, not anything the vault kept.
-   */
-  private async renewPublicFolderIfDue(): Promise<void> {
-    try {
-      const state = await this.vault.publicFolder.get();
-      if (state === null) {
-        return;
-      }
-      const card = decodeCard(state.card);
-      if (card.did !== this.pub?.did) {
-        this.log(
-          "the published public folder belongs to a previous mediation; publish it anew to bring it back"
-        );
-        return;
-      }
-      const horizon = Date.now() + PUBLIC_FOLDER_RENEW_DAYS * DAY_MS;
-      const lease = state.receipt.retain_until;
-      if (Date.parse(card.expires) >= horizon && Date.parse(lease) >= horizon) {
-        return;
-      }
-      await this.renewPublicFolder();
-    } catch (err) {
-      this.log(
-        `public folder renewal failed: ${err instanceof Error ? err.message : err}`
-      );
-    }
   }
 
   /**

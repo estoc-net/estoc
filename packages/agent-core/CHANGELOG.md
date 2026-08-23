@@ -1,50 +1,5 @@
 # Changelog
 
-## 0.14.0 — 2026-08-21
-
-public-folder/1.0 (https://didcomm.org/public-folder/1.0), both ends;
-the tree/card math is `@estoc/signed-dir` (new dependency), the relay is
-the mediator.
-
-- **Owner role on `Agent`**: `publishPublicFolder(files, {expiresInDays?})`
-  hashes the folder, signs a root card as the public DID
-  (`mediation/<id>/public`, kid `#key-1`), and runs the publish exchange
-  against its own mediator — rounds of `publish-result { missing }`
-  answered with object attachments (≤ 4 MB inline per round) until the
-  `published` receipt. `takedownPublicFolder()` publishes the signed
-  `root: null` card; `renewPublicFolder()` re-signs the current root with
-  a fresh id and `expires`. Like all mediator transport, none of it
-  enters the message log. The folder is the application's projection —
-  the agent stores no copy of the tree and none of its objects.
-- **Vault**: `state/public-folder.json` (`vault.publicFolder`), the one
-  record kept — the current card (compact JWS) and the relay's
-  `published` receipt. Carried by snapshots like everything under
-  `state/`. The receipt's `retain_until` is required, matching the
-  spec (2026-08-22): an absent lease could mean "forever" or "no
-  commitment", so a receipt without one is rejected.
-- **Renewal at start**: when the card's `expires` or the receipt's
-  `retain_until` is within 10 days, the card is re-signed and
-  republished (best effort; failure logs and the next start retries).
-  Both clocks renew in the one motion, so the "re-send the same card"
-  lease refresh the spec also allows is never needed. A card left over
-  from a previous mediation is pointed out, never auto-republished —
-  the new public DID needs the application's regenerated folder.
-- **Reader role, free functions** (`protocol/public-folder.ts`, zero
-  vault): `verifyPublicFolder` is the transport-agnostic trust core —
-  card signature against the owner's DID document, freshness (stale
-  refused by default, `allowStale` for UI), then `resolvePath` hashing
-  every hop. `readPublicFolder` reads over the relay's trustless HTTP
-  endpoints (`/card/<did>`, `/objects/<cid>`) — the default: zero DIDs,
-  zero envelopes. `queryPublicFolder` is the DIDComm form: a one-time
-  in-memory did:peer:4 per call (a mailbox, never an identity), answer
-  attachments taken inline or fetched from their `links`. The relay is
-  discovered from the owner's own DID document (`discoverRelay`) — its
-  routing service is the relay.
-- Exports: the five message types, `PROBLEM_REPORT`, the IPLD media
-  types, `decodeCard`, `authenticationKeyOf`, `httpObjects`, the
-  `PublicFolderStore` types, and re-exported `@estoc/signed-dir` shapes
-  (`TreeFiles`, `RootCard`, `Resolved`, `DirEntry`).
-
 ## 0.13.0 — 2026-08-17
 
 The vault now matches `docs/vault-format.md` (the format contract at the
