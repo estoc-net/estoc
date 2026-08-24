@@ -255,20 +255,37 @@ describe("verifyTree", () => {
 });
 
 describe("HAMT sharding", () => {
-  it("a forced-sharded tree round-trips verify and resolve", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files, { shardSplitThresholdBytes: 1 });
-    const flat = await hashTree(files);
-    expect(tree.root).not.toBe(flat.root);
+  // Enough long-named entries that the flat node's serialized size
+  // crosses the profile's 256 KiB block-bytes threshold and the
+  // importer shards on its own — no injected knob.
+  const wideName = (i: number) =>
+    `entry-${String(i).padStart(4, "0")}-${"x".repeat(80)}`;
+  const wideDir = (): TreeFiles =>
+    Object.fromEntries(
+      Array.from({ length: 2200 }, (_, i) => [wideName(i), utf8("x")]),
+    );
+
+  it("a naturally sharded directory round-trips verify and resolve", async () => {
+    const files = wideDir();
+    const tree = await hashTree(files);
+    const rootData = dagPb.decode(
+      tree.nodes.get(tree.root) as Uint8Array,
+    ).Data as Uint8Array;
+    expect(UnixFS.unmarshal(rootData).type).toBe("hamt-sharded-directory");
+    // Cross-checked against kubo 0.43.0 (unixfs-v1-2025 profile applied,
+    // same 2200 files): ipfs add -r -Q --offline hamt-fixture/
+    expect(tree.root).toBe(
+      "bafybeigjbieb3arzjkcyfyggx2xvl6p7bdattx3bl77jmifshwxa3jr5oy",
+    );
     const objects = objectSet(files, tree);
     const verified = await verifyTree(tree.root, objects);
-    expect([...verified.keys()].sort()).toEqual(Object.keys(files).sort());
+    expect(verified.size).toBe(2200);
     const hit = await resolvePath(
       tree.root,
-      "posts/2026/first.html",
+      wideName(1234),
       async (c) => objects.get(c) ?? null,
     );
-    expect(new TextDecoder().decode(hit.bytes)).toBe("<h1>hi</h1>");
+    expect(new TextDecoder().decode(hit.bytes)).toBe("x");
   });
 });
 

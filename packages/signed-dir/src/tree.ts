@@ -10,9 +10,8 @@
  * estimation). Link order inside directory nodes is the DAG-PB codec's
  * job: the spec makes encoders sort links by Name bytes (UTF-8 byte
  * order), and @ipld/dag-pb's prepare() does exactly that — which is why
- * the same snapshot roots the same CID here and in `ipfs add`. hashTree
- * still feeds entries in that order as a belt-and-braces measure, so
- * determinism doesn't hinge on a dependency internal.
+ * the same snapshot roots the same CID here and in `ipfs add`,
+ * whatever order the input arrives in.
  *
  * Deliberate deviation from the profile: empty directories are rejected,
  * both at hash time (an empty snapshot has no root) and at verify time
@@ -34,25 +33,9 @@ import { checkName, segmentsOf } from "./path.js";
 
 const PROFILE = "unixfs-v1-2025" as const;
 
-interface Candidate {
-  path: string;
-  segments: string[];
-  bytes: Uint8Array;
-}
-
-/** Segment-wise UTF-8 byte order — sorts every directory's children by name. */
-function compareCandidates(a: Candidate, b: Candidate): number {
-  const n = Math.min(a.segments.length, b.segments.length);
-  for (let i = 0; i < n; i++) {
-    const d = compareNames(a.segments[i] as string, b.segments[i] as string);
-    if (d !== 0) return d;
-  }
-  return a.segments.length - b.segments.length;
-}
-
-/** Normalize, reject unsafe/conflicting paths, sort into canonical order. */
-function candidatesOf(files: TreeFiles): Candidate[] {
-  const out: Candidate[] = [];
+/** Normalize and reject unsafe or conflicting paths. */
+function candidatesOf(files: TreeFiles): FileCandidate[] {
+  const out: FileCandidate[] = [];
   const filePaths = new Set<string>();
   const dirPaths = new Set<string>();
   for (const [path, bytes] of Object.entries(files)) {
@@ -65,24 +48,14 @@ function candidatesOf(files: TreeFiles): Candidate[] {
     for (let i = 1; i < segments.length; i++) {
       dirPaths.add(segments.slice(0, i).join("/"));
     }
-    out.push({ path: normalized, segments, bytes });
+    out.push({ path: normalized, content: bytes });
   }
   for (const path of filePaths) {
     if (dirPaths.has(path)) {
       throw new Error(`${path} is both a file and a directory`);
     }
   }
-  return out.sort(compareCandidates);
-}
-
-/** Knobs for experiments — production callers pass nothing. */
-export interface HashTreeOptions {
-  /**
-   * Override the HAMT sharding threshold (profile default 256 KiB,
-   * block-bytes). Lowering it in tests exercises the sharded path
-   * without a thousand-entry directory.
-   */
-  shardSplitThresholdBytes?: number;
+  return out;
 }
 
 /**
@@ -91,12 +64,9 @@ export interface HashTreeOptions {
  * changes the root. Rejects the empty snapshot: an empty directory has
  * no representation in this scheme.
  */
-export async function hashTree(
-  files: TreeFiles,
-  options: HashTreeOptions = {},
-): Promise<HashedTree> {
-  const candidates = candidatesOf(files);
-  if (candidates.length === 0) {
+export async function hashTree(files: TreeFiles): Promise<HashedTree> {
+  const source = candidatesOf(files);
+  if (source.length === 0) {
     throw new Error("empty tree: empty directories are rejected");
   }
 
@@ -107,10 +77,6 @@ export async function hashTree(
       return cid;
     },
   };
-  const source: FileCandidate[] = candidates.map((c) => ({
-    path: c.path,
-    content: c.bytes,
-  }));
 
   const fileCids = new Map<string, string>();
   let root: string | undefined;
@@ -118,9 +84,6 @@ export async function hashTree(
   for await (const entry of importer(source, store, {
     profile: PROFILE,
     wrapWithDirectory: true,
-    ...(options.shardSplitThresholdBytes !== undefined
-      ? { shardSplitThresholdBytes: options.shardSplitThresholdBytes }
-      : {}),
   })) {
     const type = entry.unixfs?.type;
     const isDir = type === "directory" || type === "hamt-sharded-directory";

@@ -20,13 +20,7 @@
  */
 
 export type { TreeFiles, HashedTree, RootCard, CardSigner } from "./types.js";
-export {
-  hashTree,
-  verifyTree,
-  resolvePath,
-  type Resolved,
-  type HashTreeOptions,
-} from "./tree.js";
+export { hashTree, verifyTree, resolvePath, type Resolved } from "./tree.js";
 export {
   fileCid,
   isRawCid,
