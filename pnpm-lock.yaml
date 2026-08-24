@@ -111,6 +111,31 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
 
+  packages/folder-object:
+    dependencies:
+      '@djot/djot':
+        specifier: ^0.3.2
+        version: 0.3.2
+      '@estoc/keystore':
+        specifier: workspace:^
+        version: link:../keystore
+      '@estoc/signed-dir':
+        specifier: workspace:^
+        version: link:../signed-dir
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.5
+        version: 22.20.1
+      typescript:
+        specifier: ~5.8.0
+        version: 5.8.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
+
   packages/keystore:
     dependencies:
       '@noble/curves':
@@ -722,6 +747,11 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
+
+  '@djot/djot@0.3.2':
+    resolution: {integrity: sha512-joMKR24B8rxueyFiJbpZAqEiypjvOyzTxzkhyr0q5mM/sUBaOD3unna/9IxtOotFugViyYlkIRaiXg3xM//zxg==}
+    engines: {node: '>=17.0.0'}
+    hasBin: true
 
   '@dnsquery/dns-packet@6.1.1':
     resolution: {integrity: sha512-WXTuFvL3G+74SchFAtz3FgIYVOe196ycvGsMgvSH/8Goptb1qpIQtIuM4SOK9G9lhMWYpHxnXyy544ZhluFOew==}
@@ -3640,6 +3670,8 @@ snapshots:
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
+
+  '@djot/djot@0.3.2': {}
 
   '@dnsquery/dns-packet@6.1.1':
     dependencies:
