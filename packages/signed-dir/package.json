@@ -1,6 +1,6 @@
 {
   "name": "@estoc/signed-dir",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Owner-signed directory trees: UnixFS merkle hashing (IPIP-499 unixfs-v1-2025 profile) and the signed root card. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
@@ -30,7 +30,6 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
-    "@ipld/dag-json": "^11.0.1",
     "ipfs-unixfs-exporter": "^16.0.2",
     "ipfs-unixfs-importer": "^17.0.1",
     "multiformats": "^14.0.5"

@@ -135,9 +135,6 @@ importers:
 
   packages/signed-dir:
     dependencies:
-      '@ipld/dag-json':
-        specifier: ^11.0.1
-        version: 11.0.1
       ipfs-unixfs-exporter:
         specifier: ^16.0.2
         version: 16.0.2

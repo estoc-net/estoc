@@ -15,6 +15,9 @@ import type { HashedTree, TreeFiles } from "../src/index.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
+/** The UnixFS empty directory — the CID every tool on earth agrees on. */
+const EMPTY_DIR = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354";
+
 function snapshot(): TreeFiles {
   return {
     "profile.json": utf8('{"name":"merely"}'),
@@ -97,15 +100,48 @@ describe("hashTree", () => {
     expect(tree.files.size).toBe(1);
   });
 
-  it("rejects the empty tree — empty directories have no encoding here", async () => {
-    await expect(hashTree({})).rejects.toThrow(/empty/);
+  it("hashes the empty snapshot to the empty directory", async () => {
+    const tree = await hashTree({});
+    expect(tree.root).toBe(EMPTY_DIR);
+    expect(tree.files.size).toBe(0);
+    expect(tree.nodes.has(EMPTY_DIR)).toBe(true);
+    const verified = await verifyTree(tree.root, tree.nodes);
+    expect(verified.files.size).toBe(0);
+    expect([...verified.dirs]).toEqual([["", EMPTY_DIR]]);
+  });
+
+  it("puts empty directories in the tree through options.dirs", async () => {
+    const files: TreeFiles = { "deep/x.txt": utf8("x") };
+    const tree = await hashTree(files, { dirs: ["hollow", "deep/er/"] });
+    expect(tree.nodes.has(EMPTY_DIR)).toBe(true);
+    const verified = await verifyTree(tree.root, objectSet(files, tree));
+    expect([...verified.files.keys()]).toEqual(["deep/x.txt"]);
+    expect([...verified.dirs.keys()].sort()).toEqual([
+      "",
+      "deep",
+      "deep/er",
+      "hollow",
+    ]);
+    expect(verified.dirs.get("hollow")).toBe(EMPTY_DIR);
+    expect(verified.dirs.get("deep/er")).toBe(EMPTY_DIR);
+  });
+
+  it("options.dirs: implied and repeated directories are no-ops, a file path is a conflict", async () => {
+    const files: TreeFiles = { "posts/a.txt": utf8("a") };
+    const plain = await hashTree(files);
+    const listed = await hashTree(files, { dirs: ["posts", "posts/"] });
+    expect(listed.root).toBe(plain.root);
+    await expect(
+      hashTree(files, { dirs: ["posts/a.txt"] }),
+    ).rejects.toThrow(/both a file and a directory/);
+    await expect(hashTree(files, { dirs: [".."] })).rejects.toThrow(/unsafe/);
   });
 
   it("hashes the empty file", async () => {
     const files: TreeFiles = { "empty.bin": new Uint8Array(0) };
     const tree = await hashTree(files);
     const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.keys()]).toEqual(["empty.bin"]);
+    expect([...verified.files.keys()]).toEqual(["empty.bin"]);
   });
 
   it("rejects a path that is both file and directory", async () => {
@@ -141,14 +177,16 @@ describe("verifyTree", () => {
     const files = snapshot();
     const tree = await hashTree(files);
     const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.keys()].sort()).toEqual(Object.keys(files).sort());
+    expect([...verified.files.keys()].sort()).toEqual(Object.keys(files).sort());
+    expect([...verified.dirs.keys()].sort()).toEqual(["", "posts", "posts/2026"]);
+    expect(verified.dirs.get("")).toBe(tree.root);
   });
 
   it("round-trips a chunked file", async () => {
     const files: TreeFiles = { "big.bin": bigFile(2), "small.txt": utf8("s") };
     const tree = await hashTree(files);
     const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.keys()].sort()).toEqual(["big.bin", "small.txt"]);
+    expect([...verified.files.keys()].sort()).toEqual(["big.bin", "small.txt"]);
   });
 
   it("rejects a missing leaf chunk of a chunked file", async () => {
@@ -192,15 +230,14 @@ describe("verifyTree", () => {
     await expect(verifyTree(tree.root, objects)).resolves.toBeTruthy();
   });
 
-  it("rejects an empty directory node", async () => {
+  it("accepts a hand-built empty directory node, nested or as root", async () => {
     const empty = await dirNode([]);
-    await expect(
-      verifyTree(empty.cid, new Map([[empty.cid, empty.bytes]])),
-    ).rejects.toThrow(/empty directory/);
-  });
-
-  it("rejects a nested empty directory", async () => {
-    const empty = await dirNode([]);
+    expect(empty.cid).toBe(EMPTY_DIR);
+    const alone = await verifyTree(
+      empty.cid,
+      new Map([[empty.cid, empty.bytes]]),
+    );
+    expect([...alone.dirs]).toEqual([["", EMPTY_DIR]]);
     const parent = await dirNode([
       { Name: "hollow", Hash: CID.parse(empty.cid), Tsize: empty.bytes.length },
     ]);
@@ -208,9 +245,19 @@ describe("verifyTree", () => {
       [empty.cid, empty.bytes],
       [parent.cid, parent.bytes],
     ]);
-    await expect(verifyTree(parent.cid, objects)).rejects.toThrow(
-      /empty directory/,
-    );
+    const nested = await verifyTree(parent.cid, objects);
+    expect(nested.dirs.get("hollow")).toBe(EMPTY_DIR);
+    expect(nested.files.size).toBe(0);
+  });
+
+  it("still requires the empty directory's block to be present", async () => {
+    const empty = await dirNode([]);
+    const parent = await dirNode([
+      { Name: "hollow", Hash: CID.parse(empty.cid), Tsize: empty.bytes.length },
+    ]);
+    await expect(
+      verifyTree(parent.cid, new Map([[parent.cid, parent.bytes]])),
+    ).rejects.toThrow(/missing object/);
   });
 
   it("rejects links out of canonical order", async () => {
@@ -279,7 +326,7 @@ describe("HAMT sharding", () => {
     );
     const objects = objectSet(files, tree);
     const verified = await verifyTree(tree.root, objects);
-    expect(verified.size).toBe(2200);
+    expect(verified.files.size).toBe(2200);
     const hit = await resolvePath(
       tree.root,
       wideName(1234),
@@ -331,6 +378,15 @@ describe("resolvePath", () => {
     expect(hit.bytes).toEqual(tree.nodes.get(tree.root));
   });
 
+  it("resolves an empty directory", async () => {
+    const tree = await hashTree({ "a.txt": utf8("a") }, { dirs: ["hollow"] });
+    const hit = await resolvePath(tree.root, "hollow", async (cid) =>
+      tree.nodes.get(cid) ?? null,
+    );
+    expect(hit.kind).toBe("dir");
+    expect(hit.cid).toBe(EMPTY_DIR);
+  });
+
   it("rejects a served object whose bytes do not match", async () => {
     const files = snapshot();
     const tree = await hashTree(files);
@@ -364,6 +420,25 @@ describe("golden vectors", () => {
     expect(tree.root).toBe(
       "bafybeic47ugcluinaquemujs7s63cfo7og2ucuqnl56zawlsikwcbmavle",
     );
+  });
+
+  it("empty directories — cross-checked against kubo", async () => {
+    // kubo 0.43.0, unixfs-v1-2025 profile applied, ipfs add -r -Q --offline:
+    //   empty/                            → bafybeiczss…f354 (EMPTY_DIR)
+    //   h/hollow/                         → bafybeifqql…2p4q
+    //   t/{deep/x.txt="x", deep/er/, hollow/} → bafybeiheom…5g2e
+    expect((await hashTree({})).root).toBe(EMPTY_DIR);
+    expect((await hashTree({}, { dirs: ["hollow"] })).root).toBe(
+      "bafybeifqqlbzfmduqfpdkog6kgw2obvr4lu3pjwtl63k2ccpdjmljj2p4q",
+    );
+    expect(
+      (
+        await hashTree(
+          { "deep/x.txt": utf8("x") },
+          { dirs: ["deep/er", "hollow"] },
+        )
+      ).root,
+    ).toBe("bafybeiheomt3ohnbhxepizovx2txgbsvgd6hdfimwxfkatiobqznug5g2e");
   });
 
   it("chunked file root CID — cross-checked against kubo", async () => {

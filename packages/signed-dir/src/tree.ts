@@ -13,29 +13,36 @@
  * the same snapshot roots the same CID here and in `ipfs add`,
  * whatever order the input arrives in.
  *
- * Deliberate deviation from the profile: empty directories are rejected,
- * both at hash time (an empty snapshot has no root) and at verify time
- * (a directory node with zero entries fails). TreeFiles cannot express
- * them, so nothing is lost — this just closes the door on a relay
- * serving one.
+ * The profile is taken whole, empty directories included: `hashTree({})`
+ * roots the well-known empty directory, `HashOptions.dirs` puts empty
+ * directories anywhere in a tree, and the verify side accepts a
+ * directory node with zero links like any other.
  */
 
 import { CID } from "multiformats/cid";
-import { importer, type FileCandidate } from "ipfs-unixfs-importer";
+import { importer, type ImportCandidate } from "ipfs-unixfs-importer";
 import {
   exporter,
   type ReadableStorage,
   type UnixFSDirectory,
 } from "ipfs-unixfs-exporter";
 import { checkCid, compareNames, isRawCid } from "./cid.js";
-import type { HashedTree, TreeFiles } from "./types.js";
+import type {
+  HashOptions,
+  HashedTree,
+  TreeFiles,
+  VerifiedTree,
+} from "./types.js";
 import { checkName, segmentsOf } from "./path.js";
 
 const PROFILE = "unixfs-v1-2025" as const;
 
 /** Normalize and reject unsafe or conflicting paths. */
-function candidatesOf(files: TreeFiles): FileCandidate[] {
-  const out: FileCandidate[] = [];
+function candidatesOf(
+  files: TreeFiles,
+  dirs: Iterable<string>,
+): ImportCandidate[] {
+  const out: ImportCandidate[] = [];
   const filePaths = new Set<string>();
   const dirPaths = new Set<string>();
   for (const [path, bytes] of Object.entries(files)) {
@@ -50,6 +57,13 @@ function candidatesOf(files: TreeFiles): FileCandidate[] {
     }
     out.push({ path: normalized, content: bytes });
   }
+  for (const path of dirs) {
+    const normalized = segmentsOf(path).join("/");
+    if (!dirPaths.has(normalized)) {
+      dirPaths.add(normalized);
+      out.push({ path: normalized });
+    }
+  }
   for (const path of filePaths) {
     if (dirPaths.has(path)) {
       throw new Error(`${path} is both a file and a directory`);
@@ -61,14 +75,14 @@ function candidatesOf(files: TreeFiles): FileCandidate[] {
 /**
  * Hash a snapshot into a UnixFS DAG under the unixfs-v1-2025 profile.
  * Deterministic in content only — insertion order of the input never
- * changes the root. Rejects the empty snapshot: an empty directory has
- * no representation in this scheme.
+ * changes the root. The empty snapshot roots the empty directory;
+ * `options.dirs` adds empty directories below the root.
  */
-export async function hashTree(files: TreeFiles): Promise<HashedTree> {
-  const source = candidatesOf(files);
-  if (source.length === 0) {
-    throw new Error("empty tree: empty directories are rejected");
-  }
+export async function hashTree(
+  files: TreeFiles,
+  options: HashOptions = {},
+): Promise<HashedTree> {
+  const source = candidatesOf(files, options.dirs ?? []);
 
   const blocks = new Map<string, Uint8Array>();
   const store = {
@@ -133,8 +147,9 @@ async function walkDir(
   dir: UnixFSDirectory,
   prefix: string,
   store: ReadableStorage,
-  files: Map<string, string>,
+  out: VerifiedTree,
 ): Promise<void> {
+  out.dirs.set(prefix.replace(/\/$/, ""), dir.cid.toString());
   if (dir.unixfs.type === "directory") {
     // Canonical form: flat directory links strictly ascending in UTF-8
     // byte order (also rules out duplicates). HAMT shards order links by
@@ -148,10 +163,8 @@ async function walkDir(
       }
     }
   }
-  let count = 0;
   const seen = new Set<string>();
   for await (const child of dir.entries()) {
-    count++;
     checkName(child.name);
     if (seen.has(child.name)) {
       throw new Error(`duplicate entry name: ${JSON.stringify(child.name)}`);
@@ -160,46 +173,42 @@ async function walkDir(
     const path = prefix + child.name;
     const entry = await exporter(child.cid, store);
     if (entry.type === "directory") {
-      await walkDir(entry, `${path}/`, store, files);
+      await walkDir(entry, `${path}/`, store, out);
     } else if (entry.type === "file" || entry.type === "raw") {
       // Pull every leaf through the verifying store — presence and hash
       // of each chunk block is proven as a side effect.
       for await (const _ of entry.content()) {
         // bytes discarded; the store already checked them
       }
-      files.set(path, child.cid.toString());
+      out.files.set(path, child.cid.toString());
     } else {
       throw new Error(`unsupported node kind at ${path}: ${entry.type}`);
     }
-  }
-  if (count === 0) {
-    throw new Error(
-      `empty directory at ${prefix || "/"}: empty directories are rejected`,
-    );
   }
 }
 
 /**
  * Recompute a tree from an object set and confirm it reaches `root`.
  * Every object's bytes are hashed against the CID that references them,
- * so a verified map is proof the set is exactly the tree the root names.
- * Returns path → CID for every file (the file's root CID — raw for
- * single-block files, dag-pb for chunked ones). Throws on any missing
- * object, hash mismatch, malformed node, non-canonical link order, or
- * empty directory. Extra objects in the map are ignored.
+ * so a verified result is proof the set is exactly the tree the root
+ * names. Returns path → CID for every file (the file's root CID — raw
+ * for single-block files, dag-pb for chunked ones) and for every
+ * directory (the root under `""`). Throws on any missing object, hash
+ * mismatch, malformed node, or non-canonical link order. Extra objects
+ * in the map are ignored.
  */
 export async function verifyTree(
   root: string,
   objects: Map<string, Uint8Array>,
-): Promise<Map<string, string>> {
+): Promise<VerifiedTree> {
   const store = verifyingStore(async (cid) => objects.get(cid) ?? null);
   const rootEntry = await exporter(CID.parse(root), store);
   if (rootEntry.type !== "directory") {
     throw new Error("root is not a UnixFS directory");
   }
-  const files = new Map<string, string>();
-  await walkDir(rootEntry, "", store, files);
-  return files;
+  const out: VerifiedTree = { files: new Map(), dirs: new Map() };
+  await walkDir(rootEntry, "", store, out);
+  return out;
 }
 
 /** What resolvePath found at the end of the path. */
@@ -233,9 +242,6 @@ export async function resolvePath(
     path === "" ? CID.parse(root) : `${root}/${segmentsOf(path).join("/")}`;
   const entry = await exporter(target, store);
   if (entry.type === "directory") {
-    if (entry.node.Links.length === 0) {
-      throw new Error("empty directory: empty directories are rejected");
-    }
     return {
       kind: "dir",
       cid: entry.cid.toString(),

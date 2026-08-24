@@ -1,7 +1,7 @@
 # @estoc/signed-dir
 
-Owner-signed directory trees: hash a folder into an IPLD-notation merkle
-tree, and sign/verify the **root card** that makes the tree someone's.
+Owner-signed directory trees: hash a folder into a UnixFS merkle tree,
+and sign/verify the **root card** that makes the tree someone's.
 
 The trust contract is three pieces — *(object set, recursive hash, signed
 root card)* — and a reader holding them can trust a whole tree without
@@ -10,12 +10,18 @@ pieces; it never does IO, holds no file bytes beyond hashing them, and
 decides no policy. One source runs unchanged in Node (≥20), Cloudflare
 workerd, and the browser (sha-256 and Ed25519 via WebCrypto).
 
-The hash notation is CID/IPLD **as a format, not as infrastructure**:
+The hash notation is UnixFS under IPIP-499's `unixfs-v1-2025` profile —
+CID/IPLD **as a format, not as infrastructure**. The same snapshot roots
+the same CID here and in `ipfs add` (kubo ≥ 0.40), empty directories
+included:
 
-- file object = the bare bytes, named by a CIDv1 (`raw` codec, sha-256 —
-  the same digest R2 checksums, WebCrypto, and SRI compute);
-- directory object = dag-json `{"entries":[{name,type,hash,size}…]}`
-  (name-sorted; canonicalisation is the codec's), named by its CID;
+- file object = for a file ≤ 1 MiB, the bare bytes, named by a CIDv1
+  (`raw` codec, sha-256 — the same digest R2 checksums, WebCrypto, and
+  SRI compute); a larger file roots in a dag-pb node linking raw 1 MiB
+  chunks (balanced, 1024 links per node);
+- directory object = a dag-pb UnixFS directory node (links in UTF-8 byte
+  order; HAMT-sharded past 256 KiB of block bytes), named by its CID;
+  the empty directory is the well-known `bafybeiczss…f354`;
 - root = the root directory node's CID.
 
 No DHT, no IPNS, no pinning: addressing stays DID + path, CIDs are the
@@ -37,11 +43,15 @@ import {
 } from "@estoc/signed-dir";
 
 // Vault side: hash a flat snapshot (path → bytes; the shape
-// agent-core's snapshotVault produces)
-const tree = await hashTree(files);
+// agent-core's snapshotVault produces). Empty directories have no
+// path, so they are listed separately.
+const tree = await hashTree(files, { dirs: ["drafts"] });
 // tree.root                → the CID the root card signs
-// tree.nodes               → dir objects to push (CID → dag-json bytes)
-// tree.files               → file objects to push (CID → path in `files`)
+// tree.nodes               → every block but single-block files
+//                            (dir nodes, shards, chunks; CID → bytes)
+// tree.files               → single-block files by their raw CID
+//                            (CID → path in `files`); the object set
+//                            is `nodes` plus those bytes
 
 // …and sign the root card (any keystore Signer fits CardSigner)
 const jws = await createCard(
@@ -52,9 +62,11 @@ const jws = await createCard(
 
 // Relay/reader side: verify a card, then either a whole object set…
 const { card } = await verifyCard(jws, (kid) => resolveEd25519Key(kid));
-const pathToCid = await verifyTree(card.root, objects);
+const { files, dirs } = await verifyTree(card.root, objects);
+// files: path → file CID; dirs: path → directory CID (root under "")
 
-// …or one path with O(depth) fetches, each hop proven against its CID
+// …or one path with O(depth + chunks) fetches, each hop proven against
+// its CID
 const hit = await resolvePath(card.root, "posts/2026/first.html", getObject);
 ```
 
@@ -73,7 +85,9 @@ const hit = await resolvePath(card.root, "posts/2026/first.html", getObject);
 
 ## Golden vectors
 
-The test suite pins the root CID of a fixed snapshot and a raw file CID
-(cross-checked against an independent sha-256 implementation), so a
-dependency upgrade that shifts canonical encoding fails loudly instead of
-silently re-rooting every tree.
+The test suite pins root CIDs cross-checked against kubo 0.43.0 (a
+directory tree, a chunked 2 MiB file, a HAMT-sharded directory of 2200
+entries, and empty directories alone and nested) plus a raw file CID
+against an independent sha-256, so a dependency upgrade that shifts
+canonical encoding fails loudly instead of silently re-rooting every
+tree.

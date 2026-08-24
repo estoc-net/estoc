@@ -1,29 +1,37 @@
 # @estoc/signed-dir
 
-## Unreleased — `unixfs-hash` branch experiment
+## 0.3.0 — 2026-08-24
 
 Tree hashing rebuilt on UnixFS under IPIP-499's `unixfs-v1-2025` profile
 (CIDv1, sha-256, raw leaves, 1 MiB chunks, balanced layout, 1024 links,
 HAMT past 256 KiB block-bytes), replacing the dag-json directory nodes.
+Every tree hashed by 0.2.0 re-roots.
 
 - Same snapshot, same root as `ipfs add` — cross-checked against kubo
-  0.43.0 for both a directory tree and a chunked 2 MiB file (golden
-  vectors in tree.test.ts).
-- Single-block files (≤ 1 MiB) keep the exact raw CID the dag-json
-  branch computed; only directory nodes and chunked files re-root.
-- Empty directories are rejected on both sides: `hashTree({})` throws,
-  and `verifyTree` fails a directory node with zero entries (deliberate
-  deviation from the profile's "included (opt-out)").
-- `verifyTree` also enforces canonical link order in flat directory
-  nodes (UTF-8 byte order, kubo's order) — dag-pb decode is lenient, so
-  the check lives here.
+  0.43.0 for a directory tree, a chunked 2 MiB file, a HAMT-sharded
+  directory, and empty directories (golden vectors in tree.test.ts).
+- Single-block files (≤ 1 MiB) keep the exact raw CID 0.2.0 computed;
+  only directory nodes and chunked files re-root.
+- The profile is taken whole, **empty directories included**:
+  `hashTree({})` roots the well-known empty directory
+  (`bafybeiczss…f354`); new `HashOptions.dirs` lists directories to
+  create whether or not files live under them (ancestors implied,
+  duplicates no-ops, a file path a conflict); `verifyTree` and
+  `resolvePath` accept a zero-link directory node like any other.
+- `verifyTree` now returns `VerifiedTree { files, dirs }` — path → CID
+  for files and for directories (root under `""`) — instead of the bare
+  file map, so an empty directory is reported rather than invisible.
+- `verifyTree` enforces canonical link order in flat directory nodes
+  (UTF-8 byte order, kubo's order) — dag-pb decode is lenient, so the
+  check lives here.
 - API shifts: `HashedTree.nodes` now holds every block except
   single-block file roots (leaf chunks included); `DirEntry`,
   `isDirCid`, `encodeDirNode`, `decodeDirNode` are gone (codec bits no
   longer separate file from directory — a dag-pb CID can root either);
   new `isRawCid` / `isDagPbCid`; `resolvePath` reassembles chunked file
   bytes, so a file read is O(depth + chunks) fetches.
-- New runtime deps: `ipfs-unixfs-importer`, `ipfs-unixfs-exporter`.
+- Runtime deps: `ipfs-unixfs-importer`, `ipfs-unixfs-exporter` added;
+  `@ipld/dag-json` dropped.
 
 ## 0.2.0 — 2026-08-21
 

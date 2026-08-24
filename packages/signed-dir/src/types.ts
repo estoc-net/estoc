@@ -10,10 +10,36 @@
 
 /**
  * A flat snapshot of a directory: `/`-separated relative path → bytes.
- * The same shape agent-core's `snapshotVault` produces. Empty directories
- * cannot be represented and do not exist (as in git).
+ * The same shape agent-core's `snapshotVault` produces. Directories are
+ * implied by the paths; an empty directory has no path here, so it is
+ * declared through `HashOptions.dirs` instead.
  */
 export type TreeFiles = Record<string, Uint8Array>;
+
+/** Options for `hashTree`. */
+export interface HashOptions {
+  /**
+   * Directories to create whether or not any file lives under them —
+   * the way to put an empty directory into the tree. Ancestors are
+   * created too; listing a directory that files already imply is a
+   * no-op; naming a path that is also a file is a conflict.
+   */
+  dirs?: Iterable<string>;
+}
+
+/** The result of verifying a tree: every path the root reaches. */
+export interface VerifiedTree {
+  /**
+   * File path → the file's root CID (raw for a single-block file,
+   * dag-pb for a chunked one).
+   */
+  files: Map<string, string>;
+  /**
+   * Directory path → its dag-pb CID, the root included under `""`. An
+   * empty directory shows up only here.
+   */
+  dirs: Map<string, string>;
+}
 
 /** The result of hashing a tree (UnixFS, profile unixfs-v1-2025). */
 export interface HashedTree {
