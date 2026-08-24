@@ -1,132 +1,238 @@
 /**
- * Whole-tree operations: hash a snapshot, verify an object set, resolve
- * one path with O(depth) proof. Bytes only ever pass through — nothing
- * here reads storage or keeps file contents.
+ * Whole-tree operations over UnixFS (IPIP-499 profile `unixfs-v1-2025`):
+ * hash a snapshot, verify an object set, resolve one path. Bytes only
+ * ever pass through — nothing here reads storage or keeps file contents
+ * beyond the produced blocks.
+ *
+ * Profile parameters (set by ipfs-unixfs-importer's `profile` option):
+ * CIDv1, sha-256, raw leaves, 1 MiB fixed-size chunks, balanced layout
+ * with 1024 links per node, HAMT sharding past 256 KiB (block-bytes
+ * estimation). Link order inside flat directories is not the importer's
+ * job — hashTree feeds entries in UTF-8 byte order (kubo's order) so the
+ * same snapshot roots the same CID here and in `ipfs add`.
+ *
+ * Deliberate deviation from the profile: empty directories are rejected,
+ * both at hash time (an empty snapshot has no root) and at verify time
+ * (a directory node with zero entries fails). TreeFiles cannot express
+ * them, so nothing is lost — this just closes the door on a relay
+ * serving one.
  */
 
 import { CID } from "multiformats/cid";
-import { sha256 } from "multiformats/hashes/sha2";
-import { decodeDirNode, encodeDirNode, fileCid, isDirCid } from "./cid.js";
-import type { DirEntry, HashedTree, TreeFiles } from "./types.js";
-import { segmentsOf } from "./path.js";
+import { importer, type FileCandidate } from "ipfs-unixfs-importer";
+import {
+  exporter,
+  type ReadableStorage,
+  type UnixFSDirectory,
+} from "ipfs-unixfs-exporter";
+import { checkCid, compareNames, isRawCid } from "./cid.js";
+import type { HashedTree, TreeFiles } from "./types.js";
+import { checkName, segmentsOf } from "./path.js";
 
-interface DirTree {
-  dirs: Map<string, DirTree>;
-  files: Map<string, Uint8Array>;
+const PROFILE = "unixfs-v1-2025" as const;
+
+interface Candidate {
+  path: string;
+  segments: string[];
+  bytes: Uint8Array;
 }
 
-function newDir(): DirTree {
-  return { dirs: new Map(), files: new Map() };
+/** Segment-wise UTF-8 byte order — sorts every directory's children by name. */
+function compareCandidates(a: Candidate, b: Candidate): number {
+  const n = Math.min(a.segments.length, b.segments.length);
+  for (let i = 0; i < n; i++) {
+    const d = compareNames(a.segments[i] as string, b.segments[i] as string);
+    if (d !== 0) return d;
+  }
+  return a.segments.length - b.segments.length;
 }
 
-/** Fold the flat snapshot into nesting, rejecting unsafe paths. */
-function nest(files: TreeFiles): DirTree {
-  const root = newDir();
+/** Normalize, reject unsafe/conflicting paths, sort into canonical order. */
+function candidatesOf(files: TreeFiles): Candidate[] {
+  const out: Candidate[] = [];
+  const filePaths = new Set<string>();
+  const dirPaths = new Set<string>();
   for (const [path, bytes] of Object.entries(files)) {
     const segments = segmentsOf(path);
-    let dir = root;
-    for (const segment of segments.slice(0, -1)) {
-      if (dir.files.has(segment)) {
-        throw new Error(`${segment} is both a file and a directory`);
-      }
-      let child = dir.dirs.get(segment);
-      if (!child) {
-        child = newDir();
-        dir.dirs.set(segment, child);
-      }
-      dir = child;
+    const normalized = segments.join("/");
+    if (filePaths.has(normalized)) {
+      throw new Error(`duplicate path: ${normalized}`);
     }
-    const leaf = segments[segments.length - 1] as string;
-    if (dir.dirs.has(leaf)) {
-      throw new Error(`${leaf} is both a file and a directory`);
+    filePaths.add(normalized);
+    for (let i = 1; i < segments.length; i++) {
+      dirPaths.add(segments.slice(0, i).join("/"));
     }
-    dir.files.set(leaf, bytes);
+    out.push({ path: normalized, segments, bytes });
   }
-  return root;
+  for (const path of filePaths) {
+    if (dirPaths.has(path)) {
+      throw new Error(`${path} is both a file and a directory`);
+    }
+  }
+  return out.sort(compareCandidates);
+}
+
+/** Knobs for experiments — production callers pass nothing. */
+export interface HashTreeOptions {
+  /**
+   * Override the HAMT sharding threshold (profile default 256 KiB,
+   * block-bytes). Lowering it in tests exercises the sharded path
+   * without a thousand-entry directory.
+   */
+  shardSplitThresholdBytes?: number;
 }
 
 /**
- * The recursive hash of §5.1: raw CIDs for files, dag-json nodes for
- * directories, root = the root directory node's CID. Deterministic in
- * content only — insertion order of the input never changes the root.
+ * Hash a snapshot into a UnixFS DAG under the unixfs-v1-2025 profile.
+ * Deterministic in content only — insertion order of the input never
+ * changes the root. Rejects the empty snapshot: an empty directory has
+ * no representation in this scheme.
  */
-export async function hashTree(files: TreeFiles): Promise<HashedTree> {
-  const nodes = new Map<string, Uint8Array>();
-  const fileCids = new Map<string, string>();
-
-  async function hashDir(
-    dir: DirTree,
-    prefix: string,
-  ): Promise<{ cid: string; size: number }> {
-    const entries: DirEntry[] = [];
-    for (const [name, bytes] of dir.files) {
-      const cid = await fileCid(bytes);
-      if (!fileCids.has(cid)) fileCids.set(cid, prefix + name);
-      entries.push({ name, type: "file", hash: cid, size: bytes.length });
-    }
-    for (const [name, child] of dir.dirs) {
-      const sub = await hashDir(child, `${prefix}${name}/`);
-      entries.push({ name, type: "dir", hash: sub.cid, size: sub.size });
-    }
-    const { cid, bytes } = await encodeDirNode(entries);
-    nodes.set(cid, bytes);
-    return { cid, size: entries.reduce((sum, e) => sum + e.size, 0) };
+export async function hashTree(
+  files: TreeFiles,
+  options: HashTreeOptions = {},
+): Promise<HashedTree> {
+  const candidates = candidatesOf(files);
+  if (candidates.length === 0) {
+    throw new Error("empty tree: empty directories are rejected");
   }
 
-  const { cid: root } = await hashDir(nest(files), "");
-  return { root, nodes, files: fileCids };
+  const blocks = new Map<string, Uint8Array>();
+  const store = {
+    async put(cid: CID, bytes: Uint8Array): Promise<CID> {
+      blocks.set(cid.toString(), bytes);
+      return cid;
+    },
+  };
+  const source: FileCandidate[] = candidates.map((c) => ({
+    path: c.path,
+    content: c.bytes,
+  }));
+
+  const fileCids = new Map<string, string>();
+  let root: string | undefined;
+  let rootIsDir = false;
+  for await (const entry of importer(source, store, {
+    profile: PROFILE,
+    wrapWithDirectory: true,
+    ...(options.shardSplitThresholdBytes !== undefined
+      ? { shardSplitThresholdBytes: options.shardSplitThresholdBytes }
+      : {}),
+  })) {
+    const type = entry.unixfs?.type;
+    const isDir = type === "directory" || type === "hamt-sharded-directory";
+    const cid = entry.cid.toString();
+    if (!isDir && entry.path !== undefined && entry.path !== "") {
+      if (!fileCids.has(cid)) fileCids.set(cid, entry.path);
+    }
+    root = cid;
+    rootIsDir = isDir;
+  }
+  if (root === undefined || !rootIsDir) {
+    throw new Error("importer did not produce a directory root");
+  }
+  // A single-block file's root is the raw CID of its bare bytes — the
+  // caller already holds those bytes, so don't keep a copy here.
+  for (const cid of fileCids.keys()) {
+    if (isRawCid(cid)) blocks.delete(cid);
+  }
+  return { root, nodes: blocks, files: fileCids };
+}
+
+/** Fetch one block and prove its bytes match the CID asked for. */
+async function fetchChecked(
+  getObject: (cid: string) => Promise<Uint8Array | null>,
+  cid: CID,
+): Promise<Uint8Array> {
+  const bytes = await getObject(cid.toString());
+  if (bytes === null) {
+    throw new Error(`missing object ${cid.toString()}`);
+  }
+  await checkCid(cid, bytes);
+  return bytes;
+}
+
+/** A blockstore whose every get proves the bytes match the CID asked for. */
+function verifyingStore(
+  getObject: (cid: string) => Promise<Uint8Array | null>,
+): ReadableStorage {
+  return {
+    async *get(cid: CID): AsyncGenerator<Uint8Array> {
+      yield await fetchChecked(getObject, cid);
+    },
+  };
+}
+
+async function walkDir(
+  dir: UnixFSDirectory,
+  prefix: string,
+  store: ReadableStorage,
+  files: Map<string, string>,
+): Promise<void> {
+  if (dir.unixfs.type === "directory") {
+    // Canonical form: flat directory links strictly ascending in UTF-8
+    // byte order (also rules out duplicates). HAMT shards order links by
+    // hash structure instead, so only flat nodes are checked here.
+    const names = dir.node.Links.map((l) => l.Name ?? "");
+    for (let i = 1; i < names.length; i++) {
+      if (compareNames(names[i - 1] as string, names[i] as string) >= 0) {
+        throw new Error(
+          `directory ${prefix || "/"} links are not in canonical order`,
+        );
+      }
+    }
+  }
+  let count = 0;
+  const seen = new Set<string>();
+  for await (const child of dir.entries()) {
+    count++;
+    checkName(child.name);
+    if (seen.has(child.name)) {
+      throw new Error(`duplicate entry name: ${JSON.stringify(child.name)}`);
+    }
+    seen.add(child.name);
+    const path = prefix + child.name;
+    const entry = await exporter(child.cid, store);
+    if (entry.type === "directory") {
+      await walkDir(entry, `${path}/`, store, files);
+    } else if (entry.type === "file" || entry.type === "raw") {
+      // Pull every leaf through the verifying store — presence and hash
+      // of each chunk block is proven as a side effect.
+      for await (const _ of entry.content()) {
+        // bytes discarded; the store already checked them
+      }
+      files.set(path, child.cid.toString());
+    } else {
+      throw new Error(`unsupported node kind at ${path}: ${entry.type}`);
+    }
+  }
+  if (count === 0) {
+    throw new Error(
+      `empty directory at ${prefix || "/"}: empty directories are rejected`,
+    );
+  }
 }
 
 /**
  * Recompute a tree from an object set and confirm it reaches `root`.
  * Every object's bytes are hashed against the CID that references them,
  * so a verified map is proof the set is exactly the tree the root names.
- * Returns path → CID for every file. Throws on any missing object,
- * hash mismatch, or malformed node. Extra objects in the map are ignored.
+ * Returns path → CID for every file (the file's root CID — raw for
+ * single-block files, dag-pb for chunked ones). Throws on any missing
+ * object, hash mismatch, malformed node, non-canonical link order, or
+ * empty directory. Extra objects in the map are ignored.
  */
 export async function verifyTree(
   root: string,
   objects: Map<string, Uint8Array>,
 ): Promise<Map<string, string>> {
+  const store = verifyingStore(async (cid) => objects.get(cid) ?? null);
+  const rootEntry = await exporter(CID.parse(root), store);
+  if (rootEntry.type !== "directory") {
+    throw new Error("root is not a UnixFS directory");
+  }
   const files = new Map<string, string>();
-
-  async function check(cid: string, bytes: Uint8Array): Promise<void> {
-    const parsed = CID.parse(cid);
-    const digest = await sha256.digest(bytes);
-    const expected = CID.create(1, parsed.code, digest).toString();
-    if (expected !== cid) {
-      throw new Error(`object bytes do not hash to ${cid}`);
-    }
-  }
-
-  async function walk(cid: string, prefix: string): Promise<void> {
-    const bytes = objects.get(cid);
-    if (bytes === undefined) {
-      throw new Error(`missing object ${cid} (${prefix || "/"})`);
-    }
-    await check(cid, bytes);
-    for (const entry of decodeDirNode(bytes)) {
-      const path = prefix + entry.name;
-      if (entry.type === "dir") {
-        if (!isDirCid(entry.hash)) {
-          throw new Error(`dir entry ${path} does not link a dag-json node`);
-        }
-        await walk(entry.hash, `${path}/`);
-      } else {
-        const fileBytes = objects.get(entry.hash);
-        if (fileBytes === undefined) {
-          throw new Error(`missing object ${entry.hash} (${path})`);
-        }
-        await check(entry.hash, fileBytes);
-        files.set(path, entry.hash);
-      }
-    }
-  }
-
-  if (!isDirCid(root)) {
-    throw new Error("root is not a dag-json directory node CID");
-  }
-  await walk(root, "");
+  await walkDir(rootEntry, "", store, files);
   return files;
 }
 
@@ -134,15 +240,20 @@ export async function verifyTree(
 export interface Resolved {
   kind: "file" | "dir";
   cid: string;
-  /** File bytes, or the dir node's dag-json bytes. Already verified. */
+  /**
+   * Full file bytes (chunks re-joined), or the dir node's dag-pb bytes.
+   * Already verified. Unlike the dag-json branch this is O(depth +
+   * chunks) fetches for a file, not O(depth) — a chunked file's bytes
+   * live in many blocks.
+   */
   bytes: Uint8Array;
 }
 
 /**
- * Walk one path from the root with O(depth) fetches, verifying every
- * object against the CID that named it — the read side of the trustless
- * gateway idea (IPIP-402): the caller needs the root (from a verified
- * card) and an object fetcher, and ends up with proven bytes.
+ * Walk one path from the root, verifying every object against the CID
+ * that named it — the read side of the trustless gateway idea
+ * (IPIP-402): the caller needs the root (from a verified card) and an
+ * object fetcher, and ends up with proven bytes.
  *
  * `""` resolves to the root directory itself.
  */
@@ -151,33 +262,34 @@ export async function resolvePath(
   path: string,
   getObject: (cid: string) => Promise<Uint8Array | null>,
 ): Promise<Resolved> {
-  async function fetchChecked(cid: string): Promise<Uint8Array> {
-    const bytes = await getObject(cid);
-    if (bytes === null) throw new Error(`missing object ${cid}`);
-    const parsed = CID.parse(cid);
-    const digest = await sha256.digest(bytes);
-    if (CID.create(1, parsed.code, digest).toString() !== cid) {
-      throw new Error(`object bytes do not hash to ${cid}`);
+  const store = verifyingStore(getObject);
+  const target =
+    path === "" ? CID.parse(root) : `${root}/${segmentsOf(path).join("/")}`;
+  const entry = await exporter(target, store);
+  if (entry.type === "directory") {
+    if (entry.node.Links.length === 0) {
+      throw new Error("empty directory: empty directories are rejected");
     }
-    return bytes;
+    return {
+      kind: "dir",
+      cid: entry.cid.toString(),
+      bytes: await fetchChecked(getObject, entry.cid),
+    };
   }
-
-  let cid = root;
-  let bytes = await fetchChecked(cid);
-  let kind: "file" | "dir" = "dir";
-  const segments = path === "" ? [] : segmentsOf(path);
-  for (const segment of segments) {
-    if (kind === "file") {
-      throw new Error(`${segment}: not a directory`);
+  if (entry.type === "file" || entry.type === "raw") {
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for await (const chunk of entry.content()) {
+      chunks.push(chunk);
+      length += chunk.length;
     }
-    const entry = decodeDirNode(bytes).find((e) => e.name === segment);
-    if (!entry) {
-      throw new Error(`not found: ${segment} in ${path}`);
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
     }
-    cid = entry.hash;
-    kind = entry.type;
-    bytes = await fetchChecked(cid);
+    return { kind: "file", cid: entry.cid.toString(), bytes };
   }
-  return { kind, cid, bytes };
+  throw new Error(`unsupported node kind: ${entry.type}`);
 }
-

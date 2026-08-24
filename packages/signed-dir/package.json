@@ -1,7 +1,7 @@
 {
   "name": "@estoc/signed-dir",
   "version": "0.2.0",
-  "description": "Owner-signed directory trees: IPLD-notation merkle hashing (raw file CIDs + dag-json dir nodes) and the signed root card. Pure functions, no IO; runs in Node, workerd, and the browser.",
+  "description": "Owner-signed directory trees: UnixFS merkle hashing (IPIP-499 unixfs-v1-2025 profile) and the signed root card. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -31,10 +31,14 @@
   },
   "dependencies": {
     "@ipld/dag-json": "^11.0.1",
+    "ipfs-unixfs-exporter": "^16.0.2",
+    "ipfs-unixfs-importer": "^17.0.1",
     "multiformats": "^14.0.5"
   },
   "devDependencies": {
+    "@ipld/dag-pb": "^4.1.7",
     "@types/node": "^22.13.5",
+    "ipfs-unixfs": "^13.0.0",
     "typescript": "~5.8.0",
     "vitest": "^3.0.0"
   },

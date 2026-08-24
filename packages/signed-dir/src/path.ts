@@ -11,3 +11,10 @@ export function segmentsOf(path: string): string[] {
   }
   return segments;
 }
+
+/** Reject entry names a verified tree must never contain. */
+export function checkName(name: string): void {
+  if (name === "" || name === "." || name === ".." || name.includes("/")) {
+    throw new Error(`invalid entry name: ${JSON.stringify(name)}`);
+  }
+}

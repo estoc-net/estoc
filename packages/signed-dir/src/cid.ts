@@ -1,22 +1,26 @@
 /**
- * The two object kinds and their CIDs.
+ * CID helpers for the UnixFS experiment (IPIP-499, profile unixfs-v1-2025).
  *
- * File object  = the bare bytes, named by a CIDv1 with the raw codec and
- *                sha-256 — the same digest R2 checksums, WebCrypto, and
- *                SRI compute, no git-style `blob <len>\0` header.
- * Dir object   = dag-json bytes `{"entries":[…]}`, named by a CIDv1 with
- *                the dag-json codec. dag-json brings canonical encoding
- *                (sorted keys, no whitespace) and a native link type, so
- *                canonicalisation is the codec's job, not ours.
+ * File object  = for a single-block file (≤ 1 MiB): the bare bytes, named
+ *                by a CIDv1 with the raw codec and sha-256 — byte-for-byte
+ *                the same CID the dag-json branch computed. A larger file
+ *                roots in a dag-pb node linking raw 1 MiB chunks.
+ * Dir object   = dag-pb bytes whose UnixFS Data field says `directory`
+ *                (or `hamt-sharded-directory` past the 256 KiB threshold).
  *
- * A reader tells the kinds apart by the codec bits of the CID itself.
+ * Unlike the dag-json encoding, the codec bits alone no longer separate
+ * the kinds: a dag-pb CID can root either a multi-block file or a
+ * directory. Telling them apart means decoding the UnixFS Data field —
+ * which is why tree.ts leans on ipfs-unixfs-exporter instead of a
+ * hand-rolled decoder.
  */
 
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
 import * as raw from "multiformats/codecs/raw";
-import * as dagJson from "@ipld/dag-json";
-import type { DirEntry } from "./types.js";
+
+/** multicodec code for dag-pb — UnixFS's carrier format. */
+export const dagPbCode = 0x70;
 
 /** CID string (raw codec, sha-256) naming these bare bytes. */
 export async function fileCid(bytes: Uint8Array): Promise<string> {
@@ -24,9 +28,14 @@ export async function fileCid(bytes: Uint8Array): Promise<string> {
   return CID.create(1, raw.code, digest).toString();
 }
 
-/** Does this CID name a directory node (dag-json) rather than file bytes? */
-export function isDirCid(cid: string): boolean {
-  return CID.parse(cid).code === dagJson.code;
+/** Does this CID name bare bytes (a leaf chunk or single-block file)? */
+export function isRawCid(cid: string): boolean {
+  return CID.parse(cid).code === raw.code;
+}
+
+/** Does this CID name a dag-pb node (directory, shard, or big-file root)? */
+export function isDagPbCid(cid: string): boolean {
+  return CID.parse(cid).code === dagPbCode;
 }
 
 /**
@@ -46,69 +55,13 @@ export function compareNames(a: string, b: string): number {
   return ab.length - bb.length;
 }
 
-function checkName(name: string): void {
-  if (name === "" || name === "." || name === ".." || name.includes("/")) {
-    throw new Error(`invalid entry name: ${JSON.stringify(name)}`);
+/** Throw unless `bytes` hash to `cid` (sha-256 only — the profile's hash). */
+export async function checkCid(cid: CID, bytes: Uint8Array): Promise<void> {
+  if (cid.multihash.code !== sha256.code) {
+    throw new Error(`unsupported multihash in ${cid.toString()}`);
   }
-}
-
-/**
- * Encode a directory node from its entries. Sorts by name (UTF-8 byte
- * order), rejects invalid or duplicate names, and turns `hash` strings
- * into dag-json links so the wire form is `{"/":"bafy…"}`.
- */
-export async function encodeDirNode(
-  entries: DirEntry[],
-): Promise<{ cid: string; bytes: Uint8Array }> {
-  const sorted = [...entries].sort((a, b) => compareNames(a.name, b.name));
-  for (let i = 0; i < sorted.length; i++) {
-    const entry = sorted[i] as DirEntry;
-    checkName(entry.name);
-    if (i > 0 && (sorted[i - 1] as DirEntry).name === entry.name) {
-      throw new Error(`duplicate entry name: ${JSON.stringify(entry.name)}`);
-    }
-  }
-  const node = {
-    entries: sorted.map((e) => ({
-      name: e.name,
-      type: e.type,
-      hash: CID.parse(e.hash),
-      size: e.size,
-    })),
-  };
-  const bytes = dagJson.encode(node);
   const digest = await sha256.digest(bytes);
-  const cid = CID.create(1, dagJson.code, digest).toString();
-  return { cid, bytes };
-}
-
-/**
- * Decode a directory node, checking shape. Trust in the *bytes* comes
- * from hashing them against their CID — callers do that before or after
- * decoding (verifyTree and resolvePath both do).
- */
-export function decodeDirNode(bytes: Uint8Array): DirEntry[] {
-  let node: unknown;
-  try {
-    node = dagJson.decode(bytes);
-  } catch {
-    throw new Error("not a dag-json directory node");
+  if (!CID.create(cid.version, cid.code, digest).equals(cid)) {
+    throw new Error(`object bytes do not hash to ${cid.toString()}`);
   }
-  const entries = (node as { entries?: unknown }).entries;
-  if (!Array.isArray(entries)) {
-    throw new Error("directory node has no entries array");
-  }
-  return entries.map((e: unknown): DirEntry => {
-    const { name, type, hash, size } = (e ?? {}) as Record<string, unknown>;
-    if (
-      typeof name !== "string" ||
-      (type !== "file" && type !== "dir") ||
-      !(hash instanceof CID) ||
-      typeof size !== "number"
-    ) {
-      throw new Error("malformed directory entry");
-    }
-    checkName(name);
-    return { name, type, hash: hash.toString(), size };
-  });
 }

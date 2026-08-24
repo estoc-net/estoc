@@ -15,30 +15,25 @@
  */
 export type TreeFiles = Record<string, Uint8Array>;
 
-/**
- * One row of a directory node. `hash` is a CID string: raw codec for
- * files (sha-256 of the bare bytes), dag-json codec for subdirectories.
- * `size` is the byte length for a file, and the recursive total of
- * contained file bytes for a directory.
- */
-export interface DirEntry {
-  name: string;
-  type: "file" | "dir";
-  hash: string;
-  size: number;
-}
-
-/** The result of hashing a tree. No file bytes are held — see `files`. */
+/** The result of hashing a tree (UnixFS, profile unixfs-v1-2025). */
 export interface HashedTree {
-  /** CID of the root directory node — the root card's `root` field. */
+  /** CID of the root directory node (dag-pb) — the root card's `root` field. */
   root: string;
-  /** Directory objects this hash run produced: CID → dag-json bytes. */
+  /**
+   * Every block this hash run produced except single-block file roots:
+   * directory nodes, HAMT shards, big-file roots, and raw leaf chunks.
+   * CID → bytes.
+   */
   nodes: Map<string, Uint8Array>;
   /**
-   * File objects: CID → path in the input snapshot. Bytes are not
-   * copied; look them up in the input by path. When several paths hold
-   * identical bytes they share one CID and one (arbitrary) path here —
-   * any of them yields the same bytes.
+   * The file listing: file root CID → path in the input snapshot. For a
+   * single-block file (≤ 1 MiB) the CID is raw and the bytes are the
+   * input bytes at that path — they are not copied into `nodes`. For a
+   * chunked file the CID is dag-pb and its blocks are all in `nodes`.
+   * The complete object set is therefore `nodes` plus the input bytes of
+   * every `files` entry whose CID `nodes` does not already hold. When
+   * several paths hold identical bytes they share one CID and one
+   * (arbitrary) path here — any of them yields the same bytes.
    */
   files: Map<string, string>;
 }
