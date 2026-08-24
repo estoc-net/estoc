@@ -3,10 +3,9 @@
  * over Ed25519, `kid` naming the owner's verification method.
  *
  * Split of responsibilities: this module proves *who signed what*; it
- * does not decide whether the card is acceptable. Expiry is read-time
- * policy, "newer than the card I hold" is a string comparison on `id`
- * (uuidv7), and resolving `did` to a public key is the caller's resolver
- * — all deliberately outside.
+ * does not decide whether the card is wanted. Resolving `did` to a
+ * public key is the caller's resolver, and any acceptance policy lives
+ * with the caller — the card itself carries nothing to be policy about.
  */
 
 import {
@@ -18,25 +17,17 @@ import {
 import type { CardSigner, RootCard } from "./types.js";
 
 function checkCardShape(value: unknown): RootCard {
-  const { did, id, expires, root } = (value ?? {}) as Record<string, unknown>;
-  if (
-    typeof did !== "string" ||
-    typeof id !== "string" ||
-    typeof expires !== "string" ||
-    (root !== null && typeof root !== "string")
-  ) {
+  const { did, root } = (value ?? {}) as Record<string, unknown>;
+  if (typeof did !== "string" || typeof root !== "string") {
     throw new Error("malformed root card");
   }
-  return { did, id, expires, root };
+  return { did, root };
 }
 
 /**
  * Sign a root card into a compact JWS. `kid` should name the owner's
  * verification method (usually `<did>#<fragment>`); the payload is the
- * card as given — minting rules (fresh uuidv7 id greater than the last,
- * a sane expires) are the caller's. A card with `root: null` is a
- * takedown card; null is the only takedown encoding — a payload missing
- * the field does not verify.
+ * card as given. Two cards over the same (did, root) are equivalent.
  */
 export async function createCard(
   card: RootCard,
@@ -64,8 +55,8 @@ export interface VerifiedCard {
  * header's `kid` to a raw Ed25519 public key (32 bytes) — typically by
  * resolving the DID inside the payload and checking the kid belongs to
  * it; returning null rejects the kid. Throws unless the signature
- * verifies and the payload has the RootCard shape. Expiry and id
- * ordering are NOT checked here — they are acceptance policy.
+ * verifies and the payload has the RootCard shape. Extra payload
+ * members are dropped.
  */
 export async function verifyCard(
   jws: string,

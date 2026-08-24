@@ -54,11 +54,7 @@ const tree = await hashTree(files, { dirs: ["drafts"] });
 //                            is `nodes` plus those bytes
 
 // …and sign the root card (any keystore Signer fits CardSigner)
-const jws = await createCard(
-  { did, id: uuidv7(), expires, root: tree.root },
-  signer,
-  `${did}#key-1`,
-);
+const jws = await createCard({ did, root: tree.root }, signer, `${did}#key-1`);
 
 // Relay/reader side: verify a card, then either a whole object set…
 const { card } = await verifyCard(jws, (kid) => resolveEd25519Key(kid));
@@ -74,10 +70,10 @@ const hit = await resolvePath(card.root, "posts/2026/first.html", getObject);
 
 - **Reading and storing** — OPFS/R2/filesystem are the caller's; bytes
   pass through parameters only.
-- **Acceptance policy** — `verifyCard` proves *who signed what*; whether
-  the card is expired (`expires` is the DNS-TTL analogue) or older than
-  the one you hold (`id` is uuidv7 — "newer" is a string comparison) is
-  read-time policy.
+- **Acceptance policy** — `verifyCard` proves *who signed what*. The
+  card is testimony about a tree, not a pointer to one, so it carries no
+  issue order, expiry, or takedown form; "is this the current version"
+  is answered by the tree's own contents, never by the signature.
 - **CAR packing / gateway serving** — wire layer, arrives with the relay.
 - **`_redirects` and other filename conventions** — interpretation is
   client-side; the tree is content, not protocol.

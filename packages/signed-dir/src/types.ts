@@ -65,28 +65,18 @@ export interface HashedTree {
 }
 
 /**
- * The one signed statement in the system. Signing only the root would
- * allow rollback replay and cross-DID reuse, so the card binds owner,
- * version, and lifetime to the tree hash.
+ * The one signed statement in the system: "this DID stands behind this
+ * tree". A card is testimony about a fact, not a pointer to one — so it
+ * carries no issue order, no expiry, and no takedown form. Whether a
+ * tree is someone's *current* version is a question for the tree's own
+ * contents (an object's id and updated) and for mutable references,
+ * never for the signature.
  */
 export interface RootCard {
   /** The owner. Resolving this DID yields the verification key. */
   did: string;
-  /**
-   * uuidv7 — lexicographic order is issue order, so "newer card" is a
-   * string comparison and no counter state exists anywhere.
-   */
-  id: string;
-  /** ISO 8601 instant after which the card is stale (the DNS-TTL analogue). */
-  expires: string;
-  /**
-   * CID of the root directory node, or null for a takedown card: the
-   * owner's assertion "I publish nothing". Null is the only encoding —
-   * a card *missing* the field is malformed. A takedown is destructive,
-   * so it must be written deliberately, never minted by a producer bug
-   * that drops a field (RFC 7386's null-means-removal idiom).
-   */
-  root: string | null;
+  /** CID of the root directory node. */
+  root: string;
 }
 
 /**

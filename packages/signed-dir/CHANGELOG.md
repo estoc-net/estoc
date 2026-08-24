@@ -1,5 +1,24 @@
 # @estoc/signed-dir
 
+## 0.4.0 — 2026-08-24
+
+The root card is now testimony about a tree, not a pointer to one:
+`RootCard` is `{ did, root }`.
+
+- `id`, `expires`, and the `root: null` takedown form are gone. All
+  three served the public-folder relay, where a card was a mutable
+  "DID → current root" pointer needing ordering, a TTL, and a way to
+  point at nothing. Over an immutable tree (the folder-object bundle
+  card) none of that applies: replaying a signature over a fact changes
+  no state, a fact does not expire, and a fact cannot be un-signed —
+  retraction is a new version, currency is the tree's own `id` /
+  `updated` and the reader's mutable references. If a pointer statement
+  is ever needed again it will be a separate statement type, not this
+  signature.
+- `root` is required and must be a string; `verifyCard` rejects null.
+- `verifyCard` drops unknown payload members, so a legacy card still
+  verifies as `{ did, root }`.
+
 ## 0.3.0 — 2026-08-24
 
 Tree hashing rebuilt on UnixFS under IPIP-499's `unixfs-v1-2025` profile

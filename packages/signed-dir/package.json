@@ -1,6 +1,6 @@
 {
   "name": "@estoc/signed-dir",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Owner-signed directory trees: UnixFS merkle hashing (IPIP-499 unixfs-v1-2025 profile) and the signed root card. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
