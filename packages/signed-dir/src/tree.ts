@@ -7,9 +7,12 @@
  * Profile parameters (set by ipfs-unixfs-importer's `profile` option):
  * CIDv1, sha-256, raw leaves, 1 MiB fixed-size chunks, balanced layout
  * with 1024 links per node, HAMT sharding past 256 KiB (block-bytes
- * estimation). Link order inside flat directories is not the importer's
- * job — hashTree feeds entries in UTF-8 byte order (kubo's order) so the
- * same snapshot roots the same CID here and in `ipfs add`.
+ * estimation). Link order inside directory nodes is the DAG-PB codec's
+ * job: the spec makes encoders sort links by Name bytes (UTF-8 byte
+ * order), and @ipld/dag-pb's prepare() does exactly that — which is why
+ * the same snapshot roots the same CID here and in `ipfs add`. hashTree
+ * still feeds entries in that order as a belt-and-braces measure, so
+ * determinism doesn't hinge on a dependency internal.
  *
  * Deliberate deviation from the profile: empty directories are rejected,
  * both at hash time (an empty snapshot has no root) and at verify time
