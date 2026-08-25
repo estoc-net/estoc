@@ -1,7 +1,7 @@
 {
   "name": "@estoc/folder-object",
-  "version": "0.2.0",
-  "description": "Reference implementation of the folder-object format: read and validate an object tree, hash it (UnixFS root CID via @estoc/signed-dir), sign and verify bundle cards, zip bundles, and render post/1.0 objects to HTML.",
+  "version": "0.3.0",
+  "description": "Reference implementation of the folder-object format: read and validate an object tree, hash it (UnixFS root CID via @estoc/signed-dir), sign and verify bundle cards, and pack bundles as a directory or a deterministic zip.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -10,9 +10,6 @@
     "directory": "packages/folder-object"
   },
   "type": "module",
-  "bin": {
-    "estoc-object": "./dist/bin.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -36,7 +33,6 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
-    "@djot/djot": "^0.3.2",
     "@estoc/keystore": "workspace:^",
     "@estoc/signed-dir": "workspace:^",
     "fflate": "^0.8.2"

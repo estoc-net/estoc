@@ -2,9 +2,10 @@
 import { onMounted, ref } from "vue";
 import { verifyShare, type VerifiedShare } from "@estoc/agent-core";
 import { resolvePath } from "@estoc/signed-dir";
-import { POST_FORMAT, readObject, renderPost, type TreeFiles } from "@estoc/folder-object";
+import { readObject, type TreeFiles } from "@estoc/folder-object";
 
 import type { Entry } from "../core/entries.js";
+import { POST_FORMAT, renderPost } from "../core/post.js";
 import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
 

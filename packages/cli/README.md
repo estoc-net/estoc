@@ -1,0 +1,73 @@
+# @estoc/cli
+
+`estoc` — the command-line client for Estoc vaults.
+
+A vault is any folder you own with a `.estoc` directory inside. The model
+is git's: **the folder holds your content, `.estoc` holds the machinery** —
+one seed sealed under a passphrase ([`@estoc/keystore`](../keystore) v3),
+from which every key is derived by name. `estoc init` never touches your
+files; it only adds `.estoc`. Commands discover the enclosing vault by
+walking upward from the working directory, exactly like git finds its
+repository. The layout is [docs/vault-format.md](../../docs/vault-format.md);
+the app writes the same `.estoc` into the browser's private file system.
+
+```sh
+cd ~/my-vault
+estoc init                   # prompts for a passphrase; seals a seed, mints the anchor key
+estoc status                 # vault path, label, anchor, keys — no passphrase needed
+estoc key list               # the same keys as JSON, for pipelines
+estoc key new org/estoc      # derive another key by name (same seed, same passphrase)
+```
+
+Folder-objects ([`@estoc/folder-object`](../folder-object)) are signed
+with vault keys:
+
+```sh
+estoc object hash   posts/hello/object                       # root CID of the canonical tree
+estoc object sign   posts/hello/object --key org/estoc --out card.jws
+estoc object bundle posts/hello/object --card card.jws --out posts/hello/bundle --zip hello.zip
+estoc object verify posts/hello/bundle                       # or hello.zip, or an unsigned object dir
+```
+
+`sign` defaults to the vault's `anchor` key. Every command that unlocks the
+seed first re-derives the anchor and compares it with `config.json` — a
+seed that does not derive the recorded anchor is the wrong seed for this
+vault.
+
+Passphrases come from `ESTOC_PASSPHRASE` if set, else a no-echo prompt on
+a TTY, else one line of stdin per prompt (`printf 'pw\npw\n' | estoc init`).
+
+## Vault layout
+
+```
+my-vault/
+  your files, untouched…
+  .estoc/                # mode 0700
+    config.json          # {"format":"estoc","version":1,"label":…,"identity":{"anchor":{key,did}},"mediation":null}
+    keystore.json        # @estoc/keystore v3: sealed seed + a cache of key names, mode 0600
+```
+
+The CLI only ever writes these two singletons. Everything else the format
+allows (mediation, contacts, logs) is the app's business until the CLI
+grows an agent. Keystore writes go through a same-directory temp file plus
+rename, so a crash never leaves a truncated keystore behind.
+
+## Commands
+
+```
+estoc init [--label <label>]               create a vault here (refuses if .estoc exists)
+estoc status                               show the enclosing vault and its keys
+estoc key list                             list keys as JSON (no passphrase needed)
+estoc key new <name>                       derive a key by name and record it
+estoc object hash   [<dir>]                root CID
+estoc object sign   [<dir>] [--key <name>] [--out card.jws]
+estoc object verify [<bundleDir | bundle.zip | objectDir>] [--card card.jws]
+estoc object bundle [<dir>] [--card card.jws] [--out <dir>] [--zip <file>]
+```
+
+`--vault <dir>` (or `ESTOC_VAULT`) points a command at a specific vault
+instead of searching upward.
+
+## License
+
+Apache-2.0

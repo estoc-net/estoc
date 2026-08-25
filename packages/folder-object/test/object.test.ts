@@ -10,7 +10,6 @@ import {
   zipBundle,
   unzipMapping,
   readBundle,
-  renderPost,
   MalformedObjectError,
 } from "../src/index.js";
 
@@ -72,15 +71,5 @@ describe("card + bundle", () => {
   it("zip output is deterministic", async () => {
     const object = readObject(await readTree(seaDay));
     expect(Buffer.from(zipBundle(object)).equals(Buffer.from(zipBundle(object)))).toBe(true);
-  });
-});
-
-describe("render", () => {
-  it("renders djot and rewrites in-tree image paths", async () => {
-    const object = readObject(await readTree(seaDay));
-    const post = renderPost(object, { assetBase: "bundle/object" });
-    expect(post.title).toBe("A Day at the Sea");
-    expect(post.bodyHtml).toContain('<img src="bundle/object/files/images/sunset.png" alt="sunset">');
-    expect(post.bodyHtml).toContain("<p>The tide");
   });
 });

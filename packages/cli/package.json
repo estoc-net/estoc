@@ -1,0 +1,53 @@
+{
+  "name": "@estoc/cli",
+  "version": "0.2.0",
+  "description": "estoc — the command-line client for Estoc vaults. `estoc init` marks a folder as yours by adding a .estoc directory (git model: your files stay untouched, the machinery lives in .estoc) with one seed-sealed keystore; `estoc object …` hashes, signs, verifies and bundles folder-objects with the vault's keys.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/estoc.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
+  "bin": {
+    "estoc": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm test && pnpm build",
+    "dev": "tsc --watch --preserveWatchOutput"
+  },
+  "dependencies": {
+    "@estoc/folder-object": "workspace:^",
+    "@estoc/keystore": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "~5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "did",
+    "did-key",
+    "keystore",
+    "folder-object",
+    "cli",
+    "decentralized-identity"
+  ]
+}

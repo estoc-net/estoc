@@ -1,0 +1,16 @@
+export {
+  ESTOC_DIR,
+  ANCHOR_KEY_NAME,
+  findVault,
+  openVault,
+  initVault,
+  readConfig,
+  readKeystore,
+  writeKeystore,
+  openVaultKey,
+  createVaultKey,
+  type Vault,
+  type VaultConfig,
+  type KeyRef,
+  type InitResult,
+} from "./vault.js";

@@ -1,7 +1,10 @@
 import { parse, renderHTML, type Image, type Link } from "@djot/djot";
-import { contentOf } from "./object.js";
-import type { FolderObject } from "./types.js";
+import { contentOf, type FolderObject } from "@estoc/folder-object";
 
+/**
+ * post/1.0 projection. The object is the fact; this is one way of looking
+ * at it — the app's. Pure: no network, no filesystem, raw HTML dropped.
+ */
 export const POST_FORMAT = "https://estoc.dev/post/1.0";
 
 export interface RenderOptions {
@@ -24,7 +27,6 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-/** Project a post/1.0 object to HTML. The renderer touches no network and no filesystem. */
 export function renderPost(object: FolderObject, options: RenderOptions = {}): RenderedPost {
   if (object.meta.format !== POST_FORMAT) throw new Error(`not a post/1.0 object: ${object.meta.format}`);
   const content = contentOf(object);
@@ -68,9 +70,4 @@ export function renderPost(object: FolderObject, options: RenderOptions = {}): R
   const lang = str(m.inLanguage);
   if (lang !== undefined) result.inLanguage = lang;
   return result;
-}
-
-/** Fill `{{name}}` placeholders in a page template; unknown names become empty. */
-export function fillTemplate(template: string, values: Record<string, string | undefined>): string {
-  return template.replace(/\{\{\s*([a-zA-Z_]+)\s*\}\}/g, (_, key: string) => values[key] ?? "");
 }

@@ -14,6 +14,9 @@ importers:
 
   app:
     dependencies:
+      '@djot/djot':
+        specifier: ^0.3.2
+        version: 0.3.2
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../packages/agent-core
@@ -101,6 +104,25 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
 
+  packages/cli:
+    dependencies:
+      '@estoc/folder-object':
+        specifier: workspace:^
+        version: link:../folder-object
+      '@estoc/keystore':
+        specifier: workspace:^
+        version: link:../keystore
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.5
+        version: 22.20.1
+      typescript:
+        specifier: ~5.8.0
+        version: 5.8.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
+
   packages/did-peer:
     dependencies:
       '@noble/hashes':
@@ -122,9 +144,6 @@ importers:
 
   packages/folder-object:
     dependencies:
-      '@djot/djot':
-        specifier: ^0.3.2
-        version: 0.3.2
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
