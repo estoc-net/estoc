@@ -84,10 +84,9 @@ export interface FolderObject {
 
 /**
  * The payload of the card: "this DID stands behind this tree". Testimony
- * about a fact, not a pointer to one — no issue order, no expiry, no
- * takedown form. Which tree is someone's *current* version is the
- * tree's own business (`index.json`'s `id` and `updated`), never the
- * signature's.
+ * about a fact, carrying no time. Which tree is someone's *current*
+ * version is the tree's own business (`index.json`'s `id` and
+ * `updated`), never the card's.
  */
 export interface ObjectCard {
   /** The signer: a did:key; its one verification method is the JWS `kid`. */
