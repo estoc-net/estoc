@@ -8,7 +8,8 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 | `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, over an `.estoc` vault |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |
-| `packages/signed-dir/` | [`@estoc/signed-dir`](https://www.npmjs.com/package/@estoc/signed-dir) | owner-signed directory trees — IPLD-notation merkle hashing + signed root card |
+| `packages/folder-object/` | [`@estoc/folder-object`](https://www.npmjs.com/package/@estoc/folder-object) | an object is a folder — UnixFS merkle hashing, the folder-object format, did:key cards, signed objects |
+| `packages/cli/` | [`@estoc/cli`](https://www.npmjs.com/package/@estoc/cli) | `estoc` — vaults on disk, `estoc object hash\|sign\|verify` |
 
 Inside the workspace every `@estoc/*` dependency is `workspace:^`: the app
 builds against the libraries in this tree, so a change to `agent-core` is in

@@ -7,11 +7,12 @@ import {
   hashObject,
   signObject,
   verifyObjectCard,
-  zipBundle,
-  unzipMapping,
-  readBundle,
+  signedTree,
+  readAny,
+  readSignedObject,
   MalformedObjectError,
 } from "../src/index.js";
+import { zipTree, unzipTree } from "../src/zip.js";
 
 const seaDay = fileURLToPath(new URL("../../../../folder-object/examples/sea-day/", import.meta.url));
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -53,15 +54,15 @@ describe("object", () => {
   });
 });
 
-describe("card + bundle", () => {
+describe("card + signed object", () => {
   it("signs, zips, round-trips, verifies; a changed tree mismatches", async () => {
     const object = readObject(await readTree(seaDay));
     const s = await signer();
     const jws = await signObject(object, s);
-    const zip = zipBundle(object, jws);
-    const bundle = readBundle(unzipMapping(zip));
-    expect(bundle.card).toBe(jws);
-    const verdict = await verifyObjectCard(bundle.card!, bundle.object);
+    const zip = zipTree(signedTree(object, jws));
+    const signed = readSignedObject(unzipTree(zip));
+    expect(signed.card).toBe(jws);
+    const verdict = await verifyObjectCard(signed.card, signed.object);
     expect(verdict).toMatchObject({ did: s.did(), matches: true });
 
     const tampered = readObject({ ...object.tree, "files/body.dj": enc("changed") });
@@ -70,6 +71,15 @@ describe("card + bundle", () => {
 
   it("zip output is deterministic", async () => {
     const object = readObject(await readTree(seaDay));
-    expect(Buffer.from(zipBundle(object)).equals(Buffer.from(zipBundle(object)))).toBe(true);
+    expect(Buffer.from(zipTree(object.tree)).equals(Buffer.from(zipTree(object.tree)))).toBe(true);
+  });
+
+  it("readAny takes a bare object or a signed one; litter beside object/ is ignored", async () => {
+    const object = readObject(await readTree(seaDay));
+    expect(readAny(object.tree).card).toBeUndefined();
+    const laid = { ...signedTree(object, "x.y.z"), "index.html": enc("<p>rendered</p>") };
+    expect(readAny(laid)).toEqual({ object, card: "x.y.z" });
+    expect(() => readSignedObject(object.tree)).toThrow(/not a signed one/);
+    expect(() => readAny({ "readme.txt": enc("?") })).toThrow(MalformedObjectError);
   });
 });

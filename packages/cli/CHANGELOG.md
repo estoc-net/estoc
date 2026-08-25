@@ -7,8 +7,11 @@
   derived by name. `estoc init` mints `anchor` (not `default`) and writes
   `config.identity.anchor` plus `mediation: null` per docs/vault-format.md.
   Vaults made by 0.1.0 (keystore v1) are refused, not migrated.
-- `estoc object hash|sign|verify|bundle` — the former `estoc-object` tool
-  from `@estoc/folder-object`, now signing with vault keys.
+- `estoc object hash|sign|verify` — the former `estoc-object` tool from
+  `@estoc/folder-object`, now signing with vault keys. `sign` prints the
+  card, or with `--out <dir>` / `--zip <file>` lays the signed object
+  (`object/` + `card.jws`) out beside whatever else is in the directory;
+  there is no separate `bundle` step.
 - `ESTOC_PASSPHRASE` answers passphrase prompts.
 
 ## 0.1.0

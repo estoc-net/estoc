@@ -14,9 +14,15 @@ export async function readTree(dir: string): Promise<TreeFiles> {
   return out;
 }
 
-/** Write a mapping under a directory, replacing whatever was there. */
+/**
+ * Write a mapping under a directory. Every top-level entry the mapping
+ * names (`object/`, `card.jws`, …) is replaced whole, so nothing stale
+ * survives inside it; entries the mapping does not name are left alone —
+ * a rendered page can live beside a signed object.
+ */
 export async function writeTree(dir: string, tree: TreeFiles): Promise<void> {
-  await rm(dir, { recursive: true, force: true });
+  const tops = new Set(Object.keys(tree).map((p) => p.split("/")[0]!));
+  for (const top of tops) await rm(join(dir, top), { recursive: true, force: true });
   for (const [path, bytes] of Object.entries(tree)) {
     const abs = join(dir, ...path.split("/"));
     await mkdir(dirname(abs), { recursive: true });

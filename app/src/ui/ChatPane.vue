@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
-import { readBundle, unzipMapping } from "@estoc/folder-object";
+import { readAny } from "@estoc/folder-object";
+import { unzipTree } from "@estoc/folder-object/zip";
 
 import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, shareObject, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
@@ -126,9 +127,10 @@ async function send() {
   }
 }
 
-// An object goes over whole (object-share/1.0): a bundle zip — `object/…`
-// plus its author's `card.jws` — is passed on under that card; a bare
-// object zip (index.json at the root) is ours, and the anchor signs it.
+// An object goes over whole (object-share/1.0): a signed-object zip —
+// `object/…` plus its author's `card.jws` — is passed on under that card;
+// a bare object zip (index.json at the root) is ours, and the anchor
+// signs it.
 const objectInput = ref<HTMLInputElement | null>(null);
 
 async function shareFile(event: Event) {
@@ -141,8 +143,8 @@ async function shareFile(event: Event) {
   sending.value = true;
   sendError.value = "";
   try {
-    const bundle = readBundle(unzipMapping(new Uint8Array(await file.arrayBuffer())));
-    await shareObject(contact.value.did, bundle.object.tree, bundle.card);
+    const { object, card } = readAny(unzipTree(new Uint8Array(await file.arrayBuffer())));
+    await shareObject(contact.value.did, object, card);
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -305,7 +307,7 @@ onMounted(() => {
       <button
         class="btn btn-quiet"
         type="button"
-        title="share an object: a bundle or object zip"
+        title="share an object: a signed-object or object zip"
         :disabled="sending"
         @click="objectInput?.click()"
       >

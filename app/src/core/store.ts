@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import type { TreeFiles } from "@estoc/signed-dir";
+import type { FolderObject } from "@estoc/folder-object";
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import {
   Agent,
@@ -552,15 +552,15 @@ export async function send(
 }
 
 /**
- * An object, whole: object-share/1.0. `files` is the folder as a mapping;
- * without `card` the anchor signs it, with one (a bundle passed on) the
- * card must be about this very tree.
+ * An object, whole: object-share/1.0. Without `card` the anchor signs
+ * it, with one (a signed object passed on) the card must be about this
+ * very object.
  */
-export async function shareObject(contactDid: string, files: TreeFiles, card?: string): Promise<void> {
+export async function shareObject(contactDid: string, object: FolderObject, card?: string): Promise<void> {
   if (agent === null) {
     throw new Error("the agent is not running");
   }
-  await agent.shareObject(contactDid, files, card === undefined ? {} : { card });
+  await agent.shareObject(contactDid, object, card === undefined ? {} : { card });
 }
 
 /** A line of chat: basicmessage/2.0. */

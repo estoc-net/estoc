@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { verifyShare, type VerifiedShare } from "@estoc/agent-core";
-import { resolvePath } from "@estoc/signed-dir";
-import { readObject, type TreeFiles } from "@estoc/folder-object";
 
 import type { Entry } from "../core/entries.js";
 import { POST_FORMAT, renderPost } from "../core/post.js";
@@ -10,11 +8,12 @@ import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
 
 /**
- * object-share/1.0: an object handed over whole — a root card and every
- * block of the tree, inline. The renderer re-runs the check the agent ran
- * (card under its own did:key, blocks reaching the root) and projects
- * what verified: a post/1.0 object as its title and body, anything else
- * as its files. A share that does not verify is shown as exactly that.
+ * object-share/1.0: an object handed over whole — a card and every block
+ * of the tree, inline. The renderer re-runs the check the agent ran (card
+ * under its own did:key, blocks reaching the root, the tree a well-formed
+ * object) and projects what verified: a post/1.0 object as its title and
+ * body, any other format as its files. A share that does not verify is
+ * shown as exactly that.
  *
  * The body is someone else's text rendered to HTML by our own djot
  * renderer (raw HTML stripped), and still goes into a sandboxed frame:
@@ -49,16 +48,6 @@ function dataUri(path: string, bytes: Uint8Array): string {
   return `data:${type};base64,${btoa(binary)}`;
 }
 
-async function filesOf(share: VerifiedShare): Promise<TreeFiles> {
-  const files: TreeFiles = {};
-  for (const path of share.tree.files.keys()) {
-    const resolved = await resolvePath(share.card.root, path, (cid) => Promise.resolve(share.blocks.get(cid) ?? null));
-    files[path] = resolved.bytes;
-  }
-  return files;
-}
-
-
 function page(bodyHtml: string): string {
   return `<!doctype html><meta charset="utf-8"><style>
     body{margin:0;padding:.25rem .5rem;font:15px/1.5 system-ui,sans-serif;color:#1d2528;overflow-wrap:anywhere}
@@ -75,37 +64,31 @@ onMounted(async () => {
     return;
   }
   const { did, root } = share.card;
-  const files = await filesOf(share);
-  const listing = () =>
-    Object.entries(files)
+  const { object } = share;
+  const files = object.tree;
+  if (object.meta.format !== POST_FORMAT) {
+    const listing = Object.entries(files)
       .map(([path, bytes]) => ({ path, size: bytes.length }))
       .sort((a, b) => (a.path < b.path ? -1 : 1));
-  try {
-    const object = readObject(files);
-    if (object.meta.format !== POST_FORMAT) {
-      view.value = { state: "files", did, root, files: listing() };
-      return;
-    }
-    const post = renderPost(object, { assetBase: "estoc-object" });
-    // in-tree references came out as estoc-object/files/…; the frame has
-    // no origin to fetch from, so each becomes the verified bytes inline
-    const html = post.bodyHtml.replace(/(src|href)="estoc-object\/(files\/[^"]*)"/g, (whole, attr: string, path: string) => {
-      const bytes = files[path];
-      return bytes === undefined ? whole : `${attr}="${dataUri(path, bytes)}"`;
-    });
-    view.value = {
-      state: "post",
-      did,
-      root,
-      title: post.title ?? "",
-      summary: post.summary ?? "",
-      html: page(html),
-      files: Object.keys(files).length,
-    };
-  } catch {
-    // not a folder-object (or a malformed one): still a verified tree
-    view.value = { state: "files", did, root, files: listing() };
+    view.value = { state: "files", did, root, files: listing };
+    return;
   }
+  const post = renderPost(object, { assetBase: "estoc-object" });
+  // in-tree references came out as estoc-object/files/…; the frame has
+  // no origin to fetch from, so each becomes the verified bytes inline
+  const html = post.bodyHtml.replace(/(src|href)="estoc-object\/(files\/[^"]*)"/g, (whole, attr: string, path: string) => {
+    const bytes = files[path];
+    return bytes === undefined ? whole : `${attr}="${dataUri(path, bytes)}"`;
+  });
+  view.value = {
+    state: "post",
+    did,
+    root,
+    title: post.title ?? "",
+    summary: post.summary ?? "",
+    html: page(html),
+    files: Object.keys(files).length,
+  };
 });
 
 const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;

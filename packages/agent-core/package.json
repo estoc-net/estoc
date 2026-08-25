@@ -39,7 +39,7 @@
   "dependencies": {
     "@estoc/did-peer": "workspace:^",
     "@estoc/keystore": "workspace:^",
-    "@estoc/signed-dir": "workspace:^",
+    "@estoc/folder-object": "workspace:^",
     "bs58": "^6.0.0",
     "did-resolver": "^4.1.0",
     "uuid": "^11.1.1",

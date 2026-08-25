@@ -26,9 +26,6 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../packages/keystore
-      '@estoc/signed-dir':
-        specifier: workspace:^
-        version: link:../packages/signed-dir
       didcomm:
         specifier: ^0.4.1
         version: 0.4.1
@@ -69,12 +66,12 @@ importers:
       '@estoc/did-peer':
         specifier: workspace:^
         version: link:../did-peer
+      '@estoc/folder-object':
+        specifier: workspace:^
+        version: link:../folder-object
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
-      '@estoc/signed-dir':
-        specifier: workspace:^
-        version: link:../signed-dir
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
@@ -147,16 +144,28 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
-      '@estoc/signed-dir':
-        specifier: workspace:^
-        version: link:../signed-dir
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
+      ipfs-unixfs-exporter:
+        specifier: ^16.0.2
+        version: 16.0.2
+      ipfs-unixfs-importer:
+        specifier: ^17.0.1
+        version: 17.0.1
+      multiformats:
+        specifier: ^14.0.5
+        version: 14.0.5
     devDependencies:
+      '@ipld/dag-pb':
+        specifier: ^4.1.7
+        version: 4.1.7
       '@types/node':
         specifier: ^22.13.5
         version: 22.20.1
+      ipfs-unixfs:
+        specifier: ^13.0.0
+        version: 13.0.0
       typescript:
         specifier: ~5.8.0
         version: 5.8.3
@@ -179,34 +188,6 @@ importers:
       '@types/node':
         specifier: ^22.13.5
         version: 22.20.1
-      typescript:
-        specifier: ~5.8.0
-        version: 5.8.3
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
-
-  packages/signed-dir:
-    dependencies:
-      ipfs-unixfs-exporter:
-        specifier: ^16.0.2
-        version: 16.0.2
-      ipfs-unixfs-importer:
-        specifier: ^17.0.1
-        version: 17.0.1
-      multiformats:
-        specifier: ^14.0.5
-        version: 14.0.5
-    devDependencies:
-      '@ipld/dag-pb':
-        specifier: ^4.1.7
-        version: 4.1.7
-      '@types/node':
-        specifier: ^22.13.5
-        version: 22.20.1
-      ipfs-unixfs:
-        specifier: ^13.0.0
-        version: 13.0.0
       typescript:
         specifier: ~5.8.0
         version: 5.8.3

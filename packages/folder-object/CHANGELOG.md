@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 — 2026-08-24
+
+One package for the three layers. `@estoc/signed-dir` is retired: its
+UnixFS tree (`hashTree`/`verifyTree`/`resolvePath`, golden vectors and
+all) moves in here unchanged, and its half of the card joins the other
+half, so the card has one home and one meaning.
+
+- **Breaking:** the card is a JWS with `typ: estoc/object-card`; a card
+  without it does not verify. `signRoot(did, root, signer)` /
+  `verifyCard(jws)` replace signed-dir's `createCard`/`verifyCard` — the
+  did:key rule (payload `did` is a did:key, `kid` its one method) is now
+  the card's, not the caller's. `RootCard` is `ObjectCard`.
+- **Breaking:** "bundle" is gone as a word and a verb. A *signed object*
+  is `{object/, card.jws}`: `signedTree(object, card)` lays it out,
+  `readAny(mapping)` recognizes a signed object or a bare one,
+  `readSignedObject` insists on the card. Anything beside `object/` and
+  `card.jws` is ignored, so a post directory with its rendered page *is*
+  the signed object. `Bundle`, `bundleTree`, `readBundle`, `zipBundle`,
+  `unzipMapping` are removed.
+- The zip container is its own subpath, `@estoc/folder-object/zip`
+  (`zipTree`/`unzipTree`), generic over mappings.
+- `writeTree` (`/fs`) replaces the top-level entries it writes and leaves
+  the rest of the directory alone.
+- Depends on `ipfs-unixfs-importer`/`-exporter` and `multiformats`
+  directly; no longer on `@estoc/signed-dir`.
+
 ## 0.3.0 — 2026-08-24
 
 - **Breaking:** the `estoc-object` CLI and the `post/1.0` renderer

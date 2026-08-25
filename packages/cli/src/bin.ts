@@ -5,17 +5,16 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { listKeys } from "@estoc/keystore";
 import {
-  bundleTree,
   hashObject,
-  readBundle,
+  readAny,
   readObject,
   signObject,
-  unzipMapping,
+  signedTree,
   verifyObjectCard,
-  zipBundle,
   type FolderObject,
 } from "@estoc/folder-object";
 import { readTree, writeTree } from "@estoc/folder-object/fs";
+import { unzipTree, zipTree } from "@estoc/folder-object/zip";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
 import {
   ANCHOR_KEY_NAME,
@@ -38,10 +37,12 @@ const USAGE = `usage: estoc <command>
   key new <name>                 derive a key by name and record it
 
   object hash   [<dir>]          root CID of a folder-object (default: .)
-  object sign   [<dir>] [--key <name>] [--out card.jws]
-                                 sign the object with a vault key (default: anchor)
-  object verify [<bundleDir | bundle.zip | objectDir>] [--card card.jws]
-  object bundle [<dir>] [--card card.jws] [--out <bundleDir>] [--zip <file>]
+  object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
+                                 sign the object with a vault key (default:
+                                 anchor); prints the card, or lays the signed
+                                 object ({object/, card.jws}) out under --out
+                                 and/or zips it to --zip
+  object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
 
 options:
   --vault <dir>   use the vault at <dir> instead of searching upward from
@@ -104,11 +105,11 @@ async function loadObject(dir: string): Promise<FolderObject> {
   return readObject(await readTree(dir));
 }
 
-/** A bundle directory, a bundle zip, or a bare object directory. */
+/** A signed-object directory, a signed-object zip, or a bare object directory. */
 async function loadAny(p: string): Promise<{ object: FolderObject; card?: string }> {
   const s = await stat(p);
-  const mapping = s.isDirectory() ? await readTree(p) : unzipMapping(new Uint8Array(await readFile(p)));
-  return readBundle(mapping);
+  const mapping = s.isDirectory() ? await readTree(p) : unzipTree(new Uint8Array(await readFile(p)));
+  return readAny(mapping);
 }
 
 async function readCard(file: string): Promise<string> {
@@ -134,35 +135,32 @@ async function cmdObject(sub: string | undefined, target: string, flags: ObjectF
       const vault = await requireVault(flags.vault);
       const identity = await openVaultKey(vault, flags.key ?? ANCHOR_KEY_NAME, await promptPassphrase());
       const jws = await signObject(object, identity.signer);
-      if (flags.out) await writeFile(flags.out, jws + "\n");
-      else process.stdout.write(jws + "\n");
+      if (!flags.out && !flags.zip) {
+        process.stdout.write(jws + "\n");
+        return;
+      }
+      const signed = signedTree(object, jws);
+      if (flags.out) await writeTree(flags.out, signed);
+      if (flags.zip) await writeFile(flags.zip, zipTree(signed));
       return;
     }
     case "verify": {
-      const { object, card: bundled } = await loadAny(target);
-      const card = flags.card ? await readCard(flags.card) : bundled;
+      const { object, card: beside } = await loadAny(target);
+      const card = flags.card ? await readCard(flags.card) : beside;
       const root = await hashObject(object);
       process.stdout.write(`format  ${object.meta.format}\nid      ${object.meta.id}\nroot    ${root}\n`);
       if (card === undefined) {
-        process.stdout.write("card    none (unsigned object)\n");
+        process.stdout.write("card    none (an object, not a signed one)\n");
         return;
       }
       const verdict = await verifyObjectCard(card, object);
       process.stdout.write(`signer  ${verdict.did}\n`);
-      process.stdout.write(`card    ${verdict.matches ? "VERIFIED — signs this tree" : `MISMATCH — signs ${verdict.root}`}\n`);
+      process.stdout.write(`card    ${verdict.matches ? "VERIFIED — signs this object" : `MISMATCH — signs ${verdict.root}`}\n`);
       if (!verdict.matches) process.exitCode = 1;
       return;
     }
-    case "bundle": {
-      const object = await loadObject(target);
-      const card = flags.card ? await readCard(flags.card) : undefined;
-      if (!flags.out && !flags.zip) throw new Error("estoc object bundle: give --out <dir> and/or --zip <file>");
-      if (flags.out) await writeTree(flags.out, bundleTree(object, card));
-      if (flags.zip) await writeFile(flags.zip, zipBundle(object, card));
-      return;
-    }
     default:
-      throw new Error(`unknown object subcommand: ${sub ?? "(none)"} (hash, sign, verify, bundle)`);
+      throw new Error(`unknown object subcommand: ${sub ?? "(none)"} (hash, sign, verify)`);
   }
 }
 

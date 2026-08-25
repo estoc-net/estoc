@@ -38,10 +38,8 @@ import {
   closureOf,
   closureSize,
   objectShareHandler,
-  signCard,
-  verifyDidKeyCard,
 } from "./protocol/object-share.js";
-import type { TreeFiles } from "@estoc/signed-dir";
+import { signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 import {
   currentDid,
   currentMyDid,
@@ -1606,20 +1604,20 @@ export class Agent {
   }
 
   /**
-   * Share an object (`docs/object-share.md`): hash `files` into a UnixFS
-   * tree, put its blocks in our own `blobs/`, and send the whole closure
-   * in one object-share/1.0 message — the root card in the body, one
-   * attachment per block. Without `card` the tree is ours and the anchor
-   * signs it; with one (passing on a bundle someone else signed) the card
-   * must verify and name this very root. Throws before sending when the
+   * Share an object (`docs/object-share.md`): hash its canonical tree,
+   * put the blocks in our own `blobs/`, and send the whole closure in one
+   * object-share/1.0 message — the card in the body, one attachment per
+   * block. Without `card` the object is ours and the anchor signs it;
+   * with one (passing on an object someone else signed) the card must
+   * verify and name this very root. Throws before sending when the
    * closure is bigger than `maxShareBytes`.
    */
   async shareObject(
     contactDid: string,
-    files: TreeFiles,
+    object: FolderObject,
     options: { card?: string } = {}
   ): Promise<MessageRecord> {
-    const { root, blocks } = await closureOf(files);
+    const { root, blocks } = await closureOf(object.tree);
     const size = closureSize(blocks);
     if (size > this.maxShareBytes) {
       throw new Error(`object is ${size} bytes of blocks; one share carries at most ${this.maxShareBytes}`);
@@ -1628,11 +1626,11 @@ export class Agent {
     if (options.card === undefined) {
       const anchor = this.vault.config.identity.anchor;
       const identity = await this.vault.derive(this.seedKey, anchor.key);
-      card = await signCard(anchor.did, root, identity.signer);
+      card = await signRoot(anchor.did, root, identity.signer);
     } else {
-      const given = await verifyDidKeyCard(options.card);
+      const given = await verifyCard(options.card);
       if (given.root !== root) {
-        throw new Error(`the card is about ${given.root}, not this tree (${root})`);
+        throw new Error(`the card is about ${given.root}, not this object (${root})`);
       }
       card = options.card;
     }

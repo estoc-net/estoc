@@ -1,4 +1,4 @@
-import { hashTree } from "@estoc/signed-dir";
+import { hashTree } from "./tree.js";
 import { MalformedObjectError, type FolderObject, type IndexJson, type TreeFiles } from "./types.js";
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

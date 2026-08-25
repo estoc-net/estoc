@@ -24,10 +24,14 @@ with vault keys:
 
 ```sh
 estoc object hash   posts/hello/object                       # root CID of the canonical tree
-estoc object sign   posts/hello/object --key org/estoc --out card.jws
-estoc object bundle posts/hello/object --card card.jws --out posts/hello/bundle --zip hello.zip
-estoc object verify posts/hello/bundle                       # or hello.zip, or an unsigned object dir
+estoc object sign   posts/hello/object --key org/estoc        # prints the card
+estoc object sign   posts/hello/object --key org/estoc --out posts/hello --zip hello.zip
+                                                             # posts/hello/{object/, card.jws} + a zip of the same
+estoc object verify posts/hello                              # or hello.zip, or a bare object dir
 ```
+
+A signed object is `{object/, card.jws}`; anything else in the directory
+(a rendered page, the zip) is not part of it and is left alone.
 
 `sign` defaults to the vault's `anchor` key. Every command that unlocks the
 seed first re-derives the anchor and compares it with `config.json` — a
@@ -60,9 +64,8 @@ estoc status                               show the enclosing vault and its keys
 estoc key list                             list keys as JSON (no passphrase needed)
 estoc key new <name>                       derive a key by name and record it
 estoc object hash   [<dir>]                root CID
-estoc object sign   [<dir>] [--key <name>] [--out card.jws]
-estoc object verify [<bundleDir | bundle.zip | objectDir>] [--card card.jws]
-estoc object bundle [<dir>] [--card card.jws] [--out <dir>] [--zip <file>]
+estoc object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
+estoc object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
 ```
 
 `--vault <dir>` (or `ESTOC_VAULT`) points a command at a specific vault

@@ -5,23 +5,27 @@
 Objects between people: `docs/object-share.md`.
 
 - **object-share/1.0** (`https://estoc.dev/object-share/1.0/share`): one
-  message carries a whole folder-object closure — the root card (JWS over
-  `{did, root}`, `@estoc/signed-dir`) in `body.card`, every UnixFS block as
-  an attachment whose `id` is its CID (`data.base64`, `media_type`
-  dag-pb/raw, `byte_count`). Nothing is fetched or asked back.
-- `Agent.shareObject(contactDid, files, {card?})`: hashes the tree, keeps
-  the blocks in our own `blobs/`, signs the card with the anchor (did:key)
-  or checks a given card names this root (passing a bundle on under its
-  author's card), and sends. Refuses closures over `maxShareBytes`
-  (option; default 1 MiB).
+  message carries a whole folder-object closure — the card (JWS over
+  `{did, root}`, `@estoc/folder-object`) in `body.card`, every UnixFS
+  block as an attachment whose `id` is its CID (`data.base64`,
+  `media_type` dag-pb/raw, `byte_count`). Nothing is fetched or asked back.
+- `Agent.shareObject(contactDid, object, {card?})`: hashes the object's
+  canonical tree, keeps the blocks in our own `blobs/`, signs the card
+  with the anchor (did:key) or checks a given card names this root
+  (passing a signed object on under its author's card), and sends.
+  Refuses closures over `maxShareBytes` (option; default 1 MiB).
 - Built-in `objectShareHandler`: a share that verifies (card under its own
-  did:key, blocks reaching every path under the root) has its blocks put
-  in `blobs/<cid>`; one that does not is logged as it arrived and noted.
+  did:key, blocks reaching every path under the root, **and the tree a
+  well-formed folder-object** — a card means "stands behind this object",
+  so what it signs must be one) has its blocks put in `blobs/<cid>`; one
+  that does not is logged as it arrived and noted. `verifyShare` returns
+  the `object` it read.
 - `Vault.blobs` (`BlobStore`): `blobs/<cid>` as `docs/vault-format.md` §6.8
   reserved it — immutable, put-if-absent, merged by union.
 - Pure helpers exported for applications: `closureOf`, `attachmentsOf`,
-  `blocksOf`, `verifyShare`, `signCard`, `verifyDidKeyCard`.
-- Depends on `@estoc/signed-dir`.
+  `blocksOf`, `verifyShare`. Cards are signed and verified with
+  `@estoc/folder-object` (`signRoot`, `verifyCard`).
+- Depends on `@estoc/folder-object`.
 
 ## 0.13.0 — 2026-08-17
 

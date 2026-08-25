@@ -7,7 +7,7 @@ import { BLOBS_DIR } from "./layout.js";
  * A blob is immutable and named by what it is, so writing one that exists
  * is a no-op and two vaults merge by union (`docs/vault-format.md` §6.8).
  * Whether the bytes match the name is checked by whoever puts them here;
- * a reader that cares re-checks (signed-dir's `resolvePath` does).
+ * a reader that cares re-checks (folder-object's `resolvePath` does).
  */
 export class BlobStore {
   constructor(private readonly backend: VaultBackend) {}
