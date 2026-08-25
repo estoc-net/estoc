@@ -38,6 +38,7 @@ import {
   closureOf,
   closureSize,
   objectShareHandler,
+  type ObjectShareBody,
 } from "./protocol/object-share.js";
 import { signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 import {
@@ -1606,38 +1607,44 @@ export class Agent {
   /**
    * Share an object (`docs/object-share.md`): hash its canonical tree,
    * put the blocks in our own `blobs/`, and send the whole closure in one
-   * object-share/1.0 message — the card in the body, one attachment per
-   * block. Without `card` the object is ours and the anchor signs it;
-   * with one (passing on an object someone else signed) the card must
-   * verify and name this very root. Throws before sending when the
-   * closure is bigger than `maxShareBytes`.
+   * object-share/1.0 message — the root in the body, one attachment per
+   * block. Plain, the share says only that we handed the object over.
+   * With `sign` the anchor signs a card and the share is a signed object
+   * we stand behind; with `card` (passing on an object someone else
+   * signed) the card must verify and name this very root. Throws before
+   * sending when the closure is bigger than `maxShareBytes`.
    */
   async shareObject(
     contactDid: string,
     object: FolderObject,
-    options: { card?: string } = {}
+    options: { sign?: boolean; card?: string } = {}
   ): Promise<MessageRecord> {
     const { root, blocks } = await closureOf(object.tree);
     const size = closureSize(blocks);
     if (size > this.maxShareBytes) {
       throw new Error(`object is ${size} bytes of blocks; one share carries at most ${this.maxShareBytes}`);
     }
-    let card: string;
-    if (options.card === undefined) {
-      const anchor = this.vault.config.identity.anchor;
-      const identity = await this.vault.derive(this.seedKey, anchor.key);
-      card = await signRoot(anchor.did, root, identity.signer);
-    } else {
+    const body: ObjectShareBody = { root };
+    if (options.card !== undefined) {
+      if (options.sign) {
+        throw new Error("a share carries one card: either sign it or pass one on");
+      }
       const given = await verifyCard(options.card);
       if (given.root !== root) {
         throw new Error(`the card is about ${given.root}, not this object (${root})`);
       }
-      card = options.card;
+      body.card = options.card;
+    } else if (options.sign) {
+      const anchor = this.vault.config.identity.anchor;
+      const identity = await this.vault.derive(this.seedKey, anchor.key);
+      body.card = await signRoot(anchor.did, root, identity.signer);
     }
     for (const [cid, bytes] of blocks) {
       await this.vault.blobs.put(cid, bytes);
     }
-    return this.send(contactDid, OBJECT_SHARE, { card }, { attachments: attachmentsOf(blocks) });
+    return this.send(contactDid, OBJECT_SHARE, body as unknown as Record<string, unknown>, {
+      attachments: attachmentsOf(blocks),
+    });
   }
 
   /** Send a basicmessage/2.0; resolves to the appended log record. */

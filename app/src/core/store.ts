@@ -552,15 +552,19 @@ export async function send(
 }
 
 /**
- * An object, whole: object-share/1.0. Without `card` the anchor signs
- * it, with one (a signed object passed on) the card must be about this
- * very object.
+ * An object, whole: object-share/1.0. Plain, the share only hands the
+ * object over; `sign` makes it a signed object under the anchor; `card`
+ * (a signed object passed on) must be about this very object.
  */
-export async function shareObject(contactDid: string, object: FolderObject, card?: string): Promise<void> {
+export async function shareObject(
+  contactDid: string,
+  object: FolderObject,
+  options: { sign?: boolean; card?: string } = {}
+): Promise<void> {
   if (agent === null) {
     throw new Error("the agent is not running");
   }
-  await agent.shareObject(contactDid, object, card === undefined ? {} : { card });
+  await agent.shareObject(contactDid, object, options);
 }
 
 /** A line of chat: basicmessage/2.0. */

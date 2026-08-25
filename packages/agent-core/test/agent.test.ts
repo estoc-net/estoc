@@ -1250,8 +1250,9 @@ describe("Agent sharing objects", () => {
     const { alice, bob } = await connected();
     const { root, blocks } = await closureOf(files);
     expect(blocks.size).toBe(6); // three directory nodes, three raw files
-    const sent = await alice.agent.shareObject(bob.agent.did as string, object);
+    const sent = await alice.agent.shareObject(bob.agent.did as string, object, { sign: true });
     expect(sent.msg.type).toBe(OBJECT_SHARE);
+    expect((sent.msg.body as { root: string }).root).toBe(root);
     expect(sent.msg.attachments).toHaveLength(blocks.size);
     // the sender keeps the blocks too
     expect(await alice.vault.blobs.has(root)).toBe(true);
@@ -1274,7 +1275,45 @@ describe("Agent sharing objects", () => {
     expect(share.card).toEqual({ did: alice.vault.config.identity.anchor.did, root });
     expect(share.card.did).toMatch(/^did:key:/);
     expect(share.object.meta.name).toBe("Sea day");
-    expect(bob.log.some((l) => /post\/1.0 .* from .*: 3 files kept/.test(l))).toBe(true);
+    expect(bob.log.some((l) => /post\/1.0 .* from .* \(signed by did:key:.*\): 3 files kept/.test(l))).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("shares an object without a card: the envelope says who handed it over, nobody stands behind it", async () => {
+    const { alice, bob } = await connected();
+    const { root } = await closureOf(files);
+    const sent = await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(sent.msg.body).toEqual({ root });
+    await eventually(() => bob.vault.blobs.has(root), "bob's copy");
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    const share = await verifyShare(record.msg);
+    expect(share.card).toBeNull();
+    expect(share.root).toBe(root);
+    expect(share.object.meta.name).toBe("Sea day");
+    expect(bob.log.some((l) => /post\/1.0 .* from .* \(unsigned\): 3 files kept/.test(l))).toBe(true);
+    // one card per share: sign it or pass one on, not both
+    await expect(alice.agent.shareObject(bob.agent.did as string, object, { sign: true, card: "x.y.z" })).rejects.toThrow(
+      /one card/
+    );
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("does not keep a share whose card is about another root, or one with no root at all", async () => {
+    const { alice, bob } = await connected();
+    const { root, blocks } = await closureOf(files);
+    const other = await closureOf({ ...files, "files/body.dj": enc("edited") });
+    const anchor = alice.vault.config.identity.anchor;
+    const signer = (await alice.vault.derive(alice.seedKey, anchor.key)).signer;
+    const card = await signRoot(anchor.did, other.root, signer);
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root, card }, { attachments: attachmentsOf(blocks) });
+    await eventually(async () => bob.log.some((l) => /does not verify: the card is about/.test(l)), "bob's refusal");
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { card: await signRoot(anchor.did, root, signer) }, {
+      attachments: attachmentsOf(blocks),
+    });
+    await eventually(async () => bob.log.some((l) => /does not verify: object-share message has no root/.test(l)), "no root");
+    expect(await bob.vault.blobs.list()).toEqual([]);
     alice.agent.destroy();
     bob.agent.destroy();
   });
@@ -1285,7 +1324,7 @@ describe("Agent sharing objects", () => {
     await carol.agent.start();
     await withTimeout(carol.live, 8000, "carol live");
     const { root } = await closureOf(files);
-    await alice.agent.shareObject(bob.agent.did as string, object);
+    await alice.agent.shareObject(bob.agent.did as string, object, { sign: true });
     await eventually(() => bob.vault.blobs.has(root), "bob's copy");
     const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
     const card = (record.msg.body as { card: string }).card;
@@ -1294,7 +1333,7 @@ describe("Agent sharing objects", () => {
     await bob.agent.shareObject(carol.agent.did as string, object, { card });
     await eventually(() => carol.vault.blobs.has(root), "carol's copy");
     const carols = (await carol.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
-    expect((await verifyShare(carols.msg)).card.did).toBe(alice.vault.config.identity.anchor.did);
+    expect((await verifyShare(carols.msg)).card?.did).toBe(alice.vault.config.identity.anchor.did);
 
     await expect(
       bob.agent.shareObject(carol.agent.did as string, readObject({ ...files, "files/body.dj": enc("edited") }), { card })
@@ -1314,7 +1353,7 @@ describe("Agent sharing objects", () => {
         ? { ...a, data: { base64: attachmentsOf(new Map([[a.id, enc("# Forged\n")]]))[0]!.data.base64 } }
         : a
     );
-    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { card }, { attachments });
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root, card }, { attachments });
     await eventually(async () => bob.log.some((l) => /does not verify/.test(l)), "bob's refusal");
     expect(await bob.vault.blobs.list()).toEqual([]);
     expect((await bob.vault.messages.read()).some((r) => r.msg.type === OBJECT_SHARE)).toBe(true);
@@ -1326,9 +1365,7 @@ describe("Agent sharing objects", () => {
     const { alice, bob } = await connected();
     const notAnObject = { "readme.txt": enc("just a folder") };
     const { root, blocks } = await closureOf(notAnObject);
-    const anchor = alice.vault.config.identity.anchor;
-    const card = await signRoot(anchor.did, root, (await alice.vault.derive(alice.seedKey, anchor.key)).signer);
-    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { card }, { attachments: attachmentsOf(blocks) });
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root }, { attachments: attachmentsOf(blocks) });
     await eventually(async () => bob.log.some((l) => /does not verify: malformed object/.test(l)), "bob's refusal");
     expect(await bob.vault.blobs.list()).toEqual([]);
     alice.agent.destroy();

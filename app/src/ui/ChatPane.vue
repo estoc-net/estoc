@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
-import { readAny } from "@estoc/folder-object";
-import { unzipTree } from "@estoc/folder-object/zip";
+import { readAny, type FolderObject, type TreeFiles } from "@estoc/folder-object";
 
 import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, shareObject, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
@@ -127,24 +126,60 @@ async function send() {
   }
 }
 
-// An object goes over whole (object-share/1.0): a signed-object zip —
-// `object/…` plus its author's `card.jws` — is passed on under that card;
-// a bare object zip (index.json at the root) is ours, and the anchor
-// signs it.
+// An object goes over whole (object-share/1.0), picked as a folder. The
+// folder's own name is dropped; hidden entries (a `.`-prefixed name at
+// any depth) leave the tree, as folder-object's readTree has it. A signed
+// object — `object/…` plus its author's `card.jws` — goes at once, under
+// that card. A bare object (index.json at the root) waits for a choice:
+// as it is — handed over, nobody standing behind it — or under a card the
+// anchor signs, an object we stand behind.
 const objectInput = ref<HTMLInputElement | null>(null);
+const pendingObject = ref<{ name: string; object: FolderObject } | null>(null);
 
-async function shareFile(event: Event) {
+function mappingOf(files: FileList): Promise<TreeFiles> {
+  return Promise.all(
+    [...files].map(async (file) => {
+      const parts = (file.webkitRelativePath || file.name).split("/");
+      if (parts.length > 1) parts.shift();
+      const hidden = parts.some((p) => p.startsWith("."));
+      return [parts.join("/"), hidden ? null : new Uint8Array(await file.arrayBuffer())] as const;
+    })
+  ).then((entries) => Object.fromEntries(entries.filter(([, bytes]) => bytes !== null) as [string, Uint8Array][]));
+}
+
+async function pickObject(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (file === undefined || contact.value === null || sending.value) {
+  const files = input.files;
+  const name = files?.[0]?.webkitRelativePath.split("/")[0] ?? "";
+  if (files === null || files.length === 0 || contact.value === null || sending.value) {
+    input.value = "";
+    return;
+  }
+  sendError.value = "";
+  pendingObject.value = null;
+  try {
+    const { object, card } = readAny(await mappingOf(files));
+    if (card !== undefined) {
+      await sendObject(object, { card });
+    } else {
+      pendingObject.value = { name, object };
+    }
+  } catch (err) {
+    sendError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    input.value = "";
+  }
+}
+
+async function sendObject(object: FolderObject, options: { sign?: boolean; card?: string }) {
+  if (contact.value === null || sending.value) {
     return;
   }
   sending.value = true;
   sendError.value = "";
   try {
-    const { object, card } = readAny(unzipTree(new Uint8Array(await file.arrayBuffer())));
-    await shareObject(contact.value.did, object, card);
+    await shareObject(contact.value.did, object, options);
+    pendingObject.value = null;
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -294,6 +329,18 @@ onMounted(() => {
     </div>
 
     <p v-if="sendError" class="compose-error">{{ sendError }}</p>
+    <div v-if="pendingObject" class="composer share-choice">
+      <span class="share-name"><code>{{ pendingObject.name }}</code> — {{ pendingObject.object.meta.format }}, not signed</span>
+      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="plain" @click="sendObject(pendingObject.object, {})">
+        Send as is
+      </button>
+      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="sign" @click="sendObject(pendingObject.object, { sign: true })">
+        Sign &amp; send
+      </button>
+      <button class="btn btn-quiet" type="button" :disabled="sending" data-share-choice="cancel" @click="pendingObject = null">
+        Cancel
+      </button>
+    </div>
     <form v-if="contact" class="composer" @submit.prevent="send">
       <input
         v-model="draft"
@@ -307,13 +354,13 @@ onMounted(() => {
       <button
         class="btn btn-quiet"
         type="button"
-        title="share an object: a signed-object or object zip"
+        title="share an object: pick its folder"
         :disabled="sending"
         @click="objectInput?.click()"
       >
         Object…
       </button>
-      <input ref="objectInput" type="file" accept=".zip,application/zip" data-share="object" hidden @change="shareFile" />
+      <input ref="objectInput" type="file" webkitdirectory data-share="object" hidden @change="pickObject" />
     </form>
   </main>
 </template>

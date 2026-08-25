@@ -8,12 +8,14 @@ import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
 
 /**
- * object-share/1.0: an object handed over whole — a card and every block
- * of the tree, inline. The renderer re-runs the check the agent ran (card
- * under its own did:key, blocks reaching the root, the tree a well-formed
- * object) and projects what verified: a post/1.0 object as its title and
- * body, any other format as its files. A share that does not verify is
- * shown as exactly that.
+ * object-share/1.0: an object handed over whole — its root and every
+ * block of the tree, inline, and a card when someone stands behind it.
+ * The renderer re-runs the check the agent ran (blocks reaching the
+ * root, the tree a well-formed object, the card if any under its own
+ * did:key and about this root) and projects what verified: a post/1.0
+ * object as its title and body, any other format as its files, signed
+ * by whom or by nobody. A share that does not verify is shown as exactly
+ * that.
  *
  * The body is someone else's text rendered to HTML by our own djot
  * renderer (raw HTML stripped), and still goes into a sandboxed frame:
@@ -24,8 +26,8 @@ const props = defineProps<{ entry: Entry; contact: Contact | null }>();
 type View =
   | { state: "checking" }
   | { state: "bad"; reason: string }
-  | { state: "post"; did: string; root: string; title: string; summary: string; html: string; files: number }
-  | { state: "files"; did: string; root: string; files: { path: string; size: number }[] };
+  | { state: "post"; did: string | null; root: string; title: string; summary: string; html: string; files: number }
+  | { state: "files"; did: string | null; root: string; files: { path: string; size: number }[] };
 
 const view = ref<View>({ state: "checking" });
 
@@ -63,8 +65,8 @@ onMounted(async () => {
     view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
     return;
   }
-  const { did, root } = share.card;
-  const { object } = share;
+  const { root, object } = share;
+  const did = share.card?.did ?? null;
   const files = object.tree;
   if (object.meta.format !== POST_FORMAT) {
     const listing = Object.entries(files)
@@ -110,9 +112,10 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
         <ul v-else class="object-files">
           <li v-for="f in view.files" :key="f.path"><code>{{ f.path }}</code> <span>{{ f.size }} B</span></li>
         </ul>
-        <p class="object-meta" :title="`${view.did}\n${view.root}`">
+        <p v-if="view.did !== null" class="object-meta" :title="`${view.did}\n${view.root}`">
           signed by <code>{{ shortDid(view.did) }}</code>
         </p>
+        <p v-else class="object-meta" :title="view.root">not signed</p>
       </template>
     </div>
   </Bubble>

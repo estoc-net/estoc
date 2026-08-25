@@ -22,8 +22,6 @@ import { copyFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { zipSync } from "fflate";
 import { fileURLToPath } from "node:url";
 
 const APP_URL = process.argv[2] ?? "http://localhost:4173";
@@ -149,30 +147,26 @@ try {
   await expectBubble(alice, "introduced themself as “Bob”");
   ok("profiles exchanged both ways; Bob's stranger contact took Alice's claimed name");
 
-  // An object goes over whole: Alice shares the sea-day example as a bare
-  // object zip (her anchor signs it), and both threads project the post —
-  // Bob's after re-verifying card and tree on his side.
+  // An object goes over whole: Alice picks the sea-day example folder — a
+  // bare object, so the app asks — first sends it as it is (not signed),
+  // then again signed by her anchor; both threads project the post, Bob's
+  // after re-verifying tree and card on his side.
   const seaDay = fileURLToPath(new URL("../../../folder-object/examples/sea-day/", import.meta.url));
-  const zipEntries = {};
-  const collect = (dir, prefix) => {
-    for (const name of readdirSync(dir)) {
-      const full = join(dir, name);
-      if (statSync(full).isDirectory()) collect(full, `${prefix}${name}/`);
-      else zipEntries[`${prefix}${name}`] = readFileSync(full);
-    }
-  };
-  collect(seaDay, "");
-  await alice.setInputFiles('input[data-share="object"]', {
-    name: "sea-day.zip",
-    mimeType: "application/zip",
-    buffer: Buffer.from(zipSync(zipEntries)),
-  });
+  await alice.setInputFiles('input[data-share="object"]', seaDay);
+  await alice.waitForSelector('.share-name:has-text("post/1.0, not signed")', { timeout: 15000 });
+  await alice.click('[data-share-choice="plain"]');
   await alice.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  await alice.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
-  ok("Alice's shared object shows in her thread, signed by her anchor");
+  await alice.waitForSelector('.object-meta:has-text("not signed")', { timeout: 15000 });
+  ok("Alice picked an object folder and sent it as it is: in her thread, not signed");
   await bob.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
-  await bob.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
+  await bob.waitForSelector('.object-meta:has-text("not signed")', { timeout: 15000 });
   ok("Bob received the object whole and it verifies on his side");
+  await alice.setInputFiles('input[data-share="object"]', seaDay);
+  await alice.click('[data-share-choice="sign"]');
+  await alice.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
+  ok("Alice picked it again and signed it: in her thread, signed by her anchor");
+  await bob.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
+  ok("Bob received the signed object and its card verifies on his side");
 
   // Pairwise: each side writes from a DID minted for the other alone. The
   // chat head says which; it is not the public DID on the rail.

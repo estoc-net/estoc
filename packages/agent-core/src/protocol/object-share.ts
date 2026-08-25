@@ -16,20 +16,22 @@ import type { ProtocolHandler } from "./handler.js";
 
 /**
  * object-share/1.0 (`docs/object-share.md`): hand a contact a whole
- * object — a folder-object hashed into a UnixFS tree and vouched for by
- * a card. One message carries the closure: the card in the body, every
- * block as an attachment named by its CID. Nothing is fetched, nothing
- * is asked back; the receiver either holds the entire object once the
- * message is read or holds none of it.
+ * object — a folder-object hashed into a UnixFS tree. One message
+ * carries the closure: the root in the body, every block as an
+ * attachment named by its CID. Nothing is fetched, nothing is asked
+ * back; the receiver either holds the entire object once the message is
+ * read or holds none of it.
  *
- * The card is testimony about the object, not about the message: its
- * `did` is whoever signed — the sender's own anchor for something they
- * made, or the original author's when the sender passes a signed object
- * on. The envelope proves who sent; the card proves who stands behind
- * the object. And a card means one thing — its did stands behind the
- * object as the object's own format defines it — so what it signs must
- * *be* an object: a share whose tree is not a well-formed folder-object
- * does not verify, however good its hashes.
+ * What is shared is an object — a tree that declares what it is
+ * (`index.json`); a well-hashed tree that is not one does not verify,
+ * however good its hashes. A share may carry a card, and then it is a
+ * signed object: the card is testimony about the object, not about the
+ * message. Its `did` is whoever signed — the sender's own anchor for
+ * something they stand behind, or the original author's when the sender
+ * passes a signed object on. The envelope proves who sent; the card,
+ * when there is one, proves who stands behind the object. Without a
+ * card the share says only what the envelope says: this contact handed
+ * me this object.
  */
 export const OBJECT_SHARE = "https://estoc.dev/object-share/1.0/share";
 
@@ -41,8 +43,10 @@ export const RAW_MEDIA_TYPE = "application/vnd.ipld.raw";
 export const DEFAULT_MAX_SHARE_BYTES = 1024 * 1024;
 
 export interface ObjectShareBody {
-  /** compact JWS over `{did, root}` — folder-object's card */
-  card: string;
+  /** CID of the object's root directory node: the name of the tree the attachments make */
+  root: string;
+  /** compact JWS over `{did, root}` — folder-object's card; present, the share is a signed object */
+  card?: string;
 }
 
 /**
@@ -64,9 +68,11 @@ export interface Closure {
   blocks: Map<string, Uint8Array>;
 }
 
-/** What a verified share yields: whose object, which root, the object itself, and the blocks. */
+/** What a verified share yields: the root, who (if anyone) stands behind it, the object itself, and the blocks. */
 export interface VerifiedShare {
-  card: ObjectCard;
+  root: string;
+  /** the verified card, or null for an object shared without one */
+  card: ObjectCard | null;
   tree: VerifiedTree;
   /** The object read out of the verified tree (`index.json` + `files/…`). */
   object: FolderObject;
@@ -134,25 +140,36 @@ export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {
 }
 
 /**
- * Check a share message end to end: the card verifies under its own
- * did:key, the blocks carried reach every path under the card's root
- * with matching hashes, and the tree they make is a well-formed
- * folder-object. Throws naming the first thing wrong.
+ * Check a share message end to end: the blocks carried reach every path
+ * under `body.root` with matching hashes, the tree they make is a
+ * well-formed folder-object, and the card, if there is one, verifies
+ * under its own did:key and is about this very root. Throws naming the
+ * first thing wrong.
  */
 export async function verifyShare(msg: PlainMessage): Promise<VerifiedShare> {
   const body = msg.body as Partial<ObjectShareBody>;
-  if (typeof body.card !== "string") {
-    throw new Error("object-share message has no card");
+  if (typeof body.root !== "string") {
+    throw new Error("object-share message has no root");
   }
-  const card = await verifyCard(body.card);
+  const root = body.root;
+  let card: ObjectCard | null = null;
+  if (body.card !== undefined) {
+    if (typeof body.card !== "string") {
+      throw new Error("object-share card is not a JWS");
+    }
+    card = await verifyCard(body.card);
+    if (card.root !== root) {
+      throw new Error(`the card is about ${card.root}, not the object shared (${root})`);
+    }
+  }
   const blocks = blocksOf(msg);
-  const tree = await verifyTree(card.root, blocks);
+  const tree = await verifyTree(root, blocks);
   const files: TreeFiles = {};
   const getBlock = (cid: string) => Promise.resolve(blocks.get(cid) ?? null);
   for (const path of tree.files.keys()) {
-    files[path] = (await resolvePath(card.root, path, getBlock)).bytes;
+    files[path] = (await resolvePath(root, path, getBlock)).bytes;
   }
-  return { card, tree, object: readObject(files), blocks };
+  return { root, card, tree, object: readObject(files), blocks };
 }
 
 /**
@@ -175,9 +192,8 @@ export const objectShareHandler: ProtocolHandler = {
     for (const [cid, bytes] of share.blocks) {
       await agent.vault.blobs.put(cid, bytes);
     }
-    agent.log(
-      `${share.object.meta.format} ${share.card.root} from ${contact.name} (signed by ${share.card.did}): ${share.tree.files.size} files kept`
-    );
+    const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
+    agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${share.tree.files.size} files kept`);
   },
 };
 

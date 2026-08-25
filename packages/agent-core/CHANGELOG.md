@@ -5,21 +5,26 @@
 Objects between people: `docs/object-share.md`.
 
 - **object-share/1.0** (`https://estoc.dev/object-share/1.0/share`): one
-  message carries a whole folder-object closure — the card (JWS over
-  `{did, root}`, `@estoc/folder-object`) in `body.card`, every UnixFS
-  block as an attachment whose `id` is its CID (`data.base64`,
-  `media_type` dag-pb/raw, `byte_count`). Nothing is fetched or asked back.
-- `Agent.shareObject(contactDid, object, {card?})`: hashes the object's
-  canonical tree, keeps the blocks in our own `blobs/`, signs the card
-  with the anchor (did:key) or checks a given card names this root
-  (passing a signed object on under its author's card), and sends.
-  Refuses closures over `maxShareBytes` (option; default 1 MiB).
-- Built-in `objectShareHandler`: a share that verifies (card under its own
-  did:key, blocks reaching every path under the root, **and the tree a
-  well-formed folder-object** — a card means "stands behind this object",
-  so what it signs must be one) has its blocks put in `blobs/<cid>`; one
-  that does not is logged as it arrived and noted. `verifyShare` returns
-  the `object` it read.
+  message carries a whole folder-object closure — the root CID in
+  `body.root`, every UnixFS block as an attachment whose `id` is its CID
+  (`data.base64`, `media_type` dag-pb/raw, `byte_count`), and, for a
+  signed object, the card (JWS over `{did, root}`, `@estoc/folder-object`)
+  in `body.card`, which must be about `body.root`. Nothing is fetched or
+  asked back. An object and a signed object are the two things a share
+  can be: handing over and standing behind are separate acts.
+- `Agent.shareObject(contactDid, object, {sign?, card?})`: hashes the
+  object's canonical tree, keeps the blocks in our own `blobs/`, and
+  sends — plain by default; with `sign`, under a card the anchor
+  (did:key) signs; with `card`, after checking the given card names this
+  root (passing a signed object on under its author's card). Refuses
+  closures over `maxShareBytes` (option; default 1 MiB).
+- Built-in `objectShareHandler`: a share that verifies (blocks reaching
+  every path under the root, **the tree a well-formed folder-object** — a
+  tree that does not say what it is has no interpretation — and the card,
+  if any, under its own did:key and about this root) has its blocks put
+  in `blobs/<cid>`; one that does not is logged as it arrived and noted.
+  `verifyShare` returns the `root`, the `card` (or null) and the `object`
+  it read.
 - `Vault.blobs` (`BlobStore`): `blobs/<cid>` as `docs/vault-format.md` §6.8
   reserved it — immutable, put-if-absent, merged by union.
 - Pure helpers exported for applications: `closureOf`, `attachmentsOf`,
