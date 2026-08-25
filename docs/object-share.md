@@ -43,7 +43,7 @@ whatever blocks fit inline, and no protocol field changes.
 ```
 
 - **`body.card`** — the object's card: `@estoc/folder-object`'s compact
-  JWS (`typ: estoc/object-card`, EdDSA) over `{did, root}`; `did` is a
+  JWS (`typ: estoc/object-card`, EdDSA) over exactly `{did, root}`; `did` is a
   `did:key`, `kid` its one verification method. The body carries nothing
   else: whatever the object says about itself is in the tree
   (`index.json`), and saying it twice makes two truths.

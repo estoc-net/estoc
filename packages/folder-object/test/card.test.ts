@@ -38,6 +38,15 @@ describe("object card", () => {
     await expect(verifyCard(`${h}.${p}.${sig}`)).rejects.toThrow(/does not belong/);
   });
 
+  it("rejects a card with any member beyond {did, root}", async () => {
+    const s = await signer();
+    const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) }));
+    const p = b64(JSON.stringify({ did: s.did(), root: ROOT, iat: 1 }));
+    const sig = await s.sign(new TextEncoder().encode(`${h}.${p}`));
+    const b64bytes = btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    await expect(verifyCard(`${h}.${p}.${b64bytes}`)).rejects.toThrow(/exactly/);
+  });
+
   it("rejects a JWS without the object-card typ", async () => {
     const s = await signer();
     const [, p, sig] = (await signRoot(s.did(), ROOT, s)).split(".") as [string, string, string];

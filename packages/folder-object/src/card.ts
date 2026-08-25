@@ -64,6 +64,7 @@ export async function verifyCard(jws: string): Promise<ObjectCard> {
   }
   const { did, root } = (payload ?? {}) as Record<string, unknown>;
   if (typeof did !== "string" || typeof root !== "string") throw new Error("malformed card");
+  if (Object.keys(payload as object).length !== 2) throw new Error("a card says exactly {did, root}");
   if (!did.startsWith("did:key:") || didKeyKid(did) !== header.kid) {
     throw new Error("the card's kid does not belong to the card's did");
   }

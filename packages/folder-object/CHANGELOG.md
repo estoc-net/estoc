@@ -8,7 +8,9 @@ all) moves in here unchanged, and its half of the card joins the other
 half, so the card has one home and one meaning.
 
 - **Breaking:** the card is a JWS with `typ: estoc/object-card`; a card
-  without it does not verify. `signRoot(did, root, signer)` /
+  without it does not verify. Its payload is exactly `{did, root}`; any
+  other member makes it malformed (a card is closed testimony — new
+  meaning is a new `typ`, not a new field). `signRoot(did, root, signer)` /
   `verifyCard(jws)` replace signed-dir's `createCard`/`verifyCard` — the
   did:key rule (payload `did` is a did:key, `kid` its one method) is now
   the card's, not the caller's. `RootCard` is `ObjectCard`.
