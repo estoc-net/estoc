@@ -17,9 +17,15 @@ importers:
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../packages/agent-core
+      '@estoc/folder-object':
+        specifier: workspace:^
+        version: link:../packages/folder-object
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../packages/keystore
+      '@estoc/signed-dir':
+        specifier: workspace:^
+        version: link:../packages/signed-dir
       didcomm:
         specifier: ^0.4.1
         version: 0.4.1
@@ -63,6 +69,9 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@estoc/signed-dir':
+        specifier: workspace:^
+        version: link:../signed-dir
       bs58:
         specifier: ^6.0.0
         version: 6.0.0

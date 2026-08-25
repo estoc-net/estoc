@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createSeedKeystore, addDerivedKey } from "@estoc/keystore";
+import { readTree } from "../src/fs.js";
 import {
-  readTree,
   readObject,
   hashObject,
   signObject,

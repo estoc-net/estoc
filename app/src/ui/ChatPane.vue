@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
-import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, state } from "../core/store.js";
+import { readBundle, unzipMapping } from "@estoc/folder-object";
+
+import { acceptInvitation, addContactFrom, dismissPendingInvitation, sendMessage, shareObject, state } from "../core/store.js";
 import type { Identity } from "../core/types.js";
 import { rendererFor, showsInThread } from "../renderers/index.js";
 import { shortDid } from "./util.js";
@@ -116,6 +118,31 @@ async function send() {
   try {
     await sendMessage(contact.value.did, text);
     draft.value = "";
+    void toFoot();
+  } catch (err) {
+    sendError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    sending.value = false;
+  }
+}
+
+// An object goes over whole (object-share/1.0): a bundle zip — `object/…`
+// plus its author's `card.jws` — is passed on under that card; a bare
+// object zip (index.json at the root) is ours, and the anchor signs it.
+const objectInput = ref<HTMLInputElement | null>(null);
+
+async function shareFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (file === undefined || contact.value === null || sending.value) {
+    return;
+  }
+  sending.value = true;
+  sendError.value = "";
+  try {
+    const bundle = readBundle(unzipMapping(new Uint8Array(await file.arrayBuffer())));
+    await shareObject(contact.value.did, bundle.object.tree, bundle.card);
     void toFoot();
   } catch (err) {
     sendError.value = err instanceof Error ? err.message : String(err);
@@ -275,6 +302,16 @@ onMounted(() => {
       <button class="btn" type="submit" :disabled="sending || draft.trim() === ''">
         {{ sending ? "Sealing…" : "Send" }}
       </button>
+      <button
+        class="btn btn-quiet"
+        type="button"
+        title="share an object: a bundle or object zip"
+        :disabled="sending"
+        @click="objectInput?.click()"
+      >
+        Object…
+      </button>
+      <input ref="objectInput" type="file" accept=".zip,application/zip" data-share="object" hidden @change="shareFile" />
     </form>
   </main>
 </template>

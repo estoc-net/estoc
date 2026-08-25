@@ -13,6 +13,7 @@ import { v7 as uuidv7 } from "uuid";
 import type { VaultBackend } from "../backend/types.js";
 import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
 import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
+import { BlobStore } from "./blobs.js";
 import { ContactStore, currentMyDid, type ContactRecord } from "./contacts.js";
 import { InvitationStore, type InvitationRecord } from "./invitations.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
@@ -81,6 +82,7 @@ export class Vault {
   readonly invitations: InvitationStore;
   readonly messages: MessageLog;
   readonly deliveries: DeliveryLog;
+  readonly blobs: BlobStore;
 
   private constructor(
     private readonly backend: VaultBackend,
@@ -91,6 +93,7 @@ export class Vault {
     this.invitations = new InvitationStore(backend);
     this.messages = new MessageLog(backend);
     this.deliveries = new DeliveryLog(backend);
+    this.blobs = new BlobStore(backend);
   }
 
   /** Is there a vault (a config.json) at this backend's root? */

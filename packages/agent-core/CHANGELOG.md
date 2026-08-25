@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.14.0 — 2026-08-24
+
+Objects between people: `docs/object-share.md`.
+
+- **object-share/1.0** (`https://estoc.dev/object-share/1.0/share`): one
+  message carries a whole folder-object closure — the root card (JWS over
+  `{did, root}`, `@estoc/signed-dir`) in `body.card`, every UnixFS block as
+  an attachment whose `id` is its CID (`data.base64`, `media_type`
+  dag-pb/raw, `byte_count`). Nothing is fetched or asked back.
+- `Agent.shareObject(contactDid, files, {card?})`: hashes the tree, keeps
+  the blocks in our own `blobs/`, signs the card with the anchor (did:key)
+  or checks a given card names this root (passing a bundle on under its
+  author's card), and sends. Refuses closures over `maxShareBytes`
+  (option; default 1 MiB).
+- Built-in `objectShareHandler`: a share that verifies (card under its own
+  did:key, blocks reaching every path under the root) has its blocks put
+  in `blobs/<cid>`; one that does not is logged as it arrived and noted.
+- `Vault.blobs` (`BlobStore`): `blobs/<cid>` as `docs/vault-format.md` §6.8
+  reserved it — immutable, put-if-absent, merged by union.
+- Pure helpers exported for applications: `closureOf`, `attachmentsOf`,
+  `blocksOf`, `verifyShare`, `signCard`, `verifyDidKeyCard`.
+- Depends on `@estoc/signed-dir`.
+
 ## 0.13.0 — 2026-08-17
 
 The vault now matches `docs/vault-format.md` (the format contract at the

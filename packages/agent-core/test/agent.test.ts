@@ -2,11 +2,18 @@ import { describe, expect, it } from "vitest";
 import { FromPrior, Message } from "didcomm-node";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
+import { verifyTree } from "@estoc/signed-dir";
 
 import {
   Agent,
   BASIC_MESSAGE,
   ENCRYPTED_MIME,
+  OBJECT_SHARE,
+  RAW_MEDIA_TYPE,
+  attachmentsOf,
+  closureOf,
+  signCard,
+  verifyShare,
   FORWARD,
   KEY_INVITE_PREFIX,
   KEY_PAIRWISE_PREFIX,
@@ -1207,6 +1214,133 @@ describe("Agent under hostile mail", () => {
     const chats = (await history(bob.agent)).filter((v) => v.kind === "chat").map((v) => v.content);
     expect(chats.sort()).toEqual([...texts].sort());
     alice.agent.destroy();
+    bob.agent.destroy();
+  });
+});
+
+describe("Agent sharing objects", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  const files = {
+    "index.json": enc(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000", name: "Sea day" })),
+    "files/body.dj": enc("# Sea day\n\nWaves.\n"),
+    "files/images/dot.png": new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]),
+  };
+
+  async function eventually(cond: () => Promise<boolean>, what: string): Promise<void> {
+    await withTimeout(
+      (async () => {
+        while (!(await cond())) await new Promise((r) => setTimeout(r, 5));
+      })(),
+      8000,
+      what
+    );
+  }
+
+  async function connected(): Promise<{ mediator: FakeMediator; alice: Party; bob: Party }> {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 1, mediator);
+    const bob = await newParty("Bob", 2, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]), 8000, "both live");
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    return { mediator, alice, bob };
+  }
+
+  it("hands a contact a whole tree in one message, signed by the anchor, kept block by block", async () => {
+    const { alice, bob } = await connected();
+    const { root, blocks } = await closureOf(files);
+    expect(blocks.size).toBe(6); // three directory nodes, three raw files
+    const sent = await alice.agent.shareObject(bob.agent.did as string, files);
+    expect(sent.msg.type).toBe(OBJECT_SHARE);
+    expect(sent.msg.attachments).toHaveLength(blocks.size);
+    // the sender keeps the blocks too
+    expect(await alice.vault.blobs.has(root)).toBe(true);
+
+    await eventually(() => bob.vault.blobs.has(root), "bob's copy");
+    for (const cid of blocks.keys()) {
+      expect(await bob.vault.blobs.has(cid)).toBe(true);
+    }
+    const fromBlobs = new Map<string, Uint8Array>();
+    for (const cid of await bob.vault.blobs.list()) {
+      fromBlobs.set(cid, (await bob.vault.blobs.get(cid)) as Uint8Array);
+    }
+    const tree = await verifyTree(root, fromBlobs);
+    expect([...tree.files.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png", "index.json"]);
+
+    // the record is in Bob's log, and its card names Alice's anchor — not
+    // the pairwise DID the envelope came from
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    const share = await verifyShare(record.msg);
+    expect(share.card).toEqual({ did: alice.vault.config.identity.anchor.did, root });
+    expect(share.card.did).toMatch(/^did:key:/);
+    expect(bob.log.some((l) => /object .* from .*: 3 files kept/.test(l))).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("passes a bundle on under its author's card, and refuses a card about another tree", async () => {
+    const { mediator, alice, bob } = await connected();
+    const carol = await newParty("Carol", 3, mediator);
+    await carol.agent.start();
+    await withTimeout(carol.live, 8000, "carol live");
+    const { root } = await closureOf(files);
+    await alice.agent.shareObject(bob.agent.did as string, files);
+    await eventually(() => bob.vault.blobs.has(root), "bob's copy");
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    const card = (record.msg.body as { card: string }).card;
+
+    await bob.agent.addContact(carol.agent.did as string, "Carol");
+    await bob.agent.shareObject(carol.agent.did as string, files, { card });
+    await eventually(() => carol.vault.blobs.has(root), "carol's copy");
+    const carols = (await carol.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    expect((await verifyShare(carols.msg)).card.did).toBe(alice.vault.config.identity.anchor.did);
+
+    await expect(
+      bob.agent.shareObject(carol.agent.did as string, { ...files, "files/body.dj": enc("edited") }, { card })
+    ).rejects.toThrow(/not this tree/);
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("logs but does not keep a share whose blocks do not match its card", async () => {
+    const { alice, bob } = await connected();
+    const { root, blocks } = await closureOf(files);
+    const anchor = alice.vault.config.identity.anchor;
+    const card = await signCard(anchor.did, root, (await alice.vault.derive(alice.seedKey, anchor.key)).signer);
+    const attachments = attachmentsOf(blocks).map((a) =>
+      a.media_type === RAW_MEDIA_TYPE && a.byte_count === files["files/body.dj"].length
+        ? { ...a, data: { base64: attachmentsOf(new Map([[a.id, enc("# Forged\n")]]))[0]!.data.base64 } }
+        : a
+    );
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { card }, { attachments });
+    await eventually(async () => bob.log.some((l) => /does not verify/.test(l)), "bob's refusal");
+    expect(await bob.vault.blobs.list()).toEqual([]);
+    expect((await bob.vault.messages.read()).some((r) => r.msg.type === OBJECT_SHARE)).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("refuses to share more than one message should carry", async () => {
+    const mediator = await newMediator();
+    const { backend, vault, seedKey } = await newVault("Alice", 1, mediator.did);
+    const alice = attach("Alice", backend, vault, seedKey, mediator);
+    const bob = await newParty("Bob", 2, mediator);
+    alice.agent.destroy();
+    const small = new Agent({
+      vault,
+      seedKey,
+      didcomm,
+      resolveDid: resolveDIDCommDoc,
+      fetch: mediator.fetch,
+      WebSocket: mediator.WebSocket,
+      maxShareBytes: 16,
+    });
+    await Promise.all([small.start(), bob.agent.start()]);
+    await withTimeout(bob.live, 8000, "bob live");
+    await until(() => small.did !== null);
+    await expect(small.shareObject(bob.agent.did as string, files)).rejects.toThrow(/at most 16/);
+    small.destroy();
     bob.agent.destroy();
   });
 });

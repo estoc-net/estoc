@@ -1,5 +1,6 @@
 import {
   BASIC_MESSAGE,
+  OBJECT_SHARE,
   PROFILE,
   REQUEST_PROFILE,
   TRUST_PING,
@@ -8,6 +9,7 @@ import {
 
 import BasicMessage from "./BasicMessage.vue";
 import Generic from "./Generic.vue";
+import ObjectShare from "./ObjectShare.vue";
 import Profile from "./Profile.vue";
 import { registerFallback, registerRenderer } from "./registry.js";
 
@@ -20,6 +22,7 @@ export { registerRenderer, rendererFor, showsInThread, type MessageRenderer } fr
  */
 registerRenderer({ types: [BASIC_MESSAGE], component: BasicMessage });
 registerRenderer({ types: [PROFILE], component: Profile });
+registerRenderer({ types: [OBJECT_SHARE], component: ObjectShare });
 // Heartbeats and profile requests are protocol plumbing: logged, not a
 // line in the conversation. Anything nobody registered is the opposite —
 // unknown, so shown, so it is not silently swallowed.

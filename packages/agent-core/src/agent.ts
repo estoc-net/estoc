@@ -32,6 +32,17 @@ import type { HandlerContext, ProtocolHandler, SendOptions } from "./protocol/ha
 import { BASIC_MESSAGE, basicmessageHandler } from "./protocol/basicmessage.js";
 import { userProfileHandler } from "./protocol/user-profile.js";
 import {
+  DEFAULT_MAX_SHARE_BYTES,
+  OBJECT_SHARE,
+  attachmentsOf,
+  closureOf,
+  closureSize,
+  objectShareHandler,
+  signCard,
+  verifyDidKeyCard,
+} from "./protocol/object-share.js";
+import type { TreeFiles } from "@estoc/signed-dir";
+import {
   currentDid,
   currentMyDid,
   didPlaceholder,
@@ -154,6 +165,11 @@ export interface AgentOptions {
    * replaces the built-in for that type.
    */
   handlers?: ProtocolHandler[];
+  /**
+   * The most block bytes `shareObject` will put in one message; default
+   * 1 MiB. Bigger objects wait for another road (see docs/object-share.md).
+   */
+  maxShareBytes?: number;
 }
 
 interface DeliveryAttachment {
@@ -192,6 +208,7 @@ export class Agent {
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
   private readonly deliveryTimeoutMs: number;
+  private readonly maxShareBytes: number;
   private readonly didResolver: { resolve: (did: string) => Promise<DIDDoc | null> };
   /** application-protocol handlers by message type */
   private readonly handlers = new Map<string, ProtocolHandler>();
@@ -244,8 +261,9 @@ export class Agent {
     this.displayName = options.displayName ?? (() => this.vault.config.label);
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
     this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 15_000;
+    this.maxShareBytes = options.maxShareBytes ?? DEFAULT_MAX_SHARE_BYTES;
     this.didResolver = { resolve: (did) => this.resolveDid(did) };
-    for (const handler of [basicmessageHandler, userProfileHandler, ...(options.handlers ?? [])]) {
+    for (const handler of [basicmessageHandler, userProfileHandler, objectShareHandler, ...(options.handlers ?? [])]) {
       for (const type of handler.types) {
         this.handlers.set(type, handler);
       }
@@ -1585,6 +1603,43 @@ export class Agent {
         await handler.introduce(contact, this.handlerContext);
       }
     }
+  }
+
+  /**
+   * Share an object (`docs/object-share.md`): hash `files` into a UnixFS
+   * tree, put its blocks in our own `blobs/`, and send the whole closure
+   * in one object-share/1.0 message — the root card in the body, one
+   * attachment per block. Without `card` the tree is ours and the anchor
+   * signs it; with one (passing on a bundle someone else signed) the card
+   * must verify and name this very root. Throws before sending when the
+   * closure is bigger than `maxShareBytes`.
+   */
+  async shareObject(
+    contactDid: string,
+    files: TreeFiles,
+    options: { card?: string } = {}
+  ): Promise<MessageRecord> {
+    const { root, blocks } = await closureOf(files);
+    const size = closureSize(blocks);
+    if (size > this.maxShareBytes) {
+      throw new Error(`object is ${size} bytes of blocks; one share carries at most ${this.maxShareBytes}`);
+    }
+    let card: string;
+    if (options.card === undefined) {
+      const anchor = this.vault.config.identity.anchor;
+      const identity = await this.vault.derive(this.seedKey, anchor.key);
+      card = await signCard(anchor.did, root, identity.signer);
+    } else {
+      const given = await verifyDidKeyCard(options.card);
+      if (given.root !== root) {
+        throw new Error(`the card is about ${given.root}, not this tree (${root})`);
+      }
+      card = options.card;
+    }
+    for (const [cid, bytes] of blocks) {
+      await this.vault.blobs.put(cid, bytes);
+    }
+    return this.send(contactDid, OBJECT_SHARE, { card }, { attachments: attachmentsOf(blocks) });
   }
 
   /** Send a basicmessage/2.0; resolves to the appended log record. */

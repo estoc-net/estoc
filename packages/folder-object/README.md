@@ -29,7 +29,8 @@ The passphrase comes from `ESTOC_PASSPHRASE` or a no-echo prompt. Templates use 
 ## API
 
 ```ts
-import { readTree, readObject, hashObject, signObject, verifyObjectCard, zipBundle, readBundle, renderPost } from "@estoc/folder-object";
+import { readObject, hashObject, signObject, verifyObjectCard, zipBundle, readBundle, renderPost } from "@estoc/folder-object";
+import { readTree } from "@estoc/folder-object/fs";
 
 const object = readObject(await readTree("posts/hello/bundle/object"));
 const root = await hashObject(object);                 // bafybei…
@@ -39,4 +40,4 @@ const zip = zipBundle(object, jws);
 const { bodyHtml, title } = renderPost(object, { assetBase: "bundle/object" });
 ```
 
-Everything but `readTree`/`writeTree` is pure: no IO, no network, no policy.
+Everything on the main entry is pure: no IO, no network, no policy — it runs in a browser. `readTree`/`writeTree` (Node `fs`) live on the `@estoc/folder-object/fs` subpath.

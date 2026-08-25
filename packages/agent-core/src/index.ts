@@ -109,6 +109,26 @@ export {
   type IMessage,
 } from "./protocol/didcomm.js";
 export { resolveDid } from "./protocol/resolver.js";
+export {
+  OBJECT_SHARE,
+  DAG_PB_MEDIA_TYPE,
+  RAW_MEDIA_TYPE,
+  DEFAULT_MAX_SHARE_BYTES,
+  closureOf,
+  closureSize,
+  attachmentsOf,
+  blocksOf,
+  didKeyKid,
+  signCard,
+  verifyDidKeyCard,
+  verifyShare,
+  objectShareHandler,
+  type ObjectShareBody,
+  type BlockAttachment,
+  type Closure,
+  type VerifiedShare,
+} from "./protocol/object-share.js";
+export { BlobStore } from "./vault/blobs.js";
 export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
 export {
   GOAL_CONNECT,

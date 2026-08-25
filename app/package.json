@@ -16,7 +16,9 @@
   },
   "dependencies": {
     "@estoc/agent-core": "workspace:^",
+    "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
+    "@estoc/signed-dir": "workspace:^",
     "didcomm": "^0.4.1",
     "fflate": "^0.8.2",
     "qrcode-generator": "^2.0.4",

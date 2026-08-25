@@ -1,6 +1,6 @@
 {
   "name": "@estoc/folder-object",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reference implementation of the folder-object format: read and validate an object tree, hash it (UnixFS root CID via @estoc/signed-dir), sign and verify bundle cards, zip bundles, and render post/1.0 objects to HTML.",
   "license": "Apache-2.0",
   "author": "merely",
@@ -17,6 +17,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./fs": {
+      "types": "./dist/fs.d.ts",
+      "default": "./dist/fs.js"
     }
   },
   "files": [
