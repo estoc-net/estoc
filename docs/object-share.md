@@ -110,9 +110,8 @@ which is not the pairwise DID. They differ on purpose:
   is the identity a contact is meant to know; anyone who does not want
   that from a given contact does not share objects with them.
 
-A card is testimony about a fact and carries no time. Which of two
-trees is *current* is the tree's own business (`index.json`'s `id` and
-`updated`), never the card's.
+Which of two trees is *current* is the tree's own business
+(`index.json`'s `id` and `updated`), never the card's.
 
 A card also means exactly one thing — *this DID stands behind this
 object* — and what standing behind a given object amounts to is defined
