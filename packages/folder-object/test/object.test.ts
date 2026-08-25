@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, mkdir, writeFile, symlink, cp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createSeedKeystore, addDerivedKey } from "@estoc/keystore";
 import { readTree } from "../src/fs.js";
 import {
@@ -32,6 +35,31 @@ describe("object", () => {
     const root = await hashObject(object);
     expect(root).toMatch(/^bafybei/);
     expect(await hashObject(readObject(await readTree(seaDay)))).toBe(root);
+  });
+
+  it("hidden entries never enter the tree, on disk or in a mapping", async () => {
+    const root = await hashObject(readObject(await readTree(seaDay)));
+    const mapping = await readTree(seaDay);
+    mapping["files/.DS_Store"] = enc("junk");
+    mapping["files/images/.thumbs/sunset.png"] = enc("junk");
+    expect(await hashObject(readObject(mapping))).toBe(root);
+
+    const dir = await mkdtemp(join(tmpdir(), "fo-"));
+    await cp(seaDay, dir, { recursive: true });
+    await writeFile(join(dir, "files", ".DS_Store"), "junk");
+    await mkdir(join(dir, ".git"));
+    await writeFile(join(dir, ".git", "HEAD"), "ref");
+    expect(Object.keys(await readTree(dir)).sort()).toEqual(["files/body.dj", "files/images/sunset.png", "index.json"]);
+
+    const hiddenContent = JSON.stringify({ format: "x", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "t", path: "files/.body" } });
+    expect(() => readObject({ "index.json": enc(hiddenContent), "files/.body": enc("x") })).toThrow(/point into files/);
+  });
+
+  it("refuses a folder that holds a symbolic link", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fo-"));
+    await cp(seaDay, dir, { recursive: true });
+    await symlink(join(dir, "files", "body.dj"), join(dir, "files", "link.dj"));
+    await expect(readTree(dir)).rejects.toThrow(/symbolic link/);
   });
 
   it("rejects the format and closure layers separately", () => {

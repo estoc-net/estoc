@@ -7,6 +7,12 @@ UnixFS tree (`hashTree`/`verifyTree`/`resolvePath`, golden vectors and
 all) moves in here unchanged, and its half of the card joins the other
 half, so the card has one home and one meaning.
 
+- **Breaking:** hidden entries — any path segment beginning with `.` —
+  are not part of an object's tree (`isHidden`), matching the
+  `unixfs-v1-2025` profile's default so a folder hashes as `ipfs add -r`
+  does; `readTree` skips them, and it now throws on a symbolic link (or
+  any non-regular entry) instead of silently dropping it — a fact holds
+  only files.
 - **Breaking:** the card is a JWS with `typ: estoc/object-card`; a card
   without it does not verify. Its payload is exactly `{did, root}`; any
   other member makes it malformed (a card is closed testimony — new

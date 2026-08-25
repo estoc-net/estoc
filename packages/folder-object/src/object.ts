@@ -33,17 +33,26 @@ export function parseIndex(bytes: Uint8Array): IndexJson {
   return value as IndexJson;
 }
 
-/** `files/<something>`, normalized, no traversal. */
+/**
+ * Hidden, as the `unixfs-v1-2025` profile excludes it: any path segment
+ * beginning with `.`. Purely a function of the name — the mapping has no
+ * platform attributes to consult — so it is the same everywhere.
+ */
+export function isHidden(path: string): boolean {
+  return path.split("/").some((s) => s.startsWith("."));
+}
+
+/** `files/<something>`, normalized, no traversal, nothing hidden. */
 export function isInsideFiles(path: string): boolean {
   if (!path.startsWith("files/")) return false;
   const segments = path.split("/");
-  return segments.every((s) => s !== "" && s !== "." && s !== "..");
+  return segments.every((s) => s !== "" && !s.startsWith("."));
 }
 
 /**
  * Take an object out of a mapping rooted at the object folder. The canonical
- * tree is taken by enumeration: `index.json` and everything under `files/`;
- * any other entry is litter and is dropped (spec §2).
+ * tree is taken by enumeration: `index.json` and everything under `files/`
+ * except hidden entries (§4); any other entry is litter and is dropped (§2).
  */
 export function readObject(mapping: TreeFiles): FolderObject {
   const indexBytes = mapping["index.json"];
