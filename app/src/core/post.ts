@@ -17,8 +17,8 @@ export interface RenderedPost {
   summary?: string;
   published?: string;
   updated?: string;
-  tag: string[];
-  inLanguage?: string;
+  tags: string[];
+  language?: string;
   /** Body as an HTML fragment. */
   bodyHtml: string;
 }
@@ -79,10 +79,10 @@ export function renderPost(object: FolderObject, options: RenderOptions = {}): R
 
   const m = object.meta;
   const result: RenderedPost = {
-    tag: Array.isArray(m.tag) ? m.tag.filter((t): t is string => typeof t === "string") : [],
+    tags: Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === "string") : [],
     bodyHtml,
   };
-  const title = str(m.name);
+  const title = str(m.title);
   if (title !== undefined) result.title = title;
   const summary = str(m.summary);
   if (summary !== undefined) result.summary = summary;
@@ -90,8 +90,8 @@ export function renderPost(object: FolderObject, options: RenderOptions = {}): R
   if (published !== undefined) result.published = published;
   const updated = str(m.updated);
   if (updated !== undefined) result.updated = updated;
-  const lang = str(m.inLanguage);
-  if (lang !== undefined) result.inLanguage = lang;
+  const lang = str(m.language);
+  if (lang !== undefined) result.language = lang;
   return result;
 }
 

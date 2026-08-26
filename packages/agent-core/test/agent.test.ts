@@ -1220,7 +1220,7 @@ describe("Agent under hostile mail", () => {
 describe("Agent sharing objects", () => {
   const enc = (s: string) => new TextEncoder().encode(s);
   const files = {
-    "index.json": enc(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000", name: "Sea day" })),
+    "index.json": enc(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000", title: "Sea day" })),
     "files/body.dj": enc("# Sea day\n\nWaves.\n"),
     "files/images/dot.png": new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3]),
   };
@@ -1274,7 +1274,7 @@ describe("Agent sharing objects", () => {
     const share = await verifyShare(record.msg);
     expect(share.card).toEqual({ did: alice.vault.config.identity.anchor.did, root });
     expect(share.card.did).toMatch(/^did:key:/);
-    expect(share.object.meta.name).toBe("Sea day");
+    expect(share.object.meta.title).toBe("Sea day");
     expect(bob.log.some((l) => /post\/1.0 .* from .* \(signed by did:key:.*\): 3 files kept/.test(l))).toBe(true);
     alice.agent.destroy();
     bob.agent.destroy();
@@ -1290,7 +1290,7 @@ describe("Agent sharing objects", () => {
     const share = await verifyShare(record.msg);
     expect(share.card).toBeNull();
     expect(share.root).toBe(root);
-    expect(share.object.meta.name).toBe("Sea day");
+    expect(share.object.meta.title).toBe("Sea day");
     expect(bob.log.some((l) => /post\/1.0 .* from .* \(unsigned\): 3 files kept/.test(l))).toBe(true);
     // one card per share: sign it or pass one on, not both
     await expect(alice.agent.shareObject(bob.agent.did as string, object, { sign: true, card: "x.y.z" })).rejects.toThrow(
