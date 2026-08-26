@@ -18,7 +18,7 @@
  * mediator's URL — the entry a VITE_MEDIATOR_DID build labels with that
  * URL's host).
  */
-import { copyFile, mkdtemp } from "node:fs/promises";
+import { copyFile, cp, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -167,6 +167,24 @@ try {
   ok("Alice picked it again and signed it: in her thread, signed by her anchor");
   await bob.waitForSelector('.object-meta:has-text("signed by")', { timeout: 15000 });
   ok("Bob received the signed object and its card verifies on his side");
+
+  // Too big for one message: the same post with a 1.2 MiB file beside it
+  // goes as the minimal share — skeleton and index.json, no leaves — and
+  // Bob sees what it is and what is still on the way. The leaves he
+  // already holds (the body, the picture: same CIDs) count as present.
+  const bigDay = await mkdtemp(join(tmpdir(), "estoc-big-day-"));
+  await cp(seaDay, bigDay, { recursive: true });
+  await writeFile(join(bigDay, "files", "big.bin"), new Uint8Array(1258291));
+  await alice.setInputFiles('input[data-share="object"]', bigDay);
+  await alice.click('[data-share-choice="plain"]');
+  // Alice holds every block herself, so on her side the object is whole
+  await alice.waitForFunction(() => document.querySelectorAll(".object-title").length >= 3, null, { timeout: 15000 });
+  if ((await alice.$$(".object-awaiting")).length !== 0) {
+    fail("Alice's own share should be whole on her side: she holds every block");
+  }
+  ok("Alice sent the minimal share; her own thread shows the object whole, from her blobs");
+  await bob.waitForSelector('.object-awaiting:has-text("1 file still on the way (1258291 B)")', { timeout: 15000 });
+  ok("Bob received the skeleton, reads the post, and knows exactly which bytes are missing");
 
   // Pairwise: each side writes from a DID minted for the other alone. The
   // chat head says which; it is not the public DID on the rail.

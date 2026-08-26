@@ -42,6 +42,25 @@ export interface VerifiedTree {
    * empty directory shows up only here.
    */
   dirs: Map<string, string>;
+  /**
+   * Raw blocks the tree links but the object set does not hold: CID →
+   * the size the link claims (`Tsize`). Empty unless the tree was
+   * verified with `leaves: "optional"` — otherwise a missing leaf
+   * throws.
+   */
+  missing: Map<string, number>;
+  /** File path → the CIDs of its blocks in `missing`, for every file with at least one. */
+  partial: Map<string, string[]>;
+}
+
+/** How `verifyTree` treats a raw block the object set does not hold. */
+export interface VerifyOptions {
+  /**
+   * `"required"` (default): every block of the tree must be present.
+   * `"optional"`: the skeleton (every dag-pb block) must be present;
+   * raw leaves may be absent and are reported, not thrown.
+   */
+  leaves?: "required" | "optional";
 }
 
 /** The result of hashing a tree (UnixFS, profile unixfs-v1-2025). */

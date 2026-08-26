@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FromPrior, Message } from "didcomm-node";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { readObject, signRoot, verifyTree } from "@estoc/folder-object";
+import { isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import {
   Agent,
@@ -12,6 +12,8 @@ import {
   RAW_MEDIA_TYPE,
   attachmentsOf,
   closureOf,
+  closureSize,
+  missingBytes,
   verifyShare,
   FORWARD,
   KEY_INVITE_PREFIX,
@@ -1392,6 +1394,75 @@ describe("Agent sharing objects", () => {
     await until(() => small.did !== null);
     await expect(small.shareObject(bob.agent.did as string, object)).rejects.toThrow(/at most 16/);
     small.destroy();
+    bob.agent.destroy();
+  });
+
+  it("shares the minimal form when the closure does not fit: skeleton and index.json, leaves later", async () => {
+    const mediator = await newMediator();
+    const { backend, vault, seedKey } = await newVault("Alice", 1, mediator.did);
+    const alice = attach("Alice", backend, vault, seedKey, mediator);
+    const bob = await newParty("Bob", 2, mediator);
+    alice.agent.destroy();
+    const { root, blocks, minimal } = await closureOf(files);
+    expect(minimal.size).toBe(4); // three directory nodes and index.json
+    const tight = new Agent({
+      vault,
+      seedKey,
+      didcomm,
+      resolveDid: resolveDIDCommDoc,
+      fetch: mediator.fetch,
+      WebSocket: mediator.WebSocket,
+      maxShareBytes: closureSize(minimal),
+    });
+    await Promise.all([tight.start(), bob.agent.start()]);
+    await withTimeout(bob.live, 8000, "bob live");
+    await until(() => tight.did !== null);
+    await tight.addContact(bob.agent.did as string, "Bob");
+    const sent = await tight.shareObject(bob.agent.did as string, object, { sign: true });
+    expect(sent.msg.attachments).toHaveLength(4);
+    expect((sent.msg.attachments as { id: string }[]).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
+    // the sender keeps every block regardless
+    for (const cid of blocks.keys()) expect(await vault.blobs.has(cid)).toBe(true);
+
+    await eventually(() => bob.vault.blobs.has(root), "bob's skeleton");
+    const bodyCid = [...blocks.keys()].find((c) => !minimal.has(c)) as string;
+    expect(await bob.vault.blobs.has(bodyCid)).toBe(false);
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    const partial = await verifyShare(record.msg);
+    expect(partial.complete).toBe(false);
+    expect(partial.card?.did).toBe(vault.config.identity.anchor.did);
+    expect(partial.object.meta.title).toBe("Sea day");
+    expect(Object.keys(partial.object.tree)).toEqual(["index.json"]);
+    expect([...partial.tree.partial.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png"]);
+    const lacking = files["files/body.dj"].length + files["files/images/dot.png"].length;
+    expect(missingBytes(partial.tree)).toBe(lacking);
+    expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes`))).toBe(true);
+
+    // the leaves arrive by any road — here, a later whole share of the
+    // same object from an agent that is not squeezed — and the first
+    // record fills in against blobs/
+    tight.destroy();
+    const roomy = attach("Alice", backend, vault, seedKey, mediator);
+    await roomy.agent.start();
+    await until(() => roomy.agent.did !== null);
+    await roomy.agent.shareObject(bob.agent.did as string, object);
+    await eventually(() => bob.vault.blobs.has(bodyCid), "bob's leaves");
+    const whole = await verifyShare(record.msg, (cid) => bob.vault.blobs.get(cid));
+    expect(whole.complete).toBe(true);
+    expect(Object.keys(whole.object.tree).sort()).toEqual(["files/body.dj", "files/images/dot.png", "index.json"]);
+    expect((await verifyShare(record.msg)).complete).toBe(false); // the message alone is still what it was
+    roomy.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("does not keep a share without index.json's bytes: not the minimal share", async () => {
+    const { alice, bob } = await connected();
+    const { root, blocks } = await closureOf(files);
+    const skeleton = new Map([...blocks].filter(([cid]) => isDagPbCid(cid)));
+    await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root }, { attachments: attachmentsOf(skeleton) });
+    await eventually(async () => bob.log.some((l) => /does not verify: .*no index.json/.test(l)), "bob's refusal");
+    expect(await bob.vault.blobs.list()).toEqual([]);
+    alice.agent.destroy();
     bob.agent.destroy();
   });
 });

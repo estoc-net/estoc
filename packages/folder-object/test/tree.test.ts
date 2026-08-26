@@ -301,6 +301,73 @@ describe("verifyTree", () => {
   });
 });
 
+describe("verifyTree with optional leaves", () => {
+  it("records an absent single-block file instead of throwing", async () => {
+    const files = snapshot();
+    const tree = await hashTree(files);
+    const objects = objectSet(files, tree);
+    const [cid, path] = [...tree.files].find(([, p]) => p === "profile.json") as [string, string];
+    objects.delete(cid);
+    const verified = await verifyTree(tree.root, objects, { leaves: "optional" });
+    expect([...verified.files.keys()].sort()).toEqual(Object.keys(files).sort());
+    expect(verified.missing).toEqual(new Map([[cid, (files[path] as Uint8Array).length]]));
+    expect(verified.partial).toEqual(new Map([[path, [cid]]]));
+  });
+
+  it("records an absent chunk with its size, and the chunked file as partial", async () => {
+    const files: TreeFiles = { "big.bin": bigFile(2), "small.txt": utf8("s") };
+    const tree = await hashTree(files);
+    const objects = objectSet(files, tree);
+    const leaves = [...tree.nodes.keys()].filter((c) => isRawCid(c));
+    objects.delete(leaves[0] as string);
+    const verified = await verifyTree(tree.root, objects, { leaves: "optional" });
+    expect(verified.missing.size).toBe(1);
+    expect(verified.missing.get(leaves[0] as string)).toBe(1024 * 1024);
+    expect(verified.partial).toEqual(new Map([["big.bin", [leaves[0]]]]));
+  });
+
+  it("verifies a bare skeleton: every file listed, every leaf missing", async () => {
+    const files: TreeFiles = { "big.bin": bigFile(1), ...snapshot() };
+    const tree = await hashTree(files);
+    const skeleton = new Map([...tree.nodes].filter(([c]) => !isRawCid(c)));
+    const verified = await verifyTree(tree.root, skeleton, { leaves: "optional" });
+    expect(verified.files.size).toBe(5);
+    expect(verified.partial.size).toBe(5);
+    let total = 0;
+    for (const size of verified.missing.values()) total += size;
+    let expected = 0;
+    for (const bytes of Object.values(files)) expected += bytes.length;
+    expect(total).toBe(expected);
+  });
+
+  it("still throws on a missing dag-pb block, and on a tampered present leaf", async () => {
+    const files: TreeFiles = { "big.bin": bigFile(1), ...snapshot() };
+    const tree = await hashTree(files);
+    const objects = objectSet(files, tree);
+    const chunkIndex = [...tree.files].find(([c]) => !isRawCid(c))?.[0] as string;
+    const without = new Map(objects);
+    without.delete(chunkIndex);
+    await expect(verifyTree(tree.root, without, { leaves: "optional" })).rejects.toThrow(/missing object/);
+    const tampered = new Map(objects);
+    const someFileCid = [...tree.files].find(([c]) => isRawCid(c))?.[0] as string;
+    tampered.set(someFileCid, utf8("tampered"));
+    await expect(verifyTree(tree.root, tampered, { leaves: "optional" })).rejects.toThrow(/do not hash/);
+  });
+
+  it("takes a lookup function as the object set", async () => {
+    const files = snapshot();
+    const tree = await hashTree(files);
+    const objects = objectSet(files, tree);
+    const asked: string[] = [];
+    const verified = await verifyTree(tree.root, async (cid) => {
+      asked.push(cid);
+      return objects.get(cid) ?? null;
+    });
+    expect(verified.files.size).toBe(4);
+    expect(new Set(asked)).toEqual(new Set(objects.keys()));
+  });
+});
+
 describe("HAMT sharding", () => {
   // Enough long-named entries that the flat node's serialized size
   // crosses the profile's 256 KiB block-bytes threshold and the
@@ -333,6 +400,18 @@ describe("HAMT sharding", () => {
       async (c) => objects.get(c) ?? null,
     );
     expect(new TextDecoder().decode(hit.bytes)).toBe("x");
+  });
+
+  it("walks the shards with leaves optional", async () => {
+    const files = wideDir();
+    const tree = await hashTree(files);
+    const skeleton = new Map([...tree.nodes].filter(([c]) => !isRawCid(c)));
+    const verified = await verifyTree(tree.root, skeleton, { leaves: "optional" });
+    expect(verified.files.size).toBe(2200);
+    expect(verified.files.get(wideName(7))).toBe(await fileCid(utf8("x")));
+    // every entry holds the same byte, so one missing leaf serves all
+    expect(verified.missing.size).toBe(1);
+    expect(verified.partial.size).toBe(2200);
   });
 });
 

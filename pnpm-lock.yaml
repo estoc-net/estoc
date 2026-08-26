@@ -144,9 +144,15 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@ipld/dag-pb':
+        specifier: ^4.1.7
+        version: 4.1.7
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
+      ipfs-unixfs:
+        specifier: ^13.0.0
+        version: 13.0.0
       ipfs-unixfs-exporter:
         specifier: ^16.0.2
         version: 16.0.2
@@ -157,15 +163,9 @@ importers:
         specifier: ^14.0.5
         version: 14.0.5
     devDependencies:
-      '@ipld/dag-pb':
-        specifier: ^4.1.7
-        version: 4.1.7
       '@types/node':
         specifier: ^22.13.5
         version: 22.20.1
-      ipfs-unixfs:
-        specifier: ^13.0.0
-        version: 13.0.0
       typescript:
         specifier: ~5.8.0
         version: 5.8.3

@@ -1,11 +1,14 @@
 import {
   hashTree,
   isDagPbCid,
-  readObject,
+  isInsideFiles,
+  MalformedObjectError,
+  parseIndex,
   resolvePath,
   verifyCard,
   verifyTree,
   type FolderObject,
+  type GetBlock,
   type ObjectCard,
   type TreeFiles,
   type VerifiedTree,
@@ -17,10 +20,11 @@ import type { ProtocolHandler } from "./handler.js";
 /**
  * object-share/1.0 (`docs/object-share.md`): hand a contact a whole
  * object — a folder-object hashed into a UnixFS tree. One message
- * carries the closure: the root in the body, every block as an
- * attachment named by its CID. Nothing is fetched, nothing is asked
- * back; the receiver either holds the entire object once the message is
- * read or holds none of it.
+ * carries the root in the body and blocks as attachments named by their
+ * CID: always the tree's **skeleton** (every dag-pb block) and
+ * `index.json`, and every leaf when the whole closure fits. Nothing is
+ * asked back over DIDComm; leaves a share does not carry are named and
+ * sized by the skeleton, and come by another road or a later share.
  *
  * What is shared is an object — a tree that declares what it is
  * (`index.json`); a well-hashed tree that is not one does not verify,
@@ -62,27 +66,44 @@ export interface BlockAttachment {
   data: { base64: string };
 }
 
-/** The closure of a tree: its root and every block the root reaches, CID → bytes. */
+/** The closure of a tree: its root, every block the root reaches, and the blocks a share must carry. */
 export interface Closure {
   root: string;
+  /** every block, CID → bytes */
   blocks: Map<string, Uint8Array>;
+  /**
+   * The minimal share (`docs/object-share.md` §2): every dag-pb block —
+   * the skeleton — plus the blocks of `index.json`. A subset of `blocks`.
+   */
+  minimal: Map<string, Uint8Array>;
 }
 
-/** What a verified share yields: the root, who (if anyone) stands behind it, the object itself, and the blocks. */
+/**
+ * What a verified share yields: the root, who (if anyone) stands behind
+ * it, the tree, the object as far as its bytes are here, and the blocks.
+ */
 export interface VerifiedShare {
   root: string;
   /** the verified card, or null for an object shared without one */
   card: ObjectCard | null;
+  /** the verified tree; `tree.missing` names the leaves not held, `tree.partial` their files */
   tree: VerifiedTree;
-  /** The object read out of the verified tree (`index.json` + `files/…`). */
+  /**
+   * The object read out of the tree: `index.json` (always here) and every
+   * file under `files/` whose bytes are all here. A partial file is not in
+   * `object.tree` at all — it is in `tree.partial`.
+   */
   object: FolderObject;
+  /** true when no leaf is missing: the object is whole */
+  complete: boolean;
+  /** every block held — the message's, and any the caller supplied — CID → bytes */
   blocks: Map<string, Uint8Array>;
 }
 
 /**
  * Hash a tree and gather the complete object set: `hashTree`'s `nodes`
  * plus the input bytes of every single-block file (which it
- * deliberately does not copy).
+ * deliberately does not copy) — and, apart, the minimal share.
  */
 export async function closureOf(files: TreeFiles): Promise<Closure> {
   const hashed = await hashTree(files);
@@ -92,7 +113,25 @@ export async function closureOf(files: TreeFiles): Promise<Closure> {
       blocks.set(cid, files[path] as Uint8Array);
     }
   }
-  return { root: hashed.root, blocks };
+  const minimal = new Map<string, Uint8Array>();
+  for (const [cid, bytes] of blocks) {
+    if (isDagPbCid(cid)) {
+      minimal.set(cid, bytes);
+    }
+  }
+  // index.json's blocks: its raw CID, or the chunks of a chunked one —
+  // which a walk over the skeleton alone names, as that file's gaps
+  const index = [...hashed.files].find(([, path]) => path === "index.json");
+  if (index !== undefined) {
+    const [cid] = index;
+    const chunks = isDagPbCid(cid)
+      ? ((await verifyTree(hashed.root, minimal, { leaves: "optional" })).partial.get("index.json") ?? [])
+      : [cid];
+    for (const chunk of chunks) {
+      minimal.set(chunk, blocks.get(chunk) as Uint8Array);
+    }
+  }
+  return { root: hashed.root, blocks, minimal };
 }
 
 /** The bytes of a closure, summed. */
@@ -140,13 +179,17 @@ export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {
 }
 
 /**
- * Check a share message end to end: the blocks carried reach every path
- * under `body.root` with matching hashes, the tree they make is a
- * well-formed folder-object, and the card, if there is one, verifies
- * under its own did:key and is about this very root. Throws naming the
- * first thing wrong.
+ * Check a share message end to end: the skeleton carried reaches every
+ * path under `body.root` with matching hashes, `index.json` is here and
+ * well-formed, every leaf present hashes to its CID, and the card, if
+ * there is one, verifies under its own did:key and is about this very
+ * root. Leaves under `files/` may be absent: the result says which
+ * (`tree.missing`, `tree.partial`, `complete`). Blocks the message does
+ * not carry are looked up through `held` when given — the vault's
+ * `blobs/`, so leaves that arrived by another road count as present.
+ * Throws naming the first thing wrong.
  */
-export async function verifyShare(msg: PlainMessage): Promise<VerifiedShare> {
+export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<VerifiedShare> {
   const body = msg.body as Partial<ObjectShareBody>;
   if (typeof body.root !== "string") {
     throw new Error("object-share message has no root");
@@ -163,20 +206,43 @@ export async function verifyShare(msg: PlainMessage): Promise<VerifiedShare> {
     }
   }
   const blocks = blocksOf(msg);
-  const tree = await verifyTree(root, blocks);
-  const files: TreeFiles = {};
-  const getBlock = (cid: string) => Promise.resolve(blocks.get(cid) ?? null);
-  for (const path of tree.files.keys()) {
-    files[path] = (await resolvePath(root, path, getBlock)).bytes;
+  const getBlock: GetBlock = async (cid) => {
+    const inline = blocks.get(cid);
+    if (inline !== undefined) {
+      return inline;
+    }
+    const kept = held === undefined ? null : await held(cid);
+    if (kept !== null) {
+      blocks.set(cid, kept);
+    }
+    return kept;
+  };
+  const tree = await verifyTree(root, getBlock, { leaves: "optional" });
+  if (!tree.files.has("index.json")) {
+    throw new MalformedObjectError("format", "no index.json at the root");
   }
-  return { root, card, tree, object: readObject(files), blocks };
+  if (tree.partial.has("index.json")) {
+    throw new Error("object-share message carries no index.json: not the minimal share");
+  }
+  const files: TreeFiles = {};
+  for (const path of tree.files.keys()) {
+    if (path === "index.json" || (isInsideFiles(path) && !tree.partial.has(path))) {
+      files[path] = (await resolvePath(root, path, getBlock)).bytes;
+    }
+  }
+  const meta = parseIndex(files["index.json"] as Uint8Array);
+  const object: FolderObject = { meta, tree: files };
+  return { root, card, tree, object, complete: tree.missing.size === 0, blocks };
 }
 
 /**
  * The receiving side: a share that verifies has its blocks put in
  * `blobs/`; one that does not is left as it is in the log — a fact about
  * what arrived — and noted. Either way the record is there for the
- * application to show, which will run the same check to decide how.
+ * application to show, which will run the same check to decide how. A
+ * share whose leaves are not all here is a partial object, kept as far
+ * as it goes: `blobs/` is by CID, so the rest fills in from wherever it
+ * comes.
  */
 export const objectShareHandler: ProtocolHandler = {
   types: [OBJECT_SHARE],
@@ -184,7 +250,7 @@ export const objectShareHandler: ProtocolHandler = {
   async onInbound(record, contact, agent) {
     let share: VerifiedShare;
     try {
-      share = await verifyShare(record.msg);
+      share = await verifyShare(record.msg, (cid) => agent.vault.blobs.get(cid));
     } catch (err) {
       agent.log(`object from ${contact.name} does not verify: ${err instanceof Error ? err.message : err}`);
       return;
@@ -193,9 +259,20 @@ export const objectShareHandler: ProtocolHandler = {
       await agent.vault.blobs.put(cid, bytes);
     }
     const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
-    agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${share.tree.files.size} files kept`);
+    const kept = `${share.tree.files.size} files kept`;
+    const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes`;
+    agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${kept}${state}`);
   },
 };
+
+/** The bytes a partial share still lacks, as the skeleton sizes them. */
+export function missingBytes(tree: VerifiedTree): number {
+  let total = 0;
+  for (const size of tree.missing.values()) {
+    total += size;
+  }
+  return total;
+}
 
 function bytesToBase64url(bytes: Uint8Array): string {
   let binary = "";

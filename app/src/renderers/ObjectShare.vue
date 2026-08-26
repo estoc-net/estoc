@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { verifyShare, type VerifiedShare } from "@estoc/agent-core";
+import { missingBytes, verifyShare, type VerifiedShare } from "@estoc/agent-core";
 
 import type { Entry } from "../core/entries.js";
 import { POST_FORMAT, renderPost } from "../core/post.js";
+import { heldBlock } from "../core/store.js";
 import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
 
@@ -15,7 +16,11 @@ import Bubble from "./Bubble.vue";
  * did:key and about this root) and projects what verified: a post/1.0
  * object as its title and body, any other format as its files, signed
  * by whom or by nobody. A share that does not verify is shown as exactly
- * that.
+ * that. A share whose leaves are not all here — the minimal share, or one
+ * still filling in — is a partial object: what it is, its files and
+ * their sizes are all known; what is missing is said, not hidden. Blocks
+ * are looked up in the vault's `blobs/` too, so leaves that arrived by
+ * another road show.
  *
  * The body is someone else's text rendered to HTML by our own Markdown
  * renderer (raw HTML stripped), and still goes into a sandboxed frame:
@@ -23,11 +28,32 @@ import Bubble from "./Bubble.vue";
  */
 const props = defineProps<{ entry: Entry; contact: Contact | null }>();
 
+/** What is still on the way: files and bytes, or null when the object is whole. */
+interface Awaiting {
+  files: number;
+  bytes: number;
+}
+
 type View =
   | { state: "checking" }
   | { state: "bad"; reason: string }
-  | { state: "post"; did: string | null; root: string; title: string; summary: string; html: string; files: number }
-  | { state: "files"; did: string | null; root: string; files: { path: string; size: number }[] };
+  | {
+      state: "post";
+      did: string | null;
+      root: string;
+      title: string;
+      summary: string;
+      html: string | null;
+      files: number;
+      awaiting: Awaiting | null;
+    }
+  | {
+      state: "files";
+      did: string | null;
+      root: string;
+      files: { path: string; size: number; here: boolean }[];
+      awaiting: Awaiting | null;
+    };
 
 const view = ref<View>({ state: "checking" });
 
@@ -60,19 +86,41 @@ function page(bodyHtml: string): string {
 onMounted(async () => {
   let share: VerifiedShare;
   try {
-    share = await verifyShare(props.entry.record.msg);
+    share = await verifyShare(props.entry.record.msg, heldBlock);
   } catch (err) {
     view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
     return;
   }
-  const { root, object } = share;
+  const { root, object, tree } = share;
   const did = share.card?.did ?? null;
   const files = object.tree;
+  const awaiting: Awaiting | null = share.complete ? null : { files: tree.partial.size, bytes: missingBytes(tree) };
   if (object.meta.format !== POST_FORMAT) {
-    const listing = Object.entries(files)
-      .map(([path, bytes]) => ({ path, size: bytes.length }))
+    // every file the tree names, sized by the skeleton when its bytes are not here
+    const listing = [...tree.files.keys()]
+      .filter((path) => path === "index.json" || path.startsWith("files/"))
+      .map((path) => {
+        const bytes = files[path];
+        const size = bytes?.length ?? (tree.partial.get(path) ?? []).reduce((n, cid) => n + (tree.missing.get(cid) ?? 0), 0);
+        return { path, size, here: bytes !== undefined };
+      })
       .sort((a, b) => (a.path < b.path ? -1 : 1));
-    view.value = { state: "files", did, root, files: listing };
+    view.value = { state: "files", did, root, files: listing, awaiting };
+    return;
+  }
+  const content = object.meta.content;
+  if (content !== undefined && "path" in content && files[content.path] === undefined) {
+    // the body itself is on the way: the post's name, its size, no page yet
+    view.value = {
+      state: "post",
+      did,
+      root,
+      title: typeof object.meta.title === "string" ? object.meta.title : "",
+      summary: "",
+      html: null,
+      files: tree.files.size,
+      awaiting,
+    };
     return;
   }
   const post = renderPost(object, { assetBase: "estoc-object" });
@@ -90,6 +138,7 @@ onMounted(async () => {
     summary: post.summary ?? "",
     html: page(html),
     files: Object.keys(files).length,
+    awaiting,
   };
 });
 
@@ -107,11 +156,16 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
         <template v-if="view.state === 'post'">
           <h3 v-if="view.title" class="object-title">{{ view.title }}</h3>
           <p v-if="view.summary" class="object-summary">{{ view.summary }}</p>
-          <iframe class="object-body" sandbox="" :srcdoc="view.html" :title="view.title || 'post'"></iframe>
+          <iframe v-if="view.html !== null" class="object-body" sandbox="" :srcdoc="view.html" :title="view.title || 'post'"></iframe>
         </template>
         <ul v-else class="object-files">
-          <li v-for="f in view.files" :key="f.path"><code>{{ f.path }}</code> <span>{{ f.size }} B</span></li>
+          <li v-for="f in view.files" :key="f.path" :class="{ 'object-away': !f.here }">
+            <code>{{ f.path }}</code> <span>{{ f.size }} B</span>
+          </li>
         </ul>
+        <p v-if="view.awaiting !== null" class="object-meta object-awaiting">
+          {{ view.awaiting.files }} {{ view.awaiting.files === 1 ? "file" : "files" }} still on the way ({{ view.awaiting.bytes }} B)
+        </p>
         <p v-if="view.did !== null" class="object-meta" :title="`${view.did}\n${view.root}`">
           signed by <code>{{ shortDid(view.did) }}</code>
         </p>
@@ -159,5 +213,11 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
 .object-bad {
   opacity: 1;
   color: #a33;
+}
+.object-away {
+  opacity: 0.55;
+}
+.object-awaiting {
+  font-style: italic;
 }
 </style>

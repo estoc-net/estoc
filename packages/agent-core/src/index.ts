@@ -119,6 +119,7 @@ export {
   attachmentsOf,
   blocksOf,
   verifyShare,
+  missingBytes,
   objectShareHandler,
   type ObjectShareBody,
   type BlockAttachment,

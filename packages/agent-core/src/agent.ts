@@ -1606,23 +1606,31 @@ export class Agent {
 
   /**
    * Share an object (`docs/object-share.md`): hash its canonical tree,
-   * put the blocks in our own `blobs/`, and send the whole closure in one
-   * object-share/1.0 message — the root in the body, one attachment per
-   * block. Plain, the share says only that we handed the object over.
-   * With `sign` the anchor signs a card and the share is a signed object
-   * we stand behind; with `card` (passing on an object someone else
-   * signed) the card must verify and name this very root. Throws before
-   * sending when the closure is bigger than `maxShareBytes`.
+   * put the blocks in our own `blobs/`, and send one object-share/1.0
+   * message — the root in the body, one attachment per block. The whole
+   * closure goes when it fits `maxShareBytes`; otherwise the minimal
+   * share goes — the skeleton and `index.json`, no leaves under
+   * `files/`, all or none — and the leaves wait for another road. An
+   * object whose minimal share does not fit cannot be shared this way.
+   * Plain, the share says only that we handed the object over. With
+   * `sign` the anchor signs a card and the share is a signed object we
+   * stand behind; with `card` (passing on an object someone else
+   * signed) the card must verify and name this very root.
    */
   async shareObject(
     contactDid: string,
     object: FolderObject,
     options: { sign?: boolean; card?: string } = {}
   ): Promise<MessageRecord> {
-    const { root, blocks } = await closureOf(object.tree);
-    const size = closureSize(blocks);
-    if (size > this.maxShareBytes) {
-      throw new Error(`object is ${size} bytes of blocks; one share carries at most ${this.maxShareBytes}`);
+    const closure = await closureOf(object.tree);
+    const { root } = closure;
+    let carried = closure.blocks;
+    if (closureSize(carried) > this.maxShareBytes) {
+      carried = closure.minimal;
+      const size = closureSize(carried);
+      if (size > this.maxShareBytes) {
+        throw new Error(`object's skeleton and index.json are ${size} bytes; one share carries at most ${this.maxShareBytes}`);
+      }
     }
     const body: ObjectShareBody = { root };
     if (options.card !== undefined) {
@@ -1639,11 +1647,11 @@ export class Agent {
       const identity = await this.vault.derive(this.seedKey, anchor.key);
       body.card = await signRoot(anchor.did, root, identity.signer);
     }
-    for (const [cid, bytes] of blocks) {
+    for (const [cid, bytes] of closure.blocks) {
       await this.vault.blobs.put(cid, bytes);
     }
     return this.send(contactDid, OBJECT_SHARE, body as unknown as Record<string, unknown>, {
-      attachments: attachmentsOf(blocks),
+      attachments: attachmentsOf(carried),
     });
   }
 

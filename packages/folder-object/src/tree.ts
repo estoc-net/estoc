@@ -21,17 +21,17 @@
 
 import { CID } from "multiformats/cid";
 import { importer, type ImportCandidate } from "ipfs-unixfs-importer";
-import {
-  exporter,
-  type ReadableStorage,
-  type UnixFSDirectory,
-} from "ipfs-unixfs-exporter";
-import { checkCid, compareNames, isRawCid } from "./cid.js";
+import { exporter, type ReadableStorage } from "ipfs-unixfs-exporter";
+import * as dagPB from "@ipld/dag-pb";
+import * as raw from "multiformats/codecs/raw";
+import { UnixFS } from "ipfs-unixfs";
+import { checkCid, compareNames, dagPbCode, isRawCid } from "./cid.js";
 import type {
   HashOptions,
   HashedTree,
   TreeFiles,
   VerifiedTree,
+  VerifyOptions,
 } from "./types.js";
 import { checkName, segmentsOf } from "./path.js";
 
@@ -119,9 +119,12 @@ export async function hashTree(
   return { root, nodes: blocks, files: fileCids };
 }
 
+/** A block source: CID string → bytes, or null when not held. */
+export type GetBlock = (cid: string) => Promise<Uint8Array | null>;
+
 /** Fetch one block and prove its bytes match the CID asked for. */
 async function fetchChecked(
-  getObject: (cid: string) => Promise<Uint8Array | null>,
+  getObject: GetBlock,
   cid: CID,
 ): Promise<Uint8Array> {
   const bytes = await getObject(cid.toString());
@@ -133,9 +136,7 @@ async function fetchChecked(
 }
 
 /** A blockstore whose every get proves the bytes match the CID asked for. */
-function verifyingStore(
-  getObject: (cid: string) => Promise<Uint8Array | null>,
-): ReadableStorage {
+function verifyingStore(getObject: GetBlock): ReadableStorage {
   return {
     async *get(cid: CID): AsyncGenerator<Uint8Array> {
       yield await fetchChecked(getObject, cid);
@@ -143,18 +144,137 @@ function verifyingStore(
   };
 }
 
-async function walkDir(
-  dir: UnixFSDirectory,
-  prefix: string,
-  store: ReadableStorage,
-  out: VerifiedTree,
+/** A decoded dag-pb node with its UnixFS Data field. */
+interface PbNode {
+  cid: CID;
+  node: dagPB.PBNode;
+  data: UnixFS;
+}
+
+/** Fetch, check and decode a dag-pb node (a skeleton block — never optional). */
+async function fetchNode(get: GetBlock, cid: CID): Promise<PbNode> {
+  if (cid.code !== dagPbCode) {
+    throw new Error(`${cid.toString()} is not a dag-pb node`);
+  }
+  const bytes = await fetchChecked(get, cid);
+  const node = dagPB.decode(bytes);
+  if (node.Data === undefined) {
+    throw new Error(`dag-pb node ${cid.toString()} has no UnixFS data`);
+  }
+  return { cid, node, data: UnixFS.unmarshal(node.Data) };
+}
+
+/** The walk's state: what to collect, and whether a missing leaf is a fact or a fault. */
+interface Walk {
+  get: GetBlock;
+  out: VerifiedTree;
+  leavesOptional: boolean;
+}
+
+/**
+ * Every block of a file: raw leaves checked when present and recorded
+ * under `path` when absent (or thrown, when leaves are required);
+ * dag-pb chunk indexes always fetched and recursed into.
+ */
+async function walkFileBlocks(
+  w: Walk,
+  cid: CID,
+  size: number,
+  path: string,
 ): Promise<void> {
-  out.dirs.set(prefix.replace(/\/$/, ""), dir.cid.toString());
-  if (dir.unixfs.type === "directory") {
+  if (cid.code === raw.code) {
+    const bytes = await w.get(cid.toString());
+    if (bytes === null) {
+      if (!w.leavesOptional) {
+        throw new Error(`missing object ${cid.toString()}`);
+      }
+      w.out.missing.set(cid.toString(), size);
+      const gaps = w.out.partial.get(path) ?? [];
+      gaps.push(cid.toString());
+      w.out.partial.set(path, gaps);
+      return;
+    }
+    await checkCid(cid, bytes);
+    return;
+  }
+  const { node, data } = await fetchNode(w.get, cid);
+  if (data.type !== "file") {
+    throw new Error(`${path} is a ${data.type}, not a file`);
+  }
+  for (const link of node.Links) {
+    await walkFileBlocks(w, link.Hash, link.Tsize ?? 0, path);
+  }
+}
+
+/** One directory entry, whichever kind the link turns out to name. */
+async function walkEntry(
+  w: Walk,
+  link: dagPB.PBLink,
+  name: string,
+  prefix: string,
+  seen: Set<string>,
+): Promise<void> {
+  checkName(name);
+  if (seen.has(name)) {
+    throw new Error(`duplicate entry name: ${JSON.stringify(name)}`);
+  }
+  seen.add(name);
+  const path = prefix + name;
+  const cid = link.Hash;
+  if (cid.code === raw.code) {
+    await walkFileBlocks(w, cid, link.Tsize ?? 0, path);
+    w.out.files.set(path, cid.toString());
+    return;
+  }
+  const pb = await fetchNode(w.get, cid);
+  if (pb.data.type === "directory" || pb.data.type === "hamt-sharded-directory") {
+    await walkDir(w, pb, `${path}/`);
+  } else if (pb.data.type === "file") {
+    for (const child of pb.node.Links) {
+      await walkFileBlocks(w, child.Hash, child.Tsize ?? 0, path);
+    }
+    w.out.files.set(path, cid.toString());
+  } else {
+    throw new Error(`unsupported node kind at ${path}: ${pb.data.type}`);
+  }
+}
+
+/**
+ * The entries of a HAMT shard: a link named by exactly its two hex
+ * bucket characters is a sub-shard, any longer name is an entry whose
+ * name follows the two characters.
+ */
+async function walkShard(
+  w: Walk,
+  pb: PbNode,
+  prefix: string,
+  seen: Set<string>,
+): Promise<void> {
+  for (const link of pb.node.Links) {
+    const label = link.Name ?? "";
+    if (label.length < 2) {
+      throw new Error(`shard ${prefix || "/"} has a link without a bucket label`);
+    }
+    if (label.length === 2) {
+      const sub = await fetchNode(w.get, link.Hash);
+      if (sub.data.type !== "hamt-sharded-directory") {
+        throw new Error(`shard ${prefix || "/"} links a ${sub.data.type} as a sub-shard`);
+      }
+      await walkShard(w, sub, prefix, seen);
+    } else {
+      await walkEntry(w, link, label.slice(2), prefix, seen);
+    }
+  }
+}
+
+async function walkDir(w: Walk, pb: PbNode, prefix: string): Promise<void> {
+  w.out.dirs.set(prefix.replace(/\/$/, ""), pb.cid.toString());
+  const seen = new Set<string>();
+  if (pb.data.type === "directory") {
     // Canonical form: flat directory links strictly ascending in UTF-8
     // byte order (also rules out duplicates). HAMT shards order links by
     // hash structure instead, so only flat nodes are checked here.
-    const names = dir.node.Links.map((l) => l.Name ?? "");
+    const names = pb.node.Links.map((l) => l.Name ?? "");
     for (let i = 1; i < names.length; i++) {
       if (compareNames(names[i - 1] as string, names[i] as string) >= 0) {
         throw new Error(
@@ -162,28 +282,11 @@ async function walkDir(
         );
       }
     }
-  }
-  const seen = new Set<string>();
-  for await (const child of dir.entries()) {
-    checkName(child.name);
-    if (seen.has(child.name)) {
-      throw new Error(`duplicate entry name: ${JSON.stringify(child.name)}`);
+    for (const link of pb.node.Links) {
+      await walkEntry(w, link, link.Name ?? "", prefix, seen);
     }
-    seen.add(child.name);
-    const path = prefix + child.name;
-    const entry = await exporter(child.cid, store);
-    if (entry.type === "directory") {
-      await walkDir(entry, `${path}/`, store, out);
-    } else if (entry.type === "file" || entry.type === "raw") {
-      // Pull every leaf through the verifying store — presence and hash
-      // of each chunk block is proven as a side effect.
-      for await (const _ of entry.content()) {
-        // bytes discarded; the store already checked them
-      }
-      out.files.set(path, child.cid.toString());
-    } else {
-      throw new Error(`unsupported node kind at ${path}: ${entry.type}`);
-    }
+  } else {
+    await walkShard(w, pb, prefix, seen);
   }
 }
 
@@ -196,18 +299,38 @@ async function walkDir(
  * directory (the root under `""`). Throws on any missing object, hash
  * mismatch, malformed node, or non-canonical link order. Extra objects
  * in the map are ignored.
+ *
+ * With `leaves: "optional"` the skeleton — every dag-pb block — is still
+ * required, but a raw block (a single-block file, a chunk) may be
+ * absent: the walk records it in `missing` (CID → size the link claims)
+ * and its file in `partial`, and the result is proof of the tree's
+ * shape and of every leaf that is present. The object set may be a map
+ * or a lookup function.
  */
 export async function verifyTree(
   root: string,
-  objects: Map<string, Uint8Array>,
+  objects: Map<string, Uint8Array> | GetBlock,
+  options: VerifyOptions = {},
 ): Promise<VerifiedTree> {
-  const store = verifyingStore(async (cid) => objects.get(cid) ?? null);
-  const rootEntry = await exporter(CID.parse(root), store);
-  if (rootEntry.type !== "directory") {
+  const get: GetBlock =
+    typeof objects === "function"
+      ? objects
+      : async (cid) => objects.get(cid) ?? null;
+  const rootCid = CID.parse(root);
+  if (rootCid.code !== dagPbCode) {
     throw new Error("root is not a UnixFS directory");
   }
-  const out: VerifiedTree = { files: new Map(), dirs: new Map() };
-  await walkDir(rootEntry, "", store, out);
+  const pb = await fetchNode(get, rootCid);
+  if (pb.data.type !== "directory" && pb.data.type !== "hamt-sharded-directory") {
+    throw new Error("root is not a UnixFS directory");
+  }
+  const out: VerifiedTree = {
+    files: new Map(),
+    dirs: new Map(),
+    missing: new Map(),
+    partial: new Map(),
+  };
+  await walkDir({ get, out, leavesOptional: options.leaves === "optional" }, pb, "");
   return out;
 }
 

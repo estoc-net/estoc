@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 — 2026-08-26
+
+The tree's skeleton apart from its leaves, for sharing an object before
+its bytes (`estoc/docs/object-share.md` §2, §7).
+
+- `verifyTree(root, objects, { leaves: "optional" })`: every dag-pb
+  block — directory nodes, HAMT shards, chunk indexes — is still
+  required, but a raw block may be absent. The result gains `missing`
+  (absent raw CID → the size its link claims) and `partial` (file path →
+  its absent CIDs, for every file with one); both are empty under the default
+  `leaves: "required"`, where an absent leaf throws as before. A present
+  leaf is still hashed against its CID.
+- `verifyTree` accepts a lookup function (`GetBlock`) as the object set,
+  not only a map.
+- The verify walk decodes dag-pb / UnixFS nodes itself instead of pulling
+  leaves through `ipfs-unixfs-exporter`; `@ipld/dag-pb` and `ipfs-unixfs`
+  become runtime dependencies. Roots and verdicts are unchanged (golden
+  vectors, HAMT fixture).
+
 ## 0.4.0 — 2026-08-24
 
 One package for the three layers. `@estoc/signed-dir` is retired: its

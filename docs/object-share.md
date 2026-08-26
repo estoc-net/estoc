@@ -1,16 +1,17 @@
 # object-share/1.0
 
-Status: implemented in `@estoc/agent-core` 0.14.0 (2026-08-24). Design
-history: `research/notes/2026-08-24-object-share-over-didcomm.md`.
+Status: implemented in `@estoc/agent-core` 0.15.0 (`@estoc/folder-object`
+0.5.0), 2026-08-26 — the skeleton / leaves split (§2, §7) included.
+Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`.
 
 ## 1. What it is for
 
 Handing a contact a whole **object** — a [folder-object](https://github.com/estoc-net/folder-object)
 hashed into a UnixFS tree (`@estoc/folder-object`, profile
-`unixfs-v1-2025`) — over DIDComm, in one message, with nothing to fetch
-and nothing to ask back. The protocol carries the closure, and, when
-someone stands behind the object, the card: a share is either an
-**object** or a **signed object**, the two forms `@estoc/folder-object`
+`unixfs-v1-2025`) — over DIDComm, in one message, with nothing to ask
+back. The protocol carries the tree's **skeleton** always, its **leaves**
+when they fit, and, when someone stands behind the object, the card: a
+share is either an **object** or a **signed object**, the two forms `@estoc/folder-object`
 already has. It reads exactly one thing inside — that the tree *is* an
 object (`index.json` well-formed, spec §8): a tree that does not say
 what it is has no interpretation and is not this protocol's unit (that
@@ -25,10 +26,14 @@ asks — the same fault that stalled HTTP-over-DIDComm. Push carries the
 whole thing while the sender is here; the mediator holds it; the receiver
 reads it whenever.
 
-DIDComm stays the control plane. Big objects will take another road
-(a WebRTC data channel signalled over DIDComm, or a content relay), and
-will keep the CID as the unit; this message will then carry the card and
-whatever blocks fit inline, and no protocol field changes.
+DIDComm stays the control plane. The bytes of a big object take another
+road (a WebRTC data channel signalled over DIDComm, or a content relay),
+and keep the CID as the unit; this message carries the card, the whole
+skeleton, and whatever leaves fit inline. The minimal share is card plus
+skeleton and `index.json` and nothing under `files/`: the receiver can
+verify the card, read what the object says it is, walk the tree,
+see every path and every size, and know exactly which CIDs it lacks —
+before a single content byte has moved.
 
 ## 2. Message
 
@@ -54,14 +59,45 @@ whatever blocks fit inline, and no protocol field changes.
   verify. The body carries nothing else: whatever the object says about
   itself is in the tree (`index.json`), and saying it twice makes two
   truths.
-- **`attachments`** — the closure: every block the root reaches, one
-  attachment each, in CID order. `id` **is** the CID and is the block's
-  only name; `data.base64` is base64url (DIDComm v2), `media_type` is
-  `application/vnd.ipld.dag-pb` for directory / chunked-file nodes and
-  `application/vnd.ipld.raw` for single-block files, `byte_count` the
-  decoded length. `data.hash` is not used: DIDComm defines it beside
-  `links`, and didcomm-rust drops it from an inline attachment.
-  Attachments of any other shape are ignored, not errors.
+- **`attachments`** — blocks of the tree, one attachment each, in CID
+  order. `id` **is** the CID and is the block's only name; `data.base64`
+  is base64url (DIDComm v2), `media_type` is
+  `application/vnd.ipld.dag-pb` or `application/vnd.ipld.raw`,
+  `byte_count` the decoded length. `data.hash` is not used: DIDComm
+  defines it beside `links`, and didcomm-rust drops it from an inline
+  attachment. Attachments of any other shape are ignored, not errors.
+
+  The tree's blocks fall in two classes, told apart by codec alone:
+
+  - **skeleton** — every `dag-pb` block the root reaches: directory
+    nodes (plain and HAMT shards) and the chunk-index nodes of files
+    over 1 MiB. **The skeleton is always complete.** A share missing any
+    skeleton block is malformed: without it the tree cannot be walked,
+    and a tree that cannot be walked is not a shape the receiver can
+    hold, only a hash.
+  - **leaves** — every `raw` block: single-block files and the chunks of
+    larger ones. **Leaves may be absent**, with one exception: the
+    leaf (or leaves) of `index.json` always go with the skeleton. A
+    leaf is present when its CID is among the attachments and absent
+    otherwise; there is no field that says so, absence is the signal.
+    The skeleton already names each leaf and its size (the `dag-pb`
+    link's `Tsize`), so the receiver knows what it lacks and how much
+    that is.
+
+  `index.json` travels with the skeleton because it is what makes the
+  tree an object (§1): a skeleton without it is a shape the receiver
+  can walk but cannot name — no format, no title, not this protocol's
+  unit until the file arrives. So the **minimal share** is the `dag-pb`
+  blocks plus `index.json`'s blocks; a share missing either is
+  malformed. Everything under `files/` is what may wait.
+
+  No skeleton of its own: the UnixFS nodes *are* the skeleton. A separate
+  manifest — a list of paths and CIDs beside the tree — would be a second
+  truth that has to be checked against the first, and is not a block.
+  Chunking is whatever the hashing profile says (`unixfs-v1-2025`: 1 MiB
+  chunks, balanced layout, raw leaves) and is not this protocol's
+  concern: a chunk is a leaf like any other, a chunk index is skeleton
+  like any other.
 - No `thid`: a share starts nothing. An application that answers (a
   comment, a reply post) threads on the share's `id` like any message.
 
@@ -69,11 +105,18 @@ whatever blocks fit inline, and no protocol field changes.
 
 1. Read the folder as an object (`readObject`: `index.json` + `files/…`,
    litter dropped), hash its canonical tree and gather the closure:
-   `hashTree`'s `nodes` plus the input bytes of every single-block file
+   `hashTree`'s `nodes` (the skeleton) plus every raw block
    (`closureOf`).
-2. Refuse if the blocks sum past the sender's limit (`maxShareBytes`,
-   default 1 MiB): an object that does not fit one message waits for
-   another road; splitting it into asks would make the sender the relay.
+2. Decide what goes inline against the sender's limit (`maxShareBytes`,
+   default 1 MiB). The skeleton and `index.json` always go; if those
+   alone exceed the limit the object cannot be shared by this message
+   at all — refuse.
+   Leaves go in full when the whole closure fits. When it does not, the
+   share carries the skeleton and no leaves — all or nothing, not "the
+   first few that fit": a leaf set chosen by size is a partial object
+   with no meaning the receiver can act on, while skeleton-only is a
+   definite thing (§7). The leaves then take another road; splitting
+   them into asks over DIDComm would make the sender the relay.
 3. The card, if any. Plain, the share is the object as it is: no card,
    nobody stands behind it, the message says only what the envelope says.
    To stand behind it, sign `{did: anchor, root}` with the vault's anchor
@@ -91,20 +134,30 @@ it to the contact the envelope proves. The handler then:
 
 1. if there is a card, verifies it under the `did:key` in its own payload
    and requires its `root` to be `body.root`;
-2. decodes the block attachments and verifies the tree from `body.root`
-   over them (`verifyTree`): every path reachable, every hash matching,
-   no block missing;
-3. reads the tree as an object (`readObject`): a well-hashed tree that is
-   not a folder-object — no `index.json`, or a malformed one — does not
-   verify, however good its hashes;
-4. on success puts every block in `blobs/<cid>` (put-if-absent — blocks
-   already held from another share are simply already there);
-5. on failure keeps the record as it arrived (a fact about what was sent)
+2. decodes the block attachments and verifies the **skeleton** from
+   `body.root` over them (`verifyTree`): every `dag-pb` node reachable
+   and hashing to its CID, every link resolved either to a present block
+   or to an absent `raw` CID. A missing `dag-pb` block is malformed; a
+   missing `raw` block is a missing leaf, recorded, not an error;
+3. verifies each present leaf against its CID;
+4. reads the tree as an object (`readObject`): `index.json`'s blocks
+   are part of the minimal share (§2), so their absence is malformed
+   like a missing skeleton block, not a missing leaf. A well-hashed
+   tree that is not a folder-object — no `index.json`, or a malformed
+   one — does not verify, however good its hashes;
+5. on success puts every block it holds in `blobs/<cid>` (put-if-absent
+   — blocks already held from another share are simply already there),
+   and the object is **complete** if no leaf is missing, **partial**
+   otherwise. Leaves already in `blobs/` from an earlier share count as
+   present: the CID names them, whoever sent them;
+6. on failure keeps the record as it arrived (a fact about what was sent)
    and notes why; nothing goes to `blobs/`.
 
 The application shows the record either way, and runs the same check to
 decide how (`verifyShare`); a share that does not verify is shown as
-that, not hidden.
+that, not hidden. A partial object is shown as an object with missing
+files — its title, its paths, its sizes are all known — and never as a
+broken one.
 
 ## 5. What the card says, and what it does not
 
@@ -148,3 +201,29 @@ and a plain share says nothing more. "I stand behind this" is my card.
 merged by union on import. The message log still holds the attachments
 inline; lifting them out of log lines into `blobs/` references is a later
 step and changes nothing on the wire.
+
+## 7. Missing leaves
+
+A share with absent leaves is a complete statement, not a broken one: the
+card is verified, the tree is verified, the receiver holds the exact set
+of CIDs it lacks, with sizes. What it lacks is bytes, and bytes are not
+this protocol's business. Fetching them is:
+
+- **another road**, by CID — a WebRTC data channel signalled over
+  DIDComm, or a content relay — where the ask is the flat want list the
+  skeleton already implies, `want [cid…] → block`. No path, no selector:
+  the receiver has the tree, the sender is a block store;
+- **or a later share** of the same root, or of another object that
+  happens to contain the same file — `blobs/` is by CID, so leaves land
+  wherever they come from and the partial object fills in
+  (put-if-absent, then re-run the check).
+
+There is no `want` message in object-share/1.0 over DIDComm, on purpose:
+asking a phone for blocks over a store-and-forward channel needs that
+phone awake at each ask (§1). The skeleton is what makes the ask
+unnecessary here and trivial elsewhere.
+
+An implementation that does not yet have another road still gets the
+minimal share: a contact sees what was shared, who stands behind it, and
+how big it is — and the leaves come when a road exists, without a second
+protocol.

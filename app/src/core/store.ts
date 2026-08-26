@@ -567,6 +567,17 @@ export async function shareObject(
   await agent.shareObject(contactDid, object, options);
 }
 
+/**
+ * A block held in the vault's `blobs/`, by CID — what a renderer hands
+ * `verifyShare` so leaves that came by any road count as present.
+ */
+export async function heldBlock(cid: string): Promise<Uint8Array | null> {
+  if (agent === null) {
+    return null;
+  }
+  return agent.vault.blobs.get(cid);
+}
+
 /** A line of chat: basicmessage/2.0. */
 export async function sendMessage(contactDid: string, text: string): Promise<void> {
   await send(contactDid, BASIC_MESSAGE, { content: text });

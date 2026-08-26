@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.15.0 — 2026-08-26
+
+The minimal share: an object's shape before its bytes
+(`docs/object-share.md` §2, §3, §4, §7).
+
+- A share always carries the tree's **skeleton** — every dag-pb block —
+  and `index.json`; leaves under `files/` go when the whole closure fits
+  `maxShareBytes` and stay behind, all of them, when it does not.
+  `Agent.shareObject` sends the closure or the minimal share by that
+  rule, and refuses only an object whose minimal share does not fit.
+  Its blocks all go to our own `blobs/` either way.
+- `verifyShare(msg, held?)` verifies the skeleton (missing dag-pb block:
+  malformed), `index.json` (absent: malformed — not the minimal share),
+  the card, and every leaf that is present; leaves under `files/` may be
+  absent. The result gains `complete`, and `tree.missing` / `tree.partial`
+  say which CIDs, how many bytes, which files. `object.tree` holds
+  `index.json` and only the files whose bytes are all here. With `held`
+  (the vault's `blobs.get`), blocks the message does not carry are looked
+  up there, so leaves that came by any other road count as present.
+- `objectShareHandler` keeps a partial share as far as it goes (its
+  blocks into `blobs/`, put-if-absent) and logs what is still awaited;
+  `blobs/` being by CID, a later share of the same object — or of any
+  object holding the same file — completes it.
+- `Closure` gains `minimal` (the blocks a share must carry); `missingBytes`
+  exported.
+- Depends on `@estoc/folder-object` 0.5.0 (`verifyTree` with optional
+  leaves).
+
 ## 0.14.0 — 2026-08-24
 
 Objects between people: `docs/object-share.md`.

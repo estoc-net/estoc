@@ -19,6 +19,7 @@ export type {
   HashOptions,
   HashedTree,
   VerifiedTree,
+  VerifyOptions,
   IndexJson,
   FolderObject,
   ObjectCard,
@@ -27,7 +28,7 @@ export type {
   MalformedLayer,
 } from "./types.js";
 export { MalformedObjectError } from "./types.js";
-export { hashTree, verifyTree, resolvePath, type Resolved } from "./tree.js";
+export { hashTree, verifyTree, resolvePath, type Resolved, type GetBlock } from "./tree.js";
 export { fileCid, isRawCid, isDagPbCid, compareNames, dagPbCode } from "./cid.js";
 export { parseIndex, isHidden, isInsideFiles, readObject, hashObject, contentOf } from "./object.js";
 export { CARD_TYP, didKeyKid, signRoot, signObject, verifyCard, verifyObjectCard, type CardVerdict } from "./card.js";
