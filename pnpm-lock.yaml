@@ -14,9 +14,6 @@ importers:
 
   app:
     dependencies:
-      '@djot/djot':
-        specifier: ^0.3.2
-        version: 0.3.2
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../packages/agent-core
@@ -32,6 +29,9 @@ importers:
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
+      marked:
+        specifier: ^18.0.11
+        version: 18.0.11
       qrcode-generator:
         specifier: ^2.0.4
         version: 2.0.4
@@ -756,11 +756,6 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
-
-  '@djot/djot@0.3.2':
-    resolution: {integrity: sha512-joMKR24B8rxueyFiJbpZAqEiypjvOyzTxzkhyr0q5mM/sUBaOD3unna/9IxtOotFugViyYlkIRaiXg3xM//zxg==}
-    engines: {node: '>=17.0.0'}
-    hasBin: true
 
   '@dnsquery/dns-packet@6.1.1':
     resolution: {integrity: sha512-WXTuFvL3G+74SchFAtz3FgIYVOe196ycvGsMgvSH/8Goptb1qpIQtIuM4SOK9G9lhMWYpHxnXyy544ZhluFOew==}
@@ -2274,6 +2269,11 @@ packages:
   main-event@1.0.5:
     resolution: {integrity: sha512-4l9z8r7Q446mhhVTwdHmfPksOYBwN2xa7ewEW2yxPVNQapIaAf57ORFLMB91SpMEMa4wXowect7fq3uMLjDnGA==}
 
+  marked@18.0.11:
+    resolution: {integrity: sha512-HnslJfsZkRPBDJRHvVtAaWlZHEpSu7u8LgQuJCELjRKuWR+hpq4A7sLq3p8HaI9ypVoXDXxV34CsQJEe1+J5Aw==}
+    engines: {node: '>= 20'}
+    hasBin: true
+
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
@@ -3679,8 +3679,6 @@ snapshots:
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
-
-  '@djot/djot@0.3.2': {}
 
   '@dnsquery/dns-packet@6.1.1':
     dependencies:
@@ -5162,6 +5160,8 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   main-event@1.0.5: {}
+
+  marked@18.0.11: {}
 
   math-intrinsics@1.1.0: {}
 

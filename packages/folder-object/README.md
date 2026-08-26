@@ -7,7 +7,7 @@ Reference implementation of the [folder-object](https://github.com/estoc-net/fol
 - **card** — the one signature in the system: a JWS (`typ: estoc/object-card`, EdDSA) over exactly `{did, root}` (any other member makes it malformed) by a `did:key` (an `@estoc/keystore` Signer, so a hardware key fits later). It means one thing — *this DID stands behind this object, as the object's own format defines it*; which version is current is the object's own business (`id`, `updated`). Who *sent* an object is the transport's business; endorsing or replying is a new object that refers to this one;
 - **signed object** — `{object/, card.jws}` as a mapping (spec §5); anything beside those two entries is ignored, so a rendered page can live next to the fact it renders.
 
-Rendering is not here: a format is a fact, a rendering is a projection of it, and each client projects its own way (the app renders `post/1.0` with its own djot renderer inside a sandboxed frame). The command-line tool over these functions is [`@estoc/cli`](../cli) (`estoc object hash|sign|verify`); the DIDComm transport is `object-share/1.0` in [`@estoc/agent-core`](../agent-core).
+Rendering is not here: a format is a fact, a rendering is a projection of it, and each client projects its own way (the app renders `post/1.0` with its own Markdown renderer inside a sandboxed frame). The command-line tool over these functions is [`@estoc/cli`](../cli) (`estoc object hash|sign|verify`); the DIDComm transport is `object-share/1.0` in [`@estoc/agent-core`](../agent-core).
 
 ```sh
 npm install @estoc/folder-object
@@ -38,7 +38,7 @@ import { hashTree, verifyTree, resolvePath } from "@estoc/folder-object";
 const { root, nodes, files } = await hashTree(mapping, { dirs: ["drafts"] });
 // nodes: every block but single-block files (CID → bytes); files: file CID → path
 const { files: paths, dirs } = await verifyTree(root, blocks);
-const hit = await resolvePath(root, "files/body.dj", getBlock);
+const hit = await resolvePath(root, "files/body.md", getBlock);
 ```
 
 Everything on the main entry is pure: no IO, no network, no policy — it runs in Node (≥ 20), workerd and the browser (sha-256 and Ed25519 via WebCrypto).

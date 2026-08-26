@@ -31,7 +31,7 @@ describe("object", () => {
     const mapping = await readTree(seaDay);
     mapping["draft.txt"] = enc("litter");
     const object = readObject(mapping);
-    expect(Object.keys(object.tree).sort()).toEqual(["files/body.dj", "files/images/sunset.png", "index.json"]);
+    expect(Object.keys(object.tree).sort()).toEqual(["files/body.md", "files/images/sunset.png", "index.json"]);
     const root = await hashObject(object);
     expect(root).toMatch(/^bafybei/);
     expect(await hashObject(readObject(await readTree(seaDay)))).toBe(root);
@@ -49,7 +49,7 @@ describe("object", () => {
     await writeFile(join(dir, "files", ".DS_Store"), "junk");
     await mkdir(join(dir, ".git"));
     await writeFile(join(dir, ".git", "HEAD"), "ref");
-    expect(Object.keys(await readTree(dir)).sort()).toEqual(["files/body.dj", "files/images/sunset.png", "index.json"]);
+    expect(Object.keys(await readTree(dir)).sort()).toEqual(["files/body.md", "files/images/sunset.png", "index.json"]);
 
     const hiddenContent = JSON.stringify({ format: "x", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "t", path: "files/.body" } });
     expect(() => readObject({ "index.json": enc(hiddenContent), "files/.body": enc("x") })).toThrow(/point into files/);
@@ -58,7 +58,7 @@ describe("object", () => {
   it("refuses a folder that holds a symbolic link", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fo-"));
     await cp(seaDay, dir, { recursive: true });
-    await symlink(join(dir, "files", "body.dj"), join(dir, "files", "link.dj"));
+    await symlink(join(dir, "files", "body.md"), join(dir, "files", "link.md"));
     await expect(readTree(dir)).rejects.toThrow(/symbolic link/);
   });
 
@@ -93,7 +93,7 @@ describe("card + signed object", () => {
     const verdict = await verifyObjectCard(signed.card, signed.object);
     expect(verdict).toMatchObject({ did: s.did(), matches: true });
 
-    const tampered = readObject({ ...object.tree, "files/body.dj": enc("changed") });
+    const tampered = readObject({ ...object.tree, "files/body.md": enc("changed") });
     expect((await verifyObjectCard(jws, tampered)).matches).toBe(false);
   });
 

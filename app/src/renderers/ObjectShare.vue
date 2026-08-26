@@ -17,7 +17,7 @@ import Bubble from "./Bubble.vue";
  * by whom or by nobody. A share that does not verify is shown as exactly
  * that.
  *
- * The body is someone else's text rendered to HTML by our own djot
+ * The body is someone else's text rendered to HTML by our own Markdown
  * renderer (raw HTML stripped), and still goes into a sandboxed frame:
  * no scripts, no origin, images as data URIs from the verified tree.
  */
@@ -76,9 +76,9 @@ onMounted(async () => {
     return;
   }
   const post = renderPost(object, { assetBase: "estoc-object" });
-  // in-tree references came out as estoc-object/files/…; the frame has
+  // in-tree references came out as estoc-object/<path>; the frame has
   // no origin to fetch from, so each becomes the verified bytes inline
-  const html = post.bodyHtml.replace(/(src|href)="estoc-object\/(files\/[^"]*)"/g, (whole, attr: string, path: string) => {
+  const html = post.bodyHtml.replace(/(src|href)="estoc-object\/([^"]*)"/g, (whole, attr: string, path: string) => {
     const bytes = files[path];
     return bytes === undefined ? whole : `${attr}="${dataUri(path, bytes)}"`;
   });

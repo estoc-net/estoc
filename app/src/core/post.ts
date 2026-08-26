@@ -1,4 +1,4 @@
-import { parse, renderHTML, type Image, type Link } from "@djot/djot";
+import { Marked, type Tokens } from "marked";
 import { contentOf, type FolderObject } from "@estoc/folder-object";
 
 /**
@@ -27,32 +27,55 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+/**
+ * Resolve a body reference the way its media type does — against the body's
+ * own location (spec §4: a `path` body lives at that path, a `text` body at
+ * the root). Returns the in-tree path, or undefined for anything that is not
+ * an in-tree reference (absolute URL, escapes the tree).
+ */
+export function resolveRef(ref: string, bodyPath: string | undefined): string | undefined {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith("/") || ref.startsWith("#")) return undefined;
+  const target = ref.split(/[?#]/, 1)[0] ?? "";
+  if (target === "") return undefined;
+  const dir = bodyPath ? bodyPath.split("/").slice(0, -1) : [];
+  const out: string[] = [...dir];
+  for (const seg of target.split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length === 0) return undefined;
+      out.pop();
+    } else out.push(seg);
+  }
+  return out.length ? out.join("/") : undefined;
+}
+
 export function renderPost(object: FolderObject, options: RenderOptions = {}): RenderedPost {
   if (object.meta.format !== POST_FORMAT) throw new Error(`not a post/1.0 object: ${object.meta.format}`);
   const content = contentOf(object);
   if (!content) throw new Error("post/1.0 requires content");
-  if (content.mediaType !== "text/x-djot") throw new Error(`unsupported body media type ${content.mediaType}`);
+  if (content.mediaType !== "text/markdown") throw new Error(`unsupported body media type ${content.mediaType}`);
   const source = new TextDecoder().decode(content.bytes);
+  const c = object.meta.content;
+  const bodyPath = c && "path" in c ? c.path : undefined;
   const base = options.assetBase ? options.assetBase.replace(/\/$/, "") + "/" : "";
-  const rewrite = (dest: string | undefined): string | undefined =>
-    dest && dest.startsWith("files/") ? base + dest : dest;
+  const rewrite = (dest: string): string => {
+    const resolved = resolveRef(dest, bodyPath);
+    return resolved === undefined ? dest : base + resolved;
+  };
 
-  const doc = parse(source, { warn: () => {} });
-  const bodyHtml = renderHTML(doc, {
-    overrides: {
-      image: (node: Image, r) => {
-        const alt = node.children.map((c) => ("text" in c ? c.text : "")).join("");
-        const src = rewrite(node.destination) ?? "";
-        return `<img src="${r.escapeAttribute(src)}" alt="${r.escapeAttribute(alt)}">`;
+  const md = new Marked({
+    gfm: true,
+    renderer: {
+      image({ href, text }: Tokens.Image) {
+        return `<img src="${escapeAttr(rewrite(href))}" alt="${escapeAttr(text)}">`;
       },
-      link: (node: Link, r) => {
-        const href = rewrite(node.destination) ?? "";
-        return `<a href="${r.escapeAttribute(href)}">${r.renderChildren(node)}</a>`;
+      link({ href, tokens }: Tokens.Link) {
+        return `<a href="${escapeAttr(rewrite(href))}">${this.parser.parseInline(tokens)}</a>`;
       },
-      raw_block: () => "",
-      raw_inline: () => "",
+      html: () => "",
     },
   });
+  const bodyHtml = md.parse(source, { async: false }) as string;
 
   const m = object.meta;
   const result: RenderedPost = {
@@ -70,4 +93,8 @@ export function renderPost(object: FolderObject, options: RenderOptions = {}): R
   const lang = str(m.inLanguage);
   if (lang !== undefined) result.inLanguage = lang;
   return result;
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
