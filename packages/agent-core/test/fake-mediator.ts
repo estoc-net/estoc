@@ -7,6 +7,10 @@ import { base64urlToBytes } from "@estoc/did-peer";
 import type { DerivedIdentity } from "@estoc/keystore";
 
 import {
+  BLOB_PUT,
+  BLOB_PUT_RESULT,
+  BLOB_DELETE,
+  BLOB_DELETE_RESULT,
   DELIVERY,
   DELIVERY_REQUEST,
   FORWARD,
@@ -32,6 +36,9 @@ import {
  */
 
 export const MEDIATOR_HTTP = "http://fake-mediator/";
+const PROBLEM_REPORT = "https://didcomm.org/report-problem/2.0/problem-report";
+/** the fake store's blob cap — small, so a test can hit it */
+export const BLOB_MAX = 64 * 1024;
 export const MEDIATOR_WS = "ws://fake-mediator/ws";
 
 const resolver = { resolve: resolveDIDCommDoc };
@@ -77,6 +84,13 @@ interface Queued {
   packed: string;
 }
 
+/** A blob the fake store knows: its declared size, its bytes once uploaded, and the live upload token. */
+interface FakeBlob {
+  size: number;
+  bytes: Uint8Array | null;
+  token: string | null;
+}
+
 export class FakeSocket {
   onopen: ((ev: unknown) => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
@@ -116,6 +130,8 @@ export class FakeMediator {
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
   readonly seenTypes: string[] = [];
+  /** blob-store/1.0 when on: hash → blob; off, `put` is refused */
+  readonly blobs: Map<string, FakeBlob> | null;
   /** the fake `fetch`: the mediator's endpoint, or 404 */
   readonly fetch: typeof fetch;
   /** the fake `WebSocket` constructor bound to this mediator */
@@ -125,13 +141,18 @@ export class FakeMediator {
   constructor(
     identity: DerivedIdentity,
     readonly http = MEDIATOR_HTTP,
-    readonly wsUrl = MEDIATOR_WS
+    readonly wsUrl = MEDIATOR_WS,
+    options: { blobs?: boolean } = {}
   ) {
     const minted = mintMediatorIdentity(identity, http, wsUrl);
     this.did = minted.did;
     this.secrets = minted.secrets;
+    this.blobs = options.blobs ? new Map() : null;
     this.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith(`${this.http}b/`)) {
+        return this.handleBlob(url, init);
+      }
       if (url !== this.http) {
         return new Response("not found", { status: 404 });
       }
@@ -249,9 +270,59 @@ export class FakeMediator {
       }
       case LIVE_DELIVERY_CHANGE:
         return this.reply(STATUS, from as string, { live_delivery: (msg.body as { live_delivery: boolean }).live_delivery }, msg.id);
+      case BLOB_PUT: {
+        const { hash, size } = msg.body as { hash: string; size: number };
+        if (this.blobs === null) {
+          return this.reply(PROBLEM_REPORT, from as string, { code: "e.p.blob.refused", comment: "this mediator does not store blobs" }, msg.id);
+        }
+        if (size > BLOB_MAX) {
+          return this.reply(PROBLEM_REPORT, from as string, { code: "e.p.blob.too-large", comment: `at most ${BLOB_MAX} bytes` }, msg.id);
+        }
+        let blob = this.blobs.get(hash);
+        if (blob === undefined) {
+          blob = { size, bytes: null, token: null };
+          this.blobs.set(hash, blob);
+        }
+        const url = `${this.http}b/${hash}`;
+        const body: Record<string, unknown> = { hash, url, retain_until: new Date(Date.now() + 3600_000).toISOString() };
+        if (blob.bytes === null) {
+          blob.token = crypto.randomUUID();
+          body.upload = { url: `${url}?token=${blob.token}`, expires: new Date(Date.now() + 3600_000).toISOString() };
+        }
+        return this.reply(BLOB_PUT_RESULT, from as string, body, msg.id);
+      }
+      case BLOB_DELETE: {
+        const { hash } = msg.body as { hash: string };
+        this.blobs?.delete(hash);
+        return this.reply(BLOB_DELETE_RESULT, from as string, { hash }, msg.id);
+      }
       default:
         throw new Error(`fake mediator cannot handle ${msg.type}`);
     }
+  }
+
+  /** `PUT /b/<hash>?token=…` with the bytes; `GET /b/<hash>` for anyone, 404 unless uploaded. */
+  private async handleBlob(url: string, init?: RequestInit): Promise<Response> {
+    const parsed = new URL(url);
+    const hash = parsed.pathname.slice("/b/".length);
+    const blob = this.blobs?.get(hash);
+    if ((init?.method ?? "GET") === "PUT") {
+      const token = parsed.searchParams.get("token");
+      if (blob === undefined || token === null || token !== blob.token) {
+        return new Response("no such upload", { status: 404 });
+      }
+      const bytes = new Uint8Array(await new Request(url, { method: "PUT", body: init?.body as BodyInit }).arrayBuffer());
+      if (bytes.length !== blob.size) {
+        return new Response(`expected ${blob.size} bytes`, { status: 400 });
+      }
+      blob.bytes = bytes;
+      blob.token = null;
+      return new Response(null, { status: 204 });
+    }
+    if (blob === undefined || blob.bytes === null) {
+      return new Response("no such blob", { status: 404 });
+    }
+    return new Response(blob.bytes, { status: 200, headers: { "content-type": "application/octet-stream" } });
   }
 
   async handleHttp(text: string): Promise<string | null> {

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.16.0 — 2026-08-26
+
+The package road: two roads and no round trip
+(`docs/object-share.md` §7–8, `docs/blob-store.md`).
+
+- `Agent.shareObject`: a closure that does not fit `maxShareBytes` no
+  longer goes leafless and waits. The skeleton and `index.json` still go
+  inline, and the whole closure goes as a **package** — a CARv1 encrypted
+  under a fresh key with Tink's `AES256_GCM_HKDF_1MB`, put at our
+  mediator's blob store (blob-store/1.0 `put`, then `PUT` of the bytes
+  where it says), named in the share by `body.package` (attachment id and
+  ciphering) and a linked attachment (URL, hash, size of the ciphertext).
+  One package per root per run: sharing an object with several contacts
+  is one upload. A mediator that keeps no blobs, or refuses the size,
+  makes the share fail with the mediator's problem code.
+- `Agent.fetchPackage(record)`: the receiver's side, whenever it likes —
+  GET the ciphertext, check it against its name, decrypt, read the CAR,
+  walk the tree from the share's root over its blocks (only the closure
+  is kept), put-if-absent into `blobs/`, and verify the share again.
+  A package that is gone or lies throws; the share stays a partial
+  object.
+- `verifyShare` gains `package` (`SharePackage`: hash, size, links, key)
+  when the share names one that is well-formed; a malformed or unknown
+  one is ignored, not an error. `packageOf`, `openPackage`,
+  `CAR_MEDIA_TYPE` exported.
+- `encryptStream` / `decryptStream` / `freshKey`: the streaming AEAD on
+  WebCrypto (`protocol/streaming-aead.ts`); blob-store/1.0 type constants
+  and `parsePutResult` (`protocol/blob-store.ts`).
+- Depends on `@estoc/folder-object` 0.6.0 (CAR, `blobHash`).
+
 ## 0.15.0 — 2026-08-26
 
 The minimal share: an object's shape before its bytes

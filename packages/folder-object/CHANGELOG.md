@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0 — 2026-08-26
+
+The closure as one file, for the package road (`estoc/docs/object-share.md`
+§8).
+
+- `encodeCar(roots, blocks)` / `decodeCar(bytes)`: CARv1 with a
+  hand-encoded dag-cbor header — no CBOR dependency. Decoding checks
+  every block against its CID and leaves out the ones that do not match
+  (listed in `bad`), so every byte returned is named truthfully.
+- `blobHash(bytes)` / `isBlobHash(name)`: the sha-256 multihash in
+  base32 lower that names a blob (`estoc/docs/blob-store.md`).
+
 ## 0.5.0 — 2026-08-26
 
 The tree's skeleton apart from its leaves, for sharing an object before

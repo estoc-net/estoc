@@ -113,8 +113,11 @@ export {
   OBJECT_SHARE,
   DAG_PB_MEDIA_TYPE,
   RAW_MEDIA_TYPE,
+  CAR_MEDIA_TYPE,
   DEFAULT_MAX_SHARE_BYTES,
   closureOf,
+  packageOf,
+  openPackage,
   closureSize,
   attachmentsOf,
   blocksOf,
@@ -125,7 +128,18 @@ export {
   type BlockAttachment,
   type Closure,
   type VerifiedShare,
+  type SharePackage,
+  type PackageAttachment,
 } from "./protocol/object-share.js";
+export { AES256_GCM_HKDF_1MB, encryptStream, decryptStream, freshKey } from "./protocol/streaming-aead.js";
+export {
+  BLOB_STORE_PROTOCOL,
+  BLOB_PUT,
+  BLOB_PUT_RESULT,
+  BLOB_DELETE,
+  BLOB_DELETE_RESULT,
+  type BlobPlacement,
+} from "./protocol/blob-store.js";
 export { BlobStore } from "./vault/blobs.js";
 export { didHost, resolveMediatorInput } from "./protocol/mediator-input.js";
 export {

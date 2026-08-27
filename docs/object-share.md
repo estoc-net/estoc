@@ -1,8 +1,9 @@
 # object-share/1.0
 
-Status: §1–6 implemented in `@estoc/agent-core` 0.15.0 (`@estoc/folder-object`
-0.5.0), 2026-08-26 — the skeleton / leaves split included. §7–8
-(packages) specified 2026-08-26, not yet implemented.
+Status: implemented in full — §1–6 in `@estoc/agent-core` 0.15.0
+(`@estoc/folder-object` 0.5.0), §7–8 (packages: CAR, `AES256_GCM_HKDF_1MB`,
+blob-store put/upload, `Agent.fetchPackage`) in 0.16.0 (folder-object
+0.6.0), 2026-08-26.
 Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`,
 `research/notes/2026-08-26-want-and-blob-road.md`.
 

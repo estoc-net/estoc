@@ -1,6 +1,6 @@
 {
   "name": "@estoc/folder-object",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "An object is a folder: UnixFS merkle hashing (IPIP-499 unixfs-v1-2025), the folder-object format (read, validate, hash), did:key object cards (sign, verify), and the signed-object layout. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",

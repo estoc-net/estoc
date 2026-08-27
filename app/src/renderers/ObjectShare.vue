@@ -4,7 +4,7 @@ import { missingBytes, verifyShare, type VerifiedShare } from "@estoc/agent-core
 
 import type { Entry } from "../core/entries.js";
 import { POST_FORMAT, renderPost } from "../core/post.js";
-import { heldBlock } from "../core/store.js";
+import { fetchPackage, heldBlock } from "../core/store.js";
 import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
 
@@ -20,7 +20,9 @@ import Bubble from "./Bubble.vue";
  * still filling in — is a partial object: what it is, its files and
  * their sizes are all known; what is missing is said, not hidden. Blocks
  * are looked up in the vault's `blobs/` too, so leaves that arrived by
- * another road show.
+ * another road show. A share that names a package — the bytes as one
+ * encrypted file at a URL — offers to fetch it; fetched, checked and
+ * opened, the object fills in and is shown again.
  *
  * The body is someone else's text rendered to HTML by our own Markdown
  * renderer (raw HTML stripped), and still goes into a sandboxed frame:
@@ -32,7 +34,12 @@ const props = defineProps<{ entry: Entry; contact: Contact | null }>();
 interface Awaiting {
   files: number;
   bytes: number;
+  /** the package's size, when the share names one to fetch */
+  packaged: number | null;
 }
+
+/** The fetch of a package, as it goes. */
+const fetching = ref<{ state: "idle" } | { state: "busy" } | { state: "failed"; reason: string }>({ state: "idle" });
 
 type View =
   | { state: "checking" }
@@ -91,10 +98,27 @@ onMounted(async () => {
     view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
     return;
   }
+  show(share);
+});
+
+/** Fetch the package the share names, and show the object as it is after. */
+async function fetchBytes(): Promise<void> {
+  fetching.value = { state: "busy" };
+  try {
+    show(await fetchPackage(props.entry.record));
+    fetching.value = { state: "idle" };
+  } catch (err) {
+    fetching.value = { state: "failed", reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function show(share: VerifiedShare): void {
   const { root, object, tree } = share;
   const did = share.card?.did ?? null;
   const files = object.tree;
-  const awaiting: Awaiting | null = share.complete ? null : { files: tree.partial.size, bytes: missingBytes(tree) };
+  const awaiting: Awaiting | null = share.complete
+    ? null
+    : { files: tree.partial.size, bytes: missingBytes(tree), packaged: share.package?.byteCount ?? null };
   if (object.meta.format !== POST_FORMAT) {
     // every file the tree names, sized by the skeleton when its bytes are not here
     const listing = [...tree.files.keys()]
@@ -140,7 +164,7 @@ onMounted(async () => {
     files: Object.keys(files).length,
     awaiting,
   };
-});
+}
 
 const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
 </script>
@@ -165,7 +189,17 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
         </ul>
         <p v-if="view.awaiting !== null" class="object-meta object-awaiting">
           {{ view.awaiting.files }} {{ view.awaiting.files === 1 ? "file" : "files" }} still on the way ({{ view.awaiting.bytes }} B)
+          <button
+            v-if="view.awaiting.packaged !== null"
+            type="button"
+            class="object-fetch"
+            :disabled="fetching.state === 'busy'"
+            @click="fetchBytes"
+          >
+            {{ fetching.state === "busy" ? "fetching…" : `fetch (${view.awaiting.packaged} B)` }}
+          </button>
         </p>
+        <p v-if="fetching.state === 'failed'" class="object-meta object-bad">could not fetch the package: {{ fetching.reason }}</p>
         <p v-if="view.did !== null" class="object-meta" :title="`${view.did}\n${view.root}`">
           signed by <code>{{ shortDid(view.did) }}</code>
         </p>
@@ -219,5 +253,20 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
 }
 .object-awaiting {
   font-style: italic;
+}
+.object-fetch {
+  margin-left: 0.5rem;
+  font: inherit;
+  font-style: normal;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.object-fetch:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 </style>

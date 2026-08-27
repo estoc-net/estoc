@@ -1,5 +1,9 @@
 import {
+  blobHash,
+  decodeCar,
+  encodeCar,
   hashTree,
+  isBlobHash,
   isDagPbCid,
   isInsideFiles,
   MalformedObjectError,
@@ -16,15 +20,19 @@ import {
 
 import type { PlainMessage } from "../vault/messages.js";
 import type { ProtocolHandler } from "./handler.js";
+import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
 
 /**
  * object-share/1.0 (`docs/object-share.md`): hand a contact a whole
  * object — a folder-object hashed into a UnixFS tree. One message
  * carries the root in the body and blocks as attachments named by their
  * CID: always the tree's **skeleton** (every dag-pb block) and
- * `index.json`, and every leaf when the whole closure fits. Nothing is
- * asked back over DIDComm; leaves a share does not carry are named and
- * sized by the skeleton, and come by another road or a later share.
+ * `index.json`, and every leaf when the whole closure fits. When it does
+ * not, the leaves go by the other road: the whole closure as one
+ * encrypted CAR at a URL — a **package** (§8) — named in the share with
+ * its hash and key, fetched by the receiver whenever it likes. Nothing
+ * is asked back over DIDComm; a package that is gone leaves a partial
+ * object whose files are all named and sized by the skeleton.
  *
  * What is shared is an object — a tree that declares what it is
  * (`index.json`); a well-hashed tree that is not one does not verify,
@@ -42,6 +50,8 @@ export const OBJECT_SHARE = "https://estoc.dev/object-share/1.0/share";
 /** IPLD block media types, as the IPFS ecosystem names them. */
 export const DAG_PB_MEDIA_TYPE = "application/vnd.ipld.dag-pb";
 export const RAW_MEDIA_TYPE = "application/vnd.ipld.raw";
+/** The package's plaintext: a CARv1 of the closure. */
+export const CAR_MEDIA_TYPE = "application/vnd.ipld.car";
 
 /** The raw block bytes one share may carry by default: what a mediator queue comfortably holds. */
 export const DEFAULT_MAX_SHARE_BYTES = 1024 * 1024;
@@ -51,6 +61,33 @@ export interface ObjectShareBody {
   root: string;
   /** compact JWS over `{did, root}` — folder-object's card; present, the share is a signed object */
   card?: string;
+  /** the one package (§8): which attachment, and how to open it */
+  package?: {
+    attachment_id: string;
+    ciphering: { algorithm: string; parameters: { key: string } };
+  };
+}
+
+/**
+ * The package as a DIDComm linked attachment: `id` and `data.hash` are
+ * the ciphertext's own name (sha-256 multihash, base32), `byte_count`
+ * its size, `data.links` where it is; `media_type` says what the
+ * plaintext is.
+ */
+export interface PackageAttachment {
+  id: string;
+  media_type: typeof CAR_MEDIA_TYPE;
+  byte_count: number;
+  data: { links: string[]; hash: string };
+}
+
+/** A package as a share names it: everything needed to fetch and open it. */
+export interface SharePackage {
+  hash: string;
+  byteCount: number;
+  links: string[];
+  algorithm: typeof AES256_GCM_HKDF_1MB;
+  key: Uint8Array;
 }
 
 /**
@@ -96,6 +133,8 @@ export interface VerifiedShare {
   object: FolderObject;
   /** true when no leaf is missing: the object is whole */
   complete: boolean;
+  /** the package the share names, when it names one that is well-formed; null otherwise */
+  package: SharePackage | null;
   /** every block held — the message's, and any the caller supplied — CID → bytes */
   blocks: Map<string, Uint8Array>;
 }
@@ -153,6 +192,85 @@ export function attachmentsOf(blocks: Map<string, Uint8Array>): BlockAttachment[
       byte_count: bytes.length,
       data: { base64: bytesToBase64url(bytes) },
     }));
+}
+
+/**
+ * The share's `body.package` and its attachment, as `SharePackage`, when
+ * both are there and well-formed under an algorithm we know; else null —
+ * a package that cannot be opened is ignored, not an error (§8).
+ */
+export function packageOf(msg: PlainMessage): SharePackage | null {
+  const named = (msg.body as Partial<ObjectShareBody>).package;
+  if (named === null || typeof named !== "object") {
+    return null;
+  }
+  const { attachment_id, ciphering } = named;
+  if (typeof attachment_id !== "string" || ciphering?.algorithm !== AES256_GCM_HKDF_1MB) {
+    return null;
+  }
+  const keyText = ciphering.parameters?.key;
+  if (typeof keyText !== "string") {
+    return null;
+  }
+  let key: Uint8Array;
+  try {
+    key = base64urlToBytes(keyText);
+  } catch {
+    return null;
+  }
+  if (key.length !== 32) {
+    return null;
+  }
+  const attachment = (msg.attachments ?? []).find(
+    (a) => (a as Partial<PackageAttachment>).id === attachment_id
+  ) as Partial<PackageAttachment> | undefined;
+  const data = attachment?.data;
+  const links = Array.isArray(data?.links) ? data.links.filter((l): l is string => typeof l === "string") : [];
+  if (attachment === undefined || typeof data?.hash !== "string" || !isBlobHash(data.hash) || links.length === 0) {
+    return null;
+  }
+  if (attachment.id !== data.hash || typeof attachment.byte_count !== "number") {
+    return null;
+  }
+  return { hash: data.hash, byteCount: attachment.byte_count, links, algorithm: AES256_GCM_HKDF_1MB, key };
+}
+
+/** The package attachment and the body entry that names it, for a share carrying one. */
+export function packageParts(
+  placed: { hash: string; url: string; byteCount: number; key: Uint8Array }
+): { attachment: PackageAttachment; named: NonNullable<ObjectShareBody["package"]> } {
+  return {
+    attachment: {
+      id: placed.hash,
+      media_type: CAR_MEDIA_TYPE,
+      byte_count: placed.byteCount,
+      data: { links: [placed.url], hash: placed.hash },
+    },
+    named: {
+      attachment_id: placed.hash,
+      ciphering: { algorithm: AES256_GCM_HKDF_1MB, parameters: { key: bytesToBase64url(placed.key) } },
+    },
+  };
+}
+
+/** The package's plaintext for a closure: a CARv1 rooted at `root` holding every block. */
+export function packageCar(closure: Closure): Uint8Array {
+  return encodeCar([closure.root], closure.blocks);
+}
+
+/**
+ * Open a fetched package: the ciphertext must hash to the name the share
+ * gave it, then decrypt under the share's key and read the CAR. Every
+ * block returned hashes to its CID; whether it belongs to the closure is
+ * for `verifyShare` to decide, block by block, as it walks. Throws when
+ * the bytes are not the package or do not open.
+ */
+export async function openPackage(pkg: SharePackage, ciphertext: Uint8Array): Promise<Map<string, Uint8Array>> {
+  if ((await blobHash(ciphertext)) !== pkg.hash) {
+    throw new Error(`the bytes fetched do not hash to the package ${pkg.hash}`);
+  }
+  const car = await decodeCar(await decryptStream(pkg.key, ciphertext));
+  return car.blocks;
 }
 
 /**
@@ -232,7 +350,7 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
   }
   const meta = parseIndex(files["index.json"] as Uint8Array);
   const object: FolderObject = { meta, tree: files };
-  return { root, card, tree, object, complete: tree.missing.size === 0, blocks };
+  return { root, card, tree, object, complete: tree.missing.size === 0, package: packageOf(msg), blocks };
 }
 
 /**
@@ -242,7 +360,8 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
  * application to show, which will run the same check to decide how. A
  * share whose leaves are not all here is a partial object, kept as far
  * as it goes: `blobs/` is by CID, so the rest fills in from wherever it
- * comes.
+ * comes — the package it names, when the application fetches it
+ * (`Agent.fetchPackage`), or a later share.
  */
 export const objectShareHandler: ProtocolHandler = {
   types: [OBJECT_SHARE],
@@ -260,7 +379,8 @@ export const objectShareHandler: ProtocolHandler = {
     }
     const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
     const kept = `${share.tree.files.size} files kept`;
-    const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes`;
+    const road = share.package === null ? "" : ` (${share.package.byteCount} bytes packaged at ${share.package.links[0]})`;
+    const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes${road}`;
     agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${kept}${state}`);
   },
 };
@@ -274,7 +394,7 @@ export function missingBytes(tree: VerifiedTree): number {
   return total;
 }
 
-function bytesToBase64url(bytes: Uint8Array): string {
+export function bytesToBase64url(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));

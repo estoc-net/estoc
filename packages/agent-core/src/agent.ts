@@ -38,9 +38,17 @@ import {
   closureOf,
   closureSize,
   objectShareHandler,
+  openPackage,
+  packageCar,
+  packageParts,
+  verifyShare,
+  type Closure,
   type ObjectShareBody,
+  type VerifiedShare,
 } from "./protocol/object-share.js";
-import { signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
+import { BLOB_PUT, BLOB_PUT_RESULT, parsePutResult } from "./protocol/blob-store.js";
+import { encryptStream, freshKey } from "./protocol/streaming-aead.js";
+import { blobHash, signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 import {
   currentDid,
   currentMyDid,
@@ -166,9 +174,18 @@ export interface AgentOptions {
   handlers?: ProtocolHandler[];
   /**
    * The most block bytes `shareObject` will put in one message; default
-   * 1 MiB. Bigger objects wait for another road (see docs/object-share.md).
+   * 1 MiB. A bigger closure goes as a package at the mediator's blob
+   * store, the skeleton still inline (see docs/object-share.md §7–8).
    */
   maxShareBytes?: number;
+}
+
+/** A package of ours at the blob store: the ciphertext's name and key, kept so a second share of the same object reuses it. */
+interface PlacedPackage {
+  hash: string;
+  url: string;
+  byteCount: number;
+  key: Uint8Array;
 }
 
 interface DeliveryAttachment {
@@ -208,6 +225,8 @@ export class Agent {
   private readonly reconnectDelayMs: number;
   private readonly deliveryTimeoutMs: number;
   private readonly maxShareBytes: number;
+  /** root → the package placed for it during this run */
+  private readonly packages = new Map<string, PlacedPackage>();
   private readonly didResolver: { resolve: (did: string) => Promise<DIDDoc | null> };
   /** application-protocol handlers by message type */
   private readonly handlers = new Map<string, ProtocolHandler>();
@@ -1607,11 +1626,14 @@ export class Agent {
   /**
    * Share an object (`docs/object-share.md`): hash its canonical tree,
    * put the blocks in our own `blobs/`, and send one object-share/1.0
-   * message — the root in the body, one attachment per block. The whole
-   * closure goes when it fits `maxShareBytes`; otherwise the minimal
-   * share goes — the skeleton and `index.json`, no leaves under
-   * `files/`, all or none — and the leaves wait for another road. An
-   * object whose minimal share does not fit cannot be shared this way.
+   * message — the root in the body, one attachment per block. Two roads
+   * and no round trip (§7): the whole closure goes inline when it fits
+   * `maxShareBytes`; otherwise the skeleton and `index.json` go inline
+   * and the whole closure goes as one encrypted CAR — a package (§8) —
+   * put at our mediator's blob store under a fresh key, named in the
+   * share by URL, hash and key. An object whose skeleton and
+   * `index.json` do not fit cannot be shared this way; one whose
+   * mediator keeps no blobs cannot be shared beyond `maxShareBytes`.
    * Plain, the share says only that we handed the object over. With
    * `sign` the anchor signs a card and the share is a signed object we
    * stand behind; with `card` (passing on an object someone else
@@ -1624,14 +1646,6 @@ export class Agent {
   ): Promise<MessageRecord> {
     const closure = await closureOf(object.tree);
     const { root } = closure;
-    let carried = closure.blocks;
-    if (closureSize(carried) > this.maxShareBytes) {
-      carried = closure.minimal;
-      const size = closureSize(carried);
-      if (size > this.maxShareBytes) {
-        throw new Error(`object's skeleton and index.json are ${size} bytes; one share carries at most ${this.maxShareBytes}`);
-      }
-    }
     const body: ObjectShareBody = { root };
     if (options.card !== undefined) {
       if (options.sign) {
@@ -1647,12 +1661,108 @@ export class Agent {
       const identity = await this.vault.derive(this.seedKey, anchor.key);
       body.card = await signRoot(anchor.did, root, identity.signer);
     }
+    let carried = closure.blocks;
+    const attachments: unknown[] = [];
+    if (closureSize(carried) > this.maxShareBytes) {
+      carried = closure.minimal;
+      const size = closureSize(carried);
+      if (size > this.maxShareBytes) {
+        throw new Error(`object's skeleton and index.json are ${size} bytes; one share carries at most ${this.maxShareBytes}`);
+      }
+      const { attachment, named } = packageParts(await this.placePackage(closure));
+      body.package = named;
+      attachments.push(attachment);
+    }
     for (const [cid, bytes] of closure.blocks) {
       await this.vault.blobs.put(cid, bytes);
     }
     return this.send(contactDid, OBJECT_SHARE, body as unknown as Record<string, unknown>, {
-      attachments: attachmentsOf(carried),
+      attachments: [...attachmentsOf(carried), ...attachments],
     });
+  }
+
+  /**
+   * The closure as a package at our mediator (§8.1): CAR it, encrypt it
+   * under a fresh key, `put` its name and size (blob-store/1.0), and
+   * upload the bytes where the mediator says — unless it has them. A
+   * package placed earlier this run for the same root is put again (the
+   * hold is renewed) and reused when the store still has its bytes, so
+   * sharing one object with several contacts is one upload.
+   */
+  private async placePackage(closure: Closure): Promise<PlacedPackage> {
+    const known = this.packages.get(closure.root);
+    if (known !== undefined) {
+      const renewed = await this.putBlob(known.hash, known.byteCount);
+      if (renewed.upload === null) {
+        return known;
+      }
+    }
+    const key = freshKey();
+    const ciphertext = await encryptStream(key, packageCar(closure));
+    const hash = await blobHash(ciphertext);
+    const placed = await this.putBlob(hash, ciphertext.length);
+    if (placed.upload !== null) {
+      const response = await this.fetchFn(placed.upload.url, { method: "PUT", body: ciphertext });
+      if (!response.ok) {
+        throw new Error(`the blob store answered ${response.status} to the package upload`);
+      }
+    }
+    const result = { hash, url: placed.url, byteCount: ciphertext.length, key };
+    this.packages.set(closure.root, result);
+    this.log(`package ${hash} (${ciphertext.length} bytes) placed at ${placed.url} until ${placed.retainUntil}`);
+    return result;
+  }
+
+  /** blob-store/1.0 `put` to our mediator; a problem-report is an error naming its code. */
+  private async putBlob(hash: string, size: number) {
+    const answer = await this.mediatorRoundTrip(BLOB_PUT, { hash, size });
+    if (answer.type !== BLOB_PUT_RESULT) {
+      const code = typeof answer.body.code === "string" ? answer.body.code : answer.type;
+      const comment = typeof answer.body.comment === "string" ? `: ${answer.body.comment}` : "";
+      throw new Error(`the mediator will not keep the package (${code}${comment})`);
+    }
+    return parsePutResult(answer.body);
+  }
+
+  /**
+   * Fetch the package a received share names and fill the object in
+   * (§8): GET the ciphertext, check it against its name, open it, and
+   * walk the tree from the message's root over the package's blocks —
+   * only blocks the walk reaches (the closure) are kept, put-if-absent
+   * in `blobs/`. Resolves to the share as verified afterwards; throws
+   * when the share names no package, the bytes cannot be fetched (the
+   * store's retention ran out), or they do not open — the share is then
+   * what it was, a partial object.
+   */
+  async fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
+    const before = await verifyShare(record.msg, (cid) => this.vault.blobs.get(cid));
+    if (before.complete) {
+      return before;
+    }
+    const pkg = before.package;
+    if (pkg === null) {
+      throw new Error("the share names no package to fetch");
+    }
+    let ciphertext: Uint8Array | null = null;
+    let failure = "";
+    for (const url of pkg.links) {
+      const response = await this.fetchFn(url);
+      if (response.ok) {
+        ciphertext = new Uint8Array(await response.arrayBuffer());
+        break;
+      }
+      failure = `${url} answered ${response.status}`;
+    }
+    if (ciphertext === null) {
+      throw new Error(`the package is not there: ${failure}`);
+    }
+    const blocks = await openPackage(pkg, ciphertext);
+    const share = await verifyShare(record.msg, async (cid) => blocks.get(cid) ?? this.vault.blobs.get(cid));
+    for (const [cid, bytes] of share.blocks) {
+      await this.vault.blobs.put(cid, bytes);
+    }
+    this.log(`package ${pkg.hash} opened: ${share.root} is ${share.complete ? "whole" : "still partial"}`);
+    return share;
   }
 
   /** Send a basicmessage/2.0; resolves to the appended log record. */

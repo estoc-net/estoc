@@ -43,13 +43,13 @@ import {
   snapshotVault,
 } from "../src/index.js";
 import { chatView, history, type ChatMessage } from "./chat-view.js";
-import { FakeMediator, MEDIATOR_HTTP, network } from "./fake-mediator.js";
+import { BLOB_MAX, FakeMediator, MEDIATOR_HTTP, network } from "./fake-mediator.js";
 
 const didcomm = { Message, FromPrior };
 const seedOf = (fill: number) => new Uint8Array(32).map((_, i) => (i * 7 + fill) & 0xff);
 
-async function newMediator(): Promise<FakeMediator> {
-  return new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), "anchor"));
+async function newMediator(options: { blobs?: boolean } = {}): Promise<FakeMediator> {
+  return new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), "anchor"), MEDIATOR_HTTP, undefined, options);
 }
 
 interface Party {
@@ -1397,61 +1397,136 @@ describe("Agent sharing objects", () => {
     bob.agent.destroy();
   });
 
-  it("shares the minimal form when the closure does not fit: skeleton and index.json, leaves later", async () => {
-    const mediator = await newMediator();
+  /** An agent over `vault` squeezed to `maxShareBytes`, started and live. */
+  async function squeezed(mediator: FakeMediator, maxShareBytes: number) {
     const { backend, vault, seedKey } = await newVault("Alice", 1, mediator.did);
-    const alice = attach("Alice", backend, vault, seedKey, mediator);
-    const bob = await newParty("Bob", 2, mediator);
-    alice.agent.destroy();
-    const { root, blocks, minimal } = await closureOf(files);
-    expect(minimal.size).toBe(4); // three directory nodes and index.json
-    const tight = new Agent({
+    const first = attach("Alice", backend, vault, seedKey, mediator);
+    first.agent.destroy();
+    const agent = new Agent({
       vault,
       seedKey,
       didcomm,
       resolveDid: resolveDIDCommDoc,
       fetch: mediator.fetch,
       WebSocket: mediator.WebSocket,
-      maxShareBytes: closureSize(minimal),
+      maxShareBytes,
     });
-    await Promise.all([tight.start(), bob.agent.start()]);
-    await withTimeout(bob.live, 8000, "bob live");
-    await until(() => tight.did !== null);
-    await tight.addContact(bob.agent.did as string, "Bob");
-    const sent = await tight.shareObject(bob.agent.did as string, object, { sign: true });
-    expect(sent.msg.attachments).toHaveLength(4);
-    expect((sent.msg.attachments as { id: string }[]).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
-    // the sender keeps every block regardless
-    for (const cid of blocks.keys()) expect(await vault.blobs.has(cid)).toBe(true);
+    await agent.start();
+    await until(() => agent.did !== null);
+    return { agent, vault, backend, seedKey };
+  }
 
+  it("takes the package road when the closure does not fit: skeleton and index.json inline, the closure as an encrypted CAR at the mediator", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const bob = await newParty("Bob", 2, mediator);
+    const { root, blocks, minimal } = await closureOf(files);
+    expect(minimal.size).toBe(4); // three directory nodes and index.json
+    const tight = await squeezed(mediator, closureSize(minimal));
+    await bob.agent.start();
+    await withTimeout(bob.live, 8000, "bob live");
+    await tight.agent.addContact(bob.agent.did as string, "Bob");
+    const sent = await tight.agent.shareObject(bob.agent.did as string, object, { sign: true });
+    const attachments = sent.msg.attachments as { id: string; media_type: string; byte_count: number; data: Record<string, unknown> }[];
+    expect(attachments).toHaveLength(5);
+    expect(attachments.slice(0, 4).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
+    const pkg = attachments[4] as (typeof attachments)[number];
+    expect(pkg.media_type).toBe("application/vnd.ipld.car");
+    expect(pkg.data).toEqual({ links: [`${MEDIATOR_HTTP}b/${pkg.id}`], hash: pkg.id });
+    const named = (sent.msg.body as { package: { attachment_id: string; ciphering: { algorithm: string; parameters: { key: string } } } }).package;
+    expect(named.attachment_id).toBe(pkg.id);
+    expect(named.ciphering.algorithm).toBe("AES256_GCM_HKDF_1MB");
+    // the store holds the ciphertext, whole, under its name
+    const stored = mediator.blobs?.get(pkg.id);
+    expect(stored?.bytes?.length).toBe(pkg.byte_count);
+    // the sender keeps every block regardless
+    for (const cid of blocks.keys()) expect(await tight.vault.blobs.has(cid)).toBe(true);
+
+    // Bob has the skeleton; the leaves are named, sized and packaged, not here
     await eventually(() => bob.vault.blobs.has(root), "bob's skeleton");
     const bodyCid = [...blocks.keys()].find((c) => !minimal.has(c)) as string;
     expect(await bob.vault.blobs.has(bodyCid)).toBe(false);
     const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
     const partial = await verifyShare(record.msg);
     expect(partial.complete).toBe(false);
-    expect(partial.card?.did).toBe(vault.config.identity.anchor.did);
+    expect(partial.card?.did).toBe(tight.vault.config.identity.anchor.did);
     expect(partial.object.meta.title).toBe("Sea day");
     expect(Object.keys(partial.object.tree)).toEqual(["index.json"]);
     expect([...partial.tree.partial.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png"]);
     const lacking = files["files/body.dj"].length + files["files/images/dot.png"].length;
     expect(missingBytes(partial.tree)).toBe(lacking);
-    expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes`))).toBe(true);
+    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, links: [`${MEDIATOR_HTTP}b/${pkg.id}`] });
+    expect(partial.package?.key.length).toBe(32);
+    expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes (${pkg.byte_count} bytes packaged at`))).toBe(true);
 
-    // the leaves arrive by any road — here, a later whole share of the
-    // same object from an agent that is not squeezed — and the first
-    // record fills in against blobs/
-    tight.destroy();
-    const roomy = attach("Alice", backend, vault, seedKey, mediator);
-    await roomy.agent.start();
-    await until(() => roomy.agent.did !== null);
-    await roomy.agent.shareObject(bob.agent.did as string, object);
-    await eventually(() => bob.vault.blobs.has(bodyCid), "bob's leaves");
-    const whole = await verifyShare(record.msg, (cid) => bob.vault.blobs.get(cid));
+    // whenever Bob likes: fetch, check, open, fill in
+    const whole = await bob.agent.fetchPackage(record);
     expect(whole.complete).toBe(true);
     expect(Object.keys(whole.object.tree).sort()).toEqual(["files/body.dj", "files/images/dot.png", "index.json"]);
+    expect(await bob.vault.blobs.has(bodyCid)).toBe(true);
     expect((await verifyShare(record.msg)).complete).toBe(false); // the message alone is still what it was
+    expect((await verifyShare(record.msg, (cid) => bob.vault.blobs.get(cid))).complete).toBe(true);
+    expect(await bob.agent.fetchPackage(record)).toMatchObject({ complete: true }); // already whole: nothing fetched
+
+    // a second share of the same object reuses the one package
+    const carol = await newParty("Carol", 3, mediator);
+    await carol.agent.start();
+    await withTimeout(carol.live, 8000, "carol live");
+    await tight.agent.addContact(carol.agent.did as string, "Carol");
+    const again = await tight.agent.shareObject(carol.agent.did as string, object);
+    expect((again.msg.attachments as { id: string }[])[4]?.id).toBe(pkg.id);
+    expect(mediator.blobs?.size).toBe(1);
+    tight.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("cannot take the package road past a mediator that keeps no blobs, or past its cap", async () => {
+    const mediator = await newMediator();
+    const bob = await newParty("Bob", 2, mediator);
+    const { minimal } = await closureOf(files);
+    const tight = await squeezed(mediator, closureSize(minimal));
+    await bob.agent.start();
+    await withTimeout(bob.live, 8000, "bob live");
+    await expect(tight.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/e\.p\.blob\.refused: this mediator does not store blobs/);
+    tight.agent.destroy();
+
+    const storing = await newMediator({ blobs: true });
+    const big = readObject({ ...files, "files/big.bin": new Uint8Array(BLOB_MAX + 1) });
+    const roomy = await squeezed(storing, closureSize((await closureOf(big.tree)).minimal));
+    const bobToo = await newParty("Bob", 4, storing);
+    await bobToo.agent.start();
+    await withTimeout(bobToo.live, 8000, "bob live");
+    await expect(roomy.agent.shareObject(bobToo.agent.did as string, big)).rejects.toThrow(/e\.p\.blob\.too-large/);
     roomy.agent.destroy();
+    bob.agent.destroy();
+    bobToo.agent.destroy();
+  });
+
+  it("a package that is gone leaves a partial object; one that lies is not opened", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const bob = await newParty("Bob", 2, mediator);
+    const { minimal } = await closureOf(files);
+    const tight = await squeezed(mediator, closureSize(minimal));
+    await bob.agent.start();
+    await withTimeout(bob.live, 8000, "bob live");
+    await tight.agent.addContact(bob.agent.did as string, "Bob");
+    const sent = await tight.agent.shareObject(bob.agent.did as string, object);
+    const hash = (sent.msg.attachments as { id: string }[])[4]?.id as string;
+    await eventually(async () => (await bob.vault.messages.read()).some((r) => r.msg.type === OBJECT_SHARE), "bob's share");
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+
+    // the bytes there are not the package: refused before any key is used
+    const blob = mediator.blobs?.get(hash) as { bytes: Uint8Array | null };
+    const real = blob.bytes as Uint8Array;
+    blob.bytes = new Uint8Array(real.length).fill(1);
+    await expect(bob.agent.fetchPackage(record)).rejects.toThrow(/do not hash to the package/);
+    // retention ran out
+    mediator.blobs?.delete(hash);
+    await expect(bob.agent.fetchPackage(record)).rejects.toThrow(/not there: .*404/);
+    const still = await verifyShare(record.msg, (cid) => bob.vault.blobs.get(cid));
+    expect(still.complete).toBe(false);
+    expect(still.object.meta.title).toBe("Sea day");
+    tight.agent.destroy();
     bob.agent.destroy();
   });
 

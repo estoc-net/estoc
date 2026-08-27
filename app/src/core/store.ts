@@ -19,6 +19,7 @@ import {
   type MessageRecord,
   type SendOptions,
   type VaultBackend,
+  type VerifiedShare,
 } from "@estoc/agent-core";
 
 import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
@@ -565,6 +566,17 @@ export async function shareObject(
     throw new Error("the agent is not running");
   }
   await agent.shareObject(contactDid, object, options);
+}
+
+/**
+ * Fetch the package a partial share names (`docs/object-share.md` §8) and
+ * fill the object in from it; resolves to the share as verified after.
+ */
+export async function fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
+  if (agent === null) {
+    throw new Error("the agent is not running");
+  }
+  return agent.fetchPackage(record);
 }
 
 /**

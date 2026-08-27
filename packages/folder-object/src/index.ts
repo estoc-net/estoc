@@ -33,3 +33,4 @@ export { fileCid, isRawCid, isDagPbCid, compareNames, dagPbCode } from "./cid.js
 export { parseIndex, isHidden, isInsideFiles, readObject, hashObject, contentOf } from "./object.js";
 export { CARD_TYP, didKeyKid, signRoot, signObject, verifyCard, verifyObjectCard, type CardVerdict } from "./card.js";
 export { signedTree, readAny, readSignedObject } from "./signed.js";
+export { encodeCar, decodeCar, blobHash, isBlobHash, type Car } from "./car.js";
