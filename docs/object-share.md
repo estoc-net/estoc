@@ -1,8 +1,10 @@
 # object-share/1.0
 
-Status: implemented in `@estoc/agent-core` 0.15.0 (`@estoc/folder-object`
-0.5.0), 2026-08-26 — the skeleton / leaves split (§2, §7) included.
-Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`.
+Status: §1–7 implemented in `@estoc/agent-core` 0.15.0 (`@estoc/folder-object`
+0.5.0), 2026-08-26 — the skeleton / leaves split included. §8 (`want`)
+and §9 (packages) specified 2026-08-26, not yet implemented.
+Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`,
+`research/notes/2026-08-26-want-and-blob-road.md`.
 
 ## 1. What it is for
 
@@ -24,12 +26,16 @@ phones that are each online now and then, "send the card, ask for the
 blocks" needs the sender's agent to be awake every time the receiver
 asks — the same fault that stalled HTTP-over-DIDComm. Push carries the
 whole thing while the sender is here; the mediator holds it; the receiver
-reads it whenever.
+reads it whenever. The one ask the protocol has (`want`, §8) is a single
+flat list the receiver can write from the skeleton alone, answered by
+ordinary shares whenever the sender is next awake: one round, queued,
+never a walk.
 
 DIDComm stays the control plane. The bytes of a big object take another
-road (a WebRTC data channel signalled over DIDComm, or a content relay),
-and keep the CID as the unit; this message carries the card, the whole
-skeleton, and whatever leaves fit inline. The minimal share is card plus
+road — a **package** (§9): the blocks as an encrypted CAR at a URL, the
+key in this message; or, later, a WebRTC data channel signalled over
+DIDComm — and keep the CID as the unit; this message carries the card,
+the whole skeleton, and whatever leaves fit inline. The minimal share is card plus
 skeleton and `index.json` and nothing under `files/`: the receiver can
 verify the card, read what the object says it is, walk the tree,
 see every path and every size, and know exactly which CIDs it lacks —
@@ -98,8 +104,10 @@ before a single content byte has moved.
   chunks, balanced layout, raw leaves) and is not this protocol's
   concern: a chunk is a leaf like any other, a chunk index is skeleton
   like any other.
-- No `thid`: a share starts nothing. An application that answers (a
-  comment, a reply post) threads on the share's `id` like any message.
+- No `thid` on a first share: it starts nothing. An application that
+  answers (a comment, a reply post) threads on the share's `id` like any
+  message. A share that answers a `want` (§8) carries `thid` = the id of
+  the share the want was about.
 
 ## 3. Sending
 
@@ -206,24 +214,176 @@ step and changes nothing on the wire.
 
 A share with absent leaves is a complete statement, not a broken one: the
 card is verified, the tree is verified, the receiver holds the exact set
-of CIDs it lacks, with sizes. What it lacks is bytes, and bytes are not
-this protocol's business. Fetching them is:
+of CIDs it lacks, with sizes. What it lacks is bytes, and the ways bytes
+come are:
 
-- **another road**, by CID — a WebRTC data channel signalled over
-  DIDComm, or a content relay — where the ask is the flat want list the
-  skeleton already implies, `want [cid…] → block`. No path, no selector:
-  the receiver has the tree, the sender is a block store;
-- **or a later share** of the same root, or of another object that
+- **a package** (§9) in the same or a later share — the leaves as an
+  encrypted CAR the receiver downloads itself, whenever it likes;
+- **a `want`** (§8) — the flat list the skeleton implies, `want [cid…]`,
+  answered by later shares of the same root, inline or as a package;
+- **any later share** of the same root, or of another object that
   happens to contain the same file — `blobs/` is by CID, so leaves land
   wherever they come from and the partial object fills in
-  (put-if-absent, then re-run the check).
+  (put-if-absent, then re-run the check);
+- **another road** by CID, later — a WebRTC data channel signalled over
+  DIDComm, where the receiver pulls from a live peer.
 
-There is no `want` message in object-share/1.0 over DIDComm, on purpose:
-asking a phone for blocks over a store-and-forward channel needs that
-phone awake at each ask (§1). The skeleton is what makes the ask
-unnecessary here and trivial elsewhere.
+None of these is a walk: the receiver already has the tree, so every ask
+is one list and the sender is a block store. An implementation that has
+none of them still gets the minimal share: a contact sees what was
+shared, who stands behind it, and how big it is.
 
-An implementation that does not yet have another road still gets the
-minimal share: a contact sees what was shared, who stands behind it, and
-how big it is — and the leaves come when a road exists, without a second
-protocol.
+## 8. `want`
+
+```json
+{
+  "type": "https://estoc.dev/object-share/1.0/want",
+  "id": "<uuid>",
+  "thid": "<id of the share this is about>",
+  "body": { "root": "bafybei…", "cids": ["bafkrei…", "bafkrei…"] }
+}
+```
+
+- **`body.root`** — the root of the object the leaves belong to.
+  Required.
+- **`body.cids`** — the leaves wanted: `raw` CIDs the skeleton of
+  `root` names (single-block files, or chunks of larger ones). Required,
+  non-empty. Skeleton CIDs are never wanted — a receiver without the
+  skeleton has no share to ask from.
+- **`thid`** — the share the want is about. A want threads on a share;
+  it never starts a thread.
+
+**Answer.** Ordinary shares (§2) of the same `root`, `thid` = the same
+share id, no card, carrying the wanted leaves — inline (§2), as a package
+(§9), or both — split across as many shares as the sender's limit needs.
+There is no answer type: a share is a share. Each answering share is
+checked as any other (§4): its skeleton is the one already in `blobs/`,
+so the check passes with the message's own blocks plus what is held, and
+the leaves land put-if-absent. Order does not matter and a lost answer
+loses only its leaves; the receiver's next check says what is still
+missing, and it may want again.
+
+**What the sender serves.** Only blocks in the closure of a root the
+sender has itself shared with this contact — an `object-share` record of
+its own, to this contact, with this `root`, in the pair log. A CID
+outside that closure, or a root never shared, is not served: the answer
+simply omits it, and the wanted leaf stays missing. `blobs/` holds
+everything the sender has, and a CID is a name anyone may have learned;
+"I gave you this object" is what makes its parts yours to ask for.
+
+Blocks the sender no longer holds are likewise omitted, not reported.
+Whether an answer is inline or a package is the sender's decision by
+size, as for any share (§3, §9).
+
+A want needs the sender's agent awake once, to answer — not once per
+node (§1). It is queued like any message; the answer comes when the
+sender is next here. It is the "yes" to a skeleton-only share: see the
+card, read what the object is, decide, then ask.
+
+## 9. Packages
+
+A **package** is a set of the tree's blocks as a CAR, encrypted, put at
+a URL, and named in a share. It carries what does not fit inline: the
+bytes travel over HTTP whenever the receiver chooses; the share carries
+the card, the skeleton, the URL, the hash, and the key — DIDComm is the
+control plane and the mediator's queue never holds the bytes.
+
+```json
+{
+  "type": "https://estoc.dev/object-share/1.0/share",
+  "id": "<uuid>",
+  "body": {
+    "root": "bafybei…",
+    "card": "<compact JWS>",
+    "packages": [
+      { "attachment_id": "bciqk…", "ciphering": { "algorithm": "AES256_GCM_HKDF_1MB", "parameters": { "key": "<base64url, 32 bytes>" } } }
+    ]
+  },
+  "attachments": [
+    { "id": "bafybei…", "media_type": "application/vnd.ipld.dag-pb", "byte_count": 108, "data": { "base64": "…" } },
+    { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",    "byte_count": 100, "data": { "base64": "…" } },
+    { "id": "bciqk…", "media_type": "application/vnd.ipld.car", "byte_count": 734003200,
+      "data": { "links": ["https://…/b/bciqk…"], "hash": "bciqk…" } }
+  ]
+}
+```
+
+- **The package attachment** is a DIDComm linked attachment:
+  `data.links` (one or more URLs of the same bytes), `data.hash`, and
+  `byte_count`, all about the **ciphertext**; `media_type`
+  `application/vnd.ipld.car` names what the plaintext is. `data.hash` is
+  a multihash (sha2-256) of the ciphertext bytes, multibase base32 lower
+  (`b…`), and `id` is that same string: the ciphertext's own name. The
+  hash is over the ciphertext so a download is checked as it is, before
+  any key is used, and a package may be named by anyone who has the
+  bytes. Verifying the hash is required; a package whose bytes do not
+  hash to `data.hash` is discarded.
+- **`body.packages`** — one entry per package attachment, `attachment_id`
+  naming it, `ciphering` saying how to open it. It lives in the body,
+  not on the attachment, because DIDComm attachments have no such field
+  and implementations drop fields they do not know. A package attachment
+  with no `packages` entry cannot be opened and is ignored; an entry
+  naming no attachment is ignored.
+- **`ciphering`** takes media-sharing/1.0's shape — `algorithm` plus
+  `parameters` — and no more of that protocol. `algorithm` is a name
+  from the list below; `parameters.key` is the raw key, base64url. The
+  key is a fresh random key per package and travels only in this
+  authcrypted message: encrypting to the receiver is what the envelope
+  already does. One ciphertext, one key, any number of recipients each
+  told in their own message; a recipient may pass a package on by
+  passing the URL and key on, under the object's card, without a second
+  upload.
+
+  Algorithms:
+
+  - **`AES256_GCM_HKDF_1MB`** — Tink's streaming AEAD of that name
+    (`AesGcmHkdfStreaming`: 32-byte key, HKDF-SHA256, 32-byte derived
+    key, ciphertext segments of 1 MiB, empty associated data), wire
+    format as Tink specifies: a header (length byte, salt, 7-byte nonce
+    prefix) then segments each AES-GCM under a nonce of prefix, segment
+    number, and last-segment flag. Every segment authenticates on its
+    own, in order, so a range of the ciphertext is checkable without the
+    rest — a download resumes by HTTP `Range` and verifies as it goes —
+    and a truncated stream is detected by the last-segment flag. This is
+    the only algorithm in 1.0.
+
+  Not media-sharing's whole-file `aes-256-cbc` with `iv` and `tag` in the
+  message: one tag over a file means the whole file before a byte is
+  trusted, and a range cannot be checked at all.
+
+- **The plaintext** is a CARv1 whose `roots` is `[root]` and whose blocks
+  are any subset of the tree's closure — typically every leaf the share
+  does not carry inline. The receiver reads it block by block: each
+  block's bytes must hash to the CID it is filed under, else that block
+  is dropped; blocks outside the closure of `root` are dropped; what
+  remains goes to `blobs/` put-if-absent, and the share is then checked
+  again as in §4 with the new blocks held. A package neither replaces
+  nor loosens the minimal share: **the skeleton and `index.json` are
+  always inline** (§2). A share whose package is unreachable, or whose
+  bytes fail the hash, is still a verified skeleton-only share — the
+  leaves are missing, as they would be without the package, and the
+  receiver may `want` them (§8).
+- **Fetching** is the receiver's, at any time: `GET` a link, verify the
+  hash, decrypt, import. A link may be gone (the store's retention ran
+  out, §9.1) — that is a missing leaf set, not an error in the share.
+  The receiver keeps nothing of the package itself once imported: the
+  blocks are in `blobs/` by CID and the package was transport.
+- **Sending** (extends §3 step 2): when the closure does not fit inline,
+  the sender may build a package of the leaves instead of sending none —
+  CAR them, encrypt under a fresh key, put the ciphertext in a blob
+  store (§9.1), and send the skeleton inline with the package named. An
+  answer to a `want` (§8) does the same for the wanted leaves when they
+  do not fit.
+
+### 9.1 Where the bytes live
+
+The URL is any HTTP location serving the ciphertext bytes with `GET`
+and `Range`. The sender's own mediator is the natural one: the
+`blob-store/1.0` protocol (`docs/blob-store.md`) lets an agent that
+holds a mediation with it put a ciphertext there under a retention and
+get back the URL. The store holds bytes it cannot read, named by their
+hash, for a while; it is the envelope queue's big sibling and the same
+posture — encrypted, unlisted, expiring — not a content host.
+
+Nothing in the share depends on which store: the receiver has a URL, a
+hash, and a key.
