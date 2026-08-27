@@ -70,18 +70,26 @@ quotas while they hold it.
   `Range`, to anyone, with no listing anywhere. Stable for the blob's
   life.
 - **`body.retain_until`** — required, an RFC 3339 instant: the store
-  keeps the blob at least until then. Chosen by the store (a configured
-  period from now, `MEDIATOR_BLOB_RETAIN_SECONDS`, default 30 days);
-  renewed by putting again. The store never promises forever: an agent
-  that wants a blob kept keeps putting.
+  will not expire the blob before then. Chosen by the store (a
+  configured period from now, `MEDIATOR_BLOB_RETAIN_SECONDS`, default
+  30 days); renewed by putting again. It is the store's intent, not a
+  guarantee: a store is a mediator, not an archive, and can lose bytes
+  to causes it did not choose (§3, *Expiring*); what it promises is not
+  to *decide* to drop them earlier. The store never promises forever
+  either: an agent that wants a blob kept keeps putting.
 - **`body.upload`** — present when the store does not have the bytes
   yet: a URL to `PUT` them to, and when that grant expires. The upload
   is a plain HTTP `PUT` of exactly `size` bytes; the store accepts it
   only if the bytes are `size` long and hash to `hash`, and otherwise
-  keeps nothing — `url` then serves 404 until a put succeeds. A
-  presigned object-store URL is the expected form, binding length and
-  checksum, so the store's own process handles no bytes. Absent, the
-  store already holds the blob (a renewal) and `url` serves now.
+  keeps nothing — `url` then serves 404 until a put succeeds. Where the
+  URL points is the store's business, and two forms are in view: the
+  store's own endpoint (`PUT /b/<hash>?token=…`, the form implemented —
+  the bytes pass through the mediator's process once, which is what
+  `MEDIATOR_BLOB_MAX_BYTES` bounds; the DIDComm message limit does not
+  apply to them), or a presigned object-store URL binding length and
+  checksum, so the store's process handles no bytes at all. An agent
+  treats both the same: `PUT` the bytes, expect 2xx. Absent, the store
+  already holds the blob (a renewal) and `url` serves now.
 
 A `put` that is refused is answered with a `problem-report` in the same
 thread, `code`:
@@ -134,10 +142,11 @@ result is the same, nothing held.
   and no way to ask the store what it holds beyond putting a hash one
   already knows. A URL is learned from the agent that put the blob, in
   a message only its recipient can read.
-- **Expiring.** A blob past every retention is gone; the store may
-  also drop early under `e.p.blob.refused` conditions it did not
-  foresee, which is why an object-share receiver treats a dead link as
-  a partial object, not a broken share, and waits for a later share.
+- **Expiring.** A blob past every retention is gone. Before that the
+  store does not choose to drop it, but may lose it — a disk, a move, a
+  policy it did not foresee — which is why `retain_until` is intent
+  (§2.2) and an object-share receiver treats a dead link as a partial
+  object, not a broken share, and waits for a later share.
 - **Per-mediation accounting.** Every hold is a (mediation, hash) pair
   with a `retain_until`; quota is the sum of sizes of a mediation's
   live holds; ending a mediation ends its holds.

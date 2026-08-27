@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FromPrior, Message } from "didcomm-node";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
+import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import {
   Agent,
@@ -13,6 +13,7 @@ import {
   attachmentsOf,
   closureOf,
   closureSize,
+  encryptStream,
   missingBytes,
   verifyShare,
   FORWARD,
@@ -1538,6 +1539,26 @@ describe("Agent sharing objects", () => {
     await expect(bob.agent.fetchPackage(short)).rejects.toThrow(/should be \d+ bytes, the response/);
     const long = variant((pkg) => { pkg.byte_count += 1; });
     await expect(bob.agent.fetchPackage(long)).rejects.toThrow(/should be \d+ bytes, the response/);
+    // a package attachment that is not a CAR: named but unusable
+    const notCar = variant((pkg) => { (pkg as { media_type: string }).media_type = "application/zip"; });
+    expect((await verifyShare(notCar.msg)).packageProblem).toMatch(/application\/zip, not application\/vnd\.ipld\.car/);
+    // one id, one attachment: a second under the same name is malformed, whatever it carries
+    const twice = variant(() => undefined);
+    (twice.msg.attachments as unknown[]).push(structuredClone((twice.msg.attachments as unknown[])[0]));
+    await expect(verifyShare(twice.msg)).rejects.toThrow(/appears twice/);
+    // a package that decrypts fine but is some other object's: rooted elsewhere, discarded whole
+    const key = (await verifyShare(record.msg)).package?.key as Uint8Array;
+    const other = await closureOf({ "index.json": files["index.json"], "files/other.txt": new TextEncoder().encode("other") });
+    const stray = await encryptStream(key, encodeCar([other.root], other.blocks));
+    const strayHash = await blobHash(stray);
+    mediator.blobs?.set(strayHash, { size: stray.length, bytes: stray, token: null });
+    const elsewhere = variant((pkg) => {
+      pkg.id = strayHash;
+      pkg.data = { links: [`${MEDIATOR_HTTP}b/${strayHash}`], hash: strayHash };
+      pkg.byte_count = stray.length;
+    });
+    (elsewhere.msg.body as { package: { attachment_id: string } }).package.attachment_id = strayHash;
+    await expect(bob.agent.fetchPackage(elsewhere)).rejects.toThrow(/rooted at \[.*\], not the object shared/);
     // and the genuine one still opens
     expect((await bob.agent.fetchPackage(record)).complete).toBe(true);
     tight.agent.destroy();

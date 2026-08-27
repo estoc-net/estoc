@@ -1810,7 +1810,7 @@ export class Agent {
       throw new Error(`the package is not there: ${pkg.url} answered ${response.status}`);
     }
     const ciphertext = await readExactly(response, pkg.byteCount);
-    const blocks = await openPackage(pkg, ciphertext);
+    const blocks = await openPackage(pkg, ciphertext, before.root);
     const share = await verifyShare(record.msg, async (cid) => blocks.get(cid) ?? this.vault.blobs.get(cid));
     for (const [cid, bytes] of share.blocks) {
       await this.vault.blobs.put(cid, bytes);

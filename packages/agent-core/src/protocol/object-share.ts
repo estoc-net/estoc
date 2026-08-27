@@ -257,6 +257,9 @@ export function packageOf(msg: PlainMessage): SharePackage | PackageProblem | nu
   if (attachment === undefined) {
     return { problem: `no attachment ${attachment_id} for the package` };
   }
+  if (attachment.media_type !== CAR_MEDIA_TYPE) {
+    return { problem: `the package attachment is ${attachment.media_type ?? "of no media type"}, not ${CAR_MEDIA_TYPE}` };
+  }
   const data = attachment.data;
   if (typeof data?.hash !== "string" || !isBlobHash(data.hash) || attachment.id !== data.hash) {
     return { problem: "the package attachment is not named by its hash" };
@@ -323,26 +326,47 @@ export function packageCar(closure: Closure): Uint8Array {
  * gave it, then decrypt under the share's key and read the CAR. Every
  * block returned hashes to its CID; whether it belongs to the closure is
  * for `verifyShare` to decide, block by block, as it walks. Throws when
- * the bytes are not the package or do not open.
+ * the bytes are not the package, do not open, or open to a CAR rooted
+ * elsewhere than `root` (§8): a package of some other object is not
+ * this share's, however well it decrypts. What is missing from it is
+ * not an error here — what walks is kept, the rest stays partial.
  */
-export async function openPackage(pkg: SharePackage, ciphertext: Uint8Array): Promise<Map<string, Uint8Array>> {
+export async function openPackage(
+  pkg: SharePackage,
+  ciphertext: Uint8Array,
+  root: string
+): Promise<Map<string, Uint8Array>> {
   if ((await blobHash(ciphertext)) !== pkg.hash) {
     throw new Error(`the bytes fetched do not hash to the package ${pkg.hash}`);
   }
   const car = await decodeCar(await decryptStream(pkg.key, ciphertext));
+  if (car.roots.length !== 1 || car.roots[0] !== root) {
+    throw new Error(`the package is rooted at [${car.roots.join(", ")}], not the object shared (${root})`);
+  }
   return car.blocks;
 }
 
 /**
  * The blocks a share message carries, CID → bytes. Only attachments of
  * the block shape count; anything else riding along is ignored. Whether
- * the bytes match their CID is `verifyShare`'s question.
+ * the bytes match their CID is `verifyShare`'s question. Throws when an
+ * `id` appears on two attachments (§2): that is malformed, whatever the
+ * bytes.
  */
 export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {
   const blocks = new Map<string, Uint8Array>();
+  const seen = new Set<string>();
   for (const attachment of msg.attachments ?? []) {
     const a = attachment as Partial<BlockAttachment>;
     const cid = a.id;
+    if (typeof cid === "string") {
+      // one id, one attachment: a second under the same name would leave it
+      // to the reader which bytes the name means, and readers differ
+      if (seen.has(cid)) {
+        throw new Error(`attachment ${cid} appears twice`);
+      }
+      seen.add(cid);
+    }
     const base64 = a.data?.base64;
     if (typeof cid !== "string" || typeof base64 !== "string") {
       continue;

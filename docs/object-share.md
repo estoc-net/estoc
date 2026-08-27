@@ -74,6 +74,18 @@ moving.
   it from an inline attachment. Attachments of any other shape are
   ignored, not errors (the package attachment, §8, is one of them).
 
+  **One `id`, one attachment.** The same `id` on two attachments — block
+  or package, whatever their bytes — is malformed: the share does not
+  verify. Two attachments under one name leave it to the reader which
+  bytes the name means, and readers would differ; nothing a sender
+  wants to say needs it. `media_type` and `byte_count` on a block are
+  informative, for tooling that reads attachments without reading
+  blocks: the receiver does not check them and they decide nothing. The
+  CID says the codec and the bytes say their length, and a second
+  statement of either would be a second truth (as with the body, above).
+  A block is what it is when its bytes hash to its `id`, and nothing
+  else.
+
   The tree's blocks fall in two classes, told apart by codec alone:
 
   - **skeleton** — every `dag-pb` block the root reaches: directory
@@ -378,15 +390,24 @@ is the control plane and the mediator's queue never holds the bytes.
   message: one tag over a file means the whole file before a byte is
   trusted, and a range cannot be checked at all.
 
-- **The plaintext** is a CARv1 whose `roots` is `[root]` and whose blocks
-  are the tree's closure — the skeleton again, `index.json`, every leaf.
-  The package repeats what the message already carries so it is a whole
-  object on its own: verifiable by anyone with the URL and key, without
-  the message. The receiver reads it block by block: each block's bytes
-  must hash to the CID it is filed under, else that block is dropped;
-  blocks outside the closure of `root` are dropped; what remains goes to
-  `blobs/` put-if-absent (the skeleton is already there), and the share
-  is then checked again as in §4. A package neither replaces nor loosens
+- **The plaintext** is a CARv1 whose `roots` is exactly `[root]` and
+  whose blocks the sender **must** make the tree's whole closure — the
+  skeleton again, `index.json`, every leaf. The package repeats what the
+  message already carries so it is a whole object on its own:
+  verifiable by anyone with the URL and key, without the message. The
+  receiver checks `roots` first: a CAR rooted anywhere else is not this
+  object's package and is discarded whole, like bytes that fail the
+  hash. Then it reads block by block: each block's bytes must hash to
+  the CID it is filed under, else that block is dropped; blocks outside
+  the closure of `root` are dropped; what remains goes to `blobs/`
+  put-if-absent (the skeleton is already there), and the share is then
+  checked again as in §4. A package that opens but lacks blocks of the
+  closure is **not** discarded: what walks is kept and the object is
+  partial (§7), as it would be had those bytes never been offered —
+  whole is the sender's duty, salvage is the receiver's, and throwing
+  good leaves away over missing ones serves nobody. The package
+  attachment's `media_type` must be `application/vnd.ipld.car`;
+  another is a package named but unusable. A package neither replaces nor loosens
   the minimal share: **the skeleton and `index.json` are always inline**
   (§2). A share whose package is unreachable, or whose bytes fail the
   hash, is still a verified skeleton-only share — partial, as in §7.
