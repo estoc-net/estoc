@@ -9,7 +9,7 @@ Design history: `research/notes/2026-08-26-want-and-blob-road.md`.
 Putting a **blob** — bytes the store cannot read, named by their hash —
 somewhere a contact can `GET` it later, so that what does not fit in a
 DIDComm message (an `object-share/1.0` package, `docs/object-share.md`
-§9) can still travel while neither side needs the other awake. The store
+§8) can still travel while neither side needs the other awake. The store
 is the mediator: an agent that holds a mediation with it may put blobs;
 anyone with the URL may get them. The bytes are ciphertext under a key
 the store never sees; the store holds them for a while, unlisted, and
@@ -135,7 +135,7 @@ result is the same, nothing held.
 - **Expiring.** A blob past every retention is gone; the store may
   also drop early under `e.p.blob.refused` conditions it did not
   foresee, which is why an object-share receiver treats a dead link as
-  leaves it lacks, not as a broken share, and asks (`want`) or waits.
+  a partial object, not a broken share, and waits for a later share.
 - **Per-mediation accounting.** Every hold is a (mediation, hash) pair
   with a `retain_until`; quota is the sum of sizes of a mediation's
   live holds; ending a mediation ends its holds.
