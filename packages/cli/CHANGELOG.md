@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-08-26
+
+- `estoc object render [<dir|zip>] [--template <html>] [--out <file>]
+  [--asset-base <prefix>]` — project a post/1.0 object (`@estoc/post`):
+  vocabulary, body fragment, assets, files, root and signer as JSON, or
+  laid into a Mustache-subset template (`{{key}}` escaped, `{{{key}}}`
+  raw, `{{#key}}…{{/key}}`, `{{^key}}…{{/key}}`, `{{.}}`). The renderer
+  is the app's; the page is the host's.
+
 ## 0.2.0 — 2026-08-24
 
 - Moved into the `estoc` monorepo (`packages/cli`); workspace deps.

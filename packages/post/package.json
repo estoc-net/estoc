@@ -1,18 +1,15 @@
 {
-  "name": "@estoc/cli",
-  "version": "0.3.0",
-  "description": "estoc \u2014 the command-line client for Estoc vaults. `estoc init` marks a folder as yours by adding a .estoc directory (git model: your files stay untouched, the machinery lives in .estoc) with one seed-sealed keystore; `estoc object \u2026` hashes, signs and verifies folder-objects with the vault's keys.",
+  "name": "@estoc/post",
+  "version": "0.1.0",
+  "description": "The post/1.0 type format for folder-objects: recognise, validate and read a post's vocabulary, and project it — the reference renderer (CommonMark body → HTML fragment, in-tree references resolved, raw HTML dropped). Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/estoc-net/estoc.git",
-    "directory": "packages/cli"
+    "directory": "packages/post"
   },
   "type": "module",
-  "bin": {
-    "estoc": "./dist/bin.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -23,20 +20,18 @@
     "dist",
     "src"
   ],
-  "engines": {
-    "node": ">=22"
-  },
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "pnpm test && pnpm build",
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
     "@estoc/folder-object": "workspace:^",
-    "@estoc/keystore": "workspace:^",
-    "@estoc/post": "workspace:^"
+    "marked": "^18.0.11"
   },
   "devDependencies": {
     "@types/node": "^22.13.5",
@@ -44,11 +39,9 @@
     "vitest": "^3.0.0"
   },
   "keywords": [
-    "did",
-    "did-key",
-    "keystore",
     "folder-object",
-    "cli",
-    "decentralized-identity"
+    "post",
+    "markdown",
+    "renderer"
   ]
 }

@@ -14,8 +14,10 @@ import {
   type FolderObject,
 } from "@estoc/folder-object";
 import { readTree, writeTree } from "@estoc/folder-object/fs";
+import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
+import { fill } from "./template.js";
 import {
   ANCHOR_KEY_NAME,
   createVaultKey,
@@ -43,6 +45,16 @@ const USAGE = `usage: estoc <command>
                                  object ({object/, card.jws}) out under --out
                                  and/or zips it to --zip
   object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
+  object render [<signedDir | signed.zip | objectDir>] [--template <html>]
+                [--out <file>] [--asset-base <prefix>]
+                                 project a post/1.0 object: its vocabulary,
+                                 body as an HTML fragment, assets, files,
+                                 root and signer — as JSON, or laid into a
+                                 Mustache-style template ({{title}},
+                                 {{{body}}}, {{#files}}{{path}}{{/files}},
+                                 {{#card}}{{did}}{{/card}}, …). In-tree
+                                 references are prefixed with --asset-base
+                                 (default: object for a signed layout)
 
 options:
   --vault <dir>   use the vault at <dir> instead of searching upward from
@@ -122,6 +134,32 @@ interface ObjectFlags {
   card?: string;
   out?: string;
   zip?: string;
+  template?: string;
+  "asset-base"?: string;
+}
+
+/** Every part a host page could want, in one view: the projection plus the fact it projects. */
+async function renderView(target: string, flags: ObjectFlags) {
+  const { object, card } = await loadAny(target);
+  if (!isPost(object.meta)) throw new Error(`not a post/1.0 object: ${object.meta.format}`);
+  const issues = validatePost(object.meta);
+  if (issues.length) throw new Error(`invalid post: ${issues.map((i) => `${i.member} ${i.message}`).join("; ")}`);
+  const assetBase = flags["asset-base"] ?? (card === undefined ? "" : "object");
+  const post = renderPost(object, { assetBase });
+  const root = await hashObject(object);
+  const prefix = assetBase ? assetBase.replace(/\/$/, "") + "/" : "";
+  const files = Object.keys(object.tree)
+    .sort()
+    .map((path) => ({ path, href: prefix + path }));
+  const view: Record<string, unknown> = { ...post, format: object.meta.format, root, files };
+  if (post.published) view["publishedDate"] = post.published.slice(0, 10);
+  if (post.updated) view["updatedDate"] = post.updated.slice(0, 10);
+  if (card !== undefined) {
+    const verdict = await verifyObjectCard(card, object);
+    if (!verdict.matches) throw new Error(`card MISMATCH — signs ${verdict.root}, not this object`);
+    view["card"] = { did: verdict.did, file: "card.jws" };
+  }
+  return view;
 }
 
 async function cmdObject(sub: string | undefined, target: string, flags: ObjectFlags) {
@@ -159,8 +197,15 @@ async function cmdObject(sub: string | undefined, target: string, flags: ObjectF
       if (!verdict.matches) process.exitCode = 1;
       return;
     }
+    case "render": {
+      const view = await renderView(target, flags);
+      const text = flags.template ? fill(await readFile(flags.template, "utf8"), view) : JSON.stringify(view, null, 2) + "\n";
+      if (flags.out) await writeFile(flags.out, text);
+      else process.stdout.write(text);
+      return;
+    }
     default:
-      throw new Error(`unknown object subcommand: ${sub ?? "(none)"} (hash, sign, verify)`);
+      throw new Error(`unknown object subcommand: ${sub ?? "(none)"} (hash, sign, verify, render)`);
   }
 }
 
@@ -174,6 +219,8 @@ async function main() {
       card: { type: "string" },
       out: { type: "string" },
       zip: { type: "string" },
+      template: { type: "string" },
+      "asset-base": { type: "string" },
       version: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },

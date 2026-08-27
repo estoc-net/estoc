@@ -1,37 +1,30 @@
 import { Marked, type Tokens } from "marked";
 import { contentOf, type FolderObject } from "@estoc/folder-object";
+import { readPost, type PostMeta } from "./format.js";
 
 /**
- * post/1.0 projection. The object is the fact; this is one way of looking
- * at it — the app's. Pure: no network, no filesystem, raw HTML dropped.
+ * The reference projection of a post: the object is the fact, this is one
+ * way of looking at it. Pure — no network, no filesystem — and it yields
+ * parts, never a page: the host owns the chrome (title tag, header, styles)
+ * and composes these into whatever it is showing.
  */
-export const POST_FORMAT = "https://estoc.dev/post/1.0";
-
 export interface RenderOptions {
-  /** Prefix for in-tree references (`files/…` → `${assetBase}/files/…`); default keeps them relative. */
+  /** Prefix for in-tree references (`files/…` → `${assetBase}/files/…`); default keeps them relative to the object root. */
   assetBase?: string;
 }
 
-export interface RenderedPost {
-  title?: string;
-  summary?: string;
-  published?: string;
-  updated?: string;
-  tags: string[];
-  language?: string;
-  /** Body as an HTML fragment. */
+export interface RenderedPost extends PostMeta {
+  /** The body as an HTML fragment: raw HTML dropped, in-tree references rewritten against `assetBase`. */
   bodyHtml: string;
-}
-
-function str(v: unknown): string | undefined {
-  return typeof v === "string" ? v : undefined;
+  /** Every in-tree path the body refers to, in order of first reference (present in the tree or not). */
+  assets: string[];
 }
 
 /**
  * Resolve a body reference the way its media type does — against the body's
  * own location (spec §4: a `path` body lives at that path, a `text` body at
  * the root). Returns the in-tree path, or undefined for anything that is not
- * an in-tree reference (absolute URL, escapes the tree).
+ * an in-tree reference (absolute URL, fragment, escapes the tree).
  */
 export function resolveRef(ref: string, bodyPath: string | undefined): string | undefined {
   if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith("/") || ref.startsWith("#")) return undefined;
@@ -50,17 +43,19 @@ export function resolveRef(ref: string, bodyPath: string | undefined): string | 
 }
 
 export function renderPost(object: FolderObject, options: RenderOptions = {}): RenderedPost {
-  if (object.meta.format !== POST_FORMAT) throw new Error(`not a post/1.0 object: ${object.meta.format}`);
+  const post = readPost(object.meta);
   const content = contentOf(object);
   if (!content) throw new Error("post/1.0 requires content");
   if (content.mediaType !== "text/markdown") throw new Error(`unsupported body media type ${content.mediaType}`);
   const source = new TextDecoder().decode(content.bytes);
-  const c = object.meta.content;
-  const bodyPath = c && "path" in c ? c.path : undefined;
+  const bodyPath = "path" in post.content ? post.content.path : undefined;
   const base = options.assetBase ? options.assetBase.replace(/\/$/, "") + "/" : "";
+  const assets: string[] = [];
   const rewrite = (dest: string): string => {
     const resolved = resolveRef(dest, bodyPath);
-    return resolved === undefined ? dest : base + resolved;
+    if (resolved === undefined) return dest;
+    if (!assets.includes(resolved)) assets.push(resolved);
+    return base + resolved;
   };
 
   const md = new Marked({
@@ -76,23 +71,7 @@ export function renderPost(object: FolderObject, options: RenderOptions = {}): R
     },
   });
   const bodyHtml = md.parse(source, { async: false }) as string;
-
-  const m = object.meta;
-  const result: RenderedPost = {
-    tags: Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === "string") : [],
-    bodyHtml,
-  };
-  const title = str(m.title);
-  if (title !== undefined) result.title = title;
-  const summary = str(m.summary);
-  if (summary !== undefined) result.summary = summary;
-  const published = str(m.published);
-  if (published !== undefined) result.published = published;
-  const updated = str(m.updated);
-  if (updated !== undefined) result.updated = updated;
-  const lang = str(m.language);
-  if (lang !== undefined) result.language = lang;
-  return result;
+  return { ...post, bodyHtml, assets };
 }
 
 function escapeAttr(s: string): string {

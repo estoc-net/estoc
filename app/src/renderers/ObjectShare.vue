@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { missingBytes, verifyShare, type VerifiedShare } from "@estoc/agent-core";
+import { isPost, readPost, renderPost, validatePost } from "@estoc/post";
 
 import type { Entry } from "../core/entries.js";
-import { POST_FORMAT, renderPost } from "../core/post.js";
 import { fetchPackage, heldBlock } from "../core/store.js";
 import type { Contact } from "../core/types.js";
 import Bubble from "./Bubble.vue";
@@ -119,7 +119,7 @@ function show(share: VerifiedShare): void {
   const awaiting: Awaiting | null = share.complete
     ? null
     : { files: tree.partial.size, bytes: missingBytes(tree), packaged: share.package?.byteCount ?? null };
-  if (object.meta.format !== POST_FORMAT) {
+  if (!isPost(object.meta) || validatePost(object.meta).length > 0) {
     // every file the tree names, sized by the skeleton when its bytes are not here
     const listing = [...tree.files.keys()]
       .filter((path) => path === "index.json" || path.startsWith("files/"))
@@ -132,15 +132,15 @@ function show(share: VerifiedShare): void {
     view.value = { state: "files", did, root, files: listing, awaiting };
     return;
   }
-  const content = object.meta.content;
-  if (content !== undefined && "path" in content && files[content.path] === undefined) {
+  const meta = readPost(object.meta);
+  if ("path" in meta.content && files[meta.content.path] === undefined) {
     // the body itself is on the way: the post's name, its size, no page yet
     view.value = {
       state: "post",
       did,
       root,
-      title: typeof object.meta.title === "string" ? object.meta.title : "",
-      summary: "",
+      title: meta.title ?? "",
+      summary: meta.summary ?? "",
       html: null,
       files: tree.files.size,
       awaiting,
@@ -149,11 +149,14 @@ function show(share: VerifiedShare): void {
   }
   const post = renderPost(object, { assetBase: "estoc-object" });
   // in-tree references came out as estoc-object/<path>; the frame has
-  // no origin to fetch from, so each becomes the verified bytes inline
-  const html = post.bodyHtml.replace(/(src|href)="estoc-object\/([^"]*)"/g, (whole, attr: string, path: string) => {
+  // no origin to fetch from, so each asset that is here becomes the
+  // verified bytes inline
+  let html = post.bodyHtml;
+  for (const path of post.assets) {
     const bytes = files[path];
-    return bytes === undefined ? whole : `${attr}="${dataUri(path, bytes)}"`;
-  });
+    if (bytes === undefined) continue;
+    html = html.replaceAll(`"estoc-object/${path}"`, `"${dataUri(path, bytes)}"`);
+  }
   view.value = {
     state: "post",
     did,

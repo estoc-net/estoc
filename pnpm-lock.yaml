@@ -23,15 +23,15 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../packages/keystore
+      '@estoc/post':
+        specifier: workspace:^
+        version: link:../packages/post
       didcomm:
         specifier: ^0.4.1
         version: 0.4.1
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
-      marked:
-        specifier: ^18.0.11
-        version: 18.0.11
       qrcode-generator:
         specifier: ^2.0.4
         version: 2.0.4
@@ -109,6 +109,9 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@estoc/post':
+        specifier: workspace:^
+        version: link:../post
     devDependencies:
       '@types/node':
         specifier: ^22.13.5
@@ -184,6 +187,25 @@ importers:
       jose:
         specifier: ^6.0.0
         version: 6.2.9
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.5
+        version: 22.20.1
+      typescript:
+        specifier: ~5.8.0
+        version: 5.8.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
+
+  packages/post:
+    dependencies:
+      '@estoc/folder-object':
+        specifier: workspace:^
+        version: link:../folder-object
+      marked:
+        specifier: ^18.0.11
+        version: 18.0.11
     devDependencies:
       '@types/node':
         specifier: ^22.13.5
