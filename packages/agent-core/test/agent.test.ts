@@ -1432,14 +1432,15 @@ describe("Agent sharing objects", () => {
     expect(attachments.slice(0, 4).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
     const pkg = attachments[4] as (typeof attachments)[number];
     expect(pkg.media_type).toBe("application/vnd.ipld.car");
-    expect(pkg.data).toEqual({ links: [`${MEDIATOR_HTTP}b/${pkg.id}`], hash: pkg.id });
+    // the store holds the ciphertext, whole, checked against its hash, served at an id that is not the hash
+    const stored = mediator.blobs?.get(pkg.id);
+    expect(stored?.bytes?.length).toBe(pkg.byte_count);
+    expect(pkg.data).toEqual({ links: [`${MEDIATOR_HTTP}b/${stored?.id}`], hash: pkg.id });
+    expect(stored?.id).not.toBe(pkg.id);
     const named = (sent.msg.body as { package: { attachment_id: string; ciphering: { algorithm: string; parameters: { key: string } }; available_until: string } }).package;
     expect(named.attachment_id).toBe(pkg.id);
     expect(named.ciphering.algorithm).toBe("AES256_GCM_HKDF_1MB");
     expect(Date.parse(named.available_until)).toBeGreaterThan(Date.now());
-    // the store holds the ciphertext, whole, under its name
-    const stored = mediator.blobs?.get(pkg.id);
-    expect(stored?.bytes?.length).toBe(pkg.byte_count);
     // the sender keeps every block regardless
     for (const cid of blocks.keys()) expect(await tight.vault.blobs.has(cid)).toBe(true);
 
@@ -1456,7 +1457,7 @@ describe("Agent sharing objects", () => {
     expect([...partial.tree.partial.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png"]);
     const lacking = files["files/body.dj"].length + files["files/images/dot.png"].length;
     expect(missingBytes(partial.tree)).toBe(lacking);
-    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, url: `${MEDIATOR_HTTP}b/${pkg.id}`, availableUntil: named.available_until });
+    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, url: `${MEDIATOR_HTTP}b/${stored?.id}`, availableUntil: named.available_until });
     expect(partial.packageProblem).toBeNull();
     expect(partial.package?.key.length).toBe(32);
     expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes (${pkg.byte_count} bytes packaged at`))).toBe(true);
@@ -1551,10 +1552,10 @@ describe("Agent sharing objects", () => {
     const other = await closureOf({ "index.json": files["index.json"], "files/other.txt": new TextEncoder().encode("other") });
     const stray = await encryptStream(key, encodeCar([other.root], other.blocks));
     const strayHash = await blobHash(stray);
-    mediator.blobs?.set(strayHash, { size: stray.length, bytes: stray, token: null });
+    mediator.blobs?.set(strayHash, { id: "stray", size: stray.length, bytes: stray, token: null });
     const elsewhere = variant((pkg) => {
       pkg.id = strayHash;
-      pkg.data = { links: [`${MEDIATOR_HTTP}b/${strayHash}`], hash: strayHash };
+      pkg.data = { links: [`${MEDIATOR_HTTP}b/stray`], hash: strayHash };
       pkg.byte_count = stray.length;
     });
     (elsewhere.msg.body as { package: { attachment_id: string } }).package.attachment_id = strayHash;

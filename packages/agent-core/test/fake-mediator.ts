@@ -84,8 +84,9 @@ interface Queued {
   packed: string;
 }
 
-/** A blob the fake store knows: its declared size, its bytes once uploaded, and the live upload token. */
-interface FakeBlob {
+/** A blob the fake store knows: where it is served (a random id), its declared size, its bytes once uploaded, and the live upload token. */
+export interface FakeBlob {
+  id: string;
   size: number;
   bytes: Uint8Array | null;
   token: string | null;
@@ -130,7 +131,7 @@ export class FakeMediator {
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
   readonly seenTypes: string[] = [];
-  /** blob-store/1.0 when on: hash → blob; off, `put` is refused */
+  /** blob-store/1.0 when on: hash → blob (one putter in these tests, so hash is key enough); off, `put` is refused */
   readonly blobs: Map<string, FakeBlob> | null;
   /** the fake `fetch`: the mediator's endpoint, or 404 */
   readonly fetch: typeof fetch;
@@ -280,10 +281,10 @@ export class FakeMediator {
         }
         let blob = this.blobs.get(hash);
         if (blob === undefined) {
-          blob = { size, bytes: null, token: null };
+          blob = { id: crypto.randomUUID().replace(/-/g, ""), size, bytes: null, token: null };
           this.blobs.set(hash, blob);
         }
-        const url = `${this.http}b/${hash}`;
+        const url = `${this.http}b/${blob.id}`;
         const body: Record<string, unknown> = { hash, url, retain_until: new Date(Date.now() + 3600_000).toISOString() };
         if (blob.bytes === null) {
           blob.token = crypto.randomUUID();
@@ -301,11 +302,11 @@ export class FakeMediator {
     }
   }
 
-  /** `PUT /b/<hash>?token=…` with the bytes; `GET /b/<hash>` for anyone, 404 unless uploaded. */
+  /** `PUT /b/<id>?token=…` with the bytes; `GET /b/<id>` for anyone, 404 unless uploaded. */
   private async handleBlob(url: string, init?: RequestInit): Promise<Response> {
     const parsed = new URL(url);
-    const hash = parsed.pathname.slice("/b/".length);
-    const blob = this.blobs?.get(hash);
+    const id = parsed.pathname.slice("/b/".length);
+    const blob = [...(this.blobs?.values() ?? [])].find((b) => b.id === id);
     if ((init?.method ?? "GET") === "PUT") {
       const token = parsed.searchParams.get("token");
       if (blob === undefined || token === null || token !== blob.token) {

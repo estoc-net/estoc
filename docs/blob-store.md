@@ -1,22 +1,29 @@
 # blob-store/1.0
 
 Status: implemented — store side in `didcomm-mediator` (`put`/`delete`
-handlers, bytes at `/b/<hash>`), client side in `@estoc/agent-core`
-0.16.0 (`put`, upload, then the package named in an `object-share/1.0`
-share), 2026-08-26.
+handlers, bytes at `/b/<id>`), client side in `@estoc/agent-core` 0.16.0
+(`put`, upload, then the package named in an `object-share/1.0` share),
+2026-08-26; blobs made one mediation's own, served under a random id,
+2026-08-27.
 Design history: `research/notes/2026-08-26-want-and-blob-road.md`.
 
 ## 1. What it is for
 
-Putting a **blob** — bytes the store cannot read, named by their hash —
-where a contact can `GET` it later, so that what does not fit in a
-DIDComm message (an `object-share/1.0` package, `docs/object-share.md`
-§8) still travels while neither side needs the other awake. The store is
-the mediator: an agent holding a mediation with it may put blobs; anyone
-with the URL may get them. The bytes are ciphertext under a key the store
-never sees; it holds them for a while, unlisted, and forgets them — the
-envelope queue's big sibling, under the same posture: encrypted,
-per-mediation, expiring, not a content host.
+Putting a **blob** — bytes the store cannot read — where a contact can
+`GET` it later, so that what does not fit in a DIDComm message (an
+`object-share/1.0` package, `docs/object-share.md` §8) still travels
+while neither side needs the other awake. The store is the mediator: an
+agent holding a mediation with it may put blobs; anyone with the URL may
+get them. The bytes are ciphertext under a key the store never sees; it
+holds them for a while, unlisted, and forgets them — the envelope queue's
+big sibling, under the same posture: encrypted, per-mediation, expiring,
+not a content host.
+
+A blob is **one mediation's**: put by it, uploaded by it, served at a
+URL of its own, gone when it deletes it or the retention runs out.
+Nothing is shared between mediations — not bytes, not names — so every
+URL has exactly one answer for who put it, and a `delete` is final. The
+store is a temporary way of moving bytes, not a place they live.
 
 The protocol runs between an agent and its own mediator, on the channel
 they already have, and says three things: *keep this*, *here it is*,
@@ -39,17 +46,17 @@ refused.
 }
 ```
 
-- **`body.hash`** — the blob's name: a sha2-256 multihash, multibase
-  base32 lower (`b…`) — the string an object-share package carries as
-  `data.hash`. Required.
+- **`body.hash`** — a sha2-256 multihash of the bytes, multibase base32
+  lower (`b…`) — the string an object-share package carries as
+  `data.hash`. The store checks the upload against it, and it is the
+  name this mediation refers to the blob by from then on. Required.
 - **`body.size`** — the byte length. Required: the store decides on it
   before a byte moves.
 
-Putting a hash the store already holds is a **renewal**: the retention
-is extended and the result carries no `upload`. A blob is one object
-however many mediations put it: retained until the latest retention any
-of them holds, and counted against each of their quotas while they hold
-it.
+Putting a hash this mediation already has a blob for is a **renewal**:
+same URL, retention extended, and no `upload` unless the bytes never
+arrived. Another mediation putting the same hash makes another blob —
+its own URL, its own upload, its own retention and quota.
 
 ### 2.2 `put-result`
 
@@ -60,7 +67,7 @@ it.
   "thid": "<id of the put>",
   "body": {
     "hash": "bciqk…",
-    "url": "https://mediator.estoc.dev/b/bciqk…",
+    "url": "https://mediator.estoc.dev/b/m3q7xk…",
     "retain_until": "2026-09-25T12:00:00Z",
     "upload": { "url": "https://…", "expires": "2026-08-26T13:00:00Z" }
   }
@@ -68,8 +75,11 @@ it.
 ```
 
 - **`body.url`** — where the blob is, or will be once uploaded: the
-  string for a share's `data.links`. Serves `GET` and `HEAD`, with
-  `Range`, to anyone; stable for the blob's life.
+  string for a share's `data.links`. Its last segment is a random id the
+  store minted for this blob — not the hash, not the mediation: the URL
+  says nothing about what it serves or who put it, and is unguessable.
+  Serves `GET` and `HEAD`, with `Range`, to anyone; stable for the
+  blob's life.
 - **`body.retain_until`** — RFC 3339: the store will not choose to
   expire the blob before then (§3, *Expiring*). Chosen by the store — a
   configured period from now (`MEDIATOR_BLOB_RETAIN_SECONDS`, default
@@ -80,7 +90,7 @@ it.
   HTTP `PUT` of exactly `size` bytes; the store keeps them only if they
   are `size` long and hash to `hash`, and otherwise nothing — `url`
   serves 404 until an upload succeeds. Where the upload URL points is the
-  store's business (this mediator: its own `PUT /b/<hash>?token=…`, a
+  store's business (this mediator: its own `PUT /b/<id>?token=…`, a
   one-time token good for an hour; a presigned object-store URL would do
   as well); the agent `PUT`s and expects 2xx. Absent, the store already
   holds the bytes and `url` serves now.
@@ -110,11 +120,10 @@ limit, for an agent that would rather know before asking.
 }
 ```
 
-Releases this mediation's hold on the blob. The quota is freed at once;
-the bytes go when no mediation holds them any more — another mediation's
-put is its own hold. Deleting a hash this mediation does not hold is not
-an error: the result is the same, nothing held. A `hash` that is not a
-blob name is `e.p.blob.refused`.
+Deletes this mediation's blob for the hash: the URL serves 404 from
+then on, the quota is freed, the bytes go. Deleting a hash this
+mediation has no blob for is not an error: the result is the same,
+nothing there. A `hash` that is not a blob name is `e.p.blob.refused`.
 
 ### 2.4 `delete-result`
 
@@ -129,23 +138,26 @@ blob name is `e.p.blob.refused`.
 
 ## 3. The store
 
-- **Named by hash, verified on the way in.** A blob is written only when
-  the bytes match the name; from then on the name is proof enough and
-  `GET` serves them as they are. The store never sees inside: to it a
-  blob is `size` bytes with a hash, and what an object-share receiver
-  does with them is between the two agents.
+- **One owner.** A blob is (mediation, hash): one row, one upload, one
+  URL, one `retain_until`. Two mediations putting the same bytes are two
+  blobs the store does not know to be alike; deleting one touches
+  nothing of the other. Ending a mediation ends its blobs.
+- **Verified on the way in, located by id.** A blob is written only when
+  the bytes match the hash; from then on `GET` serves them as they are,
+  at an id chosen at random when the row was made. The store never sees
+  inside: to it a blob is `size` bytes with a hash, and what an
+  object-share receiver does with them is between the two agents.
 - **Unlisted.** There is no index of blobs, per mediation or at all, and
   no way to ask the store what it holds beyond putting a hash one already
   knows. A URL is learned from the agent that put the blob, in a message
   only its recipient can read.
-- **Expiring.** A blob past every retention is gone. Before that the
-  store does not choose to drop it, but may lose it — a disk, a move, a
-  policy it did not foresee: a store is a mediator, not an archive, and
+- **Expiring.** A blob past its retention is gone. Before that the store
+  does not choose to drop it, but may lose it — a disk, a move, a policy
+  it did not foresee: a store is a mediator, not an archive, and
   `retain_until` is intent, not guarantee. An object-share receiver
   treats a dead link as a partial object, not a broken share.
-- **Per-mediation accounting.** Every hold is a (mediation, hash) pair
-  with a `retain_until`; quota is the sum of sizes of a mediation's live
-  holds; ending a mediation ends its holds.
+- **Per-mediation accounting.** Quota is the sum of sizes of a
+  mediation's live blobs, uploaded or not.
 - **Not a relay.** The store serves what it was given, to whoever has
   the URL, for as long as it said. It resolves no DIDs, renders nothing,
   redirects nowhere, and does not know that a blob is a package of an
@@ -159,7 +171,9 @@ blob name is `e.p.blob.refused`.
 - Blobs in the clear. The protocol carries no media type and defines no
   use of an unencrypted blob; a store that wished to forbid them could
   not tell.
-- Content-derived keys, or deduplication of plaintext across senders: a
-  hash of ciphertext under a fresh key names one package, and two senders
-  of one object make two blobs. That is the price of the store not
-  knowing what it holds.
+- Deduplication of any kind. A hash of ciphertext under a fresh key
+  names one package, so two senders of one object make two blobs; and
+  the store keeps even identical bytes apart when two mediations put
+  them, so that each one's `delete` means what it says. That is the
+  price of the store not knowing what it holds, and of every URL having
+  one owner.

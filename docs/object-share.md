@@ -252,7 +252,7 @@ the key; the mediator's queue never holds the bytes. A package is a
     { "id": "bafybei…", "media_type": "application/vnd.ipld.dag-pb", "byte_count": 108, "data": { "base64": "…" } },
     { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",    "byte_count": 100, "data": { "base64": "…" } },
     { "id": "bciqk…", "media_type": "application/vnd.ipld.car", "byte_count": 734003200,
-      "data": { "links": ["https://…/b/bciqk…"], "hash": "bciqk…" } }
+      "data": { "links": ["https://…/b/m3q7xk…"], "hash": "bciqk…" } }
   ]
 }
 ```
@@ -263,18 +263,18 @@ the key; the mediator's queue never holds the bytes. A package is a
 plaintext.
 
 - `data.hash` is the ciphertext's name — a sha2-256 multihash, multibase
-  base32 lower (`b…`), a blob name (§8.1) — and `id` is the same string.
-  Hashing the ciphertext lets a download be checked as it is, before any
-  key is used, and lets anyone with the bytes name them. A package whose
-  bytes do not hash to `data.hash` is discarded.
+  base32 lower (`b…`), the string the sender's store checked the upload
+  against (§8.1) — and `id` is the same string. Hashing the ciphertext
+  lets a download be checked as it is, before any key is used. A package
+  whose bytes do not hash to `data.hash` is discarded.
 - `data.links` holds **exactly one URL**: absolute, `https:` or `http:`,
   no credentials. DIDComm allows a list; this protocol does not use it —
-  the bytes have one place, and a mirror is that store's business (a
-  redirect, or the same hash at another URL in a later share). The URL is
-  a place to `GET` ciphertext and nothing more: the receiver fetches it
-  as given, follows no redirect, and may refuse it by its own policy (a
-  private address, a scheme it does not trust) — that is a partial
-  object, not an error in the share.
+  the bytes have one place. The URL is a place to `GET` ciphertext and
+  nothing more: the receiver fetches it as given, follows no redirect,
+  and may refuse it by its own policy (a private address, a scheme it
+  does not trust) — that is a partial object, not an error in the share.
+  The URL says nothing about the bytes or the sender (the store names it
+  at random, §8.1); the hash is the share's, not the URL's.
 - `byte_count` is the contract for the download: a response that
   announces or sends more is abandoned where it stands, one that ends
   short is not the package, and the receiver need never hold more than
@@ -313,12 +313,12 @@ the card is still good; what is broken is a way of getting bytes, and
 they may come another way. (`verifyShare` returns `package` for a usable
 one, `packageProblem` for a named-but-unusable one, neither for none.)
 
-**Forwarding.** A recipient may pass a package on — URL, key and
-`available_until`, under the object's card — without a second upload, for
-as long as the original hold lasts. Renewing the hold is the original
-sender's (`blob-store/1.0` renews by re-`put` under a mediation the
-forwarder does not have); to offer the bytes past that date a forwarder
-puts them in its own store and names that package.
+A package is transport for one share: bytes the sender put somewhere for
+the recipients it tells, for as long as its store keeps them. A recipient
+that passes the object on shares it anew (§3), by its own road and under
+its own package if it needs one; nothing in this protocol extends a
+package's life or lets a third party stand in for the sender at the
+store.
 
 **Algorithms.** `AES256_GCM_HKDF_1MB` — Tink's streaming AEAD of that
 name (`AesGcmHkdfStreaming`: 32-byte key, HKDF-SHA256 to a 32-byte
@@ -372,7 +372,11 @@ send the minimal share inline with the package named.
 The URL is any HTTP location serving the ciphertext with `GET`. The
 sender's own mediator is the natural one: `blob-store/1.0`
 (`docs/blob-store.md`) lets an agent holding a mediation with it put a
-blob there under a retention and get back the URL. A blob's name there is
-the package's `data.hash`, and its `retain_until` is the share's
-`available_until`. Nothing in the share depends on which store: the
-receiver has a URL, a hash and a key.
+blob there under a retention and get back the URL. The store checks the
+upload against the package's `data.hash`, serves it at a URL of its own
+choosing (a random id, unrelated to the hash), and its `retain_until` is
+the share's `available_until`. The blob is the sender's alone — its
+`delete` ends it — and the store is a temporary road, not where the
+object lives: what lives is the object in each vault's `blobs/`. Nothing
+in the share depends on which store: the receiver has a URL, a hash and
+a key.
