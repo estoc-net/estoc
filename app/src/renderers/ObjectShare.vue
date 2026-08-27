@@ -36,6 +36,10 @@ interface Awaiting {
   bytes: number;
   /** the package's size, when the share names one to fetch */
   packaged: number | null;
+  /** when the package's store said it would let go of the bytes, when the share names one */
+  until: string | null;
+  /** why the named package cannot be fetched, when the share names one this app cannot use */
+  unusable: string | null;
 }
 
 /** The fetch of a package, as it goes. */
@@ -101,6 +105,13 @@ onMounted(async () => {
   show(share);
 });
 
+/** "available until <date>" or "may be gone since <date>": the store's word, not a promise. */
+function untilWords(iso: string): string {
+  const when = new Date(iso);
+  const date = Number.isNaN(when.getTime()) ? iso : when.toLocaleDateString();
+  return when.getTime() < Date.now() ? `may be gone since ${date}` : `available until ${date}`;
+}
+
 /** Fetch the package the share names, and show the object as it is after. */
 async function fetchBytes(): Promise<void> {
   fetching.value = { state: "busy" };
@@ -118,7 +129,13 @@ function show(share: VerifiedShare): void {
   const files = object.tree;
   const awaiting: Awaiting | null = share.complete
     ? null
-    : { files: tree.partial.size, bytes: missingBytes(tree), packaged: share.package?.byteCount ?? null };
+    : {
+        files: tree.partial.size,
+        bytes: missingBytes(tree),
+        packaged: share.package?.byteCount ?? null,
+        until: share.package?.availableUntil ?? null,
+        unusable: share.packageProblem,
+      };
   if (!isPost(object.meta) || validatePost(object.meta).length > 0) {
     // every file the tree names, sized by the skeleton when its bytes are not here
     const listing = [...tree.files.keys()]
@@ -201,7 +218,11 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
           >
             {{ fetching.state === "busy" ? "fetching…" : `fetch (${view.awaiting.packaged} B)` }}
           </button>
+          <span v-if="view.awaiting.until !== null" class="object-until" :title="view.awaiting.until">
+            {{ untilWords(view.awaiting.until) }}
+          </span>
         </p>
+        <p v-if="view.awaiting?.unusable" class="object-meta object-bad">bytes were offered in a way this app cannot fetch: {{ view.awaiting.unusable }}</p>
         <p v-if="fetching.state === 'failed'" class="object-meta object-bad">could not fetch the package: {{ fetching.reason }}</p>
         <p v-if="view.did !== null" class="object-meta" :title="`${view.did}\n${view.root}`">
           signed by <code>{{ shortDid(view.did) }}</code>
@@ -253,6 +274,10 @@ const shortDid = (did: string) => `${did.slice(0, 16)}…${did.slice(-6)}`;
 }
 .object-away {
   opacity: 0.55;
+}
+.object-until {
+  margin-left: 0.5em;
+  opacity: 0.7;
 }
 .object-awaiting {
   font-style: italic;

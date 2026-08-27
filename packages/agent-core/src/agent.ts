@@ -188,6 +188,8 @@ interface PlacedPackage {
   url: string;
   byteCount: number;
   key: Uint8Array;
+  /** the store's hold as last told to us: a renewal moves it */
+  retainUntil: string;
 }
 
 interface DeliveryAttachment {
@@ -1740,6 +1742,7 @@ export class Agent {
     if (known !== undefined) {
       const renewed = await this.putBlob(known.hash, known.byteCount);
       if (renewed.upload === null) {
+        known.retainUntil = renewed.retainUntil;
         return known;
       }
     }
@@ -1753,7 +1756,7 @@ export class Agent {
         throw new Error(`the blob store answered ${response.status} to the package upload`);
       }
     }
-    const result = { hash, url: placed.url, byteCount: ciphertext.length, key };
+    const result = { hash, url: placed.url, byteCount: ciphertext.length, key, retainUntil: placed.retainUntil };
     this.packages.set(closure.root, result);
     this.log(`package ${hash} (${ciphertext.length} bytes) placed at ${placed.url} until ${placed.retainUntil}`);
     return result;
@@ -1793,7 +1796,11 @@ export class Agent {
     }
     const pkg = before.package;
     if (pkg === null) {
-      throw new Error("the share names no package to fetch");
+      throw new Error(
+        before.packageProblem === null
+          ? "the share names no package to fetch"
+          : `the share names a package this agent cannot use: ${before.packageProblem}`
+      );
     }
     const response = await this.fetchFn(pkg.url, {
       redirect: "error",

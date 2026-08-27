@@ -61,10 +61,12 @@ export interface ObjectShareBody {
   root: string;
   /** compact JWS over `{did, root}` — folder-object's card; present, the share is a signed object */
   card?: string;
-  /** the one package (§8): which attachment, and how to open it */
+  /** the one package (§8): which attachment, how to open it, and how long its store promised to keep it */
   package?: {
     attachment_id: string;
     ciphering: { algorithm: string; parameters: { key: string } };
+    /** ISO 8601: the store's retention as the sender was told it — advisory, the bytes may go sooner or later */
+    available_until: string;
   };
 }
 
@@ -87,8 +89,21 @@ export interface SharePackage {
   byteCount: number;
   /** the one place the ciphertext is, http(s) with no credentials */
   url: string;
+  /** when the store's hold on the bytes was to run out, ISO 8601 — advisory */
+  availableUntil: string;
   algorithm: typeof AES256_GCM_HKDF_1MB;
   key: Uint8Array;
+}
+
+/**
+ * A share that names a package the receiver cannot use: the entry is
+ * there but its shape, its attachment, or its algorithm is not what this
+ * receiver can open. The share is still what its blocks make it (§7); the
+ * problem is reported, not swallowed, so a receiver can tell "no bytes
+ * were offered" from "bytes were offered in a way I cannot take".
+ */
+export interface PackageProblem {
+  problem: string;
 }
 
 /**
@@ -134,8 +149,10 @@ export interface VerifiedShare {
   object: FolderObject;
   /** true when no leaf is missing: the object is whole */
   complete: boolean;
-  /** the package the share names, when it names one that is well-formed; null otherwise */
+  /** the package the share names, when it names one this receiver can fetch and open; null otherwise */
   package: SharePackage | null;
+  /** why the named package is unusable, when one is named and `package` is null; null otherwise */
+  packageProblem: string | null;
   /** every block held — the message's, and any the caller supplied — CID → bytes */
   blocks: Map<string, Uint8Array>;
 }
@@ -196,48 +213,63 @@ export function attachmentsOf(blocks: Map<string, Uint8Array>): BlockAttachment[
 }
 
 /**
- * The share's `body.package` and its attachment, as `SharePackage`, when
- * both are there and well-formed under an algorithm we know; else null —
- * a package that cannot be opened is ignored, not an error (§8).
+ * The share's `body.package` and its attachment, read out as
+ * `SharePackage` when both are there and well-formed under an algorithm
+ * we know; null when the share names no package; a `PackageProblem`
+ * when it names one that cannot be used (§8). A problem is not an error
+ * in the share — the blocks it carries are what they are — but it is
+ * not nothing either, and is reported as such.
  */
-export function packageOf(msg: PlainMessage): SharePackage | null {
+export function packageOf(msg: PlainMessage): SharePackage | PackageProblem | null {
   const named = (msg.body as Partial<ObjectShareBody>).package;
-  if (named === null || typeof named !== "object") {
+  if (named === undefined) {
     return null;
   }
-  const { attachment_id, ciphering } = named;
-  if (typeof attachment_id !== "string" || ciphering?.algorithm !== AES256_GCM_HKDF_1MB) {
-    return null;
+  if (named === null || typeof named !== "object") {
+    return { problem: "body.package is not an object" };
+  }
+  const { attachment_id, ciphering, available_until } = named;
+  if (typeof attachment_id !== "string") {
+    return { problem: "body.package names no attachment" };
+  }
+  if (typeof ciphering?.algorithm !== "string") {
+    return { problem: "body.package names no ciphering algorithm" };
+  }
+  if (ciphering.algorithm !== AES256_GCM_HKDF_1MB) {
+    return { problem: `unsupported ciphering ${ciphering.algorithm}` };
   }
   const keyText = ciphering.parameters?.key;
-  if (typeof keyText !== "string") {
-    return null;
-  }
-  let key: Uint8Array;
+  let key: Uint8Array | null = null;
   try {
-    key = base64urlToBytes(keyText);
+    key = typeof keyText === "string" ? base64urlToBytes(keyText) : null;
   } catch {
-    return null;
+    key = null;
   }
-  if (key.length !== 32) {
-    return null;
+  if (key === null || key.length !== 32) {
+    return { problem: "the package key is not 32 bytes of base64url" };
+  }
+  if (typeof available_until !== "string" || Number.isNaN(Date.parse(available_until))) {
+    return { problem: "body.package has no available_until date" };
   }
   const attachment = (msg.attachments ?? []).find(
     (a) => (a as Partial<PackageAttachment>).id === attachment_id
   ) as Partial<PackageAttachment> | undefined;
-  const data = attachment?.data;
-  if (attachment === undefined || typeof data?.hash !== "string" || !isBlobHash(data.hash)) {
-    return null;
+  if (attachment === undefined) {
+    return { problem: `no attachment ${attachment_id} for the package` };
+  }
+  const data = attachment.data;
+  if (typeof data?.hash !== "string" || !isBlobHash(data.hash) || attachment.id !== data.hash) {
+    return { problem: "the package attachment is not named by its hash" };
   }
   const url = Array.isArray(data.links) && data.links.length === 1 ? packageUrl(data.links[0]) : null;
-  if (url === null || attachment.id !== data.hash) {
-    return null;
+  if (url === null) {
+    return { problem: "the package attachment does not name exactly one http(s) URL" };
   }
   const byteCount = attachment.byte_count;
   if (typeof byteCount !== "number" || !Number.isInteger(byteCount) || byteCount < 0) {
-    return null;
+    return { problem: "the package attachment has no byte_count" };
   }
-  return { hash: data.hash, byteCount, url, algorithm: AES256_GCM_HKDF_1MB, key };
+  return { hash: data.hash, byteCount, url, availableUntil: available_until, algorithm: AES256_GCM_HKDF_1MB, key };
 }
 
 /**
@@ -264,7 +296,7 @@ function packageUrl(link: unknown): string | null {
 
 /** The package attachment and the body entry that names it, for a share carrying one. */
 export function packageParts(
-  placed: { hash: string; url: string; byteCount: number; key: Uint8Array }
+  placed: { hash: string; url: string; byteCount: number; key: Uint8Array; retainUntil: string }
 ): { attachment: PackageAttachment; named: NonNullable<ObjectShareBody["package"]> } {
   return {
     attachment: {
@@ -276,6 +308,7 @@ export function packageParts(
     named: {
       attachment_id: placed.hash,
       ciphering: { algorithm: AES256_GCM_HKDF_1MB, parameters: { key: bytesToBase64url(placed.key) } },
+      available_until: placed.retainUntil,
     },
   };
 }
@@ -377,7 +410,18 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
   }
   const meta = parseIndex(files["index.json"] as Uint8Array);
   const object: FolderObject = { meta, tree: files };
-  return { root, card, tree, object, complete: tree.missing.size === 0, package: packageOf(msg), blocks };
+  const named = packageOf(msg);
+  const problem = named !== null && "problem" in named ? named : null;
+  return {
+    root,
+    card,
+    tree,
+    object,
+    complete: tree.missing.size === 0,
+    package: problem === null ? (named as SharePackage | null) : null,
+    packageProblem: problem?.problem ?? null,
+    blocks,
+  };
 }
 
 /**
@@ -406,7 +450,12 @@ export const objectShareHandler: ProtocolHandler = {
     }
     const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
     const kept = `${share.tree.files.size} files kept`;
-    const road = share.package === null ? "" : ` (${share.package.byteCount} bytes packaged at ${share.package.url})`;
+    const road =
+      share.package !== null
+        ? ` (${share.package.byteCount} bytes packaged at ${share.package.url} until ${share.package.availableUntil})`
+        : share.packageProblem !== null
+          ? ` (a package is named but unusable: ${share.packageProblem})`
+          : "";
     const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes${road}`;
     agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${kept}${state}`);
   },

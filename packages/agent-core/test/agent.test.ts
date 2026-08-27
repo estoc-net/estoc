@@ -1432,9 +1432,10 @@ describe("Agent sharing objects", () => {
     const pkg = attachments[4] as (typeof attachments)[number];
     expect(pkg.media_type).toBe("application/vnd.ipld.car");
     expect(pkg.data).toEqual({ links: [`${MEDIATOR_HTTP}b/${pkg.id}`], hash: pkg.id });
-    const named = (sent.msg.body as { package: { attachment_id: string; ciphering: { algorithm: string; parameters: { key: string } } } }).package;
+    const named = (sent.msg.body as { package: { attachment_id: string; ciphering: { algorithm: string; parameters: { key: string } }; available_until: string } }).package;
     expect(named.attachment_id).toBe(pkg.id);
     expect(named.ciphering.algorithm).toBe("AES256_GCM_HKDF_1MB");
+    expect(Date.parse(named.available_until)).toBeGreaterThan(Date.now());
     // the store holds the ciphertext, whole, under its name
     const stored = mediator.blobs?.get(pkg.id);
     expect(stored?.bytes?.length).toBe(pkg.byte_count);
@@ -1454,7 +1455,8 @@ describe("Agent sharing objects", () => {
     expect([...partial.tree.partial.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png"]);
     const lacking = files["files/body.dj"].length + files["files/images/dot.png"].length;
     expect(missingBytes(partial.tree)).toBe(lacking);
-    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, url: `${MEDIATOR_HTTP}b/${pkg.id}` });
+    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, url: `${MEDIATOR_HTTP}b/${pkg.id}`, availableUntil: named.available_until });
+    expect(partial.packageProblem).toBeNull();
     expect(partial.package?.key.length).toBe(32);
     expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes (${pkg.byte_count} bytes packaged at`))).toBe(true);
 
@@ -1500,12 +1502,37 @@ describe("Agent sharing objects", () => {
       return { ...record, msg };
     };
 
-    // not one URL, or not an http(s) one without credentials: no package named at all
+    // not one URL, or not an http(s) one without credentials: a package named but unusable, said so
     for (const links of [[], [url, url], ["ftp://fake-mediator/b/x"], [`http://user:pw@fake-mediator/b/x`], ["/b/x"], [42]]) {
       const bad = variant((pkg) => { pkg.data.links = links as string[]; });
-      expect((await verifyShare(bad.msg)).package).toBeNull();
-      await expect(bob.agent.fetchPackage(bad)).rejects.toThrow(/names no package/);
+      const seen = await verifyShare(bad.msg);
+      expect(seen.package).toBeNull();
+      expect(seen.packageProblem).toMatch(/exactly one http\(s\) URL/);
+      expect(seen.complete).toBe(false); // the skeleton is still a verified, partial share
+      await expect(bob.agent.fetchPackage(bad)).rejects.toThrow(/cannot use: .*exactly one http/);
     }
+    // the body entry itself: unknown cipher, no attachment, no date — each its own problem; absent is no package at all
+    type Body = { package?: { attachment_id: string; ciphering: { algorithm: string }; available_until?: string } };
+    const bodyVariant = (edit: (body: Body) => void): MessageRecord => {
+      const msg = structuredClone(record.msg);
+      edit(msg.body as Body);
+      return { ...record, msg };
+    };
+    const cases: [ (body: Body) => void, RegExp ][] = [
+      [(b) => { (b.package as { ciphering: { algorithm: string } }).ciphering.algorithm = "XCHACHA20_POLY1305"; }, /unsupported ciphering XCHACHA20_POLY1305/],
+      [(b) => { (b.package as { attachment_id: string }).attachment_id = "bciqnope"; }, /no attachment bciqnope/],
+      [(b) => { delete (b.package as { available_until?: string }).available_until; }, /no available_until/],
+      [(b) => { (b as { package: unknown }).package = "yes"; }, /not an object/],
+    ];
+    for (const [edit, problem] of cases) {
+      const seen = await verifyShare(bodyVariant(edit).msg);
+      expect(seen.package).toBeNull();
+      expect(seen.packageProblem).toMatch(problem);
+    }
+    const none = await verifyShare(bodyVariant((b) => { delete b.package; }).msg);
+    expect(none.package).toBeNull();
+    expect(none.packageProblem).toBeNull();
+    await expect(bob.agent.fetchPackage(bodyVariant((b) => { delete b.package; }))).rejects.toThrow(/names no package to fetch/);
     // the store's bytes must be exactly byte_count: fewer promised, the download stops short of the rest
     const short = variant((pkg) => { pkg.byte_count -= 1; });
     await expect(bob.agent.fetchPackage(short)).rejects.toThrow(/should be \d+ bytes, the response/);

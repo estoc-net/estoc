@@ -222,7 +222,20 @@ roads, decided by the sender by size (§3):
   it; the receiver has the whole object the moment it reads the message.
 - **skeleton inline, bytes at a URL** — the skeleton and `index.json` in
   the message, the whole closure as one encrypted package (§8) the
-  receiver downloads itself, whenever it likes, without the sender.
+  receiver downloads itself, when it likes and while the store keeps
+  them (`available_until`, §8), without the sender.
+
+The two roads are the sender's rule; the receiver does not enforce it
+and cannot: a share with some leaves inline looks the same as a share
+whose missing leaves arrived in an earlier one, since `blobs/` is by CID
+and leaves land wherever they come from. The receiver checks what is
+checkable — the skeleton whole, `index.json` present, every block by its
+CID, the card — and reports what is here and what is not. A sender that
+sends less than it should has given less, which is not an attack; what
+the receiver sees is a partial object, the same state a package's
+retention running out leaves behind. That state — **skeleton, verified,
+bytes absent** — is where both roads end when the bytes do not arrive,
+and is a state, not a road: no sender chooses it.
 
 There is no third road and no ask. The receiver never tells the sender
 what it lacks: with the skeleton it lacks nothing it needs to *know* —
@@ -258,7 +271,8 @@ is the control plane and the mediator's queue never holds the bytes.
     "card": "<compact JWS>",
     "package": {
       "attachment_id": "bciqk…",
-      "ciphering": { "algorithm": "AES256_GCM_HKDF_1MB", "parameters": { "key": "<base64url, 32 bytes>" } }
+      "ciphering": { "algorithm": "AES256_GCM_HKDF_1MB", "parameters": { "key": "<base64url, 32 bytes>" } },
+      "available_until": "2026-09-26T12:00:00Z"
     }
   },
   "attachments": [
@@ -297,13 +311,33 @@ is the control plane and the mediator's queue never holds the bytes.
   either. The receiver need never hold more than `byte_count` bytes, and
   never spends a key on bytes whose length is wrong.
 - **`body.package`** — at most one per share: `attachment_id` naming the
-  package attachment, `ciphering` saying how to open it. It lives in the
-  body, not on the attachment, because DIDComm attachments have no such
-  field and implementations drop fields they do not know. A package
-  attachment with no `package` entry cannot be opened and is ignored; an
-  entry naming no attachment is ignored. One package, because the share
-  is one thing: the closure either fits the message or goes to one URL
-  (§7).
+  package attachment, `ciphering` saying how to open it, `available_until`
+  saying how long the bytes were promised for. It lives in the body, not
+  on the attachment, because DIDComm attachments have no such field and
+  implementations drop fields they do not know. One package, because the
+  share is one thing: the closure either fits the message or goes to one
+  URL (§7).
+
+  A package attachment with no `package` entry is ignored. An entry that
+  is there but cannot be used — not an object, naming no attachment or
+  one that is not in the message, an algorithm this receiver does not
+  have, a key of the wrong size, no `available_until`, or an attachment
+  of the wrong shape (§8, the rules above) — is **a package named but
+  unusable**: the share is still what its blocks make it, verified and
+  partial (§7), and the receiver reports *why* the bytes cannot be had,
+  distinct from a share that offered none. It is not malformed: the
+  object is whole in what it says about itself, and the card, if any,
+  is still good; what is broken is a way of getting bytes, and the
+  receiver may get them another way. (`verifyShare` returns `package`
+  for a usable one, `packageProblem` for a named-but-unusable one, and
+  neither for none.)
+- **`available_until`** is an ISO 8601 date-time: the store's
+  `retain_until` (§8.1) as the sender was last told it — required, since
+  the sender always knows it, and advisory, since only the store knows
+  what it will do. A share can wait in a mediator's queue for weeks; the
+  receiver reads `available_until` against now to know whether to fetch
+  first and read later, or to expect a partial object. Past the date the
+  bytes may still be there — one `GET` says — but nobody promised it.
 - **`ciphering`** takes media-sharing/1.0's shape — `algorithm` plus
   `parameters` — and no more of that protocol. `algorithm` is a name
   from the list below; `parameters.key` is the raw key, base64url. The
@@ -311,8 +345,12 @@ is the control plane and the mediator's queue never holds the bytes.
   authcrypted message: encrypting to the receiver is what the envelope
   already does. One ciphertext, one key, any number of recipients each
   told in their own message; a recipient may pass a package on by
-  passing the URL and key on, under the object's card, without a second
-  upload.
+  passing the URL, key and `available_until` on, under the object's
+  card, without a second upload — for as long as the original hold
+  lasts. Renewing it is the original sender's (`blob-store/1.0` renews
+  by re-`put` under a mediation the forwarder does not have), so to
+  offer the bytes past that date a forwarder puts them in its own store
+  and names that package instead.
 
   Algorithms:
 
@@ -322,10 +360,19 @@ is the control plane and the mediator's queue never holds the bytes.
     format as Tink specifies: a header (length byte, salt, 7-byte nonce
     prefix) then segments each AES-GCM under a nonce of prefix, segment
     number, and last-segment flag. Every segment authenticates on its
-    own, in order, so a range of the ciphertext is checkable without the
-    rest — a download resumes by HTTP `Range` and verifies as it goes —
-    and a truncated stream is detected by the last-segment flag. This is
-    the only algorithm in 1.0.
+    own, in order, and a truncated stream is detected by the last-segment
+    flag. This is the only algorithm in 1.0.
+
+    In 1.0 a receiver fetches the whole ciphertext, checks its length
+    (`byte_count`) and hash, then opens it: nothing is decrypted, and no
+    block is kept, before the bytes are known to be the package. The
+    segment format is chosen so that a later version can resume an
+    interrupted download by HTTP `Range` on segment boundaries and check
+    each segment as it lands — but that is a format's permission, not a
+    protocol's provision: what state a resuming receiver keeps, how a
+    `206` is checked, and that `data.hash` is still over the whole are
+    not specified here, and a 1.0 receiver that starts over is
+    conforming.
 
   Not media-sharing's whole-file `aes-256-cbc` with `iv` and `tag` in the
   message: one tag over a file means the whole file before a byte is
@@ -343,10 +390,11 @@ is the control plane and the mediator's queue never holds the bytes.
   the minimal share: **the skeleton and `index.json` are always inline**
   (§2). A share whose package is unreachable, or whose bytes fail the
   hash, is still a verified skeleton-only share — partial, as in §7.
-- **Fetching** is the receiver's, at any time: `GET` the URL, check the
-  length, verify the hash, decrypt, import. The bytes may be gone (the
-  store's retention ran out, §8.1) — that is a partial object, not an
-  error in the share. The
+- **Fetching** is the receiver's, at any time it likes, though the
+  bytes are promised only until `available_until`: `GET` the URL, check
+  the length, verify the hash, decrypt, import. The bytes may be gone
+  (the store's retention ran out, §8.1) — that is a partial object, not
+  an error in the share. The
   receiver keeps nothing of the package itself once imported: the blocks
   are in `blobs/` by CID and the package was transport.
 - **Sending** (§3 step 2): when the closure does not fit inline, CAR the

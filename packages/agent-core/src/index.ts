@@ -128,6 +128,7 @@ export {
   type BlockAttachment,
   type Closure,
   type VerifiedShare,
+  type PackageProblem,
   type SharePackage,
   type PackageAttachment,
 } from "./protocol/object-share.js";

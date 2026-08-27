@@ -184,7 +184,8 @@ try {
   }
   ok("Alice sent the minimal share; her own thread shows the object whole, from her blobs");
   await bob.waitForSelector('.object-awaiting:has-text("1 file still on the way (1258291 B)")', { timeout: 15000 });
-  ok("Bob received the skeleton, reads the post, and knows exactly which bytes are missing");
+  await bob.waitForSelector('.object-until:has-text("available until")', { timeout: 5000 });
+  ok("Bob received the skeleton, reads the post, knows exactly which bytes are missing and until when they are promised");
 
   // Pairwise: each side writes from a DID minted for the other alone. The
   // chat head says which; it is not the public DID on the rail.
