@@ -1,7 +1,9 @@
 # blob-store/1.0
 
-Status: specified 2026-08-26, not yet implemented (client side in
-`@estoc/agent-core`, store side in `didcomm-mediator`).
+Status: specified 2026-08-26; store side implemented in `didcomm-mediator`
+the same day (upload URL = `PUT /b/<hash>?token=…` through the mediator,
+not a presigned object-store URL); client side in `@estoc/agent-core`
+pending.
 Design history: `research/notes/2026-08-26-want-and-blob-road.md`.
 
 ## 1. What it is for
