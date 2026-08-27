@@ -166,6 +166,8 @@ export interface AgentOptions {
   reconnectDelayMs?: number;
   /** how long one delivery may take before it counts as failed (and is retried later); default 15s */
   deliveryTimeoutMs?: number;
+  /** how long fetching a package may take, headers to last byte; default 10 minutes */
+  packageTimeoutMs?: number;
   /**
    * Application-protocol handlers, added to the built-in basicmessage/2.0
    * and user-profile/1.0 ones; a handler naming a type a built-in covers
@@ -213,6 +215,48 @@ function dedupKey(sender: string | null, id: string): string {
   return `${sender ?? ""}\u0000${id}`;
 }
 
+/**
+ * Read a response body that must be exactly `expected` bytes, without
+ * ever holding more: a `Content-Length` saying otherwise is refused
+ * before the body is read, and a body that runs past `expected` is
+ * abandoned where it does. Fewer bytes than promised is an error too —
+ * the share said how many, and the hash is over exactly those.
+ */
+async function readExactly(response: Response, expected: number): Promise<Uint8Array> {
+  const announced = response.headers.get("content-length");
+  if (announced !== null && Number(announced) !== expected) {
+    throw new Error(`the package should be ${expected} bytes, the response announces ${announced}`);
+  }
+  if (response.body === null) {
+    throw new Error("the package response has no body");
+  }
+  const out = new Uint8Array(expected);
+  let got = 0;
+  const reader = response.body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (got + value.length > expected) {
+        throw new Error(`the package should be ${expected} bytes, the response keeps going`);
+      }
+      out.set(value, got);
+      got += value.length;
+    }
+  } finally {
+    reader.releaseLock();
+    if (got !== expected) {
+      await response.body.cancel().catch(() => undefined);
+    }
+  }
+  if (got !== expected) {
+    throw new Error(`the package should be ${expected} bytes, the response ended at ${got}`);
+  }
+  return out;
+}
+
 export class Agent {
   readonly vault: Vault;
   private readonly seedKey: SeedKey;
@@ -224,6 +268,7 @@ export class Agent {
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
   private readonly deliveryTimeoutMs: number;
+  private readonly packageTimeoutMs: number;
   private readonly maxShareBytes: number;
   /** root → the package placed for it during this run */
   private readonly packages = new Map<string, PlacedPackage>();
@@ -279,6 +324,7 @@ export class Agent {
     this.displayName = options.displayName ?? (() => this.vault.config.label);
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
     this.deliveryTimeoutMs = options.deliveryTimeoutMs ?? 15_000;
+    this.packageTimeoutMs = options.packageTimeoutMs ?? 600_000;
     this.maxShareBytes = options.maxShareBytes ?? DEFAULT_MAX_SHARE_BYTES;
     this.didResolver = { resolve: (did) => this.resolveDid(did) };
     for (const handler of [basicmessageHandler, userProfileHandler, objectShareHandler, ...(options.handlers ?? [])]) {
@@ -1733,6 +1779,12 @@ export class Agent {
    * when the share names no package, the bytes cannot be fetched (the
    * store's retention ran out), or they do not open — the share is then
    * what it was, a partial object.
+   *
+   * The share's `byte_count` is the contract for the download: a
+   * response announcing more is refused before a byte is read, the body
+   * is read no further than that many bytes, and fewer or more is not
+   * the package. Redirects are not followed — the URL names the bytes,
+   * and where it points was checked as it stands (`packageOf`).
    */
   async fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
     const before = await verifyShare(record.msg, (cid) => this.vault.blobs.get(cid));
@@ -1743,19 +1795,14 @@ export class Agent {
     if (pkg === null) {
       throw new Error("the share names no package to fetch");
     }
-    let ciphertext: Uint8Array | null = null;
-    let failure = "";
-    for (const url of pkg.links) {
-      const response = await this.fetchFn(url);
-      if (response.ok) {
-        ciphertext = new Uint8Array(await response.arrayBuffer());
-        break;
-      }
-      failure = `${url} answered ${response.status}`;
+    const response = await this.fetchFn(pkg.url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(this.packageTimeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error(`the package is not there: ${pkg.url} answered ${response.status}`);
     }
-    if (ciphertext === null) {
-      throw new Error(`the package is not there: ${failure}`);
-    }
+    const ciphertext = await readExactly(response, pkg.byteCount);
     const blocks = await openPackage(pkg, ciphertext);
     const share = await verifyShare(record.msg, async (cid) => blocks.get(cid) ?? this.vault.blobs.get(cid));
     for (const [cid, bytes] of share.blocks) {

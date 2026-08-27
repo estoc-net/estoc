@@ -271,8 +271,8 @@ is the control plane and the mediator's queue never holds the bytes.
 ```
 
 - **The package attachment** is a DIDComm linked attachment:
-  `data.links` (one or more URLs of the same bytes), `data.hash`, and
-  `byte_count`, all about the **ciphertext**; `media_type`
+  `data.links`, `data.hash`, and `byte_count`, all about the
+  **ciphertext**; `media_type`
   `application/vnd.ipld.car` names what the plaintext is. `data.hash` is
   a multihash (sha2-256) of the ciphertext bytes, multibase base32 lower
   (`b…`), and `id` is that same string: the ciphertext's own name. The
@@ -280,6 +280,22 @@ is the control plane and the mediator's queue never holds the bytes.
   any key is used, and a package may be named by anyone who has the
   bytes. Verifying the hash is required; a package whose bytes do not
   hash to `data.hash` is discarded.
+- **`data.links` holds exactly one URL**, absolute, `https:` or
+  `http:`, with no credentials. DIDComm allows a list; this protocol
+  does not use it: the bytes have one place, the sender's store (§8.1),
+  and a mirror is that store's business (a redirect, or the same hash at
+  another URL in a later share), not a list for the receiver to walk. A
+  package naming zero or several links, or a URL of another shape, is a
+  package that cannot be opened and is ignored. The URL is a place to
+  `GET` ciphertext and nothing more: a receiver fetches it as given and
+  follows no redirect, and may refuse a URL by its own policy (a private
+  or local address, a scheme it does not trust) — that is a partial
+  object, not an error in the share.
+- **`byte_count` is the contract for the download.** A response that
+  announces or sends more than `byte_count` bytes is not the package and
+  is abandoned where it stands; one that ends short is not the package
+  either. The receiver need never hold more than `byte_count` bytes, and
+  never spends a key on bytes whose length is wrong.
 - **`body.package`** — at most one per share: `attachment_id` naming the
   package attachment, `ciphering` saying how to open it. It lives in the
   body, not on the attachment, because DIDComm attachments have no such
@@ -327,9 +343,10 @@ is the control plane and the mediator's queue never holds the bytes.
   the minimal share: **the skeleton and `index.json` are always inline**
   (§2). A share whose package is unreachable, or whose bytes fail the
   hash, is still a verified skeleton-only share — partial, as in §7.
-- **Fetching** is the receiver's, at any time: `GET` a link, verify the
-  hash, decrypt, import. A link may be gone (the store's retention ran
-  out, §8.1) — that is a partial object, not an error in the share. The
+- **Fetching** is the receiver's, at any time: `GET` the URL, check the
+  length, verify the hash, decrypt, import. The bytes may be gone (the
+  store's retention ran out, §8.1) — that is a partial object, not an
+  error in the share. The
   receiver keeps nothing of the package itself once imported: the blocks
   are in `blobs/` by CID and the package was transport.
 - **Sending** (§3 step 2): when the closure does not fit inline, CAR the

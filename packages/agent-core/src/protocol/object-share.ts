@@ -71,8 +71,8 @@ export interface ObjectShareBody {
 /**
  * The package as a DIDComm linked attachment: `id` and `data.hash` are
  * the ciphertext's own name (sha-256 multihash, base32), `byte_count`
- * its size, `data.links` where it is; `media_type` says what the
- * plaintext is.
+ * its size, `data.links` where it is — exactly one URL (§8); `media_type`
+ * says what the plaintext is.
  */
 export interface PackageAttachment {
   id: string;
@@ -85,7 +85,8 @@ export interface PackageAttachment {
 export interface SharePackage {
   hash: string;
   byteCount: number;
-  links: string[];
+  /** the one place the ciphertext is, http(s) with no credentials */
+  url: string;
   algorithm: typeof AES256_GCM_HKDF_1MB;
   key: Uint8Array;
 }
@@ -225,14 +226,40 @@ export function packageOf(msg: PlainMessage): SharePackage | null {
     (a) => (a as Partial<PackageAttachment>).id === attachment_id
   ) as Partial<PackageAttachment> | undefined;
   const data = attachment?.data;
-  const links = Array.isArray(data?.links) ? data.links.filter((l): l is string => typeof l === "string") : [];
-  if (attachment === undefined || typeof data?.hash !== "string" || !isBlobHash(data.hash) || links.length === 0) {
+  if (attachment === undefined || typeof data?.hash !== "string" || !isBlobHash(data.hash)) {
     return null;
   }
-  if (attachment.id !== data.hash || typeof attachment.byte_count !== "number") {
+  const url = Array.isArray(data.links) && data.links.length === 1 ? packageUrl(data.links[0]) : null;
+  if (url === null || attachment.id !== data.hash) {
     return null;
   }
-  return { hash: data.hash, byteCount: attachment.byte_count, links, algorithm: AES256_GCM_HKDF_1MB, key };
+  const byteCount = attachment.byte_count;
+  if (typeof byteCount !== "number" || !Number.isInteger(byteCount) || byteCount < 0) {
+    return null;
+  }
+  return { hash: data.hash, byteCount, url, algorithm: AES256_GCM_HKDF_1MB, key };
+}
+
+/**
+ * The one URL a package may name, or null: an absolute http(s) URL with
+ * no credentials. Anything else is not a place the receiver will fetch
+ * from — the package is a place to GET ciphertext, not a way to make the
+ * receiver's agent call somewhere on the sender's behalf.
+ */
+function packageUrl(link: unknown): string | null {
+  if (typeof link !== "string") {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(link);
+  } catch {
+    return null;
+  }
+  if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username !== "" || parsed.password !== "") {
+    return null;
+  }
+  return parsed.href;
 }
 
 /** The package attachment and the body entry that names it, for a share carrying one. */
@@ -379,7 +406,7 @@ export const objectShareHandler: ProtocolHandler = {
     }
     const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
     const kept = `${share.tree.files.size} files kept`;
-    const road = share.package === null ? "" : ` (${share.package.byteCount} bytes packaged at ${share.package.links[0]})`;
+    const road = share.package === null ? "" : ` (${share.package.byteCount} bytes packaged at ${share.package.url})`;
     const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes${road}`;
     agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${kept}${state}`);
   },

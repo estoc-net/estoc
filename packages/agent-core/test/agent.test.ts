@@ -1454,7 +1454,7 @@ describe("Agent sharing objects", () => {
     expect([...partial.tree.partial.keys()].sort()).toEqual(["files/body.dj", "files/images/dot.png"]);
     const lacking = files["files/body.dj"].length + files["files/images/dot.png"].length;
     expect(missingBytes(partial.tree)).toBe(lacking);
-    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, links: [`${MEDIATOR_HTTP}b/${pkg.id}`] });
+    expect(partial.package).toMatchObject({ hash: pkg.id, byteCount: pkg.byte_count, url: `${MEDIATOR_HTTP}b/${pkg.id}` });
     expect(partial.package?.key.length).toBe(32);
     expect(bob.log.some((l) => l.includes(`3 files kept, 2 awaiting ${lacking} bytes (${pkg.byte_count} bytes packaged at`))).toBe(true);
 
@@ -1478,6 +1478,43 @@ describe("Agent sharing objects", () => {
     tight.agent.destroy();
     bob.agent.destroy();
     carol.agent.destroy();
+  });
+
+  it("fetches a package only from the one http(s) URL it names, and only byte_count bytes of it", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const bob = await newParty("Bob", 2, mediator);
+    const { minimal } = await closureOf(files);
+    const tight = await squeezed(mediator, closureSize(minimal));
+    await bob.agent.start();
+    await withTimeout(bob.live, 8000, "bob live");
+    await tight.agent.addContact(bob.agent.did as string, "Bob");
+    await tight.agent.shareObject(bob.agent.did as string, object, { sign: true });
+    await eventually(async () => (await bob.vault.messages.read()).some((r) => r.msg.type === OBJECT_SHARE), "bob's share");
+    const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
+    const pkgOf = (msg: MessageRecord["msg"]) =>
+      (msg.attachments as { id: string; byte_count: number; data: { links: string[]; hash: string } }[])[4];
+    const url = pkgOf(record.msg).data.links[0];
+    const variant = (edit: (pkg: ReturnType<typeof pkgOf>) => void): MessageRecord => {
+      const msg = structuredClone(record.msg);
+      edit(pkgOf(msg));
+      return { ...record, msg };
+    };
+
+    // not one URL, or not an http(s) one without credentials: no package named at all
+    for (const links of [[], [url, url], ["ftp://fake-mediator/b/x"], [`http://user:pw@fake-mediator/b/x`], ["/b/x"], [42]]) {
+      const bad = variant((pkg) => { pkg.data.links = links as string[]; });
+      expect((await verifyShare(bad.msg)).package).toBeNull();
+      await expect(bob.agent.fetchPackage(bad)).rejects.toThrow(/names no package/);
+    }
+    // the store's bytes must be exactly byte_count: fewer promised, the download stops short of the rest
+    const short = variant((pkg) => { pkg.byte_count -= 1; });
+    await expect(bob.agent.fetchPackage(short)).rejects.toThrow(/should be \d+ bytes, the response/);
+    const long = variant((pkg) => { pkg.byte_count += 1; });
+    await expect(bob.agent.fetchPackage(long)).rejects.toThrow(/should be \d+ bytes, the response/);
+    // and the genuine one still opens
+    expect((await bob.agent.fetchPackage(record)).complete).toBe(true);
+    tight.agent.destroy();
+    bob.agent.destroy();
   });
 
   it("cannot take the package road past a mediator that keeps no blobs, or past its cap", async () => {
