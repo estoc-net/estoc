@@ -40,7 +40,7 @@ function handshake(url: string, headers: Record<string, string>): Promise<"open"
 }
 
 describe("the daemon serving the app", () => {
-  it("serves the files, marks index.html, falls back to it, and lets its own pages in without the token", async () => {
+  it("serves the files, marks index.html, falls back to it, and takes the token from its own pages too", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
     dirs.push(root);
     const appDir = path.join(root, "app");
@@ -49,8 +49,8 @@ describe("the daemon serving the app", () => {
     await writeFile(path.join(appDir, "assets", "a.wasm"), Buffer.from([0, 0x61, 0x73, 0x6d]));
     const served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n", appDir });
     try {
-      const app = served.appUrl!;
-      expect(app).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      expect(served.appUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/\?token=t0k3n$/);
+      const app = served.appUrl!.replace(/\?.*$/, "");
       const index = await fetch(app);
       expect(index.headers.get("content-type")).toBe("text/html; charset=utf-8");
       expect(await index.text()).toContain('<head><meta name="estoc-daemon" content="same-origin"><title>x</title>');
@@ -63,14 +63,15 @@ describe("the daemon serving the app", () => {
 
       const host = new URL(app).host;
       const socket = `ws://${host}/`;
-      expect(await handshake(socket, { origin: `http://${host}` })).toBe("open");
-      expect(await handshake(socket, { origin: "http://evil.example" })).toBe(401);
+      // being one of its own pages buys nothing: the token is the only key
+      expect(await handshake(socket, { origin: `http://${host}` })).toBe(401);
       expect(await handshake(socket, {})).toBe(401);
+      expect(await handshake(`${socket}?token=wrong`, { origin: `http://${host}` })).toBe(401);
+      expect(await handshake(served.url, { origin: `http://${host}` })).toBe("open");
       expect(await handshake(served.url, { origin: "http://evil.example" })).toBe("open");
 
-      // DNS rebinding: a name of the attacker's pointing here is same-origin to them, but not a host of ours
+      // DNS rebinding: a name of the attacker's pointing here is not a host of ours, token or not
       const rebound = { host: `evil.example:${new URL(app).port}` };
-      expect(await handshake(socket, { ...rebound, origin: `http://${rebound.host}` })).toBe(401);
       expect(await handshake(served.url, rebound)).toBe(401);
       expect(await getWithHost(app, rebound.host)).toBe(421);
       expect(await getWithHost(app, "localhost:1")).toBe(421);
@@ -80,7 +81,7 @@ describe("the daemon serving the app", () => {
     }
   });
 
-  it("without an app directory answers plain HTTP with 426 and takes only the token", async () => {
+  it("without an app directory answers plain HTTP with 426", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
     dirs.push(root);
     const served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });

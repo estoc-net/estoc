@@ -34,19 +34,17 @@ export interface Served {
  * The daemon behind a WebSocket: one daemon, any number of UIs. Each
  * socket is a port the RPC serves; events go to every socket open; a UI
  * that connects late calls `boot()` like any other and is told where
- * things stand. Access control: the socket is on loopback, but any page in
- * any browser on the machine can open one, so a page must either be one
- * this daemon served — the browser says so in `Origin`, which a page
- * cannot forge — or present the token; anything else is closed before a
- * word is read. With `appDir` the daemon serves the app itself, and the
- * page it serves needs no token at all.
+ * things stand. Access control is one rule: a socket is answered only
+ * with the token (`?token=`), whoever asks — a page this daemon served,
+ * a page elsewhere, another process on this machine; anything without it
+ * is closed before a word is read. With `appDir` the daemon serves the
+ * app itself, and hands the page the token in the link it prints.
  *
- * "One this daemon served" is `Origin` equal to `http://` + `Host`, and
- * `Host` a name this server actually answers to: a loopback name, the
- * bound address, or (bound to every interface) an address of this machine
- * — all at the bound port. Without that a page anywhere could point a name
- * of its own at 127.0.0.1 (DNS rebinding) and be same-origin with us. A
- * request with any other `Host` gets nothing, socket or file.
+ * On top of that a request is answered only when `Host` is a name this
+ * server actually answers to: a loopback name, the bound address, or
+ * (bound to every interface) an address of this machine — all at the
+ * bound port. A page anywhere can point a name of its own at 127.0.0.1
+ * (DNS rebinding) and reach us; it gets nothing, socket or file.
  */
 export async function serveDaemon(options: ServeOptions): Promise<Served> {
   const emitters = new Set<Emit>();
@@ -79,8 +77,7 @@ export async function serveDaemon(options: ServeOptions): Promise<Served> {
   });
   const wss = new WebSocketServer({ noServer: true });
   http.on("upgrade", (req, socket, head) => {
-    const ours = hostAllowed(req);
-    if (!(ours && files !== null && sameOrigin(req)) && !(ours && tokenMatches(req, options.token))) {
+    if (!hostAllowed(req) || !tokenMatches(req, options.token)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -102,7 +99,7 @@ export async function serveDaemon(options: ServeOptions): Promise<Served> {
   return {
     daemon,
     url: `ws://${hostPart}:${boundPort}/?token=${encodeURIComponent(options.token)}`,
-    appUrl: files === null ? null : `http://${hostPart}:${boundPort}/`,
+    appUrl: files === null ? null : `http://${hostPart}:${boundPort}/?token=${encodeURIComponent(options.token)}`,
     close: () =>
       new Promise((resolve) => {
         for (const client of wss.clients) {
@@ -178,13 +175,6 @@ function hostIsOurs(header: string | undefined, bind: string, port: number): boo
     return name === bind.toLowerCase();
   }
   return Object.values(networkInterfaces()).some((addrs) => addrs?.some((a) => a.address.toLowerCase() === name));
-}
-
-/** The upgrade comes from a page this server sent: its Origin is the host it was fetched from. */
-function sameOrigin(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const host = req.headers.host;
-  return typeof origin === "string" && typeof host === "string" && origin === `http://${host}`;
 }
 
 function tokenMatches(req: IncomingMessage, token: string): boolean {

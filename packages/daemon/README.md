@@ -23,21 +23,24 @@ Two hosts ship:
   (`src/codec.ts`).
 
 ```
-cd ~/my-vault && estoc init && estoc serve   # open the link it prints: http://127.0.0.1:37862/
+cd ~/my-vault && estoc init && estoc serve   # open the link it prints: http://127.0.0.1:37862/?token=…
 estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 
-The page the daemon serves finds the socket at its own origin (index.html
-is sent with a `<meta name="estoc-daemon">`) and needs no token: the
-browser's `Origin` header, which a page cannot forge, is the proof it came
-from here — provided `Host` is a name of this server's (a loopback name, the
-bound address, or an address of this machine when bound to all; anything
-else, such as an attacker's name pointed at 127.0.0.1, gets 421 and no
-socket). Any other origin — a dev server, app.estoc.dev — connects with
-the token the `?_daemon=` link carries (kept in `.estoc/cache/daemon.token`)
-and remembers it until `?_daemon=off`. The daemon listens on loopback and
-answers nothing else. A second UI connecting calls `boot()` like the first
-and is told where things stand.
+The token (kept in `.estoc/cache/daemon.token`) is the one key to the
+socket, whoever asks: the page the daemon serves finds the socket at its
+own origin (index.html is sent with a `<meta name="estoc-daemon">`) and
+takes the token from the `?token=` in the link, remembering it for reloads
+and other tabs; any other origin — a dev server, app.estoc.dev — connects
+with the `?_daemon=` link, which carries the socket URL with the token,
+and remembers it until `?_daemon=off`. Being a page of the daemon's own
+buys nothing: a browser on the machine (or on the network, when bound
+wider) that has no link has no socket. On top of that `Host` must be a
+name of this server's (a loopback name, the bound address, or an address
+of this machine when bound to all); anything else, such as an attacker's
+name pointed at 127.0.0.1 (DNS rebinding), gets 421 and no socket. A
+second UI connecting calls `boot()` like the first and is told where
+things stand.
 
 ## Fetching what others name
 

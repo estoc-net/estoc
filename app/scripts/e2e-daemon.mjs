@@ -134,8 +134,9 @@ try {
 
   const aliceDid = await unlockIdentity(alice, "Alice", link.own);
   await alice.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
-  if (!alice.url().startsWith(link.own)) {
-    fail(`Alice should be at the daemon's own origin, not ${alice.url()}`);
+  // the link carried the token; the page took it off the URL and kept it
+  if (new URL(alice.url()).origin !== new URL(link.own).origin || alice.url().includes("token=")) {
+    fail(`Alice should be at the daemon's own origin with the token taken off the URL, not ${alice.url()}`);
   }
   await stat(join(root, ".estoc", "config.json"));
   ok("Alice's vault is the folder estoc init made, unlocked in the daemon; the rail says so");
@@ -174,7 +175,8 @@ try {
   await expectBubble(alice, "hi alice");
   ok("Alice's history is there after a reload");
   const tab2 = await aliceCtx.newPage();
-  await tab2.goto(link.own);
+  // the bare origin, no token in the link: the page remembers it
+  await tab2.goto(new URL(link.own).origin + "/");
   await tab2.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
   await send(bob, "Alice", "second tab too?");
   await tab2.click('.contact-chip:has-text("Bob")');

@@ -160,7 +160,8 @@ shell opening offline.
   hosts it in a dedicated worker of the page — OPFS for the bytes, the vault
   lock (`lock.ts`), the unlocked seed in IndexedDB (`keycache.ts`). Served
   by the daemon itself (`estoc serve`: this build is published as
-  `@estoc/app`, and the daemon marks its index.html),
+  `@estoc/app`, the daemon marks its index.html, and its link carries the
+  token as `?token=`, remembered here),
   or opened with the `?_daemon=ws://…` link the daemon prints, the page
   instead talks to that process over a WebSocket (`src/daemon/client.ts`),
   its vault a folder on disk; the link is remembered until `?_daemon=off`.

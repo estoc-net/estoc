@@ -17,15 +17,15 @@ const TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
-/** What the served index.html carries so the page knows the daemon is its own origin. */
+/** What the served index.html carries so the page knows the daemon is its own origin (the token comes in the link). */
 export const DAEMON_META = '<meta name="estoc-daemon" content="same-origin">';
 
 /**
  * The app as static files out of one directory: hashed assets cached for
  * good, everything else not at all, any path that is not a file gets
  * index.html (the app routes on the client). index.html is served with a
- * `<meta>` tag added so the page connects to this origin's socket rather
- * than starting a worker of its own.
+ * `<meta>` tag added so the page connects to this origin's socket (with
+ * the token from its link) rather than starting a worker of its own.
  */
 export function staticHandler(dir: string): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const root = path.resolve(dir);

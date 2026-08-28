@@ -5,14 +5,16 @@ import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } fr
  * alive as long as the tab, holding the vault in this origin's storage.
  * Or a process on this machine over a WebSocket, its vault a folder on
  * disk: either this very page was served by `estoc-daemon` (it marks its
- * index.html with a `<meta name="estoc-daemon">`, and the socket is then
- * this origin's, no token needed), or the page was opened with
- * `?_daemon=ws://…` from what the daemon printed, a choice remembered
- * here until `?_daemon=off`. Either way the UI holds this proxy and
- * nothing else.
+ * index.html with a `<meta name="estoc-daemon">`, the socket is this
+ * origin's, and the link it printed carries the token as `?token=`), or
+ * the page was opened with `?_daemon=ws://…?token=…` from what the daemon
+ * printed, a choice remembered here until `?_daemon=off`. The token is
+ * the only key either way; a page without one is answered by nobody and
+ * says so. Either way the UI holds this proxy and nothing else.
  */
 
 const DAEMON_KEY = "estoc:daemon";
+const TOKEN_KEY = "estoc:daemon-token";
 
 /** Read (and strip) `?_daemon=` from the URL, remembering the choice; the remembered URL, if any. */
 export function takeDaemonUrl(): string | null {
@@ -45,13 +47,38 @@ export interface Started {
   where: "worker" | string;
 }
 
-/** The socket of the daemon that served this page, if one did. */
+/**
+ * The socket of the daemon that served this page, if one did: this
+ * origin's, with the token read (and stripped) from `?token=` and
+ * remembered, so a reload or a second tab here gets in too.
+ */
 function servedByDaemon(): string | null {
   const meta = document.querySelector('meta[name="estoc-daemon"]');
   if (meta === null) {
     return null;
   }
-  return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/`;
+  const url = new URL(location.href);
+  let token = url.searchParams.get("token");
+  if (token !== null) {
+    url.searchParams.delete("token");
+    history.replaceState(null, "", url);
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      // no storage: this page only
+    }
+  } else {
+    try {
+      token = localStorage.getItem(TOKEN_KEY);
+    } catch {
+      token = null;
+    }
+  }
+  const socket = new URL(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/`);
+  if (token !== null) {
+    socket.searchParams.set("token", token);
+  }
+  return socket.href;
 }
 
 export function startDaemon(events: DaemonEvents): Started {
