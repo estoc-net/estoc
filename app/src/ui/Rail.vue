@@ -18,6 +18,7 @@ import MediatorForm from "./MediatorForm.vue";
 import { bytesOf, shortDid } from "./util.js";
 
 const identity = computed(() => state.identity);
+const daemonHost = computed(() => (state.daemonAt === null ? "" : new URL(state.daemonAt).host));
 
 // reachability: an identity is minted without a mediator; the rail is where
 // one is named — and, later, where it is changed (a rotation of every DID)
@@ -277,7 +278,8 @@ function forget() {
     <div class="rail-section">
       <div class="eyebrow">Your vault</div>
       <p class="status-line">
-        <template v-if="state.persisted">stored persistently in this browser</template>
+        <template v-if="state.daemonAt !== null">a folder on this machine, via estoc-daemon at {{ daemonHost }}</template>
+        <template v-else-if="state.persisted">stored persistently in this browser</template>
         <template v-else>storage is best-effort here — keep a backup</template>
       </p>
       <div class="rail-actions">

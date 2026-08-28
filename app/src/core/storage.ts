@@ -1,30 +1,9 @@
-import { ESTOC_DIR, OpfsBackend } from "@estoc/agent-core";
-
 /**
- * Where the vault lives: the `.estoc/` directory at the root of this
- * origin's Origin Private File System — one identity per install, the
- * folder itself the format. Nothing else of the identity is kept anywhere
- * else: what a backup zip holds is exactly this directory.
- *
- * The browser owns the bytes and may, unless storage is persisted, evict
- * them; the rail says which it is, and the zip is the way out either way.
+ * What the page itself asks the browser about its storage. The vault is
+ * the daemon's (src/daemon/worker.ts: `.estoc/` at the root of this
+ * origin's private file system); these two calls are Window-only, so the
+ * UI makes them and shows the answer in the rail.
  */
-
-export async function vaultBackend(): Promise<OpfsBackend> {
-  return new OpfsBackend(await navigator.storage.getDirectory());
-}
-
-/** Remove the vault directory outright — the "forget this identity" action. */
-export async function wipeVault(): Promise<void> {
-  const root = await navigator.storage.getDirectory();
-  try {
-    await root.removeEntry(ESTOC_DIR, { recursive: true });
-  } catch (err) {
-    if ((err as { name?: string }).name !== "NotFoundError") {
-      throw err;
-    }
-  }
-}
 
 /**
  * Ask the browser to treat this origin's storage as persistent — not

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `AgentOptions.packageFetch`: the fetch that gets a shared package, apart
+  from the one that reaches the mediator. A package URL is the sender's
+  word; a host that can reach a private network (the Node daemon in
+  `@estoc/daemon`) passes one that refuses non-public addresses. Defaults
+  to `fetch`.
+
 ## 0.16.0 — 2026-08-26
 
 The package road: two roads and no round trip

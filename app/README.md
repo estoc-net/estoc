@@ -153,17 +153,17 @@ shell opening offline.
   3.0), pickup and live delivery (messagepickup 3.0 over HTTP and
   WebSocket), routing 2.0 forwards, user-profile/1.0 introductions, and
   the `.estoc` vault format over an OPFS backend.
-- **The daemon is a worker**: `src/daemon/worker.ts` runs the agent in a
-  dedicated worker of the page — it takes the vault lock (`lock.ts`),
-  keeps the unlocked seed in IndexedDB (`keycache.ts`), opens the vault
-  and reports by events. The UI reaches it only through the `Daemon`
-  interface (`api.ts`) over a message-port RPC (`rpc.ts`, `client.ts`):
-  records and bytes cross, no vault, key or agent does. `src/core/store.ts`
-  is the UI side — Vue views projected from the daemon's snapshot and
-  kept current by its events; `src/core/backup.ts` is the zip on either
-  side of agent-core's `snapshotVault` / `importVault`. The same interface
-  is what a shared worker, a push-woken service worker, or a native daemon
-  would offer.
+- **The daemon is a worker — or a process**: the agent and its vault run
+  behind the `Daemon` interface of `@estoc/daemon` (`packages/daemon`), and
+  the UI reaches it only through that interface over an RPC: records and
+  bytes cross, no vault, key or agent does. By default `src/daemon/worker.ts`
+  hosts it in a dedicated worker of the page — OPFS for the bytes, the vault
+  lock (`lock.ts`), the unlocked seed in IndexedDB (`keycache.ts`). Opened
+  with the link `estoc-daemon` prints (`?_daemon=ws://…`), the page instead
+  talks to that process over a WebSocket (`src/daemon/client.ts`), its
+  vault a folder on disk, and remembers the choice until `?_daemon=off`.
+  `src/core/store.ts` is the UI side — Vue views projected from the
+  daemon's snapshot and kept current by its events.
 - **Screens follow the disk**: nothing there → onboarding (create or
   restore); a vault without its cached seed → unlock; otherwise straight
   in — the daemon says which, by a `phase` event.

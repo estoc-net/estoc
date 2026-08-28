@@ -10,6 +10,8 @@
 export interface Port {
   postMessage(message: unknown): void;
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
+  /** a port that can go away (a socket) says so, and every call in flight fails */
+  addEventListener(type: "close", listener: () => void): void;
 }
 
 type Wire =
@@ -68,6 +70,12 @@ export function connect<T extends object>(port: Port, events: Handlers): T {
       call.reject(new Error(wire.message));
     }
   });
+  port.addEventListener("close", () => {
+    for (const [id, call] of pending) {
+      pending.delete(id);
+      call.reject(new Error("the daemon went away"));
+    }
+  });
   return new Proxy({} as T, {
     get(_, method) {
       if (typeof method !== "string") {
@@ -77,6 +85,11 @@ export function connect<T extends object>(port: Port, events: Handlers): T {
         new Promise((resolve, reject) => {
           const id = next++;
           pending.set(id, { resolve, reject });
+          // an omitted optional argument is not sent: a text transport
+          // would turn it into null, which is not the same absence
+          while (args.length > 0 && args[args.length - 1] === undefined) {
+            args.pop();
+          }
           port.postMessage({ kind: "call", id, method, args } satisfies Wire);
         });
     },

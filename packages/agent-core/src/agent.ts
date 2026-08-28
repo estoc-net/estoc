@@ -160,6 +160,13 @@ export interface AgentOptions {
   /** transports, injectable for tests; default to the globals */
   fetch?: typeof fetch;
   WebSocket?: typeof WebSocket;
+  /**
+   * The fetch that gets a shared package: its URL is the sender's word,
+   * not the user's choice, so a host that can reach a private network (a
+   * Node daemon) passes one that refuses non-public addresses. Defaults to
+   * `fetch`.
+   */
+  packageFetch?: typeof fetch;
   /** the name announced over user-profile/1.0; defaults to the vault label */
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
@@ -266,6 +273,7 @@ export class Agent {
   private readonly events: Partial<AgentEvents>;
   private readonly resolveDid: (did: string) => Promise<DIDDoc | null>;
   private readonly fetchFn: typeof fetch;
+  private readonly packageFetchFn: typeof fetch;
   private readonly WebSocketCtor: typeof WebSocket;
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
@@ -322,6 +330,8 @@ export class Agent {
     // anything but the global is an "Illegal invocation" in browsers
     const fetchImpl = options.fetch ?? fetch;
     this.fetchFn = (input, init) => fetchImpl(input, init);
+    const packageFetchImpl = options.packageFetch ?? fetchImpl;
+    this.packageFetchFn = (input, init) => packageFetchImpl(input, init);
     this.WebSocketCtor = options.WebSocket ?? WebSocket;
     this.displayName = options.displayName ?? (() => this.vault.config.label);
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
@@ -1802,7 +1812,7 @@ export class Agent {
           : `the share names a package this agent cannot use: ${before.packageProblem}`
       );
     }
-    const response = await this.fetchFn(pkg.url, {
+    const response = await this.packageFetchFn(pkg.url, {
       redirect: "error",
       signal: AbortSignal.timeout(this.packageTimeoutMs),
     });

@@ -58,4 +58,4 @@ export interface Identity {
   deliveries: Record<string, DeliveryState>;
 }
 
-export type { Phase } from "../daemon/api.js";
+export type { Phase } from "@estoc/daemon";

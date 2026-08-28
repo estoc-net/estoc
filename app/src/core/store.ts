@@ -18,7 +18,7 @@ import {
   type VerifiedShare,
 } from "@estoc/agent-core";
 
-import type { Daemon, Snapshot } from "../daemon/api.js";
+import type { Daemon, Snapshot } from "@estoc/daemon";
 import { startDaemon } from "../daemon/client.js";
 import { saveFile } from "./backup.js";
 import { entryOf } from "./entries.js";
@@ -54,6 +54,8 @@ export const state = reactive({
   log: [] as string[],
   /** whether the browser has promised not to evict this origin's storage */
   persisted: false,
+  /** the socket of an `estoc-daemon` this page is using instead of its own worker; null in the worker */
+  daemonAt: null as string | null,
   installed: isInstalled(),
   /** set when the browser offers to install; call to prompt */
   install: null as (() => Promise<void>) | null,
@@ -167,7 +169,7 @@ function viewsOf(snapshot: Snapshot): Identity {
 
 /** The daemon's word is the store's state. */
 function connectDaemon(): Daemon {
-  return startDaemon({
+  const started = startDaemon({
     phase(phase) {
       if (phase !== "open") {
         state.identity = null;
@@ -177,7 +179,9 @@ function connectDaemon(): Daemon {
     opened(snapshot) {
       state.identity = viewsOf(snapshot);
       state.phase = "open";
-      void isStoragePersisted().then((persisted) => (state.persisted = persisted));
+      if (state.daemonAt === null) {
+        void isStoragePersisted().then((persisted) => (state.persisted = persisted));
+      }
     },
     status(status, did) {
       state.status = status;
@@ -214,6 +218,8 @@ function connectDaemon(): Daemon {
     },
     log,
   });
+  state.daemonAt = started.where === "worker" ? null : started.where;
+  return started.daemon;
 }
 
 function running(): Daemon {
@@ -271,7 +277,7 @@ function takePendingInvitation(): void {
  */
 export async function createIdentity(name: string, passphrase: string): Promise<void> {
   await running().createIdentity(name, passphrase);
-  state.persisted = await persistStorage();
+  state.persisted = state.daemonAt === null ? await persistStorage() : false;
 }
 
 /**
@@ -294,7 +300,7 @@ export async function chooseMediator(mediatorDid: string): Promise<void> {
 /** Restore a backup zip into an empty install, unlocking it with its passphrase. */
 export async function restoreIdentity(zip: Uint8Array, passphrase: string): Promise<void> {
   await running().restoreIdentity(zip, passphrase);
-  state.persisted = await persistStorage();
+  state.persisted = state.daemonAt === null ? await persistStorage() : false;
 }
 
 /** The vault is here but its seed is not cached: the passphrase opens it. */
