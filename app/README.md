@@ -158,10 +158,11 @@ shell opening offline.
   the UI reaches it only through that interface over an RPC: records and
   bytes cross, no vault, key or agent does. By default `src/daemon/worker.ts`
   hosts it in a dedicated worker of the page — OPFS for the bytes, the vault
-  lock (`lock.ts`), the unlocked seed in IndexedDB (`keycache.ts`). Opened
-  with the link `estoc-daemon` prints (`?_daemon=ws://…`), the page instead
-  talks to that process over a WebSocket (`src/daemon/client.ts`), its
-  vault a folder on disk, and remembers the choice until `?_daemon=off`.
+  lock (`lock.ts`), the unlocked seed in IndexedDB (`keycache.ts`). Served
+  by `estoc-daemon` itself (it bundles this build and marks its index.html),
+  or opened with the `?_daemon=ws://…` link the daemon prints, the page
+  instead talks to that process over a WebSocket (`src/daemon/client.ts`),
+  its vault a folder on disk; the link is remembered until `?_daemon=off`.
   `src/core/store.ts` is the UI side — Vue views projected from the
   daemon's snapshot and kept current by its events.
 - **Screens follow the disk**: nothing there → onboarding (create or

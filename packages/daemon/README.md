@@ -14,18 +14,24 @@ Two hosts ship:
 - **A Node process** (`@estoc/daemon/node`, the `estoc-daemon` command): a
   folder on disk (`FsBackend`, `<folder>/.estoc` the vault), a pid file for
   one daemon per folder, the seed in memory only (every start is locked
-  until a UI types the passphrase), `didcomm-node`, and a WebSocket the app
-  connects to. The RPC rides JSON with bytes and Maps tagged (`src/codec.ts`).
+  until a UI types the passphrase), `didcomm-node`, and one HTTP server
+  that serves the app (the build of `app/`, bundled into this package as
+  `app/` by `pnpm bundle-app`) and takes the app's WebSocket on the same
+  origin. The RPC rides JSON with bytes and Maps tagged (`src/codec.ts`).
 
 ```
-estoc-daemon ~/my-vault            # prints the link to open the app with
-estoc-daemon . --port 0 --app http://localhost:4173
+estoc-daemon ~/my-vault            # open the link it prints: http://127.0.0.1:7357/
+estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 
-Access to the socket is a token (`?token=`, kept in
-`.estoc/cache/daemon.token`); it listens on loopback and answers nothing
-without it. A second UI connecting calls `boot()` like the first and is
-told where things stand.
+The page the daemon serves finds the socket at its own origin (index.html
+is sent with a `<meta name="estoc-daemon">`) and needs no token: the
+browser's `Origin` header, which a page cannot forge, is the proof it came
+from here. Any other origin — a dev server, app.estoc.dev — connects with
+the token the `?_daemon=` link carries (kept in `.estoc/cache/daemon.token`)
+and remembers it until `?_daemon=off`. The daemon listens on loopback and
+answers nothing else. A second UI connecting calls `boot()` like the first
+and is told where things stand.
 
 ## Fetching what others name
 

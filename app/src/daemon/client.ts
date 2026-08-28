@@ -3,10 +3,13 @@ import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } fr
 /**
  * The daemon as this page reaches it. By default a dedicated worker,
  * alive as long as the tab, holding the vault in this origin's storage.
- * Or — when the page was opened with `?_daemon=ws://…` from what
- * `estoc-daemon` printed — a process on this machine over a WebSocket,
- * its vault a folder on disk; the choice is remembered here until
- * `?_daemon=off`. Either way the UI holds this proxy and nothing else.
+ * Or a process on this machine over a WebSocket, its vault a folder on
+ * disk: either this very page was served by `estoc-daemon` (it marks its
+ * index.html with a `<meta name="estoc-daemon">`, and the socket is then
+ * this origin's, no token needed), or the page was opened with
+ * `?_daemon=ws://…` from what the daemon printed, a choice remembered
+ * here until `?_daemon=off`. Either way the UI holds this proxy and
+ * nothing else.
  */
 
 const DAEMON_KEY = "estoc:daemon";
@@ -42,9 +45,18 @@ export interface Started {
   where: "worker" | string;
 }
 
+/** The socket of the daemon that served this page, if one did. */
+function servedByDaemon(): string | null {
+  const meta = document.querySelector('meta[name="estoc-daemon"]');
+  if (meta === null) {
+    return null;
+  }
+  return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/`;
+}
+
 export function startDaemon(events: DaemonEvents): Started {
   const handlers = events as unknown as Record<string, (...args: never[]) => unknown>;
-  const remote = takeDaemonUrl();
+  const remote = servedByDaemon() ?? takeDaemonUrl();
   if (remote === null) {
     const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
     return { daemon: connect<Daemon>(worker, handlers), where: "worker" };

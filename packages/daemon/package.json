@@ -25,16 +25,18 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "app"
   ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
+    "bundle-app": "node scripts/bundle-app.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm test && pnpm build",
+    "prepublishOnly": "pnpm test && pnpm build && pnpm --filter estoc-app build && pnpm bundle-app",
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {

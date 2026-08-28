@@ -1,7 +1,9 @@
 /**
- * The app on a Node daemon: `estoc-daemon` runs on a temp folder, Alice's
- * page is opened with the link it prints and so talks to that process over
- * a WebSocket; Bob is an ordinary in-browser install. They exchange
+ * The app on a Node daemon: `estoc-daemon` runs on a temp folder and serves
+ * the app itself; Alice's page is opened at that origin and talks to the
+ * process over its own socket; Bob is an ordinary in-browser install at
+ * the preview. The preview opened with the `?_daemon=` link the daemon also
+ * prints reaches the same vault. They exchange
  * messages and an object both ways (records and bytes cross the socket),
  * Alice's history survives a reload and a second tab (both are the same
  * daemon, so neither yields), the vault is a folder on disk, lock asks for
@@ -78,16 +80,16 @@ async function expectBubble(page, text, timeout = 15000) {
   await page.waitForSelector(`.bubble:has-text("${text}")`, { timeout });
 }
 
-/** Start estoc-daemon on `root`; resolves to the app link it prints. */
+/** Start estoc-daemon on `root`; resolves to the links it prints: its own app, and the preview with `?_daemon=`. */
 function startDaemon(root) {
   const child = spawn(process.execPath, [BIN, root, "--port", "0", "--app", APP_URL], { stdio: ["ignore", "inherit", "pipe"] });
   const link = new Promise((resolve, reject) => {
     let out = "";
     child.stderr.on("data", (chunk) => {
       out += chunk.toString();
-      const m = out.match(/^open:\s+(\S+)$/m);
+      const m = out.match(/^open:\s+(\S+)\nor:\s+(\S+)$/m);
       if (m) {
-        resolve(m[1]);
+        resolve({ own: m[1], elsewhere: m[2] });
       }
       process.stderr.write(chunk.toString().replace(/^/gm, "[daemon] "));
     });
@@ -101,7 +103,7 @@ const daemon = startDaemon(root);
 const browser = await chromium.launch({ executablePath });
 try {
   const link = await daemon.link;
-  ok(`estoc-daemon up on ${root}`);
+  ok(`estoc-daemon up on ${root}, serving the app at ${link.own}`);
   const aliceCtx = await browser.newContext();
   const bobCtx = await browser.newContext();
   const alice = await aliceCtx.newPage();
@@ -109,10 +111,10 @@ try {
   watch(alice, "alice");
   watch(bob, "bob");
 
-  const aliceDid = await createIdentity(alice, "Alice", link);
+  const aliceDid = await createIdentity(alice, "Alice", link.own);
   await alice.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
-  if (alice.url().includes("_daemon=")) {
-    fail("the _daemon parameter should be taken off the URL");
+  if (!alice.url().startsWith(link.own)) {
+    fail(`Alice should be at the daemon's own origin, not ${alice.url()}`);
   }
   await stat(join(root, ".estoc", "config.json"));
   ok("Alice's vault is a folder on disk, and the rail says the daemon is where it lives");
@@ -149,9 +151,9 @@ try {
   await alice.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
   await alice.click('.contact-chip:has-text("Bob")');
   await expectBubble(alice, "hi alice");
-  ok("Alice's history is there after a reload (no _daemon in the URL: the choice was remembered)");
+  ok("Alice's history is there after a reload");
   const tab2 = await aliceCtx.newPage();
-  await tab2.goto(APP_URL);
+  await tab2.goto(link.own);
   await tab2.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
   await send(bob, "Alice", "second tab too?");
   await tab2.click('.contact-chip:has-text("Bob")');
@@ -159,6 +161,18 @@ try {
   await expectBubble(alice, "second tab too?");
   ok("a second tab is another client of the same daemon: both open, both live");
   await tab2.close();
+
+  // the preview at another origin, pointed here with the token link: same daemon, same vault
+  const elsewhere = await aliceCtx.newPage();
+  watch(elsewhere, "alice@preview");
+  await elsewhere.goto(link.elsewhere);
+  await elsewhere.waitForSelector('.contact-chip:has-text("Bob")', { timeout: 15000 });
+  if (elsewhere.url().includes("_daemon=")) {
+    fail("the _daemon parameter should be taken off the URL");
+  }
+  await elsewhere.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
+  ok("the preview opened with ?_daemon= is a client of the same daemon (the link remembered, taken off the URL)");
+  await elsewhere.close();
 
   // lock: the seed leaves the daemon's memory; the passphrase opens it again
   await alice.click('button:has-text("Lock")');
@@ -175,10 +189,9 @@ try {
   daemon.child.kill("SIGTERM");
   await alice.waitForSelector("text=is not answering", { timeout: 10000 });
   ok("Alice's page reports the daemon gone");
-  await alice.evaluate(() => localStorage.removeItem("estoc:daemon"));
   await alice.goto(`${APP_URL}/?_daemon=off`);
   await alice.waitForSelector('input[placeholder="your name, e.g. Alice"]', { timeout: 15000 });
-  ok("?_daemon=off returns the page to its own worker: a fresh install here");
+  ok("?_daemon=off returns the preview to its own worker: a fresh install there");
   void aliceDid;
 } finally {
   await browser.close();

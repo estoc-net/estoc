@@ -7,6 +7,7 @@ import { decode, encode } from "../codec.js";
 import { createDaemon, type Emit } from "../daemon.js";
 import type { DaemonHost } from "../host.js";
 import { serve, type Port } from "../rpc.js";
+import { staticHandler } from "./static.js";
 
 export interface ServeOptions {
   host: DaemonHost;
@@ -15,12 +16,16 @@ export interface ServeOptions {
   port: number;
   /** what a client must present as `?token=` to be answered at all */
   token: string;
+  /** a directory of the built app to serve at `/`; without it plain HTTP gets a 426 */
+  appDir?: string;
 }
 
 export interface Served {
   daemon: Daemon;
   /** the URL a UI connects to, token included */
   url: string;
+  /** where the app is served, when `appDir` was given */
+  appUrl: string | null;
   close(): Promise<void>;
 }
 
@@ -28,9 +33,12 @@ export interface Served {
  * The daemon behind a WebSocket: one daemon, any number of UIs. Each
  * socket is a port the RPC serves; events go to every socket open; a UI
  * that connects late calls `boot()` like any other and is told where
- * things stand. The token is the whole access control — the socket is on
- * loopback, but any page in any browser on the machine can open one, and
- * a page without the token is closed before a word is read.
+ * things stand. Access control: the socket is on loopback, but any page in
+ * any browser on the machine can open one, so a page must either be one
+ * this daemon served — the browser says so in `Origin`, which a page
+ * cannot forge — or present the token; anything else is closed before a
+ * word is read. With `appDir` the daemon serves the app itself, and the
+ * page it serves needs no token at all.
  */
 export async function serveDaemon(options: ServeOptions): Promise<Served> {
   const emitters = new Set<Emit>();
@@ -41,12 +49,22 @@ export async function serveDaemon(options: ServeOptions): Promise<Served> {
   };
   const daemon = createDaemon(options.host, emit);
 
-  const http = createServer((_req, res) => {
-    res.writeHead(426, { "content-type": "text/plain" }).end("estoc-daemon: connect over WebSocket\n");
+  const files = options.appDir === undefined ? null : staticHandler(options.appDir);
+  const http = createServer((req, res) => {
+    if (files === null) {
+      res.writeHead(426, { "content-type": "text/plain" }).end("estoc-daemon: connect over WebSocket\n");
+      return;
+    }
+    files(req, res).catch(() => {
+      if (!res.headersSent) {
+        res.writeHead(500);
+      }
+      res.end();
+    });
   });
   const wss = new WebSocketServer({ noServer: true });
   http.on("upgrade", (req, socket, head) => {
-    if (!tokenMatches(req, options.token)) {
+    if (!(files !== null && sameOrigin(req)) && !tokenMatches(req, options.token)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -70,6 +88,7 @@ export async function serveDaemon(options: ServeOptions): Promise<Served> {
   return {
     daemon,
     url: `ws://${hostPart}:${boundPort}/?token=${encodeURIComponent(options.token)}`,
+    appUrl: files === null ? null : `http://${hostPart}:${boundPort}/`,
     close: () =>
       new Promise((resolve) => {
         for (const client of wss.clients) {
@@ -78,6 +97,13 @@ export async function serveDaemon(options: ServeOptions): Promise<Served> {
         wss.close(() => http.close(() => resolve()));
       }),
   };
+}
+
+/** The upgrade comes from a page this server sent: its Origin is the host it was fetched from. */
+function sameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  return typeof origin === "string" && typeof host === "string" && origin === `http://${host}`;
 }
 
 function tokenMatches(req: IncomingMessage, token: string): boolean {
