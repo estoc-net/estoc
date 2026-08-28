@@ -71,7 +71,7 @@ estoc serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
 
 `estoc serve` runs the daemon (`@estoc/daemon`) on the enclosing vault —
 `estoc init` first if there is none — and serves the app
-(`@estoc/app`) for it at `http://127.0.0.1:7357/`: the page talks to this
+(`@estoc/app`) for it at `http://127.0.0.1:37862/`: the page talks to this
 process, and the vault is the folder's `.estoc`, on disk. `--app <url>` also
 prints a `?_daemon=` link for an app served elsewhere (a dev server, or
 app.estoc.dev), which connects here with the token.

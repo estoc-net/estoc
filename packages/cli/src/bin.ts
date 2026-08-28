@@ -61,7 +61,7 @@ const USAGE = `usage: estoc <command>
   serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
                                  run the daemon on the enclosing vault (make
                                  one with init) and serve the app for it at
-                                 http://127.0.0.1:7357/; the page talks to
+                                 http://127.0.0.1:37862/; the page talks to
                                  this process, the vault is that .estoc.
                                  --app <url> also prints a ?_daemon= link
                                  for an app served elsewhere

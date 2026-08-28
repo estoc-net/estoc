@@ -10,7 +10,7 @@ const USAGE = `usage: estoc-daemon [folder] [options]
   @estoc/app installed (\`estoc serve\` brings it) the daemon serves the
   app itself: open the link it prints.
 
-  --port <n>        listen on this port (default 7357; 0 picks a free one)
+  --port <n>        listen on this port (default 37862; 0 picks a free one)
   --bind <addr>     listen on this address (default 127.0.0.1)
   --app-dir <dir>   serve the app from this directory (default: @estoc/app)
   --no-serve        do not serve the app; --app then defaults to https://app.estoc.dev
@@ -23,7 +23,7 @@ const USAGE = `usage: estoc-daemon [folder] [options]
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     options: {
-      port: { type: "string", default: "7357" },
+      port: { type: "string", default: "37862" },
       bind: { type: "string", default: "127.0.0.1" },
       "app-dir": { type: "string" },
       app: { type: "string" },

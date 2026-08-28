@@ -32,7 +32,8 @@ export async function runDaemon(options: RunOptions): Promise<Served> {
   const served = await serveDaemon({
     host: nodeHost(root),
     bind: options.bind,
-    port: options.port ?? 7357,
+    // 3-7-8-6-2: E-S-T-O-C on a phone keypad
+    port: options.port ?? 37862,
     token,
     appDir: options.appDir ?? undefined,
   });
