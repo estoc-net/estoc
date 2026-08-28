@@ -14,7 +14,7 @@
  *
  * The mediator is the rail's localhost entry unless E2E_MEDIATOR=estoc.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +58,19 @@ async function createIdentity(page, name, startUrl) {
   await page.fill('input[placeholder^="passphrase (seals"]', PASS[name]);
   await page.fill('input[placeholder="passphrase again"]', PASS[name]);
   await page.click('button:has-text("Create identity")');
+  return mediate(page, name);
+}
+
+/** A vault `estoc init` made: the page finds it locked and unlocks it. */
+async function unlockIdentity(page, name, startUrl) {
+  await page.goto(startUrl);
+  await page.waitForSelector('input[placeholder="passphrase"]', { timeout: 15000 });
+  await page.fill('input[placeholder="passphrase"]', PASS[name]);
+  await page.click('button:has-text("Unlock")');
+  return mediate(page, name);
+}
+
+async function mediate(page, name) {
   await page.waitForSelector("text=not reachable yet", { timeout: 20000 });
   await page.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
   await page.click('button:has-text("Use this mediator")');
@@ -102,6 +115,11 @@ function startDaemon(root) {
 }
 
 const root = await mkdtemp(join(tmpdir(), "estoc-e2e-daemon-"));
+execFileSync(process.execPath, [BIN, "init", "--label", "Alice"], {
+  cwd: root,
+  env: { ...process.env, ESTOC_PASSPHRASE: PASS.Alice },
+  stdio: "inherit",
+});
 const daemon = startDaemon(root);
 const browser = await chromium.launch({ executablePath });
 try {
@@ -114,13 +132,13 @@ try {
   watch(alice, "alice");
   watch(bob, "bob");
 
-  const aliceDid = await createIdentity(alice, "Alice", link.own);
+  const aliceDid = await unlockIdentity(alice, "Alice", link.own);
   await alice.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
   if (!alice.url().startsWith(link.own)) {
     fail(`Alice should be at the daemon's own origin, not ${alice.url()}`);
   }
   await stat(join(root, ".estoc", "config.json"));
-  ok("Alice's vault is a folder on disk, and the rail says the daemon is where it lives");
+  ok("Alice's vault is the folder estoc init made, unlocked in the daemon; the rail says so");
   const bobDid = await createIdentity(bob, "Bob", APP_URL);
 
   await addContact(alice, "Bob", bobDid);

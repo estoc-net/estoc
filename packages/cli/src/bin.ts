@@ -59,12 +59,12 @@ const USAGE = `usage: estoc <command>
                                  (default: object for a signed layout)
 
   serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
-                                 run the daemon here — the enclosing vault,
-                                 else this folder, like init — and serve the
-                                 app for it at http://127.0.0.1:7357/; the
-                                 page talks to this process, the vault is
-                                 the folder's .estoc. --app <url> also prints
-                                 a ?_daemon= link for an app served elsewhere
+                                 run the daemon on the enclosing vault (make
+                                 one with init) and serve the app for it at
+                                 http://127.0.0.1:7357/; the page talks to
+                                 this process, the vault is that .estoc.
+                                 --app <url> also prints a ?_daemon= link
+                                 for an app served elsewhere
 
 options:
   --vault <dir>   use the vault at <dir> instead of searching upward from
@@ -132,7 +132,7 @@ interface ServeFlags {
 }
 
 async function cmdServe(flags: ServeFlags) {
-  const root = flags.vault ?? process.env["ESTOC_VAULT"] ?? (await findVault(process.cwd()))?.root ?? process.cwd();
+  const { root } = await requireVault(flags.vault);
   const served = await runDaemon({
     root,
     port: flags.port === undefined ? undefined : Number(flags.port),
@@ -299,7 +299,7 @@ async function main() {
       return;
     case "serve":
       if (rest.length > 0) {
-        throw new Error("estoc serve takes no arguments; run it inside the folder (or --vault <dir>)");
+        throw new Error("estoc serve takes no arguments; run it inside the vault (or --vault <dir>)");
       }
       await cmdServe(values);
       return;
