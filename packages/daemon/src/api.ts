@@ -28,7 +28,12 @@ import type {
  * booting → (elsewhere: another tab has the vault) → onboarding (no vault)
  * | locked (a vault, no cached seed) → open.
  */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open";
+/**
+ * Which screen the vault dictates. `unreachable` is the one phase no
+ * daemon says: a client over a socket says it when nothing answers before
+ * anything was heard (no daemon there, or no token to show it).
+ */
+export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
 
 /** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
 export interface Snapshot {
@@ -51,7 +56,8 @@ export interface DaemonEvents {
   status(status: AgentStatus, did: string | null): void;
   message(record: MessageRecord, contact: ContactRecord | null): void;
   delivery(event: DeliveryEvent): void;
-  contact(record: ContactRecord): void;
+  /** added or changed: the record; removed: the record, `gone` */
+  contact(record: ContactRecord, gone: boolean): void;
   /** issued or taken: the record; revoked: the record, `gone` */
   invitation(record: InvitationRecord, gone: boolean): void;
   log(line: string): void;

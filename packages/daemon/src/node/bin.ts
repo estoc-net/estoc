@@ -32,6 +32,7 @@ async function main(): Promise<void> {
       help: { type: "boolean", short: "h", default: false },
     },
     allowPositionals: true,
+    allowNegative: true,
   });
   if (values.help) {
     process.stdout.write(USAGE);

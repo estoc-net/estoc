@@ -184,6 +184,13 @@ try {
   await expectBubble(alice, "second tab too?");
   ok("a second tab is another client of the same daemon: both open, both live");
   await tab2.close();
+  // a browser that never had the link has no token: told so, not left blank
+  const strangerCtx = await browser.newContext();
+  const stranger = await strangerCtx.newPage();
+  await stranger.goto(new URL(link.own).origin + "/");
+  await stranger.waitForSelector("text=No daemon is answering", { timeout: 10000 });
+  await strangerCtx.close();
+  ok("a page without the token is told to open the daemon's link");
 
   // the preview at another origin, pointed here with the token link: same daemon, same vault
   const elsewhere = await aliceCtx.newPage();

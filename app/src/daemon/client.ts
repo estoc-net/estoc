@@ -109,6 +109,8 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
   let ws: WebSocket | null = null;
   /** an open that follows a close — the first open included, when a connect failed before it — replays */
   let replayOnOpen = false;
+  /** whether the daemon ever spoke: until it does, a closed socket means nobody is there for this page */
+  let heard = false;
   /** what was said while the socket was still connecting */
   let queued: string[] = [];
   const port: SocketPort = {
@@ -148,6 +150,7 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
       replayOnOpen = true;
     });
     socket.addEventListener("message", (event: MessageEvent<string>) => {
+      heard = true;
       const data = decode(event.data);
       for (const l of listeners.message) {
         l({ data } as MessageEvent);
@@ -161,6 +164,9 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
         l();
       }
       events.status({ state: "error", detail: `daemon at ${new URL(url).host} is not answering` }, null);
+      if (!heard) {
+        events.phase("unreachable");
+      }
       setTimeout(open, 2000);
     });
   };

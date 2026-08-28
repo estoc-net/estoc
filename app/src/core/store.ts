@@ -210,8 +210,13 @@ function connectDaemon(): Daemon {
         ...(event.error === undefined ? {} : { error: event.error }),
       };
     },
-    contact(record) {
-      if (state.identity !== null) {
+    contact(record, gone) {
+      if (state.identity === null) {
+        return;
+      }
+      if (gone) {
+        state.identity.contacts = state.identity.contacts.filter((c) => c.cid !== record.cid);
+      } else {
         upsertContact(state.identity, record);
       }
     },

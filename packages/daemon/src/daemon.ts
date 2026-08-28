@@ -90,7 +90,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         onStatus: (s) => status(s, a.did),
         onMessage: (record, contact) => emit("message", record, contact),
         onDelivery: (event) => emit("delivery", event),
-        onContact: (record) => emit("contact", record),
+        onContact: (record) => emit("contact", record, false),
         onInvitation(record) {
           // issued or taken: the record; revoked: the record, no longer in the vault
           void a.vault.invitations.byId(record.id).then((still) => emit("invitation", record, still === null));
@@ -275,10 +275,19 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     async setMediator(mediatorDid) {
       const a = running();
       await a.setMediator(mediatorDid);
+      // every DID was minted anew: every client is told the whole of it
+      emit("opened", await snapshot(a.vault));
       return a.did;
     },
     addContact: (did, label): Promise<ContactRecord> => running().addContact(did, label),
-    removeContact: (cid) => running().removeContact(cid),
+    async removeContact(cid) {
+      const a = running();
+      const record = await a.vault.contacts.byCid(cid);
+      await a.removeContact(cid);
+      if (record !== null) {
+        emit("contact", record, true);
+      }
+    },
     acceptInvitation: (invitation: Invitation, label): Promise<ContactRecord> =>
       running().acceptInvitation(invitation, label),
     async createInvitation(): Promise<InvitationRecord> {

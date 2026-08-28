@@ -33,6 +33,8 @@ watch(
   },
   { immediate: true }
 );
+
+const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new URL(state.daemonAt).host));
 </script>
 
 <template>
@@ -70,6 +72,23 @@ watch(
   </div>
 
   <Unlock v-else-if="state.phase === 'locked'" />
+
+  <div v-else-if="state.phase === 'unreachable'" class="hollow" style="height: 100%">
+    <div class="hollow-card">
+      <div class="eyebrow">Estoc</div>
+      <h1>No daemon is answering</h1>
+      <p>
+        This page expects a daemon at {{ daemonHost }}
+        and nothing there answers it. It keeps trying.
+      </p>
+      <p class="fine">
+        If <code>estoc serve</code> is running, open the link it printed — the
+        link carries the key this page needs, and this page remembers it once
+        opened that way. <code>?_daemon=off</code> returns this page to a vault
+        of its own in the browser.
+      </p>
+    </div>
+  </div>
 
   <div v-else class="frame">
     <Rail />
