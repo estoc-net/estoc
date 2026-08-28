@@ -190,7 +190,11 @@ function connectDaemon(): Daemon {
       }
     },
     message(record, contact) {
-      state.identity?.messages.push(entryOf(record, contact?.cid ?? null));
+      const identity = state.identity;
+      if (identity === null || identity.messages.some((m) => m.mid === record.mid)) {
+        return;
+      }
+      identity.messages.push(entryOf(record, contact?.cid ?? null));
     },
     delivery(event) {
       const identity = state.identity;

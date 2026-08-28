@@ -21,6 +21,14 @@ import type { DaemonHost } from "./host.js";
 /** How the daemon raises an event: a name and its arguments, to whoever listens. */
 export type Emit = (name: string, ...args: unknown[]) => void;
 
+/** The daemon as its host holds it: the UI's interface, and a replay for one listener. */
+export interface DaemonCore extends Daemon {
+  /** whether `boot()` has run: a later `boot()` is a replay */
+  readonly booted: boolean;
+  /** Say where things stand again, to `to` alone — for a listener that was not there the first time. */
+  replayTo(to: Emit): Promise<void>;
+}
+
 /**
  * The daemon itself, wherever it runs: the vault at the host's backend,
  * the lock on it, the seed unlocked from the keystore and cached where the
@@ -33,7 +41,7 @@ export type Emit = (name: string, ...args: unknown[]) => void;
  * daemon already up, or one reconnecting — in which case it replays where
  * things stand rather than opening anything twice.
  */
-export function createDaemon(host: DaemonHost, emit: Emit): Daemon {
+export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   let backend: VaultBackend | null = null;
   let vault: Vault | null = null;
   let seedKey: CryptoKey | null = null;
@@ -130,20 +138,23 @@ export function createDaemon(host: DaemonHost, emit: Emit): Daemon {
     again.catch((err) => log(`back online: ${failure(err)}`));
   });
 
-  /** Where things stand, said again — for a listener that was not there the first time. */
-  async function replay(): Promise<void> {
+  async function replayTo(to: Emit): Promise<void> {
     if (current === "open" && vault !== null) {
-      emit("opened", await snapshot(vault));
-      status(lastStatus, agent?.did ?? null);
+      to("opened", await snapshot(vault));
+      to("status", lastStatus, agent?.did ?? null);
       return;
     }
-    phase(current);
+    to("phase", current);
   }
 
   return {
+    get booted() {
+      return booted;
+    },
+    replayTo,
     async boot() {
       if (booted) {
-        await replay();
+        await replayTo(emit);
         return;
       }
       booted = true;

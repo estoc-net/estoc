@@ -80,7 +80,8 @@ interface SocketPort extends Port {
 function socketPort(url: string, events: DaemonEvents): SocketPort {
   const listeners: { message: ((event: MessageEvent) => void)[]; close: (() => void)[] } = { message: [], close: [] };
   let ws: WebSocket | null = null;
-  let everOpened = false;
+  /** an open that follows a close — the first open included, when a connect failed before it — replays */
+  let replayOnOpen = false;
   /** what was said while the socket was still connecting */
   let queued: string[] = [];
   const port: SocketPort = {
@@ -114,10 +115,10 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
         socket.send(text);
       }
       queued = [];
-      if (everOpened) {
+      if (replayOnOpen) {
         port.onReopen?.();
       }
-      everOpened = true;
+      replayOnOpen = true;
     });
     socket.addEventListener("message", (event: MessageEvent<string>) => {
       const data = decode(event.data);
@@ -128,6 +129,7 @@ function socketPort(url: string, events: DaemonEvents): SocketPort {
     socket.addEventListener("close", () => {
       ws = null;
       queued = [];
+      replayOnOpen = true;
       for (const l of listeners.close) {
         l();
       }

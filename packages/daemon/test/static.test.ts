@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { request } from "node:http";
 import { WebSocket } from "ws";
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -12,6 +13,19 @@ afterAll(async () => {
     await rm(d, { recursive: true, force: true });
   }
 });
+
+/** A GET with the Host header as given (fetch would overwrite it); the status. */
+function getWithHost(url: string, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = request({ hostname: u.hostname, port: u.port, path: u.pathname, headers: { host } }, (res) => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.once("error", reject);
+    req.end();
+  });
+}
 
 function handshake(url: string, headers: Record<string, string>): Promise<"open" | number> {
   return new Promise((resolve) => {
@@ -53,6 +67,14 @@ describe("the daemon serving the app", () => {
       expect(await handshake(socket, { origin: "http://evil.example" })).toBe(401);
       expect(await handshake(socket, {})).toBe(401);
       expect(await handshake(served.url, { origin: "http://evil.example" })).toBe("open");
+
+      // DNS rebinding: a name of the attacker's pointing here is same-origin to them, but not a host of ours
+      const rebound = { host: `evil.example:${new URL(app).port}` };
+      expect(await handshake(socket, { ...rebound, origin: `http://${rebound.host}` })).toBe(401);
+      expect(await handshake(served.url, rebound)).toBe(401);
+      expect(await getWithHost(app, rebound.host)).toBe(421);
+      expect(await getWithHost(app, "localhost:1")).toBe(421);
+      expect(await getWithHost(app, `localhost:${new URL(app).port}`)).toBe(200);
     } finally {
       await served.close();
     }

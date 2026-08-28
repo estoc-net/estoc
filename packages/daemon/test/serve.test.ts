@@ -75,6 +75,7 @@ describe("the daemon over a socket", () => {
       const replayed = b.next("opened");
       await again.boot();
       expect(((await replayed)[0] as { label: string }).label).toBe("Alice");
+      expect(a.events.filter(([name]) => name === "opened")).toHaveLength(1);
 
       // bytes cross: the backup is the vault zipped
       const backup = await alice.exportBackup();
