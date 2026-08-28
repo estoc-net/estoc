@@ -10,10 +10,17 @@
     "test": "pnpm -r run test",
     "typecheck": "pnpm -r run typecheck",
     "dev": "pnpm -r --parallel run dev",
-    "e2e": "pnpm --filter estoc-app run e2e",
+    "e2e": "pnpm --filter @estoc/app run e2e",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.122.0"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@estoc/app"
+      ]
+    }
   }
 }

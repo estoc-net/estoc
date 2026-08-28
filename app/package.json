@@ -1,20 +1,40 @@
 {
-  "name": "estoc-app",
-  "private": true,
+  "name": "@estoc/app",
   "version": "0.1.0",
-  "type": "module",
-  "description": "Estoc: an offline-first DIDComm v2 messenger you install as a PWA. One identity from one seed, your vault in the browser's private file system, a zip you can walk away with.",
+  "description": "The Estoc app, built: the static files of the offline-first DIDComm v2 messenger (app.estoc.dev), for anything that wants to serve them itself \u2014 `estoc serve` / `estoc-daemon` do.",
   "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/estoc.git",
+    "directory": "app"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist-entry/index.d.ts",
+      "default": "./dist-entry/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "dist-entry"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "build": "vue-tsc -b && vite build && node scripts/entry.mjs",
     "preview": "vite preview --port 4173",
     "typecheck": "vue-tsc -b",
     "icons": "node scripts/icons.mjs",
     "e2e": "node scripts/e2e.mjs",
-    "deploy": "pnpm -w run deploy"
+    "deploy": "pnpm -w run deploy",
+    "prepublishOnly": "pnpm build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@estoc/agent-core": "workspace:^",
     "@estoc/daemon": "workspace:^",
     "@estoc/folder-object": "workspace:^",
@@ -23,9 +43,7 @@
     "didcomm": "^0.4.1",
     "fflate": "^0.8.2",
     "qrcode-generator": "^2.0.4",
-    "vue": "^3.5.0"
-  },
-  "devDependencies": {
+    "vue": "^3.5.0",
     "@vitejs/plugin-vue": "^5.2.0",
     "playwright-core": "^1.62.1",
     "typescript": "~5.8.0",
@@ -33,5 +51,12 @@
     "vite-plugin-pwa": "^1.0.0",
     "vue-tsc": "^2.2.0",
     "workbox-window": "^7.4.1"
-  }
+  },
+  "keywords": [
+    "didcomm",
+    "did",
+    "messenger",
+    "pwa",
+    "decentralized-identity"
+  ]
 }

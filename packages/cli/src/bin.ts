@@ -16,6 +16,8 @@ import {
 import { readTree, writeTree } from "@estoc/folder-object/fs";
 import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
+import { appDir } from "@estoc/app";
+import { exitOnSignal, runDaemon } from "@estoc/daemon/node";
 import { promptNewPassphrase, promptPassphrase } from "./prompt.js";
 import { fill } from "./template.js";
 import {
@@ -55,6 +57,14 @@ const USAGE = `usage: estoc <command>
                                  {{#card}}{{did}}{{/card}}, …). In-tree
                                  references are prefixed with --asset-base
                                  (default: object for a signed layout)
+
+  serve [<folder>] [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
+                                 run the daemon on a folder (default: the
+                                 enclosing vault, else .) and serve the app
+                                 for it at http://127.0.0.1:7357/; the page
+                                 talks to this process, the vault is the
+                                 folder's .estoc. --app <url> also prints a
+                                 ?_daemon= link for an app served elsewhere
 
 options:
   --vault <dir>   use the vault at <dir> instead of searching upward from
@@ -111,6 +121,30 @@ async function cmdKeyNew(vaultFlag: string | undefined, name: string) {
   const vault = await requireVault(vaultFlag);
   const did = await createVaultKey(vault, name, await promptPassphrase());
   process.stdout.write(`${name}  ${did}\n`);
+}
+
+interface ServeFlags {
+  vault?: string;
+  port?: string;
+  bind?: string;
+  app?: string;
+  token?: string;
+}
+
+async function cmdServe(folder: string | undefined, flags: ServeFlags) {
+  let root = folder ?? flags.vault ?? process.env["ESTOC_VAULT"];
+  if (root === undefined) {
+    root = (await findVault(process.cwd()))?.root ?? process.cwd();
+  }
+  const served = await runDaemon({
+    root,
+    port: flags.port === undefined ? undefined : Number(flags.port),
+    bind: flags.bind,
+    appDir,
+    app: flags.app,
+    token: flags.token,
+  });
+  exitOnSignal(served);
 }
 
 async function loadObject(dir: string): Promise<FolderObject> {
@@ -221,6 +255,10 @@ async function main() {
       zip: { type: "string" },
       template: { type: "string" },
       "asset-base": { type: "string" },
+      port: { type: "string" },
+      bind: { type: "string" },
+      app: { type: "string" },
+      token: { type: "string" },
       version: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -261,6 +299,9 @@ async function main() {
     }
     case "object":
       await cmdObject(rest[0], rest[1] ?? ".", values);
+      return;
+    case "serve":
+      await cmdServe(rest[0], values);
       return;
     default:
       throw new Error(`unknown command: ${command} (try \`estoc --help\`)`);

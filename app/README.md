@@ -159,7 +159,8 @@ shell opening offline.
   bytes cross, no vault, key or agent does. By default `src/daemon/worker.ts`
   hosts it in a dedicated worker of the page — OPFS for the bytes, the vault
   lock (`lock.ts`), the unlocked seed in IndexedDB (`keycache.ts`). Served
-  by `estoc-daemon` itself (it bundles this build and marks its index.html),
+  by the daemon itself (`estoc serve`: this build is published as
+  `@estoc/app`, and the daemon marks its index.html),
   or opened with the `?_daemon=ws://…` link the daemon prints, the page
   instead talks to that process over a WebSocket (`src/daemon/client.ts`),
   its vault a folder on disk; the link is remembered until `?_daemon=off`.

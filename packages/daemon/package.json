@@ -25,18 +25,16 @@
   },
   "files": [
     "dist",
-    "src",
-    "app"
+    "src"
   ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
-    "bundle-app": "node scripts/bundle-app.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "pnpm test && pnpm build && pnpm --filter estoc-app build && pnpm bundle-app",
+    "prepublishOnly": "pnpm test && pnpm build",
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
@@ -61,5 +59,13 @@
     "agent",
     "daemon",
     "decentralized-identity"
-  ]
+  ],
+  "peerDependencies": {
+    "@estoc/app": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@estoc/app": {
+      "optional": true
+    }
+  }
 }

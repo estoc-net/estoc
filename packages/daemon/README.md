@@ -15,12 +15,15 @@ Two hosts ship:
   folder on disk (`FsBackend`, `<folder>/.estoc` the vault), a pid file for
   one daemon per folder, the seed in memory only (every start is locked
   until a UI types the passphrase), `didcomm-node`, and one HTTP server
-  that serves the app (the build of `app/`, bundled into this package as
-  `app/` by `pnpm bundle-app`) and takes the app's WebSocket on the same
-  origin. The RPC rides JSON with bytes and Maps tagged (`src/codec.ts`).
+  that serves the app and takes the app's WebSocket on the same origin. The
+  app is `@estoc/app` (the built files), an optional peer: `estoc serve`
+  from `@estoc/cli` brings both together; `estoc-daemon` alone serves the
+  app if `@estoc/app` is installed beside it (or `--app-dir`), else prints
+  a link to app.estoc.dev. The RPC rides JSON with bytes and Maps tagged
+  (`src/codec.ts`).
 
 ```
-estoc-daemon ~/my-vault            # open the link it prints: http://127.0.0.1:7357/
+estoc serve ~/my-vault             # open the link it prints: http://127.0.0.1:7357/
 estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 

@@ -1,7 +1,7 @@
 {
   "name": "@estoc/cli",
   "version": "0.3.0",
-  "description": "estoc \u2014 the command-line client for Estoc vaults. `estoc init` marks a folder as yours by adding a .estoc directory (git model: your files stay untouched, the machinery lives in .estoc) with one seed-sealed keystore; `estoc object \u2026` hashes, signs and verifies folder-objects with the vault's keys.",
+  "description": "estoc \u2014 the command-line client for Estoc vaults. `estoc init` marks a folder as yours by adding a .estoc directory (git model: your files stay untouched, the machinery lives in .estoc) with one seed-sealed keystore; `estoc object \u2026` hashes, signs and verifies folder-objects with the vault's keys; `estoc serve` runs the daemon on a folder and serves the app for it.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -34,6 +34,8 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
+    "@estoc/app": "workspace:^",
+    "@estoc/daemon": "workspace:^",
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/post": "workspace:^"

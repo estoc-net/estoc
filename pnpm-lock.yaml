@@ -1,7 +1,7 @@
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 importers:
@@ -13,7 +13,7 @@ importers:
         version: 4.123.0
 
   app:
-    dependencies:
+    devDependencies:
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../packages/agent-core
@@ -29,25 +29,21 @@ importers:
       '@estoc/post':
         specifier: workspace:^
         version: link:../packages/post
+      '@vitejs/plugin-vue':
+        specifier: ^5.2.0
+        version: 5.2.4(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(vue@3.5.41(typescript@5.8.3))
       didcomm:
         specifier: ^0.4.1
         version: 0.4.1
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
-      qrcode-generator:
-        specifier: ^2.0.4
-        version: 2.0.4
-      vue:
-        specifier: ^3.5.0
-        version: 3.5.41(typescript@5.8.3)
-    devDependencies:
-      '@vitejs/plugin-vue':
-        specifier: ^5.2.0
-        version: 5.2.4(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(vue@3.5.41(typescript@5.8.3))
       playwright-core:
         specifier: ^1.62.1
         version: 1.62.1
+      qrcode-generator:
+        specifier: ^2.0.4
+        version: 2.0.4
       typescript:
         specifier: ~5.8.0
         version: 5.8.3
@@ -56,7 +52,10 @@ importers:
         version: 6.4.3(@types/node@22.20.1)(terser@5.50.0)
       vite-plugin-pwa:
         specifier: ^1.0.0
-        version: 1.3.0(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(workbox-build@7.4.1)(workbox-window@7.4.1)
+        version: 1.3.0(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(workbox-window@7.4.1)
+      vue:
+        specifier: ^3.5.0
+        version: 3.5.41(typescript@5.8.3)
       vue-tsc:
         specifier: ^2.2.0
         version: 2.2.12(typescript@5.8.3)
@@ -106,6 +105,12 @@ importers:
 
   packages/cli:
     dependencies:
+      '@estoc/app':
+        specifier: workspace:^
+        version: link:../../app
+      '@estoc/daemon':
+        specifier: workspace:^
+        version: link:../daemon
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../folder-object
@@ -2836,7 +2841,6 @@ packages:
     peerDependencies:
       '@vite-pwa/assets-generator': ^1.0.0
       vite: ^3.1.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
-      workbox-build: ^7.4.1
       workbox-window: ^7.4.1
     peerDependenciesMeta:
       '@vite-pwa/assets-generator':
@@ -5821,7 +5825,7 @@ snapshots:
       - tsx
       - yaml
 
-  vite-plugin-pwa@1.3.0(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(workbox-build@7.4.1)(workbox-window@7.4.1):
+  vite-plugin-pwa@1.3.0(vite@6.4.3(@types/node@22.20.1)(terser@5.50.0))(workbox-window@7.4.1):
     dependencies:
       debug: 4.4.3
       pretty-bytes: 6.1.1
@@ -5830,6 +5834,7 @@ snapshots:
       workbox-build: 7.4.1
       workbox-window: 7.4.1
     transitivePeerDependencies:
+      - '@types/babel__core'
       - supports-color
 
   vite@6.4.3(@types/node@22.20.1)(terser@5.50.0):

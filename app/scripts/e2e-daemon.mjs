@@ -1,6 +1,6 @@
 /**
- * The app on a Node daemon: `estoc-daemon` runs on a temp folder and serves
- * the app itself; Alice's page is opened at that origin and talks to the
+ * The app on a Node daemon: `estoc serve` runs the daemon on a temp folder
+ * and serves the app (@estoc/app) for it; Alice's page is opened at that origin and talks to the
  * process over its own socket; Bob is an ordinary in-browser install at
  * the preview. The preview opened with the `?_daemon=` link the daemon also
  * prints reaches the same vault. They exchange
@@ -25,7 +25,7 @@ const APP_URL = process.argv[2] ?? "http://localhost:4173";
 const MEDIATOR_LABEL = process.env.E2E_MEDIATOR === "estoc" ? "mediator.estoc.dev" : "localhost:8080";
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026" };
-const BIN = fileURLToPath(new URL("../../packages/daemon/dist/node/bin.js", import.meta.url));
+const BIN = fileURLToPath(new URL("../../packages/cli/dist/bin.js", import.meta.url));
 
 function fail(message) {
   console.error(`✗ ${message}`);
@@ -80,9 +80,9 @@ async function expectBubble(page, text, timeout = 15000) {
   await page.waitForSelector(`.bubble:has-text("${text}")`, { timeout });
 }
 
-/** Start estoc-daemon on `root`; resolves to the links it prints: its own app, and the preview with `?_daemon=`. */
+/** Start `estoc serve` on `root`; resolves to the links it prints: its own app, and the preview with `?_daemon=`. */
 function startDaemon(root) {
-  const child = spawn(process.execPath, [BIN, root, "--port", "0", "--app", APP_URL], { stdio: ["ignore", "inherit", "pipe"] });
+  const child = spawn(process.execPath, [BIN, "serve", root, "--port", "0", "--app", APP_URL], { stdio: ["ignore", "inherit", "pipe"] });
   const link = new Promise((resolve, reject) => {
     let out = "";
     child.stderr.on("data", (chunk) => {
@@ -93,7 +93,7 @@ function startDaemon(root) {
       }
       process.stderr.write(chunk.toString().replace(/^/gm, "[daemon] "));
     });
-    child.once("exit", (code) => reject(new Error(`estoc-daemon exited with ${code}\n${out}`)));
+    child.once("exit", (code) => reject(new Error(`estoc serve exited with ${code}\n${out}`)));
   });
   return { child, link };
 }
@@ -103,7 +103,7 @@ const daemon = startDaemon(root);
 const browser = await chromium.launch({ executablePath });
 try {
   const link = await daemon.link;
-  ok(`estoc-daemon up on ${root}, serving the app at ${link.own}`);
+  ok(`estoc serve up on ${root}, serving the app at ${link.own}`);
   const aliceCtx = await browser.newContext();
   const bobCtx = await browser.newContext();
   const alice = await aliceCtx.newPage();
