@@ -58,13 +58,13 @@ const USAGE = `usage: estoc <command>
                                  references are prefixed with --asset-base
                                  (default: object for a signed layout)
 
-  serve [<folder>] [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
-                                 run the daemon on a folder (default: the
-                                 enclosing vault, else .) and serve the app
-                                 for it at http://127.0.0.1:7357/; the page
-                                 talks to this process, the vault is the
-                                 folder's .estoc. --app <url> also prints a
-                                 ?_daemon= link for an app served elsewhere
+  serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
+                                 run the daemon here — the enclosing vault,
+                                 else this folder, like init — and serve the
+                                 app for it at http://127.0.0.1:7357/; the
+                                 page talks to this process, the vault is
+                                 the folder's .estoc. --app <url> also prints
+                                 a ?_daemon= link for an app served elsewhere
 
 options:
   --vault <dir>   use the vault at <dir> instead of searching upward from
@@ -131,11 +131,8 @@ interface ServeFlags {
   token?: string;
 }
 
-async function cmdServe(folder: string | undefined, flags: ServeFlags) {
-  let root = folder ?? flags.vault ?? process.env["ESTOC_VAULT"];
-  if (root === undefined) {
-    root = (await findVault(process.cwd()))?.root ?? process.cwd();
-  }
+async function cmdServe(flags: ServeFlags) {
+  const root = flags.vault ?? process.env["ESTOC_VAULT"] ?? (await findVault(process.cwd()))?.root ?? process.cwd();
   const served = await runDaemon({
     root,
     port: flags.port === undefined ? undefined : Number(flags.port),
@@ -301,7 +298,10 @@ async function main() {
       await cmdObject(rest[0], rest[1] ?? ".", values);
       return;
     case "serve":
-      await cmdServe(rest[0], values);
+      if (rest.length > 0) {
+        throw new Error("estoc serve takes no arguments; run it inside the folder (or --vault <dir>)");
+      }
+      await cmdServe(values);
       return;
     default:
       throw new Error(`unknown command: ${command} (try \`estoc --help\`)`);

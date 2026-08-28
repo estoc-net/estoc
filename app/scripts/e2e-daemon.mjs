@@ -82,7 +82,10 @@ async function expectBubble(page, text, timeout = 15000) {
 
 /** Start `estoc serve` on `root`; resolves to the links it prints: its own app, and the preview with `?_daemon=`. */
 function startDaemon(root) {
-  const child = spawn(process.execPath, [BIN, "serve", root, "--port", "0", "--app", APP_URL], { stdio: ["ignore", "inherit", "pipe"] });
+  const child = spawn(process.execPath, [BIN, "serve", "--port", "0", "--app", APP_URL], {
+    cwd: root,
+    stdio: ["ignore", "inherit", "pipe"],
+  });
   const link = new Promise((resolve, reject) => {
     let out = "";
     child.stderr.on("data", (chunk) => {

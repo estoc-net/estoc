@@ -23,7 +23,7 @@ Two hosts ship:
   (`src/codec.ts`).
 
 ```
-estoc serve ~/my-vault             # open the link it prints: http://127.0.0.1:7357/
+cd ~/my-vault && estoc serve       # open the link it prints: http://127.0.0.1:7357/
 estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 
