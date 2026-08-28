@@ -152,14 +152,21 @@ shell opening offline.
 - **The agent is [@estoc/agent-core]**: mediation (coordinate-mediation
   3.0), pickup and live delivery (messagepickup 3.0 over HTTP and
   WebSocket), routing 2.0 forwards, user-profile/1.0 introductions, and
-  the `.estoc` vault format over an OPFS backend. `src/core/store.ts`
-  mirrors the vault into Vue views and forwards agent events;
-  `src/core/backup.ts` is the zip on either side of agent-core's
-  `snapshotVault` / `importVault`.
+  the `.estoc` vault format over an OPFS backend.
+- **The daemon is a worker**: `src/daemon/worker.ts` runs the agent in a
+  dedicated worker of the page — it takes the vault lock (`lock.ts`),
+  keeps the unlocked seed in IndexedDB (`keycache.ts`), opens the vault
+  and reports by events. The UI reaches it only through the `Daemon`
+  interface (`api.ts`) over a message-port RPC (`rpc.ts`, `client.ts`):
+  records and bytes cross, no vault, key or agent does. `src/core/store.ts`
+  is the UI side — Vue views projected from the daemon's snapshot and
+  kept current by its events; `src/core/backup.ts` is the zip on either
+  side of agent-core's `snapshotVault` / `importVault`. The same interface
+  is what a shared worker, a push-woken service worker, or a native daemon
+  would offer.
 - **Screens follow the disk**: nothing there → onboarding (create or
   restore); a vault without its cached seed → unlock; otherwise straight
-  in. `src/core/lock.ts` takes the vault lock first; `src/core/keycache.ts`
-  is the IndexedDB slot for the unlocked seed.
+  in — the daemon says which, by a `phase` event.
 - **PWA**: [vite-plugin-pwa] generates the manifest and a Workbox service
   worker precaching the shell (scripts, styles, WASM). Updates wait for a
   nod (a chip offers to reload); `navigator.storage.persist()` is asked

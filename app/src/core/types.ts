@@ -58,9 +58,4 @@ export interface Identity {
   deliveries: Record<string, DeliveryState>;
 }
 
-/**
- * The app's screens, in the order a fresh install meets them:
- * booting → (elsewhere: another tab has the vault) → onboarding (no vault)
- * | locked (a vault, no cached seed) → open.
- */
-export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open";
+export type { Phase } from "../daemon/api.js";
