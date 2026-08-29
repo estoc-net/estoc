@@ -240,9 +240,10 @@ devices/k7q3ma/parts/pair/0198…/0198…/k3j9…/   a legacy key, migrated (§1
 ```
 
 The same partition appears under every device that observed it; the
-partition's log is their union. `parts/<myKey>/` is therefore "every
-counterpart of this key of ours": a `claim` (§8.2) names one such
-directory in every device.
+partition's log is their union. `parts/<myKey>/` is "everyone who ever
+wrote to this key of ours" — which is not the same as one contact: a
+key is a DID, and a DID can be handed on. Attribution therefore anchors
+on the whole pair (§9.1), never on `myKey` alone.
 
 ### 7.1 Partition events
 
@@ -357,23 +358,28 @@ the skeleton and "cleared"; nothing else changes.
 { "eid": "…", "at": "…", "type": "petname",   "name": "alice" }
 { "eid": "…", "at": "…", "type": "flag",      "pinned": true }
 { "eid": "…", "at": "…", "type": "claimedName", "name": "Alice L.", "mid": "0198…" }
-{ "eid": "…", "at": "…", "type": "claim",     "key": "did/0198…", "because": "minted" }
-{ "eid": "…", "at": "…", "type": "claim",     "key": "did/0198…", "because": "invitation", "oobId": "…", "pid": "…" }
-{ "eid": "…", "at": "…", "type": "attach",    "pid": "…", "because": "manual" }
+{ "eid": "…", "at": "…", "type": "useKey",    "key": "did/0198…", "because": "minted" }
+{ "eid": "…", "at": "…", "type": "attach",    "pid": "did/0198…/k3j9…", "because": "invitation", "oobId": "…" }
+{ "eid": "…", "at": "…", "type": "attach",    "pid": "did/0198…/k3j9…", "because": "reply" }
+{ "eid": "…", "at": "…", "type": "attach",    "pid": "-/m8v2…", "because": "manual" }
 { "eid": "…", "at": "…", "type": "detach",    "pid": "…" }
 { "eid": "…", "at": "…", "type": "absorb",    "from": "<cid>", "supersedes": ["<eid>", "<eid>"] }
 { "eid": "…", "at": "…", "type": "profileShared", "mid": "0198…" }
 { "eid": "…", "at": "…", "type": "deleted" }
 ```
 
-- `claim key`: every partition whose `myKey` is this key belongs to this
-  contact. Minting a key toward a contact is `did.minted` + `claim
-  (minted)`. Accepting an invitation is `claim (invitation)`; the `pid`
-  names the partition that prompted it, as grounds.
-- `attach pid`: one partition belongs to this contact. Used for
-  partitions on `uses: many` keys (someone who wrote to the profile DID)
-  and for manual repair.
-- `absorb from`: the other contact's claims and attaches are this
+- `attach pid`: **the one attribution anchor.** This partition — this
+  key of ours *and* this key of theirs — belongs to this contact. Written
+  when the person accepts an invitation (`because: invitation`, the
+  partition the accepted envelope landed in), when the first envelope
+  from a counterpart arrives on a key we minted toward them (`reply`),
+  when the person adopts a stranger (`manual`), and by migration.
+  Nothing else attributes: not the key we used, not the DID they
+  claimed in a plaintext.
+- `useKey key`: we address this contact from this key. Outbound only —
+  it picks the `myKey` to seal with and says nothing about who writes
+  back. Minting a key toward a contact is `did.minted` + `useKey`.
+- `absorb from`: the other contact's attaches and useKeys are this
   contact's; `supersedes` lists the conflicting eids it resolves. The
   absorbed contact gets a `deleted`.
 - `claimedName` and `profileShared` are observations wearing a decision's
@@ -391,33 +397,36 @@ anything to a message.
 
 ### 9.1 Attribution — `pid → cid`
 
-For a partition P, in order, first match wins:
+Build the **identity graph**: nodes are partitions (except `anon`
+partitions, which have no peer key and join nothing) and DIDs; a
+`peer.resolved` in P joins P to its `did`; a `peer.rotated` in P₀ joins
+P₀'s DID to `to`. Take P's connected component and collect every live
+`attach` (no later `detach`, not superseded by an `absorb`) whose `pid`
+is in it:
 
-1. some contact has a live `claim` (not superseded) for `P.myKey` → that
-   contact;
-2. some contact has a live `attach` (no later `detach`) for `P.pid` →
-   that contact;
-3. P is connected to an attributed partition P₀ in the **identity
-   graph**: nodes are partitions and DIDs; a `peer.resolved` in P joins
-   P to its `did`; a `peer.rotated` in P₀ joins P₀'s DID to `to`. Walk
-   the component; P inherits P₀'s contact;
-4. none → **unattributed**. The application shows it as a stranger; the
-   person's "accept" is a `claim` or `attach`.
+- **none** → P is **unattributed**: a stranger, or a second taker of a
+  one-use key, or someone the contact handed our DID on to. The
+  application shows it as such; the person's "accept" is an `attach`.
+- **one contact** → P belongs to it, and so does every partition in the
+  component (a `did:web` key rotation, a `from_prior` hop, a signing key
+  beside an agreement key).
+- **several** → a **multi-value**: the fold returns all of them, the
+  application shows the conflict, and an `absorb` resolves it. This
+  happens when two devices each accepted the same stranger while apart;
+  it is not an error.
 
-If step 1 or 2 matches more than one contact, the result is a
-**multi-value**: the fold returns all of them, the application shows the
-conflict, and an `absorb` resolves it. This happens when two devices each
-accepted the same stranger while apart; it is not an error.
-
-Legacy keys: a `pair/<cid>/<id>` name is not read for its cid. Migration
-writes the `claim` (§13); the fold never parses names.
+`myKey` never enters into it. That a key was minted toward Alice, or
+published in an invitation Alice took, says who we *meant* it for; who
+actually sealed to it is the peer key, and only the pair is evidence.
+Legacy `pair/<cid>/<id>` names are not read for their cid; migration
+writes the `attach` (§13); the fold never parses names.
 
 ### 9.2 Contact state
 
 From a contact's log and its attributed partitions:
 
 - `petname`, flags, `claimedName`: latest event.
-- `keys[]`: every live claimed key, with its `did.minted` DID.
+- `keys[]`: every live `useKey`, with its `did.minted` DID.
 - `theirDids[]`: the DIDs in the contact's component of the identity
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
   end, and its current keys are the latest `peer.resolved` for it. Two
@@ -433,7 +442,8 @@ From a contact's log and its attributed partitions:
 ### 9.3 My DIDs and devices
 
 Per `did/<id>`: minted, registered (per device), published-as, uses,
-retired, and `claimedBy` (the contacts whose claims name it). Per device:
+retired, `usedBy` (the contacts with a live `useKey` on it), and
+`takenBy` (the contacts with an `attach` on one of its partitions). Per device:
 its `device.json` and whether it is retired — so the application can
 list "your addresses" across every device without adopting another's
 mediation.
@@ -441,12 +451,16 @@ mediation.
 ### 9.4 Invitations
 
 An invitation is a `did.published { as: oob, uses: one }`. It is **open**
-iff no live `claim` names its key. It is **taken** by the claim's contact.
-A second stranger writing to a taken one-use key still lands in its own
-partition (an observation is never refused a home) and is shown as
-unattributed; the application's policy is to turn it away. Single use is
-therefore a policy, not a format guarantee — two devices apart can each
-take the same invitation, and the fold shows two claims.
+iff no live `attach` names a partition under its key. It is **taken** by
+the contact whose `attach` does — which also makes that contact's
+`useKey` on the key implicit; the fold adds it. A second stranger
+writing to a taken one-use key lands in its own partition (an
+observation is never refused a home), is in no attached component, and
+is shown unattributed; the application's policy is to turn it away.
+Single use is therefore a policy, not a format guarantee — two devices
+apart can each take the same invitation, and the fold shows two
+attaches under one key, which is a conflict only if they are the same
+peer key.
 
 ## 10. Retention
 
@@ -493,10 +507,10 @@ file under `devices/` is unlinked (rule 7).
 2. Fold attribution. For every partition attributed exactly to this
    contact (single-valued), for every `message.*` line in it: append
    `message.cleared { because: user }` and unlink the blob (§10).
-3. For every key the contact has a live `claim` on that was
-   `did.published { uses: one }` or minted toward it: append
-   `did.retired { because: contact-deleted }`, so nothing further is
-   accepted on it.
+3. For every key the contact has a live `useKey` on that was
+   `did.published { uses: one }` or minted toward it, and that no other
+   contact uses: append `did.retired { because: contact-deleted }`, so
+   nothing further is accepted on it.
 4. The fold hides the contact and its partitions; a later envelope to a
    retired key still lands in its partition, unattributed, and the
    application's policy turns it away.
@@ -544,13 +558,16 @@ renamed `migrated-v1/` and left for the person to delete.
   `did.minted` + `did.published { as: profile, uses: many }` (+
   `did.registered`).
 - `contacts/<cid>.json` → `contacts/<cid>/`: `created`, `petname`,
-  flags, `claimedName`, `profileShared`; one `claim { key, because:
-  migration }` per `myDids[].key`; `dids[]` hops with `fromPrior` → a
+  flags, `claimedName`, `profileShared`; one `useKey { key, because:
+  migration }` per `myDids[].key`; one `attach { pid, because:
+  migration }` per partition the contact's messages land in (§ below);
+  `dids[]` hops with `fromPrior` → a
   `peer.rotated` in the partition of the prior DID's key (found by the
   `myDids` entry current at `from`).
 - `invitations/<id>.json` → `me/`: `did.minted` + `did.published { as:
-  oob, uses: one }` (+ `did.registered`); if `acceptedBy`, a `claim {
-  because: invitation }` in that contact.
+  oob, uses: one }` (+ `did.registered`); if `acceptedBy`, the
+  `attach` above covers it (the accepting envelope's partition is one
+  the contact's messages land in).
 - `messages/*.jsonl` → partitions: inbound `myKey` = the `myDids[]`
   entry whose `did` is in `msg.to` (falling back to `addressedAs`, then
   the mediation's public key), `peerKey` = the agreement key of
