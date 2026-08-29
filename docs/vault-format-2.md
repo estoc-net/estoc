@@ -10,16 +10,17 @@ Sections marked *provisional* are leanings, not decisions.
 Version 1 kept three kinds of file — records, logs, singletons — and let a
 record (`contacts/<cid>.json`) be the truth about who a message belongs to.
 Version 2 keeps only logs and singletons. Every file that is not a
-singleton is either an **observation** (what an envelope proved, what the
-wire returned) or a **decision** (what the person chose), each an
-append-only event; everything else — which contact a message belongs to,
-what a contact's current DID is, whether an invitation is still open — is
-a **fold** over those events and lives in `cache/`, rebuildable. A log
-line carries a message's skeleton; its body is a blob beside it, and
-retention is deleting blobs, never log lines. Messages
-are partitioned by what the envelope proved — our key and their key, not
-their DID and not our decision about who they are; keys are named by
-random ids, not by the contact they were minted for.
+singleton is an append-only event, either an **observation** (what an
+envelope proved, what the wire returned) or a **decision** (what the
+person chose); everything else — which contact a message belongs to, what
+a contact's current DID is, whether an invitation is still open — is a
+**fold** over those events and lives in `cache/`, rebuildable. Every log
+lives under the device that wrote it, so another copy of the vault is
+merged by copying directories. A log line carries a message's skeleton;
+its body is a blob beside it, and retention is deleting blobs, never log
+lines. Messages are partitioned by what the envelope proved — our key and
+their key, not their DID and not our decision about who they are; keys
+are named by random ids, not by the contact they were minted for.
 
 ## 1. What a vault is
 
@@ -28,7 +29,7 @@ backup is the zip.
 
 ## 2. Principles
 
-v1's six rules stand (§2 there). Two are sharpened and three are added.
+v1's six rules stand (§2 there). Two are sharpened and four are added.
 
 1. **Two kinds of file.** A **log** — immutable events, append-only JSONL
    in segments, merged by union — or a **singleton**. There are no
@@ -37,17 +38,21 @@ v1's six rules stand (§2 there). Two are sharpened and three are added.
 2. **Names carry no decisions.** v1 said ids are minted, never computed.
    v2 adds: a name must not encode *whose* something is. `pair/<cid>/<id>`
    encoded a contact into a key name at mint time; v2 keys are `did/<id>`.
-3. **Observation before decision.** An event is one or the other, never
+3. **Every byte under `devices/<dev>/` was written by device `dev`.** A
+   device appends only under its own directory. Another device's
+   directory is copied whole and never written into, however many hands
+   the copy passed through. Ownership is a path, and a merge is a copy.
+4. **Observation before decision.** An event is one or the other, never
    both. Observations are written in the partition the envelope proves
-   (§7) and need no local state to place. Decisions are written under the
-   thing decided about (`contacts/<cid>/`, `me/`; a decision about one
-   message, beside that message, §10) and carry their grounds inline,
-   because the bodies they rest on may be purged (§10).
-4. **Folds are pure and commutative.** `now` is a parameter; a setting
+   (§7) and need no local state to place. Decisions are written under
+   the thing decided about (`contacts/<cid>/`, `me/`; a decision about
+   one message, beside that message, §10) and carry their grounds
+   inline, because the bodies they rest on may be purged.
+5. **Folds are pure and commutative.** `now` is a parameter; a setting
    that affects a fold is an event; the order two segments are read in
    must not change the result. Tests: incremental = full; shuffled = same;
    merge(A,B) = merge(B,A).
-5. **Conflicts are projections.** Two devices deciding differently
+6. **Conflicts are projections.** Two devices deciding differently
    produce two events, not an error. The fold shows both; a later decision
    resolves them. Merge never rewrites, never drops, never invents.
 
@@ -55,37 +60,38 @@ v1's six rules stand (§2 there). Two are sharpened and three are added.
 
 ```
 .estoc/
-  config.json                        singleton — format/version, label, anchor, device, current mediation
-  keystore.json                      singleton — @estoc/keystore v3, unchanged
-  me/events/<seg>.jsonl              log — decisions about my own DIDs: minted, published, retired
-  parts/<myKey>/<peerKey>/           one partition per (my key, their public key); pid = this path
-    part.json                        immutable — the peer key in full, and the DID it first wore
-    events/<seg>.jsonl               log — every observation in this partition; skeletons only
-  contacts/<cid>/events/<seg>.jsonl  log — decisions about a contact; never purged
-  state/                             reserved, as v1 §6.7
-  blobs/<hash>                       content-addressed bytes — message bodies, attachments; the one place purge deletes from
-  cache/                             rebuildable folds; never in a snapshot; §12
-  trace/<stream>/<seg>.jsonl         device observations with retention; as v1 §6.10
+  config.json                                singleton — format/version, label, anchor
+  keystore.json                              singleton — @estoc/keystore v3, unchanged
+  blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place purge deletes from
+  devices/<dev>/                             everything device <dev> wrote
+    device.json                              singleton-per-device — minted, current mediation
+    me/<seg>.jsonl                           log — decisions about my DIDs: minted, registered, published, retired
+    contacts/<cid>/<seg>.jsonl               log — decisions about a contact
+    parts/<myKey>/<peerKey>/<seg>.jsonl      log — observations in one partition: skeletons, deliveries, resolutions
+  state/                                     reserved, as v1 §6.7
+  cache/                                     rebuildable folds; never in a snapshot; §12
+  trace/<stream>/<seg>.jsonl                 device observations with retention; as v1 §6.10
 ```
 
-Gone: `contacts/<cid>.json`, `invitations/`, `messages/`, `deliveries/`.
+Gone: `contacts/<cid>.json`, `invitations/`, `messages/`, `deliveries/`,
+and v1's `config.mediation`.
 
-`<seg>` is `<uuidv7>-<dev>` (§4). Path rules as v1 §3.
+`<seg>` is a uuidv7. Path rules as v1 §3. A log's segments are the union
+of `devices/*/<log path>/<seg>.jsonl`; a reader concatenates them and
+lets events carry their own `at`.
 
 ## 4. Identifiers and time
 
 - **`dev`** — a device id, 6 lowercase base32 characters, minted the first
-  time a device opens (or creates) the vault and stored in
-  `config.device`. It appears in every segment name and every event id
-  this device writes. It is not secret and not stable across a restore
-  onto a new machine (a restore mints a new one).
+  time a device opens (or creates) the vault, recorded in its
+  `device.json`. It appears in every event id this device writes. Not
+  secret, and not carried by a restore onto a new machine, which mints a
+  fresh one and keeps the old directory as history.
 - **`eid`** — every event's id: `<uuidv7>-<dev>`. The dedup key for every
   log. Time-ordered within a device; across devices only `at` orders,
   with `(uuidv7, dev)` as the tiebreak wherever a fold needs "latest".
-- **Segments** are `<uuidv7>-<dev>.jsonl`. **One writer per segment,
-  ever**: a device appends only to segments carrying its own `dev`, and
-  a merge copies foreign segments whole. This is what lets union be a
-  file copy.
+- **Segments** are `<uuidv7>.jsonl` under the writing device's
+  directory; the writer appends to its newest segment or mints one.
 - **`pid`** — a partition id, the path `<myKey>/<peerKey>` (§7): the one
   id that is computed rather than minted, because it must come out the
   same on every device.
@@ -106,13 +112,13 @@ v1 §5). The name table shrinks:
 Every DID we give to a person is a `did/<id>`. Whether it went into an
 out-of-band invitation, onto a profile page, or straight to one contact;
 whether it is meant for one taker or many; whom it now belongs to — these
-are decisions in `me/events` and `contacts/*/events`, not in the name.
-The v1 names `pair/<cid>/<id>`, `invite/<id>`, `mediation/<id>/public`
-remain valid derivation names for keys that already exist (§13); no new
-key is minted under them.
+are decisions in `me/` and `contacts/`, not in the name. The v1 names
+`pair/<cid>/<id>`, `invite/<id>`, `mediation/<id>/public` remain valid
+derivation names for keys that already exist (§13); no new key is minted
+under them.
 
 `keystore.json` is unchanged: `keys[]` stays a cache, rebuilt by walking
-`me/events` for `did.minted` and `config.mediation` for `me`.
+every device's `me/` for `did.minted` and `device.json` for `me`.
 
 ## 6. Singletons
 
@@ -123,25 +129,42 @@ key is minted under them.
   "format": "estoc",
   "version": 2,
   "label": "Alice",
-  "identity": { "anchor": { "key": "anchor", "did": "did:key:z6Mk…" } },
-  "device":   { "id": "k7q3ma", "mintedAt": "…" },
-  "mediation": {
-    "id": "0198…",
-    "mediatorDid": "did:web:mediator.estoc.dev",
-    "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" },
-    "routingDid": "did:peer:2…",
-    "public": "did/0198…"                       // the key published as our address; null until granted
-  }
+  "identity": { "anchor": { "key": "anchor", "did": "did:key:z6Mk…" } }
 }
 ```
 
-- `mediation.public` is now a key *name*, pointing into `me/events`; the
-  DID and `registeredAt` live there.
-- Merge: kept local, as v1. `device` is by construction local.
+Only what is true of the identity as a whole. Merge: kept local; both
+sides agree by construction.
 
 ### 6.2 `keystore.json`
 
 As v1 §6.2.
+
+### 6.3 `devices/<dev>/device.json`
+
+```jsonc
+{
+  "dev": "k7q3ma",
+  "mintedAt": "…",
+  "label": "phone",                              // optional, the person's
+  "mediation": {                                 // this device's arrangement; or null
+    "id": "0198…",
+    "mediatorDid": "did:web:mediator.estoc.dev",
+    "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" },
+    "routingDid": "did:peer:2…",
+    "public": "did/0198…"                        // the key published as this device's address; null until granted
+  }
+}
+```
+
+- v1's `config.mediation`, moved to where it was always true: a
+  mediation is one device's arrangement with one mediator. Another device
+  can *see* it (the fold shows every device's address) without adopting
+  it.
+- `mediation.public` is a key name pointing into `me/`; the DID and its
+  registration live there.
+- Rewritten whole by its own device only (rule 3). On merge it is copied
+  with the rest of the directory.
 
 ## 7. Partitions — `parts/<myKey>/<peerKey>/`
 
@@ -174,42 +197,36 @@ is in the key, so a partition survives either side changing mediator
 while keeping keys.
 
 ```
-parts/did/0198…/k3j9…/          authcrypt with our did/0198…
-parts/did/0198…/anon/           anoncrypt to our did/0198…
-parts/-/k3j9…/                  signed only
-parts/pair/0198…/0198…/k3j9…/   a legacy key, migrated (§13)
+devices/k7q3ma/parts/did/0198…/k3j9…/          authcrypt with our did/0198…, as seen by k7q3ma
+devices/k7q3ma/parts/did/0198…/anon/           anoncrypt to our did/0198…
+devices/k7q3ma/parts/-/k3j9…/                  signed only
+devices/k7q3ma/parts/pair/0198…/0198…/k3j9…/   a legacy key, migrated (§13)
 ```
 
-`parts/<myKey>/` is therefore "every counterpart of this key of ours":
-a `claim` (§8.2) is one directory, and so is most of a deletion (§11).
-
-`part.json` is written once, by whichever device creates the directory,
-and never changed:
-
-```jsonc
-{ "key": "did:key:z6LS…", "kind": "authcrypt", "firstSeenAt": "…", "firstDid": "did:peer:4…" }
-```
-
-`key` is the full peer key; `firstDid` is the DID it wore when first
-seen (the skid's DID, or the DID we resolved before sealing) — readable
-context, not truth; the truth about which DIDs this key belongs to is
-`peer.resolved`. One counterpart can own several partitions at once
-(their signing key and their agreement key; several agreement keys in
-one document); the fold joins them (§9.1).
+The same partition appears under every device that observed it; the
+partition's log is their union. `parts/<myKey>/` is therefore "every
+counterpart of this key of ours": a `claim` (§8.2) names one such
+directory in every device.
 
 ### 7.1 Partition events
 
 One log, one `type` per line, `eid` as the dedup key:
 
 ```jsonc
-{ "eid": "0198…-k7q3ma", "at": "…", "type": "message.in",  "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<hash>" }
-{ "eid": "…", "at": "…", "type": "message.out", "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<hash>" }
-{ "eid": "…", "at": "…", "type": "delivery",    "mid": "0198…", "attempt": 1, "status": "failed", "error": "…" }
-{ "eid": "…", "at": "…", "type": "delivery",    "mid": "0198…", "attempt": 2, "status": "sent" }
+{ "eid": "0198…-k7q3ma", "at": "…", "type": "part.opened",   "key": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
+{ "eid": "…", "at": "…", "type": "message.in",    "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<hash>" }
+{ "eid": "…", "at": "…", "type": "message.out",   "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<hash>" }
+{ "eid": "…", "at": "…", "type": "delivery",      "mid": "0198…", "attempt": 1, "status": "failed", "error": "…" }
+{ "eid": "…", "at": "…", "type": "delivery",      "mid": "0198…", "attempt": 2, "status": "sent" }
 { "eid": "…", "at": "…", "type": "peer.resolved", "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" }
 { "eid": "…", "at": "…", "type": "peer.rotated",  "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" }
 ```
 
+- `part.opened`: the first line a device writes in a partition — the
+  full peer key (the hash in the path is not reversible), the kind, and
+  the DID the key wore when first seen. Readable context; the truth
+  about which DIDs a key belongs to is `peer.resolved`. Every device
+  writes its own on first contact with the partition.
 - `message.in` / `message.out`: the **skeleton** of a message — its
   local `mid` (minted at append), the wire `id`, `msgType`, `thid`,
   `pthid`, size, and `body`, the hash of the blob holding the DIDComm
@@ -218,9 +235,10 @@ One log, one `type` per line, `eid` as the dedup key:
   nothing a person said is. `direction` and `sender` are gone — the
   partition is both.
 - `delivery`: as v1 §6.6, minus `to` — the partition is the `to`; the
-  DID we sealed to is in the message's `msg.to`. Fold
-  as before: no event = pending, last `failed` = retry, `held` = by hand,
-  `sent` = final. `held` is a device decision and never merges in.
+  DID we sealed to is in the message's `msg.to`. Fold as before: no
+  event = pending, last `failed` = retry, `held` = by hand, `sent` =
+  final. `held` is a device decision; a fold reads only the writing
+  device's `held` as binding on that device.
 - `peer.resolved`: we resolved a DID and found this partition's key in
   its document — on every inbound (the skid's DID) and before every
   outbound (the DID we are writing to). Records the whole key list and
@@ -235,7 +253,18 @@ One log, one `type` per line, `eid` as the dedup key:
   names the `mid` it came from. The other edge the fold follows.
   *Provisional:* a separate event rather than re-parsing every message
   on fold.
+- `message.cleared`: §10.
 - Nothing about who the peer *is* goes here.
+
+### 7.2 Frozen partitions
+
+A partition is **frozen** when its `myKey` is not a current key of ours
+(retired, or a mediation that is no longer current on the device asking)
+or its `peerKey` is not in the current document of the contact's current
+DID (§9.2). Frozen is a fold, never written: a frozen partition still
+receives inbound observations (a late envelope to an old key is a fact)
+but nothing is sent from it; a retention rule may treat "frozen" as a
+reason to clear its bodies (§10).
 
 ### 7.3 Bodies — `blobs/<hash>`
 
@@ -245,7 +274,9 @@ appended, `hash` = sha256 of the bytes, lowercase hex, sharded
 attachments lifted out of a plaintext (the DIDComm attachment keeps its
 `hash` and gains a `links` entry naming the blob) and any other
 content-addressed bytes (v1 §6.8). Blobs are immutable, merged by union,
-and deduplicated by construction.
+deduplicated by construction, and the one directory outside `devices/`
+that every device writes to — safely, because a content address has no
+author.
 
 A crash between the two writes leaves an orphan blob, harmless, swept by
 the next garbage collection (§10). The other order is never used: a line
@@ -254,18 +285,9 @@ whose body was never written would be indistinguishable from a purge.
 A blob that is **absent** is a body that was cleared (§10). Readers show
 the skeleton and "cleared"; nothing else changes.
 
-### 7.2 Frozen partitions
-
-A partition is **frozen** when its `myKey` is not a current key of ours
-(retired, or a mediation that is no longer current) or its `peerKey` is
-not in the current document of the contact's current DID (§9.2). Frozen is a fold, never written: a
-frozen partition still receives inbound observations (a late envelope to
-an old key is a fact) but nothing is sent from it; a retention rule may
-treat "frozen" as a reason to clear its bodies (§10).
-
 ## 8. Decision logs
 
-### 8.1 `me/events/` — my DIDs
+### 8.1 `me/` — my DIDs
 
 ```jsonc
 { "eid": "…", "at": "…", "type": "did.minted",    "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" }
@@ -273,21 +295,26 @@ treat "frozen" as a reason to clear its bodies (§10).
 { "eid": "…", "at": "…", "type": "did.published", "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" }
 { "eid": "…", "at": "…", "type": "did.published", "key": "did/0198…", "as": "profile", "uses": "many" }
 { "eid": "…", "at": "…", "type": "did.retired",   "key": "did/0198…", "because": "mediation-changed" }
+{ "eid": "…", "at": "…", "type": "device.retired","dev": "p2x8rq", "because": "lost" }
 ```
 
 - `did.minted` is the one place a DID string of ours is recorded (the
   snapshot, v1 §2.4); the key is derived from the name and compared on
-  use.
-- `did.registered` is this device's fact about its mediator; it merges
-  like any event but a fold treats it as advisory (another device's
-  mediator is another arrangement).
+  use. The `mediation` id says which device's arrangement the routing
+  DID came from.
+- `did.registered` is the writing device's fact about its mediator; a
+  fold treats it as binding for that device only.
 - `did.published` says how the DID was handed out. `uses: one` is what an
   invitation was; `uses: many` is what the public DID was. An invitation
   is therefore not a file: it is a `did.published` with `as: oob`, and
   "open" is a fold (§9.4).
 - `did.retired`: no further outbound from this key; inbound still opens.
+- `device.retired`: a decision about another device (lost, replaced).
+  Its directory stays — history is history — but a fold stops treating
+  its `device.json` as a live address and shows any later events from it
+  as suspect.
 
-### 8.2 `contacts/<cid>/events/` — one contact
+### 8.2 `contacts/<cid>/` — one contact
 
 ```jsonc
 { "eid": "…", "at": "…", "type": "created" }
@@ -316,14 +343,15 @@ treat "frozen" as a reason to clear its bodies (§10).
 - `claimedName` and `profileShared` are observations wearing a decision's
   clothes — they come from a message — and are kept here for the fold's
   convenience, with the `mid` as grounds. *Provisional.*
-- `deleted` is a tombstone; the directory stays (§11).
+- `deleted` is a tombstone (§11).
 - Latest-wins fields (`petname`, each `flag`) resolve by `(uuidv7, dev)`.
 - Nothing here is ever deleted (§10).
 
 ## 9. Folds
 
-All folds are rebuildable and live under `cache/` (§12). They are the
-only place the word "contact" means anything to a message.
+All folds are rebuildable and live under `cache/` (§12). They read every
+device's directory. They are the only place the word "contact" means
+anything to a message.
 
 ### 9.1 Attribution — `pid → cid`
 
@@ -362,14 +390,17 @@ From a contact's log and its attributed partitions:
   partitions.
 - `writeTo`: the one unfrozen partition, if any; none means "must mint
   or rotate before sending".
-- `thread`: the union of `message.*` across attributed partitions, sorted
-  by `at`. Cross-partition order relies on `at` alone, as v1 §7 already
-  required across segments.
+- `thread`: the union of `message.*` across attributed partitions and
+  devices, sorted by `at`. Cross-partition and cross-device order relies
+  on `at` alone, as v1 §7 already required across segments.
 
-### 9.3 My DIDs
+### 9.3 My DIDs and devices
 
-Per `did/<id>`: minted, registered (this device), published-as, uses,
-retired, and `claimedBy` (the contacts whose claims name it).
+Per `did/<id>`: minted, registered (per device), published-as, uses,
+retired, and `claimedBy` (the contacts whose claims name it). Per device:
+its `device.json` and whether it is retired — so the application can
+list "your addresses" across every device without adopting another's
+mediation.
 
 ### 9.4 Invitations
 
@@ -386,7 +417,7 @@ take the same invitation, and the fold shows two claims.
 Nothing is ever deleted from a log. Retention operates on `blobs/` only:
 
 - **Clearing** a message = deleting `blobs/<body>` and appending a
-  decision to the partition that owns it:
+  decision, in the writing device's copy of the partition:
 
   ```jsonc
   { "eid": "…", "at": "…", "type": "message.cleared", "mid": "0198…", "because": "retention" }
@@ -398,14 +429,13 @@ Nothing is ever deleted from a log. Retention operates on `blobs/` only:
   structure, sizes, delivery outcomes, and the `cleared` line itself,
   which is why a gap is a fact on record rather than a mystery.
 - **`because`** governs resurrection on merge (§12): a `retention` clear
-  is this device making room, and a copy that still has the body brings
+  is one device making room, and a copy that still has the body brings
   it back; a `user` clear is the person's decision, and the body is not
-  copied in again. Only `user` clears merge in as decisions; `retention`
-  clears are local facts that merge as any event but bind no one.
+  copied in again.
 - **Collection**: a blob no live line references — no `message.*` line
   names it as `body` or as an attachment, or every line that does has a
-  `cleared` after it — may be deleted. Reference counting is a fold; a
-  collector may run at any time and is never required to.
+  `cleared` after it — may be deleted. Reference counting is a fold over
+  every device; a collector may run at any time and is never required to.
 - **Policy** — what to clear, when, whether frozen partitions clear
   sooner, whether attachments go before bodies — is a device option, as
   trace retention is (v1 §6.10). The format fixes only the mechanics:
@@ -417,58 +447,62 @@ Nothing is ever deleted from a log. Retention operates on `blobs/` only:
 
 ## 11. Deleting a contact
 
-1. Append `deleted` to the contact's log.
+1. Append `deleted` to the contact's log (in this device's directory).
 2. Fold attribution. Take every partition whose attribution is exactly
    this contact (single-valued).
-3. Delete those partition directories — for a claimed key, the whole
-   `parts/<myKey>/`. Partitions in conflict stay
-   until the conflict is resolved and a later sweep finds them
-   single-valued and deleted.
+3. Clear those partitions' bodies (`message.cleared { because: user }`
+   for each; §10) and delete **this device's** copies of their
+   directories — for a claimed key, the whole `parts/<myKey>/`.
 
-The contact directory stays, with its tombstone, so a merge from an older
-copy does not revive the contact (§12).
+Other devices' copies are theirs to delete: each does step 3 for its
+own directory when its fold shows the tombstone (rule 3). Partitions in
+conflict stay until the conflict is resolved and a later sweep finds
+them single-valued. Contact directories keep their tombstones so a merge
+from an older copy does not revive the contact.
 
 ## 12. Snapshot, import, cache
 
 - **Snapshot** = everything under `.estoc/` except `cache/` and `trace/`,
   as v1 §7.
 - **Import** into an empty backend = restore, `config.json` written last;
-  `device` is re-minted; every outbound message whose fold is not `sent`
-  gets a `held`.
+  the restoring device mints its own `dev` and directory, the imported
+  ones stay as history; every outbound message whose fold is not `sent`
+  gets a `held` in the new directory.
 - **Import** into the same anchor = merge:
-  - every log: foreign segments **copied whole** when absent (one writer
-    per segment makes this a union); a segment present on both sides is
-    the same bytes or a longer prefix — keep the longer;
-  - `part.json`: copied when absent;
+  - `devices/<x>/` for every `x` not present: copied whole;
+  - `devices/<x>/` present on both sides: per file, the longer of two
+    segments that share a name (a prefix relation, by rule 3), any
+    missing segment copied, `device.json` from whichever copy has the
+    later `mintedAt`-plus-mtime — *provisional*; in practice both sides
+    have the same bytes or one is strictly ahead;
+  - `devices/<self>/` is never touched by an import;
   - `blobs/`: copied when absent, **unless** the receiving side has a
     `message.cleared { because: user }` for every line that references
     it (fold first, then copy);
-  - **tombstones first**: fold contacts on both sides before copying
-    partitions; a partition attributed only to a contact that is
-    `deleted` on the receiving side is not copied;
-  - singletons local; `state/` as v1; `cache/`, `trace/`
-    ignored; any other path copied when absent.
+  - singletons local; `state/` as v1; `cache/`, `trace/` ignored; any
+    other path copied when absent.
 - **`cache/`** holds the folds of §9 with, for each, the set of
-  `(segment, cursor)` it was folded to, so a start can fold incrementally
-  and a mismatch (a segment shorter than the cursor — purged, or a
-  different device's copy) triggers a refold. Deleting `cache/` is always
-  safe.
+  `(device, segment, cursor)` it was folded to, so a start can fold
+  incrementally and a mismatch triggers a refold. Deleting `cache/` is
+  always safe.
 
 ## 13. Migration from version 1
 
-On open, once, forward only; the v1 directories are renamed
-`migrated-v1/` and left for the person to delete.
+On open, once, forward only. The migrating device mints its `dev` and
+writes everything below into its own directory; the v1 directories are
+renamed `migrated-v1/` and left for the person to delete.
 
-- `contacts/<cid>.json` → `contacts/<cid>/events/`: `created`,
-  `petname`, flags, `claimedName`, `profileShared`; one `claim {key,
-  because: migration}` per `myDids[].key`; `dids[]` hops with `fromPrior`
-  → a `peer.rotated` in the partition of the prior DID's key (found by
-  the `myDids` entry current at `from`).
-- `invitations/<id>.json` → `me/events`: `did.minted` + `did.published
-  {as: oob, uses: one}` (+ `did.registered`); if `acceptedBy`, a `claim
-  {because: invitation}` in that contact.
-- `config.mediation.public` → `did.minted` + `did.published {as:
-  profile, uses: many}`; config points to the name.
+- `config.mediation` → `devices/<dev>/device.json`; its `public` key →
+  `did.minted` + `did.published { as: profile, uses: many }` (+
+  `did.registered`).
+- `contacts/<cid>.json` → `contacts/<cid>/`: `created`, `petname`,
+  flags, `claimedName`, `profileShared`; one `claim { key, because:
+  migration }` per `myDids[].key`; `dids[]` hops with `fromPrior` → a
+  `peer.rotated` in the partition of the prior DID's key (found by the
+  `myDids` entry current at `from`).
+- `invitations/<id>.json` → `me/`: `did.minted` + `did.published { as:
+  oob, uses: one }` (+ `did.registered`); if `acceptedBy`, a `claim {
+  because: invitation }` in that contact.
 - `messages/*.jsonl` → partitions: inbound `myKey` = the `myDids[]`
   entry whose `did` is in `msg.to` (falling back to `addressedAs`, then
   the mediation's public key), `peerKey` = the agreement key of
@@ -476,9 +510,10 @@ On open, once, forward only; the v1 directories are renamed
   the DID, so this is the one place migration trusts a resolution it
   did not witness — a `peer.resolved` is written for it, marked
   `because: migration`); outbound `myKey` = the entry whose `did` is
-  `msg.from`, `peerKey` = the agreement key of `msg.to[0]`. `mid`
-  and `at` copied, `msg` written to `blobs/` and its hash put on the
-  line, the skeleton fields lifted from it; `eid` minted.
+  `msg.from`, `peerKey` = the agreement key of `msg.to[0]`. `mid` and
+  `at` copied, `msg` written to `blobs/` and its hash put on the line,
+  the skeleton fields lifted from it; `eid` minted; a `part.opened` at
+  the head of each partition.
 - `deliveries/*.jsonl` → the partition of their `mid`.
 - A v1 message whose `msg` was already stripped by hand has no v2 body:
   the line is written with `body` and no blob, plus a `message.cleared
@@ -487,11 +522,13 @@ On open, once, forward only; the v1 directories are renamed
 
 ## 14. Versioning, robustness, boundaries
 
-As v1 §8–§10, with: `config.version` = 2; one writer per segment replaces
-"one writer per vault" as the log-level rule (the application still
-serialises writers on one directory); a backup is still a move, not a
-sync — but the format no longer stands in the way of a sync, since every
-file is now either union-mergeable or local by construction.
+As v1 §8–§10, with: `config.version` = 2; one writer per device
+directory (rule 3) replaces "one writer per vault" as the format-level
+rule — the application still serialises writers on one directory, and
+two processes sharing one `dev` is a bug, not a merge. A backup is
+still a move, not a sync, but the format no longer stands in the way of
+one: a sync is "copy the other devices' directories and the blobs they
+reference", and nothing here should have to change for it.
 
 ## 15. Open
 
@@ -504,6 +541,7 @@ file is now either union-mergeable or local by construction.
 - Whether attachments are lifted out of the plaintext into their own
   blobs at append time or left inline in the body blob (§7.3); lifting
   lets them be cleared separately.
+- `device.json` merge tiebreak when two copies of one device's directory
+  disagree (§12) — should not happen under rule 3; needs a stated rule
+  anyway.
 - Retention defaults and the purge trigger (device option; not here).
-- Multi-device sync proper (which segments to send) — out of scope, but
-  nothing here should have to change for it.
