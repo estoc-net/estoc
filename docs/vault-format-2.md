@@ -14,9 +14,11 @@ singleton is an append-only event, either an **observation** (what an
 envelope proved, what the wire returned) or a **decision** (what the
 person chose); everything else — which contact a message belongs to, what
 a contact's current DID is, whether an invitation is still open — is a
-**fold** over those events and lives in `cache/`, rebuildable. Every log
-lives under the device that wrote it, so another copy of the vault is
-merged by copying directories. A log line carries a message's skeleton;
+**fold** over those events and lives in `local/cache/`, rebuildable. Every log
+lives under the device that authored it, so another copy of the vault is
+merged by copying directories; what is this device's alone — which
+device it is, its caches, its traces — lives under `local/` and is never
+in a backup. A log line carries a message's skeleton;
 its body is a blob beside it, and retention is deleting blobs, never log
 lines. Messages are partitioned by what the envelope proved — our key and
 their key, not their DID and not our decision about who they are; keys
@@ -29,7 +31,7 @@ backup is the zip.
 
 ## 2. Principles
 
-v1's six rules stand (§2 there). Two are sharpened and four are added.
+v1's six rules stand (§2 there). Two are sharpened and five are added.
 
 1. **Two kinds of file.** A **log** — immutable events, append-only JSONL
    in segments, merged by union — or a **singleton**. There are no
@@ -38,10 +40,11 @@ v1's six rules stand (§2 there). Two are sharpened and four are added.
 2. **Names carry no decisions.** v1 said ids are minted, never computed.
    v2 adds: a name must not encode *whose* something is. `pair/<cid>/<id>`
    encoded a contact into a key name at mint time; v2 keys are `did/<id>`.
-3. **Every byte under `devices/<dev>/` was written by device `dev`.** A
-   device appends only under its own directory. Another device's
-   directory is copied whole and never written into, however many hands
-   the copy passed through. Ownership is a path, and a merge is a copy.
+3. **Every event under `devices/<dev>/` was authored by device `dev`.**
+   A device appends only under its own directory. Another device's
+   directory is only ever copied — whole files, never created, edited,
+   or truncated — however many hands the copy passed through. Authorship
+   is a path, and a merge is a copy.
 4. **Observation before decision.** An event is one or the other, never
    both. Observations are written in the partition the envelope proves
    (§7) and need no local state to place. Decisions are written under
@@ -55,6 +58,9 @@ v1's six rules stand (§2 there). Two are sharpened and four are added.
 6. **Conflicts are projections.** Two devices deciding differently
    produce two events, not an error. The fold shows both; a later decision
    resolves them. Merge never rewrites, never drops, never invents.
+7. **Logs are never deleted from.** Not a line, not a segment, not a
+   directory. The only thing ever unlinked is a blob (§10) — and, under
+   `local/`, what was never part of the vault.
 
 ## 3. Layout
 
@@ -69,12 +75,16 @@ v1's six rules stand (§2 there). Two are sharpened and four are added.
     contacts/<cid>/<seg>.jsonl               log — decisions about a contact
     parts/<myKey>/<peerKey>/<seg>.jsonl      log — observations in one partition: skeletons, deliveries, resolutions
   state/                                     reserved, as v1 §6.7
-  cache/                                     rebuildable folds; never in a snapshot; §12
-  trace/<stream>/<seg>.jsonl                 device observations with retention; as v1 §6.10
+  local/                                     this backend's own; never in a snapshot, never merged; §6.4
+    device.json                              which <dev> this backend writes as
+    options.json                             device options: retention policy, trace retention
+    cache/                                   rebuildable folds; §12
+    trace/<stream>/<seg>.jsonl               device observations with retention; as v1 §6.10
 ```
 
 Gone: `contacts/<cid>.json`, `invitations/`, `messages/`, `deliveries/`,
-and v1's `config.mediation`.
+v1's `config.mediation`, and top-level `cache/` and `trace/` (moved
+under `local/`).
 
 `<seg>` is a uuidv7. Path rules as v1 §3. A log's segments are the union
 of `devices/*/<log path>/<seg>.jsonl`; a reader concatenates them and
@@ -83,10 +93,12 @@ lets events carry their own `at`.
 ## 4. Identifiers and time
 
 - **`dev`** — a device id, 6 lowercase base32 characters, minted the first
-  time a device opens (or creates) the vault, recorded in its
-  `device.json`. It appears in every event id this device writes. Not
-  secret, and not carried by a restore onto a new machine, which mints a
-  fresh one and keeps the old directory as history.
+  time a backend opens (or creates) the vault and finds no
+  `local/device.json`. Recorded there (which one *I* am) and in
+  `devices/<dev>/device.json` (that this one exists). It appears in every
+  event id this device writes. Not secret; not carried by a restore,
+  since `local/` is not in a snapshot — a restore mints a fresh one and
+  keeps the old directory as history.
 - **`eid`** — every event's id: `<uuidv7>-<dev>`. The dedup key for every
   log. Time-ordered within a device; across devices only `at` orders,
   with `(uuidv7, dev)` as the tiebreak wherever a fold needs "latest".
@@ -165,6 +177,30 @@ As v1 §6.2.
   registration live there.
 - Rewritten whole by its own device only (rule 3). On merge it is copied
   with the rest of the directory.
+
+### 6.4 `local/` — this backend's own
+
+Everything that is true of *this copy on this machine* and of nothing
+else. Never in a snapshot, never merged, never read by another device.
+
+```jsonc
+// local/device.json
+{ "device": "k7q3ma" }
+// local/options.json — shape owned by the implementation; e.g.
+{ "retention": { "bodies": { "keep": "P90D" } }, "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
+```
+
+- `device.json` is the pointer every write and every merge needs: which
+  `devices/<dev>/` is mine. Missing means "first open on this backend":
+  mint a `dev`, write both files, go on.
+- `options.json` holds device options — v1 §6.10 said a retention policy
+  is never written into the vault; `local/` is not the vault in the
+  sense that matters (it is not what a backup carries), so the policy
+  has a file without becoming a fact.
+- `cache/` (§12) and `trace/` (v1 §6.10) move here unchanged in meaning:
+  both are this device's, one rebuildable and one not.
+- Two processes sharing one `local/` share one `dev` and must serialise
+  as v1 §9 requires (Web Lock, file lock).
 
 ## 7. Partitions — `parts/<myKey>/<peerKey>/`
 
@@ -349,7 +385,7 @@ the skeleton and "cleared"; nothing else changes.
 
 ## 9. Folds
 
-All folds are rebuildable and live under `cache/` (§12). They read every
+All folds are rebuildable and live under `local/cache/` (§12). They read every
 device's directory. They are the only place the word "contact" means
 anything to a message.
 
@@ -441,33 +477,44 @@ Nothing is ever deleted from a log. Retention operates on `blobs/` only:
   trace retention is (v1 §6.10). The format fixes only the mechanics:
   unlink, and the `cleared` line.
 - Skeleton lines are small (a few hundred bytes) and are kept for the
-  life of the vault. Should a vault one day need to drop skeletons too, a
-  per-segment checkpoint (fold state plus cursor, merged by higher
-  cursor) is the shape it would take; version 2 does not define one.
+  life of the vault, along with `part.opened`, `peer.resolved`, and
+  every `cleared` (rule 7). What that leaves on disk after a deletion is
+  stated in §14. Should a vault one day need to drop skeletons too, a
+  per-partition erase (a tombstone segment that suppresses everything
+  before it, merged by presence) is the shape it would take; version 2
+  does not define one (§15).
 
 ## 11. Deleting a contact
 
-1. Append `deleted` to the contact's log (in this device's directory).
-2. Fold attribution. Take every partition whose attribution is exactly
-   this contact (single-valued).
-3. Clear those partitions' bodies (`message.cleared { because: user }`
-   for each; §10) and delete **this device's** copies of their
-   directories — for a claimed key, the whole `parts/<myKey>/`.
+Deletion is decisions, all appended in this device's directory; no
+file under `devices/` is unlinked (rule 7).
 
-Other devices' copies are theirs to delete: each does step 3 for its
-own directory when its fold shows the tombstone (rule 3). Partitions in
-conflict stay until the conflict is resolved and a later sweep finds
-them single-valued. Contact directories keep their tombstones so a merge
-from an older copy does not revive the contact.
+1. `contacts/<cid>/`: append `deleted`.
+2. Fold attribution. For every partition attributed exactly to this
+   contact (single-valued), for every `message.*` line in it: append
+   `message.cleared { because: user }` and unlink the blob (§10).
+3. For every key the contact has a live `claim` on that was
+   `did.published { uses: one }` or minted toward it: append
+   `did.retired { because: contact-deleted }`, so nothing further is
+   accepted on it.
+4. The fold hides the contact and its partitions; a later envelope to a
+   retired key still lands in its partition, unattributed, and the
+   application's policy turns it away.
+
+Other devices do steps 2 and 3 for their own directories when their
+fold shows the tombstone. Partitions in conflict (multi-valued) are
+left until the conflict is resolved. Because nothing is unlinked but
+blobs, a merge from an older copy cannot revive the contact: its
+`deleted` and every `cleared` are still here, and §12 keeps the bodies
+out.
 
 ## 12. Snapshot, import, cache
 
-- **Snapshot** = everything under `.estoc/` except `cache/` and `trace/`,
-  as v1 §7.
+- **Snapshot** = everything under `.estoc/` except `local/`.
 - **Import** into an empty backend = restore, `config.json` written last;
-  the restoring device mints its own `dev` and directory, the imported
-  ones stay as history; every outbound message whose fold is not `sent`
-  gets a `held` in the new directory.
+  there is no `local/`, so the first open mints a `dev` (§6.4) and the
+  imported directories stay as history; every outbound message whose
+  fold is not `sent` gets a `held` in the new directory.
 - **Import** into the same anchor = merge:
   - `devices/<x>/` for every `x` not present: copied whole;
   - `devices/<x>/` present on both sides: per file, the longer of two
@@ -475,15 +522,16 @@ from an older copy does not revive the contact.
     missing segment copied, `device.json` from whichever copy has the
     later `mintedAt`-plus-mtime — *provisional*; in practice both sides
     have the same bytes or one is strictly ahead;
-  - `devices/<self>/` is never touched by an import;
+  - `devices/<self>/` (`self` from `local/device.json`) is never touched
+    by an import;
   - `blobs/`: copied when absent, **unless** the receiving side has a
     `message.cleared { because: user }` for every line that references
     it (fold first, then copy);
-  - singletons local; `state/` as v1; `cache/`, `trace/` ignored; any
-    other path copied when absent.
-- **`cache/`** holds the folds of §9 with, for each, the set of
+  - singletons local; `state/` as v1; `local/` is not in the snapshot
+    and is not touched; any other path copied when absent.
+- **`local/cache/`** holds the folds of §9 with, for each, the set of
   `(device, segment, cursor)` it was folded to, so a start can fold
-  incrementally and a mismatch triggers a refold. Deleting `cache/` is
+  incrementally and a mismatch triggers a refold. Deleting `local/cache/` is
   always safe.
 
 ## 13. Migration from version 1
@@ -530,6 +578,18 @@ still a move, not a sync, but the format no longer stands in the way of
 one: a sync is "copy the other devices' directories and the blobs they
 reference", and nothing here should have to change for it.
 
+**What deletion leaves behind.** v1 deleted a contact's file outright.
+v2 keeps, forever: the contact's decision log with its tombstone, every
+partition's skeleton lines (`mid`, `at`, `thid`, sizes, delivery
+outcomes, `cleared` lines), and the identity evidence in them —
+`part.opened` with the peer's full public key and first DID,
+`peer.resolved` with every DID and key list seen. Only bodies and
+attachments are gone. A person reading the disk can see *that* the
+identity corresponded with a given key, when, and how much; not what was
+said. This is a deliberate trade for merge safety and is within v1's
+trust statement (the vault is plaintext at rest but for the seed);
+an application must say so in its copy where it says "delete".
+
 ## 15. Open
 
 - Whether `claimedName` / `profileShared` stay in the contact log or
@@ -541,6 +601,10 @@ reference", and nothing here should have to change for it.
 - Whether attachments are lifted out of the plaintext into their own
   blobs at append time or left inline in the body blob (§7.3); lifting
   lets them be cleared separately.
+- A per-partition erase for the case where the residue of §14 is not
+  acceptable: a tombstone segment under `devices/<dev>/parts/…/` after
+  which earlier segments may be unlinked and are not copied in by merge.
+  It reintroduces the deletion of a log; not in version 2.
 - `device.json` merge tiebreak when two copies of one device's directory
   disagree (§12) — should not happen under rule 3; needs a stated rule
   anyway.
