@@ -65,10 +65,10 @@ An event is a JSON object. Every event has:
 
 | field    | meaning |
 |----------|---------|
-| `eid`    | `<uuidv7>-<author>`, as `vault-format-2.md` §4. The dedup key. |
+| `eid`    | a bare uuidv7, as `vault-format-2.md` §4: minted at append, the dedup key; the same kind of id as `mid` and `cid`. |
 | `at`     | RFC 3339 UTC, as v1 §4. |
 | `type`   | the event type, as §7.1 / §8 there. |
-| `author` | the authoring device; the suffix of `eid`, present as a field so nothing has to parse ids. |
+| `author` | the authoring device. A field, on the line as well as in memory (§3); nothing is parsed out of `eid`. |
 | `scope`  | one of `me`, `contact`, `part`: which log family. |
 
 and, by scope, a **locator**:
@@ -98,12 +98,14 @@ Rules:
    recovered from state; this is what §7 of `vault-format-2.md` bought
    by partitioning on observed keys rather than on `cid`, and it is what
    makes a flat table with a `WHERE` clause a correct reading.
-2. **`author` is authorship.** The `author` field, the `eid` suffix, and
-   (in a folder) the `devices/<author>/` directory always agree. A store
-   rejects an event where they do not.
+2. **`author` is authorship.** The `author` field and (in a folder) the
+   `devices/<author>/` directory always agree; a store rejects a line
+   where they do not. Authorship is the field, not the id: `eid` says
+   nothing about who wrote the event, exactly as `mid` says nothing
+   about who received the message.
 3. **The store validates the envelope and nothing else.** On `append`
    and `ingest` it checks that the object is a JSON object; that `eid`
-   is `<uuidv7>-<author>` with a well-formed uuidv7; that `at` is RFC
+   is a well-formed uuidv7; that `at` is RFC
    3339 UTC; that `type` is a non-empty string; that the locator is
    complete for its `scope`; and that no reserved name is used by the
    payload. An event that fails is rejected — `append` throws, `ingest`
@@ -124,11 +126,14 @@ locate(event)          → "devices/<author>/me/"
 place(path, line)      → event      (path gives the locator; the line gives the rest)
 ```
 
-- **On disk, the line omits what the path already says.** A line under
-  `devices/k7q3ma/parts/did/0198…/abc…/` does not repeat `author`,
-  `scope`, `myKey`, `peerKey`; `place` reinjects them. This keeps the
-  on-disk form exactly what `vault-format-2.md` §7.1 shows, and it is
-  why the locator must be recoverable from the path alone: `myKey` has
+- **On disk, the line omits the locator below `author`.** A line under
+  `devices/k7q3ma/parts/did/0198…/abc…/` does not repeat `scope`,
+  `myKey`, `peerKey`; `place` reinjects them. It does carry `author`:
+  six characters, and the one field a line must be able to say for
+  itself once it is apart from its path (in a report, a grep, a copy),
+  and the one that checks the path (rule 2). This keeps the on-disk
+  form what `vault-format-2.md` §7.1 shows, and it is why the rest of
+  the locator must be recoverable from the path alone: `myKey` has
   slashes of its own, so `peerKey` is always the last directory (§4
   there) and the rest between `parts/` and it is `myKey`.
 - **In memory, the event is whole.** Anything above the store — folds,
@@ -163,7 +168,7 @@ type Where =
 type Locator = Where & { author: string };
 
 type Event = Locator & {
-  eid: string;                        // `<uuidv7>-<author>`
+  eid: string;                        // a bare uuidv7
   at: string;                         // RFC 3339 UTC
   type: string;
   [field: string]: unknown;           // the payload; opaque here
@@ -283,7 +288,7 @@ Yields the store's whole event set, filtered: events whose locator
 fields equal every field given in `filter`, and whose `type` equals
 `filter.type` if given. One event per `eid` (conflicts resolved as
 §4.5). Order is the canonical order of `vault-format-2.md` §4: `at`,
-then `(uuidv7, author)`.
+then `(eid, author)`.
 
 **The store sorts.** No segment, file, or table is assumed to be in
 canonical order, and a reader never merges pre-sorted streams: `at` is a
@@ -377,7 +382,7 @@ segment this store minted under `locate(event)` (which is under
 segment that does not end in a newline by terminating the fragment
 before writing. Appends are serialised per store instance, because
 `VaultBackend.append` is size-then-write. The line written is the event
-minus its locator (§3).
+minus its locator below `author` (§3).
 
 ### 5.3 Ingesting
 
@@ -501,7 +506,8 @@ contract. A database store that cannot round-trip (§3) is not a vault.
 
 A store renders its whole event set as a `vault-format-2.md` tree: each
 event to `locate(event)/<seg>.jsonl`, where `<seg>` is the segment the
-store assigned it (§3, §6.1), minus its locator, one line each, in the
+store assigned it (§3, §6.1), minus its locator below `author`, one
+line each, in the
 order they arrived within the segment; blobs to `blobs/<hash>`; every
 path in `Files` in place. A folder store exporting is a copy and keeps
 its own names.
@@ -569,7 +575,8 @@ Folded into the format in the same change as this revision:
    to segments it minted; a segment is edited or truncated by nobody
    but its writer; a merge may add segments under any device's
    directory, holding only that device's events (§5.3 here).
-   Authorship is the `eid`; the path is where a folder keeps it.
+   Authorship is the `author` field; the path is where a folder keeps
+   it.
 2. **Rule 8**, *the folder is one serialization of the event set*: a
    program reads and writes events through the interface here; any
    store that round-trips the folder is a conforming vault.
@@ -592,6 +599,13 @@ Folded into the format in the same change as this revision:
    (§7.2 here); the cache keeps a change token rather than a
    per-segment cursor (§4.4 here).
 7. **§14** names the three two-writers signals.
+8. **§4 `eid`** is a bare uuidv7, no device suffix, and `author` is a
+   field on every line. The suffix had two jobs: it let a line that
+   omitted `author` still say who wrote it, and it let the old
+   per-device cursor read a device out of an id. The cursor is gone
+   (§4.4), and the first job is done more honestly by writing the
+   field. An id that encodes a fact is what rule 2 there argues
+   against, and `mid` and `cid` were already trusted bare.
 
 ## 9. Feasibility, as surveyed
 

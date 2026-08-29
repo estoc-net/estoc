@@ -54,8 +54,8 @@ added.
    may *add* segments under any device's directory, holding only that
    device's events (§12): under `devices/x/` there may be a segment `x`
    wrote and one this vault minted from what `x` wrote, and a reader
-   unions them by `eid`. Authorship is the `eid`; the path is where a
-   folder keeps it. Two same-named segments that are not
+   unions them by `eid`. Authorship is the `author` on every line; the
+   path is where a folder keeps it. Two same-named segments that are not
    prefix-related are still two writers sharing one `dev` (§14).
 4. **Observation before decision.** An event is one or the other, never
    both. An observation about a counterpart is written in the partition
@@ -117,12 +117,19 @@ lets events carry their own `at`.
   exists; §8.1). It appears in every event id this device writes. Not
   secret; not carried by a restore, since `local/` is not in a snapshot
   — a restore mints a fresh one and keeps the old directory as history.
-- **`eid`** — every event's id: `<uuidv7>-<dev>`. The dedup key for every
-  log. The uuidv7 is minted at the instant the event is appended, so it
-  and the event's `at` agree within a device. Wherever a fold orders
-  events — a thread by time, a latest-wins field — it orders by `at`,
-  then `(uuidv7, dev)` as the total tiebreak. One rule; §8 and §9 refer
-  back to it.
+- **`eid`** — every event's id: a bare uuidv7, the same kind of id as
+  `mid` and `cid`, and like them trusted to be unique across devices.
+  The dedup key for every log. Minted at the instant the event is
+  appended, so it and the event's `at` agree within a device. Wherever
+  a fold orders events — a thread by time, a latest-wins field — it
+  orders by `at`, then `(eid, author)` as the total tiebreak. One rule;
+  §8 and §9 refer back to it.
+- **`author`** — the `dev` that wrote the event: a field on every line
+  as well as the directory the line sits under, and the two must agree
+  — a line whose `author` is not its directory's `dev` is refused
+  (`event-store.md` §2). It is the one locator field written on the
+  line; `cid`, `myKey`, `peerKey` are the path alone and are reinjected
+  on read. The examples in §7–8 show it once and elide it after.
 - **Segments** are `<uuidv7>.jsonl` under the writing device's
   directory; the writer appends to its newest segment or mints one. An
   importer appends to a segment of its own under the authoring device's
@@ -263,10 +270,11 @@ on the whole pair (§9.1), never on `myKey` alone.
 
 ### 7.1 Partition events
 
-One log, one `type` per line, `eid` as the dedup key:
+One log, one `type` per line, `eid` as the dedup key, `author` on every
+line (§4):
 
 ```jsonc
-{ "eid": "0198…-k7q3ma", "at": "…", "type": "part.opened",   "key": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
+{ "eid": "0198…", "author": "k7q3ma", "at": "…", "type": "part.opened",   "key": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
 { "eid": "…", "at": "…", "type": "message.in",    "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<hash>", "attachments": ["<hash>"], "signedBy": "did:key:z6Mk…" }
 { "eid": "…", "at": "…", "type": "message.out",   "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<hash>", "attachments": [] }
 { "eid": "…", "at": "…", "type": "delivery",      "mid": "0198…", "attempt": 1, "status": "failed", "error": "…" }
@@ -413,7 +421,7 @@ reported as such and never dressed up as a deletion.
   ordinary LWW, not a conflict worth showing.
 - `device.label`: a name for a device, the person's, for lists. `dev`
   is the device the decision is about — payload, not authorship; the
-  author is the `eid`'s suffix.
+  author is the line's `author`.
 - `device.retired`: a decision about another device (lost, replaced).
   Its directory stays — history is history — but a fold stops treating
   its mediation as a live address and shows any later events from it as
