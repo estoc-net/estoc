@@ -5,6 +5,9 @@ Version 1 (`vault-format.md`) stays the contract until this document is
 frozen. There is no migration: a version-2 reader refuses a version-1
 vault (§13), and a version-1 vault is used by a version-1 reader or
 started over. Sections marked *provisional* are leanings, not decisions.
+Read with `event-store.md`, which defines what a program sees — the
+event, the store interface, exchange — and whose amendments were folded
+into this document on 2026-08-29.
 
 ## 0. What changes, in one paragraph
 
@@ -33,7 +36,7 @@ backup is the zip.
 
 ## 2. Principles
 
-v1's six rules stand in spirit (§2 there); two are restated and five are
+v1's six rules stand in spirit (§2 there); two are restated and six are
 added.
 
 1. **Three kinds of file, none of them a record.** A **log** — immutable
@@ -46,10 +49,14 @@ added.
    v2 adds: a name must not encode *whose* something is. `pair/<cid>/<id>`
    encoded a contact into a key name at mint time; v2 keys are `did/<id>`.
 3. **Every event under `devices/<dev>/` was authored by device `dev`.**
-   A device appends only under its own directory. Another device's
-   directory is only ever copied — whole files, never created, edited,
-   or truncated — however many hands the copy passed through. Authorship
-   is a path, and a merge is a copy.
+   A device appends only to segments it minted, under its own directory.
+   A segment is edited or truncated by nobody but its writer. A merge
+   may *add* segments under any device's directory, holding only that
+   device's events (§12): under `devices/x/` there may be a segment `x`
+   wrote and one this vault minted from what `x` wrote, and a reader
+   unions them by `eid`. Authorship is the `eid`; the path is where a
+   folder keeps it. Two same-named segments that are not
+   prefix-related are still two writers sharing one `dev` (§14).
 4. **Observation before decision.** An event is one or the other, never
    both. An observation about a counterpart is written in the partition
    the envelope proves (§7) and needs no local state to place; an
@@ -59,7 +66,7 @@ added.
    that message: `held`, §7.1, and `message.erased`, §10) and carry their
    grounds inline, because the bodies they rest on may be erased.
 5. **Folds are pure and commutative.** `now` and `self` (the device
-   asking, §6.4) are parameters; a setting that affects a fold is an
+   asking, §6.3) are parameters; a setting that affects a fold is an
    event; the order two segments are read in must not change the result.
    Tests: incremental = full; shuffled = same; merge(A,B) = merge(B,A).
 6. **Conflicts are projections.** Two devices deciding differently
@@ -68,6 +75,11 @@ added.
 7. **Logs are never deleted from.** Not a line, not a segment, not a
    directory. The only thing ever unlinked is a blob (§10) — and, under
    `local/`, what was never part of the vault.
+8. **The folder is one serialization of the event set.** A program
+   reads and writes events through the interface of `event-store.md`,
+   never a path: the tree of §3 is each event's locator spelled as a
+   directory, a segment says nothing about the event in it, and any
+   store that round-trips this tree is a conforming vault.
 
 ## 3. Layout
 
@@ -77,12 +89,11 @@ added.
   keystore.json                              singleton — @estoc/keystore v3, unchanged
   blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place anything is unlinked (§10)
   devices/<dev>/                             everything device <dev> wrote
-    device.json                              immutable — dev, mintedAt
-    me/<seg>.jsonl                           log — this device's decisions about my identity, and what its mediator answered: DIDs, mediation, label
+    me/<seg>.jsonl                           log — that this device exists; its decisions about my identity, and what its mediator answered: DIDs, mediation, label
     contacts/<cid>/<seg>.jsonl               log — decisions about a contact
     parts/<myKey>/<peerKey>/<seg>.jsonl      log — observations in one partition: skeletons, deliveries, resolutions
   state/                                     reserved, as v1 §6.7
-  local/                                     this backend's own; never in a snapshot, never merged; §6.4
+  local/                                     this backend's own; never in a snapshot, never merged; §6.3
     self.json                                which <dev> this backend writes as
     options.json                             device options: trace retention
     cache/                                   rebuildable folds; §12
@@ -101,11 +112,11 @@ lets events carry their own `at`.
 
 - **`dev`** — a device id, 6 characters of lowercase RFC 4648 base32,
   minted the first time a backend opens (or creates) the vault and finds
-  no `local/self.json`. Recorded there (which one *I* am) and in
-  `devices/<dev>/device.json` (that this one exists). It appears in every
-  event id this device writes. Not secret; not carried by a restore,
-  since `local/` is not in a snapshot — a restore mints a fresh one and
-  keeps the old directory as history.
+  no `local/self.json`. Recorded there (which one *I* am) and as the
+  first event of `devices/<dev>/me/`, `device.minted` (that this one
+  exists; §8.1). It appears in every event id this device writes. Not
+  secret; not carried by a restore, since `local/` is not in a snapshot
+  — a restore mints a fresh one and keeps the old directory as history.
 - **`eid`** — every event's id: `<uuidv7>-<dev>`. The dedup key for every
   log. The uuidv7 is minted at the instant the event is appended, so it
   and the event's `at` agree within a device. Wherever a fold orders
@@ -113,7 +124,10 @@ lets events carry their own `at`.
   then `(uuidv7, dev)` as the total tiebreak. One rule; §8 and §9 refer
   back to it.
 - **Segments** are `<uuidv7>.jsonl` under the writing device's
-  directory; the writer appends to its newest segment or mints one.
+  directory; the writer appends to its newest segment or mints one. An
+  importer appends to a segment of its own under the authoring device's
+  directory (rule 3, §12). Which segment a line sits in says nothing
+  about the event; a program never sees one (`event-store.md` §3).
 - **`pid`** — a partition id, the path `<myKey>/<peerKey>` (§7). `myKey`
   is a key name and has slashes of its own; `peerKey` is always the last
   segment. The one id in a log that is computed rather than minted,
@@ -164,21 +178,7 @@ it a merge at all (v1 §7); a differing `version` is refused (§13).
 
 As v1 §6.2.
 
-### 6.3 `devices/<dev>/device.json`
-
-```jsonc
-{ "dev": "k7q3ma", "mintedAt": "…" }
-```
-
-Written once when the device mints its id, never rewritten. That a
-device exists is the only fact here; everything it *does* — which
-mediator it uses, what it calls itself — is events in its `me/` (§8.1),
-so there is no mutable per-device file to reconcile. Merge: copied when
-absent; if present on both sides the bytes must match, and a mismatch
-is reported as two writers sharing one `dev` (§14), never resolved by
-picking one.
-
-### 6.4 `local/` — this backend's own
+### 6.3 `local/` — this backend's own
 
 Everything that is true of *this copy on this machine* and of nothing
 else. Never in a snapshot, never merged, never read by another device.
@@ -193,7 +193,8 @@ else. Never in a snapshot, never merged, never read by another device.
 - `self.json` is the pointer every write, every merge, and every fold
   that depends on the asking device (rule 5) needs: which
   `devices/<dev>/` is mine. Missing means "first open on this backend":
-  mint a `dev`, write it and `devices/<dev>/device.json`, go on.
+  mint a `dev`, write it, append `device.minted` to `devices/<dev>/me/`
+  (§8.1), go on.
 - `options.json` holds device options — v1 §6.10 said a retention policy
   is never written into the vault; `local/` is not the vault in the
   sense that matters (it is not what a backup carries), so the policy
@@ -290,7 +291,9 @@ One log, one `type` per line, `eid` as the dedup key:
   body, so it works after the body is gone. Everything a thread view, a
   search index, or a collector needs is on the line; nothing a person
   said is. `direction` is the event type and `sender` is the partition;
-  neither is a field.
+  neither is a field of the line. In memory the partition is the
+  `myKey` / `peerKey` fields the store reinjects from the path
+  (`event-store.md` §3).
 - `delivery`: as v1 §6.6, minus `to` — the partition is the `to`; the
   DID we sealed to is in the message's `msg.to`. Fold as before: no
   event = pending, last `failed` = retry, `held` = by hand, `sent` =
@@ -365,6 +368,7 @@ reported as such and never dressed up as a deletion.
 ### 8.1 `me/` — my DIDs
 
 ```jsonc
+{ "eid": "…", "at": "…", "type": "device.minted" }
 { "eid": "…", "at": "…", "type": "did.minted",    "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" }
 { "eid": "…", "at": "…", "type": "did.registered","key": "did/0198…" }                     // the mediator accepted it as a recipient
 { "eid": "…", "at": "…", "type": "did.published", "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" }
@@ -378,6 +382,11 @@ reported as such and never dressed up as a deletion.
 { "eid": "…", "at": "…", "type": "device.retired", "dev": "p2x8rq", "because": "lost" }
 ```
 
+- `device.minted`: the first line a device writes, in its own `me/` —
+  that this device exists, and when (`at`). It replaces a per-device
+  file: nothing about a device is a singleton, and a device's existence
+  travels with its events. Immutable by being an event; a second
+  `device.minted` under one `dev` is two writers sharing it (§14).
 - `did.minted` and `mediation.set` are the only places a DID string of
   ours is recorded (the snapshot, v1 §2.4); the key is derived from the
   name and compared on use. The `mediation` id says which device's
@@ -402,7 +411,9 @@ reported as such and never dressed up as a deletion.
 - `label.set`: what the identity calls itself — what `user-profile`
   announces. Latest wins (§4); two devices renaming at once is an
   ordinary LWW, not a conflict worth showing.
-- `device.label`: a name for a device, the person's, for lists.
+- `device.label`: a name for a device, the person's, for lists. `dev`
+  is the device the decision is about — payload, not authorship; the
+  author is the `eid`'s suffix.
 - `device.retired`: a decision about another device (lost, replaced).
   Its directory stays — history is history — but a fold stops treating
   its mediation as a live address and shows any later events from it as
@@ -614,30 +625,39 @@ out.
 
 - **Snapshot** = everything under `.estoc/` except `local/`.
 - **Import** into an empty backend = restore, `config.json` written last;
-  there is no `local/`, so the first open mints a `dev` (§6.4) and the
+  there is no `local/`, so the first open mints a `dev` (§6.3) and the
   imported directories stay as history — including the old device's
   mediation, visible (§9.3) until the person retires it; every outbound
   message whose fold is not `sent` gets a `held` in the new directory.
-- **Import** into the same anchor = merge:
+- **Import** into the same anchor = merge, which is `ingest` in
+  `event-store.md` §4.2: every event on the other side that is not here
+  by `eid` is added under its author's directory, in a segment this
+  vault mints; nothing here is rewritten, dropped, or reordered. A
+  folder may take the file-level fast path instead, with the same
+  result:
   - `devices/<x>/` for every `x` not present: copied whole;
   - `devices/<x>/` present on both sides: any missing segment copied;
     for two segments sharing a name, one must be a prefix of the other
-    (rule 3) and the longer is kept; `device.json` must match (§6.3).
-    A segment pair that is not prefix-related, or a `device.json` that
-    differs, is two writers sharing one `dev`: the import stops and
-    reports it rather than choosing;
-  - `devices/<self>/` (`self` from `local/self.json`) is never touched
-    by an import;
+    (rule 3) and the longer is kept. A segment pair that is not
+    prefix-related, or one `eid` with two contents, is two writers
+    sharing one `dev`: the import stops and reports it rather than
+    choosing;
+  - `devices/<self>/` (`self` from `local/self.json`, §6.3) is never
+    touched by an import;
   - `blobs/`: **after** the device directories are merged, fold the
     union of skeletons and erases; a blob absent here and present there
     is copied iff it is not collectable under §10.3 over that union — an
     erased blob never comes back;
-  - singletons local; `state/` as v1; `local/` is not in the snapshot
-    and is not touched; any other path copied when absent.
-- **`local/cache/`** holds the folds of §9 with, for each, the set of
-  `(device, segment, cursor)` it was folded to, so a start can fold
-  incrementally and a mismatch triggers a refold. Deleting `local/cache/` is
-  always safe.
+  - files: `config.json` must be identical (the anchor check is what
+    makes this a merge; a differing `version` is refused, §13);
+    `keystore.json` is a cache and its `keys[]` are unioned; `state/`
+    as v1; `local/` is not in the snapshot and is not touched; any
+    other path copied when absent, never overwritten.
+- **`local/cache/`** holds the folds of §9 with, for each, the change
+  token (`event-store.md` §4.4) it was folded to, so a start folds only
+  what arrived since — in arrival order, which is why folds must not
+  depend on order (rule 5) — and a token the store cannot place triggers
+  a refold. Deleting `local/cache/` is always safe.
 
 ## 13. Version 1
 
@@ -655,11 +675,12 @@ As v1 §8–§10, with `config.version` = 2. One writer per device
 directory (rule 3) replaces "one writer per vault" as the format-level
 rule; the application still serialises writers on one directory. Two
 processes sharing one `dev` is a bug, not a merge: it shows up as
-non-prefix segments or a differing `device.json` under one `dev` (§12),
-and the remedy is for one of them to mint its own. A backup is still a
-move, not a sync, but the format no longer stands in the way of one: a
-sync is "copy the other devices' directories and the blobs they
-reference", and nothing here should have to change for it.
+non-prefix segments, one `eid` with two contents, or a second
+`device.minted` under one `dev` (§12, §8.1), and the remedy is for one
+of them to mint its own. A backup is still a move, not a sync, but the
+format no longer stands in the way of one: a sync is "copy the other
+devices' directories and the blobs they reference", and nothing here
+should have to change for it.
 
 **What deletion leaves behind.** v1 deleted a contact's file outright.
 v2 keeps, forever: the contact's decision log with its tombstone — and
@@ -695,8 +716,9 @@ it says "delete".
   acceptable: a tombstone segment under `devices/<dev>/parts/…/` after
   which earlier segments may be unlinked and are not copied in by merge.
   It reintroduces the deletion of a log; not in version 2.
-- A per-device key in `device.json` (for authenticating a device's
-  directory when directories are exchanged over a wire rather than by
-  hand). Not needed while a merge is a backup, so not in version 2.
+- A per-device key, as a field of `device.minted` (for authenticating a
+  device's directory when directories are exchanged over a wire rather
+  than by hand). Not needed while a merge is a backup, so not in
+  version 2.
 - A device-side space policy for bodies (§10.4): an eviction event that
   explains a local absence without binding anyone. Not in version 2.
