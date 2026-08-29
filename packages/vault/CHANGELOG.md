@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-08-29
 
 - `TraceLog.setPolicy(policy)`: keep by another policy from now on (a device
   preference changing while the vault is open); `policy` is a getter.

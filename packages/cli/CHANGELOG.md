@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-08-29
 
 - The vault is read and written through `@estoc/vault` (`Vault` over
   `FsBackend` from `@estoc/vault/node`) instead of a second implementation
