@@ -186,6 +186,17 @@ shell opening offline.
   sandboxed frame, or arriving in the vault) would slot in. Sending is
   the same shape: `send(contactDid, type, body)` in the store; the
   composer is just the basicmessage caller of it.
+- **Lenses, the other axis**: a renderer is chosen by type and shows what
+  a message says; a lens (`src/lenses/`) opens on any entry and shows what
+  the vault's trace observed *about* it. The one shipped is the onion:
+  "peel" under a bubble folds the record's trace events (`traceOf(mid)`
+  over the daemon; `foldOnion` in `src/lenses/onion.ts`) into the layers
+  it crossed, outermost first — the frame on the wire, the forward to the
+  mediator, the seal to the contact, the plaintext — each with who can see
+  into it. A lens gets the entry and its events through props, like a
+  renderer, and never the store. How much the device keeps is the rail's
+  "Trace" level (off / normal / verbose), a device preference the daemon's
+  host remembers, never part of the vault or a backup.
 - **The didcomm WASM** is instantiated by `src/didcomm/wasm.ts` (the npm
   package's entry is webpack-shaped) and handed to the agent.
 

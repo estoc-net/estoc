@@ -2,7 +2,9 @@
 import { computed, ref } from "vue";
 
 import type { Entry } from "../core/entries.js";
-import { retry, state } from "../core/store.js";
+import { retry, state, traceOf } from "../core/store.js";
+import { lensesFor, type Lens } from "../lenses/index.js";
+import type { TraceEvent } from "../lenses/registry.js";
 import { timeOf } from "../ui/util.js";
 
 /**
@@ -15,6 +17,12 @@ import { timeOf } from "../ui/util.js";
  * ended, and otherwise why it did not go, with a retry. The record is a
  * fact either way; delivery is a separate one (see agent-core's
  * `vault/deliveries.ts`).
+ *
+ * And the lenses (src/lenses): the other way of looking at a record, by
+ * what the vault's trace observed of it rather than by what it says. The
+ * bubble is their host: it offers the entry point of every lens that has
+ * something to say, and when one is opened fetches the record's trace
+ * over the daemon and hands it in.
  */
 const props = defineProps<{
   entry: Entry;
@@ -28,6 +36,25 @@ const delivery = computed(() => {
   }
   return state.identity?.deliveries[props.entry.mid] ?? { status: "pending" as const };
 });
+
+const lenses = computed(() => lensesFor(props.entry, { traceLevel: state.traceLevel }));
+const open = ref<Lens | null>(null);
+const events = ref<TraceEvent[]>([]);
+const peeling = ref(false);
+
+async function toggle(lens: Lens) {
+  if (open.value?.id === lens.id) {
+    open.value = null;
+    return;
+  }
+  peeling.value = true;
+  try {
+    events.value = await traceOf(props.entry.mid);
+    open.value = lens;
+  } finally {
+    peeling.value = false;
+  }
+}
 
 const retrying = ref(false);
 async function tryAgain() {
@@ -47,6 +74,18 @@ async function tryAgain() {
     <div class="meta">
       <span>{{ timeOf(entry.time) }}</span>
       <slot name="meta" />
+      <button
+        v-for="lens in lenses"
+        :key="lens.id"
+        type="button"
+        class="link-quiet lens-entry"
+        :class="{ active: open?.id === lens.id }"
+        :data-lens="lens.id"
+        :disabled="peeling"
+        @click="toggle(lens)"
+      >
+        {{ open?.id === lens.id ? "close" : lens.label }}
+      </button>
       <template v-if="delivery && delivery.status !== 'sent'">
         <span v-if="delivery.status === 'pending'" class="delivery pending">sending…</span>
         <span
@@ -61,6 +100,9 @@ async function tryAgain() {
           </button>
         </span>
       </template>
+    </div>
+    <div v-if="open" class="lens" :data-lens-open="open.id">
+      <component :is="open.component" :entry="entry" :events="events" />
     </div>
   </div>
 </template>

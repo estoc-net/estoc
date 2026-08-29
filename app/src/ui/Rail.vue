@@ -11,6 +11,7 @@ import {
   lock,
   mergeBackup,
   revokeInvitation,
+  setTraceLevel,
   state,
 } from "../core/store.js";
 import type { AgentStatus } from "../core/types.js";
@@ -27,6 +28,24 @@ const changingMediator = ref(false);
 async function moveMediator(did: string) {
   await chooseMediator(did);
   changingMediator.value = false;
+}
+
+// the trace: a device preference, not a fact of the vault (see the store)
+const traceBusy = ref(false);
+const TRACE_LEVELS = [
+  { level: "off", word: "off", note: "nothing observed is kept; no lens has anything to show" },
+  { level: "normal", word: "normal", note: "envelopes and frames for 7 days, the bytes on the wire for a day" },
+  { level: "verbose", word: "verbose", note: "four times as long, and the bytes for 7 days" },
+] as const;
+
+async function chooseTraceLevel(event: Event) {
+  const level = (event.target as HTMLSelectElement).value as (typeof TRACE_LEVELS)[number]["level"];
+  traceBusy.value = true;
+  try {
+    await setTraceLevel(level);
+  } finally {
+    traceBusy.value = false;
+  }
 }
 
 const copied = ref(false);
@@ -307,6 +326,21 @@ function forget() {
       </div>
       <p v-if="state.offlineReady && !state.installed" class="status-line">
         ready to work offline
+      </p>
+    </div>
+
+    <div v-if="identity" class="rail-section">
+      <div class="eyebrow">Trace</div>
+      <label class="trace-level">
+        keep what this device observes
+        <select :value="state.traceLevel" :disabled="traceBusy" data-trace-level @change="chooseTraceLevel">
+          <option v-for="t in TRACE_LEVELS" :key="t.level" :value="t.level">{{ t.word }}</option>
+        </select>
+      </label>
+      <p class="status-line">
+        {{ TRACE_LEVELS.find((t) => t.level === state.traceLevel)?.note }}. Every
+        envelope a message crossed, as this device saw it: “peel” under a
+        message opens it. A device preference — never in a backup.
       </p>
     </div>
 

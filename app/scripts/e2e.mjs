@@ -147,6 +147,35 @@ try {
   await expectBubble(alice, "introduced themself as “Bob”");
   ok("profiles exchanged both ways; Bob's stranger contact took Alice's claimed name");
 
+  // The onion lens: what the vault's trace observed of a message, peeled
+  // under its bubble. Inbound at Bob: the frame, the mediator's delivery,
+  // the message sealed to him, the plaintext. Outbound at Alice: the frame
+  // she sent, the forward to the mediator, the message sealed to Bob.
+  const bobBubble = bob.locator('.bubble:has-text("hello bob")').first();
+  await bobBubble.locator('[data-lens="onion"]').click();
+  await bobBubble.locator("[data-onion-layers]").waitFor({ timeout: 10000 });
+  const bobLayers = Number(await bobBubble.locator("[data-onion-layers]").getAttribute("data-onion-layers"));
+  const bobKinds = await bobBubble.locator(".layer-kind").allInnerTexts();
+  if (bobLayers < 3 || !bobKinds.some((k) => k.startsWith("WIRE")) || !bobKinds.some((k) => k.startsWith("AUTHCRYPT")) || !bobKinds.some((k) => k === "PLAINTEXT")) {
+    fail(`Bob's onion has ${bobLayers} layers: ${bobKinds.join(" / ")}`);
+  }
+  ok(`Bob peeled the message he received: ${bobLayers} layers, wire → authcrypt → plaintext`);
+  const aliceBubble = alice.locator('.bubble:has-text("hello bob")').first();
+  await aliceBubble.locator('[data-lens="onion"]').click();
+  await aliceBubble.locator("[data-onion-layers]").waitFor({ timeout: 10000 });
+  const aliceKinds = await aliceBubble.locator(".layer-kind").allInnerTexts();
+  if (!aliceKinds.some((k) => k.startsWith("ROUTING")) || !aliceKinds.some((k) => k.startsWith("AUTHCRYPT"))) {
+    fail(`Alice's onion lacks the forward or the seal: ${aliceKinds.join(" / ")}`);
+  }
+  ok("Alice peeled the message she sent: the forward to the mediator around the seal to Bob");
+  await aliceBubble.locator('[data-lens="onion"]').click(); // close
+  // The trace level is a device preference: off, and no bubble offers the lens.
+  await alice.selectOption("[data-trace-level]", "off");
+  await alice.waitForSelector('[data-lens="onion"]', { state: "detached", timeout: 5000 });
+  await alice.selectOption("[data-trace-level]", "normal");
+  await alice.waitForSelector('[data-lens="onion"]', { timeout: 5000 });
+  ok("trace off hides the lens; back on shows it");
+
   // An object goes over whole: Alice picks the sea-day example folder — a
   // bare object, so the app asks — first sends it as it is (not signed),
   // then again signed by her anchor; both threads project the post, Bob's

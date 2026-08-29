@@ -21,6 +21,7 @@ import {
 } from "@estoc/agent-core";
 
 import type { Daemon, Snapshot } from "@estoc/daemon";
+import type { TraceEvent, TraceLevel } from "@estoc/vault";
 import { startDaemon } from "../daemon/client.js";
 import { saveFile } from "./backup.js";
 import { entryOf } from "./entries.js";
@@ -73,6 +74,12 @@ export const state = reactive({
    */
   pendingInvitation: null as Invitation | null,
   pendingMediatorInvitation: null as string | null,
+  /**
+   * What this device keeps of what its agent observes (envelopes, frames,
+   * the mediator's rituals): a device preference the daemon's host holds,
+   * never a fact of the vault. `off` means no lens has a trace to read.
+   */
+  traceLevel: "normal" as TraceLevel,
 });
 
 let daemon: Daemon | null = null;
@@ -254,6 +261,7 @@ export async function boot(): Promise<void> {
   });
   daemon = connectDaemon();
   await daemon.boot();
+  state.traceLevel = await daemon.traceLevel();
 }
 
 /**
@@ -485,4 +493,14 @@ export async function sendMessage(contactDid: string, text: string): Promise<voi
  */
 export async function retry(mid: string): Promise<void> {
   await running().retry(mid);
+}
+
+/** The trace events that ended in a record: what the onion lens is fed. Empty when the trace is off or that part is pruned. */
+export async function traceOf(mid: string): Promise<TraceEvent[]> {
+  return running().traceOf(mid);
+}
+
+/** Set what this device keeps of what it observes; a stricter level prunes at once. */
+export async function setTraceLevel(level: TraceLevel): Promise<void> {
+  state.traceLevel = await running().setTraceLevel(level);
 }

@@ -1,0 +1,177 @@
+import type { TraceEvent } from "@estoc/vault";
+
+/**
+ * A message's trace, folded into the layers it crossed: the frame on the
+ * wire outermost, then each envelope inside it, then the plaintext. The
+ * agent only ever recorded raw observations — `wire.in`, `envelope.open`,
+ * `envelope.seal`, … each hung on the one it happened inside by `parent`
+ * — so the onion is nothing but that parent chain read outermost-first,
+ * from the envelope that ended in (or began as) the record. What a layer
+ * means to a person — who can see into it, what it is for — is this
+ * fold's reading, not the trace's.
+ */
+export type LayerKind = "wire" | "forward" | "anoncrypt" | "authcrypt" | "signed" | "plain" | "unknown" | "plaintext";
+
+export interface OnionLayer {
+  kind: LayerKind;
+  title: string;
+  /** who can see into this layer */
+  visibleTo: string;
+  note: string;
+  /** what the trace (or the record) holds for this layer, for the raw view */
+  raw: unknown;
+  /** the observation this layer is, when it is one */
+  event?: TraceEvent;
+}
+
+export interface Onion {
+  layers: OnionLayer[];
+  /** `sent` when the chain is one of seals, `received` when of opens */
+  direction: "sent" | "received";
+  /** how many chains ended in this record: every delivery attempt seals afresh */
+  attempts: number;
+  /** what was said to the mediator on the same frame: the pickup ritual, when it was one */
+  mediation: TraceEvent[];
+}
+
+const FORWARD = "https://didcomm.org/routing/2.0/forward";
+
+/** did:peer:4 long forms run ~800 characters; show head and tail. */
+function short(id: string): string {
+  return id.length <= 36 ? id : `${id.slice(0, 22)}…${id.slice(-8)}`;
+}
+
+/** The DID part of a key id (`did#key` → `did`). */
+function didOf(kid: string): string {
+  return kid.split("#")[0] ?? kid;
+}
+
+function names(ids: unknown): string {
+  return Array.isArray(ids) ? [...new Set(ids.map((k) => short(didOf(String(k)))))].join(", ") : "?";
+}
+
+function kindOf(event: TraceEvent): LayerKind {
+  if (event.type === FORWARD) {
+    return "forward";
+  }
+  const kind = event.kind;
+  return kind === "authcrypt" || kind === "anoncrypt" || kind === "signed" || kind === "plain" ? kind : "unknown";
+}
+
+function envelopeLayer(event: TraceEvent, direction: "sent" | "received", innermost: boolean): OnionLayer {
+  const kind = kindOf(event);
+  const raw = Object.fromEntries(Object.entries(event).filter(([k]) => k !== "stream" && k !== "parent"));
+  const opened = direction === "received";
+  const tos = names(event.to_kids ?? event.kids);
+  switch (kind) {
+    case "forward":
+      return {
+        kind,
+        title: "a forward request",
+        visibleTo: `${tos} (the mediator)`,
+        note: opened
+          ? "The mediator opened this and queued what was inside for you; it sees the next key it is for and nothing else."
+          : "Sealed to the mediator alone — anonymously. It learns the next key to hand the inside to, and nothing else.",
+        raw,
+        event,
+      };
+    case "anoncrypt":
+      return {
+        kind,
+        title: opened ? "an anonymous envelope" : "sealed anonymously",
+        visibleTo: tos,
+        note: "Encrypted to the recipient's key with no proof of who sealed it.",
+        raw,
+        event,
+      };
+    case "authcrypt": {
+      const from = event.from_kid ?? event.skid;
+      const who = typeof from === "string" ? short(didOf(from)) : "?";
+      return {
+        kind,
+        title: innermost ? (opened ? "the message, sealed to you" : "the message, sealed to them") : opened ? "the mediator's delivery, sealed to you" : "sealed to the mediator",
+        visibleTo: `${who} and ${tos}`,
+        note: innermost
+          ? `Encrypted to ${tos} and authenticated as ${who}: only the two ends can read it, and the reader knows who sealed it.${event.re_wrapped_in_forward ? " It reached you inside a forward the mediator opened." : ""}`
+          : "The mediator's own message to you (its pickup protocol), sealed and authenticated as the mediator.",
+        raw,
+        event,
+      };
+    }
+    case "signed":
+      return { kind, title: "a signed envelope", visibleTo: "anyone who holds it", note: "Signed, not encrypted: readable by all, vouched for by its signer.", raw, event };
+    case "plain":
+      return { kind, title: "a plaintext envelope", visibleTo: "anyone who holds it", note: "Neither sealed nor signed.", raw, event };
+    default:
+      return { kind, title: "an envelope", visibleTo: "?", note: `Not read: ${String(event.error ?? "an envelope of a kind this build does not know")}`, raw, event };
+  }
+}
+
+function wireLayer(event: TraceEvent, children: TraceEvent[]): OnionLayer {
+  const via = event.via === "ws" ? "the WebSocket" : "HTTP";
+  const bytes = typeof event.bytes === "number" ? `${event.bytes} bytes` : "";
+  const body = children.find((c) => c.stream === "wire.bytes")?.body;
+  const reply = children.find((c) => c.stream === "wire" && c.event === "wire.in");
+  const failed = children.find((c) => c.stream === "wire" && c.event === "wire.error");
+  const out = event.event === "wire.out";
+  const where = typeof event.endpoint === "string" ? ` to ${event.endpoint}` : "";
+  const answered =
+    reply !== undefined ? ` The endpoint answered ${String(reply.status)} in ${String(reply.ms)} ms.` : failed !== undefined ? ` The request failed: ${String(failed.error)}.` : "";
+  return {
+    kind: "wire",
+    title: out ? `sent over ${via}${where}` : `arrived over ${via}`,
+    visibleTo: "the network between here and the endpoint (TLS aside)",
+    note: `${bytes ? `${bytes} on the wire. ` : ""}${out ? "The outermost envelope is what left this device." : "The outermost envelope is what reached this device."}${answered}`.trim(),
+    raw: body ?? Object.fromEntries(Object.entries(event).filter(([k]) => k !== "stream")),
+    event,
+  };
+}
+
+/**
+ * Fold the trace of one record. `plaintext` is the record's message (the
+ * log's fact, not the trace's), shown innermost when the chain is found.
+ * Empty layers: nothing observed for this record — the trace was off, or
+ * its part is pruned.
+ */
+export function foldOnion(events: TraceEvent[], mid: string, plaintext?: unknown): Onion {
+  const byTid = new Map(events.map((e) => [e.tid, e]));
+  const children = new Map<string, TraceEvent[]>();
+  for (const e of events) {
+    if (e.parent !== undefined) {
+      children.set(e.parent, [...(children.get(e.parent) ?? []), e]);
+    }
+  }
+  // the innermost envelopes that ended in this record — one per delivery attempt; the latest is shown
+  const ends = events.filter((e) => e.stream === "envelope" && e.mid === mid).sort((a, b) => a.at.localeCompare(b.at));
+  const end = ends[ends.length - 1];
+  if (end === undefined) {
+    return { layers: [], direction: "received", attempts: 0, mediation: [] };
+  }
+  const direction = end.event === "envelope.seal" ? "sent" : "received";
+  // walk out along parent
+  const chain: TraceEvent[] = [];
+  for (let e: TraceEvent | undefined = end; e !== undefined; e = e.parent === undefined ? undefined : byTid.get(e.parent)) {
+    chain.unshift(e);
+  }
+  const layers: OnionLayer[] = [];
+  const mediation: TraceEvent[] = [];
+  for (const [i, e] of chain.entries()) {
+    const inside = children.get(e.tid) ?? [];
+    if (e.stream === "wire") {
+      layers.push(wireLayer(e, inside));
+    } else if (e.stream === "envelope") {
+      layers.push(envelopeLayer(e, direction, i === chain.length - 1));
+    }
+    mediation.push(...inside.filter((c) => c.stream === "mediation"));
+  }
+  if (plaintext !== undefined) {
+    layers.push({
+      kind: "plaintext",
+      title: "the message itself",
+      visibleTo: direction === "sent" ? "you and the one it is sealed to" : "you and the one who sealed it",
+      note: "What the log keeps: the record, as it was written or as it was opened.",
+      raw: plaintext,
+    });
+  }
+  return { layers, direction, attempts: ends.length, mediation };
+}

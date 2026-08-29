@@ -519,6 +519,162 @@ textarea {
   margin: 0 0 18px;
 }
 
+/* the lenses: a record looked at by what the trace observed of it, opened under the bubble */
+.bubble .lens-entry {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: var(--steel);
+}
+
+.bubble .lens-entry.active,
+.bubble .lens-entry:hover {
+  color: var(--verdigris-deep);
+}
+
+.bubble .lens {
+  margin: 10px -12px -6px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--panel);
+  font-style: normal;
+  font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+}
+
+.bubble .lens .hop-note {
+  margin-bottom: 10px;
+}
+
+.onion-mediation {
+  margin-top: 10px;
+}
+
+.onion-mediation summary,
+.layer summary {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--steel);
+  cursor: pointer;
+}
+
+.onion-mediation summary:hover,
+.layer summary:hover {
+  color: var(--verdigris-deep);
+}
+
+.onion-mediation pre,
+.layer pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--ink);
+  color: #c6ced1;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* the onion: each layer nests inside the previous one */
+.layer {
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 10px 12px 12px;
+}
+
+.layer .layer {
+  margin-top: 10px;
+}
+
+.layer.wire {
+  border-style: dotted;
+  border-color: var(--steel);
+  background: var(--paper);
+}
+
+.layer.authcrypt {
+  border-color: var(--verdigris);
+  background: var(--verdigris-wash);
+}
+
+.layer.anoncrypt {
+  border-color: var(--steel);
+  background: #eceff0;
+}
+
+.layer.forward {
+  border-style: dashed;
+  border-color: var(--steel);
+  background: #f2f4f4;
+}
+
+.layer.unknown {
+  border-color: var(--alarm);
+}
+
+.layer.plaintext {
+  border: 3px double var(--ink);
+  background: #fff;
+}
+
+.layer-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.layer-title {
+  font-size: 14px;
+}
+
+.layer-kind {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--steel);
+  white-space: nowrap;
+}
+
+.layer-kind.authcrypt {
+  color: var(--verdigris-deep);
+}
+
+.layer-visible {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--verdigris-deep);
+  margin: 4px 0 0;
+  word-break: break-all;
+}
+
+.layer-note {
+  font-size: 13px;
+  color: var(--steel);
+  margin: 4px 0 0;
+}
+
+.layer details {
+  margin-top: 8px;
+}
+
+/* the trace level, in the rail */
+.trace-level {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
 .composer {
   display: flex;
   gap: 8px;
