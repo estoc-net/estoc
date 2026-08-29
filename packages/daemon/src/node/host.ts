@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ESTOC_DIR } from "@estoc/vault";
+import { ESTOC_DIR, type TraceLevel } from "@estoc/vault";
 import { FsBackend } from "@estoc/vault/node";
 import type { DidcommApi } from "@estoc/agent-core";
 
@@ -19,6 +19,8 @@ import { guardedFetch } from "./guarded-fetch.js";
 export function nodeHost(root: string): DaemonHost {
   const dir = path.join(root, ESTOC_DIR);
   const pidFile = path.join(dir, "cache", "daemon.pid");
+  /** the trace level, a device preference: under cache/ like the pid, where snapshots do not look */
+  const traceFile = path.join(dir, "cache", "trace-level");
   let seedKey: CryptoKey | null = null;
 
   async function takePid(): Promise<boolean> {
@@ -63,6 +65,18 @@ export function nodeHost(root: string): DaemonHost {
     },
     async forgetSeedKey() {
       seedKey = null;
+    },
+    async traceLevel() {
+      try {
+        const text = (await readFile(traceFile, "utf8")).trim();
+        return text === "off" || text === "verbose" ? text : "normal";
+      } catch {
+        return "normal";
+      }
+    },
+    async setTraceLevel(level: TraceLevel) {
+      await mkdir(path.dirname(traceFile), { recursive: true });
+      await writeFile(traceFile, level + "\n");
     },
     async didcomm(): Promise<DidcommApi> {
       const { Message, FromPrior } = await import("didcomm-node");

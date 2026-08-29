@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `openVault(backend, options?)`: the vault's options apart from minting (today the `trace` policy).
+
 - **The agent writes the vault's trace.** Every frame sent or received
   (`wire`, and its ciphertext on `wire.bytes`), every envelope sealed or
   opened (`envelope`: kind, alg/enc, key ids, message type, `from_prior`

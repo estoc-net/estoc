@@ -3,7 +3,7 @@ import type { DidcommApi } from "@estoc/agent-core";
 import { createDaemon, serve, type DaemonHost, type Emit } from "@estoc/daemon";
 
 import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";
-import { cacheSeedKey, cachedSeedKey, forgetSeedKey } from "./keycache.js";
+import { cacheSeedKey, cachedSeedKey, forgetSeedKey, setTraceLevel, traceLevel } from "./keycache.js";
 import { acquireVaultLock } from "./lock.js";
 
 /**
@@ -29,6 +29,8 @@ const host: DaemonHost = {
   cachedSeedKey,
   cacheSeedKey,
   forgetSeedKey,
+  traceLevel,
+  setTraceLevel,
   async didcomm(): Promise<DidcommApi> {
     await initDidcomm();
     return { Message, FromPrior };

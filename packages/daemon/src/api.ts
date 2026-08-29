@@ -1,5 +1,5 @@
 import type { FolderObject } from "@estoc/folder-object";
-import type { ContactRecord, DeliveryEvent, ImportOutcome, InvitationRecord, MessageRecord } from "@estoc/vault";
+import type { ContactRecord, DeliveryEvent, ImportOutcome, InvitationRecord, MessageRecord, TraceEvent, TraceLevel } from "@estoc/vault";
 import type { AgentStatus, Invitation, SendOptions, VerifiedShare } from "@estoc/agent-core";
 
 /**
@@ -78,4 +78,16 @@ export interface Daemon {
   /** a block held in the vault's `blobs/`, by CID */
   blob(cid: string): Promise<Uint8Array | null>;
   retry(mid: string): Promise<void>;
+
+  /**
+   * One message's onion: every observation the trace (`@estoc/vault`
+   * §6.10) holds around the record `mid` — the frame it rode, each
+   * envelope inside, the rituals with mediators — outermost first. Empty
+   * when the trace is off, or that part of it is pruned.
+   */
+  traceOf(mid: string): Promise<TraceEvent[]>;
+  /** what this device keeps of what it observes: `off`, `normal`, `verbose` */
+  traceLevel(): Promise<TraceLevel>;
+  /** Change it for this device, now and for later runs; what a stricter level no longer keeps is pruned at once. */
+  setTraceLevel(level: TraceLevel): Promise<TraceLevel>;
 }

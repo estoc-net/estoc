@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
@@ -97,6 +97,40 @@ describe("the daemon over a socket", () => {
       const reopened = a.next("opened");
       await alice.unlock("alice-passes-the-salt");
       await reopened;
+    } finally {
+      await served.close();
+    }
+  });
+
+  it("keeps the trace level as a device preference, remembered across runs and not in the vault", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
+    dirs.push(root);
+    let served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
+    try {
+      const a = recorder();
+      const alice = connect<Daemon>(await clientPort(served.url), a.handlers as never);
+      await alice.boot();
+      const opened = a.next("opened");
+      await alice.createIdentity("Alice", "alice-passes-the-salt");
+      await opened;
+      expect(await alice.traceLevel()).toBe("normal");
+      expect(await alice.traceOf("no-such-record")).toEqual([]);
+      await expect(alice.setTraceLevel("loud" as never)).rejects.toThrow(/no such trace level/);
+
+      expect(await alice.setTraceLevel("off")).toBe("off");
+      expect((await readFile(path.join(root, ".estoc", "cache", "trace-level"), "utf8")).trim()).toBe("off");
+    } finally {
+      await served.close();
+    }
+
+    // a later run of the daemon on the same folder keeps the preference; the vault carries none of it
+    served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
+    try {
+      const b = recorder();
+      const again = connect<Daemon>(await clientPort(served.url), b.handlers as never);
+      await again.boot();
+      expect(await again.traceLevel()).toBe("off");
+      expect(await again.setTraceLevel("verbose")).toBe("verbose");
     } finally {
       await served.close();
     }

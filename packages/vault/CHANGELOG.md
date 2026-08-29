@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `TraceLog.setPolicy(policy)`: keep by another policy from now on (a device
+  preference changing while the vault is open); `policy` is a getter.
+
 - **`trace/`, the trace log** (`docs/vault-format.md` §6.10): what this
   device observed, apart from what was said — `TraceLog` with five
   streams (`envelope`, `wire`, `wire.bytes`, `mediation`, `diag`), each

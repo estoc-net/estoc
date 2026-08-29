@@ -188,9 +188,21 @@ export class TraceLog {
    */
   constructor(
     private readonly backend: VaultBackend,
-    readonly policy: TracePolicy,
+    private current: TracePolicy,
     private readonly clock?: () => Date
   ) {}
+
+  get policy(): TracePolicy {
+    return this.current;
+  }
+
+  /**
+   * Keep by another policy from now on: a stream turned off stops being
+   * written at once, what is already there goes by the next `prune`.
+   */
+  setPolicy(policy: TracePolicy): void {
+    this.current = policy;
+  }
 
   /** Is this stream being written? */
   enabled(stream: TraceStream): boolean {

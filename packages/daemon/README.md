@@ -42,6 +42,18 @@ name pointed at 127.0.0.1 (DNS rebinding), gets 421 and no socket. A
 second UI connecting calls `boot()` like the first and is told where
 things stand.
 
+## The trace
+
+The vault keeps what its agent observes on the way in and out — frames,
+envelopes, the rituals with mediators — in `.estoc/trace/`, under a
+retention (`@estoc/vault` format §6.10). The daemon reads it for the UI:
+`traceOf(mid)` is one message's onion, outermost frame to innermost
+envelope, empty when the trace is off or that part is pruned. How much is
+kept is a device preference, `off` / `normal` / `verbose`: `traceLevel()`
+and `setTraceLevel(level)`, which the host remembers between runs (the
+Node host in `.estoc/cache/trace-level`, the worker in IndexedDB beside the
+seed) and never writes into the vault; a stricter level prunes at once.
+
 ## Fetching what others name
 
 A browser tab cannot reach a private network; a process can. The URL of a

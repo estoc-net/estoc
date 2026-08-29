@@ -7,6 +7,8 @@ import {
   type InvitationRecord,
   type MessageRecord,
   type VaultBackend,
+  tracePolicy,
+  type TraceLevel,
 } from "@estoc/vault";
 import {
   Agent,
@@ -107,6 +109,16 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     await a.start();
   }
 
+  /** The trace level the host remembers; `normal` when it remembers none. */
+  async function traceLevel(): Promise<TraceLevel> {
+    return (await host.traceLevel?.()) ?? "normal";
+  }
+
+  /** The options every open or create of the vault takes: the device's trace policy. */
+  async function vaultOptions(): Promise<{ trace: ReturnType<typeof tracePolicy> }> {
+    return { trace: tracePolicy(await traceLevel()) };
+  }
+
   /** A vault and its unlocked seed are in hand: report, start. */
   async function open(v: PeerVault, key: CryptoKey): Promise<void> {
     vault = v;
@@ -177,7 +189,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       }
       let v: PeerVault;
       try {
-        v = await openVault(backend);
+        v = await openVault(backend, await vaultOptions());
       } catch (err) {
         // a vault this version cannot read: written by a newer client, or by
         // an older format this one does not migrate — say so, and leave the
@@ -200,7 +212,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         throw new Error("storage is not available");
       }
       const { doc, seedKey: key } = await createSeedKeystore(passphrase);
-      const v = await createVault(backend, { label: name, keystore: doc, seedKey: key });
+      const v = await createVault(backend, { label: name, keystore: doc, seedKey: key, ...(await vaultOptions()) });
       await host.cacheSeedKey(key);
       await open(v, key);
     },
@@ -213,7 +225,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if (outcome.kind !== "restored") {
         throw new Error("a vault already exists here");
       }
-      const v = await openVault(backend);
+      const v = await openVault(backend, await vaultOptions());
       let key: CryptoKey;
       try {
         key = await unlockSeedKeystore(v.keystore, passphrase);
@@ -273,7 +285,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       // the agent is restarted on the merged vault: its stores cache what
       // they read, and the merge wrote past them
       stopAgent();
-      await open(await openVault(backend), seedKey);
+      await open(await openVault(backend, await vaultOptions()), seedKey);
       return outcome;
     },
 
@@ -316,6 +328,20 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     blob: (cid) => (agent === null ? Promise.resolve(null) : agent.vault.blobs.get(cid)),
     async retry(mid) {
       await running().retry(mid);
+    },
+
+    traceOf: (mid) => running().vault.trace.traceOf(mid),
+    traceLevel,
+    async setTraceLevel(level) {
+      if (level !== "off" && level !== "normal" && level !== "verbose") {
+        throw new Error(`no such trace level: ${String(level)}`);
+      }
+      await host.setTraceLevel?.(level);
+      if (vault !== null) {
+        vault.trace.setPolicy(tracePolicy(level));
+        await vault.trace.prune();
+      }
+      return level;
     },
   };
 }

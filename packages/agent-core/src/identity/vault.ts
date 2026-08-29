@@ -1,4 +1,4 @@
-import type { VaultBackend, CreateVaultOptions } from "@estoc/vault";
+import type { VaultBackend, CreateVaultOptions, VaultOptions } from "@estoc/vault";
 import { Vault } from "@estoc/vault";
 
 import { mintPeerDid, type PeerIdentity } from "./peer.js";
@@ -14,9 +14,12 @@ export type PeerVault = Vault<PeerIdentity>;
 
 export const PEER_DIDS = { mint: mintPeerDid } as const;
 
-/** `Vault.open` with did:peer:4 minting. */
-export function openVault(backend: VaultBackend): Promise<PeerVault> {
-  return Vault.open(backend, PEER_DIDS);
+/** `Vault.open` with did:peer:4 minting; `options` is the device's side of it (the trace policy). */
+export function openVault(
+  backend: VaultBackend,
+  options: Omit<VaultOptions<PeerIdentity>, "mint"> = {}
+): Promise<PeerVault> {
+  return Vault.open(backend, { ...options, ...PEER_DIDS });
 }
 
 /** `Vault.create` with did:peer:4 minting; `mediatorDid` names one now, `Agent.setMediator` later. */
