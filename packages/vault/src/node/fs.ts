@@ -60,6 +60,17 @@ export class FsBackend implements VaultBackend {
     await rm(this.at(p), { force: true });
   }
 
+  async size(p: string): Promise<number | null> {
+    try {
+      return (await stat(this.at(p))).size;
+    } catch (err) {
+      if (isMissing(err)) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
   list(dir: string): Promise<string[]> {
     return this.entries(dir, "file");
   }

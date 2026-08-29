@@ -37,6 +37,11 @@ export class MemoryBackend implements VaultBackend {
     this.files.delete(this.key(path));
   }
 
+  async size(path: string): Promise<number | null> {
+    const data = this.files.get(this.key(path));
+    return data === undefined ? null : data.length;
+  }
+
   async list(dir: string): Promise<string[]> {
     return this.children(dir).files;
   }

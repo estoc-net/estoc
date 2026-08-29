@@ -55,6 +55,15 @@ export function backendSuite(name: string, fresh: () => Promise<VaultBackend>): 
       expect(await walk(b, ".estoc/nope")).toEqual([]);
     });
 
+    it("knows a file's size without reading it", async () => {
+      const b = await fresh();
+      expect(await b.size(".estoc/nope")).toBeNull();
+      await b.write(".estoc/f", enc.encode("héllo"));
+      expect(await b.size(".estoc/f")).toBe(6);
+      await b.append(".estoc/f", enc.encode("!"));
+      expect(await b.size(".estoc/f")).toBe(7);
+    });
+
     it("removes, and removing a missing file is fine", async () => {
       const b = await fresh();
       await b.write(".estoc/contacts/alice.json", enc.encode("{}"));

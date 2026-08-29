@@ -18,6 +18,8 @@ export interface VaultBackend {
   append(path: string, data: Uint8Array): Promise<void>;
   /** Delete a file; deleting a missing file is not an error. */
   remove(path: string): Promise<void>;
+  /** Size of a file in bytes without reading it, or null if there is no such file. */
+  size(path: string): Promise<number | null>;
   /** Names of the files (not directories) directly inside `dir`, unsorted; [] if missing. */
   list(dir: string): Promise<string[]>;
   /** Names of the directories directly inside `dir`, unsorted; [] if missing. */

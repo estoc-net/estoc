@@ -111,6 +111,11 @@ export class OpfsBackend implements VaultBackend {
     }
   }
 
+  async size(path: string): Promise<number | null> {
+    const handle = await this.file(path, false);
+    return handle === null ? null : (await handle.getFile()).size;
+  }
+
   async list(dir: string): Promise<string[]> {
     return this.entries(dir, "file");
   }

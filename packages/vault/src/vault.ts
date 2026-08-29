@@ -18,6 +18,7 @@ import { InvitationStore, type InvitationRecord } from "./invitations.js";
 import { CONFIG_PATH, KEYSTORE_PATH, prettyJson, text, utf8 } from "./layout.js";
 import { DeliveryLog } from "./deliveries.js";
 import { MessageLog } from "./messages.js";
+import { TRACE_NORMAL, TraceLog, type TracePolicy } from "./trace.js";
 
 /**
  * A vault: the `.estoc` directory as an object. Holds the config and the
@@ -58,6 +59,13 @@ export type MintDid<M extends MintedDid = MintedDid> = (
 
 export interface VaultOptions<M extends MintedDid = MintedDid> {
   mint: MintDid<M>;
+  /**
+   * What this device keeps of what it observes (`trace/`, §6.10) and for
+   * how long. A device preference, not a vault fact: it is never written
+   * into the vault. Default `TRACE_NORMAL` — everything on, pruned
+   * briskly; `TRACE_OFF` writes nothing.
+   */
+  trace?: TracePolicy;
 }
 
 /**
@@ -109,6 +117,8 @@ export class Vault<M extends MintedDid = MintedDid> {
   readonly messages: MessageLog;
   readonly deliveries: DeliveryLog;
   readonly blobs: BlobStore;
+  /** this device's observations, under their retention; `trace.prune()` is the caller's to schedule */
+  readonly trace: TraceLog;
 
   private readonly mint: MintDid<M>;
 
@@ -124,6 +134,7 @@ export class Vault<M extends MintedDid = MintedDid> {
     this.messages = new MessageLog(backend);
     this.deliveries = new DeliveryLog(backend);
     this.blobs = new BlobStore(backend);
+    this.trace = new TraceLog(backend, options.trace ?? TRACE_NORMAL);
   }
 
   /** Is there a vault (a config.json) at this backend's root? */

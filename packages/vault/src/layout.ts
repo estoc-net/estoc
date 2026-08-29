@@ -10,12 +10,16 @@
  *     invitations/<id>.json  record: single-use invitations issued, by message id
  *     messages/<uuid>.jsonl    log: append-only; readers take every segment, in name order
  *     deliveries/<uuid>.jsonl  log: what became of each outbound message
+ *     trace/<stream>/<uuid>.jsonl  log, with a retention: this device's observations
+ *                            (envelopes, wire, mediation); the one log segments are
+ *                            deleted from; never in a snapshot
  *     state/                 reserved: high-churn per-person state (cursors, drafts)
  *     blobs/<hash>           reserved: content-addressed attachment bytes
  *     cache/                 reserved: rebuildable; never in a snapshot, never merged
  *
- * A snapshot is everything under `.estoc/` except `cache/` — not the list
- * above; a client never drops from a backup what another wrote.
+ * A snapshot is everything under `.estoc/` except `cache/` and `trace/` —
+ * not the list above; a client never drops from a backup what another
+ * wrote.
  */
 export const ESTOC_DIR = ".estoc";
 export const CONFIG_PATH = `${ESTOC_DIR}/config.json`;
@@ -24,6 +28,7 @@ export const CONTACTS_DIR = `${ESTOC_DIR}/contacts`;
 export const INVITATIONS_DIR = `${ESTOC_DIR}/invitations`;
 export const MESSAGES_DIR = `${ESTOC_DIR}/messages`;
 export const DELIVERIES_DIR = `${ESTOC_DIR}/deliveries`;
+export const TRACE_DIR = `${ESTOC_DIR}/trace`;
 export const STATE_DIR = `${ESTOC_DIR}/state`;
 export const BLOBS_DIR = `${ESTOC_DIR}/blobs`;
 export const CACHE_DIR = `${ESTOC_DIR}/cache`;

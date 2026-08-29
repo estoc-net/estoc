@@ -19,11 +19,12 @@ import {
 } from "./layout.js";
 import { orderSegments, type DamagedLine, type SegmentedLog } from "./log.js";
 import { MessageLog, type MessageRecord } from "./messages.js";
+import { isTracePath } from "./trace.js";
 
 /**
  * Moving a vault between backends: the zip a browser exports, the folder a
  * device restores from. A snapshot is every file under `.estoc/` (except
- * `cache/`), byte for byte, keyed by vault-relative path
+ * `cache/` and `trace/`), byte for byte, keyed by vault-relative path
  * (`.estoc/config.json`, …) — no conversion and no allowlist, because the
  * files *are* the format and a client must not drop from a backup what
  * another client wrote. Import lays a snapshot down over a backend, and
@@ -86,16 +87,22 @@ export type ImportOutcome =
       damaged: DamagedLine[];
     };
 
-/** Is this path under `.estoc/cache/` — rebuildable, and no part of a snapshot? */
-function isCachePath(path: string): boolean {
-  return path === CACHE_DIR || path.startsWith(`${CACHE_DIR}/`);
+/**
+ * Is this path this device's own — `cache/` (rebuildable) or `trace/`
+ * (observed here, perishable)? Neither is part of a snapshot, and neither
+ * is laid down by an import: a trace another device kept is not this
+ * device's observation, and one that reached a backup by hand must not
+ * bring back what was pruned here.
+ */
+function isDevicePath(path: string): boolean {
+  return path === CACHE_DIR || path.startsWith(`${CACHE_DIR}/`) || isTracePath(path);
 }
 
-/** Every file of the vault at `backend` — the whole `.estoc/` tree but `cache/` — keyed by vault-relative path. */
+/** Every file of the vault at `backend` — the whole `.estoc/` tree but `cache/` and `trace/` — keyed by vault-relative path. */
 export async function snapshotVault(backend: VaultBackend): Promise<VaultFiles> {
   const files: VaultFiles = {};
   for (const path of await walk(backend, ESTOC_DIR)) {
-    if (isCachePath(path)) {
+    if (isDevicePath(path)) {
       continue;
     }
     const bytes = await backend.read(path);
@@ -143,10 +150,10 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
 
   const localConfigBytes = await backend.read(CONFIG_PATH);
   if (localConfigBytes === null) {
-    // restore: the files as they were (a cache/ someone zipped by hand
-    // stays out), config last so a crash midway leaves "no vault" rather
+    // restore: the files as they were (a cache/ or trace/ someone zipped
+    // by hand stays out), config last so a crash midway leaves "no vault" rather
     // than a vault missing pieces
-    const paths = Object.keys(files).filter((path) => path !== CONFIG_PATH && !isCachePath(path));
+    const paths = Object.keys(files).filter((path) => path !== CONFIG_PATH && !isDevicePath(path));
     for (const path of paths) {
       await backend.write(path, files[path] as Uint8Array);
     }
@@ -241,10 +248,10 @@ export async function importVault(backend: VaultBackend, files: VaultFiles): Pro
 
   // anything else: a path this version has no rule for (state/, blobs/, a
   // file another client keeps) is copied when absent, never overwritten;
-  // cache/ is not even that
+  // cache/ and trace/ are not even that
   let filesCopied = 0;
   for (const path of Object.keys(files).sort()) {
-    if (isMergedPath(path) || isCachePath(path)) {
+    if (isMergedPath(path) || isDevicePath(path)) {
       continue;
     }
     if ((await backend.read(path)) === null) {

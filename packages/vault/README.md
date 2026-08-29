@@ -20,6 +20,10 @@ import). Runs in the browser (OPFS), Node (a folder on disk), and tests
   invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
   messages/<uuidv7>.jsonl    log: append-only; segments named by uuidv7, read in name order
   deliveries/<uuidv7>.jsonl  log: what became of each outbound message: sent / failed / held, per try
+  trace/<stream>/<uuidv7>.jsonl
+                         log with a retention: what this device observed (envelope, wire,
+                         wire.bytes, mediation, diag); the one log segments are deleted from;
+                         never snapshotted
   blobs/<hash>           content-addressed bytes (attachments, shared objects)
   state/ cache/          reserved (per-person state · rebuildable, never snapshotted)
 ```
@@ -28,7 +32,7 @@ import). Runs in the browser (OPFS), Node (a folder on disk), and tests
 
 - **`Vault`** — the directory as an object: the two singletons in memory
   (`config`, `keystore`), the stores over the records and logs
-  (`contacts`, `invitations`, `messages`, `deliveries`, `blobs`), and the
+  (`contacts`, `invitations`, `messages`, `deliveries`, `blobs`, `trace`), and the
   keys by name (`derive`, `mintKey`, `verifyAnchor`). `Vault.create` lays
   down the anchor; `setMediator`, `mintPairwise`, `createInvitation` and
   `peerIdentity` do the bookkeeping the contract asks for around a DID —
@@ -67,7 +71,7 @@ import). Runs in the browser (OPFS), Node (a folder on disk), and tests
 
 ### Moving a vault: snapshot and import
 
-`snapshotVault(backend)` is every file under `.estoc/` except `cache/`,
+`snapshotVault(backend)` is every file under `.estoc/` except `cache/` and `trace/`,
 byte for byte, keyed by vault-relative path — the shape a zip holds, and
 not an allowlist: what another client wrote travels too.
 `importVault(backend, files)` lays them down and **merges, never

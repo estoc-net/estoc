@@ -6,7 +6,7 @@
  * `VaultBackend` (bytes: OPFS, memory; a folder on disk via
  * `@estoc/vault/node`), the layout over it (config and keystore
  * singletons, contact and invitation records, message and delivery logs,
- * blobs), snapshot and merge-import, and the `Vault` object that holds
+ * blobs, the trace log with its retention), snapshot and merge-import, and the `Vault` object that holds
  * the two singletons and mints keys by name. What a key is minted *as* —
  * a did:peer:4 with a mediator's routing DID as its service, say — is not
  * a format question: the caller hands `Vault` a `MintDid`, and the vault
@@ -28,6 +28,7 @@ export {
   KEYSTORE_PATH,
   MESSAGES_DIR,
   STATE_DIR,
+  TRACE_DIR,
 } from "./layout.js";
 export { parseConfig, type KeyRef, type Mediation, type VaultConfig } from "./config.js";
 export {
@@ -74,6 +75,24 @@ export {
   type VaultFiles,
 } from "./transfer.js";
 export { BlobStore } from "./blobs.js";
+export {
+  TRACE_NORMAL,
+  TRACE_OFF,
+  TRACE_STREAMS,
+  TRACE_VERBOSE,
+  TraceLog,
+  isTracePath,
+  isTraceStream,
+  segmentTime,
+  tracePolicy,
+  type PruneReport,
+  type StreamRetention,
+  type TraceEvent,
+  type TraceInput,
+  type TraceLevel,
+  type TracePolicy,
+  type TraceStream,
+} from "./trace.js";
 export {
   KEY_ANCHOR,
   KEY_INVITE_PREFIX,

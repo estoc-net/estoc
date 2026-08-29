@@ -91,7 +91,7 @@ describe("snapshot + import", () => {
     expect(segmentsIn(await other.list(DELIVERIES_DIR))).toBe(1);
   });
 
-  it("snapshots the whole tree but cache/, unions the key cache, and copies unknown paths only when absent", async () => {
+  it("snapshots the whole tree but cache/ and trace/, unions the key cache, and copies unknown paths only when absent", async () => {
     const enc = new TextEncoder();
     const { backend: a, vault: va } = await vaultWith(SEED_A);
     const bob = newContact("Bob", "did:peer:4bob", new Date(1_000));
@@ -101,6 +101,7 @@ describe("snapshot + import", () => {
     await a.write(".estoc/blobs/sha256-aaaa", enc.encode("blob-a"));
     await a.write(".estoc/other-client/notes/todo.md", enc.encode("from a"));
     await a.write(".estoc/cache/index.sqlite", enc.encode("rebuildable"));
+    await va.trace.append("diag", { event: "log", text: "observed here" });
     const files = await snapshotVault(a);
     expect(Object.keys(files)).toEqual([
       ".estoc/blobs/sha256-aaaa",
@@ -111,11 +112,13 @@ describe("snapshot + import", () => {
       ".estoc/state/cursors.json",
     ]);
 
-    // restore: everything as it was — and a cache/ someone zipped by hand stays out
+    // restore: everything as it was — and a cache/ or trace/ someone zipped by hand stays out
     const other = new MemoryBackend();
-    const outcome = await importVault(other, { ...files, ".estoc/cache/x": enc.encode("no") });
+    const stray = `.estoc/trace/diag/${(await a.list(".estoc/trace/diag"))[0]}`;
+    const outcome = await importVault(other, { ...files, ".estoc/cache/x": enc.encode("no"), [stray]: (await a.read(stray))! });
     expect(outcome).toMatchObject({ kind: "restored", files: 6 });
     expect(await other.read(".estoc/cache/x")).toBeNull();
+    expect(await other.list(".estoc/trace/diag")).toEqual([]);
     expect(dec.decode((await other.read(".estoc/other-client/notes/todo.md"))!)).toBe("from a");
 
     // B (the restore) mints a key A has never seen, and edits/creates unknown files
@@ -131,8 +134,9 @@ describe("snapshot + import", () => {
 
     // B into A: the key cache gains B's name (A can derive it: same seed),
     // absent files arrive, present ones are not overwritten, cache/ never travels
-    const merged = await importVault(a, { ...(await snapshotVault(other)), ".estoc/cache/x": enc.encode("no") });
+    const merged = await importVault(a, { ...(await snapshotVault(other)), ".estoc/cache/x": enc.encode("no"), ".estoc/trace/diag/x.jsonl": enc.encode("no") });
     expect(merged).toMatchObject({ kind: "merged", contactsAdded: 1, keysAdded: 1, filesCopied: 1 });
+    expect(await a.read(".estoc/trace/diag/x.jsonl")).toBeNull();
     const va2 = await Vault.open(a, { mint });
     expect(va2.keystore.keys.map((k) => k.name)).toContain(carolKey);
     expect(va2.keystore.seedJwe).toBe(va.keystore.seedJwe);

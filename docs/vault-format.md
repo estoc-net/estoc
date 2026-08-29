@@ -64,6 +64,9 @@ say which of them it obeys.
   invitations/<id>.json     record — one per single-use invitation issued
   messages/<uuidv7>.jsonl   log — every message between this vault and its contacts
   deliveries/<uuidv7>.jsonl log — what became of each outbound message, per try
+  trace/<stream>/<uuidv7>.jsonl
+                            log, with a retention — what this device observed (envelopes, wire,
+                            mediation); the one log segments are deleted from; never backed up; §6.10
   state/                    reserved — high-churn per-person state (read cursors, drafts); §6.7
   blobs/                    reserved — content-addressed bytes lifted out of messages; §6.8
   cache/                    reserved — rebuildable indexes; never backed up, never merged; §6.9
@@ -349,10 +352,65 @@ Rebuildable indexes (a thread index, a search index, one day SQLite).
 Anything here can be deleted at any time and is regenerated from the logs
 and records. It is **not** part of a snapshot and is never merged.
 
+### 6.10 `trace/<stream>/<uuidv7>.jsonl` — log, with a retention
+
+What this device *observed* while the message log recorded what was
+*said*: an envelope opened or sealed, a frame sent or received, a pickup
+round-trip with the mediator. None of it is a fact about the
+conversation; all of it is what an audit or a debugger asks for after the
+fact, and it is bulky and perishable. One directory per stream:
+
+| stream       | one line per                                  | carries                                                      |
+|--------------|-----------------------------------------------|--------------------------------------------------------------|
+| `envelope`   | every `unpack` and `pack`                     | kind (authcrypt / anoncrypt / signed / plain / forward), key ids, algorithm — **no bytes** |
+| `wire`       | every frame, request and response             | via (http / ws), endpoint, status, size, time — **headers only** |
+| `wire.bytes` | the same, as bytes                            | the ciphertext, for peeling an envelope open on screen        |
+| `mediation`  | the mediation rituals (status, delivery, grant, recipient-update) | their plaintext — the one place it exists |
+| `diag`       | a diagnostic                                  | one line of text                                             |
+
+```jsonc
+{ "stream": "wire",     "tid": "0198…a", "at": "…", "event": "wire.in", "via": "ws", "bytes": 812 }
+{ "stream": "envelope", "tid": "0198…b", "at": "…", "event": "envelope.open", "parent": "0198…a", "kind": "forward" }
+{ "stream": "envelope", "tid": "0198…c", "at": "…", "event": "envelope.open", "parent": "0198…b", "kind": "authcrypt", "from_kid": "…", "mid": "0198…" }
+{ "stream": "diag",     "tid": "0198…d", "at": "…", "event": "prune", "reason": "cap", "of": "wire", "segments": 3, "bytes": 3145728 }
+```
+
+- Common fields: `stream`, `tid` (uuidv7, this observation's id), `at`,
+  `event`; optionally `parent` (the `tid` this happened inside — the
+  envelope an inner envelope was found in, the frame an envelope came
+  off) and `mid` (the message record it ended in, when it did). The rest
+  is the stream's own. A reader follows `parent` both ways from a `mid`
+  to rebuild the whole onion of one message; the plaintext of a message
+  between contacts is never here — it is the message line, once, and the
+  trace names it.
+- **The one log that is deleted from.** Every stream has a retention —
+  a `keep` (age) and a `cap` (bytes) — and pruning unlinks whole segments,
+  oldest first: never a line, never a rewrite. Segments are rotated small
+  (a day or a mebibyte, whichever first) so pruning is fine-grained, and
+  since a line is never older than its segment's name plus one rotation,
+  pruning goes by names alone, never by contents. Any client may drop any
+  segment at any time. A stream with `keep` 0 is off: nothing is written,
+  and what is there goes at the next prune.
+- **Retention is a device option, not a vault fact.** The same vault
+  keeps everything on a workstation and a day on a phone. The policy is
+  never written into the vault. Defaults are the implementation's; the
+  reference keeps `envelope` 90 days, `wire` 30, `mediation` and `diag`
+  7, `wire.bytes` 1, each under a cap, and a deletion for cap — out of
+  the ordinary, unlike one for age — leaves a `prune` line in `diag` so a
+  gap is a fact on record, not a mystery.
+- **Never in a snapshot, never imported** — like `cache/`, and unlike it
+  not rebuildable: a trace is this device's own observation. What another
+  device saw is not what this one saw, and a segment that reached a
+  backup by hand must not bring back what was pruned here. Each session
+  writes segments of its own and never appends to another's, so a
+  cut-short last line stays where it is, damaged and skipped.
+- Additive within version 1 (§2.6): a client that does not know `trace/`
+  neither reads it nor, since it is outside every snapshot, carries it.
+
 ## 7. Snapshot and import
 
 - A **snapshot** is every file under `.estoc/`, recursively, except
-  `cache/`, keyed by vault-relative path, bytes untouched. Not an allowlist:
+  `cache/` and `trace/`, keyed by vault-relative path, bytes untouched. Not an allowlist:
   a client must not drop from a backup what a newer client (or another
   client) wrote. A backup zip's entries are these paths (`.estoc/config.json`,
   …); importers tolerate an enclosing folder or a bare `.estoc/` contents.
@@ -367,8 +425,8 @@ and records. It is **not** part of a snapshot and is never merged.
     kept local; `keystore.json`'s `keys[]` unioned by name, `seedJwe`
     kept local; `state/` per key by timestamp and `blobs/` by union once
     those have a shape (§6.7, §6.8), and until then as any other path;
-    `cache/` ignored; **any other path copied when absent, never
-    overwritten**;
+    `cache/` and `trace/` ignored (§6.9, §6.10); **any other path copied
+    when absent, never overwritten**;
   - into a vault with a **different anchor DID** it is refused: two
     identities are two vaults.
 - Merge never rewrites a line and never deletes a file. What it cannot
