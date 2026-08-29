@@ -18,7 +18,7 @@ import {
   type VerifiedTree,
 } from "@estoc/folder-object";
 
-import type { PlainMessage } from "../vault/messages.js";
+import type { PlainMessage } from "@estoc/vault";
 import type { ProtocolHandler } from "./handler.js";
 import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
 

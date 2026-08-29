@@ -7,7 +7,7 @@ import {
   type ImportOutcome,
   type VaultBackend,
   type VaultFiles,
-} from "@estoc/agent-core";
+} from "@estoc/vault";
 
 /**
  * The backup file: the vault directory zipped, nothing converted. Its

@@ -6,7 +6,6 @@ export {
   initVault,
   readConfig,
   readKeystore,
-  writeKeystore,
   openVaultKey,
   createVaultKey,
   type Vault,

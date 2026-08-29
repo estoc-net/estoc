@@ -1,15 +1,6 @@
 import type { FolderObject } from "@estoc/folder-object";
-import type {
-  AgentStatus,
-  ContactRecord,
-  DeliveryEvent,
-  ImportOutcome,
-  Invitation,
-  InvitationRecord,
-  MessageRecord,
-  SendOptions,
-  VerifiedShare,
-} from "@estoc/agent-core";
+import type { ContactRecord, DeliveryEvent, ImportOutcome, InvitationRecord, MessageRecord } from "@estoc/vault";
+import type { AgentStatus, Invitation, SendOptions, VerifiedShare } from "@estoc/agent-core";
 
 /**
  * The daemon: the agent and its vault, behind one interface the UI talks

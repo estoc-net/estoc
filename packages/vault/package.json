@@ -1,19 +1,23 @@
 {
-  "name": "@estoc/agent-core",
-  "version": "0.16.0",
-  "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery and hand-layered packing over an .estoc vault (@estoc/vault: config, seed keystore, contacts, append-only message log, through a pluggable VaultBackend). Runs wherever didcomm-rust's WASM does.",
+  "name": "@estoc/vault",
+  "version": "0.1.0",
+  "description": "The .estoc vault format as code: the on-disk contract (docs/vault-format.md) every Estoc client reads and writes — config and seed keystore singletons, contact and invitation records, append-only message and delivery logs, blobs — over a pluggable VaultBackend (OPFS in the browser, a folder on disk in Node, memory for tests), with snapshot and merge-import. Format only: what a DID is minted as is the caller's.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/estoc-net/estoc.git",
-    "directory": "packages/agent-core"
+    "directory": "packages/vault"
   },
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "files": [
@@ -30,29 +34,19 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "keywords": [
-    "didcomm",
-    "did",
-    "agent",
+    "estoc",
+    "vault",
     "opfs",
+    "keystore",
     "decentralized-identity"
   ],
   "dependencies": {
-    "@estoc/did-peer": "workspace:^",
-    "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
-    "@estoc/vault": "workspace:^",
-    "bs58": "^6.0.0",
-    "did-resolver": "^4.1.0",
-    "web-did-resolver": "^2.0.32"
-  },
-  "peerDependencies": {
-    "didcomm": "^0.4.1"
+    "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
-    "didcomm-node": "^0.4.1",
     "typescript": "~5.8.0",
-    "vitest": "^3.2.7",
-    "didcomm": "^0.4.1"
+    "vitest": "^3.2.7"
   }
 }

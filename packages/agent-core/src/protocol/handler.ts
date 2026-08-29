@@ -1,6 +1,6 @@
-import type { ContactRecord } from "../vault/contacts.js";
-import type { MessageRecord } from "../vault/messages.js";
-import type { Vault } from "../vault/vault.js";
+import type { ContactRecord, MessageRecord } from "@estoc/vault";
+
+import type { PeerVault } from "../identity/vault.js";
 
 /**
  * The seam for application-level protocols — everything between the user
@@ -49,7 +49,7 @@ export interface SendOptions {
 
 /** What a handler may do through the agent. */
 export interface HandlerContext {
-  readonly vault: Vault;
+  readonly vault: PeerVault;
   /**
    * Compose, deliver and log a message to a contact — the same call the
    * application uses (`Agent.send`), introduction included. Handlers

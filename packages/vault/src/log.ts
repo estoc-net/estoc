@@ -1,5 +1,5 @@
 import { v7 as uuidv7 } from "uuid";
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { text, utf8 } from "./layout.js";
 
 /**

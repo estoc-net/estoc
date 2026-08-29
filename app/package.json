@@ -1,7 +1,7 @@
 {
   "name": "@estoc/app",
   "version": "0.1.0",
-  "description": "The Estoc app, built: the static files of the offline-first DIDComm v2 messenger (app.estoc.dev), for anything that wants to serve them itself \u2014 `estoc serve` / `estoc-daemon` do.",
+  "description": "The Estoc app, built: the static files of the offline-first DIDComm v2 messenger (app.estoc.dev), for anything that wants to serve them itself — `estoc serve` / `estoc-daemon` do.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -40,15 +40,16 @@
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/post": "workspace:^",
+    "@estoc/vault": "workspace:^",
+    "@vitejs/plugin-vue": "^5.2.0",
     "didcomm": "^0.4.1",
     "fflate": "^0.8.2",
-    "qrcode-generator": "^2.0.4",
-    "vue": "^3.5.0",
-    "@vitejs/plugin-vue": "^5.2.0",
     "playwright-core": "^1.62.1",
+    "qrcode-generator": "^2.0.4",
     "typescript": "~5.8.0",
     "vite": "^6.3.0",
     "vite-plugin-pwa": "^1.0.0",
+    "vue": "^3.5.0",
     "vue-tsc": "^2.2.0",
     "workbox-window": "^7.4.1"
   },

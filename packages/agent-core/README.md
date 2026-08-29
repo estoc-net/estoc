@@ -3,8 +3,8 @@
 The DIDComm v2 agent behind Estoc's clients: mediation (coordinate-mediation
 3.0), pickup and live delivery (messagepickup 3.0 over HTTP and WebSocket),
 routing 2.0 forwards packed by hand, layer by layer, and user-profile/1.0
-introductions, all over an `.estoc` vault stored through a pluggable
-backend.
+introductions, all over an `.estoc` vault (`@estoc/vault`) stored through
+a pluggable backend.
 
 Runs wherever didcomm-rust's WASM does: the browser (Vite), workerd, Node.
 The WASM itself is *not* loaded here — see [Didcomm API](#didcomm-api).
@@ -17,9 +17,9 @@ Agent                        envelopes · attribution · the log · mediation ·
   ├─ protocol/mediation      coordinate-mediation 3.0 · messagepickup 3.0 — transport with the mediator, never logged
   ├─ protocol/handler        the seam for application protocols; basicmessage 2.0 and user-profile 1.0 ship as handlers
   ├─ protocol/               resolver (did:web + did:peer), mediator input, out-of-band helpers
-  ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v3)
-  └─ Vault                   the .estoc format: config · keystore · contacts · invitations · message log · delivery log
-       └─ VaultBackend       bytes: OpfsBackend (browser) · MemoryBackend (tests, snapshots)
+  ├─ identity/               did:peer:4 from a seed-derived identity (@estoc/keystore v3), bound to the vault (openVault, createVault)
+  └─ @estoc/vault            the .estoc format: config · keystore · contacts · invitations · message log · delivery log
+       └─ VaultBackend       bytes: OpfsBackend (browser) · FsBackend (Node) · MemoryBackend (tests, snapshots)
 ```
 
 ### Three kinds of protocol
@@ -48,29 +48,18 @@ Agent                        envelopes · attribution · the log · mediation ·
 profiles, pings, a protocol nobody here speaks. Whether it shows is the
 application's projection of the log, not the agent's decision.
 
-### The vault format
+### The vault, and the DIDs in it
 
 The contract is [`docs/vault-format.md`](../../docs/vault-format.md) at
-the repository root; this package is its reference implementation.
+the repository root; [`@estoc/vault`](../vault/README.md) is its
+reference implementation, and the format package does not know what a
+DID is — it records what a `MintDid` returns. This package binds it to
+did:peer:4 (`openVault`, `createVault`: `Vault.open`/`Vault.create` with
+`mintPeerDid`) — Multikey long form, one Ed25519 and one X25519 key, the
+mediator's routing DID as the service when there is one.
 
-```
-.estoc/
-  config.json            singleton: label, identity anchor, mediation snapshot
-  keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a plaintext cache of key names
-  contacts/<cid>.json    record: one mutable file per contact, DID history with evidence
-  invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
-  messages/<uuidv7>.jsonl    log: append-only; segments named by uuidv7, read in name order
-  deliveries/<uuidv7>.jsonl  log: what became of each outbound message: sent / failed / held, per try
-  state/ blobs/ cache/       reserved (per-person state · attachment bytes · rebuildable, never snapshotted)
-```
-
-- **Key names are derivation paths.** The seed and a name give the key
-  (`estoc/v3/<purpose>/<name>`), so `keystore.json`'s key list is a cache
-  and the records are the truth: every mint writes the record naming the
-  key (config, a contact's `myDids[]`, an invitation) before the cache
-  entry, and a name the cache never heard of derives all the same. No
-  name is a counter and none is reused: `mediation/<id>/…` by the
-  mediation's uuidv7, `pair/<cid>/<uuidv7>`, `invite/<id>`.
+The layout, key naming, contacts, logs, snapshot and import, and the
+backends are documented there. What matters to the agent:
 
 - **DIDs in config are snapshots**, recorded when minted, and checked against
   the seed rather than recomputed: the anchor first, at every start
@@ -207,7 +196,8 @@ service → same DID.
 
 ```ts
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
-import { Agent, OpfsBackend, Vault, resolveDid } from "@estoc/agent-core";
+import { OpfsBackend } from "@estoc/vault";
+import { Agent, createVault, openVault, resolveDid } from "@estoc/agent-core";
 import { FromPrior, Message } from "./didcomm-wasm.js"; // your runtime's didcomm-rust glue
 
 const root = await navigator.storage.getDirectory();
@@ -215,10 +205,10 @@ const backend = new OpfsBackend(await root.getDirectoryHandle("vaults/alice", { 
 
 // first run: create — an identity needs no mediator to exist
 const { doc, seedKey } = await createSeedKeystore(passphrase);
-const vault = await Vault.create(backend, { label: "Alice", keystore: doc, seedKey });
+const vault = await createVault(backend, { label: "Alice", keystore: doc, seedKey });
 
 // later runs: open, unlock however your app keeps the seed
-// const vault = await Vault.open(backend);
+// const vault = await openVault(backend);
 // const seedKey = await unlockSeedKeystore(vault.keystore, passphrase);
 
 const agent = new Agent({
@@ -236,7 +226,7 @@ const agent = new Agent({
 });
 await agent.start();               // no mediator yet → status "unmediated"; the log still reads
 await agent.setMediator("did:web:mediator.estoc.dev"); // mediate, mint the public DID, go live — or, later, move to another
-// later starts on this vault mediate straight away (or pass mediatorDid to Vault.create)
+// later starts on this vault mediate straight away (or pass mediatorDid to createVault)
 const records = await vault.messages.read();   // the facts; what a record looks like on screen is yours to decide
 await agent.addContact(bobDid, "Bob");
 await agent.sendBasicMessage(bobDid, "hello");                 // = agent.send(bobDid, BASIC_MESSAGE, { content: "hello" }); logged first, then delivered — offline it waits in the outbox
@@ -286,42 +276,17 @@ Inbound processing runs one delivery at a time. A socket that closes is
 reopened after a pickup, so nothing queued during the outage waits for the
 next start.
 
-### Moving a vault: snapshot and import
+### Moving a vault, and backends
 
-`snapshotVault(backend)` is every file under `.estoc/` except `cache/`,
-byte for byte, keyed by vault-relative path — the shape a zip holds, and
-not an allowlist: what another client wrote travels too.
-`importVault(backend, files)` lays them down and **merges, never
-overwrites**: into an empty backend it is a restore; into a vault of the
-same identity (same anchor DID) the snapshot's messages become a new log
-segment minus what is already here (same `mid`, or the same wire message
-received twice), its delivery events likewise (minus tries already here;
-a `held` is one device's own and does not travel), its contacts win by
-`updatedAt`, its invitations are added when missing (and marked taken
-when the snapshot saw the answer — only `acceptedBy`/`acceptedAt` cross
-over; `registeredAt` is this device's own), its config stays local (mediation is a
-fact about this device), its keystore's key cache is unioned by name over
-this device's sealed seed, and any other path is copied when absent and
-never overwritten; a vault of a different identity is refused.
-Either way, an outbound message that arrives undelivered is held for a
-retry by hand (`held` in the outcome). How the files travel — zip,
-folder, paste — is the application's business.
-
-### Backends
-
-`VaultBackend` is six methods over vault-relative paths: `read`, `write`
-(whole-file, atomic), `append`, `remove`, `list` (files), `dirs`
-(subdirectories); `walk(backend, dir)` builds the recursive view a
-snapshot takes. `MemoryBackend` is the test
-double and the shape a zip unpacks into; `OpfsBackend` wraps a
-`FileSystemDirectoryHandle` (needs `createWritable()`). A Node `fs` backend
-is a page, if a client ever wants one. `test/backend-suite.ts` is the
-conformance suite any backend should pass.
+`snapshotVault` / `importVault` and the `VaultBackend`s (`MemoryBackend`,
+`OpfsBackend`, `FsBackend` in `@estoc/vault/node`) live in `@estoc/vault`;
+see its README. The agent restarts on a merged vault: its stores cache
+what they read, and a merge writes past them.
 
 ## Development
 
 ```
-pnpm test       # vitest: backends, vault format, identity, agent × fake mediator
+pnpm test       # vitest: identity (did:peer:4 over the vault), streaming AEAD, agent × fake mediator
 pnpm build      # tsc → dist/
 ```
 

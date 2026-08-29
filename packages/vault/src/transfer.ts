@@ -1,6 +1,6 @@
 import { parseSeedKeystore, serializeKeystore, type DerivedKeyEntry } from "@estoc/keystore";
 
-import { walk, type VaultBackend } from "../backend/types.js";
+import { walk, type VaultBackend } from "./backend/types.js";
 import { parseConfig } from "./config.js";
 import { ContactStore, parseContact } from "./contacts.js";
 import { InvitationStore, parseInvitationRecord } from "./invitations.js";

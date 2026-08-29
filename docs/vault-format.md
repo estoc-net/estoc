@@ -1,10 +1,10 @@
 # The `.estoc` vault format, version 1
 
 Status: **contract** — version 1, frozen 2026-08-17. This document is the
-on-disk format every Estoc client reads and writes. `@estoc/agent-core`
-(0.13 and later, over `@estoc/keystore` 0.3 and later) is the reference
-implementation; where the two disagree, this document is what the code has
-to be brought back to. Nothing earlier than those releases wrote a vault
+on-disk format every Estoc client reads and writes. `@estoc/vault`
+(moved out of `@estoc/agent-core` 0.13–0.16 on 2026-08-29, over
+`@estoc/keystore` 0.3 and later) is the reference implementation; where the
+two disagree, this document is what the code has to be brought back to. Nothing earlier than those releases wrote a vault
 outside development, so there is nothing to migrate from.
 
 ## 1. What a vault is

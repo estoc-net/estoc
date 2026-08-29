@@ -50,18 +50,25 @@ import { BLOB_PUT, BLOB_PUT_RESULT, parsePutResult } from "./protocol/blob-store
 import { encryptStream, freshKey } from "./protocol/streaming-aead.js";
 import { blobHash, signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 import {
+  counterpartyOf,
   currentDid,
   currentMyDid,
   didPlaceholder,
-  previousMyDid,
+  foldDeliveries,
+  isOpenInvitation,
+  isRelationshipKey,
+  mediationKeyName,
   newContact,
+  newMessageRecord,
+  previousMyDid,
   type ContactRecord,
+  type DeliveryEvent,
+  type DeliveryState,
+  type InvitationRecord,
+  type MessageRecord,
   type MyDidUse,
-} from "./vault/contacts.js";
-import { isOpenInvitation, type InvitationRecord } from "./vault/invitations.js";
-import { foldDeliveries, type DeliveryEvent, type DeliveryState } from "./vault/deliveries.js";
-import { counterpartyOf, newMessageRecord, type MessageRecord } from "./vault/messages.js";
-import { isRelationshipKey, mediationKeyName, type Vault } from "./vault/vault.js";
+} from "@estoc/vault";
+import type { PeerVault } from "./identity/vault.js";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -89,7 +96,7 @@ import { isRelationshipKey, mediationKeyName, type Vault } from "./vault/vault.j
  * thus a message, not an error; the DIDComm `id` it carries never changes,
  * so a try that reached the far side unnoticed is dropped there as a
  * duplicate. What an import brings in undelivered is held, not tried (see
- * `vault/transfer.ts`).
+ * `@estoc/vault`'s transfer).
  *
  * Identity toward contacts is pairwise. The public DID is an address for
  * strangers — a business card — and the first message we send anyone goes
@@ -151,7 +158,7 @@ export interface AgentEvents {
 }
 
 export interface AgentOptions {
-  vault: Vault;
+  vault: PeerVault;
   seedKey: SeedKey;
   didcomm: DidcommApi;
   events?: Partial<AgentEvents>;
@@ -267,7 +274,7 @@ async function readExactly(response: Response, expected: number): Promise<Uint8A
 }
 
 export class Agent {
-  readonly vault: Vault;
+  readonly vault: PeerVault;
   private readonly seedKey: SeedKey;
   private readonly didcomm: DidcommApi;
   private readonly events: Partial<AgentEvents>;
@@ -589,7 +596,7 @@ export class Agent {
   }
 
   private mediation() {
-    return this.vault.config.mediation as NonNullable<Vault["config"]["mediation"]>;
+    return this.vault.config.mediation as NonNullable<PeerVault["config"]["mediation"]>;
   }
 
   /**
@@ -1284,7 +1291,7 @@ export class Agent {
    * first, each tried once — narrowed to one contact or one record when
    * asked. A failure for a contact stops the pass for that contact, so
    * their messages never overtake one another; other contacts go on. Held
-   * records (see `vault/deliveries.ts`) are skipped unless named by `mid`
+   * records (see `@estoc/vault`'s deliveries) are skipped unless named by `mid`
    * — that is what a retry by hand is. Passes are serialised, so a start,
    * a reconnect and a send cannot try one record at the same time.
    */

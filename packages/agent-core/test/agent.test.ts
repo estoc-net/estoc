@@ -5,7 +5,25 @@ import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import {
+  KEY_INVITE_PREFIX,
+  KEY_PAIRWISE_PREFIX,
+  MemoryBackend,
+  mediationKeyName,
+  currentDid,
+  currentMyDid,
+  foldDeliveries,
+  importVault,
+  snapshotVault,
+  type ContactRecord,
+  type DeliveryEvent,
+  type InvitationRecord,
+  type MessageRecord,
+} from "@estoc/vault";
+
+import {
   Agent,
+  createVault,
+  openVault,
   BASIC_MESSAGE,
   ENCRYPTED_MIME,
   OBJECT_SHARE,
@@ -17,31 +35,18 @@ import {
   missingBytes,
   verifyShare,
   FORWARD,
-  KEY_INVITE_PREFIX,
-  KEY_PAIRWISE_PREFIX,
-  mediationKeyName,
-  MemoryBackend,
   PLAIN_TYP,
   PROFILE,
   REQUEST_PROFILE,
   TRUST_PING,
+  type PeerVault,
   type ProtocolHandler,
-  Vault,
-  currentDid,
-  currentMyDid,
-  foldDeliveries,
   invitationUrl,
   mintPeerDid,
   parseInvitation,
   secretsResolverFor,
   type AgentStatus,
-  type ContactRecord,
-  type DeliveryEvent,
   type IMessage,
-  type InvitationRecord,
-  type MessageRecord,
-  importVault,
-  snapshotVault,
 } from "../src/index.js";
 import { chatView, history, type ChatMessage } from "./chat-view.js";
 import { BLOB_MAX, FakeMediator, MEDIATOR_HTTP, network } from "./fake-mediator.js";
@@ -56,7 +61,7 @@ async function newMediator(options: { blobs?: boolean } = {}): Promise<FakeMedia
 interface Party {
   name: string;
   backend: MemoryBackend;
-  vault: Vault;
+  vault: PeerVault;
   agent: Agent;
   seedKey: CryptoKey;
   statuses: AgentStatus[];
@@ -74,14 +79,14 @@ interface Party {
 async function newVault(name: string, fill: number, mediatorDid: string) {
   const backend = new MemoryBackend();
   const { doc, seedKey } = await createSeedKeystore("", { seed: seedOf(fill) });
-  const vault = await Vault.create(backend, { label: name, keystore: doc, seedKey, mediatorDid });
+  const vault = await createVault(backend, { label: name, keystore: doc, seedKey, mediatorDid });
   return { backend, vault, seedKey };
 }
 
 function attach(
   name: string,
   backend: MemoryBackend,
-  vault: Vault,
+  vault: PeerVault,
   seedKey: CryptoKey,
   mediator: Pick<FakeMediator, "fetch" | "WebSocket">,
   handlers: ProtocolHandler[] = []
@@ -157,7 +162,7 @@ async function newParty(name: string, fill: number, mediator: FakeMediator, hand
 /** The same vault, opened fresh from its bytes — a page reload. */
 async function reopen(party: Party, mediator: Pick<FakeMediator, "fetch" | "WebSocket">): Promise<Party> {
   party.agent.destroy();
-  const vault = await Vault.open(party.backend);
+  const vault = await openVault(party.backend);
   return attach(party.name, party.backend, vault, party.seedKey, mediator);
 }
 
@@ -406,7 +411,7 @@ describe("Agent through a mediator", () => {
     const mediator = await newMediator();
     const backend = new MemoryBackend();
     const { doc, seedKey } = await createSeedKeystore("", { seed: seedOf(7) });
-    const vault = await Vault.create(backend, { label: "Carol", keystore: doc, seedKey });
+    const vault = await createVault(backend, { label: "Carol", keystore: doc, seedKey });
     const carol = attach("Carol", backend, vault, seedKey, mediator);
     const bob = await newParty("Bob", 2, mediator);
     await Promise.all([carol.agent.start(), bob.agent.start()]);
@@ -1041,7 +1046,7 @@ describe("Agent with an outbox", () => {
     // start does not send it, though the line is up
     const other = new MemoryBackend();
     expect(await importVault(other, files)).toMatchObject({ kind: "restored", held: 1 });
-    const again = attach("Alice again", other, await Vault.open(other), alice.seedKey, mediator);
+    const again = attach("Alice again", other, await openVault(other), alice.seedKey, mediator);
     await again.agent.start();
     await withTimeout(again.live);
     await new Promise((r) => setTimeout(r, 50));

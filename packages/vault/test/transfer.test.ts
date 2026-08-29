@@ -16,9 +16,12 @@ import {
   orderSegments,
   snapshotVault,
   type ContactRecord,
+  type MintDid,
   type PlainMessage,
   type VaultBackend,
 } from "../src/index.js";
+
+const mint: MintDid = (identity, service) => ({ did: `did:test:${identity.did.slice(8)}${service === null ? "" : `;via=${service}`}` });
 
 const segmentsIn = (names: string[]) => orderSegments(names).length;
 
@@ -38,6 +41,7 @@ async function vaultWith(seed: Uint8Array, label = "Alice"): Promise<{ backend: 
     keystore: doc,
     seedKey,
     mediatorDid: "did:web:mediator.example",
+    mint,
   });
   return { backend, vault };
 }
@@ -47,7 +51,7 @@ async function restoreOf(backend: VaultBackend): Promise<{ backend: VaultBackend
   const other = new MemoryBackend();
   const outcome = await importVault(other, await snapshotVault(backend));
   expect(outcome.kind).toBe("restored");
-  return { backend: other, vault: await Vault.open(other) };
+  return { backend: other, vault: await Vault.open(other, { mint }) };
 }
 
 describe("snapshot + import", () => {
@@ -76,7 +80,7 @@ describe("snapshot + import", () => {
     for (const path of Object.keys(files)) {
       expect(dec.decode((await other.read(path)) as Uint8Array)).toBe(dec.decode(files[path] as Uint8Array));
     }
-    const restored = await Vault.open(other);
+    const restored = await Vault.open(other, { mint });
     expect(restored.config.identity.anchor.did).toBe(vault.config.identity.anchor.did);
     const records = await restored.messages.read();
     expect(records.map((r) => r.msg.id)).toEqual(["m1", "m2"]);
@@ -115,7 +119,7 @@ describe("snapshot + import", () => {
     expect(dec.decode((await other.read(".estoc/other-client/notes/todo.md"))!)).toBe("from a");
 
     // B (the restore) mints a key A has never seen, and edits/creates unknown files
-    const vb = await Vault.open(other);
+    const vb = await Vault.open(other, { mint });
     const { seedKey } = await createSeedKeystore("pw", { seed: SEED_A });
     const carol = newContact("Carol", "did:peer:4carol", new Date(2_000));
     await vb.mintPairwise(seedKey, carol, "did:web:mediator.example");
@@ -129,7 +133,7 @@ describe("snapshot + import", () => {
     // absent files arrive, present ones are not overwritten, cache/ never travels
     const merged = await importVault(a, { ...(await snapshotVault(other)), ".estoc/cache/x": enc.encode("no") });
     expect(merged).toMatchObject({ kind: "merged", contactsAdded: 1, keysAdded: 1, filesCopied: 1 });
-    const va2 = await Vault.open(a);
+    const va2 = await Vault.open(a, { mint });
     expect(va2.keystore.keys.map((k) => k.name)).toContain(carolKey);
     expect(va2.keystore.seedJwe).toBe(va.keystore.seedJwe);
     await expect(va2.peerIdentity(seedKey, carol.myDids![0]!, "did:web:mediator.example")).resolves.toMatchObject({ did: carol.myDids![0]!.did });
@@ -231,7 +235,7 @@ describe("snapshot + import", () => {
     const segments = orderSegments(await a.list(MESSAGES_DIR));
     expect(segments).toHaveLength(2);
     expect(segments[1]).toBe(outcome.kind === "merged" ? outcome.segment : null);
-    const merged = await Vault.open(a);
+    const merged = await Vault.open(a, { mint });
     expect((await merged.messages.read()).map((r) => r.msg.id)).toEqual(["a1", "a2", "a3", "shared", "b1"]);
     expect((await merged.contacts.all()).map((c) => c.name)).toEqual(["Robert", "Carol"]);
     // one cid-named file each: the rename rewrote Bob's in place
@@ -282,7 +286,7 @@ describe("snapshot + import", () => {
     expect(outcome.kind).toBe("merged");
     if (outcome.kind !== "merged") return;
     expect(outcome.invitationsAdded).toBe(0);
-    const va2 = await Vault.open(a);
+    const va2 = await Vault.open(a, { mint });
     const firstOnA = (await va2.invitations.byId(first.record.id))!;
     expect(firstOnA.acceptedBy).toBe("cid-bob");
     expect(firstOnA.acceptedAt).toBe("2026-08-15T00:00:00.000Z");
@@ -292,7 +296,7 @@ describe("snapshot + import", () => {
     // and A into B: the second arrives
     const back = await importVault(b, await snapshotVault(a));
     expect(back.kind === "merged" && back.invitationsAdded).toBe(1);
-    expect((await Vault.open(b).then((v) => v.invitations.all())).map((i) => i.id).sort()).toEqual([first.record.id, second.record.id].sort());
+    expect((await Vault.open(b, { mint }).then((v) => v.invitations.all())).map((i) => i.id).sort()).toEqual([first.record.id, second.record.id].sort());
   });
 
   it("refuses another identity's vault, and things that are not vaults", async () => {

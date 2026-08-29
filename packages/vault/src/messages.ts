@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from "uuid";
 
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { MESSAGES_DIR } from "./layout.js";
 import { SegmentedLog, parseSegment as parseLog, type DamagedLine } from "./log.js";
 

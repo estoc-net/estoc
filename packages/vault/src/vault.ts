@@ -10,8 +10,7 @@ import {
 
 import { v7 as uuidv7 } from "uuid";
 
-import type { VaultBackend } from "../backend/types.js";
-import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
+import type { VaultBackend } from "./backend/types.js";
 import { parseConfig, type KeyRef, type VaultConfig } from "./config.js";
 import { BlobStore } from "./blobs.js";
 import { ContactStore, currentMyDid, type ContactRecord } from "./contacts.js";
@@ -32,7 +31,34 @@ import { MessageLog } from "./messages.js";
  * which keys exist. So every mint here writes the record that names the
  * key first and the cache entry second: a crash between the two leaves a
  * name the next open derives on demand, never a key nobody references.
+ *
+ * What a key is minted *as* is not the vault's to know. The contract
+ * records DIDs as snapshots (`{key, did}` refs) and the vault keeps those
+ * snapshots; turning a derived key and a service into a DID is the
+ * `MintDid` the caller hands in when opening the vault — did:peer:4 for
+ * the agent, anything with a `did` for a test.
  */
+
+/** A DID minted from a key: whatever the minter returns, as long as it names the DID. */
+export interface MintedDid {
+  did: string;
+}
+
+/**
+ * How this vault turns a seed-derived key into a DID. `serviceUri` is the
+ * DIDComm service the DID should carry — a mediator's routing DID — or
+ * null for a DID that is only ever picked up from. Must be deterministic:
+ * the same identity and service give the same DID, which is how a vault
+ * checks its recorded DIDs against its seed (`peerIdentity`).
+ */
+export type MintDid<M extends MintedDid = MintedDid> = (
+  identity: DerivedIdentity,
+  serviceUri: string | null
+) => M;
+
+export interface VaultOptions<M extends MintedDid = MintedDid> {
+  mint: MintDid<M>;
+}
 
 /**
  * Key names are derivation paths (`@estoc/keystore` v3): the seed and the
@@ -63,7 +89,7 @@ export function isRelationshipKey(name: string): boolean {
   return name.startsWith(KEY_PAIRWISE_PREFIX) || name.startsWith(KEY_INVITE_PREFIX);
 }
 
-export interface CreateVaultOptions {
+export interface CreateVaultOptions<M extends MintedDid = MintedDid> extends VaultOptions<M> {
   label: string;
   /** a fresh v3 keystore document (from createSeedKeystore) — the vault adds its keys to it */
   keystore: SeedKeystoreDocument;
@@ -77,18 +103,22 @@ export interface CreateVaultOptions {
   now?: Date;
 }
 
-export class Vault {
+export class Vault<M extends MintedDid = MintedDid> {
   readonly contacts: ContactStore;
   readonly invitations: InvitationStore;
   readonly messages: MessageLog;
   readonly deliveries: DeliveryLog;
   readonly blobs: BlobStore;
 
+  private readonly mint: MintDid<M>;
+
   private constructor(
     private readonly backend: VaultBackend,
     public config: VaultConfig,
-    public keystore: SeedKeystoreDocument
+    public keystore: SeedKeystoreDocument,
+    options: VaultOptions<M>
   ) {
+    this.mint = options.mint;
     this.contacts = new ContactStore(backend);
     this.invitations = new InvitationStore(backend);
     this.messages = new MessageLog(backend);
@@ -101,7 +131,10 @@ export class Vault {
     return (await backend.read(CONFIG_PATH)) !== null;
   }
 
-  static async open(backend: VaultBackend): Promise<Vault> {
+  static async open<M extends MintedDid = MintedDid>(
+    backend: VaultBackend,
+    options: VaultOptions<M>
+  ): Promise<Vault<M>> {
     const configBytes = await backend.read(CONFIG_PATH);
     if (configBytes === null) {
       throw new Error("no vault here: config.json is missing");
@@ -113,7 +146,8 @@ export class Vault {
     return new Vault(
       backend,
       parseConfig(text(configBytes)),
-      parseSeedKeystore(text(keystoreBytes))
+      parseSeedKeystore(text(keystoreBytes)),
+      options
     );
   }
 
@@ -121,10 +155,13 @@ export class Vault {
    * Lay down a new vault: the anchor (the key named `anchor`, a did:key),
    * and nothing else — an identity is a seed and a name. Naming a mediator here is a
    * convenience for `setMediator`, which adds the mediator-facing
-   * did:peer:4 (no service); the public DID waits for mediate-grant, since
+   * mediator-facing DID (no service); the public DID waits for mediate-grant, since
    * its service is the routing DID the grant hands out.
    */
-  static async create(backend: VaultBackend, options: CreateVaultOptions): Promise<Vault> {
+  static async create<M extends MintedDid = MintedDid>(
+    backend: VaultBackend,
+    options: CreateVaultOptions<M>
+  ): Promise<Vault<M>> {
     if (await Vault.exists(backend)) {
       throw new Error("a vault already exists here");
     }
@@ -141,7 +178,7 @@ export class Vault {
       identity: { anchor: { key: KEY_ANCHOR, did: anchor.identity.did } },
       mediation: null,
     };
-    const vault = new Vault(backend, config, anchor.doc);
+    const vault = new Vault(backend, config, anchor.doc, options);
     // the keystore first here, alone: `exists` is "config.json is there",
     // so a crash between the two leaves no vault rather than a headless one
     await vault.saveKeystore();
@@ -154,7 +191,7 @@ export class Vault {
 
   /**
    * Name the mediator this vault will ask for mediation, and mint the
-   * did:peer:4 the mediator will know it by (the `mediation/<id>/me` key,
+   * DID the mediator will know it by (the `mediation/<id>/me` key,
    * no service; the id is a fresh uuidv7 recorded as `mediation.id`).
    * Reachability is a decision taken after the identity exists, and this
    * is where it is taken — and retaken: a vault that already has a
@@ -183,7 +220,7 @@ export class Vault {
     this.config.mediation = {
       id,
       mediatorDid,
-      me: { key, did: mintPeerDid(me, null).did },
+      me: { key, did: this.mint(me, null).did },
       routingDid: null,
       public: null,
     };
@@ -266,7 +303,7 @@ export class Vault {
   }
 
   /**
-   * Mint a fresh pairwise did:peer:4 toward a contact — the key
+   * Mint a fresh pairwise DID toward a contact — the key
    * `pair/<cid>/<uuidv7>`, with the mediator's routing DID as its service
    * — and record it as our current DID toward them, closing the previous
    * one. The record is saved, then the key cached; registering the DID
@@ -279,10 +316,10 @@ export class Vault {
     contact: ContactRecord,
     routingDid: string,
     now = new Date()
-  ): Promise<PeerIdentity> {
+  ): Promise<M> {
     const uses = contact.myDids ?? [];
     const key = `${KEY_PAIRWISE_PREFIX}${contact.cid}/${uuidv7({ msecs: now.getTime() })}`;
-    const minted = mintPeerDid(await this.derive(seedKey, key), routingDid);
+    const minted = this.mint(await this.derive(seedKey, key), routingDid);
     const at = now.toISOString();
     const current = currentMyDid(contact);
     if (current !== null) {
@@ -306,10 +343,10 @@ export class Vault {
     routingDid: string,
     goal: string,
     now = new Date()
-  ): Promise<{ record: InvitationRecord; identity: PeerIdentity }> {
+  ): Promise<{ record: InvitationRecord; identity: M }> {
     const id = crypto.randomUUID();
     const key = `${KEY_INVITE_PREFIX}${id}`;
-    const identity = mintPeerDid(await this.derive(seedKey, key), routingDid);
+    const identity = this.mint(await this.derive(seedKey, key), routingDid);
     const record: InvitationRecord = {
       id,
       key,
@@ -323,7 +360,7 @@ export class Vault {
   }
 
   /**
-   * Re-mint the did:peer:4 a key ref names and check it matches what was
+   * Re-mint the DID a key ref names and check it matches what was
    * recorded — the seed in the keystore must be the seed that minted this
    * vault's DIDs, or nothing sealed to them could be opened.
    */
@@ -331,9 +368,9 @@ export class Vault {
     seedKey: SeedKey,
     ref: KeyRef,
     serviceUri: string | null
-  ): Promise<PeerIdentity> {
+  ): Promise<M> {
     const identity = await this.derive(seedKey, ref.key);
-    const minted = mintPeerDid(identity, serviceUri);
+    const minted = this.mint(identity, serviceUri);
     if (minted.did !== ref.did) {
       throw new Error(`key "${ref.key}" no longer derives its recorded DID`);
     }

@@ -1,4 +1,4 @@
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { BLOBS_DIR } from "./layout.js";
 
 /**

@@ -1,5 +1,4 @@
-import { currentDid, didPlaceholder, type ContactRecord } from "../vault/contacts.js";
-import type { PlainMessage } from "../vault/messages.js";
+import { currentDid, didPlaceholder, type ContactRecord, type PlainMessage } from "@estoc/vault";
 import type { HandlerContext, ProtocolHandler } from "./handler.js";
 
 /**

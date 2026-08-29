@@ -12,7 +12,7 @@ Two hosts ship:
   the seed in IndexedDB, the DIDComm WASM as Vite loads it. The RPC rides a
   message port (`serve` / `connect` in `src/rpc.ts`; structured clone).
 - **A Node process** (`@estoc/daemon/node`, the `estoc-daemon` command): a
-  folder on disk (`FsBackend`, `<folder>/.estoc` the vault), a pid file for
+  folder on disk (`FsBackend` from `@estoc/vault/node`, `<folder>/.estoc` the vault), a pid file for
   one daemon per folder, the seed in memory only (every start is locked
   until a UI types the passphrase), `didcomm-node`, and one HTTP server
   that serves the app and takes the app's WebSocket on the same origin. The

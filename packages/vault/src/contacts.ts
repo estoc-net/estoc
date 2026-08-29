@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from "uuid";
 
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { CONTACTS_DIR, prettyJson, text, utf8 } from "./layout.js";
 
 /**

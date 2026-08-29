@@ -1,4 +1,5 @@
-import { ESTOC_DIR, OpfsBackend, type DidcommApi } from "@estoc/agent-core";
+import { ESTOC_DIR, OpfsBackend } from "@estoc/vault";
+import type { DidcommApi } from "@estoc/agent-core";
 import { createDaemon, serve, type DaemonHost, type Emit } from "@estoc/daemon";
 
 import { FromPrior, Message, initDidcomm } from "../didcomm/wasm.js";

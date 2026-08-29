@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The vault is read and written through `@estoc/vault` (`Vault` over
+  `FsBackend` from `@estoc/vault/node`) instead of a second implementation
+  of the format here. Same files, same modes (`.estoc` 0700, the keystore
+  0600 — kept across rewrites now), same commands; `writeKeystore` is gone
+  from the exports.
 ## 0.3.0 — 2026-08-26
 
 - `estoc object render [<dir|zip>] [--template <html>] [--out <file>]

@@ -1,6 +1,6 @@
 import { base64urlToUtf8, utf8ToBase64url } from "@estoc/did-peer";
 
-import type { InvitationRecord } from "../vault/invitations.js";
+import type { InvitationRecord } from "@estoc/vault";
 import { PLAIN_TYP } from "./didcomm.js";
 import { OOB_INVITATION } from "./spec.js";
 

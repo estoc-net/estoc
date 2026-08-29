@@ -1,4 +1,4 @@
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { INVITATIONS_DIR, prettyJson, text, utf8 } from "./layout.js";
 
 /**

@@ -1,4 +1,4 @@
-import { counterpartyOf, type MessageRecord } from "@estoc/agent-core";
+import { counterpartyOf, type MessageRecord } from "@estoc/vault";
 
 /**
  * A log record as the UI holds it: the record itself, plus the two things

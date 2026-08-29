@@ -1,19 +1,21 @@
 import { reactive, toRaw } from "vue";
 import type { FolderObject } from "@estoc/folder-object";
 import {
-  BASIC_MESSAGE,
   counterpartyOf,
   currentDid,
   currentMyDid,
   foldDeliveries,
+  type ContactRecord,
+  type ImportOutcome,
+  type InvitationRecord,
+  type MessageRecord,
+} from "@estoc/vault";
+import {
+  BASIC_MESSAGE,
   invitationMessage,
   invitationUrl,
   parseInvitation,
-  type ContactRecord,
-  type ImportOutcome,
   type Invitation,
-  type InvitationRecord,
-  type MessageRecord,
   type SendOptions,
   type VerifiedShare,
 } from "@estoc/agent-core";

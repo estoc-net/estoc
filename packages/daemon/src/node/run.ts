@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ESTOC_DIR } from "@estoc/agent-core";
+import { ESTOC_DIR } from "@estoc/vault";
 
 import { nodeHost } from "./host.js";
 import { serveDaemon, type Served } from "./serve.js";

@@ -1,4 +1,4 @@
-import type { VaultBackend } from "../backend/types.js";
+import type { VaultBackend } from "./backend/types.js";
 import { DELIVERIES_DIR } from "./layout.js";
 import { SegmentedLog } from "./log.js";
 import type { MessageRecord } from "./messages.js";

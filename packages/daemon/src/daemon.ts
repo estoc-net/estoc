@@ -1,16 +1,21 @@
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import type { FolderObject } from "@estoc/folder-object";
 import {
-  Agent,
   Vault,
-  type AgentStatus,
   type ContactRecord,
   type ImportOutcome,
-  type Invitation,
   type InvitationRecord,
   type MessageRecord,
-  type SendOptions,
   type VaultBackend,
+} from "@estoc/vault";
+import {
+  Agent,
+  createVault,
+  openVault,
+  type AgentStatus,
+  type Invitation,
+  type PeerVault,
+  type SendOptions,
   type VerifiedShare,
 } from "@estoc/agent-core";
 
@@ -43,7 +48,7 @@ export interface DaemonCore extends Daemon {
  */
 export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   let backend: VaultBackend | null = null;
-  let vault: Vault | null = null;
+  let vault: PeerVault | null = null;
   let seedKey: CryptoKey | null = null;
   let agent: Agent | null = null;
   let booted = false;
@@ -61,7 +66,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   };
   const failure = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-  async function snapshot(v: Vault): Promise<Snapshot> {
+  async function snapshot(v: PeerVault): Promise<Snapshot> {
     let damaged = 0;
     const contacts = await v.contacts.all();
     const invitations = await v.invitations.all();
@@ -79,7 +84,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     };
   }
 
-  async function attachAgent(v: Vault, key: CryptoKey): Promise<void> {
+  async function attachAgent(v: PeerVault, key: CryptoKey): Promise<void> {
     const didcomm = await host.didcomm();
     const a = new Agent({
       ...host.agentOptions,
@@ -103,7 +108,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   }
 
   /** A vault and its unlocked seed are in hand: report, start. */
-  async function open(v: Vault, key: CryptoKey): Promise<void> {
+  async function open(v: PeerVault, key: CryptoKey): Promise<void> {
     vault = v;
     seedKey = key;
     current = "open";
@@ -170,9 +175,9 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         phase("onboarding");
         return;
       }
-      let v: Vault;
+      let v: PeerVault;
       try {
-        v = await Vault.open(backend);
+        v = await openVault(backend);
       } catch (err) {
         // a vault this version cannot read: written by a newer client, or by
         // an older format this one does not migrate — say so, and leave the
@@ -195,7 +200,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         throw new Error("storage is not available");
       }
       const { doc, seedKey: key } = await createSeedKeystore(passphrase);
-      const v = await Vault.create(backend, { label: name, keystore: doc, seedKey: key });
+      const v = await createVault(backend, { label: name, keystore: doc, seedKey: key });
       await host.cacheSeedKey(key);
       await open(v, key);
     },
@@ -208,7 +213,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if (outcome.kind !== "restored") {
         throw new Error("a vault already exists here");
       }
-      const v = await Vault.open(backend);
+      const v = await openVault(backend);
       let key: CryptoKey;
       try {
         key = await unlockSeedKeystore(v.keystore, passphrase);
@@ -268,7 +273,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       // the agent is restarted on the merged vault: its stores cache what
       // they read, and the merge wrote past them
       stopAgent();
-      await open(await Vault.open(backend), seedKey);
+      await open(await openVault(backend), seedKey);
       return outcome;
     },
 

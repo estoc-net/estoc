@@ -1,10 +1,11 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ESTOC_DIR, type DidcommApi } from "@estoc/agent-core";
+import { ESTOC_DIR } from "@estoc/vault";
+import { FsBackend } from "@estoc/vault/node";
+import type { DidcommApi } from "@estoc/agent-core";
 
 import type { DaemonHost } from "../host.js";
-import { FsBackend } from "./fs-backend.js";
 import { guardedFetch } from "./guarded-fetch.js";
 
 /**

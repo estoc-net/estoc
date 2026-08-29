@@ -1,14 +1,15 @@
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { segmentsOf, type VaultBackend } from "@estoc/agent-core";
+import { segmentsOf, type VaultBackend } from "../backend/types.js";
 
 /**
  * A vault in a folder on disk — the page the VaultBackend comment
  * promised. Whole-file writes go to a sibling temp file and are renamed
  * into place, which the filesystem does atomically, so a crash mid-write
- * never truncates a keystore. Appends are `appendFile`; a crash there can
- * leave a partial last line, which the log reader skips.
+ * never truncates a keystore. A replaced file keeps its mode (a keystore
+ * the CLI made 0600 stays 0600 across rewrites). Appends are `appendFile`;
+ * a crash there can leave a partial last line, which the log reader skips.
  *
  * Bytes come back as plain `Uint8Array` views, not Buffers: a Buffer
  * serialises itself as `{type, data}`, which is not what a wire wants.
@@ -38,6 +39,10 @@ export class FsBackend implements VaultBackend {
     const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
     try {
       await writeFile(tmp, data);
+      const mode = await modeOf(file);
+      if (mode !== null) {
+        await chmod(tmp, mode);
+      }
       await rename(tmp, file);
     } catch (err) {
       await rm(tmp, { force: true });
@@ -73,6 +78,17 @@ export class FsBackend implements VaultBackend {
       }
       throw err;
     }
+  }
+}
+
+async function modeOf(file: string): Promise<number | null> {
+  try {
+    return (await stat(file)).mode & 0o777;
+  } catch (err) {
+    if (isMissing(err)) {
+      return null;
+    }
+    throw err;
   }
 }
 

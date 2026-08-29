@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The vault format moved out to `@estoc/vault`.** `MemoryBackend`,
+  `OpfsBackend`, `VaultBackend`, `walk`, `segmentsOf`, the layout
+  constants, `parseConfig`, the contact/invitation/message/delivery
+  stores and helpers, `SegmentedLog`, `BlobStore`, `snapshotVault`,
+  `importVault` and `Vault` itself are no longer re-exported here —
+  import them from `@estoc/vault`. What stays is the binding of that
+  format to did:peer:4: `openVault(backend)` and
+  `createVault(backend, options)` (`Vault.open`/`Vault.create` with
+  `mintPeerDid` as the `MintDid`), `PeerVault` (`Vault<PeerIdentity>`),
+  `mintPeerDid`. `AgentOptions.vault` is a `PeerVault`.
 - `AgentOptions.packageFetch`: the fetch that gets a shared package, apart
   from the one that reaches the mediator. A package URL is the sender's
   word; a host that can reach a private network (the Node daemon in
