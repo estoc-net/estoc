@@ -1,4 +1,4 @@
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createSeedKeystore,
@@ -98,7 +98,8 @@ export interface InitResult {
  * touch an existing `.estoc` — it holds keys. `Vault.create` writes the
  * keystore before the config, so a crash midway leaves "no vault", not a
  * vault without keys (vault-format §7); `.estoc` is 0700 and the keystore
- * 0600, and the backend keeps that mode across rewrites.
+ * 0600 from its first byte: an empty 0600 placeholder is laid down before
+ * `create`, and the backend's rewrite keeps that mode.
  */
 export async function initVault(root: string, label: string, passphrase: string): Promise<InitResult> {
   const vault = vaultAt(root);
@@ -110,8 +111,10 @@ export async function initVault(root: string, label: string, passphrase: string)
   // itself is tightened — the content folder is theirs, not ours.
   await mkdir(vault.root, { recursive: true });
   await mkdir(vault.dir, { mode: 0o700 });
+  // Seed the keystore path at 0600 so the backend's mode-preserving rewrite
+  // inherits it; key material is never on disk at a wider mode, even briefly.
+  await writeFile(path.join(vault.root, KEYSTORE_PATH), "", { mode: 0o600 });
   const created = await EstocVault.create(new FsBackend(vault.root), { label, keystore: doc, seedKey, mint: noDids });
-  await chmod(path.join(vault.root, KEYSTORE_PATH), 0o600);
   return { vault, did: created.config.identity.anchor.did };
 }
 
