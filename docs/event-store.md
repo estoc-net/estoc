@@ -11,8 +11,8 @@ together replace `vault-format-2.md`:
   store → folder — and is the exchange form every store must read and
   write;
 - `vault-events.md` says what the events *mean*: the types a vault
-  records, in which scope, and the folds that turn them into contacts,
-  threads and addresses.
+  records, what each carries, and the folds that turn them into
+  contacts, threads and addresses.
 
 Dependency runs one way. The folder implements this document; the
 events are written on top of it; the folder and the events do not know
@@ -30,12 +30,11 @@ database with one table, and the merge is five merges. When a caller
 asks "what happened to this contact", the answer is spread across three
 of them.
 
-Looked at as a database, the whole vault is **one table**. Each
-directory level of the folder — device, scope, the keys of a partition
-— is a column; a segment is a page; a merge is `INSERT OR IGNORE`. The
-folder is a serialization of that table, chosen because copying a
-subtree is free on a file system. Nothing in the model depends on the
-choice.
+Looked at as a database, the whole vault is **one table**. The device
+directory is one column and every field of a line is another; a
+segment is a page; a merge is `INSERT OR IGNORE`. The folder is a
+serialization of that table, chosen because copying a subtree is free
+on a file system. Nothing in the model depends on the choice.
 
 So the program's interface should be the table, not the folder. Folds
 read events through a filter; policy appends events; the store behind
@@ -50,7 +49,7 @@ must be able to read and write.
 |----------|---------|-------|
 | `event-store.md` | the event (§3), ids and order (§4), the store (§5), blobs and files (§6), exchange (§7) | — |
 | `vault-folder.md` | the tree, `locate` / `place`, segments, singletons, the folder store, snapshot and import as file operations | this |
-| `vault-events.md` | every event type, per scope; folds; erasing; deleting | this |
+| `vault-events.md` | every event type and what it carries; partitions; folds; erasing; deleting | this |
 
 What is *not* here: no path (`vault-folder.md`), no event type, no fold
 (`vault-events.md`), and not the trace log, which is local and stays a
@@ -100,53 +99,48 @@ files; `vault-events.md` §1 the ones about meaning.
 
 ## 3. The event
 
-An event is a JSON object. Every event has:
+An event is a JSON object. Four fields are the **envelope**, and the
+store knows only these:
 
 | field    | meaning |
 |----------|---------|
 | `eid`    | a bare uuidv7 (§4): minted at append, the dedup key; the same kind of id as `mid` and `cid`. |
 | `at`     | RFC 3339 UTC (§4). |
-| `type`   | the event type, as `vault-events.md` specifies per scope. |
-| `author` | the authoring device (§4). A field, on the event wherever it is; nothing is parsed out of `eid`. |
-| `scope`  | one of `me`, `contact`, `part`: which family of log. |
+| `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own. |
+| `author` | the authoring device (§4). |
 
-and, by scope, the rest of its **locator**:
+Everything else is the **payload**: the event's own fields, as
+specified per type, opaque to the store. What an event is *about* — a
+contact, a key, a device, a message, the pair of keys an envelope
+proved — is a payload field naming it, and `vault-events.md` says
+which. The store does not know the vault's shape at all. A partition
+(`vault-events.md` §3) is two fields every observation carries and a
+fold groups by, not a place in the store; a contact is a `cid` on a
+decision, as a key is a `key` and a device a `dev`.
 
-| scope     | locator fields      | holds |
-|-----------|---------------------|-------|
-| `me`      | (none)              | what a device says about the identity and itself |
-| `contact` | `cid`               | decisions about one contact |
-| `part`    | `myKey`, `peerKey`  | observations involving one key of ours and one of theirs |
+An earlier draft gave the store a **locator** — `scope`, `cid`,
+`myKey`, `peerKey` — and mirrored it as directories. It was dropped
+because nothing the store does needed it: every reader reads the whole
+set (§5.3), a merge copies by device (`vault-folder.md` §8.3), and the
+operations that might have wanted a partition as a unit — erasing one,
+syncing one — are not in version 2 and would not need directories if
+they were. What the locator did do was multiply segments and tie the
+store to one vault's shape.
 
-`author` and `scope` are locator fields too. Together they are the
-**Locator**: everything that says *where* an event is, and nothing that
-says what it is. The rest of the object is the event's **payload**: the
-event's own fields, as specified per type.
-
-**The partition scheme.** The three scopes are the one thing the store
-knows about the vault's shape, and it knows the shape, not the meaning:
-which types belong in which scope, and what a `cid`, a `myKey` or a
-`peerKey` is, are `vault-events.md`'s (§2–3 there). The scheme lives
-here rather than there because it is what a store filters, erases,
-exports and — one day — syncs by, and because typing it as a union is
-what lets a caller never spell a path. A store that had to be generic
-would carry an opaque scope and a key list instead; this one is the
-vault's store, and says so.
-
-**Reserved names.** `eid`, `at`, `type`, `author`, `scope`, `cid`,
-`myKey`, `peerKey` belong to the envelope; a payload must not use them,
-and a store rejects an event whose payload does. `dev` is *not*
-reserved: `device.label { dev }` and `device.retired { dev }` name the
-device a decision is about, which is payload, and is why the locator's
-authorship field is called `author` and not `dev`.
+**Reserved names.** `eid`, `at`, `type`, `author` belong to the
+envelope; a payload must not use them, and a store rejects an event
+whose payload does. Nothing else is reserved: `device.label { dev }`
+names the device a decision is about and `contact.petname { cid }` the
+contact, and both are payload.
 
 Rules:
 
-1. **The locator is on the event.** Every event carries its full
-   locator as fields. Nothing about where an event belongs has to be
-   recovered from state; this is what partitioning on observed keys
-   rather than on `cid` (`vault-events.md` §3) bought, and it is what
-   makes a flat table with a `WHERE` clause a correct reading.
+1. **Everything about an event is on the event.** Which contact, which
+   partition, which message a line concerns is a field of it; nothing
+   has to be recovered from state or from where a store keeps it. This
+   is what makes a flat table a correct reading, and what lets a line
+   say what it is once it is apart from its store — in a report, a
+   grep, a copy.
 2. **`author` is authorship.** The `author` field is the only statement
    of who wrote an event, and a store appends only as its own `self`
    (§5.1). A serialization that also keeps events by author (the folder
@@ -157,12 +151,12 @@ Rules:
 3. **The store validates the envelope and nothing else.** On `append`
    and `ingest` it checks that the object is a JSON object; that `eid`
    is a well-formed uuidv7; that `at` is RFC 3339 UTC; that `type` is a
-   non-empty string; that the locator is complete for its `scope`; and
-   that no reserved name is used by the payload. An event that fails is
-   rejected — `append` throws, `ingest` reports (§5.2) — and never
-   stored. The payload is opaque: type-specific validation is the
-   fold's. Bytes a serialization holds that do not parse as an event at
-   all are a *damaged* line (§5.5), reported, not stored.
+   non-empty string; that `author` is a device id; and that no reserved
+   name is used by the payload. An event that fails is rejected —
+   `append` throws, `ingest` reports (§5.2) — and never stored. The
+   payload is opaque: type-specific validation is the fold's. Bytes a
+   serialization holds that do not parse as an event at all are a
+   *damaged* line (§5.5), reported, not stored.
 
 ## 4. Identity, time, order
 
@@ -193,31 +187,19 @@ Rules:
 ## 5. The store interface
 
 ```ts
-type Where =
-  | { scope: "me" }
-  | { scope: "contact"; cid: string }
-  | { scope: "part"; myKey: string; peerKey: string };
-
-type Locator = Where & { author: string };
-
-type Event = Locator & {
+type Event = {
   eid: string;                        // a bare uuidv7
   at: string;                         // RFC 3339 UTC
+  author: string;                     // a device id
   type: string;
   [field: string]: unknown;           // the payload; opaque here
 };
 
 /** What a caller hands to `append`: no eid, at, or author — the store mints them. */
-type Draft = Where & { type: string; [field: string]: unknown };
+type Draft = { type: string; [field: string]: unknown };
 
-interface Filter {
-  author?: string;
-  scope?: "me" | "contact" | "part";
-  cid?: string;
-  myKey?: string;
-  peerKey?: string;
-  type?: string;
-}
+/** Equality on top-level fields. A store may index some; the folder store reads and compares. */
+type Filter = { author?: string; type?: string; [field: string]: string | undefined };
 
 /** A position in this store's own arrival order. Opaque; meaningful only to the store that issued it. */
 type Token = string;
@@ -248,7 +230,10 @@ interface EventStore {
 ```
 
 Anything above the store — folds, policy, an application — sees the
-whole `Event` of §3 and never a path or a segment. Where a store keeps
+`Event` of §3 and never a path or a segment. A caller that wants the
+vault's own types typed — a `MessageIn` with its pair, a
+`ContactAttach` with its `cid` — declares them above the seam;
+`vault-events.md` is that declaration in prose. Where a store keeps
 an event, and in what bytes, is the store's own and is what
 `vault-folder.md` specifies for the folder.
 
@@ -300,10 +285,9 @@ appended by `self`, and no store's business.
 
 ### 5.3 `scan`
 
-Yields the store's whole event set, filtered: events whose locator
-fields equal every field given in `filter`, and whose `type` equals
-`filter.type` if given. One event per `eid` (conflicts resolved as
-§5.5). Order is canonical (§4).
+Yields the store's whole event set, filtered: events whose top-level
+fields equal every field given in `filter`. One event per `eid`
+(conflicts resolved as §5.5). Order is canonical (§4).
 
 **The store sorts.** No segment, file or table is assumed to be in
 canonical order, and a reader never merges pre-sorted streams: `at` is
@@ -312,11 +296,13 @@ ingested batch holds whatever order the events came in, and a database
 sorts in the query anyway. A vault's event set fits in memory; the cost
 of sorting it is not what any fold waits on.
 
-The filter is deliberately small: locator fields and `type`. A database
-store could answer richer questions; the folder store can only scan. A
-question the filter cannot ask (a thread by `thid`, a message by `mid`,
-"everything about this contact across partitions") is a fold, and lives
-in the cache (§7.4), so no store is asked to be a query engine.
+The filter is equality and nothing more: no ranges, no joins, no
+"across". A database store may index the fields it is asked about most
+(`author`, `type`, a partition's pair); the folder store reads
+everything and compares, and is no slower for it than it is at reading
+everything. A question equality cannot ask (a thread by time,
+everything about one contact across its partitions) is a fold, and
+lives in the cache (§7.4), so no store is asked to be a query engine.
 
 ### 5.4 `changes`
 
@@ -506,9 +492,9 @@ Not proposed for implementation now; written to show the seam holds.
 
 ### 8.1 Shape
 
-One table, the locator as columns, the payload as JSON, and two columns
-the folder gets for free from the file system — which segment an event
-belongs to and the order it arrived in:
+One table, the envelope as columns, the payload as JSON, and two
+columns the folder gets for free from the file system — which segment
+an event belongs to and the order it arrived in:
 
 ```sql
 CREATE TABLE events (
@@ -517,33 +503,33 @@ CREATE TABLE events (
   author   TEXT NOT NULL,
   at       TEXT NOT NULL,
   type     TEXT NOT NULL,
-  scope    TEXT NOT NULL,           -- me | contact | part
-  cid      TEXT,                    -- scope = contact
-  my_key   TEXT,                    -- scope = part
-  peer_key TEXT,                    -- scope = part
   seg      TEXT NOT NULL,           -- the segment this event is exported in; assigned once
   data     TEXT NOT NULL            -- the payload, JSON
 );
-CREATE INDEX events_part  ON events (my_key, peer_key, at, eid);
-CREATE INDEX events_cid   ON events (cid, at, eid);
+CREATE INDEX events_order ON events (at, eid, author);
+-- Payload fields a store wants to filter on are its own choice, e.g.
+--   my_key   TEXT GENERATED ALWAYS AS (json_extract(data, '$.myKey')),
+--   peer_key TEXT GENERATED ALWAYS AS (json_extract(data, '$.peerKey')),
+-- with an index on (my_key, peer_key, at, eid). The model does not say.
 CREATE TABLE blobs (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE files (path TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 ```
 
 `seg` is what §7.2 says a non-folder store must remember. `append`
-uses the segment the store currently holds open for `(self,
-locate(event))`, minting one the first time it writes to a locator and
-rotating on whatever policy it likes; `ingest` mints one per locator
-per call, as the folder does (`vault-folder.md` §8.3). Once assigned,
-`seg` never changes, and rows within a segment are exported in `seq`
-order; that is what makes two exports of one store prefix-related file
-by file. `append` and `ingest` are `INSERT` with the `UNIQUE` on `eid`
-catching duplicates, which the store then compares for conflict; `scan`
-is a `SELECT` with the filter as `WHERE` and `ORDER BY at, eid, author`;
-`changes` takes `token = MAX(seq)` and selects `seq > since AND seq <=
-token ORDER BY seq`. Blob write and skeleton append become one
-transaction, which the folder store cannot offer (§6). Collection
-(`vault-events.md` §8.3) is one query over `data` for referenced hashes.
+uses the segment the store currently holds open for `self`, minting
+one the first time it writes and rotating on whatever policy it likes;
+`ingest` mints one per author per call, as the folder does
+(`vault-folder.md` §8.3). Once assigned, `seg` never changes, and rows
+within a segment are exported in `seq` order; that is what makes two
+exports of one store prefix-related file by file. `append` and `ingest`
+are `INSERT` with the `UNIQUE` on `eid` catching duplicates, which the
+store then compares for conflict; `scan` is a `SELECT` with the filter
+as `WHERE` — envelope columns, generated columns, else `json_extract`
+— and `ORDER BY at, eid, author`; `changes` takes `token = MAX(seq)`
+and selects `seq > since AND seq <= token ORDER BY seq`. Blob write
+and skeleton append become one transaction, which the folder store
+cannot offer (§6). Collection (`vault-events.md` §8.3) is one query
+over `data` for referenced hashes.
 
 ### 8.2 Where it would run
 
@@ -557,10 +543,11 @@ transaction, which the folder store cannot offer (§6). Collection
   `opfs-sahpool` VFS needs no isolation but allows one connection,
   which fits the single-worker model the app already enforces with Web
   Locks. **IndexedDB** is the other candidate and needs no wasm: one
-  object store keyed by `eid` with an autoincrement `seq` and indexes on
-  `[my_key, peer_key, at, eid]`, `[cid, at, eid]`; the app already
-  depends on `idb`. Same interface, no SQL. Whether either is worth it
-  is a question for when a fold is too slow to run at open, not before.
+  object store keyed by `eid` with an autoincrement `seq` and an index
+  on whatever it filters by (`[myKey, peerKey, at, eid]` for threads);
+  the app already depends on `idb`. Same interface, no SQL. Whether
+  either is worth it is a question for when a fold is too slow to run
+  at open, not before.
 
 ### 8.3 What it must still do
 
@@ -601,8 +588,15 @@ What the code says today, for the record:
 
 ## 10. Open
 
-- **Filter surface** (§5.3): `mid` and `thid` are tempting. Kept out;
-  the cache answers them.
+- **Partial reads.** A store answers every `scan` from the whole set;
+  there is no reading one partition or one contact without the rest,
+  and the folder store reads every device's log to answer anything.
+  The cache (§7.4) is the answer, and the per-partition directories of
+  the earlier draft only ever helped a reader that does not exist.
+- **Indexing** (§5.3): equality on any field lets a store index what it
+  likes; whether the folder store should keep a local index for the
+  pair under `local/cache/`, or leave all of that to folds, is for when
+  open is slow.
 - **`fsync` on Node** (§5.1): a per-append `fsync` in `FsBackend` would
   let the daemon claim power-loss durability. Cheap; not decided.
 - **Daemon RPC.** Once the store is the interface, the daemon could
@@ -615,10 +609,11 @@ What the code says today, for the record:
 - **Extensions.** A handler or renderer that keeps state of its own
   would keep it as events, in a `type` namespace of its own, through
   this interface and nothing lower. What that namespace looks like
-  (a URI, a reverse-DNS prefix), whether a scope of its own is needed,
-  and what an extension may `append` (by `type` prefix, presumably) is
-  not decided; the interface is shaped so that the answer is a
-  convention on `type`, not a change here.
+  (a URI, a reverse-DNS prefix) and what an extension may `append` (by
+  `type` prefix, presumably) is not decided; the interface is shaped so
+  that the answer is a convention on `type`, not a change here. An
+  extension's event about a contact carries the `cid`, exactly as the
+  vault's own do.
 - **Trace.** Stays a `SegmentedLog` of its own, local, with its own
   retention, never exchanged. Whether it should implement the same
   interface for uniformity is a code question.

@@ -8,25 +8,25 @@ started over.
 
 The second of three documents. `event-store.md` says what a vault is to
 a program — the event, the store, exchange. This document is that store
-spelled as files: the tree, the mapping between a path and an event's
-fields in both directions, and how the reference store reads, appends
-and merges on a file system. It is also the **exchange form**: what a
-backup is, what any store must be able to render and read
-(`event-store.md` §7). It defines no event type and reads no payload;
-the types it carries are `vault-events.md`'s.
+spelled as files: one log per device, the mapping between a path and an
+event in both directions (which is short), and how the reference store
+reads, appends and merges on a file system. It is also the **exchange
+form**: what a backup is, what any store must be able to render and
+read (`event-store.md` §7). It defines no event type and reads no
+payload; the types it carries are `vault-events.md`'s.
 
 ## 0. On disk, what changes
 
 Version 1 kept three kinds of file — records, logs, singletons — and let
 a record (`contacts/<cid>.json`) be the truth about who a message
 belongs to. Version 2 keeps logs, singletons, and content-addressed
-blobs; nothing is a record. Every log lives under the device that
-authored it, so another copy of the vault is merged by copying
-directories. What is this copy's alone — which device it is, its caches,
-its traces — lives under `local/` and is never in a backup. A log line
-carries a message's skeleton; its body is a blob beside it, and erasing
-is unlinking blobs, never log lines. Message logs are partitioned by
-key pairs, not by contact, and key names carry no contact.
+blobs; nothing is a record. There is one log per device, under the
+device that wrote it, so another copy of the vault is merged by copying
+directories; what an event is about is on the line, not in a path.
+What is this copy's alone — which device it is, its caches, its traces
+— lives under `local/` and is never in a backup. A log line carries a
+message's skeleton; its body is a blob beside it, and erasing is
+unlinking blobs, never log lines.
 
 ## 1. What a vault is
 
@@ -55,10 +55,10 @@ The principles of `event-store.md` §2 as they land on a file system.
 3. **Nothing under `devices/` is ever unlinked.** Not a line, not a
    segment, not a directory. The only thing ever unlinked is a blob —
    and, under `local/`, what was never part of the vault.
-4. **A path is a locator and nothing more.** Every directory level is
-   one field of the event's locator (§4); a segment name says nothing
-   about the events in it (§5); no name encodes whose anything is. Path
-   rules as v1 §3.
+4. **A path says the author and nothing more.** What an event is about
+   is a field of the line (`event-store.md` §3); a segment name says
+   nothing about the events in it (§5); no name encodes whose anything
+   is. Path rules as v1 §3.
 
 ## 3. Layout
 
@@ -67,10 +67,7 @@ The principles of `event-store.md` §2 as they land on a file system.
   config.json                                singleton — format/version, anchor; immutable
   keystore.json                              singleton — @estoc/keystore v3, unchanged
   blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place anything is unlinked
-  devices/<dev>/                             everything device <dev> wrote
-    me/<seg>.jsonl                           scope me       — that this device exists; its decisions about the identity; what its mediator answered
-    contacts/<cid>/<seg>.jsonl               scope contact  — decisions about one contact
-    parts/<myKey>/<peerKey>/<seg>.jsonl      scope part     — observations in one partition: skeletons, deliveries, resolutions
+  devices/<dev>/<seg>.jsonl                  everything device <dev> wrote: one log, every event a line
   state/                                     reserved, as v1 §6.7
   local/                                     this copy's own; never in a snapshot, never merged; §6.4
     self.json                                which <dev> this copy writes as
@@ -81,59 +78,53 @@ The principles of `event-store.md` §2 as they land on a file system.
 
 Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
 `deliveries/`, `config.mediation`, and top-level `cache/` and `trace/`
-(moved under `local/`). Gone from the draft before this: a per-device
-`device.json`; a device announces itself with an event
-(`vault-events.md` §5).
+(moved under `local/`). Gone from the drafts before this: a per-device
+`device.json` (a device announces itself with an event,
+`vault-events.md` §5), and the directories `me/`, `contacts/<cid>/`,
+`parts/<myKey>/<peerKey>/` under a device — what an event is about is
+a field, and a reader reads the whole log anyway (§8.1).
 
 ## 4. Folder ↔ store
 
-The tree is the locator of `event-store.md` §3, spelled as a path. Two
-pure functions:
-
 ```
-locate(event)          → "devices/<author>/me/"
-                       | "devices/<author>/contacts/<cid>/"
-                       | "devices/<author>/parts/<myKey>/<peerKey>/"
-
-place(path, line)      → event      (the path gives the locator; the line gives the rest)
+locate(event)          → "devices/<author>/"
+place(path, line)      → line, with line.author checked against <dev> in path
 ```
 
 `locate` is store → folder: where an event is written, and where an
 export renders it. `place` is folder → store: what a line under a path
-*is*. Everything else in this document is built from these two.
+*is*. There is nothing else to map:
 
-- **On disk, the line omits the locator below `author`.** A line under
-  `devices/k7q3ma/parts/did/0198…/abc…/` does not repeat `scope`,
-  `myKey`, `peerKey`; `place` reinjects them. It does carry `author`:
-  six characters, the one field a line must be able to say for itself
-  once it is apart from its path (in a report, a grep, a copy), and the
-  one that checks the path (rule 2). So a line is
-  `{ eid, author, at, type, ...payload }`, and the examples in
-  `vault-events.md` are lines.
-- **The rest of the locator is recoverable from the path alone.**
-  `myKey` is a key name and has slashes of its own (`did/0198…`,
-  `mediation/0198…/me`); `peerKey` is always the last directory under
-  `parts/`, and everything between `parts/` and it is `myKey`.
-- **In memory, the event is whole.** Anything above the folder store
-  sees the full object and never a path.
-- **The mapping is total and injective on locators.** Every valid
-  locator has exactly one directory, and every directory under
-  `devices/<author>/` that holds segments parses to exactly one
-  locator. A directory that does not parse is not part of the event
-  set; a reader reports it and carries it (§11), as v1 §8 does with
-  unknown paths.
+- **The line is the event.** One JSON object per line, every field the
+  event has, nothing elided and nothing reinjected. A line apart from
+  its path — in a report, a grep, a copy — says everything about
+  itself, including who wrote it.
+- **The path checks the line.** A line whose `author` is not the `dev`
+  of the directory it sits in is refused as damaged (§8.5); the
+  directory never supplies the author, it confirms it.
+- **Every directory under `devices/` that holds segments is a device.**
+  A name that is not a device id (six lowercase base32 characters,
+  `event-store.md` §4), or anything under it that is not a segment, is
+  not part of the event set; a reader reports it and carries it (§11),
+  as v1 §8 does with unknown paths.
 - **A segment is not part of an event's identity** (§5).
+
+The drafts before this mirrored each event's subject into directories
+— `contacts/<cid>/`, `parts/<myKey>/<peerKey>/` — and the mapping was
+a page. It was dropped because no reader used it (§8.1), a merge never
+looked at it (§8.3), and every partition of every device cost a
+segment per merge (§12).
 
 ## 5. Segments
 
 `<seg>` is a uuidv7; a segment is `<seg>.jsonl`, one event per line,
-under the directory `locate` gives.
+under `devices/<author>/`.
 
 - **The writer's segments.** A device appends to the newest segment it
-  minted under a directory, or mints a fresh one; rotation is the
-  writer's own policy. A first append heals a segment that does not end
-  in a newline by terminating the fragment before writing; the fragment
-  is a damaged line (§8.5).
+  minted, or mints a fresh one; rotation is the writer's own policy. A
+  first append heals a segment that does not end in a newline by
+  terminating the fragment before writing; the fragment is a damaged
+  line (§8.5).
 - **The importer's segments.** A merge that brings in another device's
   events writes them into a segment *this* vault mints under that
   device's directory (rule 2, §8.3) — never into a segment the device
@@ -148,8 +139,8 @@ under the directory `locate` gives.
   (rule 2). A store that is not a folder has to remember which segment
   each event would be rendered into (`event-store.md` §7.2), for the
   same reason.
-- **A log's segments are the union** of `devices/*/<log path>/<seg>.jsonl`
-  across every device, and a reader unions them by `eid`.
+- **A device's log is the union** of its segments, wherever they were
+  minted, and a reader unions them by `eid`.
 
 ## 6. Singletons
 
@@ -176,7 +167,7 @@ anchor check is what makes it a merge at all (v1 §7); a differing
 ### 6.2 `keystore.json`
 
 As v1 §6.2: `@estoc/keystore` v3, and `keys[]` stays a cache. Merge:
-union of `keys[]`. Rebuildable regardless from every device's `me/`
+union of `keys[]`. Rebuildable regardless from every device's log
 (`vault-events.md` §2).
 
 ### 6.3 `state/`
@@ -199,7 +190,7 @@ else. Never in a snapshot, never merged, never read by another device.
   that depends on the asking device needs: which `devices/<dev>/` is
   mine; it is `self` on the store (`event-store.md` §5). Missing means
   "first open on this copy": mint a `dev` (`event-store.md` §4), write
-  it, append `device.minted` under `devices/<dev>/me/`
+  it, append `device.minted` under `devices/<dev>/`
   (`vault-events.md` §5), go on.
 - `options.json` holds device options — v1 §6.10 said a retention
   policy is never written into the vault; `local/` is not the vault in
@@ -236,35 +227,34 @@ knows the tree; nothing above it does.
 
 ### 8.1 Reading
 
-`scan(filter)` walks the directories `locate` would produce for the
-filter (a fully specified locator is one directory; a partial one is a
-`walk` from the deepest fixed prefix), reads every `<seg>.jsonl`, parses
-each line, reinjects the locator from the path (`place`), refuses a
-line whose `author` is not its directory (rule 2), skips damaged lines
-into `damaged()`, collects, dedups by `eid` (§8.5), sorts into canonical
-order (`event-store.md` §4), and yields.
+`scan(filter)` reads every segment under `devices/*/` — under
+`devices/<author>/` alone when the filter names an author — parses
+each line, checks its `author` against the directory (rule 2), skips
+damaged lines into `damaged()`, dedups by `eid` (§8.5), keeps the lines
+whose fields equal the filter's, sorts into canonical order
+(`event-store.md` §4), and yields. There is no reading less than a
+device's whole log; a filter narrows the answer, not the work.
 
 ### 8.2 Appending
 
-Per directory, as `SegmentedLog` today: the line goes to the newest
-segment this store minted under `locate(event)` (which is under
-`devices/<self>/`), or a fresh `<uuidv7>.jsonl`, healing a fragment
-first (§5). Appends are serialised per store instance, because
-`VaultBackend.append` is size-then-write. The line written is the event
-minus its locator below `author` (§4). Whole-line durability across a
-process crash is what the backend gives; neither Node `fs` nor OPFS
-`fsync`s on append today (`event-store.md` §5.1).
+As `SegmentedLog` today: the line goes to the newest segment this store
+minted under `devices/<self>/`, or a fresh `<uuidv7>.jsonl`, healing a
+fragment first (§5). Appends are serialised per store instance, because
+`VaultBackend.append` is size-then-write. The line written is the event,
+whole (§4). Whole-line durability across a process crash is what the
+backend gives; neither Node `fs` nor OPFS `fsync`s on append today
+(`event-store.md` §5.1).
 
 ### 8.3 Ingesting
 
 For each incoming event: validate; if the `eid` is already under
 `devices/<author>/`, compare and count it duplicate or conflict;
-otherwise append the line to a segment under `locate(event)` that
-**this store minted for this `ingest` call** (§5). So a merged folder
-may hold, under `devices/x/parts/…/`, both `0198…a.jsonl` written by
-`x` and `0198…b.jsonl` written here from what `x` wrote. Both contain
-only events authored by `x`; readers union by `eid`, so nothing is
-doubled.
+otherwise append the line to a segment under `devices/<author>/` that
+**this store minted for this `ingest` call** (§5): one segment per
+author per call. So a merged folder may hold, under `devices/x/`, both
+`0198…a.jsonl` written by `x` and `0198…b.jsonl` written here from what
+`x` wrote. Both contain only events authored by `x`; readers union by
+`eid`, so nothing is doubled.
 
 **Fast path.** When the source is itself a folder (a backup zip, another
 `.estoc/` directory), the store may copy whole segments instead:
@@ -330,13 +320,12 @@ is a copy; the zip a backup carries is this tree.
 ### 9.2 Export
 
 A store that is not a folder renders one: each event to
-`locate(event)/<seg>.jsonl`, where `<seg>` is the segment the store
-assigned it, minus its locator below `author`, one line each, in the
-order they arrived within the segment; blobs to `blobs/<hash>`; every
-path in `Files` in place; no `local/`. Because a segment is assigned
-once and grows only at its end, two exports of one store are
-prefix-related file by file, which is what §8.3 requires of two copies
-of one device (`event-store.md` §7.2).
+`devices/<author>/<seg>.jsonl`, where `<seg>` is the segment the store
+assigned it, one line each, in the order they arrived within the
+segment; blobs to `blobs/<hash>`; every path in `Files` in place; no
+`local/`. Because a segment is assigned once and grows only at its end,
+two exports of one store are prefix-related file by file, which is what
+§8.3 requires of two copies of one device (`event-store.md` §7.2).
 
 ### 9.3 Import
 
@@ -389,14 +378,20 @@ it. What a deletion leaves on disk, and why, is `vault-events.md` §10.
 
 ## 12. Open
 
-- **Ingest segment granularity.** One segment per directory per
-  `ingest` call (§8.3) means many small merges leave many small files.
-  Compacting a store's own ingest segments would be the obvious answer
-  and is forbidden as rule 3 is worded; whether the rule should
-  distinguish a segment the store minted for ingest from one a device
-  wrote is a question for when the file count is felt.
+- **Ingest segment granularity.** One segment per device per `ingest`
+  call (§8.3): many small merges leave many small files, one per
+  device each time. Compacting a store's own ingest segments would be
+  the obvious answer and is forbidden as rule 3 is worded; whether the
+  rule should distinguish a segment the store minted for ingest from
+  one a device wrote is a question for when the file count is felt. It
+  is a smaller question than it was: a segment per device per merge,
+  not per partition.
 - **`fsync`** (§8.2): whether `FsBackend` should sync per append so the
   daemon can claim power-loss durability.
 - **Sharding** `blobs/` (§7): a backend's choice today; whether the
   exchange form should fix one layout so a zip is readable without
   probing.
+- **Reading by hand.** A backup is one JSONL per device; finding one
+  conversation in it is `grep` for its `peerKey`. Whether a folder
+  store should also keep a per-partition index under `local/cache/`
+  for its own reads is `event-store.md` §10, not the format's.
