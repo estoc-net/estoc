@@ -33,8 +33,8 @@ of them.
 Looked at as a database, the whole vault is **one table**. The device
 directory is one column and every field of a line is another; a
 segment is a page; a merge is `INSERT OR IGNORE`. The folder is a
-serialization of that table, chosen because copying a subtree is free
-on a file system. Nothing in the model depends on the choice.
+serialization of that table, chosen because a person can read it with
+nothing but a text editor. Nothing in the model depends on the choice.
 
 So the program's interface should be the table, not the folder. Folds
 read events through a filter; policy appends events; the store behind
@@ -99,8 +99,8 @@ files; `vault-events.md` §1 the ones about meaning.
 
 ## 3. The event
 
-An event is a JSON object. Four fields are the **envelope**, and the
-store knows only these:
+An event is a JSON object. Four fields are the **envelope**, which the
+store reads; a fifth, optional, the store checks and never reads:
 
 | field    | meaning |
 |----------|---------|
@@ -108,6 +108,7 @@ store knows only these:
 | `at`     | RFC 3339 UTC (§4). |
 | `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own. |
 | `author` | the authoring device (§4). |
+| `blobs`  | optional: every blob this event references, as hashes (§6). The complete list — a hash anywhere else on the event is not a reference. |
 
 Everything else is the **payload**: the event's own fields, as
 specified per type, opaque to the store. What an event is *about* — a
@@ -127,11 +128,31 @@ syncing one — are not in version 2 and would not need directories if
 they were. What the locator did do was multiply segments and tie the
 store to one vault's shape.
 
-**Reserved names.** `eid`, `at`, `type`, `author` belong to the
-envelope; a payload must not use them, and a store rejects an event
-whose payload does. Nothing else is reserved: `device.label { dev }`
-names the device a decision is about and `contact.petname { cid }` the
-contact, and both are payload.
+`blobs` is in the envelope for one reader: collection
+(`vault-events.md` §8.3), which must find every blob any event
+references without understanding any event. With the list on the
+envelope, an event of a type the collector has never seen — an
+extension's — still says what it holds, and a store that unlinks by
+this rule is safe for events it does not know. The store itself only
+checks the field's shape. Type-specific fields may say which blob is
+which (`body`, `attachments`), drawn from this list.
+
+**Reserved names.** `eid`, `at`, `type`, `author`, `blobs` belong to
+the envelope; a payload must not use them, and a store rejects an
+event whose payload does. Nothing else is reserved: `device.label {
+dev }` names the device a decision is about and `contact.petname { cid
+}` the contact, and both are payload.
+
+**JSON.** An event is a JSON object in the sense of RFC 8259: its
+values are objects, arrays, strings, numbers, booleans and `null`, and
+nothing else — no `undefined`, no bigint, no cycle, no `Date`. A draft
+that does not survive JSON serialization unchanged is rejected by
+`append`. Two events have the **same content** when they are
+structurally equal as JSON: objects compared as unordered maps, arrays
+in order, numbers as doubles, strings by code point. Key order is not
+a difference, and neither is whitespace: a store that re-serializes on
+export (§8) would otherwise turn every event it exported into a
+conflict on the way back.
 
 Rules:
 
@@ -149,10 +170,11 @@ Rules:
    nothing about who wrote the event, exactly as `mid` says nothing
    about who received the message.
 3. **The store validates the envelope and nothing else.** On `append`
-   and `ingest` it checks that the object is a JSON object; that `eid`
-   is a well-formed uuidv7; that `at` is RFC 3339 UTC; that `type` is a
-   non-empty string; that `author` is a device id; and that no reserved
-   name is used by the payload. An event that fails is rejected —
+   and `ingest` it checks that the object is a JSON object (above);
+   that `eid` is a well-formed uuidv7; that `at` is RFC 3339 UTC; that
+   `type` is a non-empty string; that `author` is a device id; that
+   `blobs`, if present, is an array of hashes (§6); and that no other
+   reserved name is used by the payload. An event that fails is rejected —
    `append` throws, `ingest` reports (§5.2) — and never stored. The
    payload is opaque: type-specific validation is the fold's. Bytes a
    serialization holds that do not parse as an event at all are a
@@ -169,6 +191,12 @@ Rules:
   events as history. Not secret. A device announces itself with its
   first event, `device.minted` (`vault-events.md` §5), so a device's
   existence travels with its events and needs no side channel.
+- **instance** — a random id a store mints together with `self` and
+  keeps beside it (`vault-folder.md` §6.4). Not an event field, not in
+  a backup. It names this copy of the store to the tokens it issues
+  (§5.4): a fold takes `self` as a parameter, so a cache folded under
+  one device must never be applied under another, and a restore that
+  mints a fresh `self` mints a fresh instance with it.
 - **`eid`** — every event's id: a bare uuidv7, the same kind of id as
   `mid` and `cid`, and like them trusted to be unique across devices.
   The dedup key for everything. Minted at the instant the event is
@@ -187,21 +215,26 @@ Rules:
 ## 5. The store interface
 
 ```ts
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
+type Hash = string;                   // sha256 of the bytes, lowercase hex
+
 type Event = {
   eid: string;                        // a bare uuidv7
   at: string;                         // RFC 3339 UTC
   author: string;                     // a device id
   type: string;
-  [field: string]: unknown;           // the payload; opaque here
+  blobs?: Hash[];                     // every blob the event references; checked, never read, here
+  [field: string]: JsonValue | undefined; // the payload; opaque here
 };
 
 /** What a caller hands to `append`: no eid, at, or author — the store mints them. */
-type Draft = { type: string; [field: string]: unknown };
+type Draft = { type: string; blobs?: Hash[]; [field: string]: JsonValue | undefined };
 
-/** Equality on top-level fields. A store may index some; the folder store reads and compares. */
-type Filter = { author?: string; type?: string; [field: string]: string | undefined };
+/** Equality on top-level fields, by `===` on primitives. A store may index some; the folder store reads and compares. */
+type Filter = { author?: string; type?: string; [field: string]: JsonPrimitive | undefined };
 
-/** A position in this store's own arrival order. Opaque; meaningful only to the store that issued it. */
+/** A position in this store instance's own arrival order. Opaque; meaningful only to the instance that issued it. */
 type Token = string;
 
 interface Ingested {
@@ -216,7 +249,9 @@ interface EventStore {
   readonly self: string;
   /** This device's own event. The store mints eid and at, sets author = self, returns the whole event. */
   append(draft: Draft): Promise<Event>;
-  /** Events from elsewhere (a backup, another store, another device). Union by eid. */
+  /** Events from elsewhere (a backup, another store, another device). Union by eid.
+   *  Reads its whole input before writing; throws ForkedSelf, having written nothing,
+   *  on an event of `self` it does not already hold (§5.2). */
   ingest(events: AsyncIterable<Event>): Promise<Ingested>;
   /** Every event matching `filter`, in canonical order. */
   scan(filter?: Filter): AsyncIterable<Event>;
@@ -268,8 +303,25 @@ present. An `eid` already present with the same content is a
 *duplicate* and is skipped; with different content it is a *conflict*:
 the store keeps what it had, stores nothing, and reports it. Never
 rewrites, never drops, never reorders what was there. This is the whole
-of merge at the event level; the file-level rules a folder may use to
-do it faster are `vault-folder.md` §8.3, and produce the same set.
+of merge, at every level: the folder store does it in one pass over
+the other copy (`vault-folder.md` §8.3), and there is no file-level
+shortcut that produces the same set — an earlier draft had one and
+withdrew it (§7.3).
+
+`ingest` reads its whole input before it writes anything (a vault's
+event set fits in memory, and the folder store has to read the other
+copy whole anyway), because of `self`. Events authored by `self` can
+legitimately arrive — a backup of this very device, merged back — and
+each is a duplicate, counted and skipped. One that is *not* already
+here, or is here with other content, means two writers have shared one
+device: this copy was cloned with its `local/` and both went on
+writing, or this copy lost events it once wrote. Either way the store
+does not know which history is its own, so it stops before writing —
+throws `ForkedSelf`, naming the events — and the person decides:
+usually, this copy mints a fresh device (§4, `vault-folder.md` §6.4)
+and imports again, after which the old device's events are history on
+both sides. Silently skipping them would hide exactly the fault the
+`author` field exists to expose (§3 rule 2).
 
 Nothing about the authoring device's order survives ingest. A backup
 made by filter, a second backup that fills in what the first lacked, a
@@ -326,14 +378,20 @@ qualify; the property is stated here because `changes` is what makes
 it load-bearing.
 
 A token is a string a caller stores and hands back, and nothing more. It
-belongs to the store that issued it: a folder store's names segments and
-lengths, a database's names a sequence number, and neither means
-anything to the other. A token the store cannot place — a position past
-what it holds, another store's — is answered by rejecting the call, and
-the caller answers that by refolding from `scan`. Because events are
-never deleted (principle 4), a token a store issued is always one it
-can place, so a rejection means the cache belongs to some other store,
-which is exactly when a refold is right.
+belongs to the store *instance* that issued it (§4), and names that
+instance: a folder store's names its instance, its segments and their
+lengths; a database's names its instance and a sequence number; and
+neither means anything to the other. A token the store cannot place —
+another instance's, a position past what it holds — is answered by
+rejecting the call, and the caller answers that by refolding from
+`scan`. Because events are never deleted (principle 4), a token an
+instance issued is always one it can place, so a rejection means the
+cache belongs to some other instance — another store, or this one
+before it re-minted its device — which is exactly when a refold is
+right. What a token does not defend against is a hand edit of a
+serialization that leaves its size unchanged; that is a breach of the
+folder's rules (`vault-folder.md` §2 rule 2), and the cache is stale
+until deleted.
 
 What `changes` is not: a device-to-device sync. "What do you have that I
 do not" between two vaults is anti-entropy over `eid` sets and is
@@ -352,7 +410,8 @@ careless edit.
 **Conflicts** are two contents under one `eid`. `ingest` finds them
 against what it holds and reports them (§5.2). A reader can also meet
 them, because a serialization may come to hold one `eid` twice through
-a copy that did not read what it copied (`vault-folder.md` §8.3): the
+a copy made by hand — a segment dropped in with a file manager, never
+through a store (`vault-folder.md` §8.5): the
 store then keeps one by a fixed rule of its own, stated where the
 store is (the folder's is `vault-folder.md` §8.5), yields that one from
 `scan` and `changes`, and reports the others in `conflicting()`. The
@@ -364,12 +423,12 @@ shows.
 ## 6. Blobs and files
 
 ```ts
-interface BlobStore {                 // content-addressed; as today
-  get(hash): Promise<Uint8Array | null>;
-  has(hash): Promise<boolean>;
-  put(hash, bytes): Promise<void>;
-  unlink(hash): Promise<void>;
-  list(): Promise<string[]>;
+interface BlobStore {                 // content-addressed
+  get(hash: Hash): Promise<Uint8Array | null>;
+  has(hash: Hash): Promise<boolean>;
+  put(bytes: Uint8Array): Promise<Hash>;   // the store hashes; a caller cannot misname bytes
+  unlink(hash: Hash): Promise<void>;
+  list(): Promise<Hash[]>;
 }
 
 interface Files {                     // everything in a vault that is neither an event nor a blob
@@ -386,8 +445,12 @@ replaced by folds over `events.scan(...)` and `events.changes(...)`.
 
 **Blobs** are bytes named by `sha256`, lowercase hex; immutable, merged
 by union, deduplicated by construction, and the one thing in a vault
-that is ever unlinked (`vault-events.md` §8). Which events name which
-blobs, and when a blob may go, is the events' business; the store only
+that is ever unlinked (`vault-events.md` §8). The name is computed by
+the store on `put`, checked against the bytes on import (§7.3), and may
+be checked on read; a blob whose bytes do not hash to its name is
+damage, never served. Which events reference which blobs is on the
+events (`blobs`, §3), so a collector needs no type; when a blob may go
+is the events' business (`vault-events.md` §8.3); the store only
 promises that a hash it holds returns the bytes it was given.
 
 **A blob is written before the event that names it.** A crash between
@@ -399,8 +462,11 @@ and orders them.
 
 **Files** are named by path, and the paths are the folder's
 (`vault-folder.md` §6): the format and anchor, the key cache, reserved
-state, and any path a reader does not understand and carries along.
-There is no per-device file: everything about a device is an event.
+state, and any path a reader does not understand and carries along —
+including a path under `devices/` or `blobs/` that is not shaped like
+a segment or a blob (`vault-folder.md` §8.6), so that it survives a
+trip through a store that is not a folder. There is no per-device
+file: everything about a device is an event.
 Each file has its own merge policy, stated with the file; the store
 applies none of them (§7.3).
 
@@ -418,31 +484,27 @@ line)` — the event a line under a path is.
 
 **Round trip.** For any event set *S* produced by any conforming store,
 rendering *S* as a folder and reading that folder back yields *S*: same
-events, same fields, compared as JSON objects with `eid` as identity.
+events, same content in the sense of §3, with `eid` as identity.
 Blobs and files round-trip byte for byte. This is the conformance test
 every store passes, and the definition of "a version-2 vault" that is
 independent of the medium.
 
 ### 7.2 Export
 
-A store renders its whole event set as the tree, one line per event, in
-the segment the store assigned the event; blobs as blobs; every path in
-`Files` in place. A folder store exporting is a copy and keeps its own
-names.
+A store renders its whole event set as the tree, one line per event,
+under `devices/<author>/`, in segments of its own choosing; blobs as
+blobs, flat; every path in `Files` in place. A folder store exporting
+is a copy and keeps its own names.
 
-**A segment is assigned once and grows only at its end.** A segment is
-not part of an event's identity — a program never sees one — but it is
-part of a store's state, because the folder merges by segment
-(`vault-folder.md` §5, §8.3): two exports of one store must be
-prefix-related file by file, or a folder merging both would read them
-as two writers. So a store that is not a folder remembers, per event,
-the segment it belongs to, and renders the events of a segment in the
-order they arrived. An earlier draft named export segments by the
-uuidv7 of the first event in each directory, sorted by `eid`, and kept
-no state; it is withdrawn, because an old event arriving late (§5.2)
-would land in the middle of a same-named file and be read as two
-writers. The state a store must keep is one segment name per event, and
-there is no stateless rule that does the job.
+**How an author's events are chunked into segments is not state.** A
+segment is not part of an event's identity — a program never sees one
+— and a reader of the export unions lines by `eid` and assumes no
+order (`vault-folder.md` §5), so two exports of one store need not be
+related file by file: one segment per author, minted at export, is
+enough. An earlier draft required a segment to be assigned once and
+grow only at its end, so that a folder could merge by copying
+segments; the copying is withdrawn (§7.3) and with it the state it
+demanded.
 
 An export is always the whole set. A store does not export by filter,
 so a device's events always travel with its `device.minted`.
@@ -451,16 +513,26 @@ so a device's events always travel with its `device.minted`.
 
 Three kinds of thing, three rules, in this order:
 
-1. **Events**: `ingest` every event the folder holds (§5.2), or take
-   the folder's fast path (`vault-folder.md` §8.3), which produces the
-   same set. The store never ingests into `self`'s own events. A
-   device whose events arrive without its `device.minted` is read — its
-   events are still that device's — and reported as incomplete.
+1. **Events**: `ingest` every event the folder holds (§5.2), `self`'s
+   included — a duplicate is a duplicate, and an event of `self`'s
+   that is not already here stops the import before anything is
+   written, as a forked self. A device whose events arrive without its
+   `device.minted` is read — its events are still that device's — and
+   reported as incomplete. There is no faster path: an earlier draft
+   let an import copy whole segments — a device directory absent here,
+   a segment absent here, the longer of two prefix-related segments —
+   and it is withdrawn, because a copied segment is not read: it could
+   double an `eid` already ingested by another route, the reader's
+   tie-break could then replace what this store had (which `ingest`
+   promises never to do), and `changes` would replay bytes that were
+   not new. Reading every line costs one parse of the other copy, which
+   is what `scan` costs anyway.
 2. **Blobs**, after the events: a blob absent here and present there
    is copied iff it is not collectable over the merged event set
-   (`vault-events.md` §8.3). An erased blob never comes back. The rule
-   is the events'; the order — events first — is what makes it
-   answerable.
+   (`vault-events.md` §8.3), and iff its bytes hash to its name — one
+   that does not is damage in the source, reported, not copied. An
+   erased blob never comes back. The rule is the events'; the order —
+   events first — is what makes it answerable.
 3. **Files**, each by its own policy (`vault-folder.md` §6). The one
    the store must know about is that the format and anchor must be
    identical on both sides — that check is what makes this a merge
@@ -468,8 +540,11 @@ Three kinds of thing, three rules, in this order:
    `importVault`.
 
 **Restore** is the same three steps into an empty store, the format
-and anchor written last, as today. There is no `self`, so the first
-open mints a device (§4); the imported devices stay as history.
+and anchor written last, as today; a folder store restoring into an
+empty backend may copy the snapshot as it is, since the snapshot is
+the exchange form and a copy of it is a conforming folder
+(`vault-folder.md` §9.4). There is no `self`, so the first open mints
+a device and an instance (§4); the imported devices stay as history.
 
 ### 7.4 Cache
 
@@ -492,9 +567,9 @@ Not proposed for implementation now; written to show the seam holds.
 
 ### 8.1 Shape
 
-One table, the envelope as columns, the payload as JSON, and two
-columns the folder gets for free from the file system — which segment
-an event belongs to and the order it arrived in:
+One table, the envelope as columns, the payload as JSON, and one
+column the folder gets for free from the file system — the order an
+event arrived in:
 
 ```sql
 CREATE TABLE events (
@@ -503,7 +578,7 @@ CREATE TABLE events (
   author   TEXT NOT NULL,
   at       TEXT NOT NULL,
   type     TEXT NOT NULL,
-  seg      TEXT NOT NULL,           -- the segment this event is exported in; assigned once
+  blobs    TEXT,                    -- JSON array of hashes, or NULL
   data     TEXT NOT NULL            -- the payload, JSON
 );
 CREATE INDEX events_order ON events (at, eid, author);
@@ -515,21 +590,17 @@ CREATE TABLE blobs (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE files (path TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 ```
 
-`seg` is what §7.2 says a non-folder store must remember. `append`
-uses the segment the store currently holds open for `self`, minting
-one the first time it writes and rotating on whatever policy it likes;
-`ingest` mints one per author per call, as the folder does
-(`vault-folder.md` §8.3). Once assigned, `seg` never changes, and rows
-within a segment are exported in `seq` order; that is what makes two
-exports of one store prefix-related file by file. `append` and `ingest`
-are `INSERT` with the `UNIQUE` on `eid` catching duplicates, which the
-store then compares for conflict; `scan` is a `SELECT` with the filter
-as `WHERE` — envelope columns, generated columns, else `json_extract`
-— and `ORDER BY at, eid, author`; `changes` takes `token = MAX(seq)`
-and selects `seq > since AND seq <= token ORDER BY seq`. Blob write
-and skeleton append become one transaction, which the folder store
-cannot offer (§6). Collection (`vault-events.md` §8.3) is one query
-over `data` for referenced hashes.
+`append` and `ingest` are `INSERT` with the `UNIQUE` on `eid`
+catching duplicates, which the store then compares for conflict (§3);
+`scan` is a `SELECT` with the filter as `WHERE` — envelope columns,
+generated columns, else `json_extract` — and `ORDER BY at, eid,
+author`; `changes` takes `token = MAX(seq)` and selects `seq > since
+AND seq <= token ORDER BY seq`, prefixed by the instance id. Export
+renders each author's rows into one segment in `seq` order and
+remembers nothing (§7.2). Blob write and skeleton append become one
+transaction, which the folder store cannot offer (§6). Collection
+(`vault-events.md` §8.3) is one query over `blobs`, a `json_each`
+away.
 
 ### 8.2 Where it would run
 
@@ -580,8 +651,8 @@ What the code says today, for the record:
 - **Runtimes.** Node 22.13 has `node:sqlite`; the browser has `idb`
   and no wasm SQLite; the app is not cross-origin isolated (§8.2).
 - **Size.** Today's five stores plus `transfer.ts` are about a thousand
-  lines. A folder store (`locate`/`place`, segments, ingest with fast
-  path, the segment-table token) is a few hundred; the rest becomes
+  lines. A folder store (`locate`/`place`, segments, one-pass ingest,
+  the segment-table token) is a few hundred; the rest becomes
   folds, which version 2 needs regardless. The reduction is real but
   modest; the gain is one merge routine, one place that knows the tree,
   and a store per runtime.
@@ -613,7 +684,10 @@ What the code says today, for the record:
   `type` prefix, presumably) is not decided; the interface is shaped so
   that the answer is a convention on `type`, not a change here. An
   extension's event about a contact carries the `cid`, exactly as the
-  vault's own do.
+  vault's own do, and one that holds a blob lists it in `blobs` (§3),
+  which is what keeps collection safe around it — though until an
+  erase exists for events that are not messages, such a blob is pinned
+  (`vault-events.md` §12).
 - **Trace.** Stays a `SegmentedLog` of its own, local, with its own
   retention, never exchanged. Whether it should implement the same
   interface for uniformity is a code question.

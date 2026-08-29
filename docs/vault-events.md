@@ -159,13 +159,13 @@ once.
 ```jsonc
 { "eid": "0198…", "author": "k7q3ma", "at": "…", "myKey": "did/0198…", "peerKey": "k3j9…",
   "type": "part.opened",   "key": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
-{ "type": "message.in",    "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<hash>", "attachments": ["<hash>"], "signedBy": "did:key:z6Mk…" }
-{ "type": "message.out",   "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<hash>", "attachments": [] }
+{ "type": "message.in",    "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "blobs": ["<body>", "<att>"], "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" }
+{ "type": "message.out",   "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "blobs": ["<body>"], "body": "<body>", "attachments": [] }
 { "type": "delivery",      "mid": "0198…", "attempt": 1, "status": "failed", "error": "…" }
 { "type": "delivery",      "mid": "0198…", "attempt": 2, "status": "sent" }
 { "type": "peer.resolved", "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" }
 { "type": "peer.rotated",  "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" }
-{ "type": "message.erased", "mid": "0198…", "blobs": ["<hash>"], "because": "user" }
+{ "type": "message.erased", "mid": "0198…", "drop": ["<hash>"], "because": "user" }
 ```
 
 - `part.opened`: written once by each device the first time it sees a
@@ -176,12 +176,16 @@ once.
   devices each write their own.
 - `message.in` / `message.out`: the **skeleton** of a message — its
   local `mid` (minted at append), the wire `id`, `msgType`, `thid`,
-  `pthid`, `bytes` (the size of the plaintext), `body` — the hash of
-  the blob holding the plaintext (§4) — `attachments`, the hashes of
-  every blob lifted out of it, and `signedBy` when a signature rode
-  inside the encryption. The line is the permanent record of which
-  blobs the message references: collection (§8.3) reads it, never the
-  body, so it works after the body is gone. Everything a thread view, a
+  `pthid`, `bytes` (the size of the plaintext), `blobs` — the
+  envelope's list (`event-store.md` §3) of every blob the line holds —
+  with `body`, the hash of the blob holding the plaintext (§4), and
+  `attachments`, the hashes of every blob lifted out of it, saying
+  which of them is which; and `signedBy` when a signature rode inside
+  the encryption. `blobs` is exactly `body` plus `attachments`, stated
+  twice because the collector reads only the envelope. The line is the
+  permanent record of which blobs the message references: collection
+  (§8.3) reads it, never the body, so it works after the body is gone.
+  Everything a thread view, a
   search index, or a collector needs is on the line; nothing a person
   said is. `direction` is the event type and `sender` is the pair;
   neither is a further field.
@@ -230,8 +234,8 @@ arises for attributed ones.
 A message's plaintext is a blob (`event-store.md` §6), written
 **before** its skeleton is appended; the skeleton names it by hash. The
 same blob store holds attachments lifted out of a plaintext and any
-other bytes an event names by hash; a blob no event names is an orphan
-(§8.3). A crash between the two writes leaves an orphan, harmless,
+other bytes an event lists in its `blobs`; a blob no event lists is an
+orphan (§8.3). A crash between the two writes leaves an orphan, harmless,
 swept by the next collection. The other order is never used: a line
 whose body was never written would be indistinguishable from an erase.
 
@@ -450,13 +454,15 @@ because the person said so; an absence with no such record is damage.
 
 ```jsonc
 { "eid": "…", "author": "k7q3ma", "at": "…", "myKey": "did/0198…", "peerKey": "k3j9…",
-  "type": "message.erased", "mid": "0198…", "blobs": ["<body hash>", "<attachment hash>"], "because": "user" }
+  "type": "message.erased", "mid": "0198…", "drop": ["<body hash>", "<attachment hash>"], "because": "user" }
 ```
 
 - Permanent and global: every device that folds it unlinks the named
-  blobs, and a merge never copies them in again (§10). `blobs` names
+  blobs, and a merge never copies them in again (§10). `drop` names
   what to drop — the body, some or all attachments — so an attachment
-  can be erased and the text kept, or the reverse.
+  can be erased and the text kept, or the reverse. It is not the
+  envelope's `blobs`: an erase references nothing, and the bytes need
+  not exist for it to hold.
 - Event first, then unlink. The skeleton stays; readers show "erased".
 - `because`: `user`, `contact-deleted` (§9).
 
@@ -468,13 +474,18 @@ reported as damage.
 
 ### 8.3 Collection
 
-A blob may be unlinked when, over the union of every device's events,
-**every** event that names it (a `message.*` line's `body` or
-`attachments`; any other event that names a hash) has a
-`message.erased` naming it. An orphan — a blob no event anywhere names,
-from a crash between the two writes (§4) — is collectable too; so is
-nothing else. Reference counting is a fold; a collector may run at any
-time and is never required to.
+A blob `h` is **referenced** by every event whose `blobs`
+(`event-store.md` §3) lists it, and by nothing else: a hash anywhere
+else on a line is not a reference. This is what lets a collector run
+over events of types it has never seen. Over the union of every
+device's events, `h` may be unlinked when every `message.in` or
+`message.out` referencing it has a `message.erased` for its `mid` with
+`h` in `drop`, and no event of any other type references it: an event
+the vault's own types do not cover pins its blobs, because version 2
+defines no erase for it (§12). An orphan — a blob no event anywhere
+lists, from a crash between the two writes (§4) — is collectable too;
+so is nothing else. Reference counting is a fold; a collector may run
+at any time and is never required to.
 
 ### 8.4 No space policy
 
@@ -503,7 +514,7 @@ is removed (principle 5).
 1. Append `contact.deleted { cid }`.
 2. Fold attribution. For every partition attributed exactly to this
    contact (single-valued), for every `message.*` event carrying it:
-   append `message.erased { blobs: [body, …attachments], because:
+   append `message.erased { drop: [body, …attachments], because:
    contact-deleted }` with the pair, and unlink them (§8.1).
 3. For every key the contact has a live `contact.useKey` on that was
    `did.published { uses: one }` or minted toward it, and that no other
@@ -540,9 +551,10 @@ dropped, or reordered. What the events then require:
   events stay, including its mediation, visible (§7.3) until the person
   retires it (`device.retired`, §5).
 - **Two writers sharing one `author`** is a bug, not a merge: it shows
-  as one `eid` with two contents, or two `device.minted` from one
-  `author` (and, in a folder, non-prefix segments —
-  `vault-folder.md` §11). The remedy is for one of them to mint its own.
+  as one `eid` with two contents, as two `device.minted` from one
+  `author`, or — when either imports the other — as events of `self`
+  it never wrote (`vault-folder.md` §8.3). The remedy is for one of
+  them to mint its own.
 
 **What deletion leaves behind.** v1 deleted a contact's file outright.
 v2 keeps, forever: the contact's decisions with their tombstone — and
@@ -594,3 +606,9 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
 - **Type names for extensions.** The vault's own types are `noun.verb`
   with a short noun; an extension's need a namespace that cannot
   collide (`event-store.md` §10). Which convention is not decided.
+- **An erase for events that are not messages.** Collection (§8.3)
+  knows one release, `message.erased` by `mid`; a blob held by any
+  other event is pinned for the life of the vault. A generic form —
+  an erase naming the referencing event's `eid` rather than a `mid` —
+  would cover extensions and could subsume `message.erased`; not in
+  version 2.
