@@ -56,8 +56,13 @@ export function nodeHost(root: string): DaemonHost {
       return new FsBackend(root);
     },
     async wipe() {
+      // the vault goes; the device's preferences do not — they were never the vault's
+      const level = await readFile(traceFile, "utf8").catch(() => null);
       await rm(dir, { recursive: true, force: true });
       await takePid();
+      if (level !== null) {
+        await writeFile(traceFile, level);
+      }
     },
     cachedSeedKey: async () => seedKey,
     async cacheSeedKey(key) {

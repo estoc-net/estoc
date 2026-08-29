@@ -33,8 +33,9 @@ const onion = computed(() => foldOnion(props.events, props.entry.mid, props.entr
     </template>
     <p v-else class="hop-note">
       Nothing observed for this message: the trace keeps a message's envelopes
-      for a while (7 days by default), and this one's part is gone, or it was
-      never observed here (a backup, or a device where the trace was off).
+      for a while (the rail's trace level says how long), and this one's part is
+      gone, or it was never observed here (a backup, or a device where the trace
+      was off).
     </p>
   </div>
 </template>

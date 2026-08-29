@@ -336,6 +336,8 @@ export async function lock(): Promise<void> {
 export async function forgetIdentity(): Promise<void> {
   await running().forgetIdentity();
   state.log = [];
+  // the trace level is the device's, not the vault's; ask again so the rail says what the daemon now does
+  state.traceLevel = await running().traceLevel();
 }
 
 /** Zip the vault and hand it to the browser as a download. */

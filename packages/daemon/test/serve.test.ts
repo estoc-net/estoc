@@ -131,6 +131,15 @@ describe("the daemon over a socket", () => {
       await again.boot();
       expect(await again.traceLevel()).toBe("off");
       expect(await again.setTraceLevel("verbose")).toBe("verbose");
+      // forgetting the identity wipes the vault, not the device's preference
+      const onboarding = b.next("phase");
+      await again.forgetIdentity();
+      await onboarding;
+      expect(await again.traceLevel()).toBe("verbose");
+      const reopened = b.next("opened");
+      await again.createIdentity("Alice again", "alice-passes-the-salt");
+      await reopened;
+      expect(await again.traceLevel()).toBe("verbose");
     } finally {
       await served.close();
     }

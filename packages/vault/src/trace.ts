@@ -276,48 +276,89 @@ export class TraceLog {
     return events;
   }
 
-  /**
-   * Everything observed about one message record, across every stream:
-   * the events that name `mid`, everything they happened inside
-   * (`parent`, up to the outermost frame), and everything that happened
-   * inside those — the whole onion, ordered by time. Empty when nothing
-   * was kept: the record still stands, its trace has expired.
-   */
-  async traceOf(mid: string): Promise<TraceEvent[]> {
-    const byTid = new Map<string, TraceEvent>();
-    const children = new Map<string, TraceEvent[]>();
-    for (const stream of TRACE_STREAMS) {
-      for (const event of await this.read(stream)) {
-        byTid.set(event.tid, event);
-        if (event.parent !== undefined) {
-          const siblings = children.get(event.parent);
-          if (siblings === undefined) {
-            children.set(event.parent, [event]);
-          } else {
-            siblings.push(event);
-          }
+  /** Walk one stream in order, one segment in memory at a time, without keeping the events. */
+  private async scan(stream: TraceStream, visit: (event: TraceEvent) => void): Promise<void> {
+    const dir = TraceLog.dir(stream);
+    for (const segment of orderSegments(await this.backend.list(dir))) {
+      const bytes = await this.backend.read(`${dir}/${segment}`);
+      if (bytes !== null) {
+        for (const event of parseSegment(text(bytes), segment, parseLine)) {
+          visit(event);
         }
       }
     }
+  }
+
+  /**
+   * Everything observed about one message record, across every stream:
+   * the envelopes that name `mid`, everything they happened inside
+   * (`parent`, up to the outermost frame), and what happened inside
+   * those — the frame's bytes, the answer to it, the mediator's ritual on
+   * it — but not the other envelopes that shared the frame: a delivery
+   * that carried two messages is two onions, each its own. The whole
+   * onion, ordered by time; empty when nothing was kept: the record
+   * still stands, its trace has expired.
+   *
+   * Scans the streams rather than loading them: a stream can be tens of
+   * megabytes at its cap, and one message is a handful of lines of it.
+   */
+  async traceOf(mid: string): Promise<TraceEvent[]> {
     const found = new Map<string, TraceEvent>();
-    const visit = (event: TraceEvent): void => {
-      if (found.has(event.tid)) {
-        return;
-      }
+    const take = (event: TraceEvent): void => {
       found.set(event.tid, event);
-      const parent = event.parent === undefined ? undefined : byTid.get(event.parent);
-      if (parent !== undefined) {
-        visit(parent);
+    };
+    // the envelopes that ended in (or began as) the record
+    const ends = new Set<string>();
+    await this.scan("envelope", (event) => {
+      if (event.mid === mid) {
+        take(event);
+        ends.add(event.tid);
       }
-      for (const child of children.get(event.tid) ?? []) {
-        visit(child);
+    });
+    if (ends.size === 0) {
+      return [];
+    }
+    // outward: the envelopes and the frame they happened inside — a chain of
+    // parents, one more scan per depth (an onion has two or three layers)
+    const wanted = new Set<string>();
+    const wantParentsOf = (events: Iterable<TraceEvent>): void => {
+      for (const e of events) {
+        if (e.parent !== undefined && !found.has(e.parent)) {
+          wanted.add(e.parent);
+        }
       }
     };
-    for (const event of byTid.values()) {
-      if (event.mid === mid) {
-        visit(event);
+    wantParentsOf(found.values());
+    while (wanted.size > 0) {
+      const lookingFor = new Set(wanted);
+      wanted.clear();
+      const hit: TraceEvent[] = [];
+      for (const stream of ["envelope", "wire"] as const) {
+        await this.scan(stream, (event) => {
+          if (lookingFor.has(event.tid)) {
+            take(event);
+            hit.push(event);
+          }
+        });
       }
+      wantParentsOf(hit);
     }
+    // inward: what hung on the chain that is not another envelope — the
+    // bytes, the wire's answer, the mediator's part — and anything inside
+    // the ends themselves
+    const chain = new Set(found.keys());
+    for (const stream of ["wire", "wire.bytes", "mediation"] as const) {
+      await this.scan(stream, (event) => {
+        if (event.parent !== undefined && (chain.has(event.parent) || found.has(event.parent))) {
+          take(event);
+        }
+      });
+    }
+    await this.scan("envelope", (event) => {
+      if (event.parent !== undefined && !found.has(event.tid) && (ends.has(event.parent) || (found.has(event.parent) && !chain.has(event.parent)))) {
+        take(event);
+      }
+    });
     return [...found.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.tid < b.tid ? -1 : a.tid > b.tid ? 1 : 0));
   }
 

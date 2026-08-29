@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import type { Entry } from "../core/entries.js";
 import { retry, state, traceOf } from "../core/store.js";
@@ -45,16 +45,29 @@ const peeling = ref(false);
 async function toggle(lens: Lens) {
   if (open.value?.id === lens.id) {
     open.value = null;
+    events.value = [];
     return;
   }
   peeling.value = true;
   try {
-    events.value = await traceOf(props.entry.mid);
-    open.value = lens;
+    const fetched = await traceOf(props.entry.mid);
+    // the trace may have been turned off while we asked: then there is nothing to open
+    if (lenses.value.some((l) => l.id === lens.id)) {
+      events.value = fetched;
+      open.value = lens;
+    }
   } finally {
     peeling.value = false;
   }
 }
+
+// a lens that is no longer offered (the trace turned off) closes with its events
+watch(lenses, (offered) => {
+  if (open.value !== null && !offered.some((l) => l.id === open.value?.id)) {
+    open.value = null;
+    events.value = [];
+  }
+});
 
 const retrying = ref(false);
 async function tryAgain() {

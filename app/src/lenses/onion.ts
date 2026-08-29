@@ -1,4 +1,4 @@
-import type { TraceEvent } from "@estoc/vault";
+import { tracePolicy, type TraceEvent, type TraceLevel } from "@estoc/vault";
 
 /**
  * A message's trace, folded into the layers it crossed: the frame on the
@@ -174,4 +174,20 @@ export function foldOnion(events: TraceEvent[], mid: string, plaintext?: unknown
     });
   }
   return { layers, direction, attempts: ends.length, mediation };
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+function days(ms: number): string {
+  const d = Math.round(ms / DAY);
+  return d === 1 ? "a day" : `${d} days`;
+}
+
+/** What a trace level keeps, in words, read off the policy itself so the words cannot drift from it. */
+export function traceNote(level: TraceLevel): string {
+  if (level === "off") {
+    return "nothing observed is kept; no lens has anything to show";
+  }
+  const { streams } = tracePolicy(level);
+  return `envelopes for ${days(streams.envelope.keepMs)}, frames for ${days(streams.wire.keepMs)}, the bytes on the wire for ${days(streams["wire.bytes"].keepMs)}, the mediator's rituals for ${days(streams.mediation.keepMs)}`;
 }

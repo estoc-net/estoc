@@ -198,6 +198,32 @@ describe("trace log", () => {
     expect(await trace.traceOf("never")).toEqual([]);
   });
 
+  it("traceOf(mid) keeps to its own onion: two messages in one delivery do not see each other", async () => {
+    const backend = new MemoryBackend();
+    const c = clock("2026-08-29T10:00:00.000Z");
+    const trace = new TraceLog(backend, policy(), c.now);
+    const frame = await trace.append("wire", { event: "wire.in", via: "ws" });
+    c.advance(1);
+    const bytes = await trace.append("wire.bytes", { event: "wire.in", parent: frame, body: "…" });
+    c.advance(1);
+    const delivery = await trace.append("envelope", { event: "envelope.open", parent: frame, kind: "authcrypt" });
+    c.advance(1);
+    const ritual = await trace.append("mediation", { event: "mediation.in", parent: delivery });
+    c.advance(1);
+    const one = await trace.append("envelope", { event: "envelope.open", parent: delivery, kind: "authcrypt", mid: "m1" });
+    c.advance(1);
+    const two = await trace.append("envelope", { event: "envelope.open", parent: delivery, kind: "authcrypt", mid: "m2" });
+    c.advance(1);
+    await trace.append("envelope", { event: "envelope.open", parent: two, kind: "plain", note: "inside m2 only" });
+
+    const onion = await trace.traceOf("m1");
+    expect(onion.map((e) => e.tid)).toEqual([frame, bytes, delivery, ritual, one]);
+    expect(onion.some((e) => e.mid === "m2" || e.note !== undefined)).toBe(false);
+    const other = await trace.traceOf("m2");
+    expect(other.map((e) => e.tid)).toEqual([frame, bytes, delivery, ritual, two, expect.any(String)]);
+    expect(other.some((e) => e.mid === "m1")).toBe(false);
+  });
+
   it("policy levels: off is all zero, verbose keeps longer than normal", () => {
     expect(Object.values(tracePolicy("off").streams).every((s) => s.keepMs === 0)).toBe(true);
     expect(tracePolicy("normal")).toBe(TRACE_NORMAL);

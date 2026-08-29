@@ -2,7 +2,7 @@ import Onion from "./Onion.vue";
 import { registerLens } from "./registry.js";
 
 export { lensesFor, registerLens, type Lens, type LensContext } from "./registry.js";
-export { foldOnion, type Onion as OnionView, type OnionLayer } from "./onion.js";
+export { foldOnion, traceNote, type Onion as OnionView, type OnionLayer } from "./onion.js";
 
 /**
  * The lenses this build ships with. The onion opens on any entry as long

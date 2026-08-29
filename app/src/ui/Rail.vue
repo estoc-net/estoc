@@ -16,6 +16,7 @@ import {
 } from "../core/store.js";
 import type { AgentStatus } from "../core/types.js";
 import MediatorForm from "./MediatorForm.vue";
+import { traceNote } from "../lenses/index.js";
 import { bytesOf, shortDid } from "./util.js";
 
 const identity = computed(() => state.identity);
@@ -32,11 +33,7 @@ async function moveMediator(did: string) {
 
 // the trace: a device preference, not a fact of the vault (see the store)
 const traceBusy = ref(false);
-const TRACE_LEVELS = [
-  { level: "off", word: "off", note: "nothing observed is kept; no lens has anything to show" },
-  { level: "normal", word: "normal", note: "envelopes and frames for 7 days, the bytes on the wire for a day" },
-  { level: "verbose", word: "verbose", note: "four times as long, and the bytes for 7 days" },
-] as const;
+const TRACE_LEVELS = (["off", "normal", "verbose"] as const).map((level) => ({ level, note: traceNote(level) }));
 
 async function chooseTraceLevel(event: Event) {
   const level = (event.target as HTMLSelectElement).value as (typeof TRACE_LEVELS)[number]["level"];
@@ -334,7 +331,7 @@ function forget() {
       <label class="trace-level">
         keep what this device observes
         <select :value="state.traceLevel" :disabled="traceBusy" data-trace-level @change="chooseTraceLevel">
-          <option v-for="t in TRACE_LEVELS" :key="t.level" :value="t.level">{{ t.word }}</option>
+          <option v-for="t in TRACE_LEVELS" :key="t.level" :value="t.level">{{ t.level }}</option>
         </select>
       </label>
       <p class="status-line">
