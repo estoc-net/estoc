@@ -66,12 +66,12 @@ v1's six rules stand (§2 there). Two are sharpened and five are added.
 
 ```
 .estoc/
-  config.json                                singleton — format/version, label, anchor
+  config.json                                singleton — format/version, anchor; immutable
   keystore.json                              singleton — @estoc/keystore v3, unchanged
   blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place purge deletes from
   devices/<dev>/                             everything device <dev> wrote
-    device.json                              singleton-per-device — minted, current mediation
-    me/<seg>.jsonl                           log — decisions about my DIDs: minted, registered, published, retired
+    device.json                              immutable — dev, mintedAt
+    me/<seg>.jsonl                           log — decisions about my identity as this device makes them: DIDs, mediation, label
     contacts/<cid>/<seg>.jsonl               log — decisions about a contact
     parts/<myKey>/<peerKey>/<seg>.jsonl      log — observations in one partition: skeletons, deliveries, resolutions
   state/                                     reserved, as v1 §6.7
@@ -130,7 +130,7 @@ derivation names for keys that already exist (§13); no new key is minted
 under them.
 
 `keystore.json` is unchanged: `keys[]` stays a cache, rebuilt by walking
-every device's `me/` for `did.minted` and `device.json` for `me`.
+every device's `me/` for `did.minted` and `mediation.set`.
 
 ## 6. Singletons
 
@@ -140,13 +140,15 @@ every device's `me/` for `did.minted` and `device.json` for `me`.
 {
   "format": "estoc",
   "version": 2,
-  "label": "Alice",
   "identity": { "anchor": { "key": "anchor", "did": "did:key:z6Mk…" } }
 }
 ```
 
-Only what is true of the identity as a whole. Merge: kept local; both
-sides agree by construction.
+Only what was fixed the moment the vault was created, and never changes:
+the format, and the anchor that says which identity this is. Nothing a
+person can edit lives here (v1's `label` is a `label.set` event, §8.1).
+Merge: must be identical on both sides — the anchor check is what makes
+it a merge at all (v1 §7); a differing `version` is a migration first.
 
 ### 6.2 `keystore.json`
 
@@ -155,28 +157,16 @@ As v1 §6.2.
 ### 6.3 `devices/<dev>/device.json`
 
 ```jsonc
-{
-  "dev": "k7q3ma",
-  "mintedAt": "…",
-  "label": "phone",                              // optional, the person's
-  "mediation": {                                 // this device's arrangement; or null
-    "id": "0198…",
-    "mediatorDid": "did:web:mediator.estoc.dev",
-    "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" },
-    "routingDid": "did:peer:2…",
-    "public": "did/0198…"                        // the key published as this device's address; null until granted
-  }
-}
+{ "dev": "k7q3ma", "mintedAt": "…" }
 ```
 
-- v1's `config.mediation`, moved to where it was always true: a
-  mediation is one device's arrangement with one mediator. Another device
-  can *see* it (the fold shows every device's address) without adopting
-  it.
-- `mediation.public` is a key name pointing into `me/`; the DID and its
-  registration live there.
-- Rewritten whole by its own device only (rule 3). On merge it is copied
-  with the rest of the directory.
+Written once when the device mints its id, never rewritten. That a
+device exists is the only fact here; everything it *does* — which
+mediator it uses, what it calls itself — is events in its `me/` (§8.1),
+so there is no mutable per-device file to reconcile. Merge: copied when
+absent; if present on both sides the bytes must match, and a mismatch
+is reported as two writers sharing one `dev` (§14), never resolved by
+picking one.
 
 ### 6.4 `local/` — this backend's own
 
@@ -336,7 +326,12 @@ reported as such and never dressed up as a deletion.
 { "eid": "…", "at": "…", "type": "did.published", "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" }
 { "eid": "…", "at": "…", "type": "did.published", "key": "did/0198…", "as": "profile", "uses": "many" }
 { "eid": "…", "at": "…", "type": "did.retired",   "key": "did/0198…", "because": "mediation-changed" }
-{ "eid": "…", "at": "…", "type": "device.retired","dev": "p2x8rq", "because": "lost" }
+{ "eid": "…", "at": "…", "type": "mediation.set",     "id": "0198…", "mediatorDid": "did:web:mediator.estoc.dev", "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" } }
+{ "eid": "…", "at": "…", "type": "mediation.granted", "id": "0198…", "routingDid": "did:peer:2…", "public": "did/0198…" }
+{ "eid": "…", "at": "…", "type": "mediation.retired", "id": "0198…", "because": "changed" }
+{ "eid": "…", "at": "…", "type": "label.set",      "name": "Alice" }
+{ "eid": "…", "at": "…", "type": "device.label",   "dev": "k7q3ma", "name": "phone" }
+{ "eid": "…", "at": "…", "type": "device.retired", "dev": "p2x8rq", "because": "lost" }
 ```
 
 - `did.minted` is the one place a DID string of ours is recorded (the
@@ -350,10 +345,22 @@ reported as such and never dressed up as a deletion.
   is therefore not a file: it is a `did.published` with `as: oob`, and
   "open" is a fold (§9.4).
 - `did.retired`: no further outbound from this key; inbound still opens.
+- `mediation.set` / `granted` / `retired`: v1's `config.mediation` as
+  events — one device's arrangement with one mediator, which is why they
+  are in the device's own `me/`. `set` mints the mediation id and the
+  `me` key; `granted` records what the mediator answered (the routing
+  DID and, once minted and registered, the key published as this
+  device's address); `retired` closes it. The device's current mediation
+  is the fold: the last `set` without a `retired`, plus its `granted` if
+  any. Another device can *see* it (§9.3) without adopting it.
+- `label.set`: what the identity calls itself — what `user-profile`
+  announces. Latest wins by `(uuidv7, dev)`; two devices renaming at
+  once is an ordinary LWW, not a conflict worth showing.
+- `device.label`: a name for a device, the person's, for lists.
 - `device.retired`: a decision about another device (lost, replaced).
   Its directory stays — history is history — but a fold stops treating
-  its `device.json` as a live address and shows any later events from it
-  as suspect.
+  its mediation as a live address and shows any later events from it as
+  suspect.
 
 ### 8.2 `contacts/<cid>/` — one contact
 
@@ -447,10 +454,10 @@ From a contact's log and its attributed partitions:
 
 Per `did/<id>`: minted, registered (per device), published-as, uses,
 retired, `usedBy` (the contacts with a live `useKey` on it), and
-`takenBy` (the contacts with an `attach` on one of its partitions). Per device:
-its `device.json` and whether it is retired — so the application can
-list "your addresses" across every device without adopting another's
-mediation.
+`takenBy` (the contacts with an `attach` on one of its partitions). Per
+device: its current mediation, its label, whether it is retired — so
+the application can list "your addresses" across every device without
+adopting another's mediation. For the identity: its `label`.
 
 ### 9.4 Invitations
 
@@ -552,11 +559,12 @@ out.
   fold is not `sent` gets a `held` in the new directory.
 - **Import** into the same anchor = merge:
   - `devices/<x>/` for every `x` not present: copied whole;
-  - `devices/<x>/` present on both sides: per file, the longer of two
-    segments that share a name (a prefix relation, by rule 3), any
-    missing segment copied, `device.json` from whichever copy has the
-    later `mintedAt`-plus-mtime — *provisional*; in practice both sides
-    have the same bytes or one is strictly ahead;
+  - `devices/<x>/` present on both sides: any missing segment copied;
+    for two segments sharing a name, one must be a prefix of the other
+    (rule 3) and the longer is kept; `device.json` must match (§6.3).
+    A segment pair that is not prefix-related, or a `device.json` that
+    differs, is two writers sharing one `dev`: the import stops and
+    reports it rather than choosing;
   - `devices/<self>/` (`self` from `local/device.json`) is never touched
     by an import;
   - `blobs/`: **after** the device directories are merged, fold the
@@ -576,7 +584,8 @@ On open, once, forward only. The migrating device mints its `dev` and
 writes everything below into its own directory; the v1 directories are
 renamed `migrated-v1/` and left for the person to delete.
 
-- `config.mediation` → `devices/<dev>/device.json`; its `public` key →
+- `config.label` → `label.set`. `config.mediation` → `mediation.set` +
+  `mediation.granted` (if `routingDid`); its `public` key →
   `did.minted` + `did.published { as: profile, uses: many }` (+
   `did.registered`).
 - `contacts/<cid>.json` → `contacts/<cid>/`: `created`, `petname`,
@@ -613,7 +622,9 @@ renamed `migrated-v1/` and left for the person to delete.
 As v1 §8–§10, with: `config.version` = 2; one writer per device
 directory (rule 3) replaces "one writer per vault" as the format-level
 rule — the application still serialises writers on one directory, and
-two processes sharing one `dev` is a bug, not a merge. A backup is
+two processes sharing one `dev` is a bug, not a merge — it shows up as
+non-prefix segments or differing `device.json` under one `dev` (§12),
+and the remedy is for one of them to mint its own. A backup is
 still a move, not a sync, but the format no longer stands in the way of
 one: a sync is "copy the other devices' directories and the blobs they
 reference", and nothing here should have to change for it.
@@ -646,8 +657,8 @@ an application must say so in its copy where it says "delete".
   acceptable: a tombstone segment under `devices/<dev>/parts/…/` after
   which earlier segments may be unlinked and are not copied in by merge.
   It reintroduces the deletion of a log; not in version 2.
-- `device.json` merge tiebreak when two copies of one device's directory
-  disagree (§12) — should not happen under rule 3; needs a stated rule
-  anyway.
+- A per-device key in `device.json` (for authenticating a device's
+  directory when directories are exchanged over a wire rather than by
+  hand). Not needed while a merge is a backup, so not in version 2.
 - A device-side space policy for bodies (§10.4): an eviction event that
   explains a local absence without binding anyone. Not in version 2.
