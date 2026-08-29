@@ -69,6 +69,8 @@ import {
   type MyDidUse,
 } from "@estoc/vault";
 import type { PeerVault } from "./identity/vault.js";
+import { envelopeHeader } from "./protocol/envelope.js";
+import type { TraceInput, TraceStream } from "@estoc/vault";
 
 /**
  * One vault's live agent: mediation, pickup, live delivery, and routing.
@@ -220,6 +222,54 @@ interface Opened {
   recipient: string | null;
   /** a `from_prior` header didcomm-rust verified: signed by `iss`, naming `sub` */
   fromPrior: { iss: string; sub: string; jwt: string } | null;
+  /**
+   * The `envelope.open` observation, prepared at unpack and written by
+   * `noteOpen` once the message's fate is known — so the line can name
+   * the record it ended in.
+   */
+  trace: TraceInput;
+  /** the tid `noteOpen` gave the observation */
+  tid?: string;
+}
+
+/** A packed envelope with its `envelope.seal` observation, written once the frame it rides is known. */
+interface Sealed {
+  packed: string;
+  seal: TraceInput;
+}
+
+/** How often the trace is pruned while the agent runs; `start` prunes too. */
+const TRACE_PRUNE_MS = 60 * 60 * 1000;
+
+/**
+ * A mediation ritual message as the `mediation` stream keeps it: the
+ * plaintext with attachment bodies replaced by their sizes — the bytes
+ * are ciphertext already on `wire.bytes`, or opened envelopes of their own.
+ */
+function ritual(msg: IMessage): Record<string, unknown> {
+  const attachments = msg.attachments;
+  if (!Array.isArray(attachments)) {
+    return msg as unknown as Record<string, unknown>;
+  }
+  return {
+    ...msg,
+    attachments: attachments.map((a) => {
+      const data = (a as { data?: { base64?: unknown; json?: unknown } }).data;
+      const bytes =
+        typeof data?.base64 === "string" ? data.base64.length : data?.json !== undefined ? JSON.stringify(data.json).length : 0;
+      return { ...(a as object), data: { bytes } };
+    }),
+  };
+}
+
+/** The `envelope.seal` observation of a packed envelope: its header, and the type it carries. */
+function sealInput(packed: string, plain: IMessage): TraceInput {
+  return { event: "envelope.seal", ...envelopeHeader(packed), type: plain.type };
+}
+
+const utf8 = new TextEncoder();
+function utf8Length(text: string): number {
+  return utf8.encode(text).length;
 }
 
 /**
@@ -309,6 +359,8 @@ export class Agent {
   /** a start that failed is tried again, later and later — this is the pending try */
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private startFailures = 0;
+  /** the hourly trace prune, from the first start until destroy */
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
   private _status: AgentStatus = { state: "idle" };
   /** inbound messages already in the log, keyed by proven sender + wire id */
   private seen = new Set<string>();
@@ -377,6 +429,70 @@ export class Agent {
 
   private log(line: string): void {
     this.events.onLog?.(line);
+    void this.trace("diag", { event: "log", text: line });
+  }
+
+  /**
+   * Write an observation to the vault's trace (`@estoc/vault`, format
+   * §6.10). A trace that cannot be written is said on the log once per
+   * failure and is never a reason to stop moving mail; the tid comes
+   * back even for a stream that is off, so inner observations still
+   * have something to hang on.
+   */
+  private async trace(stream: TraceStream, input: TraceInput): Promise<string | undefined> {
+    try {
+      return await this.vault.trace.append(stream, input);
+    } catch (err) {
+      this.events.onLog?.(`trace not written: ${err instanceof Error ? err.message : err}`);
+      return undefined;
+    }
+  }
+
+  /** A frame going out: its header on `wire`, its bytes on `wire.bytes`; returns the frame's tid. */
+  private async traceOut(via: "http" | "ws", endpoint: string, body: string, extra: Record<string, unknown> = {}): Promise<string | undefined> {
+    const tid = await this.trace("wire", { event: "wire.out", via, endpoint, bytes: utf8Length(body), ...extra });
+    if (this.vault.trace.enabled("wire.bytes")) {
+      void this.trace("wire.bytes", { event: "wire.out", parent: tid, body });
+    }
+    return tid;
+  }
+
+  /** A frame that came in, the same way; `parent` is the request it answers, when it answers one. */
+  private async traceIn(via: "http" | "ws", body: string, extra: Record<string, unknown> = {}): Promise<string | undefined> {
+    const tid = await this.trace("wire", { event: "wire.in", via, bytes: utf8Length(body), ...extra });
+    if (this.vault.trace.enabled("wire.bytes")) {
+      void this.trace("wire.bytes", { event: "wire.in", parent: tid, body });
+    }
+    return tid;
+  }
+
+  /** The `envelope.seal` line inside `parent`, and the plaintext on `mediation` when it was a ritual with a mediator. */
+  private async traceSeal(seal: TraceInput, parent: string | undefined, plain?: IMessage): Promise<string | undefined> {
+    const tid = await this.trace("envelope", { ...seal, parent });
+    if (plain !== undefined) {
+      void this.trace("mediation", { event: "mediation.out", parent: tid, msg: ritual(plain) });
+    }
+    return tid;
+  }
+
+  /** The `envelope.open` line of an opened envelope, naming the record it ended in when it did. */
+  private async noteOpen(opened: Opened, mid?: string): Promise<string | undefined> {
+    const tid = await this.trace("envelope", mid === undefined ? opened.trace : { ...opened.trace, mid });
+    opened.tid = tid;
+    return tid;
+  }
+
+  /** An opened ritual message from a mediator, in the clear on `mediation`. */
+  private noteRitual(opened: Opened): void {
+    void this.trace("mediation", { event: "mediation.in", parent: opened.tid, msg: ritual(opened.msg) });
+  }
+
+  private async pruneTrace(): Promise<void> {
+    try {
+      await this.vault.trace.prune();
+    } catch (err) {
+      this.log(`trace prune failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   private allSecrets(): Secret[] {
@@ -432,6 +548,11 @@ export class Agent {
     if (this.startTimer !== null) {
       clearTimeout(this.startTimer);
       this.startTimer = null;
+    }
+    void this.pruneTrace();
+    if (this.pruneTimer === null && !this.destroyed) {
+      this.pruneTimer = setInterval(() => void this.pruneTrace(), TRACE_PRUNE_MS);
+      (this.pruneTimer as { unref?: () => void }).unref?.();
     }
     try {
       // first of all: is this the seed the vault was made from?
@@ -585,6 +706,10 @@ export class Agent {
       clearTimeout(this.startTimer);
       this.startTimer = null;
     }
+    if (this.pruneTimer !== null) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = null;
+    }
     this.closeSocket();
   }
 
@@ -605,7 +730,7 @@ export class Agent {
    * route — messagepickup 3.0 requires clients to say so explicitly, once
    * per WebSocket and on every HTTP POST.
    */
-  private async packForMediator(message: IMessage): Promise<string> {
+  private async packForMediator(message: IMessage): Promise<Sealed> {
     const [packed] = await new this.didcomm.Message({
       ...message,
       return_route: "all",
@@ -617,7 +742,7 @@ export class Agent {
       secretsResolverFor(this.allSecrets()),
       { forward: false }
     );
-    return packed;
+    return { packed, seal: sealInput(packed, message) };
   }
 
   private mediatorHttp(): string {
@@ -628,16 +753,35 @@ export class Agent {
     return endpoint;
   }
 
-  private async unpack(packed: string): Promise<Opened> {
-    const [msg, metadata] = await this.didcomm.Message.unpack(
-      packed,
-      this.didResolver,
-      secretsResolverFor(this.allSecrets()),
-      {}
-    );
+  /**
+   * Open an envelope; `parent` is the observation it arrived inside (the
+   * frame, or the delivery it was attached to). One that will not open
+   * leaves an `envelope.error` line and throws; one that does is
+   * described in the returned `trace`, written by `noteOpen`.
+   */
+  private async unpack(packed: string, parent?: string): Promise<Opened> {
+    const open: TraceInput = { event: "envelope.open", ...envelopeHeader(packed), parent };
+    let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
+    try {
+      unpacked = await this.didcomm.Message.unpack(
+        packed,
+        this.didResolver,
+        secretsResolverFor(this.allSecrets()),
+        {}
+      );
+    } catch (err) {
+      void this.trace("envelope", { ...open, event: "envelope.error", error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+    const [msg, metadata] = unpacked;
     const value = msg.as_value();
     // the binding hands back null, not undefined, for a header that is not there
     const rotation = metadata.from_prior ?? null;
+    open.type = value.type;
+    if (metadata.encrypted_from_kid !== undefined) open.from_kid = metadata.encrypted_from_kid;
+    if (metadata.encrypted_to_kids !== undefined) open.to_kids = metadata.encrypted_to_kids;
+    if (metadata.re_wrapped_in_forward) open.re_wrapped_in_forward = true;
+    if (rotation !== null) open.from_prior = { iss: rotation.iss, sub: rotation.sub };
     return {
       msg: value,
       sender: didOf(metadata.encrypted_from_kid),
@@ -646,30 +790,48 @@ export class Agent {
         rotation === null
           ? null
           : { iss: rotation.iss, sub: rotation.sub, jwt: value.from_prior as string },
+      trace: open,
     };
   }
 
   /** POST to the mediator and unpack the reply riding the HTTP response. */
-  private async mediatorRoundTrip(
-    type: string,
-    body: Record<string, unknown>
-  ): Promise<IMessage> {
+  private async mediatorRoundTrip(type: string, body: Record<string, unknown>): Promise<IMessage> {
+    return (await this.mediatorExchange(type, body)).msg;
+  }
+
+  /** `mediatorRoundTrip` with the opened reply whole, for what needs its observation as a parent. */
+  private async mediatorExchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const message = plainMessage(
       type,
       (this.me as PeerIdentity).did,
       this.mediation().mediatorDid,
       body
     );
-    const packed = await this.packForMediator(message);
-    const response = await this.fetchFn(this.mediatorHttp(), {
-      method: "POST",
-      headers: { "Content-Type": ENCRYPTED_MIME },
-      body: packed,
-    });
+    const { packed, seal } = await this.packForMediator(message);
+    const endpoint = this.mediatorHttp();
+    const out = await this.traceOut("http", endpoint, packed, { type });
+    await this.traceSeal(seal, out, message);
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await this.fetchFn(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": ENCRYPTED_MIME },
+        body: packed,
+      });
+    } catch (err) {
+      void this.trace("wire", { event: "wire.error", via: "http", parent: out, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+    const text = await response.text();
+    const reply = await this.traceIn("http", text, { parent: out, status: response.status, ms: Date.now() - started });
     if (!response.ok) {
       throw new Error(`mediator answered ${response.status} to ${type}`);
     }
-    return (await this.unpack(await response.text())).msg;
+    const opened = await this.unpack(text, reply);
+    await this.noteOpen(opened);
+    this.noteRitual(opened);
+    return opened;
   }
 
   /**
@@ -735,13 +897,13 @@ export class Agent {
       }
       this.log(`${count} message(s) queued at the mediator`);
 
-      const delivery = await this.mediatorRoundTrip(DELIVERY_REQUEST, {
+      const delivery = await this.mediatorExchange(DELIVERY_REQUEST, {
         limit: count,
       });
-      if (delivery.type !== DELIVERY) {
+      if (delivery.msg.type !== DELIVERY) {
         return;
       }
-      const acked = await this.enqueueInbound(() => this.processDelivery(delivery));
+      const acked = await this.enqueueInbound(() => this.processDelivery(delivery.msg, delivery.tid));
       if (acked === 0) {
         this.log("nothing in the queue could be handled now; leaving it for a later pickup");
         return;
@@ -914,7 +1076,7 @@ export class Agent {
    * stays queued for the next pickup. Nothing here throws for one bad
    * attachment: the loop moves on, and the ack still goes out for the rest.
    */
-  private async processDelivery(delivery: IMessage): Promise<number> {
+  private async processDelivery(delivery: IMessage, parent?: string): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const acked: string[] = [];
 
@@ -938,7 +1100,7 @@ export class Agent {
 
       let opened: Opened;
       try {
-        opened = await this.unpack(innerPacked);
+        opened = await this.unpack(innerPacked, parent);
       } catch (err) {
         this.log(
           `could not open a delivered envelope; leaving it queued: ${err instanceof Error ? err.message : err}`
@@ -952,11 +1114,13 @@ export class Agent {
       const { msg: inner, sender, recipient } = opened;
       await this.applyRotation(opened);
       if (!(await this.claimInvitation(opened))) {
+        void this.noteOpen(opened);
         continue;
       }
 
       const key = dedupKey(sender, inner.id);
       if (this.seen.has(key)) {
+        void this.noteOpen(opened);
         continue;
       }
 
@@ -974,6 +1138,8 @@ export class Agent {
       });
       await this.vault.messages.append(record);
       this.seen.add(key);
+      // the record exists: the observation can name it
+      await this.noteOpen(opened, record.mid);
 
       if (isSpecType(inner.type)) {
         await this.handleSpecMessage(record, sender);
@@ -1063,15 +1229,15 @@ export class Agent {
     ws.onopen = async () => {
       // live-delivery-change is the first frame the socket ever carries.
       try {
-        const packed = await this.packForMediator(
-          plainMessage(
-            LIVE_DELIVERY_CHANGE,
-            (this.me as PeerIdentity).did,
-            this.mediation().mediatorDid,
-            { live_delivery: true }
-          )
+        const plain = plainMessage(
+          LIVE_DELIVERY_CHANGE,
+          (this.me as PeerIdentity).did,
+          this.mediation().mediatorDid,
+          { live_delivery: true }
         );
+        const { packed, seal } = await this.packForMediator(plain);
         ws.send(packed);
+        await this.traceSeal(seal, await this.traceOut("ws", wsUri, packed, { type: plain.type }), plain);
       } catch (err) {
         // an unhandled rejection here would leave the socket open and
         // live delivery never switched on; closing it re-enters reconnect
@@ -1084,7 +1250,10 @@ export class Agent {
       const text =
         typeof event.data === "string" ? event.data : await (event.data as Blob).text();
       try {
-        const { msg } = await this.unpack(text);
+        const opened = await this.unpack(text, await this.traceIn("ws", text, { endpoint: wsUri }));
+        await this.noteOpen(opened);
+        this.noteRitual(opened);
+        const { msg } = opened;
         if (msg.type === STATUS) {
           if (msg.body.live_delivery === true) {
             this.setStatus({ state: "live" });
@@ -1093,7 +1262,7 @@ export class Agent {
           return;
         }
         if (msg.type === DELIVERY) {
-          await this.enqueueInbound(() => this.processDelivery(msg));
+          await this.enqueueInbound(() => this.processDelivery(msg, opened.tid));
           return;
         }
         this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
@@ -1146,7 +1315,7 @@ export class Agent {
    * authcrypt to the recipient, then — when they live behind a mediator —
    * a forward request sealed anonymously to that mediator.
    */
-  private async deliverToContact(plain: IMessage, contactDid: string): Promise<void> {
+  private async deliverToContact(plain: IMessage, contactDid: string, mid: string): Promise<void> {
     const contactDoc = await this.resolveDid(contactDid);
     if (contactDoc === null) {
       throw new Error("contact DID does not resolve");
@@ -1165,7 +1334,8 @@ export class Agent {
       { forward: false }
     );
 
-    let outboundPacked = innerPacked;
+    const innerSeal: TraceInput = { ...sealInput(innerPacked, plain), mid };
+    let outer: { packed: string; seal: TraceInput; forward: IMessage } | null = null;
     let endpoint: string;
 
     if (contactService.startsWith("did:")) {
@@ -1203,7 +1373,7 @@ export class Agent {
         { forward: false }
       );
 
-      outboundPacked = outerPacked;
+      outer = { packed: outerPacked, seal: sealInput(outerPacked, forward), forward };
       endpoint = httpEndpoint;
     } else if (contactService.startsWith("http")) {
       // No mediator in the way — the inner envelope goes straight to them.
@@ -1212,12 +1382,25 @@ export class Agent {
       throw new Error(`unroutable service endpoint: ${contactService}`);
     }
 
-    const response = await this.fetchFn(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": ENCRYPTED_MIME },
-      body: outboundPacked,
-      signal: AbortSignal.timeout(this.deliveryTimeoutMs),
-    });
+    const outboundPacked = outer === null ? innerPacked : outer.packed;
+    // the frame first, then the envelopes inside it, outermost first
+    const out = await this.traceOut("http", endpoint, outboundPacked, { type: plain.type });
+    const wrap = outer === null ? out : await this.traceSeal(outer.seal, out, outer.forward);
+    await this.traceSeal(innerSeal, wrap);
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await this.fetchFn(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": ENCRYPTED_MIME },
+        body: outboundPacked,
+        signal: AbortSignal.timeout(this.deliveryTimeoutMs),
+      });
+    } catch (err) {
+      void this.trace("wire", { event: "wire.error", via: "http", parent: out, ms: Date.now() - started, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+    void this.trace("wire", { event: "wire.in", via: "http", parent: out, status: response.status, ms: Date.now() - started });
     if (!response.ok) {
       throw new Error(`endpoint answered ${response.status}`);
     }
@@ -1359,7 +1542,7 @@ export class Agent {
         this.events.onContact?.(contact);
       }
       to = currentDid(contact);
-      await this.deliverToContact(record.msg as unknown as IMessage, to);
+      await this.deliverToContact(record.msg as unknown as IMessage, to, record.mid);
       event = { mid: record.mid, at: new Date().toISOString(), status: "sent", attempt, to };
     } catch (err) {
       event = {
@@ -1768,7 +1951,10 @@ export class Agent {
     const hash = await blobHash(ciphertext);
     const placed = await this.putBlob(hash, ciphertext.length);
     if (placed.upload !== null) {
+      const out = await this.trace("wire", { event: "wire.out", via: "http", method: "PUT", endpoint: placed.upload.url, bytes: ciphertext.length, what: "package" });
+      const started = Date.now();
       const response = await this.fetchFn(placed.upload.url, { method: "PUT", body: ciphertext });
+      void this.trace("wire", { event: "wire.in", via: "http", parent: out, status: response.status, ms: Date.now() - started });
       if (!response.ok) {
         throw new Error(`the blob store answered ${response.status} to the package upload`);
       }
@@ -1819,10 +2005,13 @@ export class Agent {
           : `the share names a package this agent cannot use: ${before.packageProblem}`
       );
     }
+    const out = await this.trace("wire", { event: "wire.out", via: "http", method: "GET", endpoint: pkg.url, what: "package", mid: record.mid });
+    const started = Date.now();
     const response = await this.packageFetchFn(pkg.url, {
       redirect: "error",
       signal: AbortSignal.timeout(this.packageTimeoutMs),
     });
+    void this.trace("wire", { event: "wire.in", via: "http", parent: out, status: response.status, bytes: pkg.byteCount, ms: Date.now() - started });
     if (!response.ok) {
       throw new Error(`the package is not there: ${pkg.url} answered ${response.status}`);
     }

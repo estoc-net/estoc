@@ -276,6 +276,24 @@ Inbound processing runs one delivery at a time. A socket that closes is
 reopened after a pickup, so nothing queued during the outage waits for the
 next start.
 
+### The trace
+
+Everything the agent observes on its way to and from the log goes to the
+vault's trace (`@estoc/vault`'s `TraceLog`, format §6.10): the frames it
+sends and receives (`wire`: via, endpoint, size, HTTP status, duration;
+`wire.bytes`: the ciphertext), every envelope sealed or opened (`envelope`:
+kind, algorithms, key ids, the message type — no plaintext), the plaintext
+of its rituals with mediators (`mediation`: status, delivery, grant,
+recipient-update, forward), and what `onLog` was told (`diag`). Each line
+names the observation it happened inside (`parent`), and an envelope that
+ended in a log record names it (`mid`) — so `vault.trace.traceOf(mid)`
+is the whole onion of one message, outermost frame to innermost seal,
+written only after the record is. What the trace keeps and for how long
+is the vault's `trace` option (`TRACE_NORMAL` by default, `TRACE_OFF`
+writes nothing); the agent prunes it at every start and hourly, and a
+trace that cannot be written is said on the log, never a reason to stop
+moving mail.
+
 ### Moving a vault, and backends
 
 `snapshotVault` / `importVault` and the `VaultBackend`s (`MemoryBackend`,

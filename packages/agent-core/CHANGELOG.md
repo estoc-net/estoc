@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The agent writes the vault's trace.** Every frame sent or received
+  (`wire`, and its ciphertext on `wire.bytes`), every envelope sealed or
+  opened (`envelope`: kind, alg/enc, key ids, message type, `from_prior`
+  — never plaintext), the plaintext of every ritual with a mediator
+  (`mediation`), and every `onLog` line (`diag`) go to
+  `vault.trace` (`@estoc/vault` `TraceLog`, format §6.10), each inside
+  its `parent` observation; an envelope that ended in a log record
+  carries its `mid`, written after the record is. `vault.trace.traceOf(mid)`
+  is one message's onion. The agent prunes the trace at every start and
+  hourly until `destroy`. Retention is the vault's `trace` option
+  (`TRACE_NORMAL` default; `TRACE_OFF` writes nothing).
+
 - **The vault format moved out to `@estoc/vault`.** `MemoryBackend`,
   `OpfsBackend`, `VaultBackend`, `walk`, `segmentsOf`, the layout
   constants, `parseConfig`, the contact/invitation/message/delivery

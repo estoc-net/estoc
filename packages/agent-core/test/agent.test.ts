@@ -18,6 +18,9 @@ import {
   type DeliveryEvent,
   type InvitationRecord,
   type MessageRecord,
+  TRACE_DIR,
+  TRACE_OFF,
+  type TraceEvent,
 } from "@estoc/vault";
 
 import {
@@ -34,6 +37,7 @@ import {
   encryptStream,
   missingBytes,
   verifyShare,
+  DELIVERY,
   FORWARD,
   PLAIN_TYP,
   PROFILE,
@@ -1202,17 +1206,18 @@ describe("Agent under hostile mail", () => {
     const bob = await newParty("Bob", 20, mediator);
     await Promise.all([alice.agent.start(), bob.agent.start()]);
     await withTimeout(Promise.all([alice.live, bob.live]));
-    // Bob's backend appends yield mid-way, like OPFS; overlapping appends
-    // would compute one offset and overwrite each other.
+    // Bob's backend appends yield mid-way, like OPFS; two appends to one
+    // file overlapping would compute one offset and overwrite each other.
+    // (Different files — the message log, each trace stream — may overlap.)
     const inner = bob.backend.append.bind(bob.backend);
-    let inFlight = 0;
+    const inFlight = new Map<string, number>();
     let overlapped = false;
     bob.backend.append = async (path, data) => {
-      inFlight++;
-      if (inFlight > 1) overlapped = true;
+      inFlight.set(path, (inFlight.get(path) ?? 0) + 1);
+      if ((inFlight.get(path) as number) > 1) overlapped = true;
       await new Promise((r) => setTimeout(r, 2));
       await inner(path, data);
-      inFlight--;
+      inFlight.set(path, (inFlight.get(path) as number) - 1);
     };
     const texts = Array.from({ length: 8 }, (_, i) => `burst ${i}`);
     await Promise.all(texts.map((t) => alice.agent.sendBasicMessage(bob.agent.did as string, t)));
@@ -1253,6 +1258,80 @@ describe("Agent sharing objects", () => {
     await alice.agent.addContact(bob.agent.did as string, "Bob");
     return { mediator, alice, bob };
   }
+
+  it("traces the onion: a message's trace runs from the frame it rode to the record it became, with no plaintext but the rituals'", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 23, mediator);
+    const bob = await newParty("Bob", 24, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "peel me");
+    await withTimeout(bob.next((v) => v.content === "peel me"));
+    await withTimeout(alice.next((v) => v.content === "peel me"));
+
+    // Bob, inbound: frame → delivery envelope → the delivery's plaintext, and inside it the authcrypt to him
+    const got = (bob.messages.find((m) => m.view.content === "peel me") as { record: MessageRecord }).record;
+    const inbound = await bob.vault.trace.traceOf(got.mid);
+    const byTid = new Map(inbound.map((e) => [e.tid, e]));
+    const inner = inbound.find((e) => e.mid === got.mid) as TraceEvent;
+    expect(inner).toMatchObject({ stream: "envelope", event: "envelope.open", kind: "authcrypt", type: BASIC_MESSAGE });
+    expect(inner.from_kid).toContain(got.sender);
+    const delivery = byTid.get(inner.parent as string) as TraceEvent;
+    expect(delivery).toMatchObject({ stream: "envelope", event: "envelope.open", kind: "authcrypt", type: DELIVERY });
+    const frame = byTid.get(delivery.parent as string) as TraceEvent;
+    expect(frame).toMatchObject({ stream: "wire", event: "wire.in" });
+    expect(frame.parent).toBeUndefined();
+    expect(inbound.some((e) => e.stream === "wire.bytes" && e.parent === frame.tid && typeof e.body === "string")).toBe(true);
+    const ritual = inbound.find((e) => e.stream === "mediation") as TraceEvent;
+    expect(ritual).toMatchObject({ event: "mediation.in", parent: delivery.tid });
+    const plain = ritual.msg as { type: string; attachments: { data: { bytes: number } }[] };
+    expect(plain.type).toBe(DELIVERY);
+    expect(plain.attachments[0]?.data).toEqual({ bytes: expect.any(Number) });
+    // the plaintext of the message itself is nowhere in the trace
+    for (const stream of ["envelope", "wire", "mediation", "diag"] as const) {
+      for (const e of await bob.vault.trace.read(stream)) {
+        expect(JSON.stringify(e)).not.toContain("peel me");
+      }
+    }
+
+    // Alice, outbound: the POST to Bob's mediator, the anonymous forward, the authcrypt with the mid inside it
+    const sent = (alice.messages.find((m) => m.view.content === "peel me") as { record: MessageRecord }).record;
+    const outbound = await alice.vault.trace.traceOf(sent.mid);
+    const outTids = new Map(outbound.map((e) => [e.tid, e]));
+    const sealed = outbound.find((e) => e.mid === sent.mid) as TraceEvent;
+    expect(sealed).toMatchObject({ stream: "envelope", event: "envelope.seal", kind: "authcrypt", type: BASIC_MESSAGE });
+    const forward = outTids.get(sealed.parent as string) as TraceEvent;
+    expect(forward).toMatchObject({ event: "envelope.seal", kind: "anoncrypt", type: FORWARD });
+    const post = outTids.get(forward.parent as string) as TraceEvent;
+    expect(post).toMatchObject({ stream: "wire", event: "wire.out", via: "http", endpoint: MEDIATOR_HTTP, type: BASIC_MESSAGE });
+    expect(outbound.find((e) => e.event === "wire.in" && e.parent === post.tid)).toMatchObject({ status: expect.any(Number) });
+    // the forward's plaintext is a ritual: kept, with the attachment's bytes counted rather than copied
+    expect(outbound.find((e) => e.stream === "mediation")).toMatchObject({ event: "mediation.out", parent: forward.tid });
+    // what the log said is on diag
+    expect((await alice.vault.trace.read("diag")).some((e) => e.event === "log" && e.text === "live delivery is on")).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("writes no trace at all when the vault's policy is off", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 25, mediator);
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await createSeedKeystore("", { seed: seedOf(26) });
+    const vault = await createVault(backend, { label: "Quiet", keystore: doc, seedKey, mediatorDid: mediator.did, trace: TRACE_OFF });
+    const quiet = attach("Quiet", backend, vault, seedKey, mediator);
+    await Promise.all([alice.agent.start(), quiet.agent.start()]);
+    await withTimeout(Promise.all([alice.live, quiet.live]));
+    await alice.agent.sendBasicMessage(quiet.agent.did as string, "hush");
+    await withTimeout(quiet.next((v) => v.content === "hush"));
+    await quiet.agent.sendBasicMessage(currentDid(quiet.contacts[0] as ContactRecord), "hush back");
+    await withTimeout(alice.next((v) => v.content === "hush back"));
+    const paths = (await backend.list(TRACE_DIR).catch(() => [])) as string[];
+    expect(paths).toEqual([]);
+    expect(await quiet.vault.trace.traceOf((quiet.messages[0] as { record: MessageRecord }).record.mid)).toEqual([]);
+    alice.agent.destroy();
+    quiet.agent.destroy();
+  });
 
   it("hands a contact a whole tree in one message, signed by the anchor, kept block by block", async () => {
     const { alice, bob } = await connected();
