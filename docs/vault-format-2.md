@@ -19,7 +19,7 @@ lives under the device that authored it, so another copy of the vault is
 merged by copying directories; what is this device's alone — which
 device it is, its caches, its traces — lives under `local/` and is never
 in a backup. A log line carries a message's skeleton;
-its body is a blob beside it, and retention is deleting blobs, never log
+its body is a blob beside it, and erasing is deleting blobs, never log
 lines. Messages are partitioned by what the envelope proved — our key and
 their key, not their DID and not our decision about who they are; keys
 are named by random ids, not by the contact they were minted for.
@@ -77,7 +77,7 @@ v1's six rules stand (§2 there). Two are sharpened and five are added.
   state/                                     reserved, as v1 §6.7
   local/                                     this backend's own; never in a snapshot, never merged; §6.4
     device.json                              which <dev> this backend writes as
-    options.json                             device options: retention policy, trace retention
+    options.json                             device options: trace retention
     cache/                                   rebuildable folds; §12
     trace/<stream>/<seg>.jsonl               device observations with retention; as v1 §6.10
 ```
@@ -187,7 +187,7 @@ else. Never in a snapshot, never merged, never read by another device.
 // local/device.json
 { "device": "k7q3ma" }
 // local/options.json — shape owned by the implementation; e.g.
-{ "retention": { "bodies": { "keep": "P90D" } }, "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
+{ "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
 ```
 
 - `device.json` is the pointer every write and every merge needs: which
@@ -271,7 +271,7 @@ One log, one `type` per line, `eid` as the dedup key:
   hashes of every blob lifted out of it (§7.3). The line is the
   permanent record of which blobs the message references: collection
   (§10) reads it, never the body, so it works after the body is gone.
-  Everything a thread view, a search index, or a retention rule needs
+  Everything a thread view, a search index, or a collector needs
   is on the line; nothing a person said is. `direction` and `sender` are gone — the
   partition is both.
 - `delivery`: as v1 §6.6, minus `to` — the partition is the `to`; the
@@ -293,7 +293,7 @@ One log, one `type` per line, `eid` as the dedup key:
   names the `mid` it came from. The other edge the fold follows.
   *Provisional:* a separate event rather than re-parsing every message
   on fold.
-- `message.erased`, `body.evicted`: §10.
+- `message.erased`: §10.
 - Nothing about who the peer *is* goes here.
 
 ### 7.2 Frozen partitions
@@ -303,8 +303,7 @@ A partition is **frozen** when its `myKey` is not a current key of ours
 or its `peerKey` is not in the current document of the contact's current
 DID (§9.2). Frozen is a fold, never written: a frozen partition still
 receives inbound observations (a late envelope to an old key is a fact)
-but nothing is sent from it; a retention rule may treat "frozen" as a
-reason to clear its bodies (§10).
+but nothing is sent from it.
 
 ### 7.3 Bodies — `blobs/<hash>`
 
@@ -322,11 +321,10 @@ A crash between the two writes leaves an orphan blob, harmless, swept by
 the next garbage collection (§10). The other order is never used: a line
 whose body was never written would be indistinguishable from a purge.
 
-A blob that is **absent** means one of three things, and the reader
-tells them apart by the partition log (§10): **erased** — the person
-removed it everywhere; **evicted** — this copy dropped it for space and
-another copy may still have it; or, with neither on record, **missing**
-— damage, to be reported as such and never dressed up as a deletion.
+A blob that is **absent** means one of two things, and the reader tells
+them apart by the partition log (§10): **erased** — the person removed
+it everywhere; or, with no erase on record, **missing** — damage, to be
+reported as such and never dressed up as a deletion.
 
 ## 8. Decision logs
 
@@ -468,13 +466,12 @@ apart can each take the same invitation, and the fold shows two
 attaches under one key, which is a conflict only if they are the same
 peer key.
 
-## 10. Retention
+## 10. Erasing
 
-Nothing is ever deleted from a log. Only blobs are unlinked, and every
-absence has one of two explanations on record — or none, which is
-damage.
+Nothing is ever deleted from a log. Only blobs are unlinked, and only
+because the person said so; an absence with no such record is damage.
 
-### 10.1 Erase — the person's decision, everywhere
+### 10.1 Erase
 
 ```jsonc
 { "eid": "…", "at": "…", "type": "message.erased", "mid": "0198…", "blobs": ["<body hash>", "<attachment hash>"], "because": "user" }
@@ -487,53 +484,39 @@ damage.
 - Event first, then unlink. The skeleton stays; readers show "erased".
 - `because`: `user`, `contact-deleted` (§11), `migration` (§13).
 
-### 10.2 Evict — this copy making room
-
-```jsonc
-{ "eid": "…", "at": "…", "type": "body.evicted", "mid": "0198…", "blobs": ["<hash>"] }
-```
-
-- A fact about this device's copy: it dropped these blobs under its
-  retention policy (`local/options.json`). It travels with the device's
-  directory so a restore on another machine knows the gap is deliberate,
-  but it **binds nothing**: it does not count against the blob, a merge
-  from a copy that still has the blob brings it back, and the blob being
-  present again is the whole of "restored" — no event undoes an
-  eviction.
-- Event first, then unlink, as above.
-- Readers with the blob absent and an eviction on record show
-  "cleared here; may be on another copy".
-
-### 10.3 Reading an absence
+### 10.2 Reading an absence
 
 For a blob `h` referenced by a line: present → show it; absent and some
-`message.erased` names `h` → erased; absent and some `body.evicted`
-names `h` → evicted; absent and neither → **missing**, reported as
-damage.
+`message.erased` names `h` → erased; absent otherwise → **missing**,
+reported as damage.
 
-### 10.4 Collection
+### 10.3 Collection
 
 A blob may be unlinked when, over the union of every device's logs,
 **every** `message.*` line that names it (as `body` or in
-`attachments`) has a `message.erased` naming it. Evictions never make a
-blob collectable. An orphan — a blob no line names at all, from a crash
-between the two writes (§7.3) — is collectable too. Reference counting
-is a fold; a collector may run at any time and is never required to.
+`attachments`) has a `message.erased` naming it. An orphan — a blob no
+line names at all, from a crash between the two writes (§7.3) — is
+collectable too. Reference counting is a fold; a collector may run at
+any time and is never required to.
 
-### 10.5 Policy
+### 10.4 No space policy
 
-What to evict, when, whether frozen partitions go sooner, whether
-attachments go before bodies — a device option in `local/options.json`,
-as trace retention is (v1 §6.10). The format fixes only the mechanics:
-the two events, unlink after the event, and the collection rule.
+Version 2 has no device-side retention for bodies. Browser storage is
+evicted per origin, all or nothing, never per file — an application
+asks for `navigator.storage.persist()` and otherwise treats loss as a
+restore-from-backup problem, not a format one — and a person's own disk
+is theirs to fill. Should a device-side policy ever be wanted, its shape
+is an eviction event beside the erase: a fact about one copy, binding no
+one, never making a blob collectable, undone by nothing but the blob
+being present again (§15).
 
 Skeleton lines are small (a few hundred bytes) and are kept for the
 life of the vault, along with `part.opened`, `peer.resolved`, and every
-erase and eviction (rule 7). What that leaves on disk after a deletion
-is stated in §14. Should a vault one day need to drop skeletons too, a
-per-partition erase (a tombstone segment that suppresses everything
-before it, merged by presence) is the shape it would take; version 2
-does not define one (§15).
+erase (rule 7). What that leaves on disk after a deletion is stated in
+§14. Should a vault one day need to drop skeletons too, a per-partition
+erase (a tombstone segment that suppresses everything before it, merged
+by presence) is the shape it would take; version 2 does not define one
+(§15).
 
 ## 11. Deleting a contact
 
@@ -578,8 +561,8 @@ out.
     by an import;
   - `blobs/`: **after** the device directories are merged, fold the
     union of skeletons and erases; a blob absent here and present there
-    is copied iff it is not collectable under §10.4 over that union — an
-    erased blob never comes back, an evicted one always does;
+    is copied iff it is not collectable under §10.3 over that union — an
+    erased blob never comes back;
   - singletons local; `state/` as v1; `local/` is not in the snapshot
     and is not touched; any other path copied when absent.
 - **`local/cache/`** holds the folds of §9 with, for each, the set of
@@ -666,4 +649,5 @@ an application must say so in its copy where it says "delete".
 - `device.json` merge tiebreak when two copies of one device's directory
   disagree (§12) — should not happen under rule 3; needs a stated rule
   anyway.
-- Retention defaults and the purge trigger (device option; not here).
+- A device-side space policy for bodies (§10.4): an eviction event that
+  explains a local absence without binding anyone. Not in version 2.
