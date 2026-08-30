@@ -416,9 +416,13 @@ it load-bearing.
 
 A token is a string a caller stores and hands back, and nothing more. It
 belongs to the store *instance* that issued it (§4), and names that
-instance: a folder store's names its instance, its segments and their
-lengths; a database's names its instance and a sequence number; and
-neither means anything to the other. A token the store cannot place —
+instance and, since one copy opens more than one store (the vault's
+and each extension's, §6.2), which of them: a folder store's names its
+instance, the store, its segments and their lengths; a database's names
+its instance, the store and a sequence number; and neither means
+anything to the other. A token of the vault's store is never one of an
+extension's, and re-minting the instance re-mints it for every store
+the copy opens. A token the store cannot place —
 another instance's, a position past what it holds — is answered by
 rejecting the call, and the caller answers that by refolding from
 `scan`. Because events are never deleted (principle 4), a token an
@@ -570,15 +574,23 @@ So a trace store is not an `EventStore` and does not claim to be. It
 is the smaller thing below:
 
 ```ts
-/** What a producer minted: the event's shape, id and time already set. */
-interface LocalEventStore<E extends { eid: string; at: string; type: string }> {
-  append(event: E): Promise<void>;
-  scan(filter?: Filter): AsyncIterable<E>;            // equality on envelope fields and data's top level, as §5.3
-  prune(policy: RetentionPolicy): Promise<PruneReport>; // what is kept, per the owner; what was unlinked
+/** The event's shape, less what only exchange needs: no author, no blobs. Id and time are the producer's. */
+type LocalEvent<D extends JsonObject = JsonObject> = { eid: string; at: string; type: string; data: D };
+
+/** As Filter (§5), less `author`, plus `eid`: a line is looked up by the id another line cites. */
+type LocalFilter = { eid?: string; type?: string; data?: { [field: string]: JsonPrimitive | undefined } };
+
+interface LocalEventStore<E extends LocalEvent = LocalEvent> {
+  append(event: E): Promise<void>;                       // minted by the producer; the store checks the shape and nothing else
+  scan(filter?: LocalFilter): AsyncIterable<E>;          // equality, as §5.3; canonical order
+  prune(policy: RetentionPolicy): Promise<PruneReport>;  // what is kept, per the owner; what was unlinked
 }
 ```
 
-`RetentionPolicy` and what is inside `data` are the owner's. The agent
+`eid` is in the filter because it is how a chain is read: a line's
+`parent` is an `eid`, and following it is one lookup per link, which
+is what a store may index (§7.4). `RetentionPolicy` and what is inside
+`data` are the owner's. The agent
 is the first owner: its trace (v1 §6.10) is one, and its streams are
 its retention classes. The vault's `EventStore` and an owner's
 `LocalEventStore` share the event's shape, the filter and, in a folder,
@@ -646,10 +658,34 @@ What follows from it:
   `extension.purged` (dispose of its store) be two decisions: tags a
   person made through a tagging extension do not die with the
   extension unless the person says so.
+- **Devices are the vault's.** An extension store has no
+  `device.minted`: its authors are the vault's devices, and the
+  completeness check of import (§7.3) is the vault set's alone. It
+  appends as the same `self`, and the forked-self rule of `ingest`
+  (§5.2) holds in it as everywhere.
+- **Disposal is an operation, decided above.** Which extensions are
+  purged is a fold over the vault's set (`vault-events.md` §7.3); a
+  store does not read `extension.purged`, or any type. The application
+  applies the fold by calling `dispose(ext)`, the one operation besides
+  `BlobStore.unlink` that removes bytes: it removes the extension's
+  store and the extension's local state (§6.1) together, so that
+  options, cache and trace do not outlive what they were about. Import
+  (§7.3) and snapshot ask the same fold, as they ask the blob rule.
 
-A vault, to a program, is therefore its own three stores and a map
-from `ext` to an extension's two; the folder is `vault-folder.md`
-§3.1; export and import loop over them (§7.2, §7.3).
+A vault, to a program, is therefore its own three stores, a map from
+`ext` to an extension's two, and `dispose`:
+
+```ts
+interface Vault {
+  events: EventStore; blobs: BlobStore; files: FileStore;
+  extension(ext: string): { events: EventStore; blobs: BlobStore };   // opened on first use
+  extensions(): Promise<string[]>;
+  dispose(ext: string): Promise<void>;                                 // store and local state, whole
+}
+```
+
+The folder is `vault-folder.md` §3.1; export and import loop over the
+map (§7.2, §7.3).
 
 ## 7. Interchange
 
@@ -690,7 +726,8 @@ demanded.
 An export is always the whole set. A store does not export by filter,
 so a device's events always travel with its `device.minted`. Every
 extension store the vault holds is exported beside it (§6.2), each as
-its own tree, except one the vault's set says is purged.
+its own tree; a purged one is gone before export if the application
+has applied the fold (`dispose`), and dropped on import if not.
 
 ### 7.3 Import
 
@@ -724,10 +761,13 @@ Three kinds of thing, three rules, in this order:
 
 Then, for each extension store the source holds (§6.2): its events
 and then its blobs, by the first two rules, into the store of the same
-`ext` here, opened if absent. One the merged vault set says is purged
-is not read, as an erased blob never comes back; one no
-`extension.installed` accounts for is read and reported, as a device
-without its `device.minted` is.
+`ext` here, opened if absent — with the vault set's completeness check
+(a device without its `device.minted`) not applied, since an extension
+store has no such event. One that the fold over the merged vault set
+says is purged (`vault-events.md` §7.3) is not read, as an erased blob
+never comes back: the rule is the events', asked as the blob rule is,
+and the store applies it without reading a type. One no
+`extension.installed` accounts for is read and reported.
 
 **Restore** is the same steps into an empty store, the format
 and anchor written last, as today; a folder store restoring into an

@@ -13,7 +13,10 @@ event in both directions (which is short), and how the reference store
 reads, appends and merges on a file system. It is also the
 **interchange format**: what a backup is, what any store must be able to render and
 read (`event-store.md` §7). It defines no event type and never reads
-`data`; the types it carries are `vault-events.md`'s.
+`data`; the types it carries are `vault-events.md`'s, and where a file
+operation depends on one — which blobs an import copies, which
+extension stores it drops — the folder asks a fold and applies the
+answer.
 
 ## 0. On disk, what changes
 
@@ -102,9 +105,11 @@ is the uuidv7 that `extension.installed` minted (`vault-events.md`
 reader with a text editor reads it as it reads the vault: the lines
 are the events, whatever the extension meant by them.
 
-Disposal is removing `extensions/<ext>/` whole, once `extension.purged`
-is in the vault's set (§9.3). Nothing else in the tree is ever removed
-whole.
+`dispose(ext)` (`event-store.md` §6.2) removes `extensions/<ext>/` and
+`local/<ext>/` whole; the application calls it when the fold over the
+vault's set says the extension is purged (`vault-events.md` §7.3). The
+folder does not read `extension.purged`. Nothing else in the tree is
+ever removed whole.
 
 ## 4. Folder ↔ store
 
@@ -212,9 +217,11 @@ else. Never in a snapshot, never merged, never read by another device.
 
 - `self.json` is the pointer every write, every merge, and every fold
   that depends on the asking device needs: which `devices/<dev>/` is
-  mine; it is `self` on the store (`event-store.md` §5). `instance` is
+  mine, in the vault's store and in every extension's (§3.1); it is
+  `self` on each store (`event-store.md` §5). `instance` is
   minted with it — a random id, a uuid will do — and is what this
-  store's change tokens name (§8.4), so a cache folded under another
+  copy's change tokens name, together with which store issued each
+  (§8.4), so a cache folded under another
   device, or under this device before a restore re-minted it, is
   rejected rather than applied. Missing means "first open on this
   copy": mint both (`event-store.md` §4), write the file, go on. Then,
@@ -327,14 +334,15 @@ that remains is a restore into an empty backend (§9.4).
 
 ### 8.4 Changes
 
-The token is the store's `instance` (§6.4) and its segment table:
-every `<seg>.jsonl` under `devices/*/`, by path, with its byte length,
+The token is the copy's `instance` (§6.4), which store — the vault's,
+or an `ext` (§3.1) — and that store's segment table:
+every `<seg>.jsonl` under its `devices/*/`, by path, with its byte length,
 taken when `changes` is called (one walk, one `size` per segment).
 `events` reads each segment from the length `since` names for it (zero
 if `since` does not name it) to the length `token` names, in path order
 and then file order, and decodes every whole line (§4). A token naming
-another instance, or a segment that is now shorter or absent, is one
-this store did not issue, and the call is rejected. Because a segment
+another instance or another store, or a segment that is now shorter or
+absent, is one this store did not issue, and the call is rejected. Because a segment
 only grows, is appended to by one writer, and every line under
 `devices/` was either appended by `self` or ingested after a check
 against everything here (§8.3), the bytes between two lengths are
@@ -378,9 +386,11 @@ exported.
 
 ### 9.1 Snapshot
 
-Everything under `.estoc/` except `local/` — `extensions/` included,
-less any store the vault's set says is purged. A folder store's
-snapshot is a copy; the zip a backup carries is this tree.
+Everything under `.estoc/` except `local/`, `extensions/` included. A
+folder store's snapshot is a copy; the zip a backup carries is this
+tree. A purged extension store still on disk — the application has
+not yet applied the fold (§3.1) — travels with it and is dropped by
+whoever imports it (§9.3).
 
 ### 9.2 Export
 
@@ -412,9 +422,12 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    copied when absent, never overwritten; `local/` is not in the
    snapshot and is not touched.
 4. **Extension stores**, each by steps 1 and 2 into the store of the
-   same `ext` here, opened if absent (`event-store.md` §7.3). One the
-   merged vault set says is purged is not read; one that is purged
-   here and still on disk is removed whole. One no
+   same `ext` here, opened if absent (`event-store.md` §7.3); the
+   `device.minted` check of step 1 does not apply, an extension store
+   having none. One that the fold over the merged vault set says is
+   purged (`vault-events.md` §7.3) is not read — asked as step 2 asks
+   the blob rule, never by reading a type here — and the application
+   then disposes of any such store still on disk (§3.1). One no
    `extension.installed` accounts for is read and reported.
 
 ### 9.4 Restore
