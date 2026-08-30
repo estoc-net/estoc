@@ -31,7 +31,7 @@ export class OpfsBackend implements VaultBackend {
       try {
         handle = await handle.getDirectoryHandle(segment, { create });
       } catch (err) {
-        if (!create && isNotFound(err)) {
+        if (!create && isAbsent(err)) {
           return null;
         }
         throw err;
@@ -50,7 +50,7 @@ export class OpfsBackend implements VaultBackend {
     try {
       return await dir.getFileHandle(name, { create });
     } catch (err) {
-      if (!create && isNotFound(err)) {
+      if (!create && isAbsent(err)) {
         return null;
       }
       throw err;
@@ -139,4 +139,9 @@ export class OpfsBackend implements VaultBackend {
 
 function isNotFound(err: unknown): boolean {
   return err instanceof DOMException && err.name === "NotFoundError";
+}
+
+/** Nothing of the kind asked for is there: not found, or an entry of the other kind (`TypeMismatchError`). */
+function isAbsent(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "NotFoundError" || err.name === "TypeMismatchError");
 }

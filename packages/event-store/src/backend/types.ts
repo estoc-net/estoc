@@ -5,13 +5,17 @@
  * tree above. Three implementations ship: OPFS for the browser, a folder
  * on disk for Node, memory for tests. Paths are `/`-separated, relative
  * to the vault root, never absolute, never containing `.` or `..`.
+ * A file and a directory are told apart by every query: what asks
+ * about a file (`read`, `size`, `modified`) answers null for a
+ * directory, and what asks about a directory (`list`, `dirs`) answers
+ * [] for a file, as each does for a path that is not there.
  *
  * Whole-file writes are atomic in the sense a crash never leaves a
  * half-written file where a good one was; appends may leave a cut-short
  * last line, which the folder store reports and heals (§5).
  */
 export interface VaultBackend {
-  /** File contents, or null if there is no such file. */
+  /** File contents, or null if there is no such file (a directory is not one). */
   read(path: string): Promise<Uint8Array | null>;
   /** Replace (or create) a file, creating parent directories as needed. */
   write(path: string, data: Uint8Array): Promise<void>;
@@ -19,13 +23,13 @@ export interface VaultBackend {
   append(path: string, data: Uint8Array): Promise<void>;
   /** Delete a file; deleting a missing file is not an error. */
   remove(path: string): Promise<void>;
-  /** Size of a file in bytes without reading it, or null if there is no such file. */
+  /** Size of a file in bytes without reading it, or null if there is no such file (a directory is not one). */
   size(path: string): Promise<number | null>;
   /** When the file was last written, in milliseconds since the epoch of the local clock; null if there is no such file. */
   modified(path: string): Promise<number | null>;
-  /** Names of the files (not directories) directly inside `dir`, unsorted; [] if missing. */
+  /** Names of the files (not directories) directly inside `dir`, unsorted; [] if missing or a file. */
   list(dir: string): Promise<string[]>;
-  /** Names of the directories directly inside `dir`, unsorted; [] if missing. */
+  /** Names of the directories directly inside `dir`, unsorted; [] if missing or a file. */
   dirs(dir: string): Promise<string[]>;
 }
 

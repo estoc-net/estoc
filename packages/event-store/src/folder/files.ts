@@ -8,8 +8,12 @@ import type { VaultBackend } from "../backend/types.js";
 import { walk } from "../backend/types.js";
 import { ancestorsOf, checkFilePath, type FileStore } from "../files.js";
 import { kindOf } from "./layout.js";
+import { Serial } from "./serial.js";
 
 export class FolderFileStore implements FileStore {
+  /** writes one at a time: the check of the tree and the write it admits, with nothing between */
+  private readonly serial = new Serial();
+
   constructor(
     private readonly backend: VaultBackend,
     private readonly base: string
@@ -27,15 +31,17 @@ export class FolderFileStore implements FileStore {
   /** Refuses a path that with what the folder holds would be a file and a directory of one name (§9.6). */
   async write(path: string, bytes: Uint8Array): Promise<void> {
     const full = this.at(path);
-    for (const ancestor of ancestorsOf(path)) {
-      if ((await this.backend.size(`${this.base}/${ancestor}`)) !== null) {
-        throw new Error(`${ancestor} is a file: cannot write ${path}`);
+    return this.serial.run(async () => {
+      for (const ancestor of ancestorsOf(path)) {
+        if ((await this.backend.size(`${this.base}/${ancestor}`)) !== null) {
+          throw new Error(`${ancestor} is a file: cannot write ${path}`);
+        }
       }
-    }
-    if ((await this.backend.list(full)).length > 0 || (await this.backend.dirs(full)).length > 0) {
-      throw new Error(`${path} is a directory: cannot write it as a file`);
-    }
-    return this.backend.write(full, bytes);
+      if ((await this.backend.list(full)).length > 0 || (await this.backend.dirs(full)).length > 0) {
+        throw new Error(`${path} is a directory: cannot write it as a file`);
+      }
+      await this.backend.write(full, bytes);
+    });
   }
 
   async list(): Promise<string[]> {

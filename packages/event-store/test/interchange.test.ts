@@ -526,7 +526,7 @@ describe("import: extension stores", () => {
     files[`.estoc/extensions/${EXT_B}/readme.txt`] = enc.encode("a file under a purged store");
     files[`.estoc/extensions/${EXT_A}/readme.txt`] = enc.encode("a file under a kept one");
     const target = await memoryVault("cccccc", c.now);
-    await target.files.write(`extensions/${EXT_B}/readme.txt/child`, enc.encode("a purged store's file is not written, so it cannot clash")); 
+    await target.files.write(`extensions/${EXT_B}/readme.txt/child`, enc.encode("a purged store's file is not written, so it cannot clash"));
     const seen: Event[][] = [];
     const report = await importVault(target, files, {
       purged: (events) => {

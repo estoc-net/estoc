@@ -34,7 +34,7 @@ export class FsBackend implements VaultBackend {
       const buf = await readFile(this.at(p));
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     } catch (err) {
-      if (isMissing(err)) {
+      if (isMissing(err) || isDirectory(err)) {
         return null;
       }
       throw err;
@@ -70,7 +70,8 @@ export class FsBackend implements VaultBackend {
 
   async size(p: string): Promise<number | null> {
     try {
-      return (await stat(this.at(p))).size;
+      const s = await stat(this.at(p));
+      return s.isFile() ? s.size : null;
     } catch (err) {
       if (isMissing(err)) {
         return null;
@@ -81,7 +82,8 @@ export class FsBackend implements VaultBackend {
 
   async modified(p: string): Promise<number | null> {
     try {
-      return (await stat(this.at(p))).mtimeMs;
+      const s = await stat(this.at(p));
+      return s.isFile() ? s.mtimeMs : null;
     } catch (err) {
       if (isMissing(err)) {
         return null;
@@ -125,4 +127,9 @@ async function modeOf(file: string): Promise<number | null> {
 function isMissing(err: unknown): boolean {
   const code = (err as { code?: string }).code;
   return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/** The path names a directory where a file was asked for. */
+function isDirectory(err: unknown): boolean {
+  return (err as { code?: string }).code === "EISDIR";
 }
