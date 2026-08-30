@@ -110,17 +110,18 @@ is the uuidv7 that `extension.installed` minted (`vault-events.md`
 reader with a text editor reads it as it reads the vault: the lines
 are the events, whatever the extension meant by them.
 
-`create(ext)` makes `extensions/<ext>/` empty, once, at install;
-`extension(ext)` opens one that exists and refuses one that does not
-(`event-store.md` §6.2). `dispose(ext)` removes `extensions/<ext>/` and
+`provision(ext)` makes `extensions/<ext>/` empty — for an install,
+an import, whatever the application's reason — and refuses one that
+exists; `extension(ext)` opens one that exists and refuses one that
+does not (`event-store.md` §6.2). `dispose(ext)` removes `extensions/<ext>/` and
 `local/extensions/<ext>/` whole — the two mirror each other so that
 the one removal is one rule — after the operations in flight on that
 store have finished and before any can begin, and every handle to the
 store is dead from then on (`Disposed`); the application calls it
 when the fold over the vault's set says the extension is purged
 (`vault-events.md` §7.3). The folder does not read `extension.purged`,
-and does not remember what it removed: a later `create` of the same
-`ext` is the application contradicting its fold. Nothing else in the
+and does not remember what it removed: a later `provision` of the
+same `ext` is the application contradicting its fold. Nothing else in the
 tree is ever removed whole.
 
 ## 4. Folder ↔ store
@@ -440,7 +441,7 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    copied when absent, never overwritten; `local/` is not in the
    snapshot and is not touched.
 4. **Extension stores**, each by steps 1 and 2 into the store of the
-   same `ext` here, created if absent (`event-store.md` §7.3); the
+   same `ext` here, provisioned if absent (`event-store.md` §7.3); the
    `device.minted` check of step 1 is asked of the merged vault set,
    an extension store having no such event of its own — an author
    without one there is read and reported as incomplete. One that the
@@ -462,7 +463,12 @@ safe because there is nothing here for it to double. A store that is
 not a folder ingests it (§9.3). There is no `local/`, so the first open
 mints a `dev` and an `instance` (§6.4) and the imported
 directories stay as history — including the old device's mediation,
-visible until the person retires it (`vault-events.md` §7.3). What the
+visible until the person retires it (`vault-events.md` §7.3). The copy
+may carry a purged extension store the source had not yet disposed of
+(§9.1), and this copy has no memory of it, so the first open folds the
+extension lifecycle and applies every pending `dispose` before any
+extension is opened or run (`event-store.md` §6.2) — this is the
+application's first act on any open, not only after a restore. What the
 application then does with the merged set — `held` on every outbound
 not `sent` — is `vault-events.md` §10.
 

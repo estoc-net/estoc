@@ -626,8 +626,13 @@ Why a set of its own and not a namespace in the vault's:
   writes the vault's own types through it, which is the application's
   grant to make.
 - **Names.** Inside its own set an extension names its types as it
-  likes; two extensions cannot collide because they are two sets. The
-  namespace an earlier draft left open (§10) does not arise.
+  likes, less one prefix: `estoc.*` is the host's, for the events the
+  application itself writes into an extension's set (`estoc.object`,
+  below), and an extension does not use it — the application, which
+  hands out the handle, refuses it there; the store below reads no
+  type. Two extensions cannot collide because they are two sets. The
+  namespace an earlier draft left open (§10) shrinks to that one
+  reserved prefix.
 
 What follows from it:
 
@@ -645,9 +650,11 @@ What follows from it:
   events — so an unreferenced blob is an orphan there as anywhere. The
   bytes the vault carries for the extension *itself*, when it carries
   them, are blobs of this store too, and are held by an event of this
-  store that lists them: `extension.object` (`vault-events.md` §5),
-  which the application appends when it installs, before
-  `extension.installed` in the vault's set names the same root. The
+  store that lists them: `estoc.object` (`vault-events.md` §5), the
+  host's bootstrap event, which the application appends when it
+  installs, before `extension.installed` in the vault's set names the
+  same root (before in time; a set promises no order, and a reader
+  finds it by type, not by position). The
   vault's set never references them, so they are not pinned for the
   vault's life; the extension's set does, so they are not an orphan;
   and `dispose` takes them with the rest. An extension may *read* a
@@ -689,16 +696,25 @@ What follows from it:
   application stops the extension first; `dispose` is serialised with
   the store's operations — it waits for those in flight and none
   begin after; every handle to the store, held by anyone, is dead from
-  then on and each later `append`, `scan`, `changes`, `put` rejects
+  then on and every method of it — reads as much as writes — rejects
   with `Disposed` (nothing is silently re-created); and `extension(ext)`
   rejects an `ext` that is not open on disk rather than opening one,
-  so a dead handle cannot be replaced by asking again. Creation is its
-  own call, `create(ext)`, which the application makes once, at
-  install, for a fresh uuidv7. A store keeps no memory of what it
-  disposed of — that is the fold's — so a re-install is a new
-  `extension.installed` and a new `ext`, never the old one created
-  again; an application that created a purged `ext` again would be
-  contradicting its own fold, and nothing below the fold can tell.
+  so a dead handle cannot be replaced by asking again. Making one is
+  its own call, `provision(ext)`: it makes an event space that does
+  not yet exist and says nothing about why — a fresh install, an
+  import bringing a store this copy lacks (§7.3), bytes fetched by
+  root and materialised — and rejects an `ext` that exists. That a
+  fresh install mints a fresh uuidv7 is the application's rule, above
+  the store, which cannot tell a new id from an old one. A store keeps
+  no memory of what it disposed of — that is the fold's — so a
+  re-install is a new `extension.installed` and a new `ext`, never the
+  old one provisioned again; an application that provisioned a purged
+  `ext` again would be contradicting its own fold, and nothing below
+  the fold can tell. On open, before any extension is handed its store
+  or run, the application folds the extension lifecycle and applies
+  every `dispose` the fold owes — a snapshot may lawfully carry a
+  purged store not yet removed, and a restore copies it (§7.3,
+  `vault-folder.md` §9.4).
 
 A vault, to a program, is therefore its own three stores, a map from
 `ext` to an extension's two, and `dispose`:
@@ -707,7 +723,7 @@ A vault, to a program, is therefore its own three stores, a map from
 interface Vault {
   events: EventStore; blobs: BlobStore; files: FileStore;
   extension(ext: string): { events: EventStore; blobs: BlobStore };   // an existing one; rejects an unknown `ext`
-  create(ext: string): Promise<{ events: EventStore; blobs: BlobStore }>; // once, at install; rejects one that exists
+  provision(ext: string): Promise<{ events: EventStore; blobs: BlobStore }>; // a space that does not exist yet; rejects one that does
   extensions(): Promise<string[]>;
   dispose(ext: string): Promise<void>;                                 // store and local state, whole; every handle dead
 }
@@ -790,7 +806,7 @@ Three kinds of thing, three rules, in this order:
 
 Then, for each extension store the source holds (§6.2): its events
 and then its blobs, by the first two rules, into the store of the same
-`ext` here, created if absent. The completeness check of rule 1 is
+`ext` here, provisioned if absent (§6.2). The completeness check of rule 1 is
 asked of the merged *vault* set — an extension event whose author has
 no `device.minted` there is read and reported as incomplete — since an
 extension store has no such event of its own. One that the fold over

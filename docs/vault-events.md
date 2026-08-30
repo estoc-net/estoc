@@ -315,8 +315,8 @@ devices, and what its mediator answered.
 { "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: no `blobs`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
-// and one that is not in the vault's set but in the extension's own, the first line there, the application's:
-{ "type": "extension.object",    "blobs": ["<hash>", "…"], "data": { "root": "<root>" } }                 // holds the bytes `installed.object` names
+// and one that is not in the vault's set but in the extension's own — the host's bootstrap event, under the reserved `estoc.*`:
+{ "type": "estoc.object",        "blobs": ["<hash>", "…"], "data": { "root": "<root>" } }                 // holds the bytes `installed.object` names
 ```
 
 - `device.minted`: the first event a device writes — that this device
@@ -364,16 +364,18 @@ devices, and what its mediator answered.
   `object` is a name and not a reference: it is not listed in `blobs`,
   and the bytes it names, when the vault carries them at all, are
   blobs of the extension's own store, held there by
-  `extension.object` — an event of *that* store, the first, which the
+  `estoc.object` — the host's bootstrap event in *that* store, under
+  the prefix reserved to the host (`event-store.md` §6.2), which the
   application appends at install with the bytes in its `blobs` and
   the same `root` in its `data`, before `installed` goes into the
-  vault's set (`event-store.md` §6.2). Collection runs per store over
+  vault's set — before in time, not first in any order a set
+  promises. Collection runs per store over
   that store's `blobs` (§8.3), so without such an event the bytes
   would be an orphan the moment they were written; with it they live
   as long as the store, and go with `purged`. They are never the
   vault's blobs, because a blob the vault's set references is pinned
   for the vault's life (§12), and an extension's code is exactly what
-  should not be. A crash between `extension.object` and `installed`
+  should not be. A crash between `estoc.object` and `installed`
   leaves a store no `installed` accounts for, which import reports
   (`event-store.md` §7.3). `removed`: stop
   running it; its store stays, readable without it. `purged`: dispose
@@ -509,7 +511,10 @@ without adopting another's mediation. For the identity: its `label`,
 and its extensions — every `extension.installed`, marked removed or
 not and purged or not (§5), so the application can list them, run the
 ones this device's option says to, and `dispose` of the purged
-(`event-store.md` §6.2); which run here is the device's option.
+(`event-store.md` §6.2); which run here is the device's option. This
+fold is the application's first on open, before any extension is
+handed its store or run, so that a purged store a snapshot still
+carried is gone before anything could open it.
 
 ### 7.4 Invitations
 
@@ -686,10 +691,11 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   explains a local absence without binding anyone. Not in version 2.
 - **What `extension.installed.object` names** (§5): the root of a
   signed object is the leaning; how a device that folds the event
-  obtains the bytes — from the extension store's `extension.object`,
-  when the vault carries them, or by a fetch by the root when it does
-  not — is not decided, nor whether a version of an extension is a
-  second `extension.object` in the same store or a new `ext`. Type names for extensions are no longer a question:
+  obtains the bytes — from the extension store's `estoc.object`, when
+  the vault carries them, or by a fetch by the root when it does not —
+  is not decided, nor whether a version of an extension is a second
+  `estoc.object` in the same store or a new `ext`. Type names for
+  extensions are no longer a question beyond the one reserved prefix:
   an extension's events are in a set of its own (`event-store.md`
   §6.2).
 - **An erase for events that are not messages.** Collection (§8.3)
