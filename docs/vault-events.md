@@ -312,6 +312,9 @@ devices, and what its mediator answered.
 { "type": "identity.label", "data": { "name": "Alice" } }
 { "type": "device.label",   "data": { "dev": "k7q3ma", "name": "phone" } }
 { "type": "device.retired", "data": { "dev": "p2x8rq", "because": "lost" } }
+{ "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<hash or root>" } }
+{ "type": "extension.removed",   "data": { "ext": "0198…" } }
+{ "type": "extension.purged",    "data": { "ext": "0198…" } }
 ```
 
 - `device.minted`: the first event a device writes — that this device
@@ -351,6 +354,18 @@ devices, and what its mediator answered.
   Its events stay — history is history — but a fold stops treating its
   mediation as a live address and shows any later events from it as
   suspect.
+- `extension.installed` / `removed` / `purged`: the three decisions the
+  vault's set keeps about an extension, whose own events live in a
+  store of its own (`event-store.md` §6.2). `installed` mints `ext`,
+  the id of that store, and names what was installed — `object` is
+  *provisional*: a blob hash or the root of a signed object; `name` is
+  for lists. `removed`: stop running it; its store stays, readable
+  without it. `purged`: dispose of its store everywhere — a device
+  that folds it removes `extensions/<ext>/` (`vault-folder.md` §3.1),
+  and an import never brings it back (§9.3 there). Whether *this*
+  device runs an installed extension is an option (`event-store.md`
+  §6.1), not an event. Two devices installing the same extension
+  before merging is two `ext`s; the fold shows both.
 
 ## 6. Contacts
 
@@ -473,7 +488,10 @@ channels). Per device: its current mediation, the channel its
 mediator's key opened (`myKey` = `mediation/<id>/me`, joined to
 `mediatorDid` by `peer.resolved`), its label, whether it is retired —
 so the application can list "your addresses" across every device
-without adopting another's mediation. For the identity: its `label`.
+without adopting another's mediation. For the identity: its `label`,
+and its extensions — every `extension.installed` without a `purged`,
+each marked removed or not (§5); which of them run here is the
+device's option.
 
 ### 7.4 Invitations
 
@@ -648,12 +666,14 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   hand). Not needed while a merge is a backup, so not in version 2.
 - A device-side space policy for bodies (§8.4): an eviction event that
   explains a local absence without binding anyone. Not in version 2.
-- **Type names for extensions.** The vault's own types are
-  `subject.fact` with a short subject; an extension's need a namespace that cannot
-  collide (`event-store.md` §10). Which convention is not decided.
+- **What `extension.installed.object` names** (§5): a blob hash, the
+  root of a signed object, a name to be resolved. Type names for
+  extensions are no longer a question: an extension's events are in a
+  set of its own (`event-store.md` §6.2).
 - **An erase for events that are not messages.** Collection (§8.3)
   knows one release, `message.erased` by `mid`; a blob held by any
-  other event is pinned for the life of the vault. A generic form —
-  an erase naming the referencing event's `eid` rather than a `mid` —
-  would cover extensions and could subsume `message.erased`; not in
+  other event is pinned for the life of the vault (an extension's
+  blobs are its own store's, released with it, `event-store.md` §6.2).
+  A generic form — an erase naming the referencing event's `eid`
+  rather than a `mid` — could subsume `message.erased`; not in
   version 2.

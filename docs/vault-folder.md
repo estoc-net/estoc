@@ -70,12 +70,15 @@ The principles of `event-store.md` §2 as they land on a file system.
   blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place anything is unlinked
   devices/<dev>/<seg>.jsonl                  everything device <dev> wrote: one log, every event a line
   state/                                     reserved, as v1 §6.7
+  extensions/<ext>/                          an extension's own store: this tree again, less config, keystore and local; §3.1
+    devices/<dev>/<seg>.jsonl
+    blobs/<hash>
   local/                                     this copy's own; never in a snapshot, never merged; §6.4
     self.json                                which <dev> this copy writes as, and which instance
-    <owner>/                                 one directory per owner of local state: the folds, the trace, an extension
+    <owner>/                                 one directory per owner of local state: the agent, the folds, an extension
       options.json                           what this device was told; kept, not rebuildable
       cache/                                 rebuildable; delete at will
-      observations/<seg>.jsonl               what this device saw; not rebuildable, pruned by retention; as v1 §6.10
+      trace/<seg>.jsonl                      what this device saw; not rebuildable, pruned by retention; as v1 §6.10
 ```
 
 Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
@@ -84,6 +87,24 @@ Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
 announces itself with an event, `vault-events.md` §5) and no directory
 per contact or per channel: what an event is about is a field of its
 `data`, and a reader reads the whole log anyway (§8.1).
+
+### 3.1 `extensions/<ext>/`
+
+An extension's store (`event-store.md` §6.2) is this tree again, under
+its `ext`: `devices/<dev>/<seg>.jsonl` and `blobs/<hash>`, by every rule
+of §4, §5, §7 and §8 — one writer per device directory, segments named
+uuidv7, blobs flat — and nothing else: no `config.json` (the identity
+is the vault's), no `keystore.json`, no `local/` (an extension's local
+state is `local/<ext>/`, §6.4), and no `extensions/` of its own. `ext`
+is the uuidv7 that `extension.installed` minted (`vault-events.md`
+§5); a directory under `extensions/` not named like one is a file
+(§8.6). A folder store opens one store per such directory, and a
+reader with a text editor reads it as it reads the vault: the lines
+are the events, whatever the extension meant by them.
+
+Disposal is removing `extensions/<ext>/` whole, once `extension.purged`
+is in the vault's set (§9.3). Nothing else in the tree is ever removed
+whole.
 
 ## 4. Folder ↔ store
 
@@ -185,8 +206,8 @@ else. Never in a snapshot, never merged, never read by another device.
 ```jsonc
 // local/self.json
 { "dev": "k7q3ma", "instance": "01991c2e-…" }
-// local/trace/options.json — shape owned by the owner; e.g.
-{ "wire": { "keep": "P30D", "cap": 33554432 } }
+// local/agent/options.json — shape owned by the owner; e.g.
+{ "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
 ```
 
 - `self.json` is the pointer every write, every merge, and every fold
@@ -203,22 +224,23 @@ else. Never in a snapshot, never merged, never read by another device.
   and the check is idempotent.
 - Everything else under `local/` belongs to an **owner**
   (`event-store.md` §6.1) and sits under `local/<owner>/`, a directory
-  named by the owner — `trace` for the trace, a name of the
-  application's for its folds, an extension's id for an extension —
-  and holds the owner's three kinds of local state, each in its place:
-  - `options.json`: what this device was told. v1 §6.10 said a
-    retention policy is never written into the vault; `local/` is not
-    the vault in the sense that matters (it is not what a backup
-    carries), so the policy has a file without becoming a fact. Kept
-    until changed; not rebuildable.
+  named by the owner — `agent` for the agent, a name of the
+  application's for its folds, an `ext` for an extension (§3.1) — and
+  holds the owner's three kinds of local state, each in its place:
+  - `options.json`: what this device was told, and only this device.
+    v1 §6.10 said a retention policy is never written into the vault;
+    `local/` is not the vault in the sense that matters (it is not
+    what a backup carries), so the policy has a file without becoming
+    a fact. Kept until changed; not rebuildable. A setting that should
+    follow the identity is an event, not a line here (`event-store.md`
+    §6.1).
   - `cache/`: rebuildable. The folds, with the change token each was
     folded to (`event-store.md` §7.4). Deleting it is always safe.
-  - `observations/`: what this device saw, as segments (§5) so that
-    retention can go by segment name alone and never rewrite a line —
-    v1 §6.10's trace, under its owner. Not rebuildable, not exchanged,
-    pruned whole segments at a time. How an owner divides its
-    observations below this (the trace keeps one directory per
-    stream) is the owner's.
+  - `trace/`: what this device saw, as segments (§5) so that retention
+    can go by segment name alone and never rewrite a line — v1 §6.10's
+    trace, under its owner. Not rebuildable, not exchanged, pruned
+    whole segments at a time. How an owner divides its trace below
+    this (the agent keeps one directory per stream) is the owner's.
 
   The three are told apart by what may be done to them, and a reader
   that finds one kind where another belongs — a segment under `cache/`
@@ -345,25 +367,31 @@ not `blobs/<hash>` with `hash` sixty-four lowercase hex characters.
 The test is the shape of the path, not its prefix: a path under
 `devices/` or `blobs/` that is not shaped like that is a file, carried
 and never read, so that it survives a trip through a store that is not
-a folder (§11). `local/` is the folder store's own (`self.json`, and
-every owner's options, cache and observations) and is neither an event
-nor a file in this sense: it is never listed, never exported.
+a folder (§11). The same test applies under `extensions/<ext>/`
+(§3.1): a segment or a blob there is the extension store's, and
+anything else there is a file. `local/` is the folder store's own
+(`self.json`, and every owner's options, cache and trace) and is
+neither an event nor a file in this sense: it is never listed, never
+exported.
 
 ## 9. Snapshot, export, import
 
 ### 9.1 Snapshot
 
-Everything under `.estoc/` except `local/`. A folder store's snapshot
-is a copy; the zip a backup carries is this tree.
+Everything under `.estoc/` except `local/` — `extensions/` included,
+less any store the vault's set says is purged. A folder store's
+snapshot is a copy; the zip a backup carries is this tree.
 
 ### 9.2 Export
 
 A store that is not a folder renders one: each event to
 `devices/<author>/<seg>.jsonl`, in segments the export mints as it
 goes — one per author is enough, in any order — one line each; blobs
-to `blobs/<hash>`, flat; every path in `FileStore` in place; no `local/`.
-Nothing about the chunking is remembered: a reader of the export unions
-by `eid` and assumes no order (§5, `event-store.md` §7.2).
+to `blobs/<hash>`, flat; every path in `FileStore` in place; each
+extension store the same way under `extensions/<ext>/` (§3.1); no
+`local/`. Nothing about the chunking is remembered: a reader of the
+export unions by `eid` and assumes no order (§5, `event-store.md`
+§7.2).
 
 ### 9.3 Import
 
@@ -383,6 +411,11 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    refused; `keystore.json` unioned; `state/` as v1; any other path
    copied when absent, never overwritten; `local/` is not in the
    snapshot and is not touched.
+4. **Extension stores**, each by steps 1 and 2 into the store of the
+   same `ext` here, opened if absent (`event-store.md` §7.3). One the
+   merged vault set says is purged is not read; one that is purged
+   here and still on disk is removed whole. One no
+   `extension.installed` accounts for is read and reported.
 
 ### 9.4 Restore
 
