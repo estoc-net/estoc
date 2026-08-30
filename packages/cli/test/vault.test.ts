@@ -19,7 +19,7 @@ import {
 } from "../src/vault.js";
 
 const PASSPHRASE = "correct horse battery staple";
-const seaDay = fileURLToPath(new URL("../../../../folder-object/examples/sea-day/", import.meta.url));
+const seaDay = fileURLToPath(new URL("../../folder-object/test/fixtures/sea-day/", import.meta.url));
 
 let base: string;
 
