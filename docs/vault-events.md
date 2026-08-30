@@ -315,8 +315,6 @@ devices, and what its mediator answered.
 { "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: no `blobs`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
-// and one that is not in the vault's set but in the extension's own — the host's bootstrap event, under the reserved `estoc.*`:
-{ "type": "estoc.object",        "blobs": ["<hash>", "…"], "data": { "root": "<root>" } }                 // holds the bytes `installed.object` names
 ```
 
 - `device.minted`: the first event a device writes — that this device
@@ -361,23 +359,14 @@ devices, and what its mediator answered.
   store of its own (`event-store.md` §6.2). `installed` mints `ext`,
   the id of that store, and names what was installed — `object` is
   *provisional*, the root of a signed object; `name` is for lists.
-  `object` is a name and not a reference: it is not listed in `blobs`,
-  and the bytes it names, when the vault carries them at all, are
-  blobs of the extension's own store, held there by
-  `estoc.object` — the host's bootstrap event in *that* store, under
-  the prefix reserved to the host (`event-store.md` §6.2), which the
-  application appends at install with the bytes in its `blobs` and
-  the same `root` in its `data`, before `installed` goes into the
-  vault's set — before in time, not first in any order a set
-  promises. Collection runs per store over
-  that store's `blobs` (§8.3), so without such an event the bytes
-  would be an orphan the moment they were written; with it they live
-  as long as the store, and go with `purged`. They are never the
+  `object` is a name and not a reference: it is not listed in `blobs`.
+  In version 2 an extension is first-party — the application ships
+  it — so the vault carries no code and `object` names what the
+  application already has. Code that should follow the identity (a
+  third-party extension) is §12; whatever carries it, it is never the
   vault's blobs, because a blob the vault's set references is pinned
-  for the vault's life (§12), and an extension's code is exactly what
-  should not be. A crash between `estoc.object` and `installed`
-  leaves a store no `installed` accounts for, which import reports
-  (`event-store.md` §7.3). `removed`: stop
+  for the vault's life, and an extension's code is exactly what
+  should not be (`event-store.md` §6.2). `removed`: stop
   running it; its store stays, readable without it. `purged`: dispose
   of its store and its local state everywhere — the fold (§7.3) says
   so, the application calls `dispose` (`event-store.md` §6.2), and an
@@ -689,15 +678,16 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   hand). Not needed while a merge is a backup, so not in version 2.
 - A device-side space policy for bodies (§8.4): an eviction event that
   explains a local absence without binding anyone. Not in version 2.
-- **What `extension.installed.object` names** (§5): the root of a
-  signed object is the leaning; how a device that folds the event
-  obtains the bytes — from the extension store's `estoc.object`, when
-  the vault carries them, or by a fetch by the root when it does not —
-  is not decided, nor whether a version of an extension is a second
-  `estoc.object` in the same store or a new `ext`. Type names for
-  extensions are no longer a question beyond the one reserved prefix:
-  an extension's events are in a set of its own (`event-store.md`
-  §6.2).
+- **Third-party extensions.** Version 2's are first-party and the
+  vault carries no code. Deferred with the rest of it: what
+  `extension.installed.object` names (§5; the root of a signed object
+  is the leaning); how a device that folds the event obtains the bytes
+  — carried in the extension's own store as blobs held by a host event
+  under `estoc.*`, one CAR or one blob per file, or fetched by the
+  root; and whether a new version is a second such event in the same
+  store or a new `ext`. Type names for extensions are no longer a
+  question beyond the one reserved prefix: an extension's events are
+  in a set of its own (`event-store.md` §6.2).
 - **An erase for events that are not messages.** Collection (§8.3)
   knows one release, `message.erased` by `mid`; a blob held by any
   other event is pinned for the life of the vault (an extension's

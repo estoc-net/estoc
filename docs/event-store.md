@@ -52,7 +52,7 @@ must be able to read and write.
 | `vault-events.md` | every event type and what it carries; channels; folds; erasing; deleting | this |
 
 What is *not* here: no path (`vault-folder.md`), no event type defined
-— §6.2 names four of `vault-events.md`'s — no fold (`vault-events.md`), and nothing a copy keeps for itself beyond what
+— §6.2 names three of `vault-events.md`'s — no fold (`vault-events.md`), and nothing a copy keeps for itself beyond what
 §6.1 says of it: a trace, a cache, an option is beside the vault, not
 in it.
 
@@ -626,13 +626,13 @@ Why a set of its own and not a namespace in the vault's:
   writes the vault's own types through it, which is the application's
   grant to make.
 - **Names.** Inside its own set an extension names its types as it
-  likes, less one prefix: `estoc.*` is the host's, for the events the
-  application itself writes into an extension's set (`estoc.object`,
-  below), and an extension does not use it — the application, which
-  hands out the handle, refuses it there; the store below reads no
-  type. Two extensions cannot collide because they are two sets. The
-  namespace an earlier draft left open (§10) shrinks to that one
-  reserved prefix.
+  likes, less one prefix: `estoc.*` is the host's, for whatever the
+  application itself may one day write into an extension's set —
+  version 2 writes nothing there — and an extension does not use it;
+  the application, which hands out the handle, refuses it there, and
+  the store below reads no type. Two extensions cannot collide because
+  they are two sets. The namespace an earlier draft left open (§10)
+  shrinks to that one reserved prefix.
 
 What follows from it:
 
@@ -647,18 +647,17 @@ What follows from it:
   nothing dangling.
 - **Blobs are the store's own.** An extension's `blobs` names blobs in
   its own `BlobStore`, and collection runs per store over that store's
-  events — so an unreferenced blob is an orphan there as anywhere. The
-  bytes the vault carries for the extension *itself*, when it carries
-  them, are blobs of this store too, and are held by an event of this
-  store that lists them: `estoc.object` (`vault-events.md` §5), the
-  host's bootstrap event, which the application appends when it
-  installs, before `extension.installed` in the vault's set names the
-  same root (before in time; a set promises no order, and a reader
-  finds it by type, not by position). The
-  vault's set never references them, so they are not pinned for the
-  vault's life; the extension's set does, so they are not an orphan;
-  and `dispose` takes them with the rest. An extension may *read* a
-  blob of the vault's by hash,
+  events — so an unreferenced blob is an orphan there as anywhere.
+  **The vault carries no extension's code.** In version 2 an extension
+  is first-party, shipped with the application, and
+  `extension.installed` names it; there are no bytes to carry. A
+  third-party extension whose code should follow the identity is §10:
+  whatever form that takes, the bytes would be blobs of the
+  extension's own store, held by a host event there (the `estoc.*`
+  prefix above), never the vault's blobs — a blob the vault's set
+  references is pinned for the vault's life, and code is exactly what
+  should not be. An extension may *read* a blob of the vault's by
+  hash,
   through whatever the application hands it, and never pins one: an
   erase in the vault's set (`vault-events.md` §8) wins over any
   extension's reference, which is what sovereignty over one's own
@@ -702,8 +701,8 @@ What follows from it:
   so a dead handle cannot be replaced by asking again. Making one is
   its own call, `provision(ext)`: it makes an event space that does
   not yet exist and says nothing about why — a fresh install, an
-  import bringing a store this copy lacks (§7.3), bytes fetched by
-  root and materialised — and rejects an `ext` that exists. That a
+  import bringing a store this copy lacks (§7.3) — and rejects an
+  `ext` that exists. That a
   fresh install mints a fresh uuidv7 is the application's rule, above
   the store, which cannot tell a new id from an old one. A store keeps
   no memory of what it disposed of — that is the fold's — so a
@@ -976,10 +975,13 @@ What the code says today, for the record:
   `vault-folder.md` §11 already says.
 - **Extensions.** An extension's state is local (§6.1) or its own
   store (§6.2), and the vault's set records only that it was installed,
-  removed or purged (`vault-events.md` §5). Not decided: what
+  removed or purged (`vault-events.md` §5). Version 2's extensions
+  are first-party: the application ships them, the vault carries no
+  code. Not decided, and deferred with third-party extensions: what
   `extension.installed` names — a hash of the code, the root of a
-  signed object, a name to be resolved — and what a device does with
-  it; how the application grants an extension the vault's own store to
+  signed object, a name to be resolved — and how a device obtains the
+  bytes (carried in the extension's own store under a host event, one
+  CAR blob or many; or fetched by the root); how the application grants an extension the vault's own store to
   act as the application; and whether an extension runs where the agent
   runs (and sees what it sees) or only where the person looks, which is
   the application's boundary, not the store's. The agent's trace was
