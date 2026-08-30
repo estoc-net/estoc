@@ -65,7 +65,10 @@ describe("a vault on disk", () => {
 
   it("renews a block's modification time by rewriting it in place", async () => {
     const backend = new FsBackend(await tempDir());
-    const vault = await FolderVault.create(backend, {}, { graceMs: 10 });
+    // the disk's mtime is real; the store's idea of now is the wall clock plus what the test adds
+    let offset = 0;
+    const HOUR = 60 * 60 * 1000;
+    const vault = await FolderVault.create(backend, {}, { graceMs: HOUR, clock: () => new Date(Date.now() + offset) });
     await vault.blobs.put(enc.encode("hello"));
     const first = await backend.modified(`.estoc/blobs/${HELLO_CID}`);
     await sleep(25);
@@ -73,7 +76,7 @@ describe("a vault on disk", () => {
     const second = await backend.modified(`.estoc/blobs/${HELLO_CID}`);
     expect(second).toBeGreaterThan(first as number);
     expect(await vault.blobs.collect([])).toEqual({ unlinked: [], young: [HELLO_CID] });
-    await sleep(25);
+    offset = HOUR + 1000;
     expect(await vault.blobs.collect([])).toEqual({ unlinked: [HELLO_CID], young: [] });
   });
 
