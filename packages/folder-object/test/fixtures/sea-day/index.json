@@ -1,0 +1,8 @@
+{
+  "format": "https://estoc.dev/post/1.0",
+  "id": "01a03110-7c1e-7b3a-9f42-3d5e8a1b2c04",
+  "title": "A Day at the Sea",
+  "published": "2026-08-24T10:30:00Z",
+  "updated": "2026-08-24T10:30:00Z",
+  "content": { "mediaType": "text/markdown", "path": "files/body.md" }
+}

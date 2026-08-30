@@ -64,6 +64,7 @@ describe("trace log", () => {
     const c = clock("2026-08-29T10:00:00.000Z");
     const trace = new TraceLog(backend, policy({ rotate: { bytes: 200, ms: HOUR } }), c.now);
     await trace.append("diag", { event: "log", text: "x".repeat(150) }); // ~200 bytes: fills the segment
+    c.advance(1); // a pinned clock gives up uuidv7's in-millisecond order; two names in one ms could sort either way
     await trace.append("diag", { event: "log", text: "second" }); // over: a new one
     expect(await segmentsOf(backend, "diag")).toHaveLength(2);
     c.advance(HOUR);

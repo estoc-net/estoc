@@ -180,7 +180,7 @@ try {
   // bare object, so the app asks — first sends it as it is (not signed),
   // then again signed by her anchor; both threads project the post, Bob's
   // after re-verifying tree and card on his side.
-  const seaDay = fileURLToPath(new URL("../../../folder-object/examples/sea-day/", import.meta.url));
+  const seaDay = fileURLToPath(new URL("../../packages/folder-object/test/fixtures/sea-day/", import.meta.url));
   await alice.setInputFiles('input[data-share="object"]', seaDay);
   await alice.waitForSelector('.share-name:has-text("post/1.0, not signed")', { timeout: 15000 });
   await alice.click('[data-share-choice="plain"]');
