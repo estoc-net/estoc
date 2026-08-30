@@ -37,7 +37,7 @@ export {
   matchesData,
 } from "./event.js";
 
-export { InvalidEvent, ForkedSelf, BadToken, BadBlock, NotAFile } from "./errors.js";
+export { InvalidEvent, ForkedSelf, BadToken, BadBlock, NotAFile, Disposed, NotAVault } from "./errors.js";
 
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
@@ -59,4 +59,41 @@ export { DEFAULT_GRACE_MS, MemoryBlobStore, type BlobStore, type Collected, type
 
 export { checkPath, MemoryFileStore, type FileStore } from "./files.js";
 
-export { isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
+export { compareLocalEvents, isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
+
+// ---- the folder (vault-folder.md) ---------------------------------------
+
+export { walk, segmentsOf, type VaultBackend } from "./backend/types.js";
+export { MemoryBackend, type MemoryBackendOptions } from "./backend/memory.js";
+export { OpfsBackend } from "./backend/opfs.js";
+export {
+  ESTOC_DIR,
+  CONFIG_FILE,
+  KEYSTORE_FILE,
+  DEVICES_DIR,
+  BLOBS_DIR,
+  EXTENSIONS_DIR,
+  LOCAL_DIR,
+  SELF_FILE,
+  isSegmentName,
+  isExtId,
+  kindOf,
+  type PathKind,
+} from "./folder/layout.js";
+export { decodeEvent, splitLines } from "./folder/lines.js";
+export { FolderEventStore, ROTATE_BYTES } from "./folder/events.js";
+export { FolderBlobStore } from "./folder/blobs.js";
+export { FolderFileStore } from "./folder/files.js";
+export {
+  FolderLocalEventStore,
+  LocalOwner,
+  DEFAULT_ROTATION,
+  segmentTime,
+  type RetentionPolicy,
+  type PruneReport,
+  type Rotation,
+  type FolderLocalEventStoreOptions,
+  type LocalCache,
+} from "./folder/local.js";
+export { folderStore, type FolderStore, type FolderStoreOptions } from "./folder/store.js";
+export { FolderVault, DEVICE_MINTED, FORMAT, VERSION, type Vault, type ExtensionStore, type OpenVaultOptions } from "./folder/vault.js";

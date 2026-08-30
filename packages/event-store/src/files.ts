@@ -10,13 +10,14 @@ export interface FileStore {
   list(): Promise<string[]>;
 }
 
-const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
+// printable ASCII less the backslash, which a folder on Windows cannot hold as part of a name
+const PRINTABLE_ASCII = /^[\x21-\x5b\x5d-\x7e]+$/;
 
 /**
  * A relative path of `/`-separated non-empty segments of printable
- * ASCII, none of them `.` or `..` (`vault-folder.md` §1): what every
- * store accepts, so that no store holds a path a folder cannot. Throws
- * otherwise.
+ * ASCII, none of them `.` or `..`, no backslash (`vault-folder.md` §1):
+ * what every store accepts, so that no store holds a path a folder
+ * cannot. Throws otherwise.
  */
 export function checkPath(path: string): string {
   if (path === "" || path.startsWith("/") || path.endsWith("/")) {

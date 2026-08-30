@@ -28,8 +28,8 @@ vault root is the origin's OPFS root and only `.estoc/` exists; the
 passphrase-unlocked seed cached in IndexedDB is a device convenience,
 not part of the vault.
 
-Paths are `/`-separated, relative to the vault root, ASCII, with no
-`.` or `..` segments. Text files are UTF-8; JSON files are
+Paths are `/`-separated, relative to the vault root, ASCII with no
+backslash, with no `.` or `..` segments. Text files are UTF-8; JSON files are
 pretty-printed with a trailing newline; JSONL lines are compact JSON
 terminated by `\n`.
 
@@ -117,9 +117,13 @@ folder reads no type.
 
 `dispose(ext)` removes every file under `extensions/<ext>/` and
 `local/extensions/<ext>/` — the two mirror each other so that the one
-removal is one rule — after the operations in flight on that store
-have finished and before any can begin, and every handle to the store
-is dead from then on (`Disposed`), as is `extension(ext)` for that
+removal is one rule — in the store's serialisation (§9.2): after every
+operation that has taken its turn there, reads included, and before
+any other takes one. An operation still preparing outside it — an
+`ingest` reading its input, a `put` hashing its bytes — has touched
+nothing, and is refused (`Disposed`) when its turn comes, so that a
+disposal never waits on a caller's input. Every handle to the store is
+dead from the call on (`Disposed`), as is `extension(ext)` for that
 `ext` for the rest of this instance's life. The application calls it
 when the fold over the vault's set says the extension is purged
 (`vault-events.md` §7.3); the folder does not read `extension.purged`,

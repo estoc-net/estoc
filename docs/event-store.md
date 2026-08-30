@@ -774,9 +774,13 @@ What follows from it:
 - **Disposal revokes.** A handle is the permission, so `dispose` must
   end the permission, not only the bytes: the application stops the
   extension first; `dispose` is serialised with the store's operations
-  — it waits for those in flight and none begin after; every handle to
-  the store, held by anyone, is dead from then on and every method of
-  it — reads as much as writes — rejects with `Disposed`, and so does
+  — it runs after every operation that has its turn, reads included,
+  and none takes one after; what is still preparing outside the
+  serialisation (an `ingest` reading its input) has touched nothing
+  and is refused when its turn comes, so that disposal never waits on
+  a caller's input; every handle to the store, held by anyone, is dead
+  from the call on and every method of it — reads as much as writes —
+  rejects with `Disposed`, and so does
   `extension(ext)` for that `ext` for the rest of this instance's
   life, so that a dead handle cannot be replaced by asking again.
   Nothing is silently re-created.

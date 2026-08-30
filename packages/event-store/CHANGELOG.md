@@ -9,3 +9,8 @@
 - In-memory stores for all three, and the block functions of the
   `unixfs-v1-2025` profile they are built on.
 - Conformance suites `storeSuite` and `blobSuite`.
+- The folder of `docs/vault-folder.md`: `VaultBackend` with
+  `modified`, the memory, OPFS and Node `fs` backends; the folder
+  event, blob and file stores; `FolderLocalEventStore` and
+  `LocalOwner` for `local/`; `FolderVault` with extension stores and
+  `dispose`. The backend cases run against OPFS in a real browser.

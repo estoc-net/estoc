@@ -258,6 +258,37 @@ export function storeSuite(name: string, open: OpenStore): void {
       expect(twisted).toBeInstanceOf(ForkedSelf);
       expect((twisted as ForkedSelf).events).toEqual([altered(mine)]);
       expect(await all(store.scan())).toEqual([mine]);
+      // a fork hidden behind another's event under the same eid, earlier in the input, is a fork all the same
+      const [shadow] = (await foreign("bbbbbb", c.now, [{ type: "t" }])) as [Event];
+      const hidden = { ...shadow, author: "aaaaaa" };
+      const behind = await store.ingest([shadow, hidden]).catch((e: unknown) => e);
+      expect(behind).toBeInstanceOf(ForkedSelf);
+      expect((behind as ForkedSelf).events).toEqual([hidden]);
+      expect(await all(store.scan())).toEqual([mine]);
+    });
+
+    it("ingest counts an input's two contents under one eid against what is held, in input order", async () => {
+      const c = clock("2026-08-30T10:00:00.000Z");
+      const store = await open({ self: "aaaaaa", clock: c.now });
+      const [theirs] = (await foreign("bbbbbb", c.now, [{ type: "t" }])) as [Event];
+      await store.ingest([theirs]);
+      // the other content first: a conflict with what is held; then the held content itself: a duplicate, not a second conflict
+      expect(await store.ingest([altered(theirs), reordered(theirs)])).toEqual({
+        added: 0,
+        duplicates: 1,
+        conflicts: [{ eid: theirs.eid, kept: theirs, other: altered(theirs) }],
+        rejected: [],
+      });
+      // nothing held: the first content is taken, the second is a conflict with it
+      c.advance(1000);
+      const [fresh] = (await foreign("cccccc", c.now, [{ type: "t" }])) as [Event];
+      expect(await store.ingest([fresh, altered(fresh)])).toEqual({
+        added: 1,
+        duplicates: 0,
+        conflicts: [{ eid: fresh.eid, kept: fresh, other: altered(fresh) }],
+        rejected: [],
+      });
+      expect(await all(store.scan())).toEqual([theirs, fresh]);
     });
 
     it("changes yields exactly the delta since a token, in whatever order, and nothing falls between", async () => {

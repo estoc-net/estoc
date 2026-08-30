@@ -7,7 +7,7 @@
 
 import type { JsonObject, JsonPrimitive } from "./json.js";
 import { isJsonObject } from "./json.js";
-import { isRfc3339Utc, isUuidv7, matchesData } from "./event.js";
+import { atKey, isRfc3339Utc, isUuidv7, matchesData } from "./event.js";
 
 /** The event's shape, less author and blobs. Id and time are the producer's. */
 export type LocalEvent<D extends JsonObject = JsonObject> = { eid: string; at: string; type: string; data: D };
@@ -22,6 +22,16 @@ export interface LocalEventStore<E extends LocalEvent = LocalEvent, Policy = unk
   scan(filter?: LocalFilter): AsyncIterable<E>;
   /** What is kept, per the owner; what was unlinked. */
   prune(policy: Policy): Promise<Report>;
+}
+
+/** Canonical order for local events (§7.2, as §3): by `at` as an instant, then by `eid`. */
+export function compareLocalEvents(a: Pick<LocalEvent, "at" | "eid">, b: Pick<LocalEvent, "at" | "eid">): number {
+  const ka = atKey(a.at);
+  const kb = atKey(b.at);
+  if (ka !== kb) {
+    return ka < kb ? -1 : 1;
+  }
+  return a.eid === b.eid ? 0 : a.eid < b.eid ? -1 : 1;
 }
 
 /** Whether `value` has a local event's shape: the four fields, well formed, and no other. */
