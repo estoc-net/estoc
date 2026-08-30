@@ -37,7 +37,11 @@ function folderOptions<M extends MintedDid>(options: FolderOptions<M>): OpenVaul
  * keystore written first, alone — `open` is "config.json is
  * there", so a crash between the two leaves no vault rather than a
  * headless one — then `config.json` with the anchor, fixed for the
- * vault's life.
+ * vault's life. The backend has no atomic create, so two racing
+ * creates are detected, not excluded: the keystore is read back after
+ * `config.json` lands, and `open` checks the cached anchor against
+ * the config's — a raced vault fails loudly, never opens quietly
+ * inconsistent.
  */
 export async function createFolderVault<M extends MintedDid = MintedDid>(
   backend: VaultBackend,
@@ -53,8 +57,13 @@ export async function createFolderVault<M extends MintedDid = MintedDid>(
   }
   const anchor = await Keys.anchorOf(seedKey);
   const { doc: withAnchor } = await addDerivedKey(doc, seedKey, KEY_ANCHOR, options.clock === undefined ? {} : { now: options.clock() });
-  await backend.write(`${ESTOC_DIR}/${KEYSTORE_FILE}`, new TextEncoder().encode(serializeKeystore(withAnchor)));
+  const text = serializeKeystore(withAnchor);
+  await backend.write(`${ESTOC_DIR}/${KEYSTORE_FILE}`, new TextEncoder().encode(text));
   const vault = await FolderVault.create(backend, { identity: { anchor } }, folderOptions(options));
+  const readBack = await backend.read(`${ESTOC_DIR}/${KEYSTORE_FILE}`);
+  if (readBack === null || new TextDecoder().decode(readBack) !== text) {
+    throw new NotAVault(`${ESTOC_DIR}/${KEYSTORE_FILE} is not the one this create wrote: another create raced it`);
+  }
   const keys = await Keys.open<M>(vault, seedKey, options);
   const fold = await VaultFold.of(vault.events);
   return { vault, keys, fold, anchor };
@@ -71,6 +80,10 @@ export async function openFolderVault<M extends MintedDid = MintedDid>(backend: 
   }
   const keys = await Keys.open<M>(vault, seedKey, options);
   await keys.verifyAnchor(anchor["did"]);
+  const cached = keys.keystore.keys.find((entry) => entry.name === KEY_ANCHOR);
+  if (cached !== undefined && cached.did !== anchor["did"]) {
+    throw new NotAVault(`keystore.json caches another seed's anchor (${cached.did}): a raced create left it — restore this seed's keystore`);
+  }
   const fold = await VaultFold.of(vault.events);
   return { vault, keys, fold, anchor: { key: KEY_ANCHOR, did: anchor["did"] } };
 }

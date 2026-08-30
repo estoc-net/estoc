@@ -158,6 +158,20 @@ describe("v2 procedures: deleting a contact (§9)", () => {
     expect(fold.myKey("did/k1")?.retired?.because).toBe("contact-deleted");
   });
 
+  it("a retry after a late merge touches nothing live", async () => {
+    const { vault, fold, cid } = await contactScene();
+    await deleteContact(vault, fold, cid);
+    const line = new Line("2026-08-30T01:00:00.000Z");
+    const other = line.id();
+    await record(vault.events, fold, drafts.contactCreated({ cid: other }));
+    await record(vault.events, fold, drafts.contactMerged({ cid: other, from: cid }));
+    const again = await deleteContact(vault, fold, cid);
+    expect(again.tombstones).toEqual([]); // the tombstone covers only what it names (§9 step 1)
+    expect(again.retired).toEqual([]);
+    expect(fold.contact(other)?.cid).toBe(other);
+    expect(fold.contact(other)?.hidden).toEqual([cid]);
+  });
+
   it("keeps a key another contact still uses", async () => {
     const { vault, fold, cid } = await contactScene();
     const line = new Line("2026-08-30T01:00:00.000Z");

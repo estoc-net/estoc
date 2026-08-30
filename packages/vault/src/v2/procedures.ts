@@ -223,18 +223,22 @@ async function retireDeleted(events: EventStore, fold: VaultFold, rep: string, k
  * Delete a contact (§9): a tombstone per member, the erases over its
  * channels, `did.retired` for every key minted toward it alone, and a
  * collection. No event is removed. Interrupted after the tombstones, a
- * second call finishes: the sweep, the retirements, the collection.
+ * second call finishes: the sweep, the retirements, the collection —
+ * and never widens to a member merged in after the tombstone (§9).
  */
 export async function deleteContact(vault: VaultSide, fold: VaultFold, cid: string): Promise<Deleted> {
-  const contact = fold.contact(cid);
-  if (contact === null) {
-    const gone = fold.deletedContacts().find((entry) => entry.cid === cid || entry.members.includes(cid));
-    if (gone === undefined) {
-      throw new Error(`no contact ${cid}`);
-    }
+  const gone = fold.deletedContacts().find((entry) => entry.cid === cid || entry.members.includes(cid));
+  if (gone !== undefined) {
+    // `cid` is tombstoned already — an interrupted first call, or a retry after a late merge hung it
+    // on a live contact. Finish its own group and touch nothing live: the tombstone covers only what
+    // it names (§9 step 1), so the live representative is not this deletion's to widen into.
     const erased = await sweepDeleted(vault.events, fold);
     const retired = await retireDeleted(vault.events, fold, gone.cid, gone.keys);
     return { tombstones: [], erased, retired, collected: await collectBlobs(vault.blobs, fold) };
+  }
+  const contact = fold.contact(cid);
+  if (contact === null) {
+    throw new Error(`no contact ${cid}`);
   }
   // a late merge can hang tombstoned members on a live contact: their keys are still §9's to retire
   const hiddenKeys = fold.deletedContacts().filter((entry) => entry.members.some((member) => contact.hidden.includes(member))).flatMap((entry) => entry.keys);

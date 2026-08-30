@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { MemoryBackend, MemoryVault, NotAVault } from "@estoc/event-store";
-import { createSeedKeystore, parseSeedKeystore, serializeKeystore, type DerivedIdentity } from "@estoc/keystore";
+import { addDerivedKey, createSeedKeystore, parseSeedKeystore, serializeKeystore, type DerivedIdentity } from "@estoc/keystore";
 
 import { KEY_ANCHOR, Keys, VaultFold, createFolderVault, openFolderVault, type MintDid } from "../../src/v2/index.js";
 
@@ -55,6 +55,33 @@ describe("v2 identity: the folder", () => {
     await expect(createFolderVault(backend, other.doc, other.seedKey, { mint })).rejects.toThrow(/exists already/);
     const opened = await openFolderVault(backend, seedKey, { mint }); // the first seed still opens what it made
     expect(opened.anchor.did.startsWith("did:key:z")).toBe(true);
+  });
+
+  it("catches a raced create before returning: the keystore read back is not ours", async () => {
+    const other = await freshKeystore(OTHER_SEED);
+    const { doc: otherDoc } = await addDerivedKey(other.doc, other.seedKey, KEY_ANCHOR);
+    const foreign = new TextEncoder().encode(serializeKeystore(otherDoc));
+    const raced = new (class extends MemoryBackend {
+      override async write(path: string, data: Uint8Array): Promise<void> {
+        await super.write(path, data);
+        if (path.endsWith("config.json")) {
+          await super.write(".estoc/keystore.json", foreign); // the other create's write lands mid-flight
+        }
+      }
+    })();
+    const { doc, seedKey } = await freshKeystore();
+    await expect(createFolderVault(raced, doc, seedKey, { mint })).rejects.toThrow(/raced/);
+  });
+
+  it("catches a raced create at the next open: the keystore is another seed's", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    await createFolderVault(backend, doc, seedKey, { mint });
+    // the loser's keystore lands after the winner returned
+    const other = await freshKeystore(OTHER_SEED);
+    const { doc: otherDoc } = await addDerivedKey(other.doc, other.seedKey, KEY_ANCHOR);
+    await backend.write(".estoc/keystore.json", new TextEncoder().encode(serializeKeystore(otherDoc)));
+    await expect(openFolderVault(backend, seedKey, { mint })).rejects.toThrow(/another seed's anchor/);
   });
 
   it("mints DIDs and mediations: the event first, the cache after, the name derivable alone", async () => {

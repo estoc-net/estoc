@@ -450,6 +450,8 @@ function project(set: EventSet, self: string): Projection {
     because: AttachCause;
     oobId: string | null;
     at: string;
+    eid: string;
+    author: string;
   }
   const attachEvents = new Map<string, VaultEvent<"contact.attached" | "contact.detached">>();
   for (const event of [...set.of("contact.attached"), ...set.of("contact.detached")]) {
@@ -470,6 +472,8 @@ function project(set: EventSet, self: string): Projection {
         because: event.data.because,
         oobId: event.data.oobId ?? null,
         at: event.at,
+        eid: event.eid,
+        author: event.author,
       });
     }
   }
@@ -760,13 +764,13 @@ function project(set: EventSet, self: string): Projection {
     [...channels.values()].filter((have) => (kind === "one" ? have.attribution.kind === "one" && have.attribution.cid === rep : have.attribution.kind === "deleted" && have.attribution.cids.includes(rep)));
   const keyOrder = (a: ContactKey, b: ContactKey): number => (a.since !== b.since ? (a.since < b.since ? -1 : 1) : a.key < b.key ? -1 : 1);
   /** Every `contact.useKey` of `cids` plus the implicit key of each invitation `mine` took (§7.4); `lastUse` is filled with each key's latest use. */
-  const contactKeysOf = (cids: Set<string>, mine: (attach: Attach) => boolean, lastUse: Map<string, string>): ContactKey[] => {
+  const contactKeysOf = (cids: Set<string>, mine: (attach: Attach) => boolean, lastUse: Map<string, Pick<Event, "at" | "eid" | "author">>): ContactKey[] => {
     const contactKeys = new Map<string, ContactKey>();
     for (const event of set.of("contact.useKey")) {
       if (!cids.has(event.data.cid)) {
         continue;
       }
-      lastUse.set(event.data.key, event.at); // canonical order: the last write is the latest use
+      lastUse.set(event.data.key, event); // canonical order: the last write is the latest use
       const have = contactKeys.get(event.data.key);
       if (have === undefined) {
         const minted = keys.get(event.data.key)?.minted ?? null;
@@ -782,7 +786,7 @@ function project(set: EventSet, self: string): Projection {
       if (mine(attach) && attach.pair.myKey !== null && oneUse.has(attach.pair.myKey) && !contactKeys.has(attach.pair.myKey)) {
         const minted = keys.get(attach.pair.myKey)?.minted ?? null;
         contactKeys.set(attach.pair.myKey, { key: attach.pair.myKey, did: minted?.did ?? null, routingDid: minted?.routingDid ?? null, because: "invitation", implicit: true, since: attach.at });
-        lastUse.set(attach.pair.myKey, attach.at);
+        lastUse.set(attach.pair.myKey, attach);
       }
     }
     return [...contactKeys.values()];
@@ -816,7 +820,7 @@ function project(set: EventSet, self: string): Projection {
       }
     }
 
-    const lastUse = new Map<string, string>();
+    const lastUse = new Map<string, Pick<Event, "at" | "eid" | "author">>();
     const liveKeys = contactKeysOf(members, (attach) => !attach.dead && attach.rep === component.rep, lastUse)
       .filter((entry) => (keys.get(entry.key)?.retired ?? null) === null)
       .sort(keyOrder);
@@ -861,8 +865,8 @@ function project(set: EventSet, self: string): Projection {
     if (latestWritable !== null) {
       write = { myKey: latestWritable.data.myKey, peerKey: latestWritable.data.peerKey };
     } else {
-      const lastUsed = (entry: ContactKey): string => lastUse.get(entry.key) ?? entry.since;
-      const latestUse = [...liveKeys].sort((a, b) => (lastUsed(a) !== lastUsed(b) ? (lastUsed(a) < lastUsed(b) ? -1 : 1) : a.key < b.key ? -1 : 1)).at(-1); // the latest `contact.useKey` (§7.2), not the first-used key
+      const lastUsed = (entry: ContactKey): Pick<Event, "at" | "eid" | "author"> => lastUse.get(entry.key) as Pick<Event, "at" | "eid" | "author">;
+      const latestUse = [...liveKeys].sort((a, b) => compareEvents(lastUsed(a), lastUsed(b))).at(-1); // the latest `contact.useKey` (§7.2), by canonical order
       write = latestUse === undefined ? null : (writeTo.find((pair) => pair.myKey === latestUse.key) ?? null);
     }
 

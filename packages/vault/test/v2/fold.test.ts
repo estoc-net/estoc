@@ -234,6 +234,25 @@ describe("v2 fold: attribution edges", () => {
     expect(fold.contact(c)?.write?.myKey).toBe("did/k1");
   });
 
+  it("breaks a same-instant useKey tie by canonical order, not key name", () => {
+    const line = new Line();
+    const fold = new VaultFold(DEV_A);
+    const c = "0198aaaa-0000-7000-8000-000000000001";
+    const p1 = { myKey: "did/k1", peerKey: bob.fingerprint };
+    const p2 = { myKey: "did/k2", peerKey: bob.fingerprint };
+    fold.apply(line.next(DEV_A, "did.minted", { key: "did/k1", did: "did:peer:4k1", routingDid: "did:peer:2r", mediation: null }));
+    fold.apply(line.next(DEV_A, "did.minted", { key: "did/k2", did: "did:peer:4k2", routingDid: "did:peer:2r", mediation: null }));
+    fold.apply(line.next(DEV_A, "contact.created", { cid: c }));
+    fold.apply(line.next(DEV_A, "contact.attached", { ...p1, cid: c, because: "manual" }));
+    fold.apply(line.next(DEV_A, "peer.resolved", { ...p1, did: "did:peer:4bob", keys: [bob.multibase], service: null }));
+    fold.apply(line.next(DEV_A, "peer.resolved", { ...p2, did: "did:peer:4bob", keys: [bob.multibase], service: null }));
+    const at = "2026-08-30T12:00:00.000Z";
+    // same instant: canonical order falls through to the eid, and k1's is the later one
+    fold.apply({ eid: "0198aaaa-0000-7000-8000-00000000000a", at, author: DEV_A, type: "contact.useKey", blobs: [], data: { cid: c, key: "did/k2", because: "minted" } });
+    fold.apply({ eid: "0198aaaa-0000-7000-8000-00000000000b", at, author: DEV_A, type: "contact.useKey", blobs: [], data: { cid: c, key: "did/k1", because: "minted" } });
+    expect(fold.contact(c)?.write?.myKey).toBe("did/k1");
+  });
+
   it("a retired device's mediation is no longer current", () => {
     const line = new Line();
     const fold = new VaultFold(DEV_A);
