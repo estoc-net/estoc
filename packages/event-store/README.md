@@ -3,8 +3,7 @@
 The vault as an event store: the code form of
 [`docs/event-store.md`](../../docs/event-store.md).
 
-What is here is the **model** and the **seam**, with nothing behind
-it but memory:
+What is here is the **model**, the **seam**, and the **folder**:
 
 - the event — envelope (`eid`, `at`, `author`, `type`, `blobs`) plus
   an opaque `data` — its validation, canonical order (`at`, then
@@ -18,13 +17,27 @@ it but memory:
   reference semantics, and what folds are tested on;
 - the block functions a store's blob side is made of: `hashFile`,
   `checkBlock`, `readFile`, `reachable`;
-- the `LocalEvent` shape a trace uses.
+- the `LocalEvent` shape a trace uses;
+- the folder ([`docs/vault-folder.md`](../../docs/vault-folder.md)):
+  `VaultBackend` — the bytes interface, with `MemoryBackend`,
+  `OpfsBackend` and (from `@estoc/event-store/node`) `FsBackend` —
+  and over it `FolderEventStore` (`devices/<dev>/<seg>.jsonl`),
+  `FolderBlobStore` (`blobs/<cid>`, aged by modification time),
+  `FolderFileStore` (every other path, by shape), the
+  `FolderLocalEventStore` a trace is kept in, and `FolderVault`:
+  `config.json` checked, `local/self.json` minted, `device.minted`
+  announced, a store per extension, `dispose`.
 
-No event type is known here. What an event *means*, and the folds
-that turn a set of them into contacts and threads, are
-`@estoc/vault`'s (`docs/vault-events.md`). The folder serialization
-(`docs/vault-folder.md`) is the next thing to land in this package.
+No event type is known here — `device.minted` is the one name the
+folder writes, because the format says the folder writes it. What an
+event *means*, and the folds that turn a set of them into contacts
+and threads, are `@estoc/vault`'s (`docs/vault-events.md`).
+Interchange — snapshot, export, import, restore — is the next thing
+to land here.
 
 `test/suite/` holds the conformance suites — `storeSuite`,
-`blobSuite` — that every store of this package runs, so that a
-folder, a database and a map in memory read and write the same set.
+`blobSuite`, and the backend cases — that every store and backend of
+this package runs, so that a folder, a database and a map in memory
+read and write the same set. The OPFS backend runs the backend cases
+in a headless Chromium (`test/opfs.test.ts`); without one the cases
+are skipped with a warning, and `ESTOC_BROWSER` names one.

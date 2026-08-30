@@ -49,3 +49,19 @@ export class NotAFile extends Error {
     this.name = "NotAFile";
   }
 }
+
+/** A handle to an extension store this instance disposed of (§8): every method rejects, for good. */
+export class Disposed extends Error {
+  constructor(readonly ext: string) {
+    super(`extension store ${ext} was disposed of`);
+    this.name = "Disposed";
+  }
+}
+
+/** The folder is not a version-2 vault (vault-folder.md §11): nothing was read past `config.json`, nothing written. */
+export class NotAVault extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotAVault";
+  }
+}
