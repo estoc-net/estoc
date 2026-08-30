@@ -4,13 +4,16 @@ Status: **draft**, 2026-08-29. Not implemented. Sections marked
 *provisional* are leanings, not decisions.
 
 The third of three documents. Every line below is an event of
-`event-store.md` §3 — an envelope of `eid`, `at`, `author`, `type`, and
-a payload — read and written through the store there; nothing here
-names a path, and the store knows none of the words used here. The
-folder that carries these events on disk is `vault-folder.md`'s, and
-the examples are its lines, which are the events themselves
-(`vault-folder.md` §4): the envelope fields are shown once per example
-block and elided after, and so are the fields a block's events share.
+`event-store.md` §3 — an envelope of `eid`, `at`, `author`, `type`,
+`blobs`, and a payload, `data` — read and written through the store
+there; nothing here names a path, and the store knows none of the
+words used here. Every field this document defines is a field of
+`data`; the envelope is the store's. The folder that carries these
+events on disk is `vault-folder.md`'s, and the examples are its lines,
+which are the events themselves (`vault-folder.md` §4): the envelope
+fields other than `type` and `blobs` are shown once per example block
+and elided after, and so are the fields of `data` that a block's
+events share.
 
 ## 0. What changes, in one paragraph
 
@@ -36,8 +39,8 @@ The principles of `event-store.md` §2, as they apply to meaning.
    envelope proves (§3) and needs no local state to place; an
    observation about a mediator — what it answered — carries the
    mediation it belongs to (§5). A decision carries the thing it is
-   about as a field — `cid`, `key`, `dev`, `mid` — and its grounds
-   inline, because the bodies it rests on may be erased.
+   about as a field of `data` — `cid`, `key`, `dev`, `mid` — and its
+   grounds inline, because the bodies it rests on may be erased.
 2. **Names carry no decisions.** A key is `did/<id>`, never
    `pair/<cid>/<id>`: whom a key was minted for, and whom it now belongs
    to, are events about it (§2, §6).
@@ -52,7 +55,7 @@ The principles of `event-store.md` §2, as they apply to meaning.
 
 **Type names.** Every type is `subject.fact` — `did.minted`,
 `contact.attached`, `message.in`, `device.label`. The subject names
-what the event concerns, and is what a payload field identifies (a
+what the event concerns, and is what a field of `data` identifies (a
 `cid`, a `key`, a `dev`, a `mid`, a channel's pair); the fact is a
 transition (`minted`, `attached`), a field that was set (`label`,
 `petname`), a direction (`in`, `out`) or an outcome (`attempted`).
@@ -95,9 +98,9 @@ from.
 A **channel** is every observation involving one key of ours and one
 public key of theirs. It is not a transport, not a session and not a
 place in the store: it has no state of its own and no id. It is two
-fields, `myKey` and `peerKey`, that every observation carries and a
-fold groups by, set by the envelope alone — the key that opened it and
-the key that sealed or signed it — with no lookup:
+fields of `data`, `myKey` and `peerKey`, that every observation
+carries and a fold groups by, set by the envelope alone — the key that
+opened it and the key that sealed or signed it — with no lookup:
 
 ```ts
 type ChannelKey = {
@@ -106,14 +109,14 @@ type ChannelKey = {
 };
 ```
 
-`ChannelKey` is a value type above the seam. On the line there are
+`ChannelKey` is a value type above the seam. In `data` there are
 only the two fields, always both present on an observation; nothing is
 derived from them — no channel id, no composite string — and two
 devices agree on a channel because the envelope proved the same keys
 to both (`event-store.md` §2 principle 2). `null` is a value, not an
 absence: a field that is missing is not a channel field, and the
-equality filter (`event-store.md` §5.3) matches `null` as it matches
-any other value. The two fields are not the same kind of thing:
+equality filter (`event-store.md` §5.3, `filter.data`) matches `null`
+as it matches any other value. The two fields are not the same kind of thing:
 `myKey` is a key *name*, a derivation path we hold; `peerKey` is a
 *fingerprint* of a key we only ever see, which is all one can name of
 a key one does not hold.
@@ -173,22 +176,24 @@ Attribution therefore anchors on the whole pair (§7.1), never on
 
 ### 3.1 Channel events
 
-Every observation carries `myKey` and `peerKey`; the block shows them
-once.
+Every observation's `data` carries `myKey` and `peerKey`; the block
+shows them once.
 
 ```jsonc
-{ "eid": "0198…", "author": "k7q3ma", "at": "…", "myKey": "did/0198…", "peerKey": "k3j9…",
-  "type": "channel.firstSeen", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
-{ "type": "message.in",    "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "blobs": ["<body>", "<att>"], "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" }
-{ "type": "message.out",   "mid": "0198…", "wireId": "…", "msgType": "…", "thid": "…", "bytes": 1120, "blobs": ["<body>"], "body": "<body>", "attachments": [] }
-{ "type": "delivery.attempted", "mid": "0198…", "attempt": 1, "outcome": "failed", "error": "…" }
-{ "type": "delivery.attempted", "mid": "0198…", "attempt": 2, "outcome": "sent" }
-{ "type": "delivery.held", "mid": "0198…", "because": "imported" }
-{ "type": "profile.nameClaimed", "mid": "0198…", "name": "Alice L." }
-{ "type": "profile.shared",  "mid": "0198…" }
-{ "type": "peer.resolved", "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" }
-{ "type": "peer.rotated",  "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" }
-{ "type": "message.erased", "mid": "0198…", "drop": ["<hash>"], "because": "user" }
+{ "eid": "0198…", "author": "k7q3ma", "at": "…", "type": "channel.firstSeen",
+  "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" } }
+{ "type": "message.in",  "blobs": ["<body>", "<att>"],
+  "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
+{ "type": "message.out", "blobs": ["<body>"],
+  "data": { "mid": "0198…", "wireId": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<body>", "attachments": [] } }
+{ "type": "delivery.attempted", "data": { "mid": "0198…", "attempt": 1, "outcome": "failed", "error": "…" } }
+{ "type": "delivery.attempted", "data": { "mid": "0198…", "attempt": 2, "outcome": "sent" } }
+{ "type": "delivery.held",      "data": { "mid": "0198…", "because": "imported" } }
+{ "type": "profile.nameClaimed", "data": { "mid": "0198…", "name": "Alice L." } }
+{ "type": "profile.shared",      "data": { "mid": "0198…" } }
+{ "type": "peer.resolved", "data": { "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" } }
+{ "type": "peer.rotated",  "data": { "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" } }
+{ "type": "message.erased", "data": { "mid": "0198…", "drop": ["<hash>"], "because": "user" } }
 ```
 
 - `channel.firstSeen`: written once by each device the first time it
@@ -201,13 +206,13 @@ once.
   devices each write their own.
 - `message.in` / `message.out`: the **skeleton** of a message — its
   local `mid` (minted at append), the wire id (`wireId`), `msgType`, `thid`,
-  `pthid`, `bytes` (the size of the plaintext), `blobs` — the
-  envelope's list (`event-store.md` §3) of every blob the line holds —
-  with `body`, the hash of the blob holding the plaintext (§4), and
-  `attachments`, the hashes of every blob lifted out of it, saying
-  which of them is which; and `signedBy` when a signature rode inside
-  the encryption. `blobs` is exactly `body` plus `attachments`, stated
-  twice because the collector reads only the envelope. The line is the
+  `pthid`, `bytes` (the size of the plaintext), with `body`, the hash
+  of the blob holding the plaintext (§4), and `attachments`, the hashes
+  of every blob lifted out of it, saying which of them is which; and
+  `signedBy` when a signature rode inside the encryption. On the
+  envelope, `blobs` (`event-store.md` §3) lists every blob the line
+  holds: exactly `body` plus `attachments`, stated twice because the
+  collector reads only the envelope and never `data`. The line is the
   permanent record of which blobs the message references: collection
   (§8.3) reads it, never the body, so it works after the body is gone.
   Everything a thread view, a
@@ -295,18 +300,18 @@ What a device says about the identity, about itself and the other
 devices, and what its mediator answered.
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "device.minted" }
-{ "type": "did.minted",    "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" }
-{ "type": "did.registered","key": "did/0198…" }                     // the mediator accepted it as a recipient
-{ "type": "did.published", "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" }
-{ "type": "did.published", "key": "did/0198…", "as": "profile", "uses": "many" }
-{ "type": "did.retired",   "key": "did/0198…", "because": "mediation-changed" }
-{ "type": "mediation.created", "id": "0198…", "mediatorDid": "did:web:mediator.estoc.dev", "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" } }
-{ "type": "mediation.granted", "id": "0198…", "routingDid": "did:peer:2…" }
-{ "type": "mediation.retired", "id": "0198…", "because": "changed" }
-{ "type": "identity.label", "name": "Alice" }
-{ "type": "device.label",   "dev": "k7q3ma", "name": "phone" }
-{ "type": "device.retired", "dev": "p2x8rq", "because": "lost" }
+{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "device.minted", "data": {} }
+{ "type": "did.minted",     "data": { "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" } }
+{ "type": "did.registered", "data": { "key": "did/0198…" } }                     // the mediator accepted it as a recipient
+{ "type": "did.published",  "data": { "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" } }
+{ "type": "did.published",  "data": { "key": "did/0198…", "as": "profile", "uses": "many" } }
+{ "type": "did.retired",    "data": { "key": "did/0198…", "because": "mediation-changed" } }
+{ "type": "mediation.created", "data": { "id": "0198…", "mediatorDid": "did:web:mediator.estoc.dev", "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" } } }
+{ "type": "mediation.granted", "data": { "id": "0198…", "routingDid": "did:peer:2…" } }
+{ "type": "mediation.retired", "data": { "id": "0198…", "because": "changed" } }
+{ "type": "identity.label", "data": { "name": "Alice" } }
+{ "type": "device.label",   "data": { "dev": "k7q3ma", "name": "phone" } }
+{ "type": "device.retired", "data": { "dev": "p2x8rq", "because": "lost" } }
 ```
 
 - `device.minted`: the first event a device writes — that this device
@@ -340,7 +345,7 @@ devices, and what its mediator answered.
   announces. Latest wins (`event-store.md` §4); two devices renaming at
   once is an ordinary LWW, not a conflict worth showing.
 - `device.label`: a name for a device, the person's, for lists. `dev`
-  is the device the decision is about — payload, not authorship; the
+  is the device the decision is about — `data`, not authorship; the
   author is the event's `author`.
 - `device.retired`: a decision about another device (lost, replaced).
   Its events stay — history is history — but a fold stops treating its
@@ -349,21 +354,22 @@ devices, and what its mediator answered.
 
 ## 6. Contacts
 
-Decisions about one contact. Every one carries the `cid`; a contact's
-log is the union, across devices, of the events that name it.
+Decisions about one contact. Every one's `data` carries the `cid`; a
+contact's log is the union, across devices, of the events that name
+it.
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "cid": "0198…",
-  "type": "contact.created" }
-{ "type": "contact.petname",   "name": "alice" }
-{ "type": "contact.flag",      "pinned": true }
-{ "type": "contact.useKey",    "key": "did/0198…", "because": "minted" }
-{ "type": "contact.attached",  "myKey": "did/0198…", "peerKey": "k3j9…", "because": "invitation", "oobId": "…" }
-{ "type": "contact.attached",  "myKey": "did/0198…", "peerKey": "k3j9…", "because": "accepted" }
-{ "type": "contact.attached",  "myKey": null,        "peerKey": "m8v2…", "because": "manual" }
-{ "type": "contact.detached",  "myKey": "…",         "peerKey": "…" }
-{ "type": "contact.merged",    "from": "<cid>", "supersedes": ["<eid>", "<eid>"] }
-{ "type": "contact.deleted" }
+{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "contact.created",
+  "data": { "cid": "0198…" } }
+{ "type": "contact.petname",  "data": { "name": "alice" } }
+{ "type": "contact.flag",     "data": { "pinned": true } }
+{ "type": "contact.useKey",   "data": { "key": "did/0198…", "because": "minted" } }
+{ "type": "contact.attached", "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "because": "invitation", "oobId": "…" } }
+{ "type": "contact.attached", "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "because": "accepted" } }
+{ "type": "contact.attached", "data": { "myKey": null,        "peerKey": "m8v2…", "because": "manual" } }
+{ "type": "contact.detached", "data": { "myKey": "…",         "peerKey": "…" } }
+{ "type": "contact.merged",   "data": { "from": "<cid>", "supersedes": ["<eid>", "<eid>"] } }
+{ "type": "contact.deleted",  "data": {} }
 ```
 
 - `contact.attached { myKey, peerKey }`: **the one attribution
@@ -492,8 +498,8 @@ because the person said so; an absence with no such record is damage.
 ### 8.1 Erase
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "myKey": "did/0198…", "peerKey": "k3j9…",
-  "type": "message.erased", "mid": "0198…", "drop": ["<body hash>", "<attachment hash>"], "because": "user" }
+{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "message.erased",
+  "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "mid": "0198…", "drop": ["<body hash>", "<attachment hash>"], "because": "user" } }
 ```
 
 - Permanent and global: every device that folds it unlinks the named
@@ -630,8 +636,8 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   skeleton's `attachments[]` and §8's per-blob erase assume lifting;
   a message that keeps them inline simply has `attachments: []`. If
   lifting stays, the body blob is the stored form, not the wire form.
-- Whether a signature inside authcrypt is a field on the line
-  (`signedBy`, §3.1) or its own event.
+- Whether a signature inside authcrypt is a field of the skeleton's
+  `data` (`signedBy`, §3.1) or its own event.
 - A per-channel erase for the case where the residue of §10 is not
   acceptable: a tombstone after which earlier events carrying the pair
   may be dropped and are not merged in. It reintroduces the deletion of

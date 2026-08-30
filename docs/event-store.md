@@ -31,10 +31,10 @@ asks "what happened to this contact", the answer is spread across three
 of them.
 
 Looked at as a database, the whole vault is **one table**. The device
-directory is one column and every field of a line is another; a
-segment is a page; a merge is `INSERT OR IGNORE`. The folder is a
-serialization of that table, chosen because a person can read it with
-nothing but a text editor. Nothing in the model depends on the choice.
+directory is one column, each envelope field is another, and the
+payload is one JSON column; a segment is a page; a merge is `INSERT OR
+IGNORE`. The folder is a serialization of that table, chosen because a
+person can read it with nothing but a text editor. Nothing in the model depends on the choice.
 
 So the program's interface should be the table, not the folder. Folds
 read events through a filter; policy appends events; the store behind
@@ -99,8 +99,9 @@ files; `vault-events.md` §1 the ones about meaning.
 
 ## 3. The event
 
-An event is a JSON object. Four fields are the **envelope**, which the
-store reads; a fifth, optional, the store checks and never reads:
+An event is a JSON object. Five fields are the **envelope**: four the
+store reads, and one, optional, it checks and never reads. The sixth,
+`data`, is the **payload**, which the store carries and never reads:
 
 | field    | meaning |
 |----------|---------|
@@ -109,15 +110,35 @@ store reads; a fifth, optional, the store checks and never reads:
 | `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own. |
 | `author` | the authoring device (§4). |
 | `blobs`  | optional: every blob this event references, as hashes (§6). The complete list — a hash anywhere else on the event is not a reference. |
+| `data`   | the payload: a JSON object, always present, `{}` when the type carries nothing. |
 
-Everything else is the **payload**: the event's own fields, as
-specified per type, opaque to the store. What an event is *about* — a
-contact, a key, a device, a message, the pair of keys an envelope
-proved — is a payload field naming it, and `vault-events.md` says
-which. The store does not know the vault's shape at all. A channel
-(`vault-events.md` §3) is two fields every observation carries and a
-fold groups by, not a place in the store; a contact is a `cid` on a
-decision, as a key is a `key` and a device a `dev`.
+`data` holds the event's own fields, as specified per type, opaque to
+the store. What an event is *about* — a contact, a key, a device, a
+message, the pair of keys an envelope proved — is a field of `data`
+naming it, and `vault-events.md` says which. The store does not know
+the vault's shape at all. A channel (`vault-events.md` §3) is two
+fields of `data` every observation carries and a fold groups by, not a
+place in the store; a contact is a `data.cid` on a decision, as a key
+is a `data.key` and a device a `data.dev`.
+
+```jsonc
+{ "eid": "0198…", "at": "2026-08-29T10:00:00Z", "author": "k7q3ma", "type": "contact.petname",
+  "data": { "cid": "0198…", "name": "alice" } }
+```
+
+The payload is one field rather than the rest of the object so that
+the two halves cannot collide. Flat, the envelope would be frozen at
+the names it has: a sixth envelope field added later — a version, a
+signature, where an ingested event came from — would clash with any
+payload, an extension's (§10) above all, that had already used the
+name. Nested, the envelope can grow and no name is reserved; the store
+checks that `data` is an object and nothing about what is in it. It
+is also what the store already is: a table of envelope columns and
+one payload column (§8.1), and what DIDComm (headers and `body`) and
+CloudEvents (context attributes and `data`) chose for the same
+reason. `data` and not `body` because `body` names a blob on a message
+skeleton (`vault-events.md` §3.1); not `params` because an event is a
+fact, not a call.
 
 An earlier draft gave the store a **locator** — `scope`, `cid`,
 `myKey`, `peerKey` — and mirrored it as directories. It was dropped
@@ -138,11 +159,13 @@ this rule is safe for events it does not know. The store itself only
 checks the field's shape. Type-specific fields may say which blob is
 which (`body`, `attachments`), drawn from this list.
 
-**Reserved names.** `eid`, `at`, `type`, `author`, `blobs` belong to
-the envelope; a payload must not use them, and a store rejects an
-event whose payload does. Nothing else is reserved: `device.label {
-dev }` names the device a decision is about and `contact.petname { cid
-}` the contact, and both are payload.
+**Nothing is reserved inside `data`.** `device.label { dev }` names
+the device a decision is about and `contact.petname { cid }` the
+contact; a type may use any name, including the envelope's, and a
+store never looks. Outside `data`, at the top level, the store accepts
+the five envelope fields and refuses any other (rule 3): a field that
+belongs to no version of the envelope is a malformed event, not an
+extension.
 
 **JSON.** An event is a JSON object in the sense of RFC 8259: its
 values are objects, arrays, strings, numbers, booleans and `null`, and
@@ -174,10 +197,11 @@ Rules:
    and `ingest` it checks that the object is a JSON object (above);
    that `eid` is a well-formed uuidv7; that `at` is RFC 3339 UTC; that
    `type` is a non-empty string; that `author` is a device id; that
-   `blobs`, if present, is an array of hashes (§6); and that no other
-   reserved name is used by the payload. An event that fails is rejected —
-   `append` throws, `ingest` reports (§5.2) — and never stored. The
-   payload is opaque: type-specific validation is the fold's. Bytes a
+   `blobs`, if present, is an array of hashes (§6); that `data` is a
+   JSON object; and that no other top-level field is present. An event
+   that fails is rejected — `append` throws, `ingest` reports (§5.2) —
+   and never stored. `data` is opaque: type-specific validation is the
+   fold's. Bytes a
    serialization holds that do not parse as an event at all are a
    *damaged* line (§5.5), reported, not stored.
 
@@ -220,21 +244,24 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
 type Hash = string;                   // sha256 of the bytes, lowercase hex
 
-type Event = {
+type JsonObject = { [field: string]: JsonValue };
+
+type Event<D extends JsonObject = JsonObject> = {
   eid: string;                        // a bare uuidv7
   at: string;                         // RFC 3339 UTC
   author: string;                     // a device id
   type: string;
   blobs?: Hash[];                     // every blob the event references; checked, never read, here
-  [field: string]: JsonValue | undefined; // the payload; opaque here
+  data: D;                            // the payload; opaque here — `vault-events.md` types it per `type`
 };
 
 /** What a caller hands to `append`: no eid, at, or author — the store mints them. */
-type Draft = { type: string; blobs?: Hash[]; [field: string]: JsonValue | undefined };
+type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Hash[]; data: D };
 
-/** Equality on top-level fields, by `===` on primitives: `null` matches a field present and null;
- *  `undefined` is no constraint. A store may index some; the folder store reads and compares. */
-type Filter = { author?: string; type?: string; [field: string]: JsonPrimitive | undefined };
+/** Equality, by `===` on primitives: on the envelope fields named, and on the top-level fields of
+ *  `data` named under `data`. `null` matches a field present and null; `undefined` is no
+ *  constraint. A store may index some; the folder store reads and compares. */
+type Filter = { author?: string; type?: string; data?: { [field: string]: JsonPrimitive | undefined } };
 
 /** A position in this store instance's own arrival order. Opaque; meaningful only to the instance
  *  that issued it. Not an auth token: a checkpoint a caller keeps beside a fold. */
@@ -340,8 +367,10 @@ appended by `self`, and no store's business.
 
 ### 5.3 `scan`
 
-Yields the store's whole event set, filtered: events whose top-level
-fields equal every field given in `filter`. One event per `eid`
+Yields the store's whole event set, filtered: events whose envelope
+fields equal every envelope field given in `filter`, and whose
+`data`'s top-level fields equal every field given under
+`filter.data`. One event per `eid`
 (conflicts resolved as §5.5). Order is canonical (§4).
 
 **The store sorts.** No segment, file or table is assumed to be in
@@ -352,8 +381,9 @@ sorts in the query anyway. A vault's event set fits in memory; the cost
 of sorting it is not what any fold waits on.
 
 The filter is equality and nothing more: no ranges, no joins, no
-"across". A database store may index the fields it is asked about most
-(`author`, `type`, a channel's pair); the folder store reads
+"across", and nothing deeper than the top level of `data`. A database
+store may index the fields it is asked about most (`author`, `type`, a
+channel's pair); the folder store reads
 everything and compares, and is no slower for it than it is at reading
 everything. A question equality cannot ask (a thread by time,
 everything about one contact across its channels) is a fold, and
@@ -572,9 +602,9 @@ Not proposed for implementation now; written to show the seam holds.
 
 ### 8.1 Shape
 
-One table, the envelope as columns, the payload as JSON, and one
-column the folder gets for free from the file system — the order an
-event arrived in:
+One table, the envelope as columns, `data` as JSON — the same split
+the event itself makes (§3) — and one column the folder gets for free
+from the file system — the order an event arrived in:
 
 ```sql
 CREATE TABLE events (
@@ -584,10 +614,10 @@ CREATE TABLE events (
   at       TEXT NOT NULL,
   type     TEXT NOT NULL,
   blobs    TEXT,                    -- JSON array of hashes, or NULL
-  data     TEXT NOT NULL            -- the payload, JSON
+  data     TEXT NOT NULL            -- the event's `data`, JSON
 );
 CREATE INDEX events_order ON events (at, eid, author);
--- Payload fields a store wants to filter on are its own choice, e.g.
+-- Fields of `data` a store wants to filter on are its own choice, e.g.
 --   my_key   TEXT GENERATED ALWAYS AS (json_extract(data, '$.myKey')),
 --   peer_key TEXT GENERATED ALWAYS AS (json_extract(data, '$.peerKey')),
 -- with an index on (my_key, peer_key, at, eid). The model does not say.
@@ -620,7 +650,8 @@ away.
   which fits the single-worker model the app already enforces with Web
   Locks. **IndexedDB** is the other candidate and needs no wasm: one
   object store keyed by `eid` with an autoincrement `seq` and an index
-  on whatever it filters by (`[myKey, peerKey, at, eid]` for threads);
+  on whatever it filters by (`[data.myKey, data.peerKey, at, eid]` for
+  threads);
   the app already depends on `idb`. Same interface, no SQL. Whether
   either is worth it is a question for when a fold is too slow to run
   at open, not before.
@@ -669,7 +700,8 @@ What the code says today, for the record:
   and the folder store reads every device's log to answer anything.
   The cache (§7.4) is the answer; a directory per channel would only
   help a reader that does not exist.
-- **Indexing** (§5.3): equality on any field lets a store index what it
+- **Indexing** (§5.3): equality on any envelope field or top-level
+  field of `data` lets a store index what it
   likes; whether the folder store should keep a local index for the
   pair under `local/cache/`, or leave all of that to folds, is for when
   open is slow.

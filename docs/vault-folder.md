@@ -12,8 +12,8 @@ spelled as files: one log per device, the mapping between a path and an
 event in both directions (which is short), and how the reference store
 reads, appends and merges on a file system. It is also the
 **interchange format**: what a backup is, what any store must be able to render and
-read (`event-store.md` §7). It defines no event type and reads no
-payload; the types it carries are `vault-events.md`'s.
+read (`event-store.md` §7). It defines no event type and never reads
+`data`; the types it carries are `vault-events.md`'s.
 
 ## 0. On disk, what changes
 
@@ -23,7 +23,7 @@ belongs to. Version 2 keeps logs, singletons, and content-addressed
 blobs; nothing is a record. There is one log per device, under the
 device that wrote it; a merge is one pass that reads another copy and
 appends what is new, under the device that wrote it; what an event is
-about is on the line, not in a path.
+about is in the line's `data`, not in a path.
 What is this copy's alone — which device it is, its caches, its traces
 — lives under `local/` and is never in a backup. A log line carries a
 message's skeleton; its body is a blob beside it, and erasing is
@@ -57,7 +57,7 @@ The principles of `event-store.md` §2 as they land on a file system.
    segment, not a directory. The only thing ever unlinked is a blob —
    and, under `local/`, what was never part of the vault.
 4. **A path says the author and nothing more.** What an event is about
-   is a field of the line (`event-store.md` §3); a segment name says
+   is a field of the line's `data` (`event-store.md` §3); a segment name says
    nothing about the events in it (§5); no name encodes whose anything
    is. Path rules as v1 §3.
 
@@ -81,8 +81,8 @@ Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
 `deliveries/`, `config.mediation`, and top-level `cache/` and `trace/`
 (moved under `local/`). There is no per-device file (a device
 announces itself with an event, `vault-events.md` §5) and no directory
-per contact or per channel: what an event is about is a field, and a
-reader reads the whole log anyway (§8.1).
+per contact or per channel: what an event is about is a field of its
+`data`, and a reader reads the whole log anyway (§8.1).
 
 ## 4. Folder ↔ store
 
@@ -97,8 +97,8 @@ a path *is* — parsed, its envelope checked (`event-store.md` §3 rule
 3), its `author` held against the directory. There is nothing else to
 map:
 
-- **The line is the event.** One JSON object per line, every field the
-  event has, nothing elided and nothing reinjected. A line apart from
+- **The line is the event.** One JSON object per line — the envelope
+  and `data`, nothing elided and nothing reinjected. A line apart from
   its path — in a report, a grep, a copy — says everything about
   itself, including who wrote it.
 - **The path checks the line.** A line whose `author` is not the `dev`
