@@ -199,6 +199,37 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
 
+  packages/event-store:
+    dependencies:
+      '@ipld/dag-pb':
+        specifier: ^4.1.7
+        version: 4.1.7
+      ipfs-unixfs:
+        specifier: ^13.0.0
+        version: 13.0.0
+      ipfs-unixfs-importer:
+        specifier: ^17.0.1
+        version: 17.0.1
+      multiformats:
+        specifier: ^14.0.5
+        version: 14.0.5
+      uuid:
+        specifier: ^11.1.1
+        version: 11.1.1
+    devDependencies:
+      '@estoc/folder-object':
+        specifier: workspace:^
+        version: link:../folder-object
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+      typescript:
+        specifier: ~5.8.0
+        version: 5.8.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
+
   packages/folder-object:
     dependencies:
       '@estoc/keystore':

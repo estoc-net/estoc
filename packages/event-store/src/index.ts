@@ -1,0 +1,62 @@
+/**
+ * @estoc/event-store — the vault as an event store (docs/event-store.md).
+ *
+ * The event and its envelope, canonical order, the filter; the three
+ * store interfaces (events, blobs, files) and their in-memory forms; the
+ * local-event shape a trace uses. No event type is known here: what an
+ * event means, and the folds that read it, are `@estoc/vault`'s.
+ */
+
+export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
+export { isJsonObject, isJsonPrimitive, sameJson, jsonClean, deepFreeze, NotJson } from "./json.js";
+
+export type {
+  Cid,
+  Event,
+  Draft,
+  Filter,
+  ChangeToken,
+  Conflict,
+  Rejected,
+  DamagedLine,
+  Ingested,
+  EventStore,
+} from "./event.js";
+export {
+  isUuidv7,
+  isDeviceId,
+  isRfc3339Utc,
+  atKey,
+  compareEvents,
+  mintDeviceId,
+  mintInstance,
+  EidMinter,
+  validateEvent,
+  cleanDraft,
+  matches,
+  matchesData,
+} from "./event.js";
+
+export { InvalidEvent, ForkedSelf, BadToken, BadBlock, NotAFile } from "./errors.js";
+
+export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
+
+export { RAW_CODE, DAG_PB_CODE, parseCid, isCid, nameOf } from "./cid.js";
+export {
+  PROFILE,
+  MAX_RAW_BYTES,
+  checkBlock,
+  decodeNode,
+  linksOf,
+  hashFile,
+  readFile,
+  reachable,
+  type GetBlock,
+  type Node,
+  type HashedFile,
+} from "./blocks.js";
+export { DEFAULT_GRACE_MS, MemoryBlobStore, type BlobStore, type Collected, type MemoryBlobStoreOptions } from "./blobs.js";
+
+export { checkPath, MemoryFileStore, type FileStore } from "./files.js";
+
+export { isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
