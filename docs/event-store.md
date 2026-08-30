@@ -104,7 +104,7 @@ files; `vault-events.md` §1 the ones about meaning.
 ## 3. The event
 
 An event is a JSON object. Five fields are the **envelope**: four the
-store reads, and one, optional, it checks and never reads. The sixth,
+store reads, and one it checks and never reads. The sixth,
 `data`, is the **payload**, which the store carries and never reads:
 
 | field    | meaning |
@@ -113,7 +113,7 @@ store reads, and one, optional, it checks and never reads. The sixth,
 | `at`     | RFC 3339 UTC (§4). |
 | `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own. |
 | `author` | the authoring device (§4). |
-| `blobs`  | optional: every blob this event references, as roots (§6): a root, and every block it reaches. The complete list — a CID anywhere else on the event is not a reference. |
+| `blobs`  | every blob this event references, as roots (§6): a root, and every block it reaches. The complete list, always present, `[]` when the event references nothing — a CID anywhere else on the event is not a reference. |
 | `data`   | the payload: a JSON object, always present, `{}` when the type carries nothing. |
 
 `data` holds the event's own fields, as specified per type, opaque to
@@ -159,7 +159,10 @@ store to one vault's shape.
 references without understanding any event. With the list on the
 envelope, an event of a type the collector has never seen — an
 extension's — still says what it holds, and a store that unlinks by
-this rule is safe for events it does not know. What a root reaches is
+this rule is safe for events it does not know. That is why the list is
+never absent: `[]` is the event's own statement that it references
+nothing, where a missing field would only be silence, and a collector
+that treated the two alike could not tell "nothing" from "not said". What a root reaches is
 read from the blocks, not the event: the name says whether a block has
 links (§6), so the walk needs no type either. The store itself only
 checks the field's shape. Type-specific fields may say which root is
@@ -203,7 +206,7 @@ Rules:
    and `ingest` it checks that the object is a JSON object (above);
    that `eid` is a well-formed uuidv7; that `at` is RFC 3339 UTC; that
    `type` is a non-empty string; that `author` is a device id; that
-   `blobs`, if present, is an array of CIDs (§6); that `data` is a
+   `blobs` is an array of CIDs (§6), `[]` included; that `data` is a
    JSON object; and that no other top-level field is present. An event
    that fails is rejected — `append` throws, `ingest` reports (§5.2) —
    and never stored. `data` is opaque: type-specific validation is the
@@ -257,11 +260,11 @@ type Event<D extends JsonObject = JsonObject> = {
   at: string;                         // RFC 3339 UTC
   author: string;                     // a device id
   type: string;
-  blobs?: Cid[];                      // every root the event references; checked, never read, here
+  blobs: Cid[];                       // every root the event references, `[]` for none; checked, never read, here
   data: D;                            // the payload; opaque here — `vault-events.md` types it per `type`
 };
 
-/** What a caller hands to `append`: no eid, at, or author — the store mints them. */
+/** What a caller hands to `append`: no eid, at, or author — the store mints them; `blobs` left out is `[]`. */
 type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Cid[]; data: D };
 
 /** Equality, by `===` on primitives: on the envelope fields named, and on the top-level fields of
@@ -923,7 +926,7 @@ CREATE TABLE events (
   author   TEXT NOT NULL,
   at       TEXT NOT NULL,
   type     TEXT NOT NULL,
-  blobs    TEXT,                    -- JSON array of CIDs (roots), or NULL
+  blobs    TEXT NOT NULL,           -- JSON array of CIDs (roots), '[]' for none
   data     TEXT NOT NULL            -- the event's `data`, JSON
 );
 CREATE INDEX events_order ON events (at, eid, author);

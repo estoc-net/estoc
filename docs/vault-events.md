@@ -12,8 +12,8 @@ words used here. Every field this document defines is a field of
 events on disk is `vault-folder.md`'s, and the examples are its lines,
 which are the events themselves (`vault-folder.md` §4): the envelope
 fields other than `type` and `blobs` are shown once per example block
-and elided after, and so are the fields of `data` that a block's
-events share.
+and elided after, `blobs` is shown only when it is not `[]`, and so
+are the fields of `data` that a block's events share.
 
 ## 0. What changes, in one paragraph
 
@@ -323,7 +323,7 @@ devices, and what its mediator answered.
 { "type": "identity.label", "data": { "name": "Alice" } }
 { "type": "device.label",   "data": { "dev": "k7q3ma", "name": "phone" } }
 { "type": "device.retired", "data": { "dev": "p2x8rq", "because": "lost" } }
-{ "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: no `blobs`
+{ "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: `blobs` is `[]`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
 ```
