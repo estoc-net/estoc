@@ -526,9 +526,8 @@ the collection that follows it, and one that was written moments ago
 waits out the grace first; readers ask the erase before the bytes
 (`vault-events.md` §8.2), so bytes that linger read as erased all the
 same. The grace is generous — the write it may belong to is bounded
-by a process, not a clock; git's `gc.pruneExpire` is the same answer
-to the same race — and a store that writes blocks and line in one
-transaction (§11) has no orphans and may set it to nothing.
+by a process, not a clock — and a store that writes blocks and line in
+one transaction (§11) has no orphans and may set it to nothing.
 
 `collect` is serialised with the store's own `put`, `putBlock` and
 `get`, as `dispose` is with an extension's operations (§8): it runs
