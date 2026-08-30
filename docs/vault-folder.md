@@ -296,7 +296,11 @@ block's, is damage, not copied.
 
 A blob is written **before** the line that names it, leaves before
 root (`event-store.md` §6); a crash between the writes leaves orphans,
-harmless, swept by the next collection. What a block's absence means —
+harmless, swept by a collection once they are older than the grace
+(`vault-events.md` §8.3) — the folder's age of a block is its file's
+modification time, the local clock's, which an import does not carry
+over. A block the folder finds damaged (§9.3) is moved aside, out of
+`blobs/`, and is from then on absent. What a block's absence means —
 erased, missing, or not yet fetched — is read from the events
 (`vault-events.md` §8.2); the folder only reports that it is not
 there.
@@ -440,12 +444,14 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    §7.3). A device directory that arrives without its `device.minted`
    is read — its events are still that device's — and reported as
    incomplete.
-2. **Blobs**, after the events: a block absent here and present there
-   is copied iff it is not collectable over the merged event set
-   (`vault-events.md` §8.3) — reached from a root some event lists,
-   walking the blocks either copy holds — and it is a profile block
-   whose bytes hash to its name (§7); one that is not is damage in the
-   source, reported, not copied. An erased blob never comes back.
+2. **Blobs**, after the events: a block absent here — a file under
+   `blobs/` that fails the block check (`event-store.md` §6) is moved
+   aside and is absent, so a source that has it sound repairs it — and
+   present there is copied iff it is not collectable over the merged
+   event set (`vault-events.md` §8.3) — reached from a root some event
+   lists, walking the blocks either copy holds — and it passes the
+   block check (§7); one that does not is damage in the source,
+   reported, not copied. An erased blob never comes back.
 3. **Files**, each by its own policy (§6): `config.json` identical or
    refused; `keystore.json` unioned; `state/` as v1; any other path
    copied when absent, never overwritten; `local/` is not in the

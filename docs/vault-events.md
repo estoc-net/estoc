@@ -277,8 +277,9 @@ root past 1 MiB — written **before** its skeleton is appended; the
 skeleton names it by root. The same blob store holds attachments
 lifted out of a plaintext and any other blocks an event lists in its
 `blobs`, by root; a block no root reaches is an orphan (§8.3). A crash
-between the writes leaves orphans, harmless, swept by the next
-collection. The other order is never used: a line whose body was never
+between the writes leaves orphans, harmless, swept by a collection
+once they are old enough to be no write's (§8.3). The other order is
+never used: a line whose body was never
 written would be indistinguishable from an erase.
 
 *Provisional — lifting.* An attachment carried inline (`data.base64`,
@@ -554,11 +555,19 @@ because the person said so; an absence with no such record is damage.
 
 ### 8.2 Reading an absence
 
-For a root `r` a line names: every block it reaches present → show
-it; any absent and some `message.erased` names `r` → erased; absent
-otherwise → **missing**, reported as damage — unless the root's kind
+For a root `r` a line names, the erase is asked first and the blocks
+second. Some `message.erased` for the line's `mid` names `r` in `drop`
+→ **erased**, whether the blocks are there or not: they may well be,
+since a root is shared by every line whose bytes are the same (§8.3),
+and another line's hold on them says nothing about this one. No such
+erase and every block `r` reaches present → show it. No such erase and
+any absent → **missing**, reported as damage — unless the root's kind
 admits a partial tree (§4), where a reader that knows the kind may say
-**not yet fetched** instead. The format itself never does.
+**not yet fetched** instead. The format itself never does. The order
+matters: a reader that asked presence first would show an erased
+message whenever another still pins its bytes, and an erase would then
+hold only by luck. A block the store has found to be damaged
+(`event-store.md` §6) is absent to this rule.
 
 ### 8.3 Collection
 
@@ -576,8 +585,18 @@ line that reaches `b`, and no event of any other type references it:
 an event the vault's own types do not cover pins its blocks, because
 version 2 defines no erase for it (§12). An orphan — a block no
 listed root anywhere reaches, from a crash between the writes (§4) —
-is collectable too; so is nothing else. Reference counting is a fold;
-a collector may run at any time and is never required to.
+is collectable too, once it is **old**. A collector may run at any
+time and is never required to; and at any time some write may be
+between its blocks and its line, so a block no root reaches was
+either abandoned by a crash or is about to be named, and the two are
+told apart only by age. An orphan younger than a grace period the
+store sets — measured on the store's own clock from when it wrote the
+block, a local fact that travels nowhere (`event-store.md` §6) — is
+left alone. The period is generous, since the write it may belong to
+is bounded by a process, not a clock (git's `gc.pruneExpire` is the
+same answer to the same race). A store that writes blocks and line in
+one transaction (`event-store.md` §8) has no orphans and no grace.
+Nothing else is collectable. Reference counting is a fold.
 
 ### 8.4 No space policy
 
@@ -634,7 +653,8 @@ dropped, or reordered. What the events then require:
   fold the union of skeletons and erases; a block absent here and
   present there is copied iff it is not collectable under §8.3 over
   that union, walking the blocks either copy holds. An erased blob
-  never comes back.
+  never comes back; its bytes may, held by another line that shares
+  the root, and the erased line reads as erased all the same (§8.2).
 - **Held after merge.** Once the set is merged — or restored into a
   fresh device — every outbound message whose delivery fold is not
   `sent` gets a `delivery.held { because: imported }` from the device

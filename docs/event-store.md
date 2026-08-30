@@ -471,7 +471,7 @@ interface BlobStore {                 // a block store of the `unixfs-v1-2025` p
   put(bytes: Uint8Array): Promise<Cid>;          // hashes by the profile; returns the file's root. A caller cannot misname bytes.
   get(root: Cid): Promise<Uint8Array | null>;    // the file's bytes, chunks rejoined; null if the root or any chunk is absent; throws on a node that is not a file
   // blocks — what the profile's trees are made of
-  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (shape, hash); the only way in for a block minted elsewhere
+  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (profile name, hash, and for dag-pb that the bytes decode as a profile node); the only way in for a block minted elsewhere
   getBlock(cid: Cid): Promise<Uint8Array | null>;
   has(cid: Cid): Promise<boolean>;
   unlink(cid: Cid): Promise<void>;               // one block
@@ -514,11 +514,24 @@ Blobs are immutable, merged by union, deduplicated by construction
 (two attachments sharing a chunk share a block), and the one thing in
 a vault that is ever unlinked (`vault-events.md` §8). A name is
 computed by the store on `put`, checked by `putBlock` and on import
-(§7.3), and may be checked on read; a block whose bytes do not hash
-to its name, or whose name is not a profile block (another codec,
-another hash, a raw block over 1 MiB), is damage, never served and
-never copied — so that every name in a vault is one a conforming
-`put` could have minted. Which events reference which roots is on the
+(§7.3), and may be checked on read. The check is three things: that
+the name is a profile name (CIDv1, sha-256, `raw` or `dag-pb`); that
+the bytes hash to it, and a raw block is at most 1 MiB; and, for
+`dag-pb`, that the bytes decode as a node the profile makes — a
+UnixFS file, directory, or HAMT shard, its links well formed — since
+a hash proves only that the bytes are the ones named, and the empty
+node, or any dag-pb without UnixFS data, has a perfectly good CID that
+no conforming `put` ever minted. It is not a closure check: blocks
+arrive one at a time, leaves before root, and a root whose kind admits
+a partial tree may lack leaves for good (`vault-events.md` §4); what
+a root reaches is read when it is read. A block that fails is
+**damage**: never served, never copied, and **absent** to everyone —
+to a reader (`vault-events.md` §8.2), to an import (§7.3, so that a
+sound copy elsewhere can replace it), and to the store itself, which
+unlinks it or sets it aside under a path that is not a blob's whenever
+it finds it, reporting it. So every name a vault holds is one a
+conforming `put` could have minted, and a name found otherwise is not
+held. Which events reference which roots is on the
 events (`blobs`, §3), and which blocks a root reaches is in the
 blocks: raw has no links, dag-pb's are in the node, and the codec is
 in the name. A collector therefore needs no type; when a block may go
@@ -527,11 +540,20 @@ promises that a CID it holds returns the bytes it was given.
 
 **A blob is written before the event that names it** — every block
 of it, leaves before the root, root before the line. A crash between
-the writes leaves orphan blocks — harmless, collectable
-(`vault-events.md` §8.3). The other order is never used: an event whose
-blocks were never written would be indistinguishable from an erase. A
-store that can make the writes one transaction (§8) may; a folder
-cannot and orders them.
+the writes leaves orphan blocks — harmless, collectable once older
+than a grace period (`vault-events.md` §8.3). The grace is what lets
+a collector and a writer share a store without sharing a lock: the two
+interfaces give the store no way to see that a `put` and the `append`
+that follows it are one act, so it does not try to; it keeps, for each
+block, when it wrote it — a fact of this copy alone, kept however the
+store keeps such things (the folder reads its file's modification
+time, `vault-folder.md` §7), never exported, and a block whose write
+time it does not know it takes as written now — and never collects a
+block it wrote recently. The other order is never
+used: an event whose blocks were never written would be
+indistinguishable from an erase. A store that can make the writes one
+transaction (§8) may, and then has no orphans; a folder cannot and
+orders them.
 
 **Files** are named by path, and the paths are the folder's
 (`vault-folder.md` §6): the format and anchor, the key cache, reserved
@@ -820,12 +842,13 @@ Three kinds of thing, three rules, in this order:
    promises never to do), and `changes` would replay bytes that were
    not new. Reading every line costs one parse of the other copy, which
    is what `scan` costs anyway.
-2. **Blobs**, after the events: a block absent here and present there
-   is copied iff it is not collectable over the merged event set
+2. **Blobs**, after the events: a block absent here — a damaged one
+   is absent (§6): a source that has it sound repairs it — and present
+   there is copied iff it is not collectable over the merged event set
    (`vault-events.md` §8.3) — reached, walking the blocks either copy
-   holds, from a root some event lists — and iff it is a profile block
-   whose bytes hash to its name (§6) — one that is not is damage in
-   the source, reported, not copied. An erased blob never comes back.
+   holds, from a root some event lists — and iff it passes the block
+   check (§6) — one that does not is damage in the source, reported,
+   not copied. An erased blob never comes back.
    The rule is the events'; the order — events first — is what makes
    it answerable.
 3. **Files**, each by its own policy (`vault-folder.md` §6). The one
