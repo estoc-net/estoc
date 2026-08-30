@@ -214,6 +214,27 @@ describe("folder: ingest", () => {
     expect((await all(events.scan())).map((e) => e.eid)).toEqual([a1, a2, b1, a3].map((e) => e.eid));
   });
 
+  it("holds an eid once when two calls in flight bring it under two authors", async () => {
+    const { backend, events } = open({ self: "k7q3ma" });
+    const eid = "01990000-0000-7000-8000-000000000001";
+    const a = foreign("aaaaaa", eid, "2026-08-30T10:00:00Z", { from: "a" });
+    const b = foreign("bbbbbb", eid, "2026-08-30T10:00:00Z", { from: "b" });
+    // neither call has written when the other reads: the second's check must see the first's write
+    const [first, second] = await Promise.all([events.ingest([a]), events.ingest([b])]);
+    expect(first).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
+    expect(second).toEqual({ added: 0, duplicates: 0, conflicts: [{ eid, kept: a, other: b }], rejected: [] });
+    expect(segmentsOf(backend, "aaaaaa")).toHaveLength(1);
+    expect(segmentsOf(backend, "bbbbbb")).toHaveLength(0);
+    expect(await all(events.scan())).toEqual([a]);
+    expect(events.conflicting()).toEqual([]);
+    // the same with one call in flight over an append of self: what self wrote meanwhile is not lost sight of
+    const store2 = open({ self: "aaaaaa" });
+    const pending = store2.events.ingest([foreign("bbbbbb", "01990000-0000-7000-8000-000000000002", "2026-08-30T10:00:01Z")]);
+    const own = await store2.events.append({ type: "t", data: {} });
+    expect((await pending).added).toBe(1);
+    expect((await all(store2.events.scan())).map((e) => e.eid)).toEqual([own.eid, "01990000-0000-7000-8000-000000000002"].sort());
+  });
+
   it("writes nothing for a call that only repeats what is here", async () => {
     const { backend, events } = open({ self: "k7q3ma" });
     const a1 = foreign("aaaaaa", "01990000-0000-7000-8000-000000000001", "2026-08-30T10:00:00Z");
@@ -391,6 +412,10 @@ describe("folder: kindOf", () => {
     expect(kindOf(`extensions/01990000-0000-7000-8000-0000000000ee/devices/${dev}/01990000-0000-7000-8000-000000000010.jsonl`)).toBe("segment");
     expect(kindOf(`extensions/onion/blobs/${HELLO_CID}`)).toBe("file");
     expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee")).toBe("file");
+    // an extension's tree has no local/ and no extensions/ of its own (§3.1): such paths are files, carried
+    expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee/local/self.json")).toBe("file");
+    expect(kindOf(`extensions/01990000-0000-7000-8000-0000000000ee/extensions/01990000-0000-7000-8000-0000000000ef/blobs/${HELLO_CID}`)).toBe("file");
+    expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee/config.json")).toBe("file");
     expect(kindOf("local")).toBe("local");
     expect(kindOf("local/agent/trace/wire/01990000-0000-7000-8000-000000000010.jsonl")).toBe("local");
     expect(kindOf("config.json")).toBe("file");

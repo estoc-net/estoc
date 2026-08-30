@@ -165,6 +165,7 @@ export class FolderEventStore implements EventStore {
       const open = await this.openSegment();
       await this.ctx.backend.append(open.path, line);
       open.bytes += line.length;
+      this.ctx.generation += 1;
       return deepFreeze(event);
     });
   }
@@ -198,6 +199,7 @@ export class FolderEventStore implements EventStore {
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     this.ctx.guard();
     // One pass, reading first (§9.3): what is here, then the whole input.
+    const generation = this.ctx.generation;
     const held = await this.readAll();
     const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
     const staged = new Map<string, Event>();
@@ -233,6 +235,10 @@ export class FolderEventStore implements EventStore {
     }
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
+      // Another ingest, or an append, may have written while the input was being read: what is
+      // here now is what the staged events are checked against, over every author — an eid
+      // arriving twice, under two authors, from two calls, must end up in the store once.
+      const current = this.ctx.generation === generation ? held : await this.readAll();
       const byAuthor = new Map<string, Event[]>();
       for (const event of staged.values()) {
         const list = byAuthor.get(event.author);
@@ -243,12 +249,11 @@ export class FolderEventStore implements EventStore {
         }
       }
       for (const [author, incoming] of [...byAuthor].sort(([a], [b]) => (a < b ? -1 : 1))) {
-        // The directory may have gained events while the input was read: check it again.
-        const current = (await this.readDevice(author)).events;
         const lines: Uint8Array[] = [];
         for (const event of incoming) {
           const have = current.get(event.eid);
           if (have === undefined) {
+            current.set(event.eid, event);
             lines.push(jsonLine(deepFreeze(event)));
             outcome.added += 1;
           } else if (sameJson(have, event)) {
@@ -260,6 +265,7 @@ export class FolderEventStore implements EventStore {
         if (lines.length > 0) {
           // one segment per author per call (§9.3), written whole
           await this.ctx.backend.write(this.newSegmentPath(author), concat(lines));
+          this.ctx.generation += 1;
         }
       }
       return outcome;

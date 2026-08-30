@@ -19,8 +19,14 @@ import { segmentsOf, type VaultBackend } from "../backend/types.js";
 export class FsBackend implements VaultBackend {
   constructor(readonly root: string) {}
 
+  /** The file `p` names, checked once more to lie under the root whatever the platform made of the segments. */
   private at(p: string): string {
-    return path.join(this.root, ...segmentsOf(p));
+    const file = path.join(this.root, ...segmentsOf(p));
+    const rel = path.relative(this.root, file);
+    if (rel === "" || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      throw new Error(`path escapes the vault root: ${JSON.stringify(p)}`);
+    }
+    return file;
   }
 
   async read(p: string): Promise<Uint8Array | null> {

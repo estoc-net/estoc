@@ -10,7 +10,7 @@ import { InvalidEvent } from "../errors.js";
 import { EidMinter, type DamagedLine } from "../event.js";
 import { checkPath } from "../files.js";
 import { isJsonObject, type JsonObject } from "../json.js";
-import { isLocalEvent, matchesLocal, type LocalEvent, type LocalEventStore, type LocalFilter } from "../local.js";
+import { compareLocalEvents, isLocalEvent, matchesLocal, type LocalEvent, type LocalEventStore, type LocalFilter } from "../local.js";
 import { isSegmentName, jsonLine, prettyJson, text } from "./layout.js";
 import { decodeLocalEvent, decodeSegment } from "./lines.js";
 import { Serial } from "./serial.js";
@@ -128,7 +128,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
       damaged.push(...read.damaged);
     }
     this.lastDamaged = damaged;
-    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.eid < b.eid ? -1 : a.eid > b.eid ? 1 : 0));
+    events.sort(compareLocalEvents);
     for (const event of events) {
       if (matchesLocal(event, filter)) {
         yield event;
@@ -202,9 +202,16 @@ export interface LocalCache {
  * stream per name under `trace/`. The directory is the owner's —
  * `local/agent`, `local/extensions/<ext>` — and nothing here is a fact
  * of the vault.
+ *
+ * Every write here queues on the owner's own chain, so that `settle`
+ * covers it: a disposal (vault-folder.md §3.1) waits for what was
+ * issued before it and removes the directory after, and no write that
+ * passed the guard lands on the emptied tree.
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();
+  private readonly serial = new Serial();
+  private readonly alive: () => void;
 
   constructor(
     private readonly backend: VaultBackend,
@@ -212,11 +219,21 @@ export class LocalOwner {
     private readonly options: FolderLocalEventStoreOptions = {},
     /** throws once the owner is being disposed of with its extension (vault-folder.md §3.1) */
     private readonly guard: () => void = () => undefined
-  ) {}
+  ) {
+    this.alive = options.alive ?? (() => undefined);
+  }
 
-  /** Resolves once everything queued on the owner's trace streams so far has run. */
+  /** Resolves once everything queued on the owner — its writes and its trace streams — so far has run. */
   async settle(): Promise<void> {
-    await Promise.all([...this.traces.values()].map((trace) => trace.settle()));
+    await Promise.all([this.serial.run(() => undefined), ...[...this.traces.values()].map((trace) => trace.settle())]);
+  }
+
+  /** A write, in the owner's turn. */
+  private queued<T>(work: () => Promise<T>): Promise<T> {
+    return this.serial.run(() => {
+      this.alive();
+      return work();
+    });
   }
 
   /** What this device was told: a JSON object, or null when nothing was. */
@@ -235,7 +252,8 @@ export class LocalOwner {
 
   async writeOptions(options: JsonObject): Promise<void> {
     this.guard();
-    return this.backend.write(`${this.dir}/options.json`, prettyJson(options));
+    const bytes = prettyJson(options);
+    return this.queued(() => this.backend.write(`${this.dir}/options.json`, bytes));
   }
 
   get cache(): LocalCache {
@@ -244,16 +262,27 @@ export class LocalOwner {
     const base = `${this.dir}/cache`;
     const at = (path: string): string => `${base}/${checkPath(path)}`;
     const backend = this.backend;
+    // every method async, so that a guard's throw is a rejection like any other failure
     return {
-      read: (path) => (guard(), backend.read(at(path))),
-      write: (path, bytes) => (guard(), backend.write(at(path), bytes)),
+      read: async (path) => (guard(), backend.read(at(path))),
+      write: async (path, bytes) => {
+        guard();
+        const file = at(path);
+        return this.queued(() => backend.write(file, bytes));
+      },
       list: async () => (guard(), (await walk(backend, base)).map((path) => path.slice(base.length + 1))),
-      remove: (path) => (guard(), backend.remove(at(path))),
+      remove: async (path) => {
+        guard();
+        const file = at(path);
+        return this.queued(() => backend.remove(file));
+      },
       clear: async () => {
         guard();
-        for (const path of await walk(backend, base)) {
-          await backend.remove(path);
-        }
+        return this.queued(async () => {
+          for (const path of await walk(backend, base)) {
+            await backend.remove(path);
+          }
+        });
       },
     };
   }

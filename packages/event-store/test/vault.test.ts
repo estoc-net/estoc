@@ -203,6 +203,36 @@ describe("vault: extension stores", () => {
     expect(() => vault.extension(other)).toThrow(Disposed);
   });
 
+  it("lets an options or cache write in flight land before the removal, never after it", async () => {
+    // a backend whose writes wait for a gate: the write has passed the guard, the bytes are not down yet
+    class GatedBackend extends MemoryBackend {
+      gate: Promise<void> = Promise.resolve();
+      override async write(path: string, data: Uint8Array): Promise<void> {
+        await this.gate;
+        return super.write(path, data);
+      }
+    }
+    const backend = new GatedBackend();
+    const vault = await FolderVault.create(backend, ANCHOR);
+    const ext = vault.extension(EXT);
+    await ext.events.append({ type: "t", data: {} });
+    let release = (): void => undefined;
+    backend.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const cache = ext.local.cache;
+    const options = ext.local.writeOptions({ late: true });
+    const cached = cache.write("f", enc.encode("x"));
+    const disposal = vault.dispose(EXT);
+    release();
+    await Promise.all([options, cached, disposal]);
+    expect([...backend.files.keys()].filter((p) => p.includes(`/${EXT}/`))).toEqual([]);
+    // a handle taken before the call is dead like the rest
+    await expect(cache.write("g", enc.encode("y"))).rejects.toThrow(Disposed);
+    await expect(cache.remove("f")).rejects.toThrow(Disposed);
+    await expect(cache.clear()).rejects.toThrow(Disposed);
+  });
+
   it("is forgotten by the next instance: a disposed ext may be opened again there", async () => {
     const { backend, vault } = await fresh();
     await vault.extension(EXT).events.append({ type: "t", data: {} });

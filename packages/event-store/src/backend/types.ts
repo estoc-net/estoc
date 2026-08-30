@@ -45,15 +45,23 @@ export async function walk(backend: VaultBackend, dir: string): Promise<string[]
   return paths.sort();
 }
 
-/** Split a vault-relative path into segments, rejecting anything unsafe. */
+/**
+ * Split a vault-relative path into segments, rejecting anything a
+ * backend could take for more than a name under its root: an empty
+ * path, an absolute one, an empty segment, `.` or `..`, and a backslash
+ * — Windows reads it as a separator, so `..\\x` would climb out.
+ */
 export function segmentsOf(path: string): string[] {
-  const segments = path.split("/").filter((s) => s !== "");
-  if (segments.length === 0) {
+  if (path === "") {
     throw new Error("empty path");
   }
+  if (path.startsWith("/")) {
+    throw new Error(`not a relative path: ${JSON.stringify(path)}`);
+  }
+  const segments = path.split("/");
   for (const segment of segments) {
-    if (segment === "." || segment === "..") {
-      throw new Error(`unsafe path segment in ${path}`);
+    if (segment === "" || segment === "." || segment === ".." || segment.includes("\\")) {
+      throw new Error(`unsafe path segment in ${JSON.stringify(path)}`);
     }
   }
   return segments;

@@ -42,8 +42,14 @@ export function kindOf(path: string): PathKind {
     return "local";
   }
   if (parts[0] === EXTENSIONS_DIR && parts.length > 2 && isExtId(parts[1] as string)) {
-    return kindOf(parts.slice(2).join("/"));
+    // an extension's tree has segments and blobs and nothing else (§3.1): no local/, no extensions/ of its own
+    return storeKind(parts.slice(2));
   }
+  return storeKind(parts);
+}
+
+/** A segment or a blob by shape, under one store's root; anything else a file. */
+function storeKind(parts: string[]): PathKind {
   if (parts.length === 3 && parts[0] === DEVICES_DIR && isDeviceId(parts[1]) && isSegmentName(parts[2] as string)) {
     return "segment";
   }

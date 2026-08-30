@@ -54,6 +54,20 @@ describe("local event store", () => {
     expect(await all(store.scan({ type: "wire.out", data: { n: 3 } }))).toEqual([mid]);
   });
 
+  it("orders by the instant `at` names, not its spelling, then by eid", async () => {
+    const backend = new MemoryBackend();
+    const store = new FolderLocalEventStore(backend, ".estoc/local/agent/trace/wire");
+    const whole = line(9, "2026-08-30T10:00:00Z");
+    const milli = line(1, "2026-08-30T10:00:00.001Z");
+    const tenth = line(3, "2026-08-30T10:00:00.1Z");
+    const tenthToo = line(2, "2026-08-30T10:00:00.10Z");
+    for (const event of [milli, tenth, whole, tenthToo]) {
+      await store.append(event);
+    }
+    // "…00Z" before "…00.001Z" as instants, though not as strings; .1Z and .10Z are one instant, so eid decides
+    expect(await all(store.scan())).toEqual([whole, milli, tenthToo, tenth]);
+  });
+
   it("rotates by bytes or age, and prunes whole segments by name, then by cap", async () => {
     const c = clock("2026-08-30T10:00:00Z");
     const backend = new MemoryBackend({ clock: c.now });

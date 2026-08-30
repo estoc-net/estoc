@@ -152,12 +152,19 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "refuses .. and . segments",
+    name: "refuses what is not a plain relative path: .., ., a backslash, an absolute path, an empty segment",
     run: async (fresh) => {
       const b = await fresh();
       await rejects(b.read("../x"), /unsafe/, "read ..");
       await rejects(b.write("a/./b", enc.encode("")), /unsafe/, "write .");
       await rejects(b.list(""), /empty/, "list empty");
+      // Windows reads a backslash as a separator: `..\\x` must not climb out of the root
+      await rejects(b.write("..\\x", enc.encode("")), /unsafe/, "write ..\\x");
+      await rejects(b.read("a\\b"), /unsafe/, "read a\\b");
+      await rejects(b.write("/abs", enc.encode("")), /relative/, "write absolute");
+      await rejects(b.write("a//b", enc.encode("")), /unsafe/, "write empty segment");
+      await rejects(b.list("a/"), /unsafe/, "list trailing slash");
+      same(await b.list("a"), [], "nothing was written");
     },
   },
 ];

@@ -55,6 +55,7 @@ export function folderStore(backend: VaultBackend, options: FolderStoreOptions =
     guard: options.guard ?? (() => undefined),
     alive: options.alive ?? (() => undefined),
     rotateBytes: options.rotateBytes ?? ROTATE_BYTES,
+    generation: 0,
   };
   return { events: new FolderEventStore(ctx), blobs: new FolderBlobStore(ctx, options.graceMs ?? DEFAULT_GRACE_MS), serial: ctx.serial };
 }

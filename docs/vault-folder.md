@@ -28,8 +28,8 @@ vault root is the origin's OPFS root and only `.estoc/` exists; the
 passphrase-unlocked seed cached in IndexedDB is a device convenience,
 not part of the vault.
 
-Paths are `/`-separated, relative to the vault root, ASCII, with no
-`.` or `..` segments. Text files are UTF-8; JSON files are
+Paths are `/`-separated, relative to the vault root, ASCII with no
+backslash, with no `.` or `..` segments. Text files are UTF-8; JSON files are
 pretty-printed with a trailing newline; JSONL lines are compact JSON
 terminated by `\n`.
 

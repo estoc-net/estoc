@@ -59,7 +59,7 @@ export { DEFAULT_GRACE_MS, MemoryBlobStore, type BlobStore, type Collected, type
 
 export { checkPath, MemoryFileStore, type FileStore } from "./files.js";
 
-export { isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
+export { compareLocalEvents, isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
 
 // ---- the folder (vault-folder.md) ---------------------------------------
 
