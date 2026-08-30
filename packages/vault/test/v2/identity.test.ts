@@ -47,6 +47,16 @@ describe("v2 identity: the folder", () => {
     await expect(createFolderVault(new MemoryBackend(), (await openFolderVault(backend, seedKey, { mint })).keys.keystore, seedKey, { mint })).rejects.toThrow(/no keys/);
   });
 
+  it("refuses a backend that already holds a vault, its keystore untouched", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    await createFolderVault(backend, doc, seedKey, { mint });
+    const other = await freshKeystore(OTHER_SEED);
+    await expect(createFolderVault(backend, other.doc, other.seedKey, { mint })).rejects.toThrow(/exists already/);
+    const opened = await openFolderVault(backend, seedKey, { mint }); // the first seed still opens what it made
+    expect(opened.anchor.did.startsWith("did:key:z")).toBe(true);
+  });
+
   it("mints DIDs and mediations: the event first, the cache after, the name derivable alone", async () => {
     const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();

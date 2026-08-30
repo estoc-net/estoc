@@ -197,6 +197,54 @@ describe("v2 fold: attribution edges", () => {
     expect(channelId(pair)).toBe(channelId({ myKey: "did/k", peerKey: null }));
   });
 
+  it("a deleted member merged in later revives nothing", () => {
+    const line = new Line();
+    const fold = new VaultFold(DEV_A);
+    const pair = { myKey: "did/k", peerKey: bob.fingerprint };
+    const c1 = "0198aaaa-0000-7000-8000-000000000001";
+    const c2 = "0198aaaa-0000-7000-8000-000000000002";
+    fold.apply(line.next(DEV_A, "contact.created", { cid: c1 }));
+    fold.apply(line.next(DEV_A, "contact.attached", { ...pair, cid: c1, because: "manual" }));
+    fold.apply(line.next(DEV_A, "contact.deleted", { cid: c1 }));
+    fold.apply(line.next(DEV_B, "contact.created", { cid: c2 }));
+    fold.apply(line.next(DEV_B, "contact.merged", { cid: c2, from: c1 }));
+    expect(fold.attribution(pair)).toEqual({ kind: "deleted", cids: [c1] });
+    expect(fold.contact(c2)?.channels).toEqual([]);
+    expect(fold.contact(c2)?.thread).toEqual([]);
+    expect(fold.contact(c2)?.hidden).toEqual([c1]);
+    expect(fold.deletedContacts().map((gone) => [gone.cid, gone.channels])).toEqual([[c1, [pair]]]);
+  });
+
+  it("the default write follows the latest contact.useKey, not the first-used key", () => {
+    const line = new Line();
+    const fold = new VaultFold(DEV_A);
+    const c = "0198aaaa-0000-7000-8000-000000000001";
+    const p1 = { myKey: "did/k1", peerKey: bob.fingerprint };
+    const p2 = { myKey: "did/k2", peerKey: bob.fingerprint };
+    fold.apply(line.next(DEV_A, "did.minted", { key: "did/k1", did: "did:peer:4k1", routingDid: "did:peer:2r", mediation: null }));
+    fold.apply(line.next(DEV_A, "did.minted", { key: "did/k2", did: "did:peer:4k2", routingDid: "did:peer:2r", mediation: null }));
+    fold.apply(line.next(DEV_A, "contact.created", { cid: c }));
+    fold.apply(line.next(DEV_A, "contact.attached", { ...p1, cid: c, because: "manual" }));
+    fold.apply(line.next(DEV_A, "peer.resolved", { ...p1, did: "did:peer:4bob", keys: [bob.multibase], service: null }));
+    fold.apply(line.next(DEV_A, "peer.resolved", { ...p2, did: "did:peer:4bob", keys: [bob.multibase], service: null }));
+    for (const key of ["did/k1", "did/k2", "did/k1"]) {
+      fold.apply(line.next(DEV_A, "contact.useKey", { cid: c, key, because: "minted" }));
+    }
+    expect(fold.contact(c)?.writeTo).toHaveLength(2);
+    expect(fold.contact(c)?.write?.myKey).toBe("did/k1");
+  });
+
+  it("a retired device's mediation is no longer current", () => {
+    const line = new Line();
+    const fold = new VaultFold(DEV_A);
+    const id = "0198aaaa-0000-7000-8000-000000000004";
+    fold.apply(line.next(DEV_B, "mediation.created", { id, mediatorDid: "did:web:m", me: { key: `mediation/${id}/me`, did: "did:peer:4me" } }));
+    fold.apply(line.next(DEV_B, "mediation.granted", { id, routingDid: "did:peer:2r" }));
+    fold.apply(line.next(DEV_A, "device.retired", { dev: DEV_B, because: "lost" }));
+    expect(fold.device(DEV_B)?.mediation).toBeNull();
+    expect(fold.device(DEV_B)?.mediations.map((m) => m.current)).toEqual([false]);
+  });
+
   it("held is per device: another device's hold does not settle self's status", () => {
     const line = new Line();
     const bobKey = peerKey(22);

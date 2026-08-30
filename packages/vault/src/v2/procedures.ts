@@ -199,24 +199,10 @@ export interface Deleted {
   collected: { unlinked: Cid[]; young: Cid[] };
 }
 
-/**
- * Delete a contact (§9): a tombstone per member, the erases over its
- * channels, `did.retired` for every key minted toward it alone, and a
- * collection. No event is removed.
- */
-export async function deleteContact(vault: VaultSide, fold: VaultFold, cid: string): Promise<Deleted> {
-  const contact = fold.contact(cid);
-  if (contact === null) {
-    throw new Error(`no contact ${cid}`);
-  }
-  const keys = contact.keys;
-  const tombstones: Event[] = [];
-  for (const member of contact.members) {
-    tombstones.push(await record(vault.events, fold, drafts.contactDeleted({ cid: member })));
-  }
-  const erased = await sweepDeleted(vault.events, fold);
+/** §9 step 3, idempotent: retire every key of `keyList` that was the contact's alone and that no one else uses. */
+async function retireDeleted(events: EventStore, fold: VaultFold, rep: string, keyList: { key: string; because: string }[]): Promise<Event[]> {
   const retired: Event[] = [];
-  for (const entry of keys) {
+  for (const entry of keyList) {
     const key = fold.myKey(entry.key);
     if (key === null || key.retired !== null) {
       continue;
@@ -225,11 +211,40 @@ export async function deleteContact(vault: VaultSide, fold: VaultFold, cid: stri
     if (!oneUse && entry.because !== "minted") {
       continue; // not this contact's alone by minting or invitation (§9 step 3)
     }
-    if (key.usedBy.some((user) => user !== contact.cid)) {
+    if (key.usedBy.some((user) => user !== rep)) {
       continue; // another contact still uses it
     }
-    retired.push(await record(vault.events, fold, drafts.didRetired({ key: entry.key, because: "contact-deleted" })));
+    retired.push(await record(events, fold, drafts.didRetired({ key: entry.key, because: "contact-deleted" })));
   }
+  return retired;
+}
+
+/**
+ * Delete a contact (§9): a tombstone per member, the erases over its
+ * channels, `did.retired` for every key minted toward it alone, and a
+ * collection. No event is removed. Interrupted after the tombstones, a
+ * second call finishes: the sweep, the retirements, the collection.
+ */
+export async function deleteContact(vault: VaultSide, fold: VaultFold, cid: string): Promise<Deleted> {
+  const contact = fold.contact(cid);
+  if (contact === null) {
+    const gone = fold.deletedContacts().find((entry) => entry.cid === cid || entry.members.includes(cid));
+    if (gone === undefined) {
+      throw new Error(`no contact ${cid}`);
+    }
+    const erased = await sweepDeleted(vault.events, fold);
+    const retired = await retireDeleted(vault.events, fold, gone.cid, gone.keys);
+    return { tombstones: [], erased, retired, collected: await collectBlobs(vault.blobs, fold) };
+  }
+  // a late merge can hang tombstoned members on a live contact: their keys are still §9's to retire
+  const hiddenKeys = fold.deletedContacts().filter((entry) => entry.members.some((member) => contact.hidden.includes(member))).flatMap((entry) => entry.keys);
+  const keys = [...new Map([...hiddenKeys, ...contact.keys].map((entry) => [entry.key, entry] as const)).values()];
+  const tombstones: Event[] = [];
+  for (const member of contact.members) {
+    tombstones.push(await record(vault.events, fold, drafts.contactDeleted({ cid: member })));
+  }
+  const erased = await sweepDeleted(vault.events, fold);
+  const retired = await retireDeleted(vault.events, fold, contact.cid, keys);
   const collected = await collectBlobs(vault.blobs, fold);
   return { tombstones, erased, retired, collected };
 }

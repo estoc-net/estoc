@@ -31,8 +31,10 @@ function folderOptions<M extends MintedDid>(options: FolderOptions<M>): OpenVaul
 }
 
 /**
- * Lay down a new vault in an empty backend: the anchor derived from the
- * seed, the keystore written first, alone — `open` is "config.json is
+ * Lay down a new vault in an empty backend: an existing vault refused
+ * before anything is written — creating never touches a standing
+ * vault's keystore — then the anchor derived from the seed, the
+ * keystore written first, alone — `open` is "config.json is
  * there", so a crash between the two leaves no vault rather than a
  * headless one — then `config.json` with the anchor, fixed for the
  * vault's life.
@@ -45,6 +47,9 @@ export async function createFolderVault<M extends MintedDid = MintedDid>(
 ): Promise<Opened<M>> {
   if (doc.keys.length !== 0) {
     throw new Error("createFolderVault wants a fresh keystore with no keys");
+  }
+  if ((await backend.size(CONFIG_PATH)) !== null) {
+    throw new NotAVault(`${CONFIG_PATH} exists already`);
   }
   const anchor = await Keys.anchorOf(seedKey);
   const { doc: withAnchor } = await addDerivedKey(doc, seedKey, KEY_ANCHOR, options.clock === undefined ? {} : { now: options.clock() });

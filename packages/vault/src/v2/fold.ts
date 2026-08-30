@@ -132,6 +132,8 @@ export interface DeletedContact {
   members: string[];
   /** the channels attributed to this contact alone, before it was deleted */
   channels: ChannelKey[];
+  /** every `contact.useKey` (and implicit invitation key) of its members: what §9 step 3 retires */
+  keys: ContactKey[];
 }
 
 export interface Published {
@@ -426,7 +428,7 @@ function project(set: EventSet, self: string): Projection {
     deletedCids.add(event.data.cid);
   }
   const memberOf = new Map<string, string>();
-  const components: { rep: string; members: string[]; hidden: string[]; live: boolean }[] = [];
+  const components: { rep: string; members: string[]; hidden: string[]; live: boolean; deadRep: string | null }[] = [];
   for (const members of contactGraph.groups().values()) {
     const live = members.filter((cid) => !deletedCids.has(cid));
     const hidden = members.filter((cid) => deletedCids.has(cid));
@@ -434,14 +436,16 @@ function project(set: EventSet, self: string): Projection {
     for (const cid of members) {
       memberOf.set(cid, rep);
     }
-    components.push({ rep, members: live, hidden, live: live.length > 0 });
+    components.push({ rep, members: live, hidden, live: live.length > 0, deadRep: [...hidden].sort()[0] ?? null });
   }
-  const liveRep = new Set(components.filter((c) => c.live).map((c) => c.rep));
+  const byRep = new Map(components.map((component) => [component.rep, component]));
 
   // ---- live attachments: the latest of attached/detached per (cid, channel)
   interface Attach {
     cid: string;
     rep: string;
+    /** its `cid` is tombstoned: contributes nothing to a live contact (§7.2) */
+    dead: boolean;
     pair: ChannelKey;
     because: AttachCause;
     oobId: string | null;
@@ -461,6 +465,7 @@ function project(set: EventSet, self: string): Projection {
       attaches.push({
         cid: event.data.cid,
         rep: memberOf.get(event.data.cid) as string,
+        dead: deletedCids.has(event.data.cid),
         pair: { myKey: event.data.myKey, peerKey: event.data.peerKey },
         because: event.data.because,
         oobId: event.data.oobId ?? null,
@@ -487,9 +492,9 @@ function project(set: EventSet, self: string): Projection {
     if (!qualifies(have.pair)) {
       continue;
     }
-    const reps = new Set((attachesByComponent.get(graph.find(channelNode(have.pair))) ?? []).map((attach) => attach.rep));
-    const live = [...reps].filter((rep) => liveRep.has(rep)).sort();
-    const dead = [...reps].filter((rep) => !liveRep.has(rep)).sort();
+    const here = attachesByComponent.get(graph.find(channelNode(have.pair))) ?? [];
+    const live = [...new Set(here.filter((attach) => !attach.dead).map((attach) => attach.rep))].sort();
+    const dead = [...new Set(here.filter((attach) => attach.dead).map((attach) => byRep.get(attach.rep)?.deadRep ?? attach.rep))].sort();
     if (live.length === 1) {
       have.attribution = { kind: "one", cid: live[0] as string };
     } else if (live.length > 1) {
@@ -605,7 +610,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
   for (const attach of attaches) {
-    if (attach.pair.myKey !== null && liveRep.has(attach.rep)) {
+    if (attach.pair.myKey !== null && !attach.dead) {
       const have = myKey(attach.pair.myKey);
       if (!have.takenBy.includes(attach.rep)) {
         have.takenBy.push(attach.rep);
@@ -666,7 +671,7 @@ function project(set: EventSet, self: string): Projection {
     const label = latest(set.of("device.label").filter((event) => event.data.dev === dev));
     const retired = latest(set.of("device.retired").filter((event) => event.data.dev === dev));
     const own = mediationsBy.get(dev) ?? [];
-    const current = own.filter((m) => m.retired === null).at(-1) ?? null;
+    const current = retired === null ? (own.filter((m) => m.retired === null).at(-1) ?? null) : null; // a retired device has no live address (§10)
     if (current !== null) {
       current.current = true;
     }
@@ -718,7 +723,7 @@ function project(set: EventSet, self: string): Projection {
       at: event.at,
       by: event.author,
       open: have.retired === null && takers.length === 0,
-      takenBy: [...new Set(takers.map((attach) => attach.rep))].sort(),
+      takenBy: [...new Set(takers.filter((attach) => !attach.dead).map((attach) => attach.rep))].sort(),
     });
   }
   const oneUse = new Set(invitations.map((invitation) => invitation.key));
@@ -753,9 +758,41 @@ function project(set: EventSet, self: string): Projection {
   const deleted = new Map<string, DeletedContact>();
   const attributedTo = (rep: string, kind: "one" | "deleted"): Channel[] =>
     [...channels.values()].filter((have) => (kind === "one" ? have.attribution.kind === "one" && have.attribution.cid === rep : have.attribution.kind === "deleted" && have.attribution.cids.includes(rep)));
+  const keyOrder = (a: ContactKey, b: ContactKey): number => (a.since !== b.since ? (a.since < b.since ? -1 : 1) : a.key < b.key ? -1 : 1);
+  /** Every `contact.useKey` of `cids` plus the implicit key of each invitation `mine` took (§7.4); `lastUse` is filled with each key's latest use. */
+  const contactKeysOf = (cids: Set<string>, mine: (attach: Attach) => boolean, lastUse: Map<string, string>): ContactKey[] => {
+    const contactKeys = new Map<string, ContactKey>();
+    for (const event of set.of("contact.useKey")) {
+      if (!cids.has(event.data.cid)) {
+        continue;
+      }
+      lastUse.set(event.data.key, event.at); // canonical order: the last write is the latest use
+      const have = contactKeys.get(event.data.key);
+      if (have === undefined) {
+        const minted = keys.get(event.data.key)?.minted ?? null;
+        contactKeys.set(event.data.key, { key: event.data.key, did: minted?.did ?? null, routingDid: minted?.routingDid ?? null, because: event.data.because, implicit: false, since: event.at });
+      } else {
+        have.because = event.data.because; // events come in canonical order: the latest says why
+        if (event.at < have.since) {
+          have.since = event.at;
+        }
+      }
+    }
+    for (const attach of attaches) {
+      if (mine(attach) && attach.pair.myKey !== null && oneUse.has(attach.pair.myKey) && !contactKeys.has(attach.pair.myKey)) {
+        const minted = keys.get(attach.pair.myKey)?.minted ?? null;
+        contactKeys.set(attach.pair.myKey, { key: attach.pair.myKey, did: minted?.did ?? null, routingDid: minted?.routingDid ?? null, because: "invitation", implicit: true, since: attach.at });
+        lastUse.set(attach.pair.myKey, attach.at);
+      }
+    }
+    return [...contactKeys.values()];
+  };
   for (const component of components) {
+    if (component.deadRep !== null) {
+      const gone = contactKeysOf(new Set(component.hidden), (attach) => attach.dead && attach.rep === component.rep, new Map()).sort(keyOrder);
+      deleted.set(component.deadRep, { cid: component.deadRep, members: component.hidden, channels: attributedTo(component.deadRep, "deleted").map((have) => have.pair), keys: gone });
+    }
     if (!component.live) {
-      deleted.set(component.rep, { cid: component.rep, members: component.hidden, channels: attributedTo(component.rep, "deleted").map((have) => have.pair) });
       continue;
     }
     const members = new Set(component.members);
@@ -779,26 +816,10 @@ function project(set: EventSet, self: string): Projection {
       }
     }
 
-    const contactKeys = new Map<string, ContactKey>();
-    for (const event of own("contact.useKey")) {
-      const have = contactKeys.get(event.data.key);
-      if (have === undefined) {
-        const minted = keys.get(event.data.key)?.minted ?? null;
-        contactKeys.set(event.data.key, { key: event.data.key, did: minted?.did ?? null, routingDid: minted?.routingDid ?? null, because: event.data.because, implicit: false, since: event.at });
-      } else {
-        have.because = event.data.because; // events come in canonical order: the latest says why
-        if (event.at < have.since) {
-          have.since = event.at;
-        }
-      }
-    }
-    for (const attach of attaches) {
-      if (attach.rep === component.rep && attach.pair.myKey !== null && oneUse.has(attach.pair.myKey) && !contactKeys.has(attach.pair.myKey)) {
-        const minted = keys.get(attach.pair.myKey)?.minted ?? null;
-        contactKeys.set(attach.pair.myKey, { key: attach.pair.myKey, did: minted?.did ?? null, routingDid: minted?.routingDid ?? null, because: "invitation", implicit: true, since: attach.at });
-      }
-    }
-    const liveKeys = [...contactKeys.values()].filter((entry) => (keys.get(entry.key)?.retired ?? null) === null).sort((a, b) => (a.since < b.since ? -1 : a.since > b.since ? 1 : a.key < b.key ? -1 : 1));
+    const lastUse = new Map<string, string>();
+    const liveKeys = contactKeysOf(members, (attach) => !attach.dead && attach.rep === component.rep, lastUse)
+      .filter((entry) => (keys.get(entry.key)?.retired ?? null) === null)
+      .sort(keyOrder);
     for (const entry of liveKeys) {
       const have = myKey(entry.key);
       if (!have.usedBy.includes(component.rep)) {
@@ -840,7 +861,8 @@ function project(set: EventSet, self: string): Projection {
     if (latestWritable !== null) {
       write = { myKey: latestWritable.data.myKey, peerKey: latestWritable.data.peerKey };
     } else {
-      const latestUse = liveKeys.at(-1);
+      const lastUsed = (entry: ContactKey): string => lastUse.get(entry.key) ?? entry.since;
+      const latestUse = [...liveKeys].sort((a, b) => (lastUsed(a) !== lastUsed(b) ? (lastUsed(a) < lastUsed(b) ? -1 : 1) : a.key < b.key ? -1 : 1)).at(-1); // the latest `contact.useKey` (§7.2), not the first-used key
       write = latestUse === undefined ? null : (writeTo.find((pair) => pair.myKey === latestUse.key) ?? null);
     }
 

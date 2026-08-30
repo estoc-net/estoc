@@ -144,6 +144,20 @@ describe("v2 procedures: deleting a contact (§9)", () => {
     expect(refolded.erased(mid1, refolded.message(mid1)?.skeleton.body as string)).toBe(true);
   });
 
+  it("finishes a deletion interrupted after the tombstone", async () => {
+    const { vault, tick, fold, cid, mid1, mid2 } = await contactScene();
+    await record(vault.events, fold, drafts.contactDeleted({ cid })); // the crash: only the tombstone landed
+    tick(1000);
+    const deleted = await deleteContact(vault, fold, cid);
+    expect(deleted.tombstones).toEqual([]);
+    expect(deleted.erased).toHaveLength(2);
+    expect(deleted.retired.map((event) => event.data)).toEqual([{ key: "did/k1", because: "contact-deleted" }]);
+    expect(deleted.collected.unlinked).toHaveLength(2);
+    expect(fold.erased(mid1, fold.message(mid1)?.skeleton.body as string)).toBe(true);
+    expect(fold.erased(mid2, fold.message(mid2)?.skeleton.body as string)).toBe(true);
+    expect(fold.myKey("did/k1")?.retired?.because).toBe("contact-deleted");
+  });
+
   it("keeps a key another contact still uses", async () => {
     const { vault, fold, cid } = await contactScene();
     const line = new Line("2026-08-30T01:00:00.000Z");
