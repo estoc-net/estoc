@@ -203,29 +203,51 @@ describe("vault: extension stores", () => {
     expect(() => vault.extension(other)).toThrow(Disposed);
   });
 
-  it("lets an options or cache write in flight land before the removal, never after it", async () => {
-    // a backend whose writes wait for a gate: the write has passed the guard, the bytes are not down yet
+  it("lets an operation in flight — a write or a read — finish before the removal, never after it", async () => {
+    // a backend whose reads and writes wait for a gate: the operation has passed the guard, the bytes are not moved yet
     class GatedBackend extends MemoryBackend {
       gate: Promise<void> = Promise.resolve();
       override async write(path: string, data: Uint8Array): Promise<void> {
         await this.gate;
         return super.write(path, data);
       }
+      override async read(path: string): Promise<Uint8Array | null> {
+        await this.gate;
+        return super.read(path);
+      }
     }
     const backend = new GatedBackend();
     const vault = await FolderVault.create(backend, ANCHOR);
     const ext = vault.extension(EXT);
-    await ext.events.append({ type: "t", data: {} });
+    const event = await ext.events.append({ type: "t", data: {} });
+    await ext.local.writeOptions({ run: true });
+    const cache = ext.local.cache;
+    await cache.write("f", enc.encode("x"));
+    const trace = ext.local.trace("diag");
+    const note = { eid: "01990000-0000-7000-8000-000000000001", at: "2026-08-30T10:00:00Z", type: "note", data: {} };
+    await trace.append(note);
     let release = (): void => undefined;
     backend.gate = new Promise((resolve) => {
       release = resolve;
     });
-    const cache = ext.local.cache;
     const options = ext.local.writeOptions({ late: true });
-    const cached = cache.write("f", enc.encode("x"));
+    const cached = cache.write("g", enc.encode("y"));
+    const readOptions = ext.local.readOptions();
+    const readCache = cache.read("f");
+    const listCache = cache.list();
+    const scan = all(ext.events.scan());
+    const changes = ext.events.changes();
+    const traced = all(trace.scan());
     const disposal = vault.dispose(EXT);
     release();
     await Promise.all([options, cached, disposal]);
+    // every read in flight saw the store as it was — after the writes queued before it, before the emptied tree
+    expect(await readOptions).toEqual({ late: true });
+    expect(await readCache).toEqual(enc.encode("x"));
+    expect(await listCache).toEqual(["f", "g"]);
+    expect(await scan).toEqual([event]);
+    expect(await all((await changes).events)).toEqual([event]);
+    expect(await traced).toEqual([note]);
     expect([...backend.files.keys()].filter((p) => p.includes(`/${EXT}/`))).toEqual([]);
     // a handle taken before the call is dead like the rest
     await expect(cache.write("g", enc.encode("y"))).rejects.toThrow(Disposed);

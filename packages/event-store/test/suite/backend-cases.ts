@@ -105,11 +105,11 @@ export const backendCases: BackendCase[] = [
     name: "knows when a file was written, and a rewrite renews it",
     run: async (fresh) => {
       const b = await fresh();
-      const before = Date.now() - 1;
       await b.write(".estoc/blobs/x", enc.encode("x"));
       const first = await b.modified(".estoc/blobs/x");
-      if (first === null || first < before) {
-        throw new Error(`modified after write: ${String(first)} (before ${before})`);
+      // a time, not compared with Date.now(): a file system's clock is rounded differently from the process's
+      if (first === null || !Number.isFinite(first) || first <= 0) {
+        throw new Error(`modified after write: ${String(first)}`);
       }
       await sleep(25);
       await b.write(".estoc/blobs/x", enc.encode("x"));

@@ -129,7 +129,11 @@ export class FolderEventStore implements EventStore {
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
     this.ctx.guard();
-    const events = [...(await this.readAll(filter?.author)).values()].sort(compareEvents);
+    // read in the store's turn (§9.2), so that a scan in flight finishes before a disposal removes the log
+    const events = await this.ctx.serial.run(async () => {
+      this.ctx.alive();
+      return [...(await this.readAll(filter?.author)).values()].sort(compareEvents);
+    });
     for (const event of events) {
       if (matches(event, filter)) {
         yield event;
@@ -276,19 +280,34 @@ export class FolderEventStore implements EventStore {
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
     this.ctx.guard();
-    // The frontier first (§9.4): every segment's length, before any line is read.
-    const table = new Map<string, number>();
-    for (const dev of await this.devices()) {
-      for (const path of await this.segmentsOf(dev)) {
-        const size = await this.ctx.backend.size(path);
-        if (size !== null) {
-          table.set(path, size);
+    return this.ctx.serial.run(async () => {
+      this.ctx.alive();
+      // The frontier first (§9.4): every segment's length, before any line is read.
+      const table = new Map<string, number>();
+      for (const dev of await this.devices()) {
+        for (const path of await this.segmentsOf(dev)) {
+          const size = await this.ctx.backend.size(path);
+          if (size !== null) {
+            table.set(path, size);
+          }
         }
       }
-    }
-    const from = since === undefined ? {} : this.place(since, table);
-    const frontier: Frontier = { instance: this.ctx.instance, store: this.ctx.store, segments: Object.fromEntries([...table].sort()) };
-    return { token: JSON.stringify(frontier), events: this.between(from, table, filter) };
+      const from = since === undefined ? {} : this.place(since, table);
+      const frontier: Frontier = { instance: this.ctx.instance, store: this.ctx.store, segments: Object.fromEntries([...table].sort()) };
+      // the bytes between the two frontiers, read now in the store's turn; decoded as the caller iterates
+      const chunks: { path: string; bytes: Uint8Array }[] = [];
+      for (const [path, end] of table) {
+        const start = from[path] ?? 0;
+        if (start >= end) {
+          continue;
+        }
+        const bytes = await this.ctx.backend.read(path);
+        if (bytes !== null) {
+          chunks.push({ path, bytes: bytes.subarray(start, Math.min(end, bytes.length)) });
+        }
+      }
+      return { token: JSON.stringify(frontier), events: this.between(chunks, filter) };
+    });
   }
 
   /** The lengths `since` names, or a throw: another instance's or store's, or a segment now shorter or absent. */
@@ -315,20 +334,12 @@ export class FolderEventStore implements EventStore {
     return token.segments;
   }
 
-  /** The whole lines of every segment between the two lengths, decoded; each eid once; in walk order. */
-  private async *between(from: Record<string, number>, to: Map<string, number>, filter?: Filter): AsyncIterable<Event> {
+  /** The whole lines of every chunk, decoded; each eid once; in walk order. */
+  private async *between(chunks: { path: string; bytes: Uint8Array }[], filter?: Filter): AsyncIterable<Event> {
     const seen = new Set<string>();
-    for (const [path, end] of to) {
-      const start = from[path] ?? 0;
-      if (start >= end) {
-        continue;
-      }
-      const bytes = await this.ctx.backend.read(path);
-      if (bytes === null) {
-        continue;
-      }
+    for (const { path, bytes } of chunks) {
       const dev = path.split("/").at(-2) as string;
-      const { events } = decodeSegment(bytes.subarray(start, Math.min(end, bytes.length)), path, (line) => decodeEvent(line, dev));
+      const { events } = decodeSegment(bytes, path, (line) => decodeEvent(line, dev));
       for (const event of events) {
         if (!seen.has(event.eid) && matches(event, filter)) {
           seen.add(event.eid);

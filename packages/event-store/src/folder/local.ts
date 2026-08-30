@@ -115,20 +115,24 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
 
   async *scan(filter?: LocalFilter): AsyncIterable<LocalEvent> {
     this.guard();
-    const events: LocalEvent[] = [];
-    const damaged: DamagedLine[] = [];
-    for (const name of await this.segments()) {
-      const path = `${this.dir}/${name}`;
-      const bytes = await this.backend.read(path);
-      if (bytes === null) {
-        continue;
+    // read in the stream's turn, so that a scan in flight finishes before a disposal removes the segments
+    const events = await this.serial.run(async () => {
+      this.alive();
+      const found: LocalEvent[] = [];
+      const damaged: DamagedLine[] = [];
+      for (const name of await this.segments()) {
+        const path = `${this.dir}/${name}`;
+        const bytes = await this.backend.read(path);
+        if (bytes === null) {
+          continue;
+        }
+        const read = decodeSegment(bytes, path, decodeLocalEvent);
+        found.push(...read.events);
+        damaged.push(...read.damaged);
       }
-      const read = decodeSegment(bytes, path, decodeLocalEvent);
-      events.push(...read.events);
-      damaged.push(...read.damaged);
-    }
-    this.lastDamaged = damaged;
-    events.sort(compareLocalEvents);
+      this.lastDamaged = damaged;
+      return found.sort(compareLocalEvents);
+    });
     for (const event of events) {
       if (matchesLocal(event, filter)) {
         yield event;
@@ -203,10 +207,10 @@ export interface LocalCache {
  * `local/agent`, `local/extensions/<ext>` — and nothing here is a fact
  * of the vault.
  *
- * Every write here queues on the owner's own chain, so that `settle`
- * covers it: a disposal (vault-folder.md §3.1) waits for what was
- * issued before it and removes the directory after, and no write that
- * passed the guard lands on the emptied tree.
+ * Every operation here queues on the owner's own chain, so that
+ * `settle` covers it: a disposal (vault-folder.md §3.1) waits for what
+ * was issued before it and removes the directory after — no write that
+ * passed the guard lands on the emptied tree, no read reads it.
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();
@@ -228,7 +232,7 @@ export class LocalOwner {
     await Promise.all([this.serial.run(() => undefined), ...[...this.traces.values()].map((trace) => trace.settle())]);
   }
 
-  /** A write, in the owner's turn. */
+  /** An operation, in the owner's turn. */
   private queued<T>(work: () => Promise<T>): Promise<T> {
     return this.serial.run(() => {
       this.alive();
@@ -239,7 +243,7 @@ export class LocalOwner {
   /** What this device was told: a JSON object, or null when nothing was. */
   async readOptions(): Promise<JsonObject | null> {
     this.guard();
-    const bytes = await this.backend.read(`${this.dir}/options.json`);
+    const bytes = await this.queued(() => this.backend.read(`${this.dir}/options.json`));
     if (bytes === null) {
       return null;
     }
@@ -264,13 +268,20 @@ export class LocalOwner {
     const backend = this.backend;
     // every method async, so that a guard's throw is a rejection like any other failure
     return {
-      read: async (path) => (guard(), backend.read(at(path))),
+      read: async (path) => {
+        guard();
+        const file = at(path);
+        return this.queued(() => backend.read(file));
+      },
       write: async (path, bytes) => {
         guard();
         const file = at(path);
         return this.queued(() => backend.write(file, bytes));
       },
-      list: async () => (guard(), (await walk(backend, base)).map((path) => path.slice(base.length + 1))),
+      list: async () => {
+        guard();
+        return this.queued(async () => (await walk(backend, base)).map((path) => path.slice(base.length + 1)));
+      },
       remove: async (path) => {
         guard();
         const file = at(path);
