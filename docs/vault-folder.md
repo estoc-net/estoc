@@ -110,19 +110,25 @@ is the uuidv7 that `extension.installed` minted (`vault-events.md`
 reader with a text editor reads it as it reads the vault: the lines
 are the events, whatever the extension meant by them.
 
-`provision(ext)` makes `extensions/<ext>/` empty — for an install,
-an import, whatever the application's reason — and refuses one that
-exists; `extension(ext)` opens one that exists and refuses one that
-does not (`event-store.md` §6.2). `dispose(ext)` removes `extensions/<ext>/` and
-`local/extensions/<ext>/` whole — the two mirror each other so that
-the one removal is one rule — after the operations in flight on that
-store have finished and before any can begin, and every handle to the
-store is dead from then on (`Disposed`); the application calls it
+There is no call that makes an empty `extensions/<ext>/`: the
+directory comes into being with the first line or block written
+through the handle `extension(ext)` hands out (`event-store.md` §6.2),
+and an `extensions/<ext>/` with no segment and no blob is nothing —
+not a store, not listed by `extensions()`, not in a snapshot (§9.1
+walks files) — so the backend need not know what an empty directory
+is. Whether an `ext` may be opened at all is the lifecycle fold's
+answer, asked by the application above; the folder reads no type.
+`dispose(ext)` removes every file under `extensions/<ext>/` and
+`local/extensions/<ext>/` — the two mirror each other so that the one
+removal is one rule — after the operations in flight on that store
+have finished and before any can begin, and every handle to the store
+is dead from then on (`Disposed`), as is `extension(ext)` for that
+`ext` for the rest of this instance's life; the application calls it
 when the fold over the vault's set says the extension is purged
 (`vault-events.md` §7.3). The folder does not read `extension.purged`,
-and does not remember what it removed: a later `provision` of the
-same `ext` is the application contradicting its fold. Nothing else in the
-tree is ever removed whole.
+and does not remember what it removed past this instance: a later
+write to the same `ext` is the application contradicting its fold.
+Nothing else in the tree is ever removed whole.
 
 ## 4. Folder ↔ store
 
@@ -172,8 +178,9 @@ under `devices/<author>/`.
   wrote, never into one a previous import wrote. Such a segment holds
   its events in the order they came, which is no order at all.
 - **No segment is assumed ordered.** `at` is a wall clock and steps
-  back; an importer's segment is in arrival order. A reader collects
-  and sorts (§8.1); it never merges segments as sorted streams.
+  back; an importer's segment is in whatever order the events came. A
+  reader collects and sorts (§8.1); it never merges segments as sorted
+  streams.
 - **A segment says nothing about the event in it**, and a program never
   sees one. It is not state: a merge reads lines, never segments
   (§8.3), so how a writer chunks its log is its own affair, and an
@@ -296,10 +303,16 @@ block's, is damage, not copied.
 
 A blob is written **before** the line that names it, leaves before
 root (`event-store.md` §6); a crash between the writes leaves orphans,
-harmless, swept by a collection once they are older than the grace
-(`vault-events.md` §8.3) — the folder's age of a block is its file's
-modification time, the local clock's, which an import does not carry
-over. A block the folder finds damaged (§9.3) is moved aside, out of
+harmless, unlinked by `collect` once they are older than the grace
+(`event-store.md` §6, `vault-events.md` §8.3). The folder's age of a
+block is its file's modification time (`VaultBackend.modified`), the
+local clock's, which an import does not carry over; a `put` or
+`putBlock` of a block already on disk rewrites the file with the same
+bytes so that the time is renewed, as `event-store.md` §6 requires.
+`collect` walks `blobs/` once, keeps what `keep` reaches, and removes
+the rest that is old enough; it runs under the same per-instance
+serialisation as the store's appends (§8.2), never beside a `put`. A
+block the folder finds damaged (§9.3) is moved aside, out of
 `blobs/`, and is from then on absent. What a block's absence means —
 erased, missing, or not yet fetched — is read from the events
 (`vault-events.md` §8.2); the folder only reports that it is not
@@ -308,7 +321,8 @@ there.
 ## 8. The folder store
 
 The reference `EventStore`, over `VaultBackend`, the bytes interface
-that exists today (read, write, append, remove, size, list, dirs). It
+that exists today (read, write, append, remove, size, list, dirs) plus
+`modified`, the one method version 2 adds, for a block's age (§7). It
 knows the tree; nothing above it does.
 
 ### 8.1 Reading
@@ -368,8 +382,11 @@ or an `ext` (§3.1) — and that store's segment table:
 every `<seg>.jsonl` under its `devices/*/`, by path, with its byte length,
 taken when `changes` is called (one walk, one `size` per segment).
 `events` reads each segment from the length `since` names for it (zero
-if `since` does not name it) to the length `token` names, in path order
-and then file order, and decodes every whole line (§4). A token naming
+if `since` does not name it) to the length `token` names, and decodes
+every whole line (§4), in whatever order the walk finds them —
+`event-store.md` §5.4 promises none, and a folder could not keep the
+order events were gained in across authors without a ledger it does
+not have. A token naming
 another instance or another store, or a segment that is now shorter or
 absent, is one this store did not issue, and the call is rejected. Because a segment
 only grows, is appended to by one writer, and every line under
@@ -415,11 +432,12 @@ exported.
 
 ### 9.1 Snapshot
 
-Everything under `.estoc/` except `local/`, `extensions/` included. A
-folder store's snapshot is a copy; the zip a backup carries is this
-tree. A purged extension store still on disk — the application has
-not yet applied the fold (§3.1) — travels with it and is dropped by
-whoever imports it (§9.3).
+Everything under `.estoc/` except `local/`, `extensions/` included —
+every file, so an `extensions/<ext>/` with nothing in it is not in it
+(§3.1). A folder store's snapshot is a copy; the zip a backup carries
+is this tree. A purged extension store still on disk — the application
+has not yet applied the fold (§3.1) — travels with it and is dropped
+by whoever imports it (§9.3).
 
 ### 9.2 Export
 
@@ -434,41 +452,36 @@ export unions by `eid` and assumes no order (§5, `event-store.md`
 
 ### 9.3 Import
 
-Three kinds of thing, in this order (`event-store.md` §7.3):
+The algorithm is `event-store.md` §7.3 — preflight, then events,
+blobs, files, then each extension store — and is not restated here;
+this is what each step is on a folder.
 
-1. **Events.** Decode every line of every segment under `devices/*/`
-   (§4) and `ingest` the result (§8.3), `self`'s lines included: a forked
-   self stops the import before anything is written — and "anything"
-   is the import's, not the store's: step 4's stores are read, and
-   checked for a forked self, before step 1 writes (`event-store.md`
-   §7.3). A device directory that arrives without its `device.minted`
-   is read — its events are still that device's — and reported as
-   incomplete.
-2. **Blobs**, after the events: a block absent here — a file under
-   `blobs/` that fails the block check (`event-store.md` §6) is moved
-   aside and is absent, so a source that has it sound repairs it — and
-   present there is copied iff it is not collectable over the merged
-   event set (`vault-events.md` §8.3) — reached from a root some event
-   lists, walking the blocks either copy holds — and it passes the
-   block check (§7); one that does not is damage in the source,
-   reported, not copied. An erased blob never comes back.
-3. **Files**, each by its own policy (§6): `config.json` identical or
-   refused; `keystore.json` unioned; `state/` as v1; any other path
-   copied when absent, never overwritten; `local/` is not in the
-   snapshot and is not touched.
-4. **Extension stores**, each by steps 1 and 2 into the store of the
-   same `ext` here, provisioned if absent (`event-store.md` §7.3); the
-   `device.minted` check of step 1 is asked of the merged vault set,
-   an extension store having no such event of its own — an author
-   without one there is read and reported as incomplete. One that the
-   fold over the merged vault set says is purged (`vault-events.md`
-   §7.3) is not read — asked as step 2 asks the blob rule, never by
-   reading a type here — and the application then disposes of any
-   such store still on disk (§3.1). One no `extension.installed`
-   accounts for is read and reported. Read, for all of this, means
-   before step 1 writes: the import is one read of the whole source
-   and one forked-self check across every set it will write, then the
-   writes in this order.
+- **Preflight** reads `config.json` first: not version 2 (§10), or a
+  format or anchor that differs from this folder's (§6), refuses the
+  import before a line is decoded. Then every line of every segment
+  under `devices/*/` and `extensions/*/devices/*/` is decoded (§4) —
+  the whole source, so that the forked-self check runs over every set
+  the import will write before anything is written.
+- **Events** are `ingest` (§8.3), `self`'s lines included. A device
+  directory that arrives without its `device.minted` is read and
+  reported as incomplete.
+- **Blobs** are the files under `blobs/`. One absent here — a file
+  here that fails the block check (`event-store.md` §6) is moved aside
+  and is absent, so a source that has it sound repairs it — is copied
+  when `event-store.md` §7.3 says so, and only when it passes the
+  check (§7); one that does not is damage in the source, reported,
+  not copied.
+- **Files**: `config.json` is not touched, having been checked;
+  `keystore.json` unioned; `state/` as v1; any other path copied when
+  absent, never overwritten; `local/` is not in the snapshot and is
+  not touched.
+- **Extension stores** are the directories under `extensions/` named
+  like an `ext` (§3.1), each into the store of the same `ext` here,
+  which comes into being with the first line written if this copy had
+  none. One the fold over the merged vault set says is purged is not
+  read, and the application then disposes of any such store still on
+  disk (§3.1); one no `extension.installed` accounts for is read and
+  reported.
 
 ### 9.4 Restore
 
@@ -485,8 +498,8 @@ may carry a purged extension store the source had not yet disposed of
 extension lifecycle and applies every pending `dispose` before any
 extension is opened or run (`event-store.md` §6.2) — this is the
 application's first act on any open, not only after a restore. What the
-application then does with the merged set — `held` on every outbound
-not `sent` — is `vault-events.md` §10.
+application then does with the merged set — `held` on the old devices'
+outbound not `sent` — is `vault-events.md` §10.
 
 ## 10. Version 1
 

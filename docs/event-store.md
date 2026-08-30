@@ -86,11 +86,15 @@ files; `vault-events.md` §1 the ones about meaning.
    rule, and an extension's own set (§6.2) is disposed of whole, never
    a line at a time.
 5. **Conflicts are projections.** Two devices deciding differently
-   produce two events, not an error; a fold shows both; a later event
-   resolves them. A store never chooses between events it holds. The
+   produce two events, not an error. A fold that can show both does;
+   one that must pick — a field that is one value at a time — takes
+   the latest by canonical order (§4), which is the clocks' latest and
+   not always the person's last word; and where that would be wrong,
+   the resolution is an event of its own (`vault-events.md` §6). A
+   store never chooses between events it holds. The
    one thing it refuses is two *contents* under one `eid` (§5.5), which
    is not two decisions but one broken.
-6. **Folds are functions of the set.** `now` and `self` are parameters;
+6. **Folds are functions of the set.** `self` is the one parameter;
    a setting that affects a fold is an event; the order events are
    applied in does not change the result. Tests: incremental = full;
    shuffled = same; merge(A,B) = merge(B,A). This is what makes
@@ -158,7 +162,7 @@ store to one vault's shape.
 (`vault-events.md` §8.3), which must find every blob any event
 references without understanding any event. With the list on the
 envelope, an event of a type the collector has never seen — an
-extension's — still says what it holds, and a store that unlinks by
+extension's — still says what it holds, and a collector that keeps by
 this rule is safe for events it does not know. That is why the list is
 never absent: `[]` is the event's own statement that it references
 nothing, where a missing field would only be silence, and a collector
@@ -240,6 +244,13 @@ Rules:
 - **Canonical order** — wherever a fold orders events — a thread by
   time, a latest-wins field — it orders by `at`, then `(eid, author)`
   as the total tiebreak. One rule; `vault-events.md` refers back to it.
+  It is an order of clocks: across devices, or across a step back on
+  one, "latest" means the latest `at`, and a decision the person made
+  last can sort before one they made earlier. Version 2 accepts this
+  for fields that are one value at a time (a petname, a label) and
+  gives what cannot tolerate it — attribution — an explicit resolving
+  event (`vault-events.md` §6) instead of a better clock; a hybrid
+  logical clock is the change if that ever stops being enough (§10).
   `scan` (§5.3) yields in this order and sorts to produce it: no
   container of events — segment, file, table — is ever assumed to be in
   it.
@@ -272,8 +283,8 @@ type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Cid[]; d
  *  constraint. A store may index some; the folder store reads and compares. */
 type Filter = { author?: string; type?: string; data?: { [field: string]: JsonPrimitive | undefined } };
 
-/** A position in this store instance's own arrival order. Opaque; meaningful only to the instance
- *  that issued it. Not an auth token: a checkpoint a caller keeps beside a fold. */
+/** A frontier of this store instance: what it held when the token was taken. Opaque; meaningful only
+ *  to the instance that issued it. Not an auth token: a checkpoint a caller keeps beside a fold. */
 type ChangeToken = string;
 
 interface Ingested {
@@ -294,7 +305,7 @@ interface EventStore {
   ingest(events: AsyncIterable<Event>): Promise<Ingested>;
   /** Every event matching `filter`, in canonical order. */
   scan(filter?: Filter): AsyncIterable<Event>;
-  /** What this store gained after `since`, in arrival order, up to `token`. */
+  /** What this store gained after `since` and at or before `token`; each event once, in no promised order. */
   changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }>;
   /** Bytes met in storage that could not be read as events; for the caller to surface. */
   damaged(): DamagedLine[];
@@ -370,16 +381,16 @@ per-device cursor (§5.4).
 
 `ingest` is not import. Import is ingest plus blobs plus files, in that
 order (§7.3); and after a merge the application still does what it does
-today — folds, and `held`s every outbound whose delivery is not `sent`
+today — folds, and `held`s every outbound of *another* device whose
+delivery is not `sent` and that `self` has not already held
 (`vault-events.md` §10). That is a decision made on the merged set,
 appended by `self`, and no store's business.
 
 ### 5.3 `scan`
 
-Yields the store's whole event set, filtered: events whose envelope
-fields equal every envelope field given in `filter`, and whose
-`data`'s top-level fields equal every field given under
-`filter.data`. One event per `eid`
+Yields the store's whole event set, filtered: events whose `author`
+and `type` equal those given in `filter`, and whose `data`'s top-level
+fields equal every field given under `filter.data`. One event per `eid`
 (conflicts resolved as §5.5). Order is canonical (§4).
 
 **The store sorts.** No segment, file or table is assumed to be in
@@ -401,23 +412,27 @@ lives in the cache (§7.4), so no store is asked to be a query engine.
 ### 5.4 `changes`
 
 `changes(filter, since)` answers "what has this store gained since
-`since`", in the order it gained it. The `token` is a position in the
-store's own **arrival order** — appends and ingests, in the sequence
-this store performed them — taken when `changes` is called, before any
-event is read. `events` yields exactly the events that arrived after
-`since` and at or before `token`, matching `filter`. A caller that
-folds those events and keeps `token` therefore has a fold that is
-exactly as far as the token, whatever was appended concurrently: the
-next call picks up from there and nothing falls between.
+`since`". The `token` is a **frontier**: a mark of what the store held
+at the moment `changes` was called, taken before any event is read, in
+whatever form the store keeps such a thing. `events` yields exactly
+the events that arrived after `since` and at or before `token`,
+matching `filter` — a complete delta, each event once — **in no
+promised order**. A caller that folds those events and keeps `token`
+therefore has a fold that is exactly as far as the token, whatever was
+appended concurrently: the next call picks up from there and nothing
+falls between.
 
-Arrival order is **not** canonical order. An event older than
-everything the caller has folded can arrive late (§5.2), and `changes`
-delivers it when it arrives. So an incremental fold must not depend on
-the order events are applied — principle 6 (shuffled = same) applied
-one event at a time — and a fold that cannot promise that refolds from
-`scan`. The folds of `vault-events.md` §7 are functions of the set and
-qualify; the property is stated here because `changes` is what makes
-it load-bearing.
+No order is promised because none is worth keeping. An event older than
+everything the caller has folded can arrive late (§5.2), so the delta
+is not in canonical order whatever a store does; and the sequence a
+store happened to gain events in is not one the folder can reproduce
+— it reads segments, not a ledger — and not one any fold may lean on:
+principle 6 (shuffled = same) applied one event at a time is the
+contract, and a fold that cannot keep it refolds from `scan`. The
+folds of `vault-events.md` §7 are functions of the set and qualify;
+the property is stated here because `changes` is what makes it
+load-bearing. A store that has an order (a sequence column, §8) may
+yield in it; a caller must not notice.
 
 A token is a string a caller stores and hands back, and nothing more. It
 belongs to the store *instance* that issued it (§4), and names that
@@ -477,9 +492,12 @@ interface BlobStore {                 // a block store of the `unixfs-v1-2025` p
   putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (profile name, hash, and for dag-pb that the bytes decode as a profile node); the only way in for a block minted elsewhere
   getBlock(cid: Cid): Promise<Uint8Array | null>;
   has(cid: Cid): Promise<boolean>;
-  unlink(cid: Cid): Promise<void>;               // one block
   list(): Promise<Cid[]>;
+  // removal — the only way bytes leave a store; serialised with everything above
+  collect(keep: Cid[]): Promise<Collected>;      // unlinks every block no root in `keep` reaches that is older than the store's grace
 }
+
+interface Collected { unlinked: Cid[]; young: Cid[] }   // `young`: unreferenced but too recent to touch; the next collection sees them again
 
 interface FileStore {                 // everything in a vault that is neither an event nor a blob
   read(path): Promise<Uint8Array | null>;
@@ -542,21 +560,48 @@ is the events' business (`vault-events.md` §8.3); the store only
 promises that a CID it holds returns the bytes it was given.
 
 **A blob is written before the event that names it** — every block
-of it, leaves before the root, root before the line. A crash between
-the writes leaves orphan blocks — harmless, collectable once older
-than a grace period (`vault-events.md` §8.3). The grace is what lets
-a collector and a writer share a store without sharing a lock: the two
-interfaces give the store no way to see that a `put` and the `append`
-that follows it are one act, so it does not try to; it keeps, for each
-block, when it wrote it — a fact of this copy alone, kept however the
-store keeps such things (the folder reads its file's modification
-time, `vault-folder.md` §7), never exported, and a block whose write
-time it does not know it takes as written now — and never collects a
-block it wrote recently. The other order is never
-used: an event whose blocks were never written would be
+of it, leaves before the root, root before the line. The other order
+is never used: an event whose blocks were never written would be
 indistinguishable from an erase. A store that can make the writes one
-transaction (§8) may, and then has no orphans; a folder cannot and
-orders them.
+transaction (§8) may; a folder cannot and orders them, and a crash
+between the writes leaves orphan blocks, harmless.
+
+**Bytes leave by `collect`, and only when old.** The two interfaces
+give the store no way to see that a `put` and the `append` that
+follows it are one act, so a block that no event names is either
+abandoned by a crash or about to be named, and the store cannot tell
+which. What it can tell is age. It keeps, for each block, when it
+last wrote it — a fact of this copy alone, kept however the store
+keeps such things (the folder reads its file's modification time,
+`vault-folder.md` §7), never exported; a block whose write time it
+does not know it takes as written now — and **a `put` or `putBlock`
+of a block already held renews that time**: the write is a no-op for
+the bytes and not for the clock, because the caller is about to name
+the block and a collector must not take it first. `collect(keep)`
+then unlinks every block that no root in `keep` reaches and that is
+older than a grace the store sets, and nothing else; an unreferenced
+block younger than the grace is reported as `young` and left for the
+next call. Which roots are `keep` is the events' business — every
+root some event still holds (`vault-events.md` §8.3) — and the store
+walks them without a type, since the links are in the blocks. An
+erased blob is therefore not unlinked *by* the erase but by the
+collection that follows it, and one that was written moments ago
+waits out the grace first; readers ask the erase before the bytes
+(`vault-events.md` §8.2), so bytes that linger read as erased all the
+same. The grace is generous — the write it may belong to is bounded
+by a process, not a clock; git's `gc.pruneExpire` is the same answer
+to the same race — and a store that writes blocks and line in one
+transaction (§8) has no orphans and may set it to nothing.
+
+`collect` is serialised with the store's own `put`, `putBlock` and
+`get`, as `dispose` is with an extension's operations (§6.2): it runs
+between them, never beside one. Two instances over one serialization
+are the caller's problem, as for `append` (§5.1). The renewal is what
+closes the race a lock alone would not: a `put` that returned before
+a `collect` began has already made its block young, whatever the
+`append` after it is still waiting on. Nothing else removes a block a
+store holds; damage (above) is the store's own finding and is set
+aside by it, not collected.
 
 **Files** are named by path, and the paths are the folder's
 (`vault-folder.md` §6): the format and anchor, the key cache, reserved
@@ -740,34 +785,40 @@ What follows from it:
   purged is a fold over the vault's set (`vault-events.md` §7.3); a
   store does not read `extension.purged`, or any type. The application
   applies the fold by calling `dispose(ext)`, the one operation besides
-  `BlobStore.unlink` that removes bytes: it removes the extension's
+  `BlobStore.collect` that removes bytes: it removes the extension's
   store and the extension's local state (§6.1) together, so that
   options, cache and trace do not outlive what they were about. Import
-  (§7.3) and snapshot ask the same fold, as they ask the blob rule.
+  (§7.3) asks the same fold, as it asks the blob rule; a snapshot
+  copies what is on disk (`vault-folder.md` §9.1), and a purged store
+  it still carries is dropped by whoever imports it.
 - **Disposal revokes.** A handle is the permission (above), so
   `dispose` must end the permission, not only the bytes: the
   application stops the extension first; `dispose` is serialised with
   the store's operations — it waits for those in flight and none
   begin after; every handle to the store, held by anyone, is dead from
   then on and every method of it — reads as much as writes — rejects
-  with `Disposed` (nothing is silently re-created); and `extension(ext)`
-  rejects an `ext` that is not open on disk rather than opening one,
-  so a dead handle cannot be replaced by asking again. Making one is
-  its own call, `provision(ext)`: it makes an event space that does
-  not yet exist and says nothing about why — a fresh install, an
-  import bringing a store this copy lacks (§7.3) — and rejects an
-  `ext` that exists. That a
-  fresh install mints a fresh uuidv7 is the application's rule, above
-  the store, which cannot tell a new id from an old one. A store keeps
-  no memory of what it disposed of — that is the fold's — so a
-  re-install is a new `extension.installed` and a new `ext`, never the
-  old one provisioned again; an application that provisioned a purged
+  with `Disposed`, and so does `extension(ext)` for that `ext` for the
+  rest of this instance's life, so that a dead handle cannot be
+  replaced by asking again. Nothing is silently re-created.
+- **A store exists when the fold says so, and on disk when written.**
+  There is no call that makes an empty extension store.
+  `extension(ext)` hands out a handle; the store's bytes come into
+  being at its first `append` or `put`, and a store nothing was ever
+  written to has no bytes, is not in `extensions()`, not in a snapshot,
+  and needs no representation — which is why `VaultBackend` needs no
+  notion of an empty directory. Whether an `ext` *may* be opened is
+  the lifecycle fold's answer (`vault-events.md` §7.3) — installed,
+  not purged — and the application asks it before calling
+  `extension(ext)`; the store below reads no type and cannot tell a
+  new `ext` from a purged one, so an application that opened a purged
   `ext` again would be contradicting its own fold, and nothing below
-  the fold can tell. On open, before any extension is handed its store
-  or run, the application folds the extension lifecycle and applies
-  every `dispose` the fold owes — a snapshot may lawfully carry a
-  purged store not yet removed, and a restore copies it (§7.3,
-  `vault-folder.md` §9.4).
+  the fold can tell. That a fresh install mints a fresh uuidv7 is
+  likewise the application's rule: a re-install is a new
+  `extension.installed` and a new `ext`, never the old one. On open,
+  before any extension is handed its store or run, the application
+  folds the lifecycle and applies every `dispose` the fold owes — a
+  snapshot may lawfully carry a purged store not yet removed, and a
+  restore copies it (§7.3, `vault-folder.md` §9.4).
 
 A vault, to a program, is therefore its own three stores, a map from
 `ext` to an extension's two, and `dispose`:
@@ -775,9 +826,8 @@ A vault, to a program, is therefore its own three stores, a map from
 ```ts
 interface Vault {
   events: EventStore; blobs: BlobStore; files: FileStore;
-  extension(ext: string): { events: EventStore; blobs: BlobStore };   // an existing one; rejects an unknown `ext`
-  provision(ext: string): Promise<{ events: EventStore; blobs: BlobStore }>; // a space that does not exist yet; rejects one that does
-  extensions(): Promise<string[]>;
+  extension(ext: string): { events: EventStore; blobs: BlobStore };   // a handle; bytes exist from the first write; rejects an `ext` this instance disposed of
+  extensions(): Promise<string[]>;                                     // every `ext` with bytes on disk
   dispose(ext: string): Promise<void>;                                 // store and local state, whole; every handle dead
 }
 ```
@@ -829,14 +879,35 @@ has applied the fold (`dispose`), and dropped on import if not.
 
 ### 7.3 Import
 
-Three kinds of thing, three rules, in this order:
+Nothing is written until everything is checked; then three kinds of
+thing, three rules, in this order. This is the one statement of the
+algorithm: `vault-folder.md` §9.3 says what each step is on a folder,
+`vault-events.md` §10 what the events require of it, and neither
+restates it.
 
+0. **Preflight**, before the first write. The source is read whole —
+   a folder reads the other copy whole anyway (`vault-folder.md` §8.3,
+   §9.3); a store that cannot hold an import in memory stages it,
+   which is that store's problem and not a change to the rule — and
+   three things are checked against it, any failure refusing the
+   import with nothing written: that the source is a version-2 vault
+   (`vault-folder.md` §10); that its format and anchor are identical
+   to this one's (`vault-folder.md` §6) — the check that makes this a
+   merge rather than a restore, made above the store, as today in
+   `importVault`; and that no set the import will write is a forked
+   self (§5.2) — the vault's, then, by the fold over the merged vault
+   set that says which extensions are purged, every extension set the
+   fold lets in. `ingest` promises to write nothing when `self` is
+   forked, and an import is one `ingest` per store; the promise must
+   hold for the import, not for each store in turn, or a fork found in
+   the third store would find the first two already written — and the
+   same is true of an anchor found wrong after the events went in,
+   which is why the anchor is checked here and not with the files.
 1. **Events**: `ingest` every event the folder holds (§5.2), `self`'s
-   included — a duplicate is a duplicate, and an event of `self`'s
-   that is not already here stops the import before anything is
-   written, as a forked self. A device whose events arrive without its
-   `device.minted` is read — its events are still that device's — and
-   reported as incomplete. There is no faster path: an earlier draft
+   included — a duplicate is a duplicate. A device whose events arrive
+   without its `device.minted` is read — its events are still that
+   device's — and reported as incomplete. There is no faster path: an
+   earlier draft
    let an import copy whole segments — a device directory absent here,
    a segment absent here, the longer of two prefix-related segments —
    and it is withdrawn, because a copied segment is not read: it could
@@ -847,44 +918,30 @@ Three kinds of thing, three rules, in this order:
    is what `scan` costs anyway.
 2. **Blobs**, after the events: a block absent here — a damaged one
    is absent (§6): a source that has it sound repairs it — and present
-   there is copied iff it is not collectable over the merged event set
-   (`vault-events.md` §8.3) — reached, walking the blocks either copy
-   holds, from a root some event lists — and iff it passes the block
-   check (§6) — one that does not is damage in the source, reported,
-   not copied. An erased blob never comes back.
-   The rule is the events'; the order — events first — is what makes
-   it answerable.
-3. **Files**, each by its own policy (`vault-folder.md` §6). The one
-   the store must know about is that the format and anchor must be
-   identical on both sides — that check is what makes this a merge
-   rather than a restore, and it is made above the store, as today in
-   `importVault`.
+   there is copied iff a root held over the merged event set
+   (`vault-events.md` §8.3) reaches it — walking the blocks either
+   copy holds — and iff it passes the block check (§6) — one that does
+   not is damage in the source, reported, not copied. An erased blob
+   never comes back. The rule is the events'; the order — events first
+   — is what makes it answerable.
+3. **Files**, each by its own policy (`vault-folder.md` §6); the
+   format and anchor, checked in preflight, are not touched.
 
 Then, for each extension store the source holds (§6.2): its events
-and then its blobs, by the first two rules, into the store of the same
-`ext` here, provisioned if absent (§6.2). The completeness check of rule 1 is
-asked of the merged *vault* set — an extension event whose author has
-no `device.minted` there is read and reported as incomplete — since an
+and then its blobs, by rules 1 and 2, into the store of the same `ext`
+here, which comes into being with the first line written if this copy
+had none (§6.2). The completeness check of rule 1 is asked of the
+merged *vault* set — an extension event whose author has no
+`device.minted` there is read and reported as incomplete — since an
 extension store has no such event of its own. One that the fold over
 the merged vault set says is purged (`vault-events.md` §7.3) is not
 read, as an erased blob never comes back: the rule is the events',
 asked as the blob rule is, and the store applies it without reading a
 type. One no `extension.installed` accounts for is read and reported.
 
-**One import, one forked-self check.** `ingest` promises to write
-nothing when `self` is forked, and an import is one `ingest` per
-store; the promise must hold for the import, not for each store in
-turn, or a fork found in the third store would find the first two
-already written. So an import reads everything first — the vault's
-set, then the fold that says which extensions are purged, then every
-extension set the fold lets in — and runs the forked-self check of
-§5.2 over all of them before the first write. A folder reads the other
-copy whole anyway (`vault-folder.md` §8.3, §9.3); a store that cannot
-hold an import in memory has to stage it, which is that store's
-problem and not a change to the rule.
-
-**Restore** is the same steps into an empty store, the format
-and anchor written last, as today; a folder store restoring into an
+**Restore** is the same steps into an empty store — there is no
+anchor here to check the source's against — the format and anchor
+written last, as today; a folder store restoring into an
 empty backend may copy the snapshot as it is, since the snapshot is
 the interchange format and a copy of it is a conforming folder
 (`vault-folder.md` §9.4). There is no `self`, so the first open mints
@@ -894,12 +951,12 @@ a device and an instance (§4); the imported devices stay as history.
 
 A fold's result is a projection, kept locally with the `ChangeToken` it was
 folded to. On open, `changes(filter, token)` yields what arrived since
-and the fold advances, in arrival order, which the folds of
-`vault-events.md` are built to accept (§5.4); a rejected token means the
-cache belongs to another store and the fold restarts from
-`scan(filter)`. A cache is itself a store of the projection's choosing;
-the app's is IndexedDB today for keys, and nothing says it cannot hold
-the folds.
+and the fold advances, one event at a time in whatever order they
+come, which the folds of `vault-events.md` are built to accept (§5.4);
+a rejected token means the cache belongs to another store and the fold
+restarts from `scan(filter)`. A cache is itself a store of the
+projection's choosing; the app's is IndexedDB today for keys, and
+nothing says it cannot hold the folds.
 
 This is the one place a database is plainly right and costs nothing:
 the cache is rebuildable, so its store needs no round trip, no
@@ -921,7 +978,7 @@ from the file system — the order an event arrived in:
 
 ```sql
 CREATE TABLE events (
-  seq      INTEGER PRIMARY KEY,     -- arrival order; the token
+  seq      INTEGER PRIMARY KEY,     -- insertion order; what the token names (§5.4 promises no order, so this is the store's own)
   eid      TEXT NOT NULL UNIQUE,
   author   TEXT NOT NULL,
   at       TEXT NOT NULL,
@@ -934,7 +991,7 @@ CREATE INDEX events_order ON events (at, eid, author);
 --   my_key   TEXT GENERATED ALWAYS AS (json_extract(data, '$.myKey')),
 --   peer_key TEXT GENERATED ALWAYS AS (json_extract(data, '$.peerKey')),
 -- with an index on (my_key, peer_key, at, eid). The model does not say.
-CREATE TABLE blobs (cid TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE blobs (cid TEXT PRIMARY KEY, bytes BLOB NOT NULL, written TEXT NOT NULL);   -- `written`: renewed by a repeated put (§6)
 CREATE TABLE links (parent TEXT NOT NULL, child TEXT NOT NULL);   -- a dag-pb block's links, filled on put; derived, rebuildable from `blobs`
 CREATE TABLE files (path TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 ```
@@ -950,9 +1007,10 @@ author`; `changes` takes `token = MAX(seq)` and selects `seq > since
 AND seq <= token ORDER BY seq`, prefixed by the instance id. Export
 renders each author's rows into one segment in `seq` order and
 remembers nothing (§7.2). Blob write and skeleton append become one
-transaction, which the folder store cannot offer (§6). Collection
-(`vault-events.md` §8.3) is `json_each` over `blobs` for the roots and
-a recursive query over `links` for what they reach.
+transaction, which the folder store cannot offer (§6), and the grace
+may be zero. `collect(keep)` is a recursive query over `links` from
+`keep` and a `DELETE` of every `cid` not reached whose `written` is
+older than the grace.
 
 ### 8.2 Where it would run
 
@@ -997,10 +1055,13 @@ What the code says today, for the record:
   record for its keys, then writes what is new into a fresh segment. It
   is `ingest` with the dedup key spelled per log; v2's single `eid`
   makes it one routine for every log.
-- **`VaultBackend` stays.** OPFS (`createWritable` atomic on close,
-  append as size-then-seek), Node `fs`, and memory: 330 lines, unchanged.
-  The folder store sits on it. Neither `fs` nor OPFS syncs on append
-  today, which is what §5.1 promises no more than.
+- **`VaultBackend` stays, plus one method.** OPFS (`createWritable`
+  atomic on close, append as size-then-seek), Node `fs`, and memory:
+  330 lines, with `modified(path)` added for a block's age (§6,
+  `vault-folder.md` §7) — `File.lastModified` on OPFS, `stat` on
+  Node, a map in memory. The folder store sits on it. Neither `fs`
+  nor OPFS syncs on append today, which is what §5.1 promises no more
+  than.
 - **Runtimes.** Node 22.13 has `node:sqlite`; the browser has `idb`
   and no wasm SQLite; the app is not cross-origin isolated (§8.2).
 - **Size.** Today's five stores plus `transfer.ts` are about a thousand
@@ -1017,7 +1078,7 @@ What the code says today, for the record:
   and the folder store reads every device's log to answer anything.
   The cache (§7.4) is the answer; a directory per channel would only
   help a reader that does not exist.
-- **Indexing** (§5.3): equality on any envelope field or top-level
+- **Indexing** (§5.3): equality on `author`, `type` and a top-level
   field of `data` lets a store index what it
   likes; whether the folder store should keep a local index for the
   pair under its owner's cache (`vault-folder.md` §6.4), or leave all of that to folds, is for when
@@ -1031,6 +1092,10 @@ What the code says today, for the record:
   split out of it (the CID helpers, the chunker, a links decoder) is
   an implementation matter; the profile and the names are fixed
   either way.
+- **A logical clock** (§4): latest-wins is by `at`, a wall clock. If
+  a field ever needs "the person's last decision" rather than "the
+  latest timestamp", the change is a hybrid logical clock in the
+  envelope, not a rule in a fold; nothing in version 2 needs it.
 - **Daemon RPC.** Once the store is the interface, the daemon could
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this

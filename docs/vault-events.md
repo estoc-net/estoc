@@ -45,11 +45,15 @@ The principles of `event-store.md` §2, as they apply to meaning.
    `pair/<cid>/<id>`: whom a key was minted for, and whom it now belongs
    to, are events about it (§2, §6).
 3. **Folds are the only place "contact" means anything to a message.**
-   Every fold is pure, a function of the event set with `now` and
-   `self` as parameters, rebuildable, and cached locally
-   (`event-store.md` §7.4).
+   Every fold is pure, a function of the event set with `self` as its
+   one parameter, rebuildable, and cached locally (`event-store.md`
+   §7.4).
 4. **Conflicts are projections.** Two devices deciding differently is
-   two events; the fold shows both; a later decision resolves them.
+   two events. A field that is one value at a time takes the latest by
+   canonical order (`event-store.md` §4) — a clock's latest, which is
+   usually and not always the person's; where that is not good enough
+   the fold shows both and an event of its own resolves them
+   (`contact.merged`, §6).
 5. **Nothing is deleted.** An erase is a decision plus an unlinked blob
    (§8); a deleted contact is a tombstone (§9).
 
@@ -402,7 +406,7 @@ it.
 { "type": "contact.attached", "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "because": "accepted" } }
 { "type": "contact.attached", "data": { "myKey": null,        "peerKey": "m8v2…", "because": "manual" } }
 { "type": "contact.detached", "data": { "myKey": "…",         "peerKey": "…" } }
-{ "type": "contact.merged",   "data": { "from": "<cid>", "supersedes": ["<eid>", "<eid>"] } }
+{ "type": "contact.merged",   "data": { "from": "<cid>" } }
 { "type": "contact.deleted",  "data": {} }
 ```
 
@@ -423,10 +427,19 @@ it.
   only — it picks the `myKey` to seal with and says nothing about who
   writes back. Minting a key toward a contact is `did.minted` +
   `contact.useKey`.
-- `contact.merged from`: the other contact is merged into this one —
-  its attaches and useKeys are this contact's; `supersedes` lists the
-  conflicting eids it resolves; the contact merged away gets a
-  `contact.deleted`. Merged in the address-book sense; the merge of two
+- `contact.merged from`: this contact and `from` are one. It is an
+  **edge**, not a move: the fold takes the connected components of
+  contacts under every `contact.merged` edge, in either direction, and
+  each component is one contact (§7.2) — so two devices merging the
+  same pair the opposite way round, one contact merged into two
+  targets on two devices, or a cycle, all fold to one component and
+  need no rule of their own. The component's representative — the
+  `cid` a fold reports, and the one later decisions should name — is
+  the smallest `cid` (the earliest minted) among its members that are
+  not deleted (§9); the others are hidden, not deleted: no
+  `contact.deleted` accompanies a merge. There is no
+  unmerge (§12); detaching a channel and creating a contact for it is
+  the recovery. Merged in the address-book sense; the merge of two
   vaults is `ingest` (§10) and is not an event.
 - What a peer called themself, and that we sent them our profile, are
   not decisions: they are observations on a channel
@@ -457,8 +470,8 @@ joins C to its `did`; a `peer.rotated` joins its `from` to its `to`. Only the pa
 event carries — the key that actually opened or signed an envelope —
 joins; the `keys` a document lists never do, because a document can
 list keys it does not control. Take C's connected component and collect
-every live `contact.attached` (no later `contact.detached`, not
-superseded by a `contact.merged`) whose channel is in it:
+every live `contact.attached` (no later `contact.detached`) whose
+channel is in it, counting contacts by component (§6, §7.2):
 
 - **none** → C is **unattributed**: a stranger, or a second taker of a
   one-use key, or someone the contact handed our DID on to. The
@@ -468,7 +481,8 @@ superseded by a `contact.merged`) whose channel is in it:
   component (a `did:web` key rotation, a `from_prior` hop, a signing key
   beside an agreement key).
 - **several** → a **multi-valued conflict**: the fold returns all of
-  them, the application shows it, and a `contact.merged` resolves it.
+  them, the application shows it, and a `contact.merged` resolves it
+  by making them one component.
   This happens when two devices each accepted the same stranger while
   apart; it is not an error.
 
@@ -479,10 +493,15 @@ The fold never parses key names.
 
 ### 7.2 Contact state
 
-From a contact's events and its attributed channels:
+From a contact's events and its attributed channels — where a contact
+is a component under `contact.merged` (§6): every member's events fold
+together and are reported under the representative's `cid`, less any
+member with a `contact.deleted` (§9), which contributes nothing; a
+component every member of which is deleted is deleted:
 
-- `petname`, flags: latest event. `claimedName`: the latest
-  `profile.nameClaimed` across the attributed channels.
+- `petname`, flags: latest event across the component, by canonical
+  order. `claimedName`: the latest `profile.nameClaimed` across the
+  attributed channels.
 - `keys[]`: every live `contact.useKey`, with its `did.minted` DID.
 - `theirDids[]`: the DIDs in the contact's component of the identity
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
@@ -543,14 +562,15 @@ because the person said so; an absence with no such record is damage.
   "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "mid": "0198…", "drop": ["<body root>", "<attachment root>"], "because": "user" } }
 ```
 
-- Permanent and global: every device that folds it unlinks what the
-  named roots reach and nothing else still reaches (§8.3), and a merge
-  never copies those blocks in again (§10). `drop` names roots — the
+- Permanent and global: every device that folds it stops holding what
+  the named roots reach, so that the next collection (§8.3) unlinks
+  whatever nothing else still holds, and a merge never copies those
+  blocks in again (§10). `drop` names roots — the
   body, some or all attachments — so an attachment can be erased and
   the text kept, or the reverse; a block two roots share goes when the
   last of them is dropped. It is not the envelope's `blobs`: an erase
   references nothing, and the bytes need not exist for it to hold.
-- Event first, then unlink. The skeleton stays; readers show "erased".
+- Event first, then collect. The skeleton stays; readers show "erased".
 - `because`: `user`, `contact-deleted` (§9).
 
 ### 8.2 Reading an absence
@@ -578,25 +598,24 @@ block (`event-store.md` §6). A block `b` is **referenced** by every
 event whose `blobs` (`event-store.md` §3) lists a root that reaches
 `b`, and by nothing else: a CID anywhere else on a line is not a
 reference. This is what lets a collector run over events of types it
-has never seen. Over the union of every device's events, `b` may be
-unlinked when, for every `message.in` or `message.out` referencing it,
-a `message.erased` for its `mid` names in `drop` every root of that
-line that reaches `b`, and no event of any other type references it:
-an event the vault's own types do not cover pins its blocks, because
-version 2 defines no erase for it (§12). An orphan — a block no
-listed root anywhere reaches, from a crash between the writes (§4) —
-is collectable too, once it is **old**. A collector may run at any
-time and is never required to; and at any time some write may be
-between its blocks and its line, so a block no root reaches was
-either abandoned by a crash or is about to be named, and the two are
-told apart only by age. An orphan younger than a grace period the
-store sets — measured on the store's own clock from when it wrote the
-block, a local fact that travels nowhere (`event-store.md` §6) — is
-left alone. The period is generous, since the write it may belong to
-is bounded by a process, not a clock (git's `gc.pruneExpire` is the
-same answer to the same race). A store that writes blocks and line in
-one transaction (`event-store.md` §8) has no orphans and no grace.
-Nothing else is collectable. Reference counting is a fold.
+has never seen. Over the union of every device's events, a root is
+**held** by an event whose `blobs` lists it, unless that event is a
+`message.in` or `message.out` and some `message.erased` for its `mid`
+names the root in `drop`; an event the vault's own types do not cover
+holds its roots for the life of the vault, because version 2 defines
+no erase for it (§12). The held roots are the `keep` the application
+hands to `collect` (`event-store.md` §6), and they are the whole of
+what the events say: a block no held root reaches — one every
+reference to which was erased, or an orphan from a crash between the
+writes (§4) — may go, and nothing else may. *When* it goes is the
+store's: `collect` unlinks a block only once it is older than the
+store's grace, because a block no held root reaches is either
+released, abandoned, or about to be named by an `append` still in
+flight, and the store tells the last from the others only by age
+(`event-store.md` §6). A collector may run at any time and is never
+required to; a body written and erased within the grace lingers for
+it and reads as erased meanwhile (§8.2). Reference counting is a
+fold; the store counts nothing and reads no type.
 
 ### 8.4 No space policy
 
@@ -622,11 +641,13 @@ presence) is the shape it would take; version 2 does not define one
 Deletion is a set of decisions, all appended by this device; no event
 is removed (principle 5).
 
-1. Append `contact.deleted { cid }`.
+1. Append `contact.deleted { cid }` for every member of the contact's
+   component (§7.2), one event each: a tombstone names one `cid`, and
+   a member merged in later from another device is not covered by it.
 2. Fold attribution. For every channel attributed exactly to this
    contact (single-valued), for every `message.*` event carrying it:
    append `message.erased { drop: [body, …attachments], because:
-   contact-deleted }` with the pair, and unlink them (§8.1).
+   contact-deleted }` with the pair, and collect (§8.1).
 3. For every key the contact has a live `contact.useKey` on that was
    `did.published { uses: one }` or minted toward it, and that no other
    contact uses: append `did.retired { because: contact-deleted }`, so
@@ -651,15 +672,20 @@ dropped, or reordered. What the events then require:
 
 - **Blobs come in by collectability.** After the events are merged,
   fold the union of skeletons and erases; a block absent here and
-  present there is copied iff it is not collectable under §8.3 over
-  that union, walking the blocks either copy holds. An erased blob
+  present there is copied iff a root held under §8.3 over that union
+  reaches it, walking the blocks either copy holds. An erased blob
   never comes back; its bytes may, held by another line that shares
   the root, and the erased line reads as erased all the same (§8.2).
 - **Held after merge.** Once the set is merged — or restored into a
-  fresh device — every outbound message whose delivery fold is not
-  `sent` gets a `delivery.held { because: imported }` from the device
-  asking. A decision made on the
-  merged set, appended by `self`, and no store's business.
+  fresh device — every `message.out` authored by a device *other than
+  `self`* whose delivery fold is not `sent`, and that `self` has not
+  already held, gets one `delivery.held { because: imported }` from
+  `self`. Not `self`'s own: those are in its outbox and it is sending
+  them, and an import told it nothing new about them. Not one it held
+  before: `held` is binding per writing device (§3.1), so its own
+  earlier `held` answers, and importing the same backup twice appends
+  nothing. A decision made on the merged set, appended by `self`, and
+  no store's business.
 - **A restored device is history.** A restore mints a fresh device
   (`event-store.md` §4, `vault-folder.md` §9.4); the old device's
   events stay, including its mediation, visible (§7.3) until the person
@@ -711,6 +737,10 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   may be dropped and are not merged in. It reintroduces the deletion of
   events, and with one log per device it means rewriting a segment;
   not in version 2.
+- **Unmerge.** `contact.merged` is an edge and a component is one
+  contact (§6); no event cuts an edge. Detach the channel, create a
+  contact, attach: the recovery for a wrong merge. A `contact.split`
+  would be the shape; not in version 2.
 - A per-device key, as a field of `device.minted` (for authenticating a
   device's events when they are exchanged over a wire rather than by
   hand). Not needed while a merge is a backup, so not in version 2.
