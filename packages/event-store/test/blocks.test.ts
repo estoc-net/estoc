@@ -23,6 +23,22 @@ describe("blocks of the profile", () => {
     expect((await hashFile(enc.encode("hello"))).root).toBe(HELLO_CID);
   });
 
+  it("accept every node @estoc/folder-object makes for a tree", async () => {
+    const files: Record<string, Uint8Array> = { "b.txt": enc.encode("b"), "a/x": enc.encode("x"), "a/y": bigBytes(), "é": enc.encode("e") };
+    for (let i = 0; i < 1500; i++) {
+      files[`many/${i.toString().padStart(4, "0")}-${"n".repeat(200)}`] = enc.encode(String(i)); // past the HAMT threshold
+    }
+    const tree = await hashTree(files);
+    let shards = 0;
+    for (const [cid, bytes] of tree.nodes) {
+      await checkBlock(cid, bytes);
+      if (cid.startsWith("bafybei") && decodeNode(cid, bytes).data.type === "hamt-sharded-directory") {
+        shards += 1;
+      }
+    }
+    expect(shards).toBeGreaterThan(0);
+  });
+
   it("decode a node, list its links, and walk what a root reaches through the blocks held", async () => {
     const { root, blocks } = await hashFile(bigBytes());
     const rootBytes = blocks.get(root) as Uint8Array;

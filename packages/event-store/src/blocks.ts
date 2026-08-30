@@ -24,7 +24,7 @@ const NODE_KINDS = ["file", "directory", "hamt-sharded-directory"] as const;
 /**
  * The three checks of §5.1, or a throw: `cid` is a profile name; `bytes`
  * hash to it and a raw block is at most 1 MiB; a dag-pb block decodes as
- * a node the profile makes, its links profile names. Not a closure check.
+ * a node the profile makes (`decodeNode`). Not a closure check.
  */
 export async function checkBlock(cid: string, bytes: Uint8Array): Promise<CID> {
   const parsed = parseCid(cid);
@@ -49,7 +49,23 @@ export interface Node {
   data: UnixFS;
 }
 
-/** Decode `bytes` as a profile node, or throw `BadBlock`. */
+/**
+ * The fanout the profile shards with. Its hash function (murmur3-x64-64)
+ * is not checked: `ipfs-unixfs` does not surface `hashType` on unmarshal.
+ */
+const HAMT_FANOUT = 256n;
+
+/**
+ * Decode `bytes` as a node the profile makes, or throw `BadBlock`: dag-pb
+ * with UnixFS data of kind file, directory or HAMT shard; every link a
+ * profile name; and the shape the profile gives each kind — a file node
+ * of at least two chunks with one size per link and no inline bytes (one
+ * chunk, or the empty file, is a raw block, not a node), directory
+ * entries named and strictly ascending with no inline bytes, a shard
+ * 256-way whose inline bytes are its bitfield. Not the balanced layout
+ * itself: that a chunk is 1 MiB, that a node has at most 1024 links, is
+ * what a root reaches, read when read.
+ */
 export function decodeNode(cid: string, bytes: Uint8Array): Node {
   let node: dagPB.PBNode;
   try {
@@ -74,7 +90,53 @@ export function decodeNode(cid: string, bytes: Uint8Array): Node {
       throw new BadBlock(cid, `links ${link.Hash.toString()}, which is not a profile name`);
     }
   }
+  const inline = data.data !== undefined && data.data.length > 0;
+  if (data.type === "file") {
+    if (inline) {
+      throw new BadBlock(cid, "a file node with inline bytes, which the profile never makes");
+    }
+    if (node.Links.length < 2) {
+      throw new BadBlock(cid, "a file node of fewer than two chunks, which the profile makes a raw block");
+    }
+    if (data.blockSizes.length !== node.Links.length) {
+      throw new BadBlock(cid, "a file node whose block sizes do not match its links");
+    }
+  } else if (data.type === "directory") {
+    if (inline) {
+      throw new BadBlock(cid, "a directory node with inline bytes, which the profile never makes");
+    }
+  } else if (data.fanout !== HAMT_FANOUT || !inline) {
+    throw new BadBlock(cid, "a shard that is not 256-way with a bitfield, which the profile never makes");
+  }
+  if (data.type !== "file") {
+    let previous: string | undefined;
+    for (const link of node.Links) {
+      const name = link.Name ?? "";
+      if (name === "" || name === "." || name === ".." || name.includes("/")) {
+        throw new BadBlock(cid, `a directory entry named ${JSON.stringify(name)}`);
+      }
+      if (data.type === "directory" && previous !== undefined && compareNames(previous, name) >= 0) {
+        throw new BadBlock(cid, "directory entries not in strictly ascending order");
+      }
+      previous = name;
+    }
+  }
   return { node, data };
+}
+
+/** Names as UTF-8 byte sequences: the order of directory entries (`@estoc/folder-object`'s rule). */
+function compareNames(a: string, b: string): number {
+  const encoder = new TextEncoder();
+  const ab = encoder.encode(a);
+  const bb = encoder.encode(b);
+  const n = Math.min(ab.length, bb.length);
+  for (let i = 0; i < n; i++) {
+    const d = (ab[i] as number) - (bb[i] as number);
+    if (d !== 0) {
+      return d;
+    }
+  }
+  return ab.length - bb.length;
 }
 
 /** The blocks `cid` links, for a block already checked: none for raw, the node's for dag-pb. */

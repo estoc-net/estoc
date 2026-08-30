@@ -24,7 +24,7 @@ describe("memory: FileStore", () => {
 
   it("takes relative paths only", async () => {
     const files = new MemoryFileStore();
-    for (const bad of ["", "/abs", "trailing/", "a//b", ".", "..", "a/../b", "./a"]) {
+    for (const bad of ["", "/abs", "trailing/", "a//b", ".", "..", "a/../b", "./a", "café", "a b", "tab\there", "a\u0000b"]) {
       expect(() => checkPath(bad), bad).toThrow();
       await expect(files.write(bad, new Uint8Array()), bad).rejects.toThrow();
       await expect(files.read(bad), bad).rejects.toThrow();

@@ -64,14 +64,19 @@ export class MemoryBlobStore implements BlobStore {
     return run;
   }
 
-  /** Store a block, or renew its write time if held: the clock moves either way (§5.3). */
+  /**
+   * Store a block, or renew its write time if held: the clock moves either
+   * way (§5.3). `bytes` must already be the store's own copy.
+   */
   private hold(cid: string, bytes: Uint8Array): void {
     const have = this.blocks.get(cid);
-    this.blocks.set(cid, { bytes: have?.bytes ?? bytes.slice(), written: this.clock().getTime() });
+    this.blocks.set(cid, { bytes: have?.bytes ?? bytes, written: this.clock().getTime() });
   }
 
   async put(bytes: Uint8Array): Promise<string> {
-    const { root, blocks } = await hashFile(bytes);
+    // Copy before the first await: the chunks the hasher yields are views
+    // of its input, and a caller may reuse the buffer once the call returns.
+    const { root, blocks } = await hashFile(bytes.slice());
     return this.serialise(() => {
       for (const [cid, block] of blocks) {
         this.hold(cid, block);
@@ -85,9 +90,11 @@ export class MemoryBlobStore implements BlobStore {
   }
 
   async putBlock(cid: string, bytes: Uint8Array): Promise<void> {
-    await checkBlock(cid, bytes);
+    // One copy, taken before the first await, is what is checked and what is kept.
+    const own = bytes.slice();
+    await checkBlock(cid, own);
     return this.serialise(() => {
-      this.hold(cid, bytes);
+      this.hold(cid, own);
     });
   }
 

@@ -10,13 +10,20 @@ export interface FileStore {
   list(): Promise<string[]>;
 }
 
+const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
+
 /**
- * A relative path of `/`-separated non-empty segments, none of them `.`
- * or `..`: what every store accepts. Throws otherwise.
+ * A relative path of `/`-separated non-empty segments of printable
+ * ASCII, none of them `.` or `..` (`vault-folder.md` §1): what every
+ * store accepts, so that no store holds a path a folder cannot. Throws
+ * otherwise.
  */
 export function checkPath(path: string): string {
   if (path === "" || path.startsWith("/") || path.endsWith("/")) {
     throw new Error(`not a relative path: ${JSON.stringify(path)}`);
+  }
+  if (!PRINTABLE_ASCII.test(path)) {
+    throw new Error(`not a printable ASCII path: ${JSON.stringify(path)}`);
   }
   for (const segment of path.split("/")) {
     if (segment === "" || segment === "." || segment === "..") {

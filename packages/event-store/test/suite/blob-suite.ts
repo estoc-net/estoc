@@ -124,6 +124,56 @@ export function blobSuite(name: string, open: OpenBlobs): void {
       expect(await store.list()).toEqual([HELLO_CID, dirCid].sort());
     });
 
+    it("putBlock rejects a node of a shape the profile never makes", async () => {
+      const store = await open();
+      const hello = enc.encode("hello");
+      const rawLink = { Hash: CID.parse(HELLO_CID), Tsize: 5 };
+      const bitfield = new Uint8Array(32);
+      const shapes: [Uint8Array, string][] = [
+        [pbNode(new UnixFS({ type: "file", data: hello })), "a file node carrying its bytes inline"],
+        [pbNode(new UnixFS({ type: "file" })), "an empty file node: the empty file is a raw block"],
+        [pbNode(new UnixFS({ type: "file", blockSizes: [5n] }), [rawLink]), "a file node of one chunk: one chunk is a raw block"],
+        [pbNode(new UnixFS({ type: "file", blockSizes: [5n] }), [rawLink, rawLink]), "a file node with fewer sizes than links"],
+        [pbNode(new UnixFS({ type: "directory", data: hello })), "a directory with inline bytes"],
+        [pbNode(new UnixFS({ type: "directory" }), [{ ...rawLink, Name: "" }]), "a directory entry without a name"],
+        [pbNode(new UnixFS({ type: "directory" }), [{ ...rawLink, Name: "a/b" }]), "a directory entry with a slash"],
+        [pbNode(new UnixFS({ type: "directory" }), [{ ...rawLink, Name: ".." }]), "a directory entry named .."],
+        [pbNode(new UnixFS({ type: "directory" }), [{ ...rawLink, Name: "a" }, { ...rawLink, Name: "a" }]), "two entries of one name"],
+        [pbNode(new UnixFS({ type: "hamt-sharded-directory", fanout: 1024n, hashType: 0x22n, data: bitfield })), "a shard that is not 256-way"],
+        [pbNode(new UnixFS({ type: "hamt-sharded-directory", fanout: 256n, hashType: 0x22n }), [{ ...rawLink, Name: "00a" }]), "a shard without its bitfield"],
+      ];
+      for (const [bytes, why] of shapes) {
+        await expect(store.putBlock(await nameOf(DAG_PB_CODE, bytes), bytes), why).rejects.toBeInstanceOf(BadBlock);
+      }
+      // the shapes the profile does make pass
+      const file = pbNode(new UnixFS({ type: "file", blockSizes: [5n, 5n] }), [rawLink, rawLink]);
+      await store.putBlock(await nameOf(DAG_PB_CODE, file), file);
+      const dir = pbNode(new UnixFS({ type: "directory" }), [{ ...rawLink, Name: "a" }, { ...rawLink, Name: "b" }]);
+      await store.putBlock(await nameOf(DAG_PB_CODE, dir), dir);
+      const shard = pbNode(new UnixFS({ type: "hamt-sharded-directory", fanout: 256n, hashType: 0x22n, data: bitfield }), [{ ...rawLink, Name: "00a" }]);
+      await store.putBlock(await nameOf(DAG_PB_CODE, shard), shard);
+      expect(await store.list()).toHaveLength(3);
+    });
+
+    it("keeps its own copy of the bytes, taken before the caller can touch them again", async () => {
+      const store = await open();
+      const viaBlock = enc.encode("hello");
+      const pending = store.putBlock(HELLO_CID, viaBlock);
+      viaBlock[0] = 0x48; // "Hello", before the check has run
+      await pending;
+      expect(await store.getBlock(HELLO_CID)).toEqual(enc.encode("hello"));
+      const viaPut = enc.encode("world");
+      const putting = store.put(viaPut);
+      viaPut[0] = 0x57;
+      const root = await putting;
+      expect(root).toBe(await nameOf(RAW_CODE, enc.encode("world")));
+      expect(await store.get(root)).toEqual(enc.encode("world"));
+      // and what it hands out is a copy too
+      const out = (await store.getBlock(HELLO_CID)) as Uint8Array;
+      out[0] = 0x48;
+      expect(await store.getBlock(HELLO_CID)).toEqual(enc.encode("hello"));
+    });
+
     it("get throws on a root that names a directory, not a file", async () => {
       const store = await open();
       const dir = pbNode(new UnixFS({ type: "directory" }));
