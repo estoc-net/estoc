@@ -294,6 +294,8 @@ describe("import: preflight (event-store.md §10.3 step 0)", () => {
       { ...v3, seedJwe: undefined },
       { ...v3, keys: [{ name: "k", did: "did:key:k" }] },
       { ...v3, keys: [...v3.keys, ...v3.keys] },
+      { ...v3, keys: [{ name: "bad name", did: "did:key:k", createdAt: "2026-08-30T00:00:00.000Z" }] },
+      { ...v3, keys: [{ name: "", did: "did:key:k", createdAt: "2026-08-30T00:00:00.000Z" }] },
     ]) {
       await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode(JSON.stringify(doc)) })).rejects.toThrow(/v3 keystore/);
     }
@@ -353,6 +355,14 @@ describe("import: preflight (event-store.md §10.3 step 0)", () => {
     await expect(importVault(target, { ...files, ".estoc/notes.txt/more": enc.encode("x") })).rejects.toThrow(/file and a directory/);
     expect(await contents(target)).toEqual(before);
     expect(await target.extensions()).toEqual([]);
+    // a folder no store wrote: a file of this vault's where an extension store has its directory
+    const backend = new MemoryBackend();
+    const hand = await FolderVault.create(backend, ANCHOR, { clock: c.now });
+    await backend.write(`.estoc/extensions/${EXT_A}/devices`, enc.encode("in the way"));
+    const held = new Map(backend.files);
+    await expect(importVault(hand, files)).rejects.toThrow(/file where the layout has a directory/);
+    expect(backend.files).toEqual(held);
+    expect(await all(hand.events.scan({ author: "aaaaaa" }))).toEqual([]);
   });
 
   it("refuses a path no store would take, before writing: a store's refusal must not come after the events went in", async () => {
@@ -516,6 +526,7 @@ describe("import: extension stores", () => {
     files[`.estoc/extensions/${EXT_B}/readme.txt`] = enc.encode("a file under a purged store");
     files[`.estoc/extensions/${EXT_A}/readme.txt`] = enc.encode("a file under a kept one");
     const target = await memoryVault("cccccc", c.now);
+    await target.files.write(`extensions/${EXT_B}/readme.txt/child`, enc.encode("a purged store's file is not written, so it cannot clash")); 
     const seen: Event[][] = [];
     const report = await importVault(target, files, {
       purged: (events) => {
@@ -529,7 +540,7 @@ describe("import: extension stores", () => {
     expect(Object.keys(report.events)).toEqual(["vault", EXT_A, EXT_C]);
     expect(await target.extensions()).toEqual([EXT_A, EXT_C]);
     expect(await all(target.extension(EXT_A).events.scan())).toEqual(await all(source.extension(EXT_A).events.scan()));
-    expect(await target.files.list()).toEqual(["config.json", `extensions/${EXT_A}/readme.txt`, "keystore.json", "state/read.json"]);
+    expect(await target.files.list()).toEqual(["config.json", `extensions/${EXT_A}/readme.txt`, `extensions/${EXT_B}/readme.txt/child`, "keystore.json", "state/read.json"]);
     // the fold was asked over the merged vault set: the source's events were in it, not only this store's
     expect(seen).toHaveLength(1);
     expect(seen[0]?.some((e) => e.type === "message.in")).toBe(true);

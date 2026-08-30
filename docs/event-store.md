@@ -557,6 +557,14 @@ a segment or a blob (`vault-folder.md` §9.6), so that it survives a
 trip through a store that is not a folder. There is no per-device
 file: everything about a device is an event.
 
+`write` takes a file's path and no other: not one shaped like a
+segment's or a block's, not one under `local/`, not one at a
+directory the layout owns (`vault-folder.md` §9.6), and not one that,
+with the paths the store holds, would make a file and a directory of
+one name. So the tree a store's files make is one a folder holds, and
+an export (§10.2) is one an import (§10.3) takes: the round trip
+(§10.1) is the store's to keep, not the importer's to repair.
+
 A file that is one per vault and has a merge policy of its own is a
 **singleton** (`vault-folder.md` §6); to the store it is a file like
 any other. Each singleton states its policy where it is defined; the

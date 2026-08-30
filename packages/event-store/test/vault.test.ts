@@ -117,6 +117,23 @@ describe("vault: this copy", () => {
   });
 });
 
+describe("vault: files", () => {
+  it("take a file's path and no other, and never a file and a directory of one name (vault-folder.md §9.6)", async () => {
+    const backend = new MemoryBackend();
+    const vault = await FolderVault.create(backend, {});
+    await vault.events.append({ type: "t", data: {} });
+    await vault.extension(EXT).events.append({ type: "t", data: {} });
+    for (const bad of ["devices", `devices/${vault.self}`, "blobs", "extensions", `extensions/${EXT}`, `extensions/${EXT}/devices`, "local", "local/self.json"]) {
+      await expect(vault.files.write(bad, new Uint8Array()), bad).rejects.toThrow(/not a file path/);
+    }
+    await vault.files.write("state/a/b.json", new Uint8Array([1]));
+    await expect(vault.files.write("state/a", new Uint8Array())).rejects.toThrow(/is a directory/);
+    await expect(vault.files.write("state/a/b.json/c", new Uint8Array())).rejects.toThrow(/is a file/);
+    await expect(vault.files.write("config.json/x", new Uint8Array())).rejects.toThrow(/is a file/);
+    expect([...backend.files.keys()].filter((p) => p.startsWith(".estoc/state/"))).toEqual([".estoc/state/a/b.json"]);
+  });
+});
+
 describe("vault: extension stores", () => {
   it("hands out a handle whose bytes appear at the first write, under extensions/<ext>/", async () => {
     const { backend, vault } = await fresh();

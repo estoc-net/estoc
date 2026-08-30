@@ -13,7 +13,7 @@ import { walk } from "./backend/types.js";
 import type { BlobStore } from "./blobs.js";
 import { checkBlock, reachable } from "./blocks.js";
 import { BadBlock, ForkedSelf, NotAVault, NotSameVault } from "./errors.js";
-import { EidMinter, compareEvents, isDeviceId, type Cid, type DamagedLine, type Event, type Ingested } from "./event.js";
+import { EidMinter, compareEvents, type Cid, type DamagedLine, type Event, type Ingested } from "./event.js";
 import { checkPath } from "./files.js";
 import { readConfig } from "./folder/config.js";
 import {
@@ -25,7 +25,7 @@ import {
   KEYSTORE_FILE,
   LOCAL_DIR,
   concat,
-  isExtId,
+  isStoreDir,
   jsonLine,
   kindOf,
   prettyJson,
@@ -216,20 +216,6 @@ function sourcePaths(files: VaultFiles): { path: string; rel: string; kind: Excl
   return found;
 }
 
-/** Whether `rel` is a directory the layout owns (vault-folder.md §3): a file there is a folder no store could write. */
-function isStoreDir(rel: string): boolean {
-  const parts = rel.split("/");
-  const ofStore = (p: string[]): boolean =>
-    (p.length === 1 && (p[0] === DEVICES_DIR || p[0] === BLOBS_DIR)) || (p.length === 2 && p[0] === DEVICES_DIR && isDeviceId(p[1]));
-  if (parts.length === 1 && (parts[0] === EXTENSIONS_DIR || parts[0] === LOCAL_DIR)) {
-    return true;
-  }
-  if (parts[0] === EXTENSIONS_DIR && isExtId(parts[1] as string)) {
-    return parts.length === 2 || ofStore(parts.slice(2));
-  }
-  return ofStore(parts);
-}
-
 /** Refuse a set of paths a file system could not hold at once: one that is a file and a directory both. */
 function checkTree(paths: string[], whose: string): void {
   const set = new Set(paths);
@@ -310,15 +296,22 @@ export async function importVault(target: VaultStores, files: VaultFiles, policy
     throw new NotSameVault(`the source's ${CONFIG_FILE} is not this vault's: another identity, or another format`);
   }
   const keystore = planKeystore(source.files.get(KEYSTORE_FILE), await target.files.read(KEYSTORE_FILE));
-  // the files this will write, absent here, must fit among the files here: none a file and a directory both
-  const have = new Set(mine);
-  checkTree([...mine, ...[...source.files.keys()].filter((path) => !have.has(path))], "this vault's files");
+  // a folder no store wrote (vault-folder.md §9.6): a file of this vault's where a store has its directory
+  for (const path of mine) {
+    if (isStoreDir(path)) {
+      throw new NotAVault(`this vault's files: ${path} is a file where the layout has a directory`);
+    }
+  }
 
   // the merged vault set, for the folds; the fork check over every store before the first write
   const self = target.events.self;
   const mergedVault = merged(held, source.vault.events);
   const purged = new Set(await policy.purged?.(mergedVault));
   const installed = policy.installed === undefined ? null : new Set(await policy.installed(mergedVault));
+  // the files this will write — absent here, not a purged extension's — must fit among the files here: none a file and a directory both
+  const have = new Set(mine);
+  const purgedList = [...purged];
+  checkTree([...mine, ...[...source.files.keys()].filter((path) => !have.has(path) && !underAny(path, purgedList))], "this vault's files");
   const forked = forksIn(self, held, source.vault.events);
   const exts: { ext: string; stores: Stores; source: SourceStore; merged: Event[] }[] = [];
   for (const [ext, src] of source.exts) {
@@ -488,11 +481,13 @@ function planKeystore(theirs: Uint8Array | undefined, mine: Uint8Array | null): 
   return { write: prettyJson({ ...a.doc, keys: [...a.keys, ...fresh] }), added: fresh.length, copied: false };
 }
 
+/** A key name as `@estoc/keystore` v3 has it (vault-folder.md §6.2). */
+const KEY_NAME = /^[A-Za-z0-9._/-]+$/;
+
 /**
  * A keystore as vault-folder.md §6.2 names it: `@estoc/keystore` v3 —
- * `version` 3, `seedJwe` a string, `keys[]` each a name, a did and a
- * createdAt, the names unique — or `NotAVault`. The shape the union
- * needs, not the package's whole check.
+ * `version` 3, `seedJwe` a string, `keys[]` each a name of the grammar,
+ * a did and a createdAt, the names unique — or `NotAVault`.
  */
 function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys: JsonObject[] } {
   let doc: unknown;
@@ -521,6 +516,9 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
       throw bad("a key without name, did and createdAt");
     }
     const name = key["name"] as string;
+    if (!KEY_NAME.test(name)) {
+      throw bad(`a key named ${JSON.stringify(name)}`);
+    }
     if (names.has(name)) {
       throw bad(`two keys named ${JSON.stringify(name)}`);
     }

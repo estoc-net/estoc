@@ -48,6 +48,23 @@ export function kindOf(path: string): PathKind {
   return storeKind(parts);
 }
 
+/**
+ * Whether `path` (relative to `.estoc/`) is a directory the layout owns
+ * (§3, §9.6): a file there is a folder no store could write.
+ */
+export function isStoreDir(path: string): boolean {
+  const parts = path.split("/");
+  const ofStore = (p: string[]): boolean =>
+    (p.length === 1 && (p[0] === DEVICES_DIR || p[0] === BLOBS_DIR)) || (p.length === 2 && p[0] === DEVICES_DIR && isDeviceId(p[1]));
+  if (parts.length === 1 && (parts[0] === EXTENSIONS_DIR || parts[0] === LOCAL_DIR)) {
+    return true;
+  }
+  if (parts[0] === EXTENSIONS_DIR && isExtId(parts[1] as string)) {
+    return parts.length === 2 || ofStore(parts.slice(2));
+  }
+  return ofStore(parts);
+}
+
 /** A segment or a blob by shape, under one store's root; anything else a file. */
 function storeKind(parts: string[]): PathKind {
   if (parts.length === 3 && parts[0] === DEVICES_DIR && isDeviceId(parts[1]) && isSegmentName(parts[2] as string)) {
