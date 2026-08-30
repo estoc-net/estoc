@@ -71,15 +71,16 @@ The principles of `event-store.md` §2 as they land on a file system.
   devices/<dev>/<seg>.jsonl                  everything device <dev> wrote: one log, every event a line
   state/                                     reserved, as v1 §6.7
   local/                                     this copy's own; never in a snapshot, never merged; §6.4
-    self.json                                which <dev> this copy writes as
-    options.json                             device options: trace retention
-    cache/                                   rebuildable folds
-    trace/<stream>/<seg>.jsonl               device observations with retention; as v1 §6.10
+    self.json                                which <dev> this copy writes as, and which instance
+    <owner>/                                 one directory per owner of local state: the folds, the trace, an extension
+      options.json                           what this device was told; kept, not rebuildable
+      cache/                                 rebuildable; delete at will
+      observations/<seg>.jsonl               what this device saw; not rebuildable, pruned by retention; as v1 §6.10
 ```
 
 Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
 `deliveries/`, `config.mediation`, and top-level `cache/` and `trace/`
-(moved under `local/`). There is no per-device file (a device
+(moved under `local/`, each to its owner). There is no per-device file (a device
 announces itself with an event, `vault-events.md` §5) and no directory
 per contact or per channel: what an event is about is a field of its
 `data`, and a reader reads the whole log anyway (§8.1).
@@ -184,8 +185,8 @@ else. Never in a snapshot, never merged, never read by another device.
 ```jsonc
 // local/self.json
 { "dev": "k7q3ma", "instance": "01991c2e-…" }
-// local/options.json — shape owned by the implementation; e.g.
-{ "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
+// local/trace/options.json — shape owned by the owner; e.g.
+{ "wire": { "keep": "P30D", "cap": 33554432 } }
 ```
 
 - `self.json` is the pointer every write, every merge, and every fold
@@ -200,13 +201,28 @@ else. Never in a snapshot, never merged, never read by another device.
   `device.minted` (`vault-events.md` §5), append one. A crash between
   writing `self.json` and the first append leaves exactly that gap,
   and the check is idempotent.
-- `options.json` holds device options — v1 §6.10 said a retention
-  policy is never written into the vault; `local/` is not the vault in
-  the sense that matters (it is not what a backup carries), so the
-  policy has a file without becoming a fact.
-- `cache/` holds folds with the change token each was folded to
-  (`event-store.md` §7.4). Deleting it is always safe.
-- `trace/` as v1 §6.10: this device's, not rebuildable, not exchanged.
+- Everything else under `local/` belongs to an **owner**
+  (`event-store.md` §6.1) and sits under `local/<owner>/`, a directory
+  named by the owner — `trace` for the trace, a name of the
+  application's for its folds, an extension's id for an extension —
+  and holds the owner's three kinds of local state, each in its place:
+  - `options.json`: what this device was told. v1 §6.10 said a
+    retention policy is never written into the vault; `local/` is not
+    the vault in the sense that matters (it is not what a backup
+    carries), so the policy has a file without becoming a fact. Kept
+    until changed; not rebuildable.
+  - `cache/`: rebuildable. The folds, with the change token each was
+    folded to (`event-store.md` §7.4). Deleting it is always safe.
+  - `observations/`: what this device saw, as segments (§5) so that
+    retention can go by segment name alone and never rewrite a line —
+    v1 §6.10's trace, under its owner. Not rebuildable, not exchanged,
+    pruned whole segments at a time. How an owner divides its
+    observations below this (the trace keeps one directory per
+    stream) is the owner's.
+
+  The three are told apart by what may be done to them, and a reader
+  that finds one kind where another belongs — a segment under `cache/`
+  — treats the directory as damaged, not as the other kind.
 - Two processes sharing one `local/` share one `dev` and must serialise
   as v1 §9 requires (Web Lock, file lock).
 
@@ -329,9 +345,9 @@ not `blobs/<hash>` with `hash` sixty-four lowercase hex characters.
 The test is the shape of the path, not its prefix: a path under
 `devices/` or `blobs/` that is not shaped like that is a file, carried
 and never read, so that it survives a trip through a store that is not
-a folder (§11). `local/` is the folder store's own (self, options,
-cache, trace) and is neither an event nor a file in this sense: it is
-never listed, never exported.
+a folder (§11). `local/` is the folder store's own (`self.json`, and
+every owner's options, cache and observations) and is neither an event
+nor a file in this sense: it is never listed, never exported.
 
 ## 9. Snapshot, export, import
 
@@ -422,5 +438,6 @@ to change for it. What a deletion leaves on disk, and why, is
   daemon can claim power-loss durability.
 - **Reading by hand.** A backup is one JSONL per device; finding one
   conversation in it is `grep` for its `peerKey`. Whether a folder
-  store should also keep a per-channel index under `local/cache/`
-  for its own reads is `event-store.md` §10, not the format's.
+  store should also keep a per-channel index under its owner's
+  `local/<owner>/cache/` for its own reads is `event-store.md` §10,
+  not the format's.

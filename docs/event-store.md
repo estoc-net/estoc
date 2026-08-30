@@ -52,8 +52,9 @@ must be able to read and write.
 | `vault-events.md` | every event type and what it carries; channels; folds; erasing; deleting | this |
 
 What is *not* here: no path (`vault-folder.md`), no event type, no fold
-(`vault-events.md`), and not the trace log, which is local and stays a
-log of its own.
+(`vault-events.md`), and nothing a copy keeps for itself beyond what
+§6.1 says of it: a trace, a cache, an option is beside the vault, not
+in it.
 
 ## 2. Principles
 
@@ -80,7 +81,8 @@ files; `vault-events.md` §1 the ones about meaning.
 4. **Events are never deleted.** Not by a store, not by a merge, not by
    the person. An absence of meaning is a later event
    (`vault-events.md` §8); an absence of bytes is a blob's, never an
-   event's.
+   event's. This is a property of the vault's set: what a copy keeps
+   beside it (§6.1) shares the event's shape and not this rule.
 5. **Conflicts are projections.** Two devices deciding differently
    produce two events, not an error; a fold shows both; a later event
    resolves them. A store never chooses between events it holds. The
@@ -472,9 +474,11 @@ interface FileStore {                 // everything in a vault that is neither a
 ```
 
 A vault, to a program, is `{ events: EventStore, blobs: BlobStore,
-files: FileStore }` plus the trace log. `Vault` in `@estoc/vault` holds
+files: FileStore }`. `Vault` in `@estoc/vault` holds
 these three and the key-minting it does today; the five stores go,
 replaced by folds over `events.scan(...)` and `events.changes(...)`.
+What a copy keeps for itself — the trace among it — is not one of the
+three and is §6.1.
 
 **Blobs** are bytes named by `sha256`, lowercase hex; immutable, merged
 by union, deduplicated by construction, and the one thing in a vault
@@ -504,6 +508,78 @@ A file that is one per vault and has a merge policy of its own is a
 **singleton** (`vault-folder.md` §6); to the store it is a file like
 any other. Each singleton states its policy where it is defined; the
 store applies none of them (§7.3).
+
+### 6.1 Local state
+
+Everything so far is the vault: what a backup carries, what two copies
+merge, what a text editor reads. A copy also keeps things that are true
+of it alone and travel nowhere — which device it is (§4), the folds it
+has cached (§7.4), the retention it was told to apply, the envelopes
+it observed. None of it is an event of the set, and none of it is a
+file in the `FileStore` sense: a snapshot has none, an import touches
+none, and no other device reads any. `vault-folder.md` §6.4 says where
+the folder keeps it.
+
+Local state has **owners** and three **lifetimes**, and a piece of it
+is one of the three, never a mix:
+
+| kind | rebuildable | disposable | example |
+|------|-------------|------------|---------|
+| **options** | no | no | what this device was told: a retention level, a label for a mediator |
+| **cache** | yes | yes | a fold and the token it was folded to (§7.4) |
+| **observations** | no | yes | what this device saw: an envelope opened, a frame sent, with a retention |
+
+An owner is whoever keeps the state: the vault's own folds, the trace,
+an extension. Each owner has its own of each kind, and the kinds are
+told apart by what may be done to them: a cache may be deleted at any
+moment and comes back; observations may be pruned by their own
+retention and do not come back; options are kept until the person
+changes them. Nothing about an owner's local state is the store's
+business beyond keeping the three apart.
+
+**Observations** are the kind that looks like the vault and is not. An
+observation has the event's shape — `eid`, `at`, `type`, `data`, so
+that one reader, one filter and one line format serve both — and none
+of the event's contract:
+
+- it is **minted by its producer**, not by the store: the agent hands
+  an observation its id and time as it makes it, because the next
+  observation may cite it as its `parent` whether or not anyone is
+  keeping observations at all (a chain of envelopes is a chain of ids);
+- it has no `author` that matters and is never ingested: one device
+  wrote it and only that device reads it, so there is no union, no
+  duplicate, no conflict, no forked self;
+- it is **pruned**: a retention the owner sets unlinks whole segments,
+  never a line (as v1 §6.10), and a `ChangeToken` issued before a prune
+  is not one the store can promise to place (§5.4);
+- it is never exported and needs no interchange form; a store that
+  cannot render it as a folder is still a conforming vault.
+
+So an observation store is not an `EventStore` and does not claim to
+be. It is the smaller thing below:
+
+```ts
+/** What a producer minted: the event's shape, id and time already set. */
+interface LocalEventStore<E extends { eid: string; at: string; type: string }> {
+  append(event: E): Promise<void>;
+  scan(filter?: Filter): AsyncIterable<E>;            // equality on envelope fields and data's top level, as §5.3
+  prune(policy: RetentionPolicy): Promise<PruneReport>; // what is kept, per the owner; what was unlinked
+}
+```
+
+`RetentionPolicy` and what is inside `data` are the owner's; the trace
+(v1 §6.10) is the first owner and its streams are its retention
+classes. The vault's `EventStore` and an owner's `LocalEventStore`
+share the event's shape, the filter and, in a folder, the segment
+format; they share no lifetime, and a program that holds one does not
+hold the other.
+
+**Extensions** — a handler, a renderer, a lens — keep state in these
+three kinds under an owner of their own, and in one more: events
+appended to the vault's `EventStore` (§10), which replicate, merge and
+are never deleted like everything else there. Only that fourth kind
+needs a name that will not collide with another extension's; the three
+local kinds are the owner's own namespace and collide with nothing.
 
 ## 7. Interchange
 
@@ -595,6 +671,10 @@ the folds.
 This is the one place a database is plainly right and costs nothing:
 the cache is rebuildable, so its store needs no round trip, no
 interchange format, and no promise beyond "delete me and I come back".
+The observation store (§6.1) is the other: not rebuildable, but local,
+never exchanged, and read by id — a chain of `parent`s is a chain of
+lookups — which is exactly what the folder does worst and an index does
+for free.
 
 ## 8. A database store
 
@@ -703,7 +783,7 @@ What the code says today, for the record:
 - **Indexing** (§5.3): equality on any envelope field or top-level
   field of `data` lets a store index what it
   likes; whether the folder store should keep a local index for the
-  pair under `local/cache/`, or leave all of that to folds, is for when
+  pair under its owner's `local/<owner>/cache/`, or leave all of that to folds, is for when
   open is slow.
 - **`fsync` on Node** (§5.1): a per-append `fsync` in `FsBackend` would
   let the daemon claim power-loss durability. Cheap; not decided.
@@ -714,17 +794,19 @@ What the code says today, for the record:
 - **Device-to-device sync** (§5.4): anti-entropy over `eid` sets, its
   own design; nothing here should have to change for it beyond what
   `vault-folder.md` §11 already says.
-- **Extensions.** A handler or renderer that keeps state of its own
-  would keep it as events, in a `type` namespace of its own, through
-  this interface and nothing lower. What that namespace looks like
-  (a URI, a reverse-DNS prefix) and what an extension may `append` (by
-  `type` prefix, presumably) is not decided; the interface is shaped so
-  that the answer is a convention on `type`, not a change here. An
-  extension's event about a contact carries the `cid`, exactly as the
-  vault's own do, and one that holds a blob lists it in `blobs` (§3),
-  which is what keeps collection safe around it — though until an
-  erase exists for events that are not messages, such a blob is pinned
-  (`vault-events.md` §12).
-- **Trace.** Stays a `SegmentedLog` of its own, local, with its own
-  retention, never exchanged. Whether it should implement the same
-  interface for uniformity is a code question.
+- **Extensions.** State an extension keeps is one of the four kinds
+  of §6.1; the three local ones are its own and need nothing here. The
+  fourth — events it appends to the vault's set — goes through this
+  interface and nothing lower, in a `type` namespace of its own. What
+  that namespace looks like (a URI, a reverse-DNS prefix) and what an
+  extension may `append` (by `type` prefix, presumably) is not decided;
+  the interface is shaped so that the answer is a convention on
+  `type`, not a change here. An extension's event about a contact
+  carries the `cid`, exactly as the vault's own do, and one that holds
+  a blob lists it in `blobs` (§3), which is what keeps collection safe
+  around it — though until an erase exists for events that are not
+  messages, such a blob is pinned (`vault-events.md` §12). The trace
+  was the first owner of local state and keeps none of the fourth
+  kind; whether an extension runs where the agent runs (and sees what
+  it sees) or only where the person looks is the application's
+  boundary, not the store's.
