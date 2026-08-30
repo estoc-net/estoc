@@ -216,7 +216,11 @@ passphrase — the only secret in the vault — and `keys[]`, a cache of
 which names have been minted, when, and the did:key of each Ed25519
 half, so a client can list keys without unlocking. The cache is not
 the truth about which keys exist; every device's log is
-(`vault-events.md` §2), and the cache is rebuilt from it. Merge:
+(`vault-events.md` §2), and the cache is rebuilt from it. A name is
+`[A-Za-z0-9._/-]+`, as `@estoc/keystore` v3 has it, and each appears
+once; an import (§10.3) refuses a `keystore.json` on either side that
+is not this shape — `version` 3, `seedJwe`, `keys[]` each with
+`name`, `did` and `createdAt` — before writing anything. Merge:
 `seedJwe` stays local (same seed, possibly a different passphrase);
 `keys[]` is the union by name.
 
@@ -432,6 +436,14 @@ is not a folder. The same test applies under `extensions/<ext>/`
 (§3.1): a segment or a blob there is the extension store's, and
 anything else there is a file. `local/` is neither an event nor a file
 in this sense (§7).
+
+`write` refuses what is not a file's path (`event-store.md` §6): a
+segment's or a blob's shape, `local/`, a directory the layout owns —
+`devices`, `devices/<dev>`, `blobs`, `extensions`, `extensions/<ext>`
+and the `devices`, `devices/<dev>` and `blobs` under it, `local` — and
+a path that with what the folder holds would make a file and a
+directory of one name. A folder that holds such a path anyway was not
+written by a store, and an import (§10.3) refuses it before writing.
 
 ## 10. Snapshot, export, import, restore
 

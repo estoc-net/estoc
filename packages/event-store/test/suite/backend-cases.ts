@@ -92,6 +92,22 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "tells a file from a directory: null for a directory asked as a file, [] for a file asked as a directory",
+    run: async (fresh) => {
+      const b = await fresh();
+      await b.write(".estoc/d/f", enc.encode("x"));
+      same(await b.read(".estoc/d"), null, "read a directory");
+      same(await b.size(".estoc/d"), null, "size of a directory");
+      same(await b.modified(".estoc/d"), null, "modified of a directory");
+      same(await b.list(".estoc/d/f"), [], "list a file");
+      same(await b.dirs(".estoc/d/f"), [], "dirs of a file");
+      same(await b.list(".estoc/d/f/deeper"), [], "list under a file");
+      same(await b.read(".estoc/d/f/deeper"), null, "read under a file");
+      same(await b.size(".estoc/d/f/deeper"), null, "size under a file");
+      same(await b.size(".estoc/d/f"), 1, "the file itself");
+    },
+  },
+  {
     name: "knows a file's size without reading it",
     run: async (fresh) => {
       const b = await fresh();

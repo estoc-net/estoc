@@ -21,7 +21,7 @@ import {
   type Ingested,
 } from "../event.js";
 import { deepFreeze, jsonClean, sameJson, type JsonObject } from "../json.js";
-import { DEVICES_DIR, isSegmentName, jsonLine, utf8 } from "./layout.js";
+import { DEVICES_DIR, concat, isSegmentName, jsonLine, utf8 } from "./layout.js";
 import { decodeEvent, decodeSegment, endsClean } from "./lines.js";
 import type { StoreContext } from "./serial.js";
 
@@ -332,14 +332,4 @@ export class FolderEventStore implements EventStore {
       }
     }
   }
-}
-
-function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
 }

@@ -117,6 +117,29 @@ describe("vault: this copy", () => {
   });
 });
 
+describe("vault: files", () => {
+  it("take a file's path and no other, and never a file and a directory of one name (vault-folder.md §9.6)", async () => {
+    const backend = new MemoryBackend();
+    const vault = await FolderVault.create(backend, {});
+    await vault.events.append({ type: "t", data: {} });
+    await vault.extension(EXT).events.append({ type: "t", data: {} });
+    for (const bad of ["devices", `devices/${vault.self}`, "blobs", "extensions", `extensions/${EXT}`, `extensions/${EXT}/devices`, "local", "local/self.json"]) {
+      await expect(vault.files.write(bad, new Uint8Array()), bad).rejects.toThrow(/not a file path/);
+    }
+    await vault.files.write("state/a/b.json", new Uint8Array([1]));
+    await vault.files.write("state/a/c.json", new Uint8Array([1])); // a sibling: the directory is one, not a file
+    await vault.files.write("state/a/b.json", new Uint8Array([2])); // and a file is overwritten
+    await expect(vault.files.write("state/a", new Uint8Array())).rejects.toThrow(/is a directory/);
+    await expect(vault.files.write("state/a/b.json/c", new Uint8Array())).rejects.toThrow(/is a file/);
+    await expect(vault.files.write("config.json/x", new Uint8Array())).rejects.toThrow(/is a file/);
+    expect([...backend.files.keys()].filter((p) => p.startsWith(".estoc/state/")).sort()).toEqual([".estoc/state/a/b.json", ".estoc/state/a/c.json"]);
+    // two writes at once that cannot both land: one at a time, so the second sees the first
+    const outcomes = await Promise.allSettled([vault.files.write("x", new Uint8Array([1])), vault.files.write("x/y", new Uint8Array([2]))]);
+    expect(outcomes.map((o) => o.status)).toEqual(["fulfilled", "rejected"]);
+    expect([...backend.files.keys()].filter((p) => p.startsWith(".estoc/x"))).toEqual([".estoc/x"]);
+  });
+});
+
 describe("vault: extension stores", () => {
   it("hands out a handle whose bytes appear at the first write, under extensions/<ext>/", async () => {
     const { backend, vault } = await fresh();

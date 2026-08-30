@@ -204,6 +204,9 @@ importers:
       '@ipld/dag-pb':
         specifier: ^4.1.7
         version: 4.1.7
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.3
       ipfs-unixfs:
         specifier: ^13.0.0
         version: 13.0.0

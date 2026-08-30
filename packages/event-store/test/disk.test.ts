@@ -30,6 +30,19 @@ afterAll(async () => {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("a vault on disk", () => {
+  it("writes files beside each other and over themselves: a directory on disk is not a file in the way", async () => {
+    const backend = new FsBackend(await tempDir());
+    const vault = await FolderVault.create(backend, {});
+    await vault.files.write("state/a.json", enc.encode("a"));
+    await vault.files.write("state/b.json", enc.encode("b"));
+    await vault.files.write("state/b.json", enc.encode("b2"));
+    await vault.files.write("config-notes/x", enc.encode("x")); // a sibling of config.json, not under it
+    expect(await vault.files.list()).toEqual(["config-notes/x", "config.json", "state/a.json", "state/b.json"]);
+    await expect(vault.files.write("state", enc.encode(""))).rejects.toThrow(/is a directory/);
+    await expect(vault.files.write("config.json/x", enc.encode(""))).rejects.toThrow(/is a file/);
+    expect(await vault.files.read("state")).toBeNull();
+  });
+
   it("lays the tree out as vault-folder.md §3 draws it, and a second process carries on", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);

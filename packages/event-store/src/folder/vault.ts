@@ -9,58 +9,28 @@
 
 import type { VaultBackend } from "../backend/types.js";
 import { walk } from "../backend/types.js";
-import type { BlobStore } from "../blobs.js";
 import { isCid } from "../cid.js";
 import { DEFAULT_GRACE_MS } from "../blobs.js";
 import { Disposed, NotAVault } from "../errors.js";
-import { isDeviceId, mintDeviceId, mintInstance, type EventStore } from "../event.js";
-import type { FileStore } from "../files.js";
+import { isDeviceId, mintDeviceId, mintInstance } from "../event.js";
 import { isJsonObject, type JsonObject } from "../json.js";
+import type { Stores, Vault } from "../vault.js";
 import type { FolderBlobStore } from "./blobs.js";
 import type { FolderEventStore } from "./events.js";
 import { FolderFileStore } from "./files.js";
-import {
-  BLOBS_DIR,
-  CONFIG_FILE,
-  DEVICES_DIR,
-  ESTOC_DIR,
-  EXTENSIONS_DIR,
-  LOCAL_DIR,
-  SELF_FILE,
-  isExtId,
-  isSegmentName,
-  prettyJson,
-  text,
-} from "./layout.js";
+import { FORMAT, VERSION, parseJson, readConfig } from "./config.js";
+import { BLOBS_DIR, CONFIG_FILE, DEVICES_DIR, ESTOC_DIR, EXTENSIONS_DIR, LOCAL_DIR, SELF_FILE, isExtId, isSegmentName, prettyJson } from "./layout.js";
 import { LocalOwner, type FolderLocalEventStoreOptions } from "./local.js";
 import type { Serial } from "./serial.js";
 import { folderStore } from "./store.js";
 
-/** The vault, to a program (event-store.md §9). */
-export interface Vault {
-  events: EventStore;
-  blobs: BlobStore;
-  files: FileStore;
-  /** A handle; bytes exist from the first write; rejects an `ext` this instance disposed of. */
-  extension(ext: string): ExtensionStore;
-  /** Every `ext` with bytes on disk. */
-  extensions(): Promise<string[]>;
-  /** Store and local state, whole; every handle dead. */
-  dispose(ext: string): Promise<void>;
-}
-
 /** An extension's own store (event-store.md §8), and its local state (§7). */
-export interface ExtensionStore {
-  events: EventStore;
-  blobs: BlobStore;
+export interface ExtensionStore extends Stores {
   local: LocalOwner;
 }
 
 /** The first event a device writes (vault-events.md §5); the folder appends it on open (vault-folder.md §7). */
 export const DEVICE_MINTED = "device.minted";
-
-export const FORMAT = "estoc";
-export const VERSION = 2;
 
 export interface OpenVaultOptions {
   clock?: () => Date;
@@ -117,7 +87,7 @@ export class FolderVault implements Vault {
     if (config === null) {
       throw new NotAVault(`no ${ESTOC_DIR}/${CONFIG_FILE}`);
     }
-    checkConfig(parseJson(config, CONFIG_FILE));
+    readConfig(config);
     const self = await readSelf(backend);
     const vault = new FolderVault(backend, self.dev, self.instance, options);
     await vault.announce();
@@ -241,27 +211,6 @@ export class FolderVault implements Vault {
       this.owners.set(owner, have);
     }
     return have;
-  }
-}
-
-function parseJson(bytes: Uint8Array, what: string): unknown {
-  try {
-    return JSON.parse(text(bytes));
-  } catch (err) {
-    throw new NotAVault(`${what} is not JSON: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-/** `config.json` as §6.1 and §11 read it: format `estoc`, version 2, or refuse. */
-function checkConfig(config: unknown): void {
-  if (!isJsonObject(config)) {
-    throw new NotAVault(`${CONFIG_FILE} is not a JSON object`);
-  }
-  if (config["format"] !== FORMAT) {
-    throw new NotAVault(`${CONFIG_FILE}: format is ${JSON.stringify(config["format"])}, not ${JSON.stringify(FORMAT)}`);
-  }
-  if (config["version"] !== VERSION) {
-    throw new NotAVault(`${CONFIG_FILE}: version ${JSON.stringify(config["version"])} is not ${VERSION}; this reader opens version ${VERSION} only`);
   }
 }
 

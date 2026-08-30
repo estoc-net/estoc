@@ -65,3 +65,15 @@ export class NotAVault extends Error {
     this.name = "NotAVault";
   }
 }
+
+/**
+ * The source of a merge is another vault (vault-folder.md §6.1): its
+ * `config.json` — format, version, anchor — is not this one's. Nothing
+ * was written; two identities are two vaults.
+ */
+export class NotSameVault extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotSameVault";
+  }
+}
