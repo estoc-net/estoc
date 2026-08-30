@@ -153,7 +153,7 @@ try {
   ok("Alice's page shows what the daemon received, live over the socket");
 
   // an object each way: bytes cross the socket in both directions
-  const seaDay = fileURLToPath(new URL("../../../folder-object/examples/sea-day/", import.meta.url));
+  const seaDay = fileURLToPath(new URL("../../packages/folder-object/test/fixtures/sea-day/", import.meta.url));
   await alice.setInputFiles('input[data-share="object"]', seaDay);
   await alice.click('[data-share-choice="plain"]');
   await alice.waitForSelector('.object-title:has-text("A Day at the Sea")', { timeout: 15000 });
