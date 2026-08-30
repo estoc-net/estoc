@@ -1,4 +1,4 @@
-import { unzipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import { filesFromZip, zipFiles, type VaultFiles } from "../src/index.js";
@@ -27,5 +27,20 @@ describe("zip", () => {
     });
     expect(filesFromZip(inside)).toEqual(files);
     expect(() => filesFromZip(zipFiles({ "readme.txt": enc.encode("no vault here") }))).toThrow(/config\.json/);
+  });
+
+  it("roots at the shallowest config.json, whatever order the archive lists a nested one in", () => {
+    const nested = { ...files, ".estoc/state/config.json": enc.encode("{}") };
+    const insideFirst = zipSync({
+      "state/config.json": nested[".estoc/state/config.json"],
+      ...Object.fromEntries(Object.entries(files).map(([path, bytes]) => [path.slice(".estoc/".length), bytes])),
+    });
+    expect(Object.keys(unzipSync(insideFirst))[0]).toBe("state/config.json");
+    expect(filesFromZip(insideFirst)).toEqual(nested);
+    const wrappedFirst = zipSync({
+      "my vault/state/.estoc/config.json": enc.encode("{}"),
+      ...Object.fromEntries(Object.entries(files).map(([path, bytes]) => [`my vault/${path}`, bytes])),
+    });
+    expect(filesFromZip(wrappedFirst)).toEqual({ ...files, "state/.estoc/config.json": enc.encode("{}") }); // outside .estoc/: not a vault path, ignored by every reader
   });
 });

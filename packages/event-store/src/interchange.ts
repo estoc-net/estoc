@@ -11,9 +11,10 @@
 import type { VaultBackend } from "./backend/types.js";
 import { walk } from "./backend/types.js";
 import type { BlobStore } from "./blobs.js";
-import { reachable } from "./blocks.js";
+import { checkBlock, reachable } from "./blocks.js";
 import { BadBlock, ForkedSelf, NotAVault, NotSameVault } from "./errors.js";
 import { EidMinter, compareEvents, type Cid, type DamagedLine, type Event, type Ingested } from "./event.js";
+import { checkPath } from "./files.js";
 import { readConfig } from "./folder/config.js";
 import {
   BLOBS_DIR,
@@ -143,8 +144,9 @@ function emptyStore(): SourceStore {
  * The whole source, read (§10.3 preflight): `config.json` first, or
  * `NotAVault`; then every line of every segment under `devices/<dev>/`
  * and `extensions/<ext>/devices/<dev>/` decoded (vault-folder.md §4), every block
- * named, every file kept. `local/` and anything outside `.estoc/` is not
- * looked at.
+ * named, every file kept, every path one a store accepts — a path it
+ * would refuse must refuse the import here, not after the events went
+ * in. `local/` and anything outside `.estoc/` is not looked at.
  */
 function readSource(files: VaultFiles): Source {
   const config = files[CONFIG_PATH];
@@ -157,7 +159,7 @@ function readSource(files: VaultFiles): Source {
       continue;
     }
     const bytes = files[path] as Uint8Array;
-    const rel = path.slice(ROOT.length);
+    const rel = sourcePath(path);
     const kind = kindOf(rel);
     if (kind === "file") {
       source.files.set(rel, bytes);
@@ -184,6 +186,16 @@ function readSource(files: VaultFiles): Source {
     }
   }
   return source;
+}
+
+/** The path relative to `.estoc/` that `path` names, checked as every store checks it (`files.ts`), or `NotAVault`. */
+function sourcePath(path: string): string {
+  const rel = path.slice(ROOT.length);
+  try {
+    return checkPath(rel);
+  } catch (err) {
+    throw new NotAVault(`not a vault path: ${JSON.stringify(path)} (${err instanceof Error ? err.message : String(err)})`);
+  }
 }
 
 // ---- import ------------------------------------------------------------
@@ -345,33 +357,51 @@ function forksIn(self: string, held: Map<string, Event>, incoming: Event[]): Eve
  * Rule 2 (§10.3): a block absent here — a damaged one is absent — and
  * present in the source is copied iff a held root reaches it, walking
  * the blocks either copy holds, and iff it passes the check; one that
- * does not is damage in the source, reported.
+ * does not is damage in the source, reported. Damage is absent on the
+ * walk too: bytes that fail the check are not a block, so what they
+ * link is not reached through them — else a name over another node's
+ * bytes would let that node's tree in under no held root.
  */
 async function copyBlocks(store: string, blobs: BlobStore, blocks: Map<string, Uint8Array>, events: Event[], policy: ImportPolicy, report: Imported): Promise<void> {
   if (blocks.size === 0) {
     return;
   }
   const roots = policy.held === undefined ? events.flatMap((event) => event.blobs) : await policy.held(store, events);
-  // this copy's block when it holds it sound — reading it sets a damaged one aside (§5.1) — else the source's
+  // this copy's block when it holds it sound — reading it sets a damaged one aside (§5.1) — else the source's, checked
   const here = new Map<string, boolean>();
+  const sound = new Map<string, Uint8Array | null>();
   const reached = await reachable(roots, async (cid) => {
     const mine = await blobs.getBlock(cid);
     here.set(cid, mine !== null);
-    return mine ?? blocks.get(cid) ?? null;
+    if (mine !== null) {
+      return mine;
+    }
+    const theirs = blocks.get(cid);
+    if (theirs === undefined) {
+      return null;
+    }
+    let checked = sound.get(cid);
+    if (checked === undefined) {
+      try {
+        await checkBlock(cid, theirs);
+        checked = theirs;
+      } catch (err) {
+        if (!(err instanceof BadBlock)) {
+          throw err;
+        }
+        report.blobs.damaged.push({ store, cid, error: err.message });
+        checked = null;
+      }
+      sound.set(cid, checked);
+    }
+    return checked;
   });
   for (const [cid, bytes] of [...blocks].sort(([a], [b]) => (a < b ? -1 : 1))) {
     if (!reached.has(cid) || here.get(cid) === true) {
       continue;
     }
-    try {
-      await blobs.putBlock(cid, bytes);
-      report.blobs.copied += 1;
-    } catch (err) {
-      if (!(err instanceof BadBlock)) {
-        throw err;
-      }
-      report.blobs.damaged.push({ store, cid, error: err.message });
-    }
+    await blobs.putBlock(cid, bytes);
+    report.blobs.copied += 1;
   }
 }
 
@@ -383,18 +413,18 @@ function underAny(path: string, exts: string[]): boolean {
 /**
  * `keystore.json` (vault-folder.md §6.2): copied when this vault has
  * none; else the seed stays this one's and `keys[]` is the union by
- * name. Decided in preflight, so that a keystore that is not one refuses
- * the import before anything is written.
+ * name. Decided in preflight, both sides read, so that a keystore that
+ * is not one refuses the import before anything is written.
  */
 function planKeystore(theirs: Uint8Array | undefined, mine: Uint8Array | null): { write: Uint8Array | null; added: number; copied: boolean } {
   if (theirs === undefined) {
     return { write: null, added: 0, copied: false };
   }
+  const b = readKeystore(theirs, "the source's");
   if (mine === null) {
     return { write: theirs, added: 0, copied: true };
   }
   const a = readKeystore(mine, "this vault's");
-  const b = readKeystore(theirs, "the source's");
   const known = new Set(a.keys.map((key) => key["name"]));
   const fresh = b.keys.filter((key) => !known.has(key["name"]));
   if (fresh.length === 0) {
@@ -423,12 +453,15 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
  * A folder store restoring into an empty backend (vault-folder.md
  * §10.4): the snapshot copied as it is, `config.json` last, so that a
  * crash midway leaves no vault rather than a vault missing pieces.
- * Refuses a backend that has a vault, and a source that is not one;
- * `local/` in the source, should a hand-made zip carry one, stays out.
+ * Refuses a backend with anything under `.estoc/` — a vault, or the
+ * remains of one, which the copy would be mixed into — and a source
+ * that is not one, before writing; `local/` in the source, should a
+ * hand-made zip carry one, stays out.
  */
 export async function restoreFolder(backend: VaultBackend, files: VaultFiles): Promise<{ files: number }> {
-  if ((await backend.size(CONFIG_PATH)) !== null) {
-    throw new NotAVault(`${CONFIG_PATH} exists already: a restore needs an empty backend`);
+  const there = await walk(backend, ESTOC_DIR);
+  if (there.length > 0) {
+    throw new NotAVault(`${ESTOC_DIR}/ is not empty (${there[0]}${there.length > 1 ? ", …" : ""}): a restore needs an empty backend`);
   }
   const config = files[CONFIG_PATH];
   if (config === undefined) {
@@ -438,6 +471,9 @@ export async function restoreFolder(backend: VaultBackend, files: VaultFiles): P
   const paths = Object.keys(files)
     .filter((path) => isSnapshotPath(path) && path !== CONFIG_PATH)
     .sort();
+  for (const path of paths) {
+    sourcePath(path);
+  }
   for (const path of paths) {
     await backend.write(path, files[path] as Uint8Array);
   }

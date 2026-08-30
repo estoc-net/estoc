@@ -30,15 +30,15 @@ export function filesFromZip(zip: Uint8Array): VaultFiles {
   const marker = `${ESTOC_DIR}/${CONFIG_FILE}`;
   let prefix: string;
   let addEstoc = false;
-  const inEstoc = names.find((name) => name === marker || name.endsWith(`/${marker}`));
-  if (inEstoc !== undefined) {
-    prefix = inEstoc.slice(0, inEstoc.length - marker.length);
+  const inEstoc = rootOf(names, marker);
+  if (inEstoc !== null) {
+    prefix = inEstoc;
   } else {
-    const bare = names.find((name) => name === CONFIG_FILE || name.endsWith(`/${CONFIG_FILE}`));
-    if (bare === undefined) {
+    const bare = rootOf(names, CONFIG_FILE);
+    if (bare === null) {
       throw new Error(`that zip holds no vault (no ${CONFIG_FILE} inside)`);
     }
-    prefix = bare.slice(0, bare.length - CONFIG_FILE.length);
+    prefix = bare;
     addEstoc = true;
   }
   const files: VaultFiles = {};
@@ -50,4 +50,23 @@ export function filesFromZip(zip: Uint8Array): VaultFiles {
     files[addEstoc ? `${ESTOC_DIR}/${rel}` : rel] = entries[name] as Uint8Array;
   }
   return files;
+}
+
+/**
+ * The folder `marker` is at the root of: the shortest prefix any entry
+ * puts before it — the root's own before a nested one's, whatever order
+ * the archive lists them in — or null when no entry ends in it.
+ */
+function rootOf(names: string[], marker: string): string | null {
+  let best: string | null = null;
+  for (const name of names) {
+    if (name !== marker && !name.endsWith(`/${marker}`)) {
+      continue;
+    }
+    const prefix = name.slice(0, name.length - marker.length);
+    if (best === null || prefix.length < best.length) {
+      best = prefix;
+    }
+  }
+  return best;
 }

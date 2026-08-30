@@ -286,6 +286,25 @@ describe("import: preflight (event-store.md §10.3 step 0)", () => {
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode("[]") })).rejects.toThrow(NotAVault);
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode(JSON.stringify({ keys: [{}] })) })).rejects.toThrow(NotAVault);
     expect(await contents(target)).toEqual(before);
+    // and when this vault has none to union with: the source's is still read before it is copied
+    const bare = await memoryVault("cccccc", c.now);
+    const nothing = await contents(bare);
+    await expect(importVault(bare, { ...files, ".estoc/keystore.json": enc.encode("not json") })).rejects.toThrow(NotAVault);
+    expect(await contents(bare)).toEqual(nothing);
+    expect(await bare.files.read("keystore.json")).toBeNull();
+  });
+
+  it("refuses a path no store would take, before writing: a store's refusal must not come after the events went in", async () => {
+    const c = clock("2026-08-30T10:00:00.000Z");
+    const target = await memoryVault("aaaaaa", c.now);
+    const files = await exportVault(await populated(c.now).then((p) => p.vault));
+    const before = await contents(target);
+    for (const path of [".estoc/../bad", ".estoc/state/../read.json", ".estoc/state//read.json", ".estoc/état.json"]) {
+      await expect(importVault(target, { ...files, [path]: enc.encode("x") })).rejects.toThrow(NotAVault);
+      await expect(restoreFolder(new MemoryBackend(), { ...files, [path]: enc.encode("x") })).rejects.toThrow(NotAVault);
+    }
+    expect(await contents(target)).toEqual(before);
+    expect(await target.extensions()).toEqual([]);
   });
 });
 
@@ -346,6 +365,21 @@ describe("import: blobs (rule 2)", () => {
     expect(await target.extension(EXT_A).blobs.list()).toHaveLength(1);
     // the same again copies nothing: every block a held root reaches is here and sound
     expect((await importVault(target, files)).blobs.copied).toBe(0);
+  });
+
+  it("does not walk damage: a name over another node's bytes reaches nothing through them", async () => {
+    const c = clock("2026-08-30T10:00:00.000Z");
+    const { vault: source, big } = await populated(c.now);
+    const twin = bigBytes();
+    twin[0] = (twin[0] as number) ^ 1;
+    const other = await source.blobs.put(twin); // a dag-pb name that is not big's
+    const files = await exportVault(source, { clock: c.now });
+    files[`.estoc/blobs/${other}`] = files[`.estoc/blobs/${big}`] as Uint8Array; // big's root node under other's name
+    const target = await memoryVault("cccccc", c.now);
+    const report = await importVault(target, files, { held: (store) => (store === "vault" ? [other] : []) });
+    expect(report.blobs.damaged).toEqual([{ store: "vault", cid: other, error: expect.stringMatching(/hash/) as string }]);
+    expect(report.blobs.copied).toBe(0); // not big's root, and not the chunks its node links
+    expect(await target.blobs.list()).toEqual([]);
   });
 
   it("asks the fold which roots are held, and copies only what those reach", async () => {
@@ -467,6 +501,11 @@ describe("restore", () => {
     expect(order.at(-1)).toBe(".estoc/config.json");
     expect([...fresh.files.keys()].sort()).toEqual(paths(files).filter((p) => !p.startsWith(".estoc/local/")));
     await expect(restoreFolder(fresh, files)).rejects.toThrow(NotAVault);
+    // not only a vault: anything under .estoc/ is something the copy would be mixed into
+    const stale = new MemoryBackend();
+    await stale.write(".estoc/stale.txt", enc.encode("left over"));
+    await expect(restoreFolder(stale, files)).rejects.toThrow(/not empty/);
+    expect([...stale.files.keys()]).toEqual([".estoc/stale.txt"]);
     const restored = await FolderVault.open(fresh);
     expect(restored.self).not.toBe(vault.self);
     expect((await all(restored.events.scan({ type: DEVICE_MINTED }))).map((e) => e.author).sort()).toEqual([vault.self, restored.self].sort());
