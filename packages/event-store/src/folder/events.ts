@@ -175,6 +175,37 @@ export class FolderEventStore implements EventStore {
     });
   }
 
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
+    this.ctx.guard();
+    const cleans = drafts.map(cleanDraft); // every draft checked before anything lands
+    if (cleans.length === 0) {
+      return [];
+    }
+    return this.ctx.serial.run(async () => {
+      this.ctx.alive();
+      const now = this.ctx.clock();
+      const events = cleans.map(
+        (clean): Event<D> => ({
+          eid: this.ctx.segments.mint(now.getTime()),
+          at: now.toISOString(),
+          author: this.ctx.self,
+          type: clean.type,
+          blobs: clean.blobs,
+          data: clean.data,
+        })
+      );
+      // A fresh segment, written whole (vault-folder.md §9.2): a whole-file write is
+      // atomic across a process crash, so the batch lands entire or not at all — an
+      // append could tear between lines. On success it is the newest segment this
+      // store minted, so it is the open one from here on; on failure `open` stands.
+      const path = this.newSegmentPath(this.ctx.self);
+      const buffer = concat(events.map((event) => jsonLine(event)));
+      await this.ctx.backend.write(path, buffer);
+      this.open = { path, bytes: buffer.length };
+      return events.map((event) => deepFreeze(event));
+    });
+  }
+
   /**
    * The segment this instance appends to (§9.2): the newest under
    * `devices/<self>/` the first time, healed if a crash left it

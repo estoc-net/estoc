@@ -172,6 +172,20 @@ describe("v2 procedures: deleting a contact (§9)", () => {
     expect(fold.contact(other)?.hidden).toEqual([cid]);
   });
 
+  it("tombstones every member of a merged contact as one write", async () => {
+    const { vault, fold, cid } = await contactScene();
+    const line = new Line("2026-08-30T01:00:00.000Z");
+    const other = line.id();
+    await record(vault.events, fold, drafts.contactCreated({ cid: other }));
+    await record(vault.events, fold, drafts.contactMerged({ cid: other, from: cid }));
+    const deleted = await deleteContact(vault, fold, cid);
+    expect(deleted.tombstones.map((event) => (event.data as { cid: string }).cid).sort()).toEqual([cid, other].sort());
+    expect(new Set(deleted.tombstones.map((event) => event.at)).size).toBe(1); // one write, one instant
+    expect(fold.contact(cid)).toBeNull();
+    expect(fold.contact(other)).toBeNull();
+    expect(fold.deletedContacts().map((entry) => [...entry.members].sort())).toEqual([[cid, other].sort()]);
+  });
+
   it("keeps a key another contact still uses", async () => {
     const { vault, fold, cid } = await contactScene();
     const line = new Line("2026-08-30T01:00:00.000Z");

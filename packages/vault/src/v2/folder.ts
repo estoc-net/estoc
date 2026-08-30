@@ -37,11 +37,13 @@ function folderOptions<M extends MintedDid>(options: FolderOptions<M>): OpenVaul
  * keystore written first, alone — `open` is "config.json is
  * there", so a crash between the two leaves no vault rather than a
  * headless one — then `config.json` with the anchor, fixed for the
- * vault's life. The backend has no atomic create, so two racing
- * creates are detected, not excluded: the keystore is read back after
+ * vault's life. The backend has no atomic create, so two racing creates are
+ * detected, not excluded: the keystore is read back after
  * `config.json` lands, and `open` checks the cached anchor against
- * the config's — a raced vault fails loudly, never opens quietly
- * inconsistent.
+ * the config's — a raced vault fails loudly, at this create or at the
+ * latest on its next open, never quietly inconsistent. Real mutual
+ * exclusion is the caller's serialization (event-store.md §4.1): a
+ * Web Lock in the browser, one process on disk.
  */
 export async function createFolderVault<M extends MintedDid = MintedDid>(
   backend: VaultBackend,

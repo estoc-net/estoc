@@ -27,6 +27,15 @@ export async function record<D extends JsonObject>(events: EventStore, fold: Vau
   return event;
 }
 
+/** The batch of `record`: the drafts land as one write (`appendAll`), all or none, then fold in order. */
+export async function recordAll(events: EventStore, fold: VaultFold, batch: Draft<JsonObject>[]): Promise<Event[]> {
+  const appended = await events.appendAll(batch);
+  for (const event of appended) {
+    fold.apply(event);
+  }
+  return appended;
+}
+
 // ---- import policy (event-store.md §10.3) ----------------------------------
 
 /** A fold over `events` alone: for policy questions, where no device is asking. */
@@ -243,10 +252,12 @@ export async function deleteContact(vault: VaultSide, fold: VaultFold, cid: stri
   // a late merge can hang tombstoned members on a live contact: their keys are still §9's to retire
   const hiddenKeys = fold.deletedContacts().filter((entry) => entry.members.some((member) => contact.hidden.includes(member))).flatMap((entry) => entry.keys);
   const keys = [...new Map([...hiddenKeys, ...contact.keys].map((entry) => [entry.key, entry] as const)).values()];
-  const tombstones: Event[] = [];
-  for (const member of contact.members) {
-    tombstones.push(await record(vault.events, fold, drafts.contactDeleted({ cid: member })));
-  }
+  // one write (`appendAll`): a crash leaves every member tombstoned or none — §9 step 1 cannot half-land
+  const tombstones = await recordAll(
+    vault.events,
+    fold,
+    contact.members.map((member) => drafts.contactDeleted({ cid: member }))
+  );
   const erased = await sweepDeleted(vault.events, fold);
   const retired = await retireDeleted(vault.events, fold, contact.cid, keys);
   const collected = await collectBlobs(vault.blobs, fold);

@@ -85,6 +85,27 @@ export class MemoryEventStore implements EventStore {
     });
   }
 
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
+    const cleans = drafts.map(cleanDraft); // every draft checked before anything lands
+    return this.serialise(() => {
+      const now = this.clock();
+      const events = cleans.map(
+        (clean): Event<D> => ({
+          eid: this.minter.mint(now.getTime()),
+          at: now.toISOString(),
+          author: this.self,
+          type: clean.type,
+          blobs: clean.blobs,
+          data: clean.data,
+        })
+      );
+      for (const event of events) {
+        this.add(event); // one turn of the chain: all in, in input order
+      }
+      return events;
+    });
+  }
+
   private add(event: Event): void {
     deepFreeze(event);
     this.held.set(event.eid, event);

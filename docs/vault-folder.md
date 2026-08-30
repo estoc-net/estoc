@@ -360,6 +360,14 @@ event, whole (§4). Whole-line durability across a process crash is
 what the backend gives; neither Node `fs` nor OPFS `fsync`s on append
 (`event-store.md` §4.1).
 
+A batch (`appendAll`, `event-store.md` §4.1) is not appended. The
+store mints a fresh segment and hands the whole batch to
+`VaultBackend.write`: a whole-file write is atomic across a process
+crash, so the segment is there entire or not at all — between two
+appends there is a gap for a crash to land in; inside one write there
+is none the process can make. The fresh segment is the newest this
+store minted, so it is the open segment from then on.
+
 ### 9.3 Ingesting
 
 One pass, reading first. The store reads its input whole and, before
