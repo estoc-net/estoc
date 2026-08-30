@@ -315,6 +315,8 @@ devices, and what its mediator answered.
 { "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: no `blobs`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
+// and one that is not in the vault's set but in the extension's own, the first line there, the application's:
+{ "type": "extension.object",    "blobs": ["<hash>", "…"], "data": { "root": "<root>" } }                 // holds the bytes `installed.object` names
 ```
 
 - `device.minted`: the first event a device writes — that this device
@@ -361,10 +363,19 @@ devices, and what its mediator answered.
   *provisional*, the root of a signed object; `name` is for lists.
   `object` is a name and not a reference: it is not listed in `blobs`,
   and the bytes it names, when the vault carries them at all, are
-  blobs of the extension's own store, written before this event and
-  gone with `purged`. They are never the vault's blobs, because a blob
-  the vault's set references is pinned for the vault's life (§12), and
-  an extension's code is exactly what should not be. `removed`: stop
+  blobs of the extension's own store, held there by
+  `extension.object` — an event of *that* store, the first, which the
+  application appends at install with the bytes in its `blobs` and
+  the same `root` in its `data`, before `installed` goes into the
+  vault's set (`event-store.md` §6.2). Collection runs per store over
+  that store's `blobs` (§8.3), so without such an event the bytes
+  would be an orphan the moment they were written; with it they live
+  as long as the store, and go with `purged`. They are never the
+  vault's blobs, because a blob the vault's set references is pinned
+  for the vault's life (§12), and an extension's code is exactly what
+  should not be. A crash between `extension.object` and `installed`
+  leaves a store no `installed` accounts for, which import reports
+  (`event-store.md` §7.3). `removed`: stop
   running it; its store stays, readable without it. `purged`: dispose
   of its store and its local state everywhere — the fold (§7.3) says
   so, the application calls `dispose` (`event-store.md` §6.2), and an
@@ -675,8 +686,10 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   explains a local absence without binding anyone. Not in version 2.
 - **What `extension.installed.object` names** (§5): the root of a
   signed object is the leaning; how a device that folds the event
-  obtains the bytes (the extension store's blobs, a fetch by the root)
-  is not decided. Type names for extensions are no longer a question:
+  obtains the bytes — from the extension store's `extension.object`,
+  when the vault carries them, or by a fetch by the root when it does
+  not — is not decided, nor whether a version of an extension is a
+  second `extension.object` in the same store or a new `ext`. Type names for extensions are no longer a question:
   an extension's events are in a set of its own (`event-store.md`
   §6.2).
 - **An erase for events that are not messages.** Collection (§8.3)

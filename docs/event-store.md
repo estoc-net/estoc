@@ -51,8 +51,8 @@ must be able to read and write.
 | `vault-folder.md` | the tree, `locate` / `decodeEvent`, segments, singletons, the folder store, snapshot and import as file operations | this |
 | `vault-events.md` | every event type and what it carries; channels; folds; erasing; deleting | this |
 
-What is *not* here: no path (`vault-folder.md`), no event type, no fold
-(`vault-events.md`), and nothing a copy keeps for itself beyond what
+What is *not* here: no path (`vault-folder.md`), no event type defined
+— §6.2 names four of `vault-events.md`'s — no fold (`vault-events.md`), and nothing a copy keeps for itself beyond what
 §6.1 says of it: a trace, a cache, an option is beside the vault, not
 in it.
 
@@ -642,7 +642,16 @@ What follows from it:
   nothing dangling.
 - **Blobs are the store's own.** An extension's `blobs` names blobs in
   its own `BlobStore`, and collection runs per store over that store's
-  events. An extension may *read* a blob of the vault's by hash,
+  events — so an unreferenced blob is an orphan there as anywhere. The
+  bytes the vault carries for the extension *itself*, when it carries
+  them, are blobs of this store too, and are held by an event of this
+  store that lists them: `extension.object` (`vault-events.md` §5),
+  which the application appends when it installs, before
+  `extension.installed` in the vault's set names the same root. The
+  vault's set never references them, so they are not pinned for the
+  vault's life; the extension's set does, so they are not an orphan;
+  and `dispose` takes them with the rest. An extension may *read* a
+  blob of the vault's by hash,
   through whatever the application hands it, and never pins one: an
   erase in the vault's set (`vault-events.md` §8) wins over any
   extension's reference, which is what sovereignty over one's own
@@ -659,10 +668,14 @@ What follows from it:
   person made through a tagging extension do not die with the
   extension unless the person says so.
 - **Devices are the vault's.** An extension store has no
-  `device.minted`: its authors are the vault's devices, and the
-  completeness check of import (§7.3) is the vault set's alone. It
-  appends as the same `self`, and the forked-self rule of `ingest`
-  (§5.2) holds in it as everywhere.
+  `device.minted`: its authors are the vault's devices, and import
+  (§7.3) asks the completeness check of the *vault's* merged set for
+  them — an extension event whose author has no `device.minted` there
+  is read and reported as incomplete, exactly as the vault's own would
+  be. It appends as the same `self`, and the forked-self rule of
+  `ingest` (§5.2) holds in it as everywhere; because one import is
+  many `ingest`s, the check runs over every store before the first
+  write (§7.3).
 - **Disposal is an operation, decided above.** Which extensions are
   purged is a fold over the vault's set (`vault-events.md` §7.3); a
   store does not read `extension.purged`, or any type. The application
@@ -671,6 +684,21 @@ What follows from it:
   store and the extension's local state (§6.1) together, so that
   options, cache and trace do not outlive what they were about. Import
   (§7.3) and snapshot ask the same fold, as they ask the blob rule.
+- **Disposal revokes.** A handle is the permission (above), so
+  `dispose` must end the permission, not only the bytes: the
+  application stops the extension first; `dispose` is serialised with
+  the store's operations — it waits for those in flight and none
+  begin after; every handle to the store, held by anyone, is dead from
+  then on and each later `append`, `scan`, `changes`, `put` rejects
+  with `Disposed` (nothing is silently re-created); and `extension(ext)`
+  rejects an `ext` that is not open on disk rather than opening one,
+  so a dead handle cannot be replaced by asking again. Creation is its
+  own call, `create(ext)`, which the application makes once, at
+  install, for a fresh uuidv7. A store keeps no memory of what it
+  disposed of — that is the fold's — so a re-install is a new
+  `extension.installed` and a new `ext`, never the old one created
+  again; an application that created a purged `ext` again would be
+  contradicting its own fold, and nothing below the fold can tell.
 
 A vault, to a program, is therefore its own three stores, a map from
 `ext` to an extension's two, and `dispose`:
@@ -678,9 +706,10 @@ A vault, to a program, is therefore its own three stores, a map from
 ```ts
 interface Vault {
   events: EventStore; blobs: BlobStore; files: FileStore;
-  extension(ext: string): { events: EventStore; blobs: BlobStore };   // opened on first use
+  extension(ext: string): { events: EventStore; blobs: BlobStore };   // an existing one; rejects an unknown `ext`
+  create(ext: string): Promise<{ events: EventStore; blobs: BlobStore }>; // once, at install; rejects one that exists
   extensions(): Promise<string[]>;
-  dispose(ext: string): Promise<void>;                                 // store and local state, whole
+  dispose(ext: string): Promise<void>;                                 // store and local state, whole; every handle dead
 }
 ```
 
@@ -761,13 +790,26 @@ Three kinds of thing, three rules, in this order:
 
 Then, for each extension store the source holds (§6.2): its events
 and then its blobs, by the first two rules, into the store of the same
-`ext` here, opened if absent — with the vault set's completeness check
-(a device without its `device.minted`) not applied, since an extension
-store has no such event. One that the fold over the merged vault set
-says is purged (`vault-events.md` §7.3) is not read, as an erased blob
-never comes back: the rule is the events', asked as the blob rule is,
-and the store applies it without reading a type. One no
-`extension.installed` accounts for is read and reported.
+`ext` here, created if absent. The completeness check of rule 1 is
+asked of the merged *vault* set — an extension event whose author has
+no `device.minted` there is read and reported as incomplete — since an
+extension store has no such event of its own. One that the fold over
+the merged vault set says is purged (`vault-events.md` §7.3) is not
+read, as an erased blob never comes back: the rule is the events',
+asked as the blob rule is, and the store applies it without reading a
+type. One no `extension.installed` accounts for is read and reported.
+
+**One import, one forked-self check.** `ingest` promises to write
+nothing when `self` is forked, and an import is one `ingest` per
+store; the promise must hold for the import, not for each store in
+turn, or a fork found in the third store would find the first two
+already written. So an import reads everything first — the vault's
+set, then the fold that says which extensions are purged, then every
+extension set the fold lets in — and runs the forked-self check of
+§5.2 over all of them before the first write. A folder reads the other
+copy whole anyway (`vault-folder.md` §8.3, §9.3); a store that cannot
+hold an import in memory has to stage it, which is that store's
+problem and not a change to the rule.
 
 **Restore** is the same steps into an empty store, the format
 and anchor written last, as today; a folder store restoring into an
@@ -905,7 +947,7 @@ What the code says today, for the record:
 - **Indexing** (§5.3): equality on any envelope field or top-level
   field of `data` lets a store index what it
   likes; whether the folder store should keep a local index for the
-  pair under its owner's `local/<owner>/cache/`, or leave all of that to folds, is for when
+  pair under its owner's cache (`vault-folder.md` §6.4), or leave all of that to folds, is for when
   open is slow.
 - **`fsync` on Node** (§5.1): a per-append `fsync` in `FsBackend` would
   let the daemon claim power-loss durability. Cheap; not decided.

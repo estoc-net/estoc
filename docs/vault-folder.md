@@ -78,10 +78,14 @@ The principles of `event-store.md` §2 as they land on a file system.
     blobs/<hash>
   local/                                     this copy's own; never in a snapshot, never merged; §6.4
     self.json                                which <dev> this copy writes as, and which instance
-    <owner>/                                 one directory per owner of local state: the agent, the folds, an extension
+    agent/                                   the agent's local state; the folds' would be beside it, by name
       options.json                           what this device was told; kept, not rebuildable
       cache/                                 rebuildable; delete at will
       trace/<seg>.jsonl                      what this device saw; not rebuildable, pruned by retention; as v1 §6.10
+    extensions/<ext>/                        an extension's local state: the same three, mirroring extensions/<ext>/ above
+      options.json
+      cache/
+      trace/<seg>.jsonl
 ```
 
 Gone from v1: `contacts/<cid>.json`, `invitations/`, `messages/`,
@@ -98,18 +102,26 @@ its `ext`: `devices/<dev>/<seg>.jsonl` and `blobs/<hash>`, by every rule
 of §4, §5, §7 and §8 — one writer per device directory, segments named
 uuidv7, blobs flat — and nothing else: no `config.json` (the identity
 is the vault's), no `keystore.json`, no `local/` (an extension's local
-state is `local/<ext>/`, §6.4), and no `extensions/` of its own. `ext`
+state is `local/extensions/<ext>/`, §6.4), and no `extensions/` of its
+own. `ext`
 is the uuidv7 that `extension.installed` minted (`vault-events.md`
 §5); a directory under `extensions/` not named like one is a file
 (§8.6). A folder store opens one store per such directory, and a
 reader with a text editor reads it as it reads the vault: the lines
 are the events, whatever the extension meant by them.
 
-`dispose(ext)` (`event-store.md` §6.2) removes `extensions/<ext>/` and
-`local/<ext>/` whole; the application calls it when the fold over the
-vault's set says the extension is purged (`vault-events.md` §7.3). The
-folder does not read `extension.purged`. Nothing else in the tree is
-ever removed whole.
+`create(ext)` makes `extensions/<ext>/` empty, once, at install;
+`extension(ext)` opens one that exists and refuses one that does not
+(`event-store.md` §6.2). `dispose(ext)` removes `extensions/<ext>/` and
+`local/extensions/<ext>/` whole — the two mirror each other so that
+the one removal is one rule — after the operations in flight on that
+store have finished and before any can begin, and every handle to the
+store is dead from then on (`Disposed`); the application calls it
+when the fold over the vault's set says the extension is purged
+(`vault-events.md` §7.3). The folder does not read `extension.purged`,
+and does not remember what it removed: a later `create` of the same
+`ext` is the application contradicting its fold. Nothing else in the
+tree is ever removed whole.
 
 ## 4. Folder ↔ store
 
@@ -230,10 +242,13 @@ else. Never in a snapshot, never merged, never read by another device.
   writing `self.json` and the first append leaves exactly that gap,
   and the check is idempotent.
 - Everything else under `local/` belongs to an **owner**
-  (`event-store.md` §6.1) and sits under `local/<owner>/`, a directory
-  named by the owner — `agent` for the agent, a name of the
-  application's for its folds, an `ext` for an extension (§3.1) — and
-  holds the owner's three kinds of local state, each in its place:
+  (`event-store.md` §6.1), in a directory of its own: `local/agent/`
+  for the agent, a name of the application's beside it for its folds,
+  and `local/extensions/<ext>/` for an extension — under `extensions/`
+  so that the named owners and the minted ids do not share a
+  directory, and so that the path mirrors `extensions/<ext>/` (§3.1),
+  which is what lets `dispose` remove the two by one rule. Each holds
+  the owner's three kinds of local state, each in its place:
   - `options.json`: what this device was told, and only this device.
     v1 §6.10 said a retention policy is never written into the vault;
     `local/` is not the vault in the sense that matters (it is not
@@ -409,9 +424,12 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
 
 1. **Events.** Decode every line of every segment under `devices/*/`
    (§4) and `ingest` the result (§8.3), `self`'s lines included: a forked
-   self stops the import before anything is written. A device
-   directory that arrives without its `device.minted` is read — its
-   events are still that device's — and reported as incomplete.
+   self stops the import before anything is written — and "anything"
+   is the import's, not the store's: step 4's stores are read, and
+   checked for a forked self, before step 1 writes (`event-store.md`
+   §7.3). A device directory that arrives without its `device.minted`
+   is read — its events are still that device's — and reported as
+   incomplete.
 2. **Blobs**, after the events: a blob absent here and present there
    is copied iff it is not collectable over the merged event set
    (`vault-events.md` §8.3) and its bytes hash to its name; one that
@@ -422,13 +440,18 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    copied when absent, never overwritten; `local/` is not in the
    snapshot and is not touched.
 4. **Extension stores**, each by steps 1 and 2 into the store of the
-   same `ext` here, opened if absent (`event-store.md` §7.3); the
-   `device.minted` check of step 1 does not apply, an extension store
-   having none. One that the fold over the merged vault set says is
-   purged (`vault-events.md` §7.3) is not read — asked as step 2 asks
-   the blob rule, never by reading a type here — and the application
-   then disposes of any such store still on disk (§3.1). One no
-   `extension.installed` accounts for is read and reported.
+   same `ext` here, created if absent (`event-store.md` §7.3); the
+   `device.minted` check of step 1 is asked of the merged vault set,
+   an extension store having no such event of its own — an author
+   without one there is read and reported as incomplete. One that the
+   fold over the merged vault set says is purged (`vault-events.md`
+   §7.3) is not read — asked as step 2 asks the blob rule, never by
+   reading a type here — and the application then disposes of any
+   such store still on disk (§3.1). One no `extension.installed`
+   accounts for is read and reported. Read, for all of this, means
+   before step 1 writes: the import is one read of the whole source
+   and one forked-self check across every set it will write, then the
+   writes in this order.
 
 ### 9.4 Restore
 
@@ -485,5 +508,5 @@ to change for it. What a deletion leaves on disk, and why, is
 - **Reading by hand.** A backup is one JSONL per device; finding one
   conversation in it is `grep` for its `peerKey`. Whether a folder
   store should also keep a per-channel index under its owner's
-  `local/<owner>/cache/` for its own reads is `event-store.md` §10,
+  cache directory (§6.4) for its own reads is `event-store.md` §10,
   not the format's.
