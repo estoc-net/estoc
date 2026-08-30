@@ -20,9 +20,9 @@ Version 2 has no records. Every event is either an **observation**
 (what the person chose); everything else — which contact a message
 belongs to, what a contact's current DID is, whether an invitation is
 still open — is a **fold** over those events, rebuildable. An
-observation carries the pair of keys the envelope proved — our key and
-their key, not their DID and not our decision about who they are; a
-decision carries what it is about — a contact, a key, a device, a
+observation carries the channel the envelope proved — one key of ours
+and one key of theirs, not their DID and not our decision about who
+they are; a decision carries what it is about — a contact, a key, a device, a
 message. Keys are named by random ids, not by the contact they were
 minted for. A message's body is a blob its skeleton names, and erasing
 is unlinking blobs, never events.
@@ -32,7 +32,7 @@ is unlinking blobs, never events.
 The principles of `event-store.md` §2, as they apply to meaning.
 
 1. **Observation before decision.** An event is one or the other, never
-   both. An observation about a counterpart carries the partition the
+   both. An observation about a counterpart carries the channel the
    envelope proves (§3) and needs no local state to place; an
    observation about a mediator — what it answered — carries the
    mediation it belongs to (§5). A decision carries the thing it is
@@ -50,18 +50,22 @@ The principles of `event-store.md` §2, as they apply to meaning.
 5. **Nothing is deleted.** An erase is a decision plus an unlinked blob
    (§8); a deleted contact is a tombstone (§9).
 
-**Type names.** Every type is `noun.verb` — `did.minted`,
-`contact.attach`, `message.in` — and the noun says what kind of thing
-the event is about. Since every device's events are one log, the type
-is the only thing that says what a line is; there is no directory to
-borrow meaning from.
+**Type names.** Every type is `subject.fact` — `did.minted`,
+`contact.attached`, `message.in`, `device.label`. The subject names
+what the event concerns, and is what a payload field identifies (a
+`cid`, a `key`, a `dev`, a `mid`, a channel's pair); the fact is a
+transition (`minted`, `attached`), a field that was set (`label`,
+`petname`), a direction (`in`, `out`) or an outcome (`attempted`).
+Since every device's events are one log, the type is the only thing
+that says what a line is; there is no directory to borrow meaning
+from.
 
 ## 2. Identity, devices, keys
 
 - **The identity** is the anchor: `did:key` from the key named
   `anchor`, fixed at creation and recorded in `config.json`
   (`vault-folder.md` §6.1). What the identity calls itself is
-  `label.set` (§5).
+  `identity.label` (§5).
 - **A device** is an `author` (`event-store.md` §4). A device's first
   event is `device.minted`; a device is named, and retired, by
   decisions from any device (§5). `self` is the device a fold is asked
@@ -84,26 +88,47 @@ borrow meaning from.
 
 - **The key cache** (`keystore.json`, `vault-folder.md` §6.2) is
   rebuilt by walking every device's log for `did.minted` and
-  `mediation.set`.
+  `mediation.created`.
 
-## 3. Partitions
+## 3. Channels
 
-A partition is every observation involving one key of ours and one
-public key of theirs. It is not a place: it is two fields, `myKey` and
-`peerKey`, that every observation carries, and a fold groups by. They
-are set by the envelope alone — the key that opened it and the key that
-sealed or signed it — with no lookup:
+A **channel** is every observation involving one key of ours and one
+public key of theirs. It is not a transport, not a session and not a
+place in the store: it has no state of its own and no id. It is two
+fields, `myKey` and `peerKey`, that every observation carries and a
+fold groups by, set by the envelope alone — the key that opened it and
+the key that sealed or signed it — with no lookup:
+
+```ts
+type ChannelKey = {
+  myKey: string | null;    // the name of a key of ours (§2); null: no key of ours was involved
+  peerKey: string | null;  // the fingerprint of a public key of theirs; null: the sender is anonymous
+};
+```
+
+`ChannelKey` is a value type above the seam. On the line there are
+only the two fields, always both present on an observation; nothing is
+derived from them — no channel id, no composite string — and two
+devices agree on a channel because the envelope proved the same keys
+to both (`event-store.md` §2 principle 2). `null` is a value, not an
+absence: a field that is missing is not a channel field, and the
+equality filter (`event-store.md` §5.3) matches `null` as it matches
+any other value. The two fields are not the same kind of thing:
+`myKey` is a key *name*, a derivation path we hold; `peerKey` is a
+*fingerprint* of a key we only ever see, which is all one can name of
+a key one does not hold.
 
 | envelope | `myKey` | `peerKey` | `kind` |
 | --- | --- | --- | --- |
 | authcrypt, opened with our key K, sealed by their X25519 key P | K | hash(P) | `authcrypt` |
-| anoncrypt, opened with K, unsigned | K | `anon` | `anoncrypt` |
-| signed by their Ed25519 key P, bare or inside anoncrypt opened with K | `-` or K | hash(P) | `signed` |
+| anoncrypt, opened with K, unsigned | K | `null` | `anoncrypt` |
+| signed by their Ed25519 key P, bare or inside anoncrypt opened with K | `null` or K | hash(P) | `signed` |
 | outbound, sealed from our K to their key P | K | hash(P) | `authcrypt` |
-| outbound, sealed anonymously to their key P | `-` | hash(P) | `anoncrypt` |
+| outbound, sealed anonymously to their key P | `null` | hash(P) | `anoncrypt` |
 
 The key that proves the sender places: the authcrypt sealing key, else
-the signing key, else `anon`. A signature inside authcrypt does not move
+the signing key, else none and `peerKey` is `null`; anonymity is in
+`kind` (§3.1), never in a stand-in key. A signature inside authcrypt does not move
 the message — the line records it (`signedBy`, §3.1), and if one
 document lists both keys a `peer.resolved` says so. Transport wrappers
 (`forward`) are not messages and are not recorded; the trace (v1 §6.10)
@@ -117,65 +142,65 @@ i.e. the hash of the bytes a `did:key` of that key encodes (`z6LS…` for
 X25519, `z6Mk…` for Ed25519). Hashed rather than used raw for uniform
 length and for safety anywhere it becomes a name.
 
-The **partition id**, `pid`, is the string `<myKey>/<peerKey>`. It is
-the one id in the vault that is computed rather than minted
-(`event-store.md` §2 principle 2), because it must come out the same on
-every device: it is what a `contact.attach` (§6) names.
-
 The DID is **not** in the pair. A DID is a name a key wears:
 `did:peer:4` commits to its keys, `did:web` and `did:peer:2` can change
 them, and the envelope proves the key either way. So a `did:web` owner
-rotating keys opens a new partition exactly as a `from_prior` rotation
+rotating keys opens a new channel exactly as a `from_prior` rotation
 does, and the two are linked the same way — by observation (§3.1
 `peer.resolved`). A consequence, not a goal: neither side's routing DID
-is in the pair, so a partition survives either side changing mediator
+is in the pair, so a channel survives either side changing mediator
 while keeping keys.
 
 ```
 { "myKey": "did/0198…",           "peerKey": "k3j9…" }   authcrypt with our did/0198…
-{ "myKey": "did/0198…",           "peerKey": "anon"  }   anoncrypt to our did/0198…
-{ "myKey": "-",                   "peerKey": "k3j9…" }   signed only
+{ "myKey": "did/0198…",           "peerKey": null    }   anoncrypt to our did/0198…, unsigned
+{ "myKey": null,                  "peerKey": "k3j9…" }   signed only
 { "myKey": "mediation/0198…/me",  "peerKey": "q4w8…" }   this device's mediator
 ```
 
 Mediation traffic — mediate-request, keylist updates, pickup — carries
 a pair like everything else, under the mediation's `me` key. Those
-partitions are the mediator's, not any contact's: the fold joins them to
-`mediation.set.mediatorDid` (§7.3) and keeps them out of the identity
+channels are the mediator's, not any contact's: the fold joins them to
+`mediation.created.mediatorDid` (§7.3) and keeps them out of the identity
 graph (§7.1).
 
-The same partition is observed by every device that saw it; the
-partition's events are the union of theirs. "Every partition under
+The same channel is observed by every device that saw it; the
+channel's events are the union of theirs. "Every channel under
 `myKey`" is "everyone who ever wrote to this key of ours" — which is not
 the same as one contact: a key is a DID, and a DID can be handed on.
 Attribution therefore anchors on the whole pair (§7.1), never on
 `myKey` alone.
 
-### 3.1 Partition events
+### 3.1 Channel events
 
 Every observation carries `myKey` and `peerKey`; the block shows them
 once.
 
 ```jsonc
 { "eid": "0198…", "author": "k7q3ma", "at": "…", "myKey": "did/0198…", "peerKey": "k3j9…",
-  "type": "part.opened",   "key": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
-{ "type": "message.in",    "mid": "0198…", "id": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "blobs": ["<body>", "<att>"], "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" }
-{ "type": "message.out",   "mid": "0198…", "id": "…", "msgType": "…", "thid": "…", "bytes": 1120, "blobs": ["<body>"], "body": "<body>", "attachments": [] }
-{ "type": "delivery",      "mid": "0198…", "attempt": 1, "status": "failed", "error": "…" }
-{ "type": "delivery",      "mid": "0198…", "attempt": 2, "status": "sent" }
+  "type": "channel.firstSeen", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" }
+{ "type": "message.in",    "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "blobs": ["<body>", "<att>"], "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" }
+{ "type": "message.out",   "mid": "0198…", "wireId": "…", "msgType": "…", "thid": "…", "bytes": 1120, "blobs": ["<body>"], "body": "<body>", "attachments": [] }
+{ "type": "delivery.attempted", "mid": "0198…", "attempt": 1, "outcome": "failed", "error": "…" }
+{ "type": "delivery.attempted", "mid": "0198…", "attempt": 2, "outcome": "sent" }
+{ "type": "delivery.held", "mid": "0198…", "because": "imported" }
+{ "type": "profile.nameClaimed", "mid": "0198…", "name": "Alice L." }
+{ "type": "profile.shared",  "mid": "0198…" }
 { "type": "peer.resolved", "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" }
 { "type": "peer.rotated",  "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" }
 { "type": "message.erased", "mid": "0198…", "drop": ["<hash>"], "because": "user" }
 ```
 
-- `part.opened`: written once by each device the first time it sees a
-  pair — the full peer key (the hash in `peerKey` is not reversible;
-  absent for `anon`), the kind, and the DID the key wore when first
-  seen. Readable context; the truth about which DIDs list a key is
+- `channel.firstSeen`: written once by each device the first time it
+  sees a channel — the peer's full public key, `peerPublicKey` (the
+  fingerprint in `peerKey` is not reversible; absent when `peerKey` is
+  `null`), the `kind` of envelope, and the DID the key wore when first
+  seen. It says nothing about a channel's later state, because a
+  channel has none: frozen (§3.2) is a fold. Readable context; the truth about which DIDs list a key is
   `peer.resolved`. "First" is what the writing device had not seen; two
   devices each write their own.
 - `message.in` / `message.out`: the **skeleton** of a message — its
-  local `mid` (minted at append), the wire `id`, `msgType`, `thid`,
+  local `mid` (minted at append), the wire id (`wireId`), `msgType`, `thid`,
   `pthid`, `bytes` (the size of the plaintext), `blobs` — the
   envelope's list (`event-store.md` §3) of every blob the line holds —
   with `body`, the hash of the blob holding the plaintext (§4), and
@@ -189,19 +214,29 @@ once.
   search index, or a collector needs is on the line; nothing a person
   said is. `direction` is the event type and `sender` is the pair;
   neither is a further field.
-- `delivery`: as v1 §6.6, minus `to` — the pair is the `to`; the DID we
-  sealed to is in the message's `msg.to`. Carries the pair so that it
-  is its own thread's without a join. Fold as before: no event =
-  pending, last `failed` = retry, `held` = by hand, `sent` = final.
-  `held` is a device decision; a fold reads only the writing device's
-  `held` as binding on that device.
+- `delivery.attempted`: one attempt on the wire and its `outcome`,
+  `sent` or `failed` — an observation, as v1 §6.6 minus `to`: the pair
+  is the `to`, and the DID we sealed to is in the message's `msg.to`.
+  `delivery.held`: this device's decision to stop retrying — by hand
+  (`because: user`) or after an import (`imported`, §10). The two are
+  one wire fact and one decision, and are two types for that reason.
+  Both carry the pair so that a thread's deliveries are its own without
+  a join. Fold as before: no event = pending, last attempt `failed` =
+  retry, `held` = by hand, `sent` = final. A fold reads only the
+  writing device's `held` as binding on that device.
+- `profile.nameClaimed` / `profile.shared`: lifted from a `user-profile`
+  message on this channel — the name the peer claimed, and that a
+  profile of ours went out — with the `mid` as grounds. They are
+  observations and carry no `cid`; a contact's `claimedName` (§7.2) is
+  the latest across its attributed channels. *Provisional:* written,
+  or derived from `message.*` by `msgType` on fold (§12).
 - `peer.resolved`: we resolved a DID and found this pair's peer key in
   its document — on every inbound (the skid's DID) and before every
   outbound (the DID we are writing to), written only when the result
   differs from the pair's latest `peer.resolved` for that DID (the fold
   is the same either way; the log is shorter). Records the whole key
   list and the service, so a later reader sees what the document said
-  then. This is the edge that joins partitions: two pairs whose peer
+  then. This is the edge that joins channels: two channels whose peer
   keys were each found under one DID are one counterpart (§7.1). The
   `keys` list is context, never an edge — a document can list keys it
   does not control. For `did:peer:4` the resolution is local and
@@ -213,20 +248,20 @@ once.
   evidence, and the `mid` it came from. The other edge the fold
   follows. *Provisional:* a separate event rather than re-parsing every
   message on fold.
-- `message.erased` (§8) and `delivery { status: held }` are the two
-  decisions that carry a pair, because they are about one message in
-  it (principle 1).
+- `message.erased` (§8) and `delivery.held` are the two decisions
+  that carry a pair, because they are about one message in it
+  (principle 1).
 - Nothing about which contact the peer is goes on any of these.
 
-### 3.2 Frozen partitions
+### 3.2 Frozen channels
 
-A partition is **frozen** when its `myKey` is not a current key of ours
+A channel is **frozen** when its `myKey` is not a current key of ours
 (retired, or a mediation that is no longer current on the device asking)
 or its `peerKey` is not in the current document of the contact's current
 DID (§7.2). Frozen is a fold, asked per device (`self`), never
-written: a frozen partition still receives inbound observations (a late
+written: a frozen channel still receives inbound observations (a late
 envelope to an old key is a fact) but nothing is sent from it. An
-unattributed partition is never written from, so the question only
+unattributed channel is never written from, so the question only
 arises for attributed ones.
 
 ## 4. Bodies
@@ -266,10 +301,10 @@ devices, and what its mediator answered.
 { "type": "did.published", "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" }
 { "type": "did.published", "key": "did/0198…", "as": "profile", "uses": "many" }
 { "type": "did.retired",   "key": "did/0198…", "because": "mediation-changed" }
-{ "type": "mediation.set",     "id": "0198…", "mediatorDid": "did:web:mediator.estoc.dev", "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" } }
+{ "type": "mediation.created", "id": "0198…", "mediatorDid": "did:web:mediator.estoc.dev", "me": { "key": "mediation/0198…/me", "did": "did:peer:4…" } }
 { "type": "mediation.granted", "id": "0198…", "routingDid": "did:peer:2…" }
 { "type": "mediation.retired", "id": "0198…", "because": "changed" }
-{ "type": "label.set",      "name": "Alice" }
+{ "type": "identity.label", "name": "Alice" }
 { "type": "device.label",   "dev": "k7q3ma", "name": "phone" }
 { "type": "device.retired", "dev": "p2x8rq", "because": "lost" }
 ```
@@ -279,7 +314,7 @@ devices, and what its mediator answered.
   existence travels with its events. Immutable by being an event; a
   second `device.minted` from one `author` is two writers sharing it
   (`vault-folder.md` §11).
-- `did.minted` and `mediation.set` are the only places a DID string of
+- `did.minted` and `mediation.created` are the only places a DID string of
   ours is recorded (the snapshot, v1 §2.4); the key is derived from the
   name and compared on use. The `mediation` id says which device's
   arrangement the routing DID came from.
@@ -291,16 +326,17 @@ devices, and what its mediator answered.
   is therefore not a file: it is a `did.published` with `as: oob`, and
   "open" is a fold (§7.4).
 - `did.retired`: no further outbound from this key; inbound still opens.
-- `mediation.set` / `granted` / `retired`: v1's `config.mediation` as
-  events — one device's arrangement with one mediator, which is why the
-  device writing them is the device they bind. `set` mints the
+- `mediation.created` / `granted` / `retired`: v1's `config.mediation`
+  as events — one device's arrangement with one mediator, which is why
+  the device writing them is the device they bind. `created` mints the
   mediation id and the `me` key; `granted` is an observation, what the
   mediator answered (the routing DID); `retired` closes it. Which key
   is published as this device's address is `did.published { as:
   profile }`, not a field here. The device's current mediation is the
-  fold: the last `set` without a `retired`, plus its `granted` if any.
+  fold: the last `created` without a `retired`, plus its `granted` if
+  any.
   Another device can *see* it (§7.3) without adopting it.
-- `label.set`: what the identity calls itself — what `user-profile`
+- `identity.label`: what the identity calls itself — what `user-profile`
   announces. Latest wins (`event-store.md` §4); two devices renaming at
   once is an ordinary LWW, not a conflict worth showing.
 - `device.label`: a name for a device, the person's, for lists. `dev`
@@ -321,20 +357,20 @@ log is the union, across devices, of the events that name it.
   "type": "contact.created" }
 { "type": "contact.petname",   "name": "alice" }
 { "type": "contact.flag",      "pinned": true }
-{ "type": "contact.claimedName", "name": "Alice L.", "mid": "0198…" }
 { "type": "contact.useKey",    "key": "did/0198…", "because": "minted" }
-{ "type": "contact.attach",    "pid": "did/0198…/k3j9…", "because": "invitation", "oobId": "…" }
-{ "type": "contact.attach",    "pid": "did/0198…/k3j9…", "because": "accepted" }
-{ "type": "contact.attach",    "pid": "-/m8v2…", "because": "manual" }
-{ "type": "contact.detach",    "pid": "…" }
-{ "type": "contact.absorb",    "from": "<cid>", "supersedes": ["<eid>", "<eid>"] }
-{ "type": "contact.profileShared", "mid": "0198…" }
+{ "type": "contact.attached",  "myKey": "did/0198…", "peerKey": "k3j9…", "because": "invitation", "oobId": "…" }
+{ "type": "contact.attached",  "myKey": "did/0198…", "peerKey": "k3j9…", "because": "accepted" }
+{ "type": "contact.attached",  "myKey": null,        "peerKey": "m8v2…", "because": "manual" }
+{ "type": "contact.detached",  "myKey": "…",         "peerKey": "…" }
+{ "type": "contact.merged",    "from": "<cid>", "supersedes": ["<eid>", "<eid>"] }
 { "type": "contact.deleted" }
 ```
 
-- `contact.attach pid`: **the one attribution anchor.** This partition
-  — this key of ours *and* this key of theirs — belongs to this
-  contact. Written when the person accepts someone who took our
+- `contact.attached { myKey, peerKey }`: **the one attribution
+  anchor.** This channel — this key of ours *and* this key of theirs —
+  belongs to this contact. It names the channel by the same two fields
+  an observation carries (§3), and nothing is computed from them: a
+  decision cites what the envelope proved. Written when the person accepts someone who took our
   invitation (`because: invitation`, the pair the accepted envelope
   carried); when we take someone's invitation (`accepted`, the pair our
   first outbound opens — `peer.resolved` before sending fixes the peer
@@ -347,13 +383,15 @@ log is the union, across devices, of the events that name it.
   only — it picks the `myKey` to seal with and says nothing about who
   writes back. Minting a key toward a contact is `did.minted` +
   `contact.useKey`.
-- `contact.absorb from`: the other contact's attaches and useKeys are
-  this contact's; `supersedes` lists the conflicting eids it resolves.
-  The absorbed contact gets a `contact.deleted`.
-- `contact.claimedName` and `contact.profileShared` are observations
-  wearing a decision's clothes — they come from a message — and are
-  kept here for the fold's convenience, with the `mid` as grounds.
-  *Provisional.*
+- `contact.merged from`: the other contact is merged into this one —
+  its attaches and useKeys are this contact's; `supersedes` lists the
+  conflicting eids it resolves; the contact merged away gets a
+  `contact.deleted`. Merged in the address-book sense; the merge of two
+  vaults is `ingest` (§10) and is not an event.
+- What a peer called themself, and that we sent them our profile, are
+  not decisions: they are observations on a channel
+  (`profile.nameClaimed`, `profile.shared`, §3.1) and reach the contact
+  through attribution (§7.1).
 - `contact.deleted` is a tombstone (§9).
 - Latest-wins fields (`petname`, each `flag`) resolve by canonical
   order (`event-store.md` §4).
@@ -369,28 +407,28 @@ events in any order, one at a time (`event-store.md` §5.4). They read
 every device's events. They are the only place the word "contact" means
 anything to a message.
 
-### 7.1 Attribution — `pid → cid`
+### 7.1 Attribution — channel → `cid`
 
-Build the **identity graph**: nodes are partitions and DIDs — leaving
-out `anon` partitions, which have no peer key and join nothing, and
-mediation partitions (`myKey` under `mediation/`), which are the
-mediator's (§7.3). A `peer.resolved` carrying pair P joins P to its
-`did`; a `peer.rotated` joins its `from` to its `to`. Only the pair an
+Build the **identity graph**: nodes are channels and DIDs — leaving
+out channels whose `peerKey` is `null`, which have no peer key and
+join nothing, and mediation channels (`myKey` under `mediation/`),
+which are the mediator's (§7.3). A `peer.resolved` carrying channel C
+joins C to its `did`; a `peer.rotated` joins its `from` to its `to`. Only the pair an
 event carries — the key that actually opened or signed an envelope —
 joins; the `keys` a document lists never do, because a document can
-list keys it does not control. Take P's connected component and collect
-every live `contact.attach` (no later `contact.detach`, not superseded
-by a `contact.absorb`) whose `pid` is in it:
+list keys it does not control. Take C's connected component and collect
+every live `contact.attached` (no later `contact.detached`, not
+superseded by a `contact.merged`) whose channel is in it:
 
-- **none** → P is **unattributed**: a stranger, or a second taker of a
+- **none** → C is **unattributed**: a stranger, or a second taker of a
   one-use key, or someone the contact handed our DID on to. The
   application shows it as such; the person's "accept" is a
-  `contact.attach`.
-- **one contact** → P belongs to it, and so does every partition in the
+  `contact.attached`.
+- **one contact** → C belongs to it, and so does every channel in the
   component (a `did:web` key rotation, a `from_prior` hop, a signing key
   beside an agreement key).
-- **several** → a **multi-value**: the fold returns all of them, the
-  application shows the conflict, and a `contact.absorb` resolves it.
+- **several** → a **multi-valued conflict**: the fold returns all of
+  them, the application shows it, and a `contact.merged` resolves it.
   This happens when two devices each accepted the same stranger while
   apart; it is not an error.
 
@@ -401,30 +439,31 @@ The fold never parses key names.
 
 ### 7.2 Contact state
 
-From a contact's events and its attributed partitions:
+From a contact's events and its attributed channels:
 
-- `petname`, flags, `claimedName`: latest event.
+- `petname`, flags: latest event. `claimedName`: the latest
+  `profile.nameClaimed` across the attributed channels.
 - `keys[]`: every live `contact.useKey`, with its `did.minted` DID.
 - `theirDids[]`: the DIDs in the contact's component of the identity
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
   end, and its current keys are the latest `peer.resolved` for it. Two
-  ends = multi-value, shown.
+  ends = a multi-valued conflict, shown.
 - `addressedAs`: the `myKey` of the latest `message.in` across attributed
-  partitions.
-- `writeTo`: the unfrozen partitions (§3.2). There may be several — more
+  channels.
+- `writeTo`: the unfrozen channels (§3.2). There may be several — more
   than one key of ours, more than one of theirs; the default is the one
   with the latest `message.in`, else the one under the latest
   `contact.useKey`. None means "must mint or rotate before sending".
-- `thread`: the union of `message.*` across attributed partitions and
-  devices, in canonical order. Cross-partition and cross-device order
+- `thread`: the union of `message.*` across attributed channels and
+  devices, in canonical order. Cross-channel and cross-device order
   relies on `at` alone, as v1 §7 already required across segments.
 
 ### 7.3 My DIDs and devices
 
 Per `did/<id>`: minted, registered (per device), published-as, uses,
 retired, `usedBy` (the contacts with a live `contact.useKey` on it), and
-`takenBy` (the contacts with a `contact.attach` on one of its
-partitions). Per device: its current mediation, the partition its
+`takenBy` (the contacts with a `contact.attached` on one of its
+channels). Per device: its current mediation, the channel its
 mediator's key opened (`myKey` = `mediation/<id>/me`, joined to
 `mediatorDid` by `peer.resolved`), its label, whether it is retired —
 so the application can list "your addresses" across every device
@@ -433,11 +472,11 @@ without adopting another's mediation. For the identity: its `label`.
 ### 7.4 Invitations
 
 An invitation is a `did.published { as: oob, uses: one }`. It is **open**
-iff its key has no `did.retired` and no live `contact.attach` names a
-partition under it. It is **taken** by the contact whose
-`contact.attach` does — which also makes that contact's
+iff its key has no `did.retired` and no live `contact.attached` names
+a channel under it. It is **taken** by the contact whose
+`contact.attached` does — which also makes that contact's
 `contact.useKey` on the key implicit; the fold adds it. A second
-stranger writing to a taken one-use key lands in its own partition (an
+stranger writing to a taken one-use key lands in its own channel (an
 observation is never refused a home), is in no attached component, and
 is shown unattributed; the application's policy is to turn it away.
 Single use is therefore a policy, not a format guarantee — two devices
@@ -499,9 +538,9 @@ one, never making a blob collectable, undone by nothing but the blob
 being present again (§12).
 
 Skeleton lines are small (a few hundred bytes) and are kept for the
-life of the vault, along with `part.opened`, `peer.resolved`, and every
-erase. What that leaves behind after a deletion is stated in §10.
-Should a vault one day need to drop skeletons too, a per-partition
+life of the vault, along with `channel.firstSeen`, `peer.resolved`, and
+every erase. What that leaves behind after a deletion is stated in §10.
+Should a vault one day need to drop skeletons too, a per-channel
 erase (a tombstone that suppresses everything before it, merged by
 presence) is the shape it would take; version 2 does not define one
 (§12).
@@ -512,7 +551,7 @@ Deletion is a set of decisions, all appended by this device; no event
 is removed (principle 5).
 
 1. Append `contact.deleted { cid }`.
-2. Fold attribution. For every partition attributed exactly to this
+2. Fold attribution. For every channel attributed exactly to this
    contact (single-valued), for every `message.*` event carrying it:
    append `message.erased { drop: [body, …attachments], because:
    contact-deleted }` with the pair, and unlink them (§8.1).
@@ -520,14 +559,14 @@ is removed (principle 5).
    `did.published { uses: one }` or minted toward it, and that no other
    contact uses: append `did.retired { because: contact-deleted }`, so
    nothing further is accepted on it.
-4. The fold hides the contact and its partitions; a later envelope to a
-   retired key still lands in its partition, unattributed, and the
+4. The fold hides the contact and its channels; a later envelope to a
+   retired key still lands in its channel, unattributed, and the
    application's policy turns it away.
 
 Another device, when its fold first shows the tombstone, does step 2
-for any event in those partitions the deleting device had not seen — a
+for any event in those channels the deleting device had not seen — a
 late inbound, an outbound of its own. Step 3 is identity-wide and is
-not repeated. Partitions in conflict (multi-valued) are left until the
+not repeated. Channels in conflict (multi-valued) are left until the
 conflict is resolved. Because nothing is unlinked but blobs, a merge
 from an older copy cannot revive the contact: its `contact.deleted` and
 every `message.erased` are still here, and §10 keeps the bodies out.
@@ -544,7 +583,8 @@ dropped, or reordered. What the events then require:
   that union. An erased blob never comes back.
 - **Held after merge.** Once the set is merged — or restored into a
   fresh device — every outbound message whose delivery fold is not
-  `sent` gets a `held` from the device asking. A decision made on the
+  `sent` gets a `delivery.held { because: imported }` from the device
+  asking. A decision made on the
   merged set, appended by `self`, and no store's business.
 - **A restored device is history.** A restore mints a fresh device
   (`event-store.md` §4, `vault-folder.md` §9.4); the old device's
@@ -559,10 +599,10 @@ dropped, or reordered. What the events then require:
 **What deletion leaves behind.** v1 deleted a contact's file outright.
 v2 keeps, forever: the contact's decisions with their tombstone — and
 among them the petname and any `claimedName` the contact sent; the
-`goal` text of any invitation they took (§5); every partition's
+`goal` text of any invitation they took (§5); every channel's
 skeleton lines (`mid`, `at`, `thid`, sizes, blob hashes, delivery
 outcomes, `erased` lines), and the identity evidence in them —
-`part.opened` with the peer's full public key and first DID,
+`channel.firstSeen` with the peer's full public key and first DID,
 `peer.resolved` with every DID and key list seen. Only bodies and
 attachments are gone. A person reading the disk can see *that* the
 identity corresponded with a given key, when, and how much; not what
@@ -580,9 +620,8 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
 
 ## 12. Open
 
-- Whether `contact.claimedName` / `contact.profileShared` stay
-  decisions or become observations read by the fold (§6).
-- Whether `peer.rotated` is written or derived (§3.1).
+- Whether `peer.rotated`, `profile.nameClaimed` and `profile.shared`
+  are written or derived from `message.*` on fold (§3.1).
 - Which key when a document lists several agreement keys: the one the
   envelope used (inbound) and the first listed (outbound) is the working
   rule; the fold joins them regardless.
@@ -593,7 +632,7 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   lifting stays, the body blob is the stored form, not the wire form.
 - Whether a signature inside authcrypt is a field on the line
   (`signedBy`, §3.1) or its own event.
-- A per-partition erase for the case where the residue of §10 is not
+- A per-channel erase for the case where the residue of §10 is not
   acceptable: a tombstone after which earlier events carrying the pair
   may be dropped and are not merged in. It reintroduces the deletion of
   events, and with one log per device it means rewriting a segment;
@@ -603,8 +642,8 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   hand). Not needed while a merge is a backup, so not in version 2.
 - A device-side space policy for bodies (§8.4): an eviction event that
   explains a local absence without binding anyone. Not in version 2.
-- **Type names for extensions.** The vault's own types are `noun.verb`
-  with a short noun; an extension's need a namespace that cannot
+- **Type names for extensions.** The vault's own types are
+  `subject.fact` with a short subject; an extension's need a namespace that cannot
   collide (`event-store.md` §10). Which convention is not decided.
 - **An erase for events that are not messages.** Collection (§8.3)
   knows one release, `message.erased` by `mid`; a blob held by any

@@ -8,8 +8,8 @@ together replace `vault-format-2.md`:
   made of;
 - `vault-folder.md` says how a version-2 `.estoc/` folder serializes
   that store — the mapping in both directions, folder → store and
-  store → folder — and is the exchange form every store must read and
-  write;
+  store → folder — and is the interchange format every store must read
+  and write;
 - `vault-events.md` says what the events *mean*: the types a vault
   records, what each carries, and the folds that turn them into
   contacts, threads and addresses.
@@ -47,9 +47,9 @@ must be able to read and write.
 
 | document | defines | reads |
 |----------|---------|-------|
-| `event-store.md` | the event (§3), ids and order (§4), the store (§5), blobs and files (§6), exchange (§7) | — |
-| `vault-folder.md` | the tree, `locate` / `place`, segments, singletons, the folder store, snapshot and import as file operations | this |
-| `vault-events.md` | every event type and what it carries; partitions; folds; erasing; deleting | this |
+| `event-store.md` | the event (§3), ids and order (§4), the store (§5), blobs and files (§6), interchange (§7) | — |
+| `vault-folder.md` | the tree, `locate` / `decodeEvent`, segments, singletons, the folder store, snapshot and import as file operations | this |
+| `vault-events.md` | every event type and what it carries; channels; folds; erasing; deleting | this |
 
 What is *not* here: no path (`vault-folder.md`), no event type, no fold
 (`vault-events.md`), and not the trace log, which is local and stays a
@@ -64,16 +64,16 @@ files; `vault-events.md` §1 the ones about meaning.
 
 1. **A vault is events, blobs and files.** *Events*: immutable,
    appended, unioned, folded. *Blobs*: bytes named by their hash,
-   unioned, the only thing ever unlinked. *Files*: the few singletons
-   that are neither — the format and anchor, the key cache, reserved
-   state. Nothing is a record: where v1 rewrote a small JSON file whole,
+   unioned, the only thing ever unlinked. *Files*: everything that is
+   neither, and among them the singletons — the format and anchor, the
+   key cache, reserved state. Nothing is a record: where v1 rewrote a small JSON file whole,
    v2 appends an event and folds.
 2. **Ids are minted, never computed, and encode nothing.** An `eid`
    says nothing about who wrote it; a key name says nothing about the
    contact it was minted for. What a thing is *for* is an event about
-   it. The one exception is made where it is needed and says why: the
-   partition id (`vault-events.md` §3) is computed, because it must
-   come out the same on every device.
+   it. A channel (`vault-events.md` §3) has no id at all: it is the two
+   key fields an observation carries, and two devices agree on it
+   because the envelope proved the same keys to both.
 3. **Authorship is the `author` field.** Every event says which device
    wrote it, and a device writes only as itself. Nothing else about an
    event's origin is recoverable, and nothing needs to be.
@@ -94,7 +94,7 @@ files; `vault-events.md` §1 the ones about meaning.
    order except on `scan`.
 7. **The folder is one serialization.** A program reads and writes
    events through the interface here, never a path. `vault-folder.md`
-   is the reference store and the exchange form; any store that
+   is the reference store and the interchange format; any store that
    round-trips it (§7.1) is a conforming vault.
 
 ## 3. The event
@@ -114,7 +114,7 @@ Everything else is the **payload**: the event's own fields, as
 specified per type, opaque to the store. What an event is *about* — a
 contact, a key, a device, a message, the pair of keys an envelope
 proved — is a payload field naming it, and `vault-events.md` says
-which. The store does not know the vault's shape at all. A partition
+which. The store does not know the vault's shape at all. A channel
 (`vault-events.md` §3) is two fields every observation carries and a
 fold groups by, not a place in the store; a contact is a `cid` on a
 decision, as a key is a `key` and a device a `dev`.
@@ -122,8 +122,9 @@ decision, as a key is a `key` and a device a `dev`.
 An earlier draft gave the store a **locator** — `scope`, `cid`,
 `myKey`, `peerKey` — and mirrored it as directories. It was dropped
 because nothing the store does needed it: every reader reads the whole
-set (§5.3), a merge copies by device (`vault-folder.md` §8.3), and the
-operations that might have wanted a partition as a unit — erasing one,
+set (§5.3), a merge reads every line whatever its subject
+(`vault-folder.md` §8.3), and the operations that might have wanted a
+channel as a unit — erasing one,
 syncing one — are not in version 2 and would not need directories if
 they were. What the locator did do was multiply segments and tie the
 store to one vault's shape.
@@ -157,7 +158,7 @@ conflict on the way back.
 Rules:
 
 1. **Everything about an event is on the event.** Which contact, which
-   partition, which message a line concerns is a field of it; nothing
+   channel, which message a line concerns is a field of it; nothing
    has to be recovered from state or from where a store keeps it. This
    is what makes a flat table a correct reading, and what lets a line
    say what it is once it is apart from its store — in a report, a
@@ -231,15 +232,17 @@ type Event = {
 /** What a caller hands to `append`: no eid, at, or author — the store mints them. */
 type Draft = { type: string; blobs?: Hash[]; [field: string]: JsonValue | undefined };
 
-/** Equality on top-level fields, by `===` on primitives. A store may index some; the folder store reads and compares. */
+/** Equality on top-level fields, by `===` on primitives: `null` matches a field present and null;
+ *  `undefined` is no constraint. A store may index some; the folder store reads and compares. */
 type Filter = { author?: string; type?: string; [field: string]: JsonPrimitive | undefined };
 
-/** A position in this store instance's own arrival order. Opaque; meaningful only to the instance that issued it. */
-type Token = string;
+/** A position in this store instance's own arrival order. Opaque; meaningful only to the instance
+ *  that issued it. Not an auth token: a checkpoint a caller keeps beside a fold. */
+type ChangeToken = string;
 
 interface Ingested {
   added: number;
-  duplicate: number;                  // same eid, same content: skipped
+  duplicates: number;                 // same eid, same content: skipped
   conflicts: Conflict[];              // same eid, different content: the store keeps what it had
   rejected: Rejected[];               // failed envelope validation (§3 rule 3)
 }
@@ -256,7 +259,7 @@ interface EventStore {
   /** Every event matching `filter`, in canonical order. */
   scan(filter?: Filter): AsyncIterable<Event>;
   /** What this store gained after `since`, in arrival order, up to `token`. */
-  changes(filter?: Filter, since?: Token): Promise<{ token: Token; events: AsyncIterable<Event> }>;
+  changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }>;
   /** Bytes met in storage that could not be read as events; for the caller to surface. */
   damaged(): DamagedLine[];
   /** Eids met with more than one content; for the caller to surface. */
@@ -350,10 +353,10 @@ of sorting it is not what any fold waits on.
 
 The filter is equality and nothing more: no ranges, no joins, no
 "across". A database store may index the fields it is asked about most
-(`author`, `type`, a partition's pair); the folder store reads
+(`author`, `type`, a channel's pair); the folder store reads
 everything and compares, and is no slower for it than it is at reading
 everything. A question equality cannot ask (a thread by time,
-everything about one contact across its partitions) is a fold, and
+everything about one contact across its channels) is a fold, and
 lives in the cache (§7.4), so no store is asked to be a query engine.
 
 ### 5.4 `changes`
@@ -431,7 +434,7 @@ interface BlobStore {                 // content-addressed
   list(): Promise<Hash[]>;
 }
 
-interface Files {                     // everything in a vault that is neither an event nor a blob
+interface FileStore {                 // everything in a vault that is neither an event nor a blob
   read(path): Promise<Uint8Array | null>;
   write(path, bytes): Promise<void>;
   list(): Promise<string[]>;
@@ -439,7 +442,7 @@ interface Files {                     // everything in a vault that is neither a
 ```
 
 A vault, to a program, is `{ events: EventStore, blobs: BlobStore,
-files: Files }` plus the trace log. `Vault` in `@estoc/vault` holds
+files: FileStore }` plus the trace log. `Vault` in `@estoc/vault` holds
 these three and the key-minting it does today; the five stores go,
 replaced by folds over `events.scan(...)` and `events.changes(...)`.
 
@@ -467,20 +470,22 @@ including a path under `devices/` or `blobs/` that is not shaped like
 a segment or a blob (`vault-folder.md` §8.6), so that it survives a
 trip through a store that is not a folder. There is no per-device
 file: everything about a device is an event.
-Each file has its own merge policy, stated with the file; the store
-applies none of them (§7.3).
+A file that is one per vault and has a merge policy of its own is a
+**singleton** (`vault-folder.md` §6); to the store it is a file like
+any other. Each singleton states its policy where it is defined; the
+store applies none of them (§7.3).
 
-## 7. Exchange
+## 7. Interchange
 
-### 7.1 The exchange form
+### 7.1 The interchange format
 
 Every store must be able to render its whole vault as a version-2
 folder and read one back. The folder is the interchange format and the
 sovereignty contract: a backup is a folder in a zip, a merge is a folder
 read into a store, and a reader with a text editor is a conforming
 reader. `vault-folder.md` §4 gives the mapping in both directions:
-`locate(event)` — where in the tree an event goes — and `place(path,
-line)` — the event a line under a path is.
+`locate(event)` — where in the tree an event goes — and
+`decodeEvent(path, line)` — the event a line under a path is.
 
 **Round trip.** For any event set *S* produced by any conforming store,
 rendering *S* as a folder and reading that folder back yields *S*: same
@@ -493,7 +498,7 @@ independent of the medium.
 
 A store renders its whole event set as the tree, one line per event,
 under `devices/<author>/`, in segments of its own choosing; blobs as
-blobs, flat; every path in `Files` in place. A folder store exporting
+blobs, flat; every path in `FileStore` in place. A folder store exporting
 is a copy and keeps its own names.
 
 **How an author's events are chunked into segments is not state.** A
@@ -542,13 +547,13 @@ Three kinds of thing, three rules, in this order:
 **Restore** is the same three steps into an empty store, the format
 and anchor written last, as today; a folder store restoring into an
 empty backend may copy the snapshot as it is, since the snapshot is
-the exchange form and a copy of it is a conforming folder
+the interchange format and a copy of it is a conforming folder
 (`vault-folder.md` §9.4). There is no `self`, so the first open mints
 a device and an instance (§4); the imported devices stay as history.
 
 ### 7.4 Cache
 
-A fold's result is a projection, kept locally with the `Token` it was
+A fold's result is a projection, kept locally with the `ChangeToken` it was
 folded to. On open, `changes(filter, token)` yields what arrived since
 and the fold advances, in arrival order, which the folds of
 `vault-events.md` are built to accept (§5.4); a rejected token means the
@@ -660,10 +665,10 @@ What the code says today, for the record:
 ## 10. Open
 
 - **Partial reads.** A store answers every `scan` from the whole set;
-  there is no reading one partition or one contact without the rest,
+  there is no reading one channel or one contact without the rest,
   and the folder store reads every device's log to answer anything.
-  The cache (§7.4) is the answer, and the per-partition directories of
-  the earlier draft only ever helped a reader that does not exist.
+  The cache (§7.4) is the answer; a directory per channel would only
+  help a reader that does not exist.
 - **Indexing** (§5.3): equality on any field lets a store index what it
   likes; whether the folder store should keep a local index for the
   pair under `local/cache/`, or leave all of that to folds, is for when
