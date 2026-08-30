@@ -1,7 +1,7 @@
 {
   "name": "@estoc/vault",
   "version": "0.1.0",
-  "description": "The .estoc vault format as code: the on-disk contract (docs/vault-format.md) every Estoc client reads and writes — config and seed keystore singletons, contact and invitation records, append-only message and delivery logs, blobs — over a pluggable VaultBackend (OPFS in the browser, a folder on disk in Node, memory for tests), with snapshot and merge-import. Format only: what a DID is minted as is the caller's.",
+  "description": "The .estoc vault format as code: the on-disk contract (docs/vault-format.md) every Estoc client reads and writes \u2014 config and seed keystore singletons, contact and invitation records, append-only message and delivery logs, blobs \u2014 over a pluggable VaultBackend (OPFS in the browser, a folder on disk in Node, memory for tests), with snapshot and merge-import. Format only: what a DID is minted as is the caller's.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -18,6 +18,10 @@
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
+    },
+    "./v2": {
+      "types": "./dist/v2/index.d.ts",
+      "default": "./dist/v2/index.js"
     }
   },
   "files": [
@@ -41,7 +45,10 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/event-store": "workspace:^",
     "@estoc/keystore": "workspace:^",
+    "@noble/hashes": "^1.8.0",
+    "bs58": "^6.0.0",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
