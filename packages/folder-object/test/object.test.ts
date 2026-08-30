@@ -17,7 +17,7 @@ import {
 } from "../src/index.js";
 import { zipTree, unzipTree } from "../src/zip.js";
 
-const seaDay = fileURLToPath(new URL("../../../../folder-object/examples/sea-day/", import.meta.url));
+const seaDay = fileURLToPath(new URL("./fixtures/sea-day/", import.meta.url));
 const enc = (s: string) => new TextEncoder().encode(s);
 
 const seed = new Uint8Array(32).fill(7);
