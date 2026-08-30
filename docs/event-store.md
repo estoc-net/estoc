@@ -117,12 +117,9 @@ signature, where an ingested event came from — would clash with any
 payload that had already used the name. Nested, the envelope can grow
 and **nothing is reserved inside `data`**: a type may use any name
 there, the envelope's included, and the store never looks. It is the
-same split a table makes — envelope columns and one payload column
-(§11) — and the one DIDComm (headers and `body`) and CloudEvents
-(context attributes and `data`) make for the same reason. `data` and
-not `body`, because `body` names a blob on a message skeleton
-(`vault-events.md` §3.1); not `params`, because an event is a fact,
-not a call.
+same split a table makes: envelope columns and one payload column
+(§11). `data` and not `body`, because `body` names a blob on a message
+skeleton (`vault-events.md` §3.1).
 
 ### 2.2 `blobs`
 
