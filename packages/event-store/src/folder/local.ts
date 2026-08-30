@@ -142,6 +142,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
 
   /** What the last `scan` met that was not a line. */
   damaged(): DamagedLine[] {
+    this.guard();
     return this.lastDamaged;
   }
 

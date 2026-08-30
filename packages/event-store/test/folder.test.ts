@@ -219,7 +219,7 @@ describe("folder: ingest", () => {
     const eid = "01990000-0000-7000-8000-000000000001";
     const a = foreign("aaaaaa", eid, "2026-08-30T10:00:00Z", { from: "a" });
     const b = foreign("bbbbbb", eid, "2026-08-30T10:00:00Z", { from: "b" });
-    // neither call has written when the other reads: the second's check must see the first's write
+    // each call reads the store in its own turn: the second's check sees the first's write
     const [first, second] = await Promise.all([events.ingest([a]), events.ingest([b])]);
     expect(first).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
     expect(second).toEqual({ added: 0, duplicates: 0, conflicts: [{ eid, kept: a, other: b }], rejected: [] });

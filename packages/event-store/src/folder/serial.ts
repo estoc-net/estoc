@@ -33,6 +33,4 @@ export interface StoreContext {
   alive: () => void;
   /** the writer's own rotation (§5) */
   rotateBytes: number;
-  /** bumped by every write that adds events through this instance, so a reader can tell whether what it read is still what is there */
-  generation: number;
 }

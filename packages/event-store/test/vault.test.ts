@@ -178,6 +178,8 @@ describe("vault: extension stores", () => {
     await expect(all(ext.events.scan())).rejects.toThrow(Disposed);
     await expect(ext.events.ingest([])).rejects.toThrow(Disposed);
     await expect(ext.events.changes()).rejects.toThrow(Disposed);
+    expect(() => ext.events.damaged()).toThrow(Disposed);
+    expect(() => ext.events.conflicting()).toThrow(Disposed);
     await expect(ext.blobs.put(enc.encode("x"))).rejects.toThrow(Disposed);
     await expect(ext.blobs.get(HELLO_CID)).rejects.toThrow(Disposed);
     await expect(ext.blobs.getBlock(HELLO_CID)).rejects.toThrow(Disposed);
@@ -192,6 +194,7 @@ describe("vault: extension stores", () => {
     await expect(trace.append({ eid: "01990000-0000-7000-8000-000000000002", at: "2026-08-30T10:00:00Z", type: "note", data: {} })).rejects.toThrow(Disposed);
     await expect(all(trace.scan())).rejects.toThrow(Disposed);
     await expect(trace.prune({ keepMs: 0, capBytes: 0 })).rejects.toThrow(Disposed);
+    expect(() => trace.damaged()).toThrow(Disposed);
     // the vault's own store is untouched
     expect(await all(vault.events.scan())).toHaveLength(1);
     // disposing what was never opened removes what is on disk all the same
@@ -253,6 +256,32 @@ describe("vault: extension stores", () => {
     await expect(cache.write("g", enc.encode("y"))).rejects.toThrow(Disposed);
     await expect(cache.remove("f")).rejects.toThrow(Disposed);
     await expect(cache.clear()).rejects.toThrow(Disposed);
+  });
+
+  it("lets an ingest that has its turn finish, however slow the store's reads, before the removal", async () => {
+    class GatedBackend extends MemoryBackend {
+      gate: Promise<void> = Promise.resolve();
+      override async read(path: string): Promise<Uint8Array | null> {
+        await this.gate;
+        return super.read(path);
+      }
+    }
+    const backend = new GatedBackend();
+    const vault = await FolderVault.create(backend, ANCHOR);
+    const ext = vault.extension(EXT);
+    await ext.events.append({ type: "t", data: {} });
+    let release = (): void => undefined;
+    backend.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const foreign = { eid: "01990000-0000-7000-8000-000000000001", at: "2026-08-30T10:00:00Z", author: "aaaaaa", type: "t", blobs: [], data: {} };
+    const ingest = ext.events.ingest([foreign]);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the input is read; the store's turn is taken, its reads held
+    const disposal = vault.dispose(EXT);
+    release();
+    expect(await ingest).toMatchObject({ added: 1 });
+    await disposal;
+    expect([...backend.files.keys()].filter((p) => p.includes(`/${EXT}/`))).toEqual([]);
   });
 
   it("does not wait on an ingest still reading its input: that one is refused when its turn comes, having written nothing", async () => {

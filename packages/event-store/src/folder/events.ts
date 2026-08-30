@@ -142,10 +142,12 @@ export class FolderEventStore implements EventStore {
   }
 
   damaged(): DamagedLine[] {
+    this.ctx.guard();
     return [...this.findings.keys()].sort().flatMap((dev) => (this.findings.get(dev) as { damaged: DamagedLine[] }).damaged);
   }
 
   conflicting(): Conflict[] {
+    this.ctx.guard();
     return [...this.findings.keys()].sort().flatMap((dev) => (this.findings.get(dev) as { conflicts: Conflict[] }).conflicts);
   }
 
@@ -169,7 +171,6 @@ export class FolderEventStore implements EventStore {
       const open = await this.openSegment();
       await this.ctx.backend.append(open.path, line);
       open.bytes += line.length;
-      this.ctx.generation += 1;
       return deepFreeze(event);
     });
   }
@@ -202,12 +203,9 @@ export class FolderEventStore implements EventStore {
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     this.ctx.guard();
-    // One pass, reading first (§9.3): what is here, then the whole input.
-    const generation = this.ctx.generation;
-    const held = await this.readAll();
+    // The whole input first (§9.3), touching nothing of the store: read as events, staged by eid.
     const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
     const staged = new Map<string, Event>();
-    const forked: Event[] = [];
     for await (const raw of events) {
       let event: Event;
       try {
@@ -216,35 +214,39 @@ export class FolderEventStore implements EventStore {
         outcome.rejected.push({ event: raw, error: err instanceof Error ? err.message : String(err) });
         continue;
       }
-      const have = held.get(event.eid) ?? staged.get(event.eid);
-      if (have !== undefined) {
-        if (sameJson(have, event)) {
-          outcome.duplicates += 1;
-        } else {
-          outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
-          if (event.author === this.ctx.self) {
-            forked.push(event);
-          }
-        }
-        continue;
+      const have = staged.get(event.eid);
+      if (have === undefined) {
+        staged.set(event.eid, event);
+      } else if (sameJson(have, event)) {
+        outcome.duplicates += 1;
+      } else {
+        outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
       }
-      if (event.author === this.ctx.self) {
-        forked.push(event);
-        continue;
-      }
-      staged.set(event.eid, event);
     }
-    if (forked.length > 0) {
-      throw new ForkedSelf(this.ctx.self, forked);
-    }
+    // Then the store, in its turn (§9.2): what is here against what came, and the writes — nothing
+    // in between, so that no other write can slip in, and nothing before a disposal could not undo.
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
-      // Another ingest, or an append, may have written while the input was being read: what is
-      // here now is what the staged events are checked against, over every author — an eid
-      // arriving twice, under two authors, from two calls, must end up in the store once.
-      const current = this.ctx.generation === generation ? held : await this.readAll();
+      const held = await this.readAll();
+      const forked: Event[] = [];
       const byAuthor = new Map<string, Event[]>();
       for (const event of staged.values()) {
+        const have = held.get(event.eid);
+        if (have !== undefined) {
+          if (sameJson(have, event)) {
+            outcome.duplicates += 1;
+          } else {
+            outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
+            if (event.author === this.ctx.self) {
+              forked.push(event);
+            }
+          }
+          continue;
+        }
+        if (event.author === this.ctx.self) {
+          forked.push(event);
+          continue;
+        }
         const list = byAuthor.get(event.author);
         if (list === undefined) {
           byAuthor.set(event.author, [event]);
@@ -252,25 +254,14 @@ export class FolderEventStore implements EventStore {
           list.push(event);
         }
       }
+      if (forked.length > 0) {
+        throw new ForkedSelf(this.ctx.self, forked);
+      }
       for (const [author, incoming] of [...byAuthor].sort(([a], [b]) => (a < b ? -1 : 1))) {
-        const lines: Uint8Array[] = [];
-        for (const event of incoming) {
-          const have = current.get(event.eid);
-          if (have === undefined) {
-            current.set(event.eid, event);
-            lines.push(jsonLine(deepFreeze(event)));
-            outcome.added += 1;
-          } else if (sameJson(have, event)) {
-            outcome.duplicates += 1;
-          } else {
-            outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
-          }
-        }
-        if (lines.length > 0) {
-          // one segment per author per call (§9.3), written whole
-          await this.ctx.backend.write(this.newSegmentPath(author), concat(lines));
-          this.ctx.generation += 1;
-        }
+        const lines = incoming.map((event) => jsonLine(deepFreeze(event)));
+        outcome.added += lines.length;
+        // one segment per author per call (§9.3), written whole
+        await this.ctx.backend.write(this.newSegmentPath(author), concat(lines));
       }
       return outcome;
     });
