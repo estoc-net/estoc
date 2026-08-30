@@ -22,24 +22,26 @@ export function zipFiles(files: VaultFiles, level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
  * The vault files inside a zip, re-rooted so that `.estoc/config.json` is
  * where a reader expects it, whatever folder the archive put around it:
  * one made from inside `.estoc/` gets the directory back; one wrapped in
- * a folder has it stripped. Throws when no `config.json` is inside.
+ * a folder has it stripped. The root is the shallowest `config.json`
+ * either way — a nested one, in `state/` or carried under a stray
+ * `.estoc/`, is a file of the vault, not its root. Throws when no
+ * `config.json` is inside.
  */
 export function filesFromZip(zip: Uint8Array): VaultFiles {
   const entries = unzipSync(zip);
   const names = Object.keys(entries).filter((name) => !name.endsWith("/") && !name.startsWith("__MACOSX/"));
   const marker = `${ESTOC_DIR}/${CONFIG_FILE}`;
+  const inEstoc = rootOf(names, marker);
+  const bare = rootOf(names, CONFIG_FILE);
   let prefix: string;
   let addEstoc = false;
-  const inEstoc = rootOf(names, marker);
-  if (inEstoc !== null) {
+  if (inEstoc !== null && (bare === null || inEstoc.length <= bare.length)) {
     prefix = inEstoc;
-  } else {
-    const bare = rootOf(names, CONFIG_FILE);
-    if (bare === null) {
-      throw new Error(`that zip holds no vault (no ${CONFIG_FILE} inside)`);
-    }
+  } else if (bare !== null) {
     prefix = bare;
     addEstoc = true;
+  } else {
+    throw new Error(`that zip holds no vault (no ${CONFIG_FILE} inside)`);
   }
   const files: VaultFiles = {};
   for (const name of names) {
@@ -54,8 +56,8 @@ export function filesFromZip(zip: Uint8Array): VaultFiles {
 
 /**
  * The folder `marker` is at the root of: the shortest prefix any entry
- * puts before it — the root's own before a nested one's, whatever order
- * the archive lists them in — or null when no entry ends in it.
+ * puts before it, whatever order the archive lists them in — or null
+ * when no entry ends in it.
  */
 function rootOf(names: string[], marker: string): string | null {
   let best: string | null = null;

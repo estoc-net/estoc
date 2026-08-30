@@ -13,7 +13,7 @@ import { walk } from "./backend/types.js";
 import type { BlobStore } from "./blobs.js";
 import { checkBlock, reachable } from "./blocks.js";
 import { BadBlock, ForkedSelf, NotAVault, NotSameVault } from "./errors.js";
-import { EidMinter, compareEvents, type Cid, type DamagedLine, type Event, type Ingested } from "./event.js";
+import { EidMinter, compareEvents, isDeviceId, type Cid, type DamagedLine, type Event, type Ingested } from "./event.js";
 import { checkPath } from "./files.js";
 import { readConfig } from "./folder/config.js";
 import {
@@ -25,10 +25,12 @@ import {
   KEYSTORE_FILE,
   LOCAL_DIR,
   concat,
+  isExtId,
   jsonLine,
   kindOf,
   prettyJson,
   text,
+  type PathKind,
 } from "./folder/layout.js";
 import { decodeEvent, decodeSegment } from "./folder/lines.js";
 import { DEVICE_MINTED } from "./folder/vault.js";
@@ -144,9 +146,8 @@ function emptyStore(): SourceStore {
  * The whole source, read (§10.3 preflight): `config.json` first, or
  * `NotAVault`; then every line of every segment under `devices/<dev>/`
  * and `extensions/<ext>/devices/<dev>/` decoded (vault-folder.md §4), every block
- * named, every file kept, every path one a store accepts — a path it
- * would refuse must refuse the import here, not after the events went
- * in. `local/` and anything outside `.estoc/` is not looked at.
+ * named, every file kept. `local/` and anything outside `.estoc/` is
+ * not looked at.
  */
 function readSource(files: VaultFiles): Source {
   const config = files[CONFIG_PATH];
@@ -154,18 +155,13 @@ function readSource(files: VaultFiles): Source {
     throw new NotAVault(`no ${CONFIG_PATH} in the source`);
   }
   const source: Source = { config: readConfig(config), vault: emptyStore(), exts: new Map(), files: new Map(), damaged: [] };
-  for (const path of Object.keys(files).sort()) {
-    if (!isSnapshotPath(path) || path === CONFIG_PATH) {
+  for (const { path, rel, kind } of sourcePaths(files)) {
+    if (path === CONFIG_PATH) {
       continue;
     }
     const bytes = files[path] as Uint8Array;
-    const rel = sourcePath(path);
-    const kind = kindOf(rel);
     if (kind === "file") {
       source.files.set(rel, bytes);
-      continue;
-    }
-    if (kind === "local") {
       continue;
     }
     const parts = rel.split("/");
@@ -188,13 +184,63 @@ function readSource(files: VaultFiles): Source {
   return source;
 }
 
-/** The path relative to `.estoc/` that `path` names, checked as every store checks it (`files.ts`), or `NotAVault`. */
-function sourcePath(path: string): string {
-  const rel = path.slice(ROOT.length);
-  try {
-    return checkPath(rel);
-  } catch (err) {
-    throw new NotAVault(`not a vault path: ${JSON.stringify(path)} (${err instanceof Error ? err.message : String(err)})`);
+/**
+ * The paths of a source that a reader writes, in order — under `.estoc/`,
+ * not `local/` — each checked as every store checks a path (`files.ts`),
+ * and the tree checked as one a folder can hold (`checkTree`): what a
+ * store would refuse, or a file system could not lay down, refuses the
+ * import here, not after the events went in.
+ */
+function sourcePaths(files: VaultFiles): { path: string; rel: string; kind: Exclude<PathKind, "local"> }[] {
+  const found: { path: string; rel: string; kind: Exclude<PathKind, "local"> }[] = [];
+  for (const path of Object.keys(files).sort()) {
+    if (!isSnapshotPath(path)) {
+      continue;
+    }
+    const rel = path.slice(ROOT.length);
+    try {
+      checkPath(rel);
+    } catch (err) {
+      throw new NotAVault(`not a vault path: ${JSON.stringify(path)} (${err instanceof Error ? err.message : String(err)})`);
+    }
+    const kind = kindOf(rel);
+    if (kind === "local" && rel !== LOCAL_DIR) {
+      continue;
+    }
+    if (kind !== "segment" && kind !== "blob" && isStoreDir(rel)) {
+      throw new NotAVault(`not a vault path: ${JSON.stringify(path)} is a file where the layout has a directory`);
+    }
+    found.push({ path, rel, kind: kind as Exclude<PathKind, "local"> });
+  }
+  checkTree(found.map((f) => f.rel), "the source");
+  return found;
+}
+
+/** Whether `rel` is a directory the layout owns (vault-folder.md §3): a file there is a folder no store could write. */
+function isStoreDir(rel: string): boolean {
+  const parts = rel.split("/");
+  const ofStore = (p: string[]): boolean =>
+    (p.length === 1 && (p[0] === DEVICES_DIR || p[0] === BLOBS_DIR)) || (p.length === 2 && p[0] === DEVICES_DIR && isDeviceId(p[1]));
+  if (parts.length === 1 && (parts[0] === EXTENSIONS_DIR || parts[0] === LOCAL_DIR)) {
+    return true;
+  }
+  if (parts[0] === EXTENSIONS_DIR && isExtId(parts[1] as string)) {
+    return parts.length === 2 || ofStore(parts.slice(2));
+  }
+  return ofStore(parts);
+}
+
+/** Refuse a set of paths a file system could not hold at once: one that is a file and a directory both. */
+function checkTree(paths: string[], whose: string): void {
+  const set = new Set(paths);
+  for (const path of paths) {
+    const parts = path.split("/");
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      const ancestor = parts.slice(0, depth).join("/");
+      if (set.has(ancestor)) {
+        throw new NotAVault(`${whose}: ${ancestor} is a file and a directory both (${path})`);
+      }
+    }
   }
 }
 
@@ -247,20 +293,29 @@ export interface Imported {
  * import will write — with nothing written on any failure; then the
  * events, the blobs a held root reaches, the files by their policies;
  * then each extension store the fold lets in. Into a store with no
- * `config.json` it is a restore, and the config is written last.
+ * `config.json` it is a restore — the same steps into an empty store,
+ * and the config is written last.
  */
 export async function importVault(target: VaultStores, files: VaultFiles, policy: ImportPolicy = {}): Promise<Imported> {
   const source = readSource(files);
   const config = await target.files.read(CONFIG_FILE);
   const restore = config === null;
-  if (!restore && !sameJson(readConfig(config), source.config)) {
+  const mine = await target.files.list();
+  const held = await heldBy(target.events);
+  if (restore) {
+    if (mine.length > 0 || held.size > 0 || (await target.blobs.list()).length > 0 || (await target.extensions()).length > 0) {
+      throw new NotAVault("this store holds no config.json but is not empty: a restore needs an empty store");
+    }
+  } else if (!sameJson(readConfig(config), source.config)) {
     throw new NotSameVault(`the source's ${CONFIG_FILE} is not this vault's: another identity, or another format`);
   }
   const keystore = planKeystore(source.files.get(KEYSTORE_FILE), await target.files.read(KEYSTORE_FILE));
+  // the files this will write, absent here, must fit among the files here: none a file and a directory both
+  const have = new Set(mine);
+  checkTree([...mine, ...[...source.files.keys()].filter((path) => !have.has(path))], "this vault's files");
 
   // the merged vault set, for the folds; the fork check over every store before the first write
   const self = target.events.self;
-  const held = await heldBy(target.events);
   const mergedVault = merged(held, source.vault.events);
   const purged = new Set(await policy.purged?.(mergedVault));
   const installed = policy.installed === undefined ? null : new Set(await policy.installed(mergedVault));
@@ -433,7 +488,12 @@ function planKeystore(theirs: Uint8Array | undefined, mine: Uint8Array | null): 
   return { write: prettyJson({ ...a.doc, keys: [...a.keys, ...fresh] }), added: fresh.length, copied: false };
 }
 
-/** As much of a keystore as the union needs: a JSON object whose `keys` are objects with a `name`. */
+/**
+ * A keystore as vault-folder.md §6.2 names it: `@estoc/keystore` v3 —
+ * `version` 3, `seedJwe` a string, `keys[]` each a name, a did and a
+ * createdAt, the names unique — or `NotAVault`. The shape the union
+ * needs, not the package's whole check.
+ */
 function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys: JsonObject[] } {
   let doc: unknown;
   try {
@@ -441,10 +501,32 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
   } catch {
     throw new NotAVault(`${whose} ${KEYSTORE_FILE} is not JSON`);
   }
-  if (!isJsonObject(doc) || !Array.isArray(doc["keys"]) || !doc["keys"].every((key) => isJsonObject(key) && typeof key["name"] === "string")) {
-    throw new NotAVault(`${whose} ${KEYSTORE_FILE} is not a keystore: no keys[] with a name each`);
+  const bad = (why: string): NotAVault => new NotAVault(`${whose} ${KEYSTORE_FILE} is not a v3 keystore: ${why}`);
+  if (!isJsonObject(doc)) {
+    throw bad("not an object");
   }
-  return { doc, keys: doc["keys"] as JsonObject[] };
+  if (doc["version"] !== 3) {
+    throw bad(`version ${JSON.stringify(doc["version"])}`);
+  }
+  if (typeof doc["seedJwe"] !== "string") {
+    throw bad("no seedJwe");
+  }
+  const keys = doc["keys"];
+  if (!Array.isArray(keys)) {
+    throw bad("no keys[]");
+  }
+  const names = new Set<string>();
+  for (const key of keys) {
+    if (!isJsonObject(key) || ["name", "did", "createdAt"].some((field) => typeof key[field] !== "string")) {
+      throw bad("a key without name, did and createdAt");
+    }
+    const name = key["name"] as string;
+    if (names.has(name)) {
+      throw bad(`two keys named ${JSON.stringify(name)}`);
+    }
+    names.add(name);
+  }
+  return { doc, keys: keys as JsonObject[] };
 }
 
 // ---- restore -----------------------------------------------------------
@@ -453,27 +535,24 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
  * A folder store restoring into an empty backend (vault-folder.md
  * §10.4): the snapshot copied as it is, `config.json` last, so that a
  * crash midway leaves no vault rather than a vault missing pieces.
- * Refuses a backend with anything under `.estoc/` — a vault, or the
- * remains of one, which the copy would be mixed into — and a source
- * that is not one, before writing; `local/` in the source, should a
- * hand-made zip carry one, stays out.
+ * Refuses a backend with anything at `.estoc` — a vault, the remains of
+ * one, an empty directory the copy would land in — and a source that is
+ * not one, before writing; `local/` in the source, should a hand-made
+ * zip carry one, stays out.
  */
 export async function restoreFolder(backend: VaultBackend, files: VaultFiles): Promise<{ files: number }> {
-  const there = await walk(backend, ESTOC_DIR);
-  if (there.length > 0) {
-    throw new NotAVault(`${ESTOC_DIR}/ is not empty (${there[0]}${there.length > 1 ? ", …" : ""}): a restore needs an empty backend`);
+  const there = [...(await backend.list(ESTOC_DIR)), ...(await backend.dirs(ESTOC_DIR))];
+  if (there.length > 0 || (await backend.size(ESTOC_DIR)) !== null) {
+    throw new NotAVault(`${ESTOC_DIR} is not empty${there.length > 0 ? ` (${there[0]}${there.length > 1 ? ", …" : ""})` : ""}: a restore needs an empty backend`);
   }
   const config = files[CONFIG_PATH];
   if (config === undefined) {
     throw new NotAVault(`no ${CONFIG_PATH} in the source`);
   }
   readConfig(config);
-  const paths = Object.keys(files)
-    .filter((path) => isSnapshotPath(path) && path !== CONFIG_PATH)
-    .sort();
-  for (const path of paths) {
-    sourcePath(path);
-  }
+  const paths = sourcePaths(files)
+    .map((f) => f.path)
+    .filter((path) => path !== CONFIG_PATH);
   for (const path of paths) {
     await backend.write(path, files[path] as Uint8Array);
   }

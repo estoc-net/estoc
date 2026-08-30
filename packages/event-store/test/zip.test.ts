@@ -42,5 +42,11 @@ describe("zip", () => {
       ...Object.fromEntries(Object.entries(files).map(([path, bytes]) => [`my vault/${path}`, bytes])),
     });
     expect(filesFromZip(wrappedFirst)).toEqual({ ...files, "state/.estoc/config.json": enc.encode("{}") }); // outside .estoc/: not a vault path, ignored by every reader
+    // a stray .estoc/config.json carried as a file does not outrank the root's bare one
+    const strayFirst = zipSync({
+      "state/.estoc/config.json": enc.encode("{}"),
+      ...Object.fromEntries(Object.entries(files).map(([path, bytes]) => [path.slice(".estoc/".length), bytes])),
+    });
+    expect(filesFromZip(strayFirst)).toEqual({ ...files, ".estoc/state/.estoc/config.json": enc.encode("{}") });
   });
 });

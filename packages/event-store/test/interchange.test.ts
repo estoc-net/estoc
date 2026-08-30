@@ -32,7 +32,7 @@ const CONFIG = enc.encode(JSON.stringify({ format: "estoc", version: 2, ...ANCHO
 const OTHER_CONFIG = enc.encode(JSON.stringify({ format: "estoc", version: 2, identity: { anchor: { key: "anchor", did: "did:key:z6MkOther" } } }));
 
 function keystore(seed: string, names: string[]): Uint8Array {
-  return enc.encode(JSON.stringify({ version: 3, seedJwe: seed, keys: names.map((name) => ({ name, did: `did:key:${name}` })) }));
+  return enc.encode(JSON.stringify({ version: 3, seedJwe: seed, keys: names.map((name) => ({ name, did: `did:key:${name}`, createdAt: "2026-08-30T00:00:00.000Z" })) }));
 }
 
 /** A memory vault that is a vault: a config, and its device announced. */
@@ -286,12 +286,73 @@ describe("import: preflight (event-store.md §10.3 step 0)", () => {
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode("[]") })).rejects.toThrow(NotAVault);
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode(JSON.stringify({ keys: [{}] })) })).rejects.toThrow(NotAVault);
     expect(await contents(target)).toEqual(before);
+    // the v3 shape §6.2 names, on either side: version, seed, each key's fields, names unique
+    const v3 = JSON.parse(dec.decode(keystore("s", ["anchor"]))) as { keys: object[] };
+    for (const doc of [
+      { keys: [] },
+      { ...v3, version: 2 },
+      { ...v3, seedJwe: undefined },
+      { ...v3, keys: [{ name: "k", did: "did:key:k" }] },
+      { ...v3, keys: [...v3.keys, ...v3.keys] },
+    ]) {
+      await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode(JSON.stringify(doc)) })).rejects.toThrow(/v3 keystore/);
+    }
+    await target.files.write("keystore.json", enc.encode(JSON.stringify({ ...v3, keys: [...v3.keys, ...v3.keys] })));
+    await expect(importVault(target, files)).rejects.toThrow(/this vault's keystore.json .*two keys/);
+    expect((await contents(target)).events).toEqual(before.events);
     // and when this vault has none to union with: the source's is still read before it is copied
     const bare = await memoryVault("cccccc", c.now);
     const nothing = await contents(bare);
     await expect(importVault(bare, { ...files, ".estoc/keystore.json": enc.encode("not json") })).rejects.toThrow(NotAVault);
+    await expect(importVault(bare, { ...files, ".estoc/keystore.json": enc.encode('{"keys":[]}') })).rejects.toThrow(NotAVault);
     expect(await contents(bare)).toEqual(nothing);
     expect(await bare.files.read("keystore.json")).toBeNull();
+  });
+
+  it("refuses a restore into a store that is not empty, whatever it holds", async () => {
+    const c = clock("2026-08-30T10:00:00.000Z");
+    const files = await exportVault(await populated(c.now).then((p) => p.vault));
+    const stale = new MemoryVault({ self: "cccccc", clock: c.now });
+    await stale.events.append({ type: "stale", data: {} });
+    await expect(importVault(stale, files)).rejects.toThrow(/not empty/);
+    expect((await all(stale.events.scan())).map((e) => e.type)).toEqual(["stale"]);
+    expect(await stale.files.read("config.json")).toBeNull();
+    for (const fill of [
+      async (v: MemoryVault) => v.files.write("notes.txt", enc.encode("x")),
+      async (v: MemoryVault) => void (await v.blobs.put(enc.encode("x"))),
+      async (v: MemoryVault) => void (await v.extension(EXT_A).events.append({ type: "t", data: {} })),
+    ]) {
+      const vault = new MemoryVault({ self: "cccccc", clock: c.now });
+      await fill(vault);
+      await expect(importVault(vault, files)).rejects.toThrow(/not empty/);
+      expect(await all(vault.events.scan())).toEqual([]);
+    }
+  });
+
+  it("refuses a tree no file system could hold — a file and a directory both, a file where the layout has a directory — before writing", async () => {
+    const c = clock("2026-08-30T10:00:00.000Z");
+    const target = await memoryVault("cccccc", c.now);
+    await target.files.write("state/read.json", enc.encode("{}"));
+    await target.files.write("notes.txt", enc.encode("mine"));
+    const files = await exportVault(await populated(c.now).then((p) => p.vault));
+    const before = await contents(target);
+    const trees: VaultFiles[] = [
+      { ".estoc/a": enc.encode("x"), ".estoc/a/b": enc.encode("y") }, // within the source
+      { ".estoc/devices": enc.encode("x") }, // where every store has its log
+      { ".estoc/devices/aaaaaa": enc.encode("x") },
+      { ".estoc/blobs": enc.encode("x") },
+      { [`.estoc/extensions/${EXT_A}/devices`]: enc.encode("x") },
+      { ".estoc/local": enc.encode("x") },
+    ];
+    for (const tree of trees) {
+      await expect(importVault(target, { ...files, ...tree })).rejects.toThrow(NotAVault);
+      await expect(restoreFolder(new MemoryBackend(), { ...files, ...tree })).rejects.toThrow(NotAVault);
+    }
+    // against what is here: a file of this vault under a path the source has a file at, and the other way round
+    await expect(importVault(target, { ...files, ".estoc/state": enc.encode("x") })).rejects.toThrow(/file and a directory/);
+    await expect(importVault(target, { ...files, ".estoc/notes.txt/more": enc.encode("x") })).rejects.toThrow(/file and a directory/);
+    expect(await contents(target)).toEqual(before);
+    expect(await target.extensions()).toEqual([]);
   });
 
   it("refuses a path no store would take, before writing: a store's refusal must not come after the events went in", async () => {
@@ -424,11 +485,7 @@ describe("import: files (rule 3)", () => {
     expect(JSON.parse(dec.decode((await target.files.read("keystore.json")) as Uint8Array))).toEqual({
       version: 3,
       seedJwe: "sealed-mine",
-      keys: [
-        { name: "anchor", did: "did:key:anchor" },
-        { name: "k1", did: "did:key:k1" },
-        { name: "k2", did: "did:key:k2" },
-      ],
+      keys: ["anchor", "k1", "k2"].map((name) => ({ name, did: `did:key:${name}`, createdAt: "2026-08-30T00:00:00.000Z" })),
     });
     expect(dec.decode((await target.files.read("state/y.json")) as Uint8Array)).toBe("mine");
     expect(dec.decode((await target.files.read("state/read.json")) as Uint8Array)).toBe("{}");
@@ -501,11 +558,22 @@ describe("restore", () => {
     expect(order.at(-1)).toBe(".estoc/config.json");
     expect([...fresh.files.keys()].sort()).toEqual(paths(files).filter((p) => !p.startsWith(".estoc/local/")));
     await expect(restoreFolder(fresh, files)).rejects.toThrow(NotAVault);
-    // not only a vault: anything under .estoc/ is something the copy would be mixed into
+    // not only a vault: anything at .estoc is something the copy would be mixed into — a file, an empty directory
     const stale = new MemoryBackend();
     await stale.write(".estoc/stale.txt", enc.encode("left over"));
     await expect(restoreFolder(stale, files)).rejects.toThrow(/not empty/);
     expect([...stale.files.keys()]).toEqual([".estoc/stale.txt"]);
+    class EmptyDir extends MemoryBackend {
+      override async dirs(dir: string): Promise<string[]> {
+        return dir === ".estoc" ? ["config.json"] : super.dirs(dir);
+      }
+    }
+    const hollow = new EmptyDir();
+    await expect(restoreFolder(hollow, files)).rejects.toThrow(/not empty/);
+    expect(hollow.files.size).toBe(0);
+    const file = new MemoryBackend();
+    await file.write(".estoc", enc.encode("a file"));
+    await expect(restoreFolder(file, files)).rejects.toThrow(/not empty/);
     const restored = await FolderVault.open(fresh);
     expect(restored.self).not.toBe(vault.self);
     expect((await all(restored.events.scan({ type: DEVICE_MINTED }))).map((e) => e.author).sort()).toEqual([vault.self, restored.self].sort());
