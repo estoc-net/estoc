@@ -203,24 +203,15 @@ export class FolderEventStore implements EventStore {
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     this.ctx.guard();
-    // The whole input first (§9.3), touching nothing of the store: read as events, staged by eid.
+    // The whole input first (§9.3), touching nothing of the store: read as events, in order, every one kept —
+    // which of two under one eid is the duplicate is the store's to say, and the store is not read yet.
     const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
-    const staged = new Map<string, Event>();
+    const incoming: Event[] = [];
     for await (const raw of events) {
-      let event: Event;
       try {
-        event = validateEvent(jsonClean(raw));
+        incoming.push(validateEvent(jsonClean(raw)));
       } catch (err) {
         outcome.rejected.push({ event: raw, error: err instanceof Error ? err.message : String(err) });
-        continue;
-      }
-      const have = staged.get(event.eid);
-      if (have === undefined) {
-        staged.set(event.eid, event);
-      } else if (sameJson(have, event)) {
-        outcome.duplicates += 1;
-      } else {
-        outcome.conflicts.push({ eid: event.eid, kept: have, other: event });
       }
     }
     // Then the store, in its turn (§9.2): what is here against what came, and the writes — nothing
@@ -228,10 +219,11 @@ export class FolderEventStore implements EventStore {
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
       const held = await this.readAll();
+      const staged = new Map<string, Event>();
       const forked: Event[] = [];
       const byAuthor = new Map<string, Event[]>();
-      for (const event of staged.values()) {
-        const have = held.get(event.eid);
+      for (const event of incoming) {
+        const have = held.get(event.eid) ?? staged.get(event.eid);
         if (have !== undefined) {
           if (sameJson(have, event)) {
             outcome.duplicates += 1;
@@ -247,6 +239,7 @@ export class FolderEventStore implements EventStore {
           forked.push(event);
           continue;
         }
+        staged.set(event.eid, event);
         const list = byAuthor.get(event.author);
         if (list === undefined) {
           byAuthor.set(event.author, [event]);
