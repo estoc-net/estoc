@@ -255,6 +255,26 @@ describe("vault: extension stores", () => {
     await expect(cache.clear()).rejects.toThrow(Disposed);
   });
 
+  it("does not wait on an ingest still reading its input: that one is refused when its turn comes, having written nothing", async () => {
+    const { backend, vault } = await fresh();
+    const ext = vault.extension(EXT);
+    await ext.events.append({ type: "t", data: {} });
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    async function* input(): AsyncIterable<unknown> {
+      await gate;
+      yield { eid: "01990000-0000-7000-8000-000000000001", at: "2026-08-30T10:00:00Z", author: "aaaaaa", type: "t", blobs: [], data: {} };
+    }
+    const ingest = ext.events.ingest(input());
+    await vault.dispose(EXT); // resolves while the input is still held
+    expect([...backend.files.keys()].filter((p) => p.includes(`/${EXT}/`))).toEqual([]);
+    release();
+    await expect(ingest).rejects.toThrow(Disposed);
+    expect([...backend.files.keys()].filter((p) => p.includes(`/${EXT}/`))).toEqual([]);
+  });
+
   it("is forgotten by the next instance: a disposed ext may be opened again there", async () => {
     const { backend, vault } = await fresh();
     await vault.extension(EXT).events.append({ type: "t", data: {} });
