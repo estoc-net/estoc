@@ -79,3 +79,14 @@ export function prettyJson(value: unknown): Uint8Array {
 export function jsonLine(value: unknown): Uint8Array {
   return utf8(JSON.stringify(value) + "\n");
 }
+
+/** One byte string from many: the lines of a segment written whole. */
+export function concat(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}

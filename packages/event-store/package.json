@@ -1,7 +1,7 @@
 {
   "name": "@estoc/event-store",
   "version": "0.1.0",
-  "description": "The vault as an event store (docs/event-store.md): the event envelope, canonical order and filter; the EventStore, BlobStore and FileStore interfaces every Estoc vault store implements; in-memory stores for tests and folds. Knows no event type: what an event means is @estoc/vault's.",
+  "description": "The vault as an event store (docs/event-store.md): the event envelope, canonical order and filter; the EventStore, BlobStore and FileStore interfaces every Estoc vault store implements; in-memory stores for tests and folds; the interchange (snapshot, export, import, restore, zip). Knows no event type: what an event means is @estoc/vault's.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -44,6 +44,7 @@
   ],
   "dependencies": {
     "@ipld/dag-pb": "^4.1.7",
+    "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",
     "ipfs-unixfs-importer": "^17.0.1",
     "multiformats": "^14.0.5",

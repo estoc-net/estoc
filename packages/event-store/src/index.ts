@@ -37,9 +37,11 @@ export {
   matchesData,
 } from "./event.js";
 
-export { InvalidEvent, ForkedSelf, BadToken, BadBlock, NotAFile, Disposed, NotAVault } from "./errors.js";
+export { InvalidEvent, ForkedSelf, BadToken, BadBlock, NotAFile, Disposed, NotAVault, NotSameVault } from "./errors.js";
 
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
+export type { Stores, VaultStores, Vault } from "./vault.js";
+export { MemoryVault, type MemoryVaultOptions } from "./memory-vault.js";
 
 export { RAW_CODE, DAG_PB_CODE, parseCid, isCid, nameOf } from "./cid.js";
 export {
@@ -96,4 +98,21 @@ export {
   type LocalCache,
 } from "./folder/local.js";
 export { folderStore, type FolderStore, type FolderStoreOptions } from "./folder/store.js";
-export { FolderVault, DEVICE_MINTED, FORMAT, VERSION, type Vault, type ExtensionStore, type OpenVaultOptions } from "./folder/vault.js";
+export { FORMAT, VERSION, readConfig } from "./folder/config.js";
+export { FolderVault, DEVICE_MINTED, type ExtensionStore, type OpenVaultOptions } from "./folder/vault.js";
+
+// ---- interchange (event-store.md §10) -------------------------------------
+
+export {
+  CONFIG_PATH,
+  isSnapshotPath,
+  snapshot,
+  exportVault,
+  importVault,
+  restoreFolder,
+  type VaultFiles,
+  type ExportOptions,
+  type ImportPolicy,
+  type Imported,
+} from "./interchange.js";
+export { zipFiles, filesFromZip } from "./zip.js";
