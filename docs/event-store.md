@@ -247,6 +247,10 @@ interface EventStore {
   readonly self: string;
   /** This device's own event. The store mints eid and at, sets author = self, returns the whole event. */
   append(draft: Draft): Promise<Event>;
+  /** Several of this device's events as one write: all validated first — one bad draft and
+   *  nothing lands — then minted in input order at one instant; the batch lands whole or
+   *  not at all across a crash of the process (§4.1). */
+  appendAll(drafts: Draft[]): Promise<Event[]>;
   /** Events from elsewhere (a backup, another store, another device). Union by eid.
    *  Reads its whole input before writing; throws ForkedSelf, having written nothing,
    *  on an event of `self` it does not already hold (§4.2). */
@@ -288,6 +292,16 @@ Node's `appendFile` does not `fsync`, and OPFS offers no control over
 when bytes reach the medium. A backend that wants the stronger claim
 makes it itself (an `fsync` per append on Node is cheap at this write
 rate) and says so.
+
+`appendAll` is `append` for several drafts as one write, for a
+procedure that must not half-land (a deletion's per-member tombstones,
+`vault-events.md` §9). Every draft is validated before anything is
+written — one bad draft and nothing lands — then each event is minted
+in input order at one reading of the clock: one `at` for the batch,
+eids monotone within it. The batch lands whole or not at all across a
+crash of the process — the folder store writes it as a fresh segment,
+whole, rather than appending (`vault-folder.md` §9.2). Past a crash of
+the process, the claim is the backend's, as above.
 
 Appends from one store instance are ordered; two instances over one
 serialization are the caller's problem (a Web Lock in the browser, one

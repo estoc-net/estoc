@@ -85,6 +85,36 @@ export function storeSuite(name: string, open: OpenStore): void {
       expect(back.at < first.at).toBe(true); // `at` is the wall clock, and says so
     });
 
+    it("appendAll lands the batch in input order at one instant, ids monotone", async () => {
+      const c = clock("2026-08-30T10:00:00.000Z");
+      const store = await open({ self: "k7q3ma", clock: c.now });
+      const before = await store.append({ type: "t", data: { n: 0 } });
+      c.advance(1000);
+      const batch = await store.appendAll([
+        { type: "contact.deleted", data: { cid: "c1" } },
+        { type: "contact.deleted", data: { cid: "c2" } },
+        { type: "contact.deleted", data: { cid: "c3" } },
+      ]);
+      expect(batch.map((event) => event.data.cid)).toEqual(["c1", "c2", "c3"]);
+      expect(new Set(batch.map((event) => event.at)).size).toBe(1); // one reading of the clock
+      expect(batch.every((event) => event.author === "k7q3ma")).toBe(true);
+      const ids = eids(batch);
+      expect([...ids].sort()).toEqual(ids); // monotone within the batch
+      expect(eids(await all(store.scan()))).toEqual([before.eid, ...ids]);
+    });
+
+    it("appendAll of nothing writes nothing", async () => {
+      const store = await open();
+      expect(await store.appendAll([])).toEqual([]);
+      expect(await all(store.scan())).toEqual([]);
+    });
+
+    it("appendAll validates every draft before anything lands", async () => {
+      const store = await open();
+      await expect(store.appendAll([{ type: "t", data: {} }, { type: "", data: {} }])).rejects.toThrow(InvalidEvent);
+      expect(await all(store.scan())).toEqual([]);
+    });
+
     it("append stores a copy of the draft, and what it hands out is read-only", async () => {
       const store = await open();
       const draft = { type: "t", data: { list: [1, 2], nested: { a: 1 } }, blobs: [] as string[] };

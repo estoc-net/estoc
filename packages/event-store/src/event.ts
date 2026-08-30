@@ -81,6 +81,13 @@ export interface EventStore {
   /** This device's own event. The store mints eid and at, sets author = self, returns the whole event. */
   append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>>;
   /**
+   * Several of this device's events as one write: every draft validated before anything
+   * lands — one bad draft and nothing is written — then minted in input order at one
+   * instant, one `at` for the batch and eids monotone within it. Across a crash of the
+   * process the batch lands whole or not at all (§4.1).
+   */
+  appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]>;
+  /**
    * Events from elsewhere (a backup, another store, another device). Union by eid.
    * Reads its whole input before writing; throws ForkedSelf, having written nothing,
    * on an event of `self` it does not already hold (§4.2).

@@ -421,3 +421,41 @@ describe("folder: kindOf", () => {
     expect(kindOf("config.json")).toBe("file");
   });
 });
+
+describe("folder: appendAll", () => {
+  it("writes the batch as one fresh segment, whole, and appends continue in it", async () => {
+    const { backend, events } = open({ self: "k7q3ma" });
+    await events.append({ type: "t", data: { n: 0 } });
+    const batch = await events.appendAll([
+      { type: "contact.deleted", data: { cid: "c1" } },
+      { type: "contact.deleted", data: { cid: "c2" } },
+    ]);
+    const segments = segmentsOf(backend, "k7q3ma");
+    expect(segments).toHaveLength(2); // a fresh segment, not the open one appended to
+    const lines = fileText(backend, segments[1] as string).split("\n");
+    expect(lines).toHaveLength(3); // two lines and the final newline
+    expect(lines.slice(0, 2).map((line) => (JSON.parse(line) as Event).eid)).toEqual(batch.map((event) => event.eid));
+    await events.append({ type: "t", data: { n: 3 } });
+    expect(segmentsOf(backend, "k7q3ma")).toHaveLength(2); // the batch's segment is the open one now
+    expect(fileText(backend, segments[1] as string).split("\n")).toHaveLength(4);
+  });
+
+  it("leaves nothing behind when the write fails, and the store goes on", async () => {
+    const backend = new (class extends MemoryBackend {
+      fail = false;
+      override async write(path: string, data: Uint8Array): Promise<void> {
+        if (this.fail && path.endsWith(".jsonl")) {
+          throw new Error("no room");
+        }
+        await super.write(path, data);
+      }
+    })();
+    const { events } = folderStore(backend, { self: "k7q3ma" });
+    backend.fail = true;
+    await expect(events.appendAll([{ type: "t", data: { n: 1 } }])).rejects.toThrow(/no room/);
+    expect(await all(events.scan())).toEqual([]);
+    backend.fail = false;
+    const after = await events.append({ type: "t", data: { n: 2 } });
+    expect((await all(events.scan())).map((event) => event.eid)).toEqual([after.eid]);
+  });
+});
