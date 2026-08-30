@@ -43,8 +43,8 @@ The principles of `event-store.md` §2 as they land on a file system.
 
 1. **Three kinds of file, none of them a record.** A **log** — events,
    append-only JSONL in segments, merged by union; a **singleton** — one
-   per vault, kept by its own policy on merge (§6); a **blob** — bytes
-   named by their hash, merged by union, the only kind ever unlinked
+   per vault, kept by its own policy on merge (§6); a **blob** — a
+   block named by its CID, merged by union, the only kind ever unlinked
    (§7).
 2. **Every event under `devices/<dev>/` was authored by device `dev`.**
    The directory and the line's `author` field say the same thing, and
@@ -70,12 +70,12 @@ The principles of `event-store.md` §2 as they land on a file system.
 .estoc/
   config.json                                singleton — format/version, anchor; immutable
   keystore.json                              singleton — @estoc/keystore v3, unchanged
-  blobs/<hash>                               content-addressed bytes — message bodies, attachments; global; the one place anything is unlinked
+  blobs/<cid>                                content-addressed blocks — message bodies, attachments, received objects; global; the one place anything is unlinked
   devices/<dev>/<seg>.jsonl                  everything device <dev> wrote: one log, every event a line
   state/                                     reserved, as v1 §6.7
   extensions/<ext>/                          an extension's own store: this tree again, less config, keystore and local; §3.1
     devices/<dev>/<seg>.jsonl
-    blobs/<hash>
+    blobs/<cid>
   local/                                     this copy's own; never in a snapshot, never merged; §6.4
     self.json                                which <dev> this copy writes as, and which instance
     agent/                                   the agent's local state; the folds' would be beside it, by name
@@ -98,7 +98,7 @@ per contact or per channel: what an event is about is a field of its
 ### 3.1 `extensions/<ext>/`
 
 An extension's store (`event-store.md` §6.2) is this tree again, under
-its `ext`: `devices/<dev>/<seg>.jsonl` and `blobs/<hash>`, by every rule
+its `ext`: `devices/<dev>/<seg>.jsonl` and `blobs/<cid>`, by every rule
 of §4, §5, §7 and §8 — one writer per device directory, segments named
 uuidv7, blobs flat — and nothing else: no `config.json` (the identity
 is the vault's), no `keystore.json`, no `local/` (an extension's local
@@ -274,23 +274,32 @@ else. Never in a snapshot, never merged, never read by another device.
 Any other path a reader meets and does not understand is carried, never
 read, never overwritten (§11).
 
-## 7. Blobs — `blobs/<hash>`
+## 7. Blobs — `blobs/<cid>`
 
-`hash` = sha256 of the bytes, lowercase hex; one flat directory,
-always: the interchange format has one layout, so a zip is readable without
-probing. A backend that wants sharding does it below `VaultBackend`
-and renders flat. Immutable, merged by union, deduplicated by
-construction, and the one directory outside `devices/` that every
-device writes to — safely, because a content address has no author.
-The store names a blob by hashing its bytes (`event-store.md` §6);
-a blob's name is checked against its bytes on import (§9.3), and a
-mismatch is damage, not copied.
+One file per block of the `unixfs-v1-2025` profile (`event-store.md`
+§6), named by its CID: CIDv1, sha-256, codec `raw` or `dag-pb`,
+base32 lower — fifty-nine characters, `bafkrei…` for a raw block and
+`bafybei…` for a dag-pb node. The file's bytes are the block's, as
+they hash: a raw block is the bare bytes, a dag-pb node its encoded
+form. A file of at most 1 MiB is one raw block; a larger one is its
+raw 1 MiB chunks and a dag-pb root, each a file here; a received
+object is every block of its tree, each a file here. One flat
+directory, always: the interchange format has one layout, so a zip is
+readable without probing. A backend that wants sharding does it below
+`VaultBackend` and renders flat. Immutable, merged by union,
+deduplicated by construction, and the one directory outside
+`devices/` that every device writes to — safely, because a content
+address has no author. The store names a block by hashing its bytes
+(`event-store.md` §6); a block's name is checked against its bytes on
+import (§9.3), and a mismatch, or a name that is not a profile
+block's, is damage, not copied.
 
-A blob is written **before** the line that names it (`event-store.md`
-§6); a crash between the two leaves an orphan, harmless, swept by the
-next collection. What a blob's absence means — erased, or missing — is
-read from the events (`vault-events.md` §8.2); the folder only reports
-that it is not there.
+A blob is written **before** the line that names it, leaves before
+root (`event-store.md` §6); a crash between the writes leaves orphans,
+harmless, swept by the next collection. What a block's absence means —
+erased, missing, or not yet fetched — is read from the events
+(`vault-events.md` §8.2); the folder only reports that it is not
+there.
 
 ## 8. The folder store
 
@@ -387,8 +396,8 @@ a judgement about which is right.
 `FileStore` is the backend's read/write/list over every path in the
 snapshot that is not a segment or a blob — not
 `devices/<dev>/<seg>.jsonl` with `dev` a device id and `seg` a uuidv7,
-not `blobs/<hash>` with `hash` sixty-four lowercase hex characters.
-The test is the shape of the path, not its prefix: a path under
+not `blobs/<cid>` with `cid` a fifty-nine character base32-lower
+CIDv1 (§7). The test is the shape of the path, not its prefix: a path under
 `devices/` or `blobs/` that is not shaped like that is a file, carried
 and never read, so that it survives a trip through a store that is not
 a folder (§11). The same test applies under `extensions/<ext>/`
@@ -413,7 +422,7 @@ whoever imports it (§9.3).
 A store that is not a folder renders one: each event to
 `devices/<author>/<seg>.jsonl`, in segments the export mints as it
 goes — one per author is enough, in any order — one line each; blobs
-to `blobs/<hash>`, flat; every path in `FileStore` in place; each
+to `blobs/<cid>`, flat; every path in `FileStore` in place; each
 extension store the same way under `extensions/<ext>/` (§3.1); no
 `local/`. Nothing about the chunking is remembered: a reader of the
 export unions by `eid` and assumes no order (§5, `event-store.md`
@@ -431,11 +440,12 @@ Three kinds of thing, in this order (`event-store.md` §7.3):
    §7.3). A device directory that arrives without its `device.minted`
    is read — its events are still that device's — and reported as
    incomplete.
-2. **Blobs**, after the events: a blob absent here and present there
+2. **Blobs**, after the events: a block absent here and present there
    is copied iff it is not collectable over the merged event set
-   (`vault-events.md` §8.3) and its bytes hash to its name; one that
-   does not is damage in the source, reported, not copied. An erased
-   blob never comes back.
+   (`vault-events.md` §8.3) — reached from a root some event lists,
+   walking the blocks either copy holds — and it is a profile block
+   whose bytes hash to its name (§7); one that is not is damage in the
+   source, reported, not copied. An erased blob never comes back.
 3. **Files**, each by its own policy (§6): `config.json` identical or
    refused; `keystore.json` unioned; `state/` as v1; any other path
    copied when absent, never overwritten; `local/` is not in the

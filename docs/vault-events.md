@@ -27,8 +27,8 @@ observation carries the channel the envelope proved — one key of ours
 and one key of theirs, not their DID and not our decision about who
 they are; a decision carries what it is about — a contact, a key, a device, a
 message. Keys are named by random ids, not by the contact they were
-minted for. A message's body is a blob its skeleton names, and erasing
-is unlinking blobs, never events.
+minted for. A message's body is a blob its skeleton names by root,
+and erasing is unlinking blocks, never events.
 
 ## 1. Principles
 
@@ -193,7 +193,7 @@ shows them once.
 { "type": "profile.shared",      "data": { "mid": "0198…" } }
 { "type": "peer.resolved", "data": { "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" } }
 { "type": "peer.rotated",  "data": { "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" } }
-{ "type": "message.erased", "data": { "mid": "0198…", "drop": ["<hash>"], "because": "user" } }
+{ "type": "message.erased", "data": { "mid": "0198…", "drop": ["<body>"], "because": "user" } }
 ```
 
 - `channel.firstSeen`: written once by each device the first time it
@@ -206,11 +206,11 @@ shows them once.
   devices each write their own.
 - `message.in` / `message.out`: the **skeleton** of a message — its
   local `mid` (minted at append), the wire id (`wireId`), `msgType`, `thid`,
-  `pthid`, `bytes` (the size of the plaintext), with `body`, the hash
-  of the blob holding the plaintext (§4), and `attachments`, the hashes
+  `pthid`, `bytes` (the size of the plaintext), with `body`, the root
+  of the blob holding the plaintext (§4), and `attachments`, the roots
   of every blob lifted out of it, saying which of them is which; and
   `signedBy` when a signature rode inside the encryption. On the
-  envelope, `blobs` (`event-store.md` §3) lists every blob the line
+  envelope, `blobs` (`event-store.md` §3) lists every root the line
   holds: exactly `body` plus `attachments`, stated twice because the
   collector reads only the envelope and never `data`. The line is the
   permanent record of which blobs the message references: collection
@@ -271,28 +271,38 @@ arises for attributed ones.
 
 ## 4. Bodies
 
-A message's plaintext is a blob (`event-store.md` §6), written
-**before** its skeleton is appended; the skeleton names it by hash. The
-same blob store holds attachments lifted out of a plaintext and any
-other bytes an event lists in its `blobs`; a blob no event lists is an
-orphan (§8.3). A crash between the two writes leaves an orphan, harmless,
-swept by the next collection. The other order is never used: a line
-whose body was never written would be indistinguishable from an erase.
+A message's plaintext is a blob (`event-store.md` §6) — `put` as a
+file, one raw block for the usual few kilobytes, chunks and a dag-pb
+root past 1 MiB — written **before** its skeleton is appended; the
+skeleton names it by root. The same blob store holds attachments
+lifted out of a plaintext and any other blocks an event lists in its
+`blobs`, by root; a block no root reaches is an orphan (§8.3). A crash
+between the writes leaves orphans, harmless, swept by the next
+collection. The other order is never used: a line whose body was never
+written would be indistinguishable from an erase.
 
 *Provisional — lifting.* An attachment carried inline (`data.base64`,
 `data.json`) may be lifted out at append time: its bytes go to their own
 blob, the body blob is written with that `data` replaced by a `links`
 entry naming the blob (the attachment's own `hash` stays), and the
-blob's hash goes into the line's `attachments[]`. The body blob is then
-the plaintext *as stored*, not byte-for-byte as it crossed the wire; the
+blob's root goes into the line's `attachments[]`. An object that
+arrived as blocks (`object-share/1.0`) is lifted as it is: each block
+by `putBlock`, its root into `attachments[]`, and from then on it is
+read by `@estoc/folder-object` over the vault's own blocks — the
+share's leaves that were absent, or fetched later by package, land
+beside the rest under the same root. The body blob is then the
+plaintext *as stored*, not byte-for-byte as it crossed the wire; the
 wire form is what the trace keeps (v1 §6.10). A message left inline has
 `attachments: []` and its attachments are erased with its body. Whether
 to lift at all is open (§12).
 
-A blob that is **absent** means one of two things, and the reader tells
-them apart by the events (§8.2): **erased** — the person removed it
-everywhere; or, with no erase on record, **missing** — damage, to be
-reported as such and never dressed up as a deletion.
+A block that is **absent** under a root a line names means one of
+three things, and the reader tells them apart by the events (§8.2):
+**erased** — the person removed it everywhere; **missing** — damage,
+to be reported as such and never dressed up as a deletion; or, for a
+root whose kind allows a partial tree (an object whose leaves may be
+absent, `object-share.md` §2), **not yet fetched** — the type's
+reading, not the format's.
 
 ## 5. Identity and devices
 
@@ -529,38 +539,45 @@ because the person said so; an absence with no such record is damage.
 
 ```jsonc
 { "eid": "…", "author": "k7q3ma", "at": "…", "type": "message.erased",
-  "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "mid": "0198…", "drop": ["<body hash>", "<attachment hash>"], "because": "user" } }
+  "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "mid": "0198…", "drop": ["<body root>", "<attachment root>"], "because": "user" } }
 ```
 
-- Permanent and global: every device that folds it unlinks the named
-  blobs, and a merge never copies them in again (§10). `drop` names
-  what to drop — the body, some or all attachments — so an attachment
-  can be erased and the text kept, or the reverse. It is not the
-  envelope's `blobs`: an erase references nothing, and the bytes need
-  not exist for it to hold.
+- Permanent and global: every device that folds it unlinks what the
+  named roots reach and nothing else still reaches (§8.3), and a merge
+  never copies those blocks in again (§10). `drop` names roots — the
+  body, some or all attachments — so an attachment can be erased and
+  the text kept, or the reverse; a block two roots share goes when the
+  last of them is dropped. It is not the envelope's `blobs`: an erase
+  references nothing, and the bytes need not exist for it to hold.
 - Event first, then unlink. The skeleton stays; readers show "erased".
 - `because`: `user`, `contact-deleted` (§9).
 
 ### 8.2 Reading an absence
 
-For a blob `h` referenced by a line: present → show it; absent and some
-`message.erased` names `h` → erased; absent otherwise → **missing**,
-reported as damage.
+For a root `r` a line names: every block it reaches present → show
+it; any absent and some `message.erased` names `r` → erased; absent
+otherwise → **missing**, reported as damage — unless the root's kind
+admits a partial tree (§4), where a reader that knows the kind may say
+**not yet fetched** instead. The format itself never does.
 
 ### 8.3 Collection
 
-A blob `h` is **referenced** by every event whose `blobs`
-(`event-store.md` §3) lists it, and by nothing else: a hash anywhere
-else on a line is not a reference. This is what lets a collector run
-over events of types it has never seen. Over the union of every
-device's events, `h` may be unlinked when every `message.in` or
-`message.out` referencing it has a `message.erased` for its `mid` with
-`h` in `drop`, and no event of any other type references it: an event
-the vault's own types do not cover pins its blobs, because version 2
-defines no erase for it (§12). An orphan — a blob no event anywhere
-lists, from a crash between the two writes (§4) — is collectable too;
-so is nothing else. Reference counting is a fold; a collector may run
-at any time and is never required to.
+A root `r` **reaches** itself and, when it is a dag-pb node, every
+block its links reach; a block that is absent ends the walk there. The
+walk needs no type: the codec is in the name and the links are in the
+block (`event-store.md` §6). A block `b` is **referenced** by every
+event whose `blobs` (`event-store.md` §3) lists a root that reaches
+`b`, and by nothing else: a CID anywhere else on a line is not a
+reference. This is what lets a collector run over events of types it
+has never seen. Over the union of every device's events, `b` may be
+unlinked when, for every `message.in` or `message.out` referencing it,
+a `message.erased` for its `mid` names in `drop` every root of that
+line that reaches `b`, and no event of any other type references it:
+an event the vault's own types do not cover pins its blocks, because
+version 2 defines no erase for it (§12). An orphan — a block no
+listed root anywhere reaches, from a crash between the writes (§4) —
+is collectable too; so is nothing else. Reference counting is a fold;
+a collector may run at any time and is never required to.
 
 ### 8.4 No space policy
 
@@ -614,9 +631,10 @@ side that is not here by `eid` is added; nothing here is rewritten,
 dropped, or reordered. What the events then require:
 
 - **Blobs come in by collectability.** After the events are merged,
-  fold the union of skeletons and erases; a blob absent here and
+  fold the union of skeletons and erases; a block absent here and
   present there is copied iff it is not collectable under §8.3 over
-  that union. An erased blob never comes back.
+  that union, walking the blocks either copy holds. An erased blob
+  never comes back.
 - **Held after merge.** Once the set is merged — or restored into a
   fresh device — every outbound message whose delivery fold is not
   `sent` gets a `delivery.held { because: imported }` from the device
@@ -636,7 +654,7 @@ dropped, or reordered. What the events then require:
 v2 keeps, forever: the contact's decisions with their tombstone — and
 among them the petname and any `claimedName` the contact sent; the
 `goal` text of any invitation they took (§5); every channel's
-skeleton lines (`mid`, `at`, `thid`, sizes, blob hashes, delivery
+skeleton lines (`mid`, `at`, `thid`, sizes, blob roots, delivery
 outcomes, `erased` lines), and the identity evidence in them —
 `channel.firstSeen` with the peer's full public key and first DID,
 `peer.resolved` with every DID and key list seen. Only bodies and
@@ -682,9 +700,9 @@ derivation names in version 2 (§2), and nothing in version 2 reads a
   vault carries no code. Deferred with the rest of it: what
   `extension.installed.object` names (§5; the root of a signed object
   is the leaning); how a device that folds the event obtains the bytes
-  — carried in the extension's own store as blobs held by a host event
-  under `estoc.*`, one CAR or one blob per file, or fetched by the
-  root; and whether a new version is a second such event in the same
+  — carried in the extension's own store as blocks under its root,
+  held by a host event under `estoc.*`, or fetched by the root; and
+  whether a new version is a second such event in the same
   store or a new `ext`. Type names for extensions are no longer a
   question beyond the one reserved prefix: an extension's events are
   in a set of its own (`event-store.md` §6.2).

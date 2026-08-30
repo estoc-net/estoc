@@ -64,7 +64,7 @@ that hold for every store. `vault-folder.md` §2 has the ones about
 files; `vault-events.md` §1 the ones about meaning.
 
 1. **A vault is events, blobs and files.** *Events*: immutable,
-   appended, unioned, folded. *Blobs*: bytes named by their hash,
+   appended, unioned, folded. *Blobs*: blocks named by their CID (§6),
    unioned, the only thing ever unlinked. *Files*: everything that is
    neither, and among them the singletons — the format and anchor, the
    key cache, reserved state. Nothing is a record: where v1 rewrote a small JSON file whole,
@@ -113,7 +113,7 @@ store reads, and one, optional, it checks and never reads. The sixth,
 | `at`     | RFC 3339 UTC (§4). |
 | `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own. |
 | `author` | the authoring device (§4). |
-| `blobs`  | optional: every blob this event references, as hashes (§6). The complete list — a hash anywhere else on the event is not a reference. |
+| `blobs`  | optional: every blob this event references, as roots (§6): a root, and every block it reaches. The complete list — a CID anywhere else on the event is not a reference. |
 | `data`   | the payload: a JSON object, always present, `{}` when the type carries nothing. |
 
 `data` holds the event's own fields, as specified per type, opaque to
@@ -159,8 +159,10 @@ store to one vault's shape.
 references without understanding any event. With the list on the
 envelope, an event of a type the collector has never seen — an
 extension's — still says what it holds, and a store that unlinks by
-this rule is safe for events it does not know. The store itself only
-checks the field's shape. Type-specific fields may say which blob is
+this rule is safe for events it does not know. What a root reaches is
+read from the blocks, not the event: the name says whether a block has
+links (§6), so the walk needs no type either. The store itself only
+checks the field's shape. Type-specific fields may say which root is
 which (`body`, `attachments`), drawn from this list.
 
 **Nothing is reserved inside `data`.** `device.label { dev }` names
@@ -201,7 +203,7 @@ Rules:
    and `ingest` it checks that the object is a JSON object (above);
    that `eid` is a well-formed uuidv7; that `at` is RFC 3339 UTC; that
    `type` is a non-empty string; that `author` is a device id; that
-   `blobs`, if present, is an array of hashes (§6); that `data` is a
+   `blobs`, if present, is an array of CIDs (§6); that `data` is a
    JSON object; and that no other top-level field is present. An event
    that fails is rejected — `append` throws, `ingest` reports (§5.2) —
    and never stored. `data` is opaque: type-specific validation is the
@@ -246,7 +248,7 @@ Rules:
 ```ts
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
-type Hash = string;                   // sha256 of the bytes, lowercase hex
+type Cid = string;                    // CIDv1, sha-256, codec raw or dag-pb, base32 lower (§6)
 
 type JsonObject = { [field: string]: JsonValue };
 
@@ -255,12 +257,12 @@ type Event<D extends JsonObject = JsonObject> = {
   at: string;                         // RFC 3339 UTC
   author: string;                     // a device id
   type: string;
-  blobs?: Hash[];                     // every blob the event references; checked, never read, here
+  blobs?: Cid[];                      // every root the event references; checked, never read, here
   data: D;                            // the payload; opaque here — `vault-events.md` types it per `type`
 };
 
 /** What a caller hands to `append`: no eid, at, or author — the store mints them. */
-type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Hash[]; data: D };
+type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Cid[]; data: D };
 
 /** Equality, by `===` on primitives: on the envelope fields named, and on the top-level fields of
  *  `data` named under `data`. `null` matches a field present and null; `undefined` is no
@@ -464,12 +466,16 @@ shows.
 ## 6. Blobs and files
 
 ```ts
-interface BlobStore {                 // content-addressed
-  get(hash: Hash): Promise<Uint8Array | null>;
-  has(hash: Hash): Promise<boolean>;
-  put(bytes: Uint8Array): Promise<Hash>;   // the store hashes; a caller cannot misname bytes
-  unlink(hash: Hash): Promise<void>;
-  list(): Promise<Hash[]>;
+interface BlobStore {                 // a block store of the `unixfs-v1-2025` profile
+  // files — what an event's `body` and `attachments` name
+  put(bytes: Uint8Array): Promise<Cid>;          // hashes by the profile; returns the file's root. A caller cannot misname bytes.
+  get(root: Cid): Promise<Uint8Array | null>;    // the file's bytes, chunks rejoined; null if the root or any chunk is absent; throws on a node that is not a file
+  // blocks — what the profile's trees are made of
+  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (shape, hash); the only way in for a block minted elsewhere
+  getBlock(cid: Cid): Promise<Uint8Array | null>;
+  has(cid: Cid): Promise<boolean>;
+  unlink(cid: Cid): Promise<void>;               // one block
+  list(): Promise<Cid[]>;
 }
 
 interface FileStore {                 // everything in a vault that is neither an event nor a blob
@@ -487,22 +493,45 @@ replaced by folds over `events.scan(...)` and `events.changes(...)`.
 What a copy keeps for itself — the trace among it — is none of these
 and is §6.1.
 
-**Blobs** are bytes named by `sha256`, lowercase hex; immutable, merged
-by union, deduplicated by construction, and the one thing in a vault
-that is ever unlinked (`vault-events.md` §8). The name is computed by
-the store on `put`, checked against the bytes on import (§7.3), and may
-be checked on read; a blob whose bytes do not hash to its name is
-damage, never served. Which events reference which blobs is on the
-events (`blobs`, §3), so a collector needs no type; when a blob may go
-is the events' business (`vault-events.md` §8.3); the store only
-promises that a hash it holds returns the bytes it was given.
+**Blobs are blocks.** A blob is one block of the UnixFS hashing
+profile `unixfs-v1-2025` (`@estoc/folder-object`, `object-share.md`
+§2): a CIDv1 over sha-256, base32 lower, whose codec is **`raw`** —
+bare bytes, at most 1 MiB — or **`dag-pb`** — a UnixFS node: a
+directory, a HAMT shard, or the chunk index of a file over 1 MiB,
+whose links are further blocks. A **file** is a raw block (at most
+1 MiB) or a dag-pb root over raw 1 MiB chunks in the profile's
+balanced layout; `put` hashes bytes into exactly that and returns the
+root, so the same bytes have the same name in a vault, in an
+`object-share/1.0` share, and in a signed object, and a single-block
+file's name *is* its bytes' raw CID. A received object — blocks
+already named — comes in by `putBlock`, one per block, and is read
+back by `@estoc/folder-object` over `getBlock`; nothing is re-hashed
+and nothing is stored twice. A CID names a block inside a tree; a
+bare multihash (`blob-store.md`) names bytes outside one — a package
+as uploaded — and the two are never confused.
 
-**A blob is written before the event that names it.** A crash between
-the two leaves an orphan blob — harmless, collectable
+Blobs are immutable, merged by union, deduplicated by construction
+(two attachments sharing a chunk share a block), and the one thing in
+a vault that is ever unlinked (`vault-events.md` §8). A name is
+computed by the store on `put`, checked by `putBlock` and on import
+(§7.3), and may be checked on read; a block whose bytes do not hash
+to its name, or whose name is not a profile block (another codec,
+another hash, a raw block over 1 MiB), is damage, never served and
+never copied — so that every name in a vault is one a conforming
+`put` could have minted. Which events reference which roots is on the
+events (`blobs`, §3), and which blocks a root reaches is in the
+blocks: raw has no links, dag-pb's are in the node, and the codec is
+in the name. A collector therefore needs no type; when a block may go
+is the events' business (`vault-events.md` §8.3); the store only
+promises that a CID it holds returns the bytes it was given.
+
+**A blob is written before the event that names it** — every block
+of it, leaves before the root, root before the line. A crash between
+the writes leaves orphan blocks — harmless, collectable
 (`vault-events.md` §8.3). The other order is never used: an event whose
-blob was never written would be indistinguishable from an erase. A
-store that can make the two one transaction (§8) may; a folder cannot
-and orders them.
+blocks were never written would be indistinguishable from an erase. A
+store that can make the writes one transaction (§8) may; a folder
+cannot and orders them.
 
 **Files** are named by path, and the paths are the folder's
 (`vault-folder.md` §6): the format and anchor, the key cache, reserved
@@ -657,7 +686,7 @@ What follows from it:
   prefix above), never the vault's blobs — a blob the vault's set
   references is pinned for the vault's life, and code is exactly what
   should not be. An extension may *read* a blob of the vault's by
-  hash,
+  CID,
   through whatever the application hands it, and never pins one: an
   erase in the vault's set (`vault-events.md` §8) wins over any
   extension's reference, which is what sovereignty over one's own
@@ -791,12 +820,14 @@ Three kinds of thing, three rules, in this order:
    promises never to do), and `changes` would replay bytes that were
    not new. Reading every line costs one parse of the other copy, which
    is what `scan` costs anyway.
-2. **Blobs**, after the events: a blob absent here and present there
+2. **Blobs**, after the events: a block absent here and present there
    is copied iff it is not collectable over the merged event set
-   (`vault-events.md` §8.3), and iff its bytes hash to its name — one
-   that does not is damage in the source, reported, not copied. An
-   erased blob never comes back. The rule is the events'; the order —
-   events first — is what makes it answerable.
+   (`vault-events.md` §8.3) — reached, walking the blocks either copy
+   holds, from a root some event lists — and iff it is a profile block
+   whose bytes hash to its name (§6) — one that is not is damage in
+   the source, reported, not copied. An erased blob never comes back.
+   The rule is the events'; the order — events first — is what makes
+   it answerable.
 3. **Files**, each by its own policy (`vault-folder.md` §6). The one
    the store must know about is that the format and anchor must be
    identical on both sides — that check is what makes this a merge
@@ -869,7 +900,7 @@ CREATE TABLE events (
   author   TEXT NOT NULL,
   at       TEXT NOT NULL,
   type     TEXT NOT NULL,
-  blobs    TEXT,                    -- JSON array of hashes, or NULL
+  blobs    TEXT,                    -- JSON array of CIDs (roots), or NULL
   data     TEXT NOT NULL            -- the event's `data`, JSON
 );
 CREATE INDEX events_order ON events (at, eid, author);
@@ -877,7 +908,8 @@ CREATE INDEX events_order ON events (at, eid, author);
 --   my_key   TEXT GENERATED ALWAYS AS (json_extract(data, '$.myKey')),
 --   peer_key TEXT GENERATED ALWAYS AS (json_extract(data, '$.peerKey')),
 -- with an index on (my_key, peer_key, at, eid). The model does not say.
-CREATE TABLE blobs (hash TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE blobs (cid TEXT PRIMARY KEY, bytes BLOB NOT NULL);
+CREATE TABLE links (parent TEXT NOT NULL, child TEXT NOT NULL);   -- a dag-pb block's links, filled on put; derived, rebuildable from `blobs`
 CREATE TABLE files (path TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 ```
 
@@ -893,8 +925,8 @@ AND seq <= token ORDER BY seq`, prefixed by the instance id. Export
 renders each author's rows into one segment in `seq` order and
 remembers nothing (§7.2). Blob write and skeleton append become one
 transaction, which the folder store cannot offer (§6). Collection
-(`vault-events.md` §8.3) is one query over `blobs`, a `json_each`
-away.
+(`vault-events.md` §8.3) is `json_each` over `blobs` for the roots and
+a recursive query over `links` for what they reach.
 
 ### 8.2 Where it would run
 
@@ -966,6 +998,13 @@ What the code says today, for the record:
   open is slow.
 - **`fsync` on Node** (§5.1): a per-append `fsync` in `FsBackend` would
   let the daemon claim power-loss durability. Cheap; not decided.
+- **The profile's hasher in the store** (§6): `put` chunks and roots
+  by `unixfs-v1-2025`, and collection decodes dag-pb links. Both live
+  in `@estoc/folder-object` today, with the exporter beside them.
+  Whether `@estoc/vault` depends on that package or on a smaller one
+  split out of it (the CID helpers, the chunker, a links decoder) is
+  an implementation matter; the profile and the names are fixed
+  either way.
 - **Daemon RPC.** Once the store is the interface, the daemon could
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this
@@ -980,8 +1019,8 @@ What the code says today, for the record:
   code. Not decided, and deferred with third-party extensions: what
   `extension.installed` names — a hash of the code, the root of a
   signed object, a name to be resolved — and how a device obtains the
-  bytes (carried in the extension's own store under a host event, one
-  CAR blob or many; or fetched by the root); how the application grants an extension the vault's own store to
+  bytes (carried in the extension's own store as blocks under a host
+  event; or fetched by the root); how the application grants an extension the vault's own store to
   act as the application; and whether an extension runs where the agent
   runs (and sees what it sees) or only where the person looks, which is
   the application's boundary, not the store's. The agent's trace was
