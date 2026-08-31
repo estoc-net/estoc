@@ -6,7 +6,7 @@ import { drafts, record as recordEvent, type Contact } from "@estoc/vault/v2";
 
 import { BASIC_MESSAGE, OOB_INVITATION, PLAIN_TYP, PROFILE } from "../../src/index.js";
 import { nameOf, openVault, type MessageRecord } from "../../src/v2/index.js";
-import type { FakeMediator, FakeSocket } from "../fake-mediator.js";
+import { network, type FakeMediator, type FakeSocket } from "../fake-mediator.js";
 import {
   attach,
   contactByDid,
@@ -339,8 +339,8 @@ describe("v2 agent through a mediator", () => {
 });
 
 /** A WebSocket that keeps every socket it opened, for counting and closing checks. */
-function watching(sockets: FakeSocket[], mediator: FakeMediator): typeof WebSocket {
-  return class extends mediator.WebSocket {
+function watching(sockets: FakeSocket[], over: Pick<FakeMediator, "WebSocket">): typeof WebSocket {
+  return class extends over.WebSocket {
     constructor(url: string) {
       super(url);
       sockets.push(this as unknown as FakeSocket);
@@ -492,5 +492,44 @@ describe("v2 agent hardened", () => {
     expect(bob.messages.filter((m) => m.view.kind === "profile" && m.view.direction === "received")).toHaveLength(1);
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  it("changes mediator while a start is midway: the move waits its turn, and nothing of ours stays behind", async () => {
+    const one = await newMediator();
+    const two = await newMediator({ fill: 201, http: "http://mediator-two/", ws: "ws://mediator-two/ws" });
+    const net = network(one, two);
+    const sockets: FakeSocket[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let stallNext = false;
+    const slow: typeof fetch = async (input, init) => {
+      if (stallNext) {
+        stallNext = false;
+        await held;
+      }
+      return net.fetch(input, init);
+    };
+    const alice = await newParty("Alice", 18, one, { fetch: slow, webSocket: watching(sockets, net) });
+
+    // the start stalls inside its mediate-request to the first mediator; the move is asked for meanwhile
+    stallNext = true;
+    const starting = alice.agent.start();
+    await until(() => !stallNext);
+    const moving = alice.agent.setMediator(two.did);
+    release();
+    await Promise.all([starting, moving]);
+    await withTimeout(alice.live, 8000, "live at the new mediator");
+
+    // the stalled start finished its round trip and stopped; the leaving ran after it, so what
+    // it had registered at the old mediator was on the drop list, not left behind
+    const device = alice.v.fold.device(alice.v.vault.self);
+    expect(device?.mediations.map((m) => m.retired !== null)).toEqual([true, false]);
+    expect(device?.mediation?.mediatorDid).toBe(two.did);
+    expect(one.recipients.size).toBe(0);
+    expect(two.recipients.size).toBeGreaterThan(0);
+    // no socket ever opened toward the old mediator
+    expect(sockets.map((s) => s.url)).toEqual([two.wsUrl]);
+    expect(alice.agent.did).toMatch(/^did:peer:4/);
+    alice.agent.destroy();
   });
 });

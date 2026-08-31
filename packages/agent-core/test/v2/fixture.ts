@@ -34,8 +34,14 @@ import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 export const didcomm = { Message, FromPrior };
 export const seedOf = (fill: number) => new Uint8Array(32).map((_, i) => (i * 7 + fill) & 0xff);
 
-export async function newMediator(options: { blobs?: boolean } = {}): Promise<FakeMediator> {
-  return new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), "anchor"), MEDIATOR_HTTP, undefined, options);
+export async function newMediator(options: { blobs?: boolean; fill?: number; http?: string; ws?: string } = {}): Promise<FakeMediator> {
+  const { blobs, fill, http, ws } = options;
+  return new FakeMediator(
+    await deriveIdentity(await importSeed(seedOf(fill ?? 200)), "anchor"),
+    http ?? MEDIATOR_HTTP,
+    ws,
+    blobs === undefined ? {} : { blobs }
+  );
 }
 
 /** every stamp a second after the last: `at` orders what the test appends, whatever the wall clock does */

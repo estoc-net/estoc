@@ -164,9 +164,9 @@ export class Agent {
   private _status: AgentStatus = { state: "idle" };
   /** per-key critical sections (see `locked`) */
   private readonly locks = new Map<string, Promise<unknown>>();
-  /** starts run one at a time, the newest the one that acts (see `start`) */
-  private startChain: Promise<void> = Promise.resolve();
-  /** moved by every start and by destroy: an older start's continuation stops at its next checkpoint */
+  /** the lifecycle queue: starts and mediator moves run one at a time (see `start`, `setMediator`) */
+  private lifecycle: Promise<void> = Promise.resolve();
+  /** moved by every start, every mediator move and by destroy: an older continuation stops at its next checkpoint */
   private epoch = 0;
   /** introductions run one at a time, across every contact (see `introduced`) */
   private introducing: Promise<unknown> = Promise.resolve();
@@ -264,6 +264,15 @@ export class Agent {
     }
   }
 
+  /** The hourly trace prune, from the first start (or mediator move) until destroy. */
+  private keepPruning(): void {
+    void this.pruneTrace();
+    if (this.pruneTimer === null && !this.destroyed) {
+      this.pruneTimer = setInterval(() => void this.pruneTrace(), TRACE_PRUNE_MS);
+      (this.pruneTimer as unknown as { unref?: () => void }).unref?.();
+    }
+  }
+
   // ---- bringing it up --------------------------------------------------------
 
   /**
@@ -280,24 +289,21 @@ export class Agent {
    * minute, until it comes up or the agent is destroyed: an app opened
    * with no network must not need reopening when the network returns.
    *
-   * Starts are serialised: a second start while one runs queues behind
-   * it, and only the newest acts — the older one stops at its next
-   * checkpoint, as a start does after `destroy` — so two starts cannot
-   * each establish a mediation or leave a socket behind.
+   * Starts are serialised on the lifecycle queue they share with
+   * `setMediator`: a second start while one runs queues behind it, and
+   * only the newest acts — the older one stops at its next checkpoint,
+   * as a start does after `destroy` — so two starts cannot each
+   * establish a mediation or leave a socket behind.
    */
   async start(): Promise<void> {
     if (this.startTimer !== null) {
       clearTimeout(this.startTimer);
       this.startTimer = null;
     }
-    void this.pruneTrace();
-    if (this.pruneTimer === null && !this.destroyed) {
-      this.pruneTimer = setInterval(() => void this.pruneTrace(), TRACE_PRUNE_MS);
-      (this.pruneTimer as unknown as { unref?: () => void }).unref?.();
-    }
+    this.keepPruning();
     const epoch = ++this.epoch;
-    const run = this.startChain.then(() => this.bringUp(epoch));
-    this.startChain = run.catch(() => undefined);
+    const run = this.lifecycle.then(() => this.bringUp(epoch));
+    this.lifecycle = run.catch(() => undefined);
     return run;
   }
 
@@ -527,15 +533,43 @@ export class Agent {
   // ---- moving mediator -------------------------------------------------------
 
   /**
-   * Name the mediator, then start: mediate, mint the public DID, go
-   * live. The mediator is chosen after the identity exists, not with it
-   * — and may be changed later, which leaves the old mediation (`leave`:
-   * the public DID and open invitations retired, the old mediator asked
-   * to drop what it knew), records the new arrangement, and lets `start`
-   * mint what the new one calls for (`rotateStale` re-keys every contact).
+   * Name the mediator, then bring the loop up: mediate, mint the public
+   * DID, go live. The mediator is chosen after the identity exists, not
+   * with it — and may be changed later, which leaves the old mediation
+   * (`leave`: the public DID and open invitations retired, the old
+   * mediator asked to drop what it knew), records the new arrangement,
+   * and mints what the new one calls for (`rotateStale` re-keys every
+   * contact).
+   *
+   * The move rides the lifecycle queue. The epoch moves now, so a start
+   * midway stops at its next checkpoint — before the leaving begins, and
+   * with everything it registered still on the fold for the drop list —
+   * and the transition takes the next turn. Once its turn comes, the two
+   * records (the retirement, the new arrangement) land whatever else was
+   * asked meanwhile: a stop between them is the crash the next start
+   * heals. Only the closing bring-up yields to a newer call, which does
+   * its own.
    */
   async setMediator(mediatorDid: string): Promise<void> {
-    const ring = (this.ring ??= await Keyring.load(this.vault));
+    if (this.ring === null) {
+      this.ring = await Keyring.load(this.vault);
+    }
+    if (this.startTimer !== null) {
+      clearTimeout(this.startTimer);
+      this.startTimer = null;
+    }
+    this.keepPruning();
+    const epoch = ++this.epoch;
+    const run = this.lifecycle.then(() => this.moveMediator(epoch, mediatorDid));
+    this.lifecycle = run.catch(() => undefined);
+    return run;
+  }
+
+  private async moveMediator(epoch: number, mediatorDid: string): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    const ring = this.ring as Keyring;
     const mediation = ring.current();
     if (mediation !== null) {
       if (mediation.mediatorDid === mediatorDid) {
@@ -544,7 +578,7 @@ export class Agent {
       await this.leaveMediator(ring, mediation.mediatorDid);
     }
     await ring.createMediation(mediatorDid);
-    await this.start();
+    await this.bringUp(epoch);
   }
 
   /**
