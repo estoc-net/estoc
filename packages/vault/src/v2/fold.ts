@@ -101,6 +101,15 @@ export interface TheirDid {
   current: boolean;
 }
 
+export interface Attached {
+  pair: ChannelKey;
+  because: AttachCause;
+  /** the invitation it took, when `because` says so */
+  oobId: string | null;
+  at: string;
+  by: string;
+}
+
 export interface Contact {
   /** the representative: the smallest live cid of the component (§6) */
   cid: string;
@@ -112,6 +121,8 @@ export interface Contact {
   petname: string | null;
   flags: Record<string, boolean>;
   claimedName: string | null;
+  /** the latest `profile.shared` across the attributed channels: when a profile of ours last went out to them */
+  profileSharedAt: string | null;
   keys: ContactKey[];
   theirDids: TheirDid[];
   /** two or more is a multi-valued conflict, shown */
@@ -119,6 +130,8 @@ export interface Contact {
   addressedAs: string | null;
   /** the channels attributed to this contact alone */
   channels: ChannelKey[];
+  /** every live `contact.attached` of its members, in canonical order: how each channel came to it */
+  attached: Attached[];
   /** the unfrozen ones (§3.2) */
   writeTo: ChannelKey[];
   /** the default among `writeTo`; null: mint or rotate before sending */
@@ -803,7 +816,7 @@ function project(set: EventSet, self: string): Projection {
     const own = <T extends "contact.created" | "contact.petname" | "contact.flag" | "contact.useKey">(type: T): VaultEvent<T>[] => set.of(type).filter((event) => members.has(event.data.cid));
     const attributed = attributedTo(component.rep, "one");
     const attributedIds = new Set(attributed.map((have) => channelId(have.pair)));
-    const onAttributed = <T extends "message.in" | "profile.nameClaimed">(type: T): VaultEvent<T>[] => set.of(type).filter((event) => attributedIds.has(channelId(event.data)));
+    const onAttributed = <T extends "message.in" | "profile.nameClaimed" | "profile.shared">(type: T): VaultEvent<T>[] => set.of(type).filter((event) => attributedIds.has(channelId(event.data)));
 
     const flags: Record<string, boolean> = {};
     const flagAt = new Map<string, VaultEvent<"contact.flag">>();
@@ -874,6 +887,10 @@ function project(set: EventSet, self: string): Projection {
       .flatMap((have) => have.messages)
       .map((mid) => messages.get(mid) as Message)
       .sort(compareEvents);
+    const attachedHere = attaches
+      .filter((attach) => !attach.dead && attach.rep === component.rep)
+      .sort(compareEvents)
+      .map((attach): Attached => ({ pair: attach.pair, because: attach.because, oobId: attach.oobId, at: attach.at, by: attach.author }));
 
     contacts.set(component.rep, {
       cid: component.rep,
@@ -883,11 +900,13 @@ function project(set: EventSet, self: string): Projection {
       petname: latest(own("contact.petname"))?.data.name ?? null,
       flags,
       claimedName: latest(onAttributed("profile.nameClaimed"))?.data.name ?? null,
+      profileSharedAt: latest(onAttributed("profile.shared"))?.at ?? null,
       keys: liveKeys,
       theirDids,
       currentDids,
       addressedAs: latestIn?.data.myKey ?? null,
       channels: attributed.map((have) => have.pair),
+      attached: attachedHere,
       writeTo,
       write,
       thread,

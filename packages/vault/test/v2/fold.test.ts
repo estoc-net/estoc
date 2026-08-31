@@ -49,6 +49,15 @@ describe("v2 fold: the scene", () => {
     expect(contact?.keys[1]?.did).toBe("did:peer:4k2");
   });
 
+  it("lists the live attachments in canonical order, and when a profile of ours last went out", () => {
+    const contact = fold.contact(scene.cids.c1);
+    expect(contact?.attached.map((entry) => [entry.pair, entry.because, entry.oobId, entry.by])).toEqual([
+      [scene.pairs.ch1, "invitation", "oob-1", DEV_A],
+      [scene.pairs.ch3, "manual", null, DEV_B], // the merged-in member's: the component's, not the representative's alone
+    ]);
+    expect(contact?.profileSharedAt).toBe(scene.events.find((event) => event.type === "profile.shared")?.at);
+  });
+
   it("orders theirDids by rotation and points current at the chain's end", () => {
     const contact = fold.contact(scene.cids.c1);
     expect(contact?.theirDids.map((entry) => [entry.did, entry.current])).toEqual([
@@ -169,8 +178,11 @@ describe("v2 fold: attribution edges", () => {
     expect(fold.attribution(pair).kind).toBe("one");
     fold.apply(line.next(DEV_A, "contact.detached", { ...pair, cid: c1 }));
     expect(fold.attribution(pair)).toEqual({ kind: "none" });
+    expect(fold.contact(c1)?.attached).toEqual([]);
+    expect(fold.contact(c1)?.profileSharedAt).toBeNull();
     fold.apply(line.next(DEV_A, "contact.attached", { ...pair, cid: c1, because: "manual" }));
     expect(fold.attribution(pair).kind).toBe("one");
+    expect(fold.contact(c1)?.attached.map((entry) => [entry.pair, entry.because, entry.oobId])).toEqual([[pair, "manual", null]]);
   });
 
   it("hides a deleted contact and its channels", () => {

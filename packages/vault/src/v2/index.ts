@@ -80,6 +80,7 @@ export {
   VaultFold,
   type Attribution,
   type Channel,
+  type Attached,
   type Contact,
   type ContactKey,
   type DeletedContact,

@@ -505,7 +505,11 @@ component every member of which is deleted is deleted:
 
 - `petname`, flags: latest event across the component, by canonical
   order. `claimedName`: the latest `profile.nameClaimed` across the
-  attributed channels.
+  attributed channels; `profileSharedAt`: the `at` of the latest
+  `profile.shared` across them, null while none of ours went out.
+- `attached[]`: every live `contact.attached` of the component, in
+  canonical order — the channel, its `because`, and the `oobId` of the
+  invitation it took, if one.
 - `keys[]`: every live `contact.useKey`, with its `did.minted` DID.
 - `theirDids[]`: the DIDs in the contact's component of the identity
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
