@@ -133,6 +133,7 @@ export async function newVault(name: string, fill: number, mediatorDid: string |
 export interface AttachOverrides {
   resolveDid?: (did: string) => Promise<DIDDoc | null>;
   deliveryTimeoutMs?: number;
+  maxShareBytes?: number;
 }
 
 export function attach(
@@ -176,6 +177,7 @@ export function attach(
     WebSocket: mediator.WebSocket,
     reconnectDelayMs: 10,
     ...(over.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: over.deliveryTimeoutMs }),
+    ...(over.maxShareBytes === undefined ? {} : { maxShareBytes: over.maxShareBytes }),
     handlers,
     events: {
       onStatus(status) {
@@ -234,6 +236,8 @@ export interface PartyOptions {
   resolveDid?: (did: string) => Promise<DIDDoc | null>;
   /** a budget of the test's own for deliveries, rituals and resolutions */
   deliveryTimeoutMs?: number;
+  /** the most block bytes one share may carry inline; defaults to the agent's 1 MiB */
+  maxShareBytes?: number;
 }
 
 export async function newParty(name: string, fill: number, mediator: FakeMediator, options: PartyOptions = {}): Promise<Party> {
@@ -242,6 +246,7 @@ export async function newParty(name: string, fill: number, mediator: FakeMediato
   return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? [], {
     ...(options.resolveDid === undefined ? {} : { resolveDid: options.resolveDid }),
     ...(options.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: options.deliveryTimeoutMs }),
+    ...(options.maxShareBytes === undefined ? {} : { maxShareBytes: options.maxShareBytes }),
   });
 }
 
