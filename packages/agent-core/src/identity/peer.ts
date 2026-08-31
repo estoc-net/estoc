@@ -26,10 +26,11 @@ export interface PeerIdentity {
 }
 
 /** multicodec prefixes for raw public keys */
-const ED25519_PUB = [0xed, 0x01];
-const X25519_PUB = [0xec, 0x01];
+export const ED25519_PUB = [0xed, 0x01];
+export const X25519_PUB = [0xec, 0x01];
 
-function multibaseKey(prefix: number[], publicKey: Uint8Array): string {
+/** The multibase a document lists (`z…`, base58btc) of a multicodec-prefixed raw public key: what a `did:key` encodes. */
+export function multibaseKey(prefix: number[], publicKey: Uint8Array): string {
   const bytes = new Uint8Array(prefix.length + publicKey.length);
   bytes.set(prefix);
   bytes.set(publicKey, prefix.length);
