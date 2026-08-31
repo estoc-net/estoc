@@ -7,9 +7,11 @@
  * on is told to the caller, a delivery pushed down is taken like one
  * fetched. What an opened message means is the handle's, and so is its
  * fate: `acked`, the mediator may drop it; `skip`, it stays queued for a
- * later pickup — as does one that would not open, or that the handle
- * threw on. The mediator's copy is the only copy, so nothing here drops
- * mail it could not hand over.
+ * later pickup — as does one that would not open, or read (an attachment
+ * by link is not fetched here), or that the handle threw on. The
+ * mediator's copy is the only copy, so nothing here drops mail it could
+ * not hand over, and nothing is counted acknowledged that the mediator
+ * was not told of.
  *
  * Every inbound step runs after the one before it — a delivery down the
  * socket, a delivery fetched — so what the handle records is in the
@@ -45,7 +47,7 @@ export interface PickupOptions {
 export interface Drained {
   /** attachments acknowledged, over every round */
   acked: number;
-  /** `empty`: the queue is; `left`: a round took nothing, so what is queued waits for a later pickup; `rounds`: ten rounds and mail still queued */
+  /** `empty`: the queue is; `left`: a round acknowledged nothing, so what is queued waits for a later pickup; `rounds`: ten rounds ran, and what is queued now was not asked */
   ended: "empty" | "left" | "rounds";
 }
 
@@ -54,18 +56,26 @@ const ROUNDS = 10;
 
 interface DeliveryAttachment {
   id?: string;
-  data?: { base64?: string; json?: unknown };
+  data?: { base64?: string; json?: unknown; links?: unknown };
 }
 
-/** The packed envelope an attachment carries, or null when it carries nothing to open. */
-function insideOf(attachment: DeliveryAttachment): string | null {
-  if (typeof attachment.data?.base64 === "string") {
-    return base64urlToUtf8(attachment.data.base64);
+/**
+ * The packed envelope an attachment carries. Throws for one that carries
+ * it by link — the content is elsewhere, and fetching it is not done
+ * here — for one with nothing inside, and for bytes that will not decode.
+ */
+function insideOf(attachment: DeliveryAttachment): string {
+  const data = attachment.data;
+  if (typeof data?.base64 === "string") {
+    return base64urlToUtf8(data.base64);
   }
-  if (attachment.data?.json !== undefined) {
-    return JSON.stringify(attachment.data.json);
+  if (data?.json !== undefined) {
+    return JSON.stringify(data.json);
   }
-  return null;
+  if (data?.links !== undefined) {
+    throw new Error("the attachment is by link, which is not fetched here");
+  }
+  throw new Error("the attachment has nothing inside");
 }
 
 function messageOf(err: unknown): string {
@@ -88,31 +98,40 @@ export class Pickup {
 
   /**
    * The pickup loop: status → delivery-request → take → ack, until the
-   * queue is empty, a round takes nothing — mail left queued would only
-   * be fetched again in the same breath — or ten rounds have run.
+   * queue is empty, a round acknowledges nothing — mail left queued
+   * would only be fetched again in the same breath — or ten rounds have
+   * run. Throws when the line is cut, or when the mediator answers
+   * something else than the ritual says (a problem report, say): that
+   * is not an empty queue.
    */
   async drain(): Promise<Drained> {
     let acked = 0;
     for (let round = 0; round < ROUNDS; round++) {
       const status = await this.link.roundTrip(STATUS_REQUEST, {});
-      const count = status.type === STATUS && typeof status.body["message_count"] === "number" ? status.body["message_count"] : 0;
-      if (count === 0) {
+      if (status.type !== STATUS) {
+        throw new Error(`mediator answered ${status.type} to status-request`);
+      }
+      const count = status.body["message_count"];
+      if (typeof count !== "number" || count <= 0) {
         return { acked, ended: "empty" };
       }
       this.log(`${count} message(s) queued at the mediator`);
       const delivery = await this.link.exchange(DELIVERY_REQUEST, { limit: count });
-      if (delivery.msg.type !== DELIVERY) {
-        // a status instead: the queue emptied between the two questions
+      if (delivery.msg.type === STATUS) {
+        // the queue emptied between the two questions
         return { acked, ended: "empty" };
+      }
+      if (delivery.msg.type !== DELIVERY) {
+        throw new Error(`mediator answered ${delivery.msg.type} to delivery-request`);
       }
       const taken = await this.enqueue(() => this.take(delivery.msg, delivery.eid));
       acked += taken;
       if (taken === 0) {
-        this.log("nothing in the queue could be taken now; leaving it for a later pickup");
+        this.log("nothing acknowledged this round; leaving the queue for a later pickup");
         return { acked, ended: "left" };
       }
     }
-    this.log("pickup stopped after ten rounds with mail still queued");
+    this.log("pickup stopped after ten rounds");
     return { acked, ended: "rounds" };
   }
 
@@ -145,24 +164,23 @@ export class Pickup {
 
   /**
    * One delivery: every attachment opened and handed over, the taken
-   * ones acknowledged. One that will not open — sealed to a key this
-   * device no longer holds, or a resolver hiccup — is logged and left
-   * queued (`envelope.error` written by the link); so is one the handle
-   * threw on. One with nothing inside is taken without opening: there
-   * is nothing to come back for. Returns how many were acknowledged.
+   * ones acknowledged. One that will not read (by link, or bytes that
+   * will not decode) or open — sealed to a key this device no longer
+   * holds, or a resolver hiccup — is logged and left queued (the link
+   * writes `envelope.error` for the latter); so is one the handle threw
+   * on. One bad attachment stops nothing: the rest are handed over and
+   * acknowledged. Returns how many the mediator was told of — none when
+   * the acknowledgement itself failed, as they are all still queued.
    */
   private async take(delivery: IMessage, parent?: string): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const taken: string[] = [];
-    const take = (attachment: DeliveryAttachment) => {
-      if (attachment.id !== undefined) {
-        taken.push(attachment.id);
-      }
-    };
     for (const attachment of attachments) {
-      const packed = insideOf(attachment);
-      if (packed === null) {
-        take(attachment);
+      let packed: string;
+      try {
+        packed = insideOf(attachment);
+      } catch (err) {
+        this.log(`could not read a delivered attachment; leaving it queued: ${messageOf(err)}`);
         continue;
       }
       let opened: Opened;
@@ -182,16 +200,18 @@ export class Pickup {
       if (opened.eid === undefined) {
         await this.link.noteOpen(opened);
       }
-      if (fate === "acked") {
-        take(attachment);
+      if (fate === "acked" && attachment.id !== undefined) {
+        taken.push(attachment.id);
       }
     }
-    if (taken.length > 0) {
-      try {
-        await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: taken });
-      } catch (err) {
-        this.log(`ack failed (${messageOf(err)}); messages stay queued and will be deduplicated on the next pickup`);
-      }
+    if (taken.length === 0) {
+      return 0;
+    }
+    try {
+      await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: taken });
+    } catch (err) {
+      this.log(`ack failed (${messageOf(err)}); messages stay queued and will be deduplicated on the next pickup`);
+      return 0;
     }
     return taken.length;
   }

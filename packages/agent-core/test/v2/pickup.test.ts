@@ -95,6 +95,8 @@ async function party(mediator: FakeMediator, fill: number, over: Partial<LinkOpt
   return { v, ring, me, trace, link, log, posted, sockets };
 }
 
+const PROBLEM_REPORT = "https://didcomm.org/report-problem/2.0/problem-report";
+
 function plain(type: string, from: string | null, to: string, body: Record<string, unknown>): IMessage {
   return { id: crypto.randomUUID(), typ: PLAIN_TYP, type, ...(from === null ? {} : { from }), to: [to], created_time: 1, body } as IMessage;
 }
@@ -197,7 +199,7 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     expect(inbox.seen).toHaveLength(3);
   });
 
-  it("what will not open, what the handle skips and what it threw on stay queued; the rest is acknowledged, and a round that takes nothing ends the drain", async () => {
+  it("what will not open, what the handle skips and what it threw on stay queued; the rest is acknowledged, and a round that acknowledges nothing ends the drain", async () => {
     const mediator = await newMediator();
     const alice = await party(mediator, 3);
     const bob = await party(mediator, 4);
@@ -233,7 +235,7 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
       "3 message(s) queued at the mediator",
       expect.stringMatching(/^could not open a delivered envelope; leaving it queued: /),
       `a delivered ${BASIC_MESSAGE} was not handled; leaving it queued: too hot to handle`,
-      "nothing in the queue could be taken now; leaving it for a later pickup",
+      "nothing acknowledged this round; leaving the queue for a later pickup",
     ]);
     // the one that would not open left the link's word; the ones handed over were noted, record or no record
     const envelope = await alice.trace.read("envelope");
@@ -248,7 +250,7 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     expect(queued(mediator, alice)).toEqual([stray, hot]);
   });
 
-  it("mail that keeps coming: ten rounds, then the drain stops with mail still queued", async () => {
+  it("mail that keeps coming: ten rounds, then the drain stops without asking what is queued now", async () => {
     const mediator = await newMediator();
     const alice = await party(mediator, 6);
     const bob = await party(mediator, 7);
@@ -262,10 +264,10 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     expect(await inbox.handle.drain()).toEqual({ acked: 10, ended: "rounds" });
     expect(inbox.contents()).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     expect(queued(mediator, alice)).toHaveLength(1);
-    expect(alice.log.at(-1)).toBe("pickup stopped after ten rounds with mail still queued");
+    expect(alice.log.at(-1)).toBe("pickup stopped after ten rounds");
   });
 
-  it("an acknowledgement that failed is a line: the mail stays queued and comes again, for the handle to tell apart", async () => {
+  it("an acknowledgement that failed is a line and no count: the drain stops, and the mail comes again next time, for the handle to tell apart", async () => {
     const mediator = await newMediator();
     const alice = await party(mediator, 8);
     const bob = await party(mediator, 9);
@@ -299,17 +301,74 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
       },
       { log: (line) => log.push(line) }
     );
-    expect(await handle.drain()).toEqual({ acked: 2, ended: "empty" });
-    expect(seen).toEqual(["once", "once"]);
+    expect(await handle.drain()).toEqual({ acked: 0, ended: "left" });
+    expect(seen).toEqual(["once"]);
     expect(log).toEqual([
       "1 message(s) queued at the mediator",
       "ack failed (connection reset); messages stay queued and will be deduplicated on the next pickup",
-      "1 message(s) queued at the mediator",
+      "nothing acknowledged this round; leaving the queue for a later pickup",
     ]);
+    expect(queued(mediator, alice)).toHaveLength(1);
+    // the next pickup: the same mail, handed over again, acknowledged this time
+    expect(await handle.drain()).toEqual({ acked: 1, ended: "empty" });
+    expect(seen).toEqual(["once", "once"]);
     expect(queued(mediator, alice)).toEqual([]);
   });
 
-  it("the socket: live delivery is told, a delivery down it is taken and acknowledged, one with nothing inside is taken unopened, a stray frame is logged; inbound steps run one after another", async () => {
+  it("a mediator that answers the ritual with something else is an error, not an empty queue; a status to a delivery-request is one", async () => {
+    const mediator = await newMediator();
+    const alice = await party(mediator, 14);
+    const bob = await party(mediator, 15);
+    // what the mediator answers instead, when it does; and a queue that empties between the two questions
+    const instead: { status: string | null; delivery: string | null } = { status: null, delivery: null };
+    let emptied = false;
+    const odd = (type: string) => plain(type, mediator.did, alice.me.identity.did, { code: "e.p.msg.unsupported" });
+    class Odd extends MediatorLink {
+      override async roundTrip(type: string, body: Record<string, unknown>): Promise<IMessage> {
+        return type === STATUS_REQUEST && instead.status !== null ? odd(instead.status) : super.roundTrip(type, body);
+      }
+      override async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
+        if (type === DELIVERY_REQUEST && instead.delivery !== null) {
+          return { msg: odd(instead.delivery), sender: mediator.did, recipient: alice.me.identity.did, fromPrior: null, metadata: {}, open: {} } as unknown as Opened;
+        }
+        if (type === DELIVERY_REQUEST && emptied) {
+          mediator.queues.set(alice.me.identity.did, []);
+        }
+        return super.exchange(type, body);
+      }
+    }
+    const link = new Odd({
+      didcomm,
+      resolveDid: resolveDIDCommDoc,
+      fetch: mediator.fetch,
+      trace: alice.trace,
+      secrets: () => alice.ring.secrets(),
+      me: () => alice.me.identity,
+      mediatorDid: mediator.did,
+      mediatorDoc: (await resolveDIDCommDoc(mediator.did)) as DIDDoc,
+    });
+    const seen: string[] = [];
+    const handle = new Pickup(link, (opened) => {
+      seen.push(contentOf(opened));
+      return "acked";
+    });
+    await post(mediator, bob, alice, "waiting");
+
+    instead.status = PROBLEM_REPORT;
+    await expect(handle.drain()).rejects.toThrow(`mediator answered ${PROBLEM_REPORT} to status-request`);
+    instead.status = null;
+    instead.delivery = PROBLEM_REPORT;
+    await expect(handle.drain()).rejects.toThrow(`mediator answered ${PROBLEM_REPORT} to delivery-request`);
+    expect(seen).toEqual([]);
+    expect(queued(mediator, alice)).toHaveLength(1);
+
+    instead.delivery = null;
+    emptied = true;
+    expect(await handle.drain()).toEqual({ acked: 0, ended: "empty" });
+    expect(seen).toEqual([]);
+  });
+
+  it("the socket: live delivery is told, a delivery down it is taken and acknowledged, attachments that will not read stay queued beside one that is taken, a stray frame is logged; inbound steps run one after another", async () => {
     const mediator = await newMediator();
     const alice = await party(mediator, 10);
     const bob = await party(mediator, 11);
@@ -349,25 +408,36 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     expect(wrap).toMatchObject({ type: "envelope.open", data: { type: DELIVERY } });
     expect(byEid(await alice.trace.read("wire")).get(wrap.data["parent"] as string)).toMatchObject({ type: "wire.in", data: { via: "ws" } });
 
-    // a delivery with nothing to open inside (an attachment by link, say): taken without a word, so the mediator stops offering it
+    // a delivery with attachments that will not read — bytes that are no base64, one by link — ahead of one that will:
+    // the bad ones are a line each and stay queued, the good one is handed over and acknowledged alone
     const secrets = mintMediatorIdentity(await mediatorIdentity()).secrets;
-    const hollow = {
+    const mail = await bob.link.seal(plain(BASIC_MESSAGE, bob.me.identity.did, alice.me.identity.did, { content: "after the bad ones" }), alice.me.identity.did, bob.me.identity.did);
+    const mixed = {
       ...plain(DELIVERY, mediator.did, alice.me.identity.did, { recipient_did: alice.me.identity.did }),
-      attachments: [{ id: "hollow", data: { links: ["https://mediator.invalid/mail/hollow"], hash: "n/a" } }],
+      attachments: [
+        { id: "poison", data: { base64: "!!!not base64!!!" } },
+        { id: "elsewhere", data: { links: ["https://mediator.invalid/mail/elsewhere"], hash: "n/a" } },
+        { id: "good", data: { json: JSON.parse(mail.packed) } },
+      ],
     } as IMessage;
-    const [packed] = await new Message(hollow).pack_encrypted(alice.me.identity.did, mediator.did, null, resolver, secretsResolverFor(secrets), { forward: false });
+    const [packed] = await new Message(mixed).pack_encrypted(alice.me.identity.did, mediator.did, null, resolver, secretsResolverFor(secrets), { forward: false });
     alice.posted.length = 0;
     alice.sockets[0]?.deliver(packed);
-    await until("the hollow one acknowledged", () => alice.posted.length === 1);
-    expect(await acked(alice)).toEqual([["hollow"]]);
-    expect(inbox.seen).toHaveLength(2);
+    await until("the good one acknowledged", () => alice.posted.length === 1);
+    expect(await acked(alice)).toEqual([["good"]]);
+    expect(inbox.contents()).toEqual(["slow", "quick", "after the bad ones"]);
+    expect(alice.log).toEqual([
+      expect.stringMatching(/^could not read a delivered attachment; leaving it queued: /),
+      "could not read a delivered attachment; leaving it queued: the attachment is by link, which is not fetched here",
+    ]);
+    alice.log.length = 0;
 
     // a frame that is neither status nor delivery: a line, and the socket stays up
     const carol = await party(mediator, 12);
     const stray = await carol.link.seal(plain(BASIC_MESSAGE, carol.me.identity.did, alice.me.identity.did, { content: "psst" }), alice.me.identity.did, carol.me.identity.did);
     alice.sockets[0]?.deliver(stray.packed);
     await until("the stray frame logged", () => alice.log.includes(`unexpected frame type ${BASIC_MESSAGE}`));
-    expect(inbox.seen).toHaveLength(2);
+    expect(inbox.seen).toHaveLength(3);
     expect(alice.link.live).toBe(true);
     expect(closed).toBe(0);
     alice.link.closeSocket();
