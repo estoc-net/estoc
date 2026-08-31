@@ -44,6 +44,13 @@ export interface OutboundOptions {
   /** the clock a mid is minted by, and a from_prior dated by */
   clock?: () => Date;
   log?: (line: string) => void;
+  /**
+   * The mint-lock's chain (see `fromKey`), handed in by a caller that
+   * rebuilds composers across restarts: the lock is the identity's, not
+   * one composer's, and two composers over one vault must share it.
+   * Left out, the composer keeps one of its own.
+   */
+  choosing?: { chain: Promise<unknown> };
 }
 
 /** A message composed and not yet recorded: the plaintext, the channel it will go out on, the DID it is addressed to. */
@@ -85,8 +92,8 @@ export class Outbound {
   private readonly timeoutMs: number;
   private readonly clock: () => Date;
   private readonly log: (line: string) => void;
-  /** the `fromKey` in progress: one choice at a time, so two first messages at once mint one key, not two */
-  private choosing: Promise<unknown> = Promise.resolve();
+  /** the `fromKey` in progress (`OutboundOptions.choosing`): one choice at a time, so two first messages at once mint one key, not two */
+  private readonly choosing: { chain: Promise<unknown> };
 
   constructor(
     private readonly opened: PeerVault,
@@ -101,6 +108,7 @@ export class Outbound {
     this.timeoutMs = options.deliveryTimeoutMs ?? 15_000;
     this.clock = options.clock ?? (() => new Date());
     this.log = options.log ?? (() => undefined);
+    this.choosing = options.choosing ?? { chain: Promise.resolve() };
   }
 
   private get fold(): VaultFold {
@@ -207,6 +215,12 @@ export class Outbound {
     if (typeof from !== "string") {
       throw new Error("the plaintext names no DID of ours to seal from");
     }
+    // the key it is sealed from must be held: derived now when its mint
+    // landed after this ring loaded (composed under an earlier assembly)
+    const name = this.fold.myKeys().find((key) => key.minted?.did === from)?.key;
+    if (name !== undefined) {
+      await this.keyring.holdMinted(name);
+    }
     const doc = await this.resolveDid(to);
     if (doc === null) {
       throw new Error(`${didPlaceholder(to)} does not resolve`);
@@ -279,8 +293,10 @@ export class Outbound {
    * the invitation they took (§7.4) — else one minted now
    * (`Keyring.mintToward`: `did.minted` + `contact.useKey`). A key on
    * another route, or under another device's mediation, is no address
-   * of this device's (§3.2) and is passed over; one the ring does not
-   * hold is not ours to write from. One choice at a time, across every
+   * of this device's (§3.2) and is passed over; one the ring has not
+   * derived yet is derived and held now (`holdMinted` — a mint that
+   * landed after this ring loaded, under an earlier assembly); one the
+   * seed does not derive is not ours to write from. One choice at a time, across every
    * contact — not per contact: the representative a cid resolves to can
    * change under a merge while a compose waits, and a lock keyed on it
    * can split one contact across two chains. Choosing is fold reads and
@@ -289,8 +305,8 @@ export class Outbound {
    * minting its own, whenever the two turn out to be one contact.
    */
   private fromKey(cid: string, routed: Routed): Promise<MyIdentity> {
-    const run = this.choosing.then(() => this.chooseKey(cid, routed));
-    this.choosing = run.catch(() => undefined);
+    const run = this.choosing.chain.then(() => this.chooseKey(cid, routed));
+    this.choosing.chain = run.catch(() => undefined);
     return run;
   }
 
@@ -300,9 +316,9 @@ export class Outbound {
       if (!underCurrent(this.fold.myKey(use.key), routed)) {
         continue;
       }
-      const identity = this.keyring.identityOf(use.key);
-      if (identity !== null) {
-        return { key: use.key, identity };
+      const held = await this.keyring.holdMinted(use.key);
+      if (held !== null) {
+        return held;
       }
     }
     // `contact.cid`, not `cid`: under a merge that landed while we waited, the representative of record

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { KEYSTORE_FILE } from "@estoc/event-store";
-import { drafts, record as recordEvent, type Contact } from "@estoc/vault/v2";
+import { drafts, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, OOB_INVITATION, PLAIN_TYP, PROFILE } from "../../src/index.js";
+import { BASIC_MESSAGE, FORWARD, OOB_INVITATION, PLAIN_TYP, PROFILE } from "../../src/index.js";
 import { nameOf, openVault, type MessageRecord } from "../../src/v2/index.js";
 import { network, type FakeMediator, type FakeSocket } from "../fake-mediator.js";
 import {
@@ -531,5 +531,89 @@ describe("v2 agent hardened", () => {
     expect(sockets.map((s) => s.url)).toEqual([two.wsUrl]);
     expect(alice.agent.did).toMatch(/^did:peer:4/);
     alice.agent.destroy();
+  });
+
+  it("runs one delivery pass at a time across a restart: a stalled send is not sent twice by the fresh outbox", async () => {
+    const mediator = await newMediator();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const gate = { arm: false };
+    const slow: typeof fetch = async (input, init) => {
+      if (gate.arm) {
+        gate.arm = false;
+        await held;
+      }
+      return mediator.fetch(input, init);
+    };
+    const alice = await newParty("Alice", 19, mediator, { fetch: slow });
+    const bob = await newParty("Bob", 20, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "warm");
+    await withTimeout(bob.next((v) => v.content === "warm"));
+    await withTimeout(until(() => [...mediator.queues.values()].every((q) => q.length === 0)), 8000, "quiet");
+    const forwardsBefore = mediator.seenTypes.filter((t) => t === FORWARD).length;
+
+    // the pass stalls on the wire; a restart assembles a fresh outbox meanwhile
+    gate.arm = true;
+    const sending = alice.agent.sendBasicMessage(bob.agent.did as string, "slow one");
+    await until(() => !gate.arm);
+    const restarting = alice.agent.start();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    release();
+    const [record] = await Promise.all([sending, restarting]);
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live again");
+
+    // one try, one forward: the fresh outbox took its turn after the stalled pass, and found nothing waiting
+    expect(alice.v.fold.delivery(record.mid)?.attempts.map((attempt) => attempt.outcome)).toEqual(["sent"]);
+    expect(mediator.seenTypes.filter((t) => t === FORWARD).length - forwardsBefore).toBe(1);
+    await withTimeout(bob.next((v) => v.content === "slow one"));
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("mints one key toward a contact even when two composes straddle a restart", async () => {
+    const mediator = await newMediator();
+    const stalls = new Map<string, Promise<void>>();
+    let resolutions = 0;
+    const alice = await newParty("Alice", 21, mediator, {
+      resolveDid: async (did) => {
+        resolutions += 1;
+        await stalls.get(did);
+        return resolveDIDCommDoc(did);
+      },
+    });
+    const bob = await newParty("Bob", 22, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    const contact = contactByDid(alice, bob.agent.did as string) as Contact;
+    // introduced by decree: sends compose directly, and the first key is minted by whoever sends first
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.profileShared({ ...(contact.channels[0] as ChannelKey), mid: "0198a000-0000-7000-8000-000000000031" }));
+
+    // the first compose stalls at the resolver on the first assembly; a restart swaps the composer; the second composes on the fresh one
+    let release = (): void => undefined;
+    stalls.set(bob.agent.did as string, new Promise<void>((resolve) => (release = resolve)));
+    const before = resolutions;
+    const first = alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    await until(() => resolutions > before);
+    await alice.agent.start();
+    const second = alice.agent.sendBasicMessage(bob.agent.did as string, "two");
+    await until(() => resolutions > before + 1);
+    release();
+    stalls.delete(bob.agent.did as string);
+    await Promise.all([first, second]);
+
+    // one mint: the two composers share one mint lock, and the second found the first's key in the fold
+    const after = contactByDid(alice, bob.agent.did as string) as Contact;
+    expect(after.keys).toHaveLength(1);
+    const outs = (await recordsOf(alice)).filter((r) => r.direction === "out");
+    expect(outs).toHaveLength(2);
+    expect(new Set(outs.map((r) => r.msg?.from)).size).toBe(1);
+    // and the fresh assembly's ring holds the straddling key: both delivered, nothing stuck sealing
+    expect(outs.map((r) => alice.v.fold.delivery(r.mid)?.status)).toEqual(["sent", "sent"]);
+    await withTimeout(bob.next((v) => v.content === "two"), 8000, "bob's second chat");
+    alice.agent.destroy();
+    bob.agent.destroy();
   });
 });

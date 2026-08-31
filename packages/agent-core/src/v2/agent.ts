@@ -170,6 +170,12 @@ export class Agent {
   private epoch = 0;
   /** introductions run one at a time, across every contact (see `introduced`) */
   private introducing: Promise<unknown> = Promise.resolve();
+  /** outbox passes run one at a time, across every assembly (see `deliverTurn`) */
+  private delivering: Promise<unknown> = Promise.resolve();
+  /** inbound handling runs one opened envelope at a time, across every assembly, so two pickups cannot race the dedup (see `take`) */
+  private receiving: Promise<unknown> = Promise.resolve();
+  /** the mint lock, one chain for every composer this agent ever assembles (`OutboundOptions.choosing`) */
+  private readonly choosing: { chain: Promise<unknown> } = { chain: Promise.resolve() };
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
@@ -410,14 +416,18 @@ export class Agent {
     const composer = new Outbound(this.vault, ring, link, {
       didcomm: this.didcomm,
       resolveDid: this.resolveDid,
+      choosing: this.choosing,
       log: (line) => this.log(line),
       ...(this.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: this.deliveryTimeoutMs }),
     });
     this.composer = composer;
     this.outbox = new Outbox(this.vault, link, composer, { log: (line) => this.log(line) });
-    this.inbound = new Inbound(this.vault, this.ctx, {
+    // the inbound policy holds no link and survives restarts: its dedup of
+    // wire ids keeps counting across assemblies; the ring it asks is the
+    // current one, read late
+    this.inbound ??= new Inbound(this.vault, this.ctx, {
       resolveDid: this.resolveDid,
-      keyOfDid: ring.keyOfDid,
+      keyOfDid: (did) => this.ring?.keyOfDid(did) ?? null,
       handlers: this.handlerList,
       ...(this.adoptStrangers === undefined ? {} : { adoptStrangers: this.adoptStrangers }),
     });
@@ -455,14 +465,23 @@ export class Agent {
     });
   }
 
-  /** One opened envelope from the pickup: through the inbound policy, the open noted with its record, the application told. */
-  private async take(opened: Opened): Promise<Fate> {
-    const handled = await (this.inbound as Inbound).handle(opened);
-    if (handled.outcome === "recorded") {
-      await (this.link as MediatorLink).noteOpen(opened, handled.record.mid);
-      this.events.onMessage?.(handled.record, handled.contact);
-    }
-    return "acked";
+  /**
+   * One opened envelope from the pickup: in turn with every other —
+   * across assemblies, so an old socket's frame still in flight and a
+   * fresh pickup's fetch cannot race the dedup — through the inbound
+   * policy, the open noted with its record, the application told.
+   */
+  private take(opened: Opened): Promise<Fate> {
+    const run = this.receiving.then(async (): Promise<Fate> => {
+      const handled = await (this.inbound as Inbound).handle(opened);
+      if (handled.outcome === "recorded") {
+        await (this.link as MediatorLink).noteOpen(opened, handled.record.mid);
+        this.events.onMessage?.(handled.record, handled.contact);
+      }
+      return "acked";
+    });
+    this.receiving = run.catch(() => undefined);
+    return run;
   }
 
   private openSocket(link: MediatorLink): void {
@@ -493,6 +512,9 @@ export class Agent {
    * coming back is the sign the network did — then reopens the socket.
    */
   private async reconnect(link: MediatorLink): Promise<void> {
+    if (this.destroyed || this.link !== link) {
+      return;
+    }
     try {
       await (this.pickup as Pickup).drain();
       await this.drained();
@@ -704,35 +726,54 @@ export class Agent {
 
   /** Try again to deliver one message of ours, held or failed — by hand, so a held one is tried too. */
   async retry(mid: string): Promise<Attempted> {
-    const outbox = this.outbox;
-    if (outbox === null) {
-      throw new Error("no mediation granted yet: nothing to write from");
-    }
-    const event = await outbox.retry(mid);
-    await this.told([event]);
-    return event;
+    return this.deliverTurn(async () => {
+      const outbox = this.outbox;
+      if (outbox === null) {
+        throw new Error("no mediation granted yet: nothing to write from");
+      }
+      const event = await outbox.retry(mid);
+      await this.told([event]);
+      return event;
+    });
   }
 
   /** Try everything waiting in the outbox now — a browser's `online` event. Held stays held. */
   async flush(): Promise<Attempted[]> {
-    const outbox = this.outbox;
-    if (outbox === null) {
-      return [];
-    }
-    const tried = await outbox.flush();
-    await this.told(tried);
-    return tried;
+    return this.deliverTurn(async () => {
+      const outbox = this.outbox;
+      if (outbox === null) {
+        return [];
+      }
+      const tried = await outbox.flush();
+      await this.told(tried);
+      return tried;
+    });
   }
 
   /** One outbox pass, and the application told of every try it made. */
-  private async drained(only: { cid?: string; mid?: string } = {}): Promise<Attempted[]> {
-    const outbox = this.outbox;
-    if (outbox === null) {
-      return [];
-    }
-    const tried = await outbox.drain(only);
-    await this.told(tried);
-    return tried;
+  private drained(only: { cid?: string; mid?: string } = {}): Promise<Attempted[]> {
+    return this.deliverTurn(async () => {
+      const outbox = this.outbox;
+      if (outbox === null) {
+        return [];
+      }
+      const tried = await outbox.drain(only);
+      await this.told(tried);
+      return tried;
+    });
+  }
+
+  /**
+   * One delivery pass at a time, across every assembly: a restart swaps
+   * the Outbox, and a fresh one must not run a pass beside one still in
+   * flight on the old — two passes over one fold would each see the same
+   * message unsent and send it twice. The outbox is read once the turn
+   * comes, so a pass queued across a restart runs on the current one.
+   */
+  private deliverTurn<T>(step: () => Promise<T>): Promise<T> {
+    const run = this.delivering.then(step);
+    this.delivering = run.catch(() => undefined);
+    return run;
   }
 
   private async told(tried: Attempted[]): Promise<void> {

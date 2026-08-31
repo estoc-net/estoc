@@ -81,6 +81,26 @@ export class Keyring {
     return this.byName.get(name) ?? null;
   }
 
+  /**
+   * Hold a key the fold shows minted that this ring has not derived —
+   * a mint that landed after `load`, under an earlier assembly over the
+   * same seed. Derives by name and checks the recorded DID, exactly as
+   * `load` does; null when the fold has no mint for the name, or the
+   * seed derives another DID (skipped then, as at load).
+   */
+  async holdMinted(name: string): Promise<MyIdentity | null> {
+    const have = this.held(name);
+    if (have !== null) {
+      return have;
+    }
+    const minted = this.opened.fold.myKey(name)?.minted ?? null;
+    if (minted === null) {
+      return null;
+    }
+    await this.derive(name, minted.routingDid, minted.did);
+    return this.held(name);
+  }
+
   /** Every held key's secrets: what didcomm's `SecretsResolver` hands out. */
   secrets(): Secret[] {
     return [...this.byName.values()].flatMap((identity) => identity.secrets);
