@@ -2,8 +2,9 @@
  * @estoc/agent-core/v2 — the agent over the version-2 vault
  * (`@estoc/vault/v2`, docs/vault-events.md), built beside the v1 agent
  * until it replaces it. Opening and creating, the records a caller
- * reads, the trace of what this device saw, and the channel an envelope
- * proves; the rest follows, one module at a time.
+ * reads, the trace of what this device saw, the channel an envelope
+ * proves, and the keys this device holds; the rest follows, one module
+ * at a time.
  */
 
 export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
@@ -22,6 +23,7 @@ export {
   type Proved,
   type Unpacked,
 } from "./channel.js";
+export { Keyring, type MyIdentity, type Routed, type Skipped } from "./keyring.js";
 export {
   contactRecord,
   didPlaceholder,
