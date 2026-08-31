@@ -281,25 +281,79 @@ describe("v2 link: the line to the mediator", () => {
     ]);
     expect((await alice.trace.read("envelope"))[1]?.data["parent"]).toBeUndefined();
 
-    const answers = { status: 500 };
+    const answers: { next: "500" | "cut" | "mid-body" } = { next: "500" };
     const flaky = await party(mediator, 9, {
       fetch: (async () => {
-        if (answers.status === 0) {
-          throw new TypeError("fetch failed");
+        switch (answers.next) {
+          case "500":
+            return new Response("no", { status: 500 });
+          case "cut":
+            throw new TypeError("fetch failed");
+          case "mid-body":
+            // the headers came, the body does not: the line went during the answer
+            return new Response(
+              new ReadableStream({
+                pull(controller) {
+                  controller.error(new TypeError("terminated"));
+                },
+              }),
+              { status: 200 }
+            );
         }
-        return new Response("no", { status: answers.status });
       }) as typeof fetch,
     });
     await expect(flaky.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(`mediator answered 500 to ${MEDIATE_REQUEST}`);
-    answers.status = 0;
+    answers.next = "cut";
     await expect(flaky.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow("fetch failed");
+    answers.next = "mid-body";
+    await expect(flaky.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow("terminated");
     const wire = await flaky.trace.read("wire");
-    expect(wire.map((event) => event.type)).toEqual(["wire.out", "wire.in", "wire.out", "wire.error"]);
+    expect(wire.map((event) => event.type)).toEqual(["wire.out", "wire.in", "wire.out", "wire.error", "wire.out", "wire.error"]);
     expect(wire[1]?.data).toMatchObject({ parent: wire[0]?.eid, status: 500 });
     expect(wire[3]?.data).toMatchObject({ via: "http", parent: wire[2]?.eid, error: "fetch failed", ms: expect.any(Number) });
+    expect(wire[5]?.data).toMatchObject({ via: "http", parent: wire[4]?.eid, error: "terminated", ms: expect.any(Number) });
     // the request was sealed and noted either way; nothing was opened
-    expect((await flaky.trace.read("envelope")).map((event) => event.type)).toEqual(["envelope.seal", "envelope.seal"]);
-    expect((await flaky.trace.read("mediation")).map((event) => event.type)).toEqual(["mediation.out", "mediation.out"]);
+    expect((await flaky.trace.read("envelope")).map((event) => event.type)).toEqual(["envelope.seal", "envelope.seal", "envelope.seal"]);
+    expect((await flaky.trace.read("mediation")).map((event) => event.type)).toEqual(["mediation.out", "mediation.out", "mediation.out"]);
+  });
+
+  it("the recipient is the key of ours the envelope was opened with, not the first it names: a crafted envelope puts another's key first", async () => {
+    // didcomm-rust seals to the keys of one DID only, so a real envelope
+    // cannot name Bob's key ahead of Alice's; a hand-made one can, and
+    // opens all the same with Alice's secret — so the metadata is stubbed
+    const mediator = await newMediator();
+    const alice = await party(mediator, 13);
+    const bob = await party(mediator, 14);
+    const crafted = plain(BASIC_MESSAGE, bob.me.identity.did, alice.me.identity.did, { content: "to whom" });
+    const metadata = {
+      encrypted: true,
+      authenticated: true,
+      non_repudiation: false,
+      anonymous_sender: false,
+      re_wrapped_in_forward: false,
+      encrypted_from_kid: `${bob.me.identity.did}#key-2`,
+      encrypted_to_kids: [`${bob.me.identity.did}#key-2`, `${alice.me.identity.did}#key-2`],
+    };
+    const stubbed = await party(mediator, 13, {
+      didcomm: {
+        ...didcomm,
+        Message: { unpack: async () => [{ as_value: () => crafted }, metadata] } as unknown as typeof Message,
+      },
+      secrets: () => alice.ring.secrets(),
+    });
+    const opened = await stubbed.link.unpack(JSON.stringify({ protected: "e30", recipients: [], ciphertext: "x" }));
+    expect(opened.recipient).toBe(alice.me.identity.did);
+    expect(opened.sender).toBe(bob.me.identity.did);
+    // the trace keeps the envelope's word: every kid it named, in its order
+    expect(opened.open["to_kids"]).toEqual(metadata.encrypted_to_kids);
+    // sealed to no key of ours at all: no recipient, though didcomm says it opened
+    const nobody = await party(mediator, 15, {
+      didcomm: {
+        ...didcomm,
+        Message: { unpack: async () => [{ as_value: () => crafted }, metadata] } as unknown as typeof Message,
+      },
+    });
+    expect((await nobody.link.unpack(JSON.stringify({ protected: "e30", recipients: [], ciphertext: "x" }))).recipient).toBeNull();
   });
 
   it("http() and ws() are the mediator's endpoints; a document that lists none is refused where it is needed", async () => {

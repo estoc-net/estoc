@@ -49,7 +49,7 @@ export interface Opened {
   msg: IMessage;
   /** the DID whose key proved the envelope — sealed it, or signed it when no one sealed it (`senderOf`); null when anonymous */
   sender: string | null;
-  /** the DID of ours it was sealed to; null when it was not sealed */
+  /** the DID of ours it was opened with: the first key it was sealed to that this device holds, as `inboundPair` names `myKey`; null when it was not sealed */
   recipient: string | null;
   /** a `from_prior` header didcomm-rust verified: signed by `iss`, naming `sub` */
   fromPrior: { iss: string; sub: string; jwt: string } | null;
@@ -104,6 +104,18 @@ function utf8Length(text: string): number {
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The DID of ours an envelope was opened with: the first of the kids it
+ * was sealed to whose secret this device holds — the one didcomm opened
+ * it with. didcomm-rust seals to the keys of one DID only, so the first
+ * kid is usually ours too; an envelope crafted by hand can name anyone's
+ * key first, and the first kid is then no DID of ours.
+ */
+function openedWith(kids: readonly string[], secrets: readonly Secret[]): string | null {
+  const held = new Set(secrets.map((secret) => secret.id));
+  return didOf(kids.find((kid) => held.has(kid)));
 }
 
 export class MediatorLink {
@@ -194,9 +206,10 @@ export class MediatorLink {
    */
   async unpack(packed: string, parent?: string): Promise<Opened> {
     const open: TraceData = { ...envelopeHeader(packed), parent };
+    const secrets = this.secrets();
     let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
     try {
-      unpacked = await this.didcomm.Message.unpack(packed, this.resolver, secretsResolverFor(this.secrets()), {});
+      unpacked = await this.didcomm.Message.unpack(packed, this.resolver, secretsResolverFor(secrets), {});
     } catch (err) {
       void this.note("envelope", "envelope.error", { ...open, error: messageOf(err) });
       throw err;
@@ -214,7 +227,7 @@ export class MediatorLink {
     return {
       msg: value,
       sender: senderOf(metadata),
-      recipient: didOf(metadata.encrypted_to_kids?.[0]),
+      recipient: openedWith(metadata.encrypted_to_kids ?? [], secrets),
       fromPrior: rotation === null ? null : { iss: rotation.iss, sub: rotation.sub, jwt: value.from_prior as string },
       metadata,
       open,
@@ -228,9 +241,9 @@ export class MediatorLink {
 
   /**
    * `roundTrip` with the opened reply whole, for what needs its
-   * observation as a parent. Throws when the line is cut (`wire.error`
-   * written) or the mediator answers anything but 2xx (the answer on
-   * `wire`, unopened).
+   * observation as a parent. Throws when the line is cut, before or
+   * during the answer (`wire.error` written), or when the mediator
+   * answers anything but 2xx (the answer on `wire`, unopened).
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const message = plainMessage(type, this.me().did, this.mediatorDid, body);
@@ -240,17 +253,18 @@ export class MediatorLink {
     await this.traceSeal(seal, out, message);
     const started = Date.now();
     let response: Response;
+    let text: string;
     try {
       response = await this.fetchFn(endpoint, {
         method: "POST",
         headers: { "Content-Type": ENCRYPTED_MIME },
         body: packed,
       });
+      text = await response.text();
     } catch (err) {
       void this.note("wire", "wire.error", { via: "http", parent: out, ms: Date.now() - started, error: messageOf(err) });
       throw err;
     }
-    const text = await response.text();
     const reply = await this.traceIn("http", text, { parent: out, status: response.status, ms: Date.now() - started });
     if (!response.ok) {
       throw new Error(`mediator answered ${response.status} to ${type}`);
