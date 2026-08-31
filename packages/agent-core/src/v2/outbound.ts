@@ -258,10 +258,17 @@ export class Outbound {
     }
     const packed = outer === null ? inner.packed : outer.packed;
     // the frame first, then the envelopes inside it, outermost first
-    const out = await this.link.traceOut("http", endpoint, packed, { type: plain.type });
-    const wrap = outer === null ? out : await this.link.traceSeal(outer.seal, out, outer.forward);
-    await this.link.traceSeal({ ...inner.seal, mid }, wrap);
-    const { ok, status } = await this.link.post(endpoint, packed, out, signal);
+    const out = await bounded(signal, () => this.link.traceOut("http", endpoint, packed, { type: plain.type }));
+    const wrap = outer === null ? out : await bounded(signal, () => this.link.traceSeal(outer.seal, out, outer.forward));
+    await bounded(signal, () => this.link.traceSeal({ ...inner.seal, mid }, wrap));
+    const { ok, status, text, ms } = await this.link.post(endpoint, packed, out, signal);
+    // the reply's note loses alone: the answer is in hand, and a 2xx the far
+    // side applied must not be retold as a failure because a local trace hung
+    try {
+      await bounded(signal, () => this.link.traceIn("http", text, { parent: out, status, ms }));
+    } catch {
+      this.log("trace not written: the deadline passed while noting the reply");
+    }
     if (!ok) {
       throw new Error(`endpoint answered ${status}`);
     }

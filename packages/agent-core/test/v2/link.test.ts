@@ -426,4 +426,47 @@ describe("v2 link: the line to the mediator", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(mediator.seenTypes).toEqual([]);
   });
+
+  it("a note that never settles before the POST fails the ritual at the deadline: nothing goes out", async () => {
+    const mediator = await newMediator();
+    const jam = { on: false };
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+      override async write(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.write(path, data);
+      }
+    }
+    const alice = await party(mediator, 18, { timeoutMs: 50 }, new Parked());
+    jam.on = true;
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+    expect(mediator.seenTypes).toEqual([]);
+  });
+
+  it("a note that never settles after the answer loses alone: the ritual result stands and the turn is released", async () => {
+    const mediator = await newMediator();
+    const decoder = new TextDecoder();
+    const jam = { on: false };
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/") && decoder.decode(data).includes("envelope.open")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+    }
+    const alice = await party(mediator, 19, { timeoutMs: 100 }, new Parked());
+    jam.on = true;
+    const opened = await alice.link.exchange(MEDIATE_REQUEST, {});
+    expect(opened.msg.type).toBe(MEDIATE_GRANT);
+    expect(opened.eid).toBeUndefined();
+    expect(alice.log.some((line) => line.startsWith("trace not written"))).toBe(true);
+  });
 });
