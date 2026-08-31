@@ -49,6 +49,8 @@ export interface Channel {
   seenBy: string[];
   /** the latest `peer.resolved` on this pair, per DID */
   resolved: { did: string; keys: string[]; service: string | null; at: string }[];
+  /** every `peer.rotated` recorded on this pair, in canonical order: the old pair's evidence, the JWT and the mid it came from */
+  rotated: { from: string; to: string; fromPrior: string; mid: string; at: string; by: string }[];
   /** the DIDs joined to it in the identity graph (§7.1) */
   dids: string[];
   attribution: Attribution;
@@ -366,7 +368,7 @@ function project(set: EventSet, self: string): Projection {
     const id = channelId(pair);
     let have = channels.get(id);
     if (have === undefined) {
-      have = { pair: { myKey: pair.myKey, peerKey: pair.peerKey }, firstSeen: null, seenBy: [], resolved: [], dids: [], attribution: { kind: "none" }, messages: [] };
+      have = { pair: { myKey: pair.myKey, peerKey: pair.peerKey }, firstSeen: null, seenBy: [], resolved: [], rotated: [], dids: [], attribution: { kind: "none" }, messages: [] };
       channels.set(id, have);
     }
     return have;
@@ -394,6 +396,9 @@ function project(set: EventSet, self: string): Projection {
     } else {
       have.resolved[at] = entry; // set.of is canonical order: the last one for a did is the latest
     }
+  }
+  for (const event of set.of("peer.rotated")) {
+    channel(event.data).rotated.push({ from: event.data.from, to: event.data.to, fromPrior: event.data.fromPrior, mid: event.data.mid, at: event.at, by: event.author });
   }
 
   // ---- the identity graph (§7.1)

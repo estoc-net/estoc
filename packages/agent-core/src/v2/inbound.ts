@@ -299,7 +299,7 @@ export class Inbound {
       return minted;
     }
     if (this.fold.channel(pair)?.dids.includes(fromPrior.iss) ?? false) {
-      return (await this.promisedMid(fromPrior.iss, sender)) ?? minted;
+      return this.promisedMid(fromPrior.iss, sender, fromPrior.jwt) ?? minted;
     }
     const old = this.channelOf(fromPrior.iss)?.pair ?? pair;
     await record(this.events, this.fold, drafts.peerRotated({ ...old, from: fromPrior.iss, to: sender, fromPrior: fromPrior.jwt, mid: minted }));
@@ -307,12 +307,19 @@ export class Inbound {
     return minted;
   }
 
-  /** The mid a `peer.rotated` from `from` to `to` names while no message carries it: what a record cut off before landing was to be. */
-  private async promisedMid(from: string, to: string): Promise<string | null> {
-    for await (const event of this.events.scan({ type: "peer.rotated", data: { from, to } })) {
-      const named = event.data["mid"];
-      if (typeof named === "string" && this.fold.message(named) === null) {
-        return named;
+  /**
+   * The mid a `peer.rotated` from `from` to `to` by this very JWT names
+   * while no message carries it: what a record cut off before landing
+   * was to be. Read from the fold, so a line it holds as malformed names
+   * nothing, and the same rotation vouched for by another JWT is another
+   * message's evidence.
+   */
+  private promisedMid(from: string, to: string, fromPrior: string): string | null {
+    for (const channel of this.fold.channels()) {
+      for (const rotation of channel.rotated) {
+        if (rotation.from === from && rotation.to === to && rotation.fromPrior === fromPrior && this.fold.message(rotation.mid) === null) {
+          return rotation.mid;
+        }
       }
     }
     return null;

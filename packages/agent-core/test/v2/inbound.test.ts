@@ -77,8 +77,8 @@ async function sealed(msg: IMessage, to: string, from: Peer | null, signBy: Peer
 }
 
 /** `old` signs `fresh` over: the header a rotation rides */
-async function vouched(old: Peer, fresh: Peer): Promise<string> {
-  const [jwt] = await new FromPrior({ iss: old.did, sub: fresh.did, iat: 1 }).pack(`${old.did}#key-1`, resolver, secretsResolverFor(old.secrets));
+async function vouched(old: Peer, fresh: Peer, iat = 1): Promise<string> {
+  const [jwt] = await new FromPrior({ iss: old.did, sub: fresh.did, iat }).pack(`${old.did}#key-1`, resolver, secretsResolverFor(old.secrets));
   return jwt;
 }
 
@@ -419,6 +419,11 @@ describe("v2 inbound: a message from a stranger", () => {
     expect(types(cut)).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated"]);
     const promised = (cut[2]?.data as { mid: string }).mid;
     expect(s.v.fold.message(promised)).toBeNull();
+    // meanwhile the same move vouched for by another JWT: its own record, under its own mid, not the one promised
+    const aside = await s.deliver(plain(BASIC_MESSAGE, bob2.did, me, { content: "aside" }, { from_prior: await vouched(bob, bob2, 2) }), bob2);
+    expect(types(await s.fresh())).toEqual(["message.in"]);
+    expect(aside.outcome === "recorded" && aside.record.mid).not.toBe(promised);
+    expect(s.v.fold.message(promised)).toBeNull();
     const again = await s.take(moved);
     const landed = await s.fresh();
     expect(types(landed)).toEqual(["message.in"]);
@@ -438,7 +443,7 @@ describe("v2 inbound: a message from a stranger", () => {
     expect(opened.outcome === "recorded" && opened.contact?.currentDids).toEqual([dan.did]);
     expect(s.v.fold.contacts()).toHaveLength(2);
     expect((await all(s.v)).filter((event) => event.type === "peer.rotated")).toHaveLength(1);
-    expect(s.handled.map((entry) => entry.type)).toEqual([BASIC_MESSAGE, BASIC_MESSAGE, BASIC_MESSAGE]);
+    expect(s.handled.map((entry) => entry.type)).toEqual([BASIC_MESSAGE, BASIC_MESSAGE, BASIC_MESSAGE, BASIC_MESSAGE]);
     expect(await s.take(knock)).toEqual({ outcome: "duplicate" });
   });
 
