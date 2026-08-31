@@ -147,6 +147,9 @@ describe("v2 fold: the scene", () => {
     expect(ch1?.firstSeen?.firstDid).toBe("did:peer:4bob");
     expect(ch1?.seenBy).toEqual([DEV_A]);
     expect(ch1?.resolved).toEqual([{ did: "did:peer:4bob", keys: [scene.bob.multibase], service: "did:peer:2bobroute", at: ch1?.resolved[0]?.at }]);
+    expect(ch1?.rotated).toEqual([]);
+    const ch2 = fold.channel(scene.pairs.ch2);
+    expect(ch2?.rotated).toEqual([{ from: "did:peer:4bob", to: "did:peer:4bob2", fromPrior: "eyJhbGciOi…", mid: scene.mids.in2, at: ch2?.rotated[0]?.at, by: DEV_A }]);
   });
 });
 

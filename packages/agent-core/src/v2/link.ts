@@ -56,6 +56,14 @@ export interface Opened {
   /** what didcomm says of the envelope: the channel is read from it (`inboundPair`) */
   metadata: UnpackMetadata;
   /**
+   * The documents didcomm resolved to open it — the sender's, a signer's,
+   * a `from_prior` issuer's — by DID, each resolved once for the whole
+   * open: what the envelope was verified against, so that the channel is
+   * read from the same and not from a later resolution that may say
+   * otherwise.
+   */
+  documents: ReadonlyMap<string, DIDDoc>;
+  /**
    * The `envelope.open` observation, prepared at unpack and written by
    * `noteOpen` once the message's fate is known — so the line can name
    * the record it ended in.
@@ -207,9 +215,28 @@ export class MediatorLink {
   async unpack(packed: string, parent?: string): Promise<Opened> {
     const open: TraceData = { ...envelopeHeader(packed), parent };
     const secrets = this.secrets();
+    const documents = new Map<string, DIDDoc>();
+    const pending = new Map<string, Promise<DIDDoc | null>>();
+    const resolver = {
+      // one resolution per DID for the whole open, however many times didcomm asks (a signature to verify, a
+      // key to decrypt with, a from_prior to check): what it verified against is one document, and the one kept
+      resolve: (did: string): Promise<DIDDoc | null> => {
+        let resolving = pending.get(did);
+        if (resolving === undefined) {
+          resolving = this.resolver.resolve(did).then((doc) => {
+            if (doc !== null) {
+              documents.set(did, doc);
+            }
+            return doc;
+          });
+          pending.set(did, resolving);
+        }
+        return resolving;
+      },
+    };
     let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
     try {
-      unpacked = await this.didcomm.Message.unpack(packed, this.resolver, secretsResolverFor(secrets), {});
+      unpacked = await this.didcomm.Message.unpack(packed, resolver, secretsResolverFor(secrets), {});
     } catch (err) {
       void this.note("envelope", "envelope.error", { ...open, error: messageOf(err) });
       throw err;
@@ -230,6 +257,7 @@ export class MediatorLink {
       recipient: openedWith(metadata.encrypted_to_kids ?? [], secrets),
       fromPrior: rotation === null ? null : { iss: rotation.iss, sub: rotation.sub, jwt: value.from_prior as string },
       metadata,
+      documents,
       open,
     };
   }

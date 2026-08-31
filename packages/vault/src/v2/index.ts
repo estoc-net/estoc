@@ -110,6 +110,7 @@ export {
   notePeerResolved,
   readRoot,
   record,
+  recordAll,
   recordMessage,
   sweepDeleted,
   type Absence,
