@@ -10,7 +10,7 @@
 import type { BlobStore } from "@estoc/event-store";
 import { blobHash, signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 
-import { BLOB_PUT, BLOB_PUT_RESULT, parsePutResult, type BlobPlacement } from "../protocol/blob-store.js";
+import { BLOB_DELETE, BLOB_DELETE_RESULT, BLOB_PUT, BLOB_PUT_RESULT, parsePutResult, type BlobPlacement } from "../protocol/blob-store.js";
 import {
   attachmentsOf,
   closureOf,
@@ -101,22 +101,36 @@ export async function buildShare(
 }
 
 /**
+ * The placement slot of one (mediation, root): every placing of it runs
+ * on `chain`, one turn at a time, so a renewal, a failure's retry and a
+ * fresh placement never race each other or overwrite one another's
+ * outcome. `prepared` is the one ciphertext, kept until its bytes are
+ * on the store: a retry re-puts the same hash — the store keeps one
+ * reservation per hash — and sends the same bytes, so a failed attempt
+ * leaves no second reservation on the store's books, which count a put
+ * uploaded or not. `placed` is the last placement made whole.
+ */
+export interface Placing {
+  chain: Promise<unknown>;
+  prepared: { hash: string; key: Uint8Array; ciphertext: Uint8Array } | null;
+  placed: PlacedPackage | null;
+}
+
+/**
  * The closure as a package at our mediator (§8.1): CAR it, encrypt it
  * under a fresh key, `put` its name and size (blob-store/1.0, over the
  * standing link — a ritual, bounded as any), and upload the bytes where
- * the mediator says — unless it has them. The cache is keyed by
- * mediation and root: a package placed earlier this run under the same
- * mediation is put again (the hold is renewed) and reused when the
- * store still has its bytes, and what the map holds is the placing
- * itself, so two shares of one object meeting here — at once or in
- * turn — are one upload; a placement under another mediation is
- * another store's and is never probed, since the store keeps a put on
- * its books, uploaded or not. A placing that failed does not poison
- * the cache: the next share places afresh, over it.
+ * the mediator says — unless it has them. Slots are keyed by mediation
+ * and root: a package placed earlier this run under the same mediation
+ * is put again (the hold is renewed) and reused while the store has its
+ * bytes, and however many shares of one object meet here — at once, in
+ * turn, or on the heels of a failure — they take turns on one slot, so
+ * the store ever holds one reservation for it; a placement under
+ * another mediation is another store's and is never probed.
  */
 export async function placePackage(
   link: MediatorLink,
-  packages: Map<string, Promise<PlacedPackage>>,
+  packages: Map<string, Placing>,
   mediation: string,
   closure: Closure,
   fetchFn: typeof fetch,
@@ -125,26 +139,28 @@ export async function placePackage(
   log: (line: string) => void
 ): Promise<PlacedPackage> {
   const at = `${mediation}\u0000${closure.root}`;
-  const pending = packages.get(at);
-  if (pending !== undefined) {
-    const known = await pending.catch(() => null);
-    if (known !== null) {
-      const renewed = await putBlob(link, known.hash, known.byteCount);
-      if (renewed.upload === null) {
-        known.retainUntil = renewed.retainUntil;
-        return known;
-      }
-    }
+  let slot = packages.get(at);
+  if (slot === undefined) {
+    slot = { chain: Promise.resolve(), prepared: null, placed: null };
+    packages.set(at, slot);
   }
-  // check-to-set with no await between: a share arriving while this one
-  // is placing finds the placing, not a miss
-  const placing = placeFresh(link, closure, fetchFn, timeoutMs, note, log);
-  packages.set(at, placing);
-  return placing;
+  const have = slot;
+  const run = have.chain.then(() => attempt(have, link, closure, fetchFn, timeoutMs, note, log));
+  have.chain = run.catch(() => undefined);
+  return run;
 }
 
-/** One fresh placement: encrypt, `put`, upload where the store says — unless it has the bytes. */
-async function placeFresh(
+/**
+ * One turn on the slot. What is placed is renewed and reused — unless
+ * the store lost the bytes: our copy is gone too (the ciphertext is
+ * dropped once uploaded, and encrypting again cannot reproduce it), so
+ * the reservation the re-put just revived is freed and the placing
+ * starts over. Otherwise place: encrypt once — a retry finds `prepared`
+ * and sends the same hash and bytes to the grant the re-put returns —
+ * upload where the store says, and only then let the buffer go.
+ */
+async function attempt(
+  slot: Placing,
   link: MediatorLink,
   closure: Closure,
   fetchFn: typeof fetch,
@@ -152,16 +168,33 @@ async function placeFresh(
   note: WireNote,
   log: (line: string) => void
 ): Promise<PlacedPackage> {
-  const key = freshKey();
-  const ciphertext = await encryptStream(key, packageCar(closure));
-  const hash = await blobHash(ciphertext);
-  const placed = await putBlob(link, hash, ciphertext.length);
-  if (placed.upload !== null) {
+  const placed = slot.placed;
+  if (placed !== null) {
+    const renewed = await putBlob(link, placed.hash, placed.byteCount);
+    if (renewed.upload === null) {
+      placed.retainUntil = renewed.retainUntil;
+      return placed;
+    }
+    slot.placed = null;
+    try {
+      await deleteBlob(link, placed.hash);
+    } catch (err) {
+      log(`could not free the lost package ${placed.hash}: ${messageOf(err)}`);
+    }
+  }
+  if (slot.prepared === null) {
+    const key = freshKey();
+    const ciphertext = await encryptStream(key, packageCar(closure));
+    slot.prepared = { hash: await blobHash(ciphertext), key, ciphertext };
+  }
+  const { hash, key, ciphertext } = slot.prepared;
+  const put = await putBlob(link, hash, ciphertext.length);
+  if (put.upload !== null) {
     // one deadline over the whole leg, the note before it included: a
     // fetch that ignores its signal, or a trace store that never answers,
     // must not hold the share past the budget (as `MediatorLink.exchange`)
     const signal = AbortSignal.timeout(timeoutMs);
-    const url = placed.upload.url;
+    const url = put.upload.url;
     const out = await bounded(signal, () => note("wire.out", { via: "http", method: "PUT", endpoint: url, bytes: ciphertext.length, what: "package" }));
     const started = Date.now();
     const response = await bounded(signal, () => fetchFn(url, { method: "PUT", body: ciphertext, signal }));
@@ -170,8 +203,10 @@ async function placeFresh(
       throw new Error(`the blob store answered ${response.status} to the package upload`);
     }
   }
-  const result = { hash, url: placed.url, byteCount: ciphertext.length, key, retainUntil: placed.retainUntil };
-  log(`package ${hash} (${ciphertext.length} bytes) placed at ${placed.url} until ${placed.retainUntil}`);
+  const result = { hash, url: put.url, byteCount: ciphertext.length, key, retainUntil: put.retainUntil };
+  slot.placed = result;
+  slot.prepared = null; // the bytes are the store's now; the buffer goes
+  log(`package ${hash} (${ciphertext.length} bytes) placed at ${put.url} until ${put.retainUntil}`);
   return result;
 }
 
@@ -185,6 +220,20 @@ export async function putBlob(link: MediatorLink, hash: string, size: number): P
     throw new Error(`the mediator will not keep the package (${code}${comment})`);
   }
   return parsePutResult(body);
+}
+
+/** blob-store/1.0 `delete` to our mediator: the reservation and any bytes go; a problem-report is an error naming its code. */
+export async function deleteBlob(link: MediatorLink, hash: string): Promise<void> {
+  const answer = await link.roundTrip(BLOB_DELETE, { hash });
+  if (answer.type !== BLOB_DELETE_RESULT) {
+    const body = answer.body as Record<string, unknown>;
+    const code = typeof body.code === "string" ? body.code : answer.type;
+    throw new Error(`the blob store will not delete (${code})`);
+  }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**

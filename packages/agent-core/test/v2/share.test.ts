@@ -299,4 +299,75 @@ describe("v2 agent sharing objects", () => {
     bob.agent.destroy();
     carol.agent.destroy();
   });
+
+  /** A fetch whose first PUT hangs forever, signal ignored; every later request goes through. */
+  function flakyPut(mediator: FakeMediator): typeof fetch {
+    const gate = { deaf: true };
+    return (input, init) => {
+      if (init?.method === "PUT" && gate.deaf) {
+        gate.deaf = false;
+        return new Promise<Response>(() => undefined);
+      }
+      return mediator.fetch(input, init);
+    };
+  }
+
+  it("retries a failed upload with the same hash: one reservation on the books, then its bytes", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const { alice, bob } = await squeezedOver(mediator, [1, 2], { fetch: flakyPut(mediator) });
+    await expect(alice.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/timeout|abort/i);
+    expect(mediator.blobs?.size).toBe(1);
+    // the line healed: the retry re-puts the same hash and sends the same bytes to the fresh grant
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(mediator.blobs?.size).toBe(1);
+    const [blob] = [...(mediator.blobs?.values() ?? [])];
+    expect(blob?.bytes?.length).toBe(blob?.size);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("shares meeting a failure recover one at a time: one reservation, one upload", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const { alice, bob } = await squeezedOver(mediator, [1, 2], { fetch: flakyPut(mediator) });
+    const carol = await newParty("Carol", 3, mediator);
+    const dave = await newParty("Dave", 4, mediator);
+    await Promise.all([carol.agent.start(), dave.agent.start()]);
+    await withTimeout(Promise.all([carol.live, dave.live]), 8000, "both live");
+    await alice.agent.addContact(carol.agent.did as string, "Carol");
+    await alice.agent.addContact(dave.agent.did as string, "Dave");
+    const settled = await Promise.allSettled([
+      alice.agent.shareObject(bob.agent.did as string, object),
+      alice.agent.shareObject(carol.agent.did as string, object),
+      alice.agent.shareObject(dave.agent.did as string, object),
+    ]);
+    // the first turn ate the dead line; the next retried the same hash, the last reused it
+    expect(settled.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(mediator.blobs?.size).toBe(1);
+    expect([...(mediator.blobs?.values() ?? [])][0]?.bytes).not.toBeNull();
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+    dave.agent.destroy();
+  });
+
+  it("frees a placement whose bytes the store lost before placing afresh", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const { alice, bob } = await squeezedOver(mediator, [1, 2]);
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(mediator.blobs?.size).toBe(1);
+    const before = [...(mediator.blobs?.keys() ?? [])][0] as string;
+    // the store loses the bytes but keeps the reservation on its books
+    const row = mediator.blobs?.get(before);
+    if (row !== undefined) {
+      row.bytes = null;
+    }
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    // our ciphertext is long gone: the dead reservation is deleted, not left beside the new one
+    expect(mediator.blobs?.size).toBe(1);
+    const [hash] = [...(mediator.blobs?.keys() ?? [])];
+    expect(hash).not.toBe(before);
+    expect(mediator.blobs?.get(hash as string)?.bytes).not.toBeNull();
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
 });

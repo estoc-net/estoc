@@ -56,7 +56,7 @@ import { establish, leave, register, registerPending, rotateStale, routedOf } fr
 import { invitationMessage, parseInvitation, type Invitation } from "./oob.js";
 import { Outbound, Outbox, type Attempted } from "./outbound.js";
 import { Pickup, type Fate } from "./pickup.js";
-import { buildShare, fetchPackage, placePackage, type PlacedPackage } from "./share.js";
+import { buildShare, fetchPackage, placePackage, type PlacedPackage, type Placing } from "./share.js";
 import {
   contactRecord,
   didPlaceholder,
@@ -198,8 +198,8 @@ export class Agent {
   private receiving: Promise<unknown> = Promise.resolve();
   /** the mint lock, one chain for every composer this agent ever assembles (`OutboundOptions.choosing`) */
   private readonly choosing: { chain: Promise<unknown> } = { chain: Promise.resolve() };
-  /** packages of ours at the blob store, by mediation and root — placed once this run however many contacts get the share (see `placePackage`) */
-  private readonly packages = new Map<string, Promise<PlacedPackage>>();
+  /** packages of ours at the blob store, one slot per mediation and root — however many shares meet it, one reservation (see `placePackage`) */
+  private readonly packages = new Map<string, Placing>();
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
