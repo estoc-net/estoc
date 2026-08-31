@@ -249,6 +249,37 @@ describe("v2 trace", () => {
     expect(other.some((e) => e.data["mid"] === "m1")).toBe(false);
   });
 
+  it("traceOf(mid) goes as deep as the onion does: envelopes inside the ends, and what hung on the frame's answer", async () => {
+    const c = clock("2026-08-29T10:00:00.000Z");
+    const { agent } = await scene(c);
+    const trace = new AgentTrace(agent, { clock: c.now });
+    const next = async (stream: TraceStream, type: string, data: Parameters<AgentTrace["append"]>[2]): Promise<string> => {
+      const eid = await trace.append(stream, type, data);
+      c.advance(1);
+      return eid;
+    };
+    // outbound: one frame carrying two sealed messages, one of them signed inside; the mediator's answer, its bytes, and a status opened out of it
+    const out = await next("wire", "wire.out", { via: "http" });
+    const sealOne = await next("envelope", "envelope.seal", { parent: out, kind: "authcrypt", mid: "m1" });
+    const sealTwo = await next("envelope", "envelope.seal", { parent: out, kind: "authcrypt", mid: "m2" });
+    const signedTwo = await next("envelope", "envelope.seal", { parent: sealTwo, kind: "signed" });
+    const answer = await next("wire", "wire.in", { via: "http", parent: out, status: 200 });
+    const answerBytes = await next("wire.bytes", "wire.in", { parent: answer, body: "…" });
+    const opened = await next("envelope", "envelope.open", { parent: answer, kind: "authcrypt" });
+    const ritual = await next("mediation", "mediation.in", { parent: opened });
+    // inbound: an authcrypt around a signed around a plain, the record on the outermost
+    const frame = await next("wire", "wire.in", { via: "ws" });
+    const auth = await next("envelope", "envelope.open", { parent: frame, kind: "authcrypt", mid: "m3" });
+    const signed = await next("envelope", "envelope.open", { parent: auth, kind: "signed" });
+    const plain = await next("envelope", "envelope.open", { parent: signed, kind: "plain" });
+
+    // the answer and what came out of it belong to every message the frame carried; the other message's seal and what is inside it do not
+    expect((await trace.traceOf("m1")).map((e) => e.eid)).toEqual([out, sealOne, answer, answerBytes, opened, ritual]);
+    expect((await trace.traceOf("m2")).map((e) => e.eid)).toEqual([out, sealTwo, signedTwo, answer, answerBytes, opened, ritual]);
+    // two envelopes deep under the end, both taken
+    expect((await trace.traceOf("m3")).map((e) => e.eid)).toEqual([frame, auth, signed, plain]);
+  });
+
   it("policy levels: off is all zero, verbose keeps longer than normal", () => {
     expect(Object.values(tracePolicy("off").streams).every((s) => s.keepMs === 0)).toBe(true);
     expect(tracePolicy("normal")).toBe(TRACE_NORMAL);

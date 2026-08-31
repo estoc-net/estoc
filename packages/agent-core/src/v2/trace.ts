@@ -236,10 +236,11 @@ export class AgentTrace {
    * onion in canonical order, the outer layers first; empty when nothing
    * was kept: the record still stands, its trace has expired.
    *
-   * Read the way §7.2 means a trace to be read: a chain of `parent`s is
-   * a chain of lookups by `eid`, and what hung on a line is a lookup by
-   * `data.parent` — one filtered `scan` per link, which is what a store
-   * may index.
+   * Outward is read the way §7.2 means a chain to be read: a `parent`
+   * is a lookup by `eid`, one filtered `scan` per link. Inward is a
+   * closure — what hung on the chain, what hung on that, as deep as the
+   * onion goes — so the streams are read once each and indexed by
+   * `data.parent` rather than looked up once per node.
    */
   async traceOf(mid: string): Promise<TraceEvent[]> {
     const found = new Map<string, TraceEvent>();
@@ -267,18 +268,28 @@ export class AgentTrace {
       }
       wanted = this.parentsOf(take(hit), found);
     }
-    // inward: what hung on the chain that is not another envelope — the
-    // bytes, the wire's answer, the mediator's part — and anything inside
-    // the ends themselves
-    const chain = [...found.keys()];
-    const inside: TraceEvent[] = [];
-    for (const stream of ["wire", "wire.bytes", "mediation"] as const) {
-      for (const eid of chain) {
-        inside.push(...take(await this.read(stream, { data: { parent: eid } })));
+    // inward: everything under the chain, and under what is found there,
+    // and so on — except the other envelopes that hung on the chain above
+    // the ends: those are the other messages the frame carried, each its
+    // own onion. An envelope is taken under an end, or under what was
+    // found inward (the frame's answer, what was opened out of it); the
+    // bytes, the wire's answer and the mediator's part are taken anywhere.
+    const chain = new Set(found.keys());
+    const isEnd = new Set(ends.map((event) => event.eid));
+    const children = new Map<string, TraceEvent[]>();
+    for (const stream of ["wire", "wire.bytes", "mediation", "envelope"] as const) {
+      for (const event of await this.read(stream)) {
+        const parent = parentOf(event);
+        if (parent !== undefined) {
+          children.set(parent, [...(children.get(parent) ?? []), event]);
+        }
       }
     }
-    for (const event of [...ends, ...inside]) {
-      take(await this.read("envelope", { data: { parent: event.eid } }));
+    const pending = [...chain];
+    while (pending.length > 0) {
+      const eid = pending.pop() as string;
+      const ours = (children.get(eid) ?? []).filter((event) => event.stream !== "envelope" || isEnd.has(eid) || !chain.has(eid));
+      pending.push(...take(ours).map((event) => event.eid));
     }
     return [...found.values()].sort(compareLocalEvents);
   }
