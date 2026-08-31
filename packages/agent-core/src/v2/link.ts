@@ -324,7 +324,7 @@ export class MediatorLink {
     const endpoint = this.http();
     const out = await bounded(signal, () => this.traceOut("http", endpoint, packed, { type }));
     await bounded(signal, () => this.traceSeal(seal, out, message));
-    const { ok, status, text, ms } = await this.post(endpoint, packed, out, signal);
+    const { ok, status, text, ms } = await bounded(signal, () => this.post(endpoint, packed, out, signal));
     // the note of the reply runs beside the unpack, not before it: a note
     // that jams must not spend the budget the unpack still needs — and an
     // answer is noted whatever its status, before a bad one throws
@@ -347,7 +347,8 @@ export class MediatorLink {
    * line is cut, before or during the answer, with `wire.error`
    * written; a status that is no 2xx is the caller's to judge. `signal`
    * bounds the wait: an answer not in hand by the deadline is a
-   * failure. The reply's `wire.in` note is the caller's (`traceIn`),
+   * failure — and the caller races the whole call too (`bounded`),
+   * since an injected fetch may ignore the signal. The reply's `wire.in` note is the caller's (`traceIn`),
    * under its own semantics — once the answer is in hand, a note that
    * hangs must lose alone, never retell a 2xx the far side applied as
    * a failure, nor starve what the caller still does with the text.

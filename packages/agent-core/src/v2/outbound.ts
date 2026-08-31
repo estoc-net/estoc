@@ -261,7 +261,7 @@ export class Outbound {
     const out = await bounded(signal, () => this.link.traceOut("http", endpoint, packed, { type: plain.type }));
     const wrap = outer === null ? out : await bounded(signal, () => this.link.traceSeal(outer.seal, out, outer.forward));
     await bounded(signal, () => this.link.traceSeal({ ...inner.seal, mid }, wrap));
-    const { ok, status, text, ms } = await this.link.post(endpoint, packed, out, signal);
+    const { ok, status, text, ms } = await bounded(signal, () => this.link.post(endpoint, packed, out, signal));
     // the reply's note loses alone: the answer is in hand, and a 2xx the far
     // side applied must not be retold as a failure because a local trace hung
     try {

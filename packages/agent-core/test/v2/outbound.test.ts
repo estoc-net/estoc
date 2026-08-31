@@ -835,4 +835,15 @@ describe("v2 outbox", () => {
     expect(s.posts.map((post) => post.url)).toEqual([BOB_HTTP]);
     expect(await s.outbox.flush()).toEqual([]);
   });
+
+  it("an endpoint that never answers fails the attempt at the deadline, signal or no signal", async () => {
+    const s = await scene({ deliveryTimeoutMs: 100 });
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { record: one } = await s.write(cid, "one");
+    s.endpoints.set(BOB_HTTP, () => new Promise<Response>(() => undefined));
+    const tried = await s.outbox.drain();
+    expect(tried.map((event) => event.data)).toMatchObject([{ mid: one.mid, attempt: 1, outcome: "failed" }]);
+    expect(String(tried[0]?.data.error)).toMatch(/timeout|abort/i);
+  });
 });

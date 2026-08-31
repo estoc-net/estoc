@@ -469,4 +469,11 @@ describe("v2 link: the line to the mediator", () => {
     expect(opened.eid).toBeUndefined();
     expect(alice.log.some((line) => line.startsWith("trace not written"))).toBe(true);
   });
+
+  it("a fetch that ignores the signal and never settles still loses at the deadline", async () => {
+    const mediator = await newMediator();
+    const deaf: typeof fetch = () => new Promise<Response>(() => undefined);
+    const alice = await party(mediator, 20, { fetch: deaf, timeoutMs: 50 });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+  });
 });
