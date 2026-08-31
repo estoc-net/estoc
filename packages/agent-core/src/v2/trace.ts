@@ -239,12 +239,17 @@ export class AgentTrace {
    * Outward is read the way §7.2 means a chain to be read: a `parent`
    * is a lookup by `eid`, one filtered `scan` per link. Inward is a
    * fixed point — what hung on the chain, what hung on that, as deep as
-   * the onion goes: each round scans every stream once, keeping what
-   * hangs on something found, until a round finds nothing. A stream is
-   * consumed as the store yields it and only the onion is kept, so what
-   * is held at once is one stream's worth (the store's own floor) and
-   * the onion. Nothing rests on a child following its parent in the
-   * order: a child scanned first is taken the round after.
+   * the onion goes: each round scans the streams, keeping what hangs on
+   * something found, until a round finds nothing. A stream is consumed
+   * as the store yields it and only the onion is kept, so what is held
+   * at once is one stream's worth (the store's own floor) and the onion.
+   * Nothing rests on a child following its parent in the order: a child
+   * scanned first is taken the round after. The rounds are few because
+   * the streams go in the order things hang on each other — a frame,
+   * the envelopes on it, the ritual in those — with the bytes, the
+   * largest and a leaf, last; and a stream is scanned again only if
+   * something was found since it was last scanned, so the bytes are
+   * usually decoded once.
    */
   async traceOf(mid: string): Promise<TraceEvent[]> {
     const found = new Map<string, TraceEvent>();
@@ -281,9 +286,15 @@ export class AgentTrace {
     // The chain is what outward found and does not grow with the onion.
     const chain = new Set(found.keys());
     const isEnd = new Set(ends.map((event) => event.eid));
+    /** per stream, how many were found when it was last scanned: no more since, nothing new hangs there */
+    const scannedAt = new Map<TraceStream, number>();
     for (let grew = true; grew; ) {
       grew = false;
-      for (const stream of ["wire", "wire.bytes", "mediation", "envelope"] as const) {
+      for (const stream of ["wire", "envelope", "mediation", "wire.bytes"] as const) {
+        if (scannedAt.get(stream) === found.size) {
+          continue;
+        }
+        scannedAt.set(stream, found.size);
         for await (const event of this.owner.trace(stream).scan()) {
           const parent = parentOf(event);
           if (parent === undefined || !found.has(parent) || found.has(event.eid)) {
