@@ -4,8 +4,8 @@
  * until it replaces it. Opening and creating, the records a caller
  * reads, the trace of what this device saw, the channel an envelope
  * proves, the keys this device holds, the line to the mediator, the
- * rituals over it and the pickup of what it holds for us; the rest
- * follows, one module at a time.
+ * rituals over it, the pickup of what it holds for us and the handlers
+ * for what the mail says; the rest follows, one module at a time.
  */
 
 export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
@@ -28,6 +28,11 @@ export { Keyring, type MyIdentity, type Routed, type Skipped } from "./keyring.j
 export { MediatorLink, ritual, sealData, type LinkOptions, type Opened, type Sealed } from "./link.js";
 export { current, establish, leave, register, registerPending, rotateStale, routedOf, type EstablishStep, type Established, type Left, type Rotated } from "./mediation.js";
 export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
+export { type HandlerContext, type InboundRecord, type ProtocolHandler, type SendOptions } from "./handler.js";
+export { basicmessageHandler } from "./handlers/basicmessage.js";
+export { objectShareHandler } from "./handlers/object-share.js";
+export { shareProfile, userProfileHandler } from "./handlers/user-profile.js";
+export { GOAL_CONNECT, invitationMessage, invitationUrl, parseInvitation, type Invitation } from "./oob.js";
 export {
   contactRecord,
   didPlaceholder,
