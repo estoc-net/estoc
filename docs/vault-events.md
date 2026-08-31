@@ -189,7 +189,7 @@ shows them once.
 { "eid": "0198…", "author": "k7q3ma", "at": "…", "type": "channel.firstSeen",
   "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" } }
 { "type": "message.in",  "blobs": ["<body>", "<att>"],
-  "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
+  "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "did": "did:peer:4…", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
 { "type": "message.out", "blobs": ["<body>"],
   "data": { "mid": "0198…", "wireId": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<body>", "attachments": [] } }
 { "type": "delivery.attempted", "data": { "mid": "0198…", "attempt": 1, "outcome": "failed", "error": "…" } }
