@@ -57,9 +57,10 @@ export interface Opened {
   metadata: UnpackMetadata;
   /**
    * The documents didcomm resolved to open it — the sender's, a signer's,
-   * a `from_prior` issuer's — by DID: what the envelope was verified
-   * against, so that the channel is read from the same and not from a
-   * later resolution that may say otherwise.
+   * a `from_prior` issuer's — by DID, each resolved once for the whole
+   * open: what the envelope was verified against, so that the channel is
+   * read from the same and not from a later resolution that may say
+   * otherwise.
    */
   documents: ReadonlyMap<string, DIDDoc>;
   /**
@@ -215,13 +216,22 @@ export class MediatorLink {
     const open: TraceData = { ...envelopeHeader(packed), parent };
     const secrets = this.secrets();
     const documents = new Map<string, DIDDoc>();
+    const pending = new Map<string, Promise<DIDDoc | null>>();
     const resolver = {
-      resolve: async (did: string): Promise<DIDDoc | null> => {
-        const doc = await this.resolver.resolve(did);
-        if (doc !== null) {
-          documents.set(did, doc);
+      // one resolution per DID for the whole open, however many times didcomm asks (a signature to verify, a
+      // key to decrypt with, a from_prior to check): what it verified against is one document, and the one kept
+      resolve: (did: string): Promise<DIDDoc | null> => {
+        let resolving = pending.get(did);
+        if (resolving === undefined) {
+          resolving = this.resolver.resolve(did).then((doc) => {
+            if (doc !== null) {
+              documents.set(did, doc);
+            }
+            return doc;
+          });
+          pending.set(did, resolving);
         }
-        return doc;
+        return resolving;
       },
     };
     let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;

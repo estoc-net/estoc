@@ -369,6 +369,28 @@ describe("v2 inbound: a message from a stranger", () => {
     expect(handled.outcome === "recorded" && handled.record.pair.peerKey).toBe(fingerprint(bob, 2));
   });
 
+  it("didcomm asking twice for one DID gets one answer: the document kept is the one the envelope was verified against", async () => {
+    const bob = await peer(2);
+    const carol = await peer(3);
+    // bob's DID, resolving to carol's keys from the second look on: a signature verified against one document and a key looked up in another would not open
+    const swapped: DIDDoc = { ...bob.doc, verificationMethod: carol.doc.verificationMethod.map((method) => ({ ...method, id: method.id.replace(carol.did, bob.did), controller: bob.did })) };
+    const calls: string[] = [];
+    const s = await scene({
+      resolveDid: async (did) => {
+        calls.push(did);
+        return did === bob.did ? (calls.filter((d) => d === bob.did).length === 1 ? bob.doc : swapped) : resolveDIDCommDoc(did);
+      },
+    });
+    const opened = await s.link.unpack(await sealed(hello(bob, s.me.identity.did, "sealed and signed"), s.me.identity.did, bob, bob));
+    expect(calls.filter((did) => did === bob.did)).toHaveLength(1);
+    expect(opened.documents.get(bob.did)).toBe(bob.doc);
+
+    const handled = await s.inbound.handle(opened);
+
+    expect(calls.filter((did) => did === bob.did)).toHaveLength(1);
+    expect(handled.outcome === "recorded" && handled.record.skeleton).toMatchObject({ peerKey: fingerprint(bob, 2), did: bob.did, signedBy: key(bob.doc, 1) });
+  });
+
   it("interrupted before the record, the redelivery finishes: every step before it is done once", async () => {
     const s = await scene();
     const bob = await peer(2);
@@ -393,9 +415,16 @@ describe("v2 inbound: a message from a stranger", () => {
     const moved = await sealed(plain(BASIC_MESSAGE, bob2.did, me, { content: "new me" }, { from_prior: await vouched(bob, bob2) }), me, bob2);
     failing = true;
     await expect(s.take(moved)).rejects.toThrow("disk full");
-    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated"]);
+    const cut = await s.fresh();
+    expect(types(cut)).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated"]);
+    const promised = (cut[2]?.data as { mid: string }).mid;
+    expect(s.v.fold.message(promised)).toBeNull();
     const again = await s.take(moved);
-    expect(types(await s.fresh())).toEqual(["message.in"]);
+    const landed = await s.fresh();
+    expect(types(landed)).toEqual(["message.in"]);
+    // the record takes the mid the rotation named: the evidence points at the message
+    expect((landed[0]?.data as { mid: string }).mid).toBe(promised);
+    expect(again.outcome === "recorded" && again.record.mid).toBe(promised);
     expect(again.outcome === "recorded" && again.contact?.cid).toBe(cid);
     expect(contactOf(s, cid).currentDids).toEqual([bob2.did]);
 
@@ -411,6 +440,42 @@ describe("v2 inbound: a message from a stranger", () => {
     expect((await all(s.v)).filter((event) => event.type === "peer.rotated")).toHaveLength(1);
     expect(s.handled.map((entry) => entry.type)).toEqual([BASIC_MESSAGE, BASIC_MESSAGE, BASIC_MESSAGE]);
     expect(await s.take(knock)).toEqual({ outcome: "duplicate" });
+  });
+
+  it("a contact is created and attached as one write: a failure there leaves nothing, and the redelivery adopts once", async () => {
+    const s = await scene();
+    await invite(s);
+    const bob = await peer(2);
+    const carol = await peer(3);
+    const events = s.v.vault.events;
+    const appendAll = events.appendAll.bind(events);
+    let failing = false;
+    events.appendAll = async (batch) => {
+      if (failing) {
+        failing = false;
+        throw new Error("disk full");
+      }
+      return appendAll(batch);
+    };
+
+    // a stranger adopted by hand, and one taking an invitation: the same write
+    const knock = await sealed(hello(bob, s.me.identity.did, "knock"), s.me.identity.did, bob);
+    failing = true;
+    await expect(s.take(knock)).rejects.toThrow("disk full");
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved"]);
+    expect(s.v.fold.contacts()).toEqual([]);
+    await s.take(knock);
+    expect(types(await s.fresh())).toEqual(["contact.created", "contact.attached", "message.in"]);
+
+    const took = await sealed(hello(carol, s.inv.identity.did, "found you"), s.inv.identity.did, carol);
+    failing = true;
+    await expect(s.take(took)).rejects.toThrow("disk full");
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved"]);
+    expect(invitationOf(s)).toMatchObject({ open: true, takenBy: [] });
+    const taken = await s.take(took);
+    expect(types(await s.fresh())).toEqual(["contact.created", "contact.attached", "message.in"]);
+    expect(taken.outcome === "recorded" && taken.contact?.attached).toMatchObject([{ because: "invitation", oobId: "oob-1" }]);
+    expect(s.v.fold.contacts()).toHaveLength(2);
   });
 });
 

@@ -16,9 +16,11 @@
  * a message gives rise to is in the log before the record is, and a
  * step that fails — the disk, a crash — leaves an envelope the mediator
  * still holds and a log the redelivery finishes: each step before the
- * record finds its own work done and does it once. What follows the
- * record, the answer, is not retried: a handler's reply to a message
- * recorded just before a crash is lost, as it was in v1.
+ * record finds its own work done and does it once — and the record takes
+ * the mid an earlier attempt's `peer.rotated` named, so the evidence
+ * points at the message. What follows the record, the answer, is not
+ * retried: a handler's reply to a message recorded just before a crash
+ * is lost, as it was in v1.
  *
  * Every decision is the fold's to explain afterwards: nothing is kept
  * outside the log but the wire ids seen, and those are loaded from it.
@@ -39,7 +41,9 @@ import {
   noteFirstSeen,
   notePeerResolved,
   record,
+  recordAll,
   recordMessage,
+  type AttachCause,
   type Attribution,
   type Channel,
   type ChannelKey,
@@ -191,8 +195,7 @@ export class Inbound {
       await notePeerResolved(this.events, this.fold, resolvedOf(pair, sender, senderDoc));
     }
     // 4. the rotation it vouched for (§3.1 `peer.rotated`), before anything asks who the channel belongs to
-    const mid = uuidv7({ msecs: this.clock().getTime() });
-    await this.noteRotation(opened, pair, mid);
+    const mid = await this.noteRotation(opened, pair, this.mint());
     // 5. an invitation of ours (§7.4)
     const refusal = await this.takeInvitation(pair, sender);
     // 6. whose it is (§7.1)
@@ -261,9 +264,13 @@ export class Inbound {
       return null;
     }
     const known = pick(this.fold.attribution(pair));
-    const cid = known ?? (await this.newContact());
-    await record(this.events, this.fold, drafts.contactAttached({ ...pair, cid, because: "invitation", ...(invitation.oobId === null ? {} : { oobId: invitation.oobId }) }));
-    this.log(known === null ? "someone took an invitation of ours; they have a thread now" : `${this.contactOf(cid).name} took an invitation of ours; that key is ours toward them now`);
+    if (known === null) {
+      await this.adopt(pair, "invitation", invitation.oobId);
+      this.log("someone took an invitation of ours; they have a thread now");
+    } else {
+      await record(this.events, this.fold, drafts.contactAttached({ ...pair, cid: known, because: "invitation", ...(invitation.oobId === null ? {} : { oobId: invitation.oobId }) }));
+      this.log(`${this.contactOf(known).name} took an invitation of ours; that key is ours toward them now`);
+    }
     return null;
   }
 
@@ -278,22 +285,37 @@ export class Inbound {
    * else on this one, when `iss` was never seen: a stranger vouching
    * with a DID they used elsewhere. Once: a later message still carrying
    * it, or this one redelivered, finds the two DIDs joined already.
+   * Returns the mid the message is recorded under — `minted`, or the one
+   * a rotation names that no message carries yet: an earlier attempt's,
+   * cut off before its record, whose evidence this record is.
    */
-  private async noteRotation(opened: Opened, pair: ChannelKey, mid: string): Promise<void> {
+  private async noteRotation(opened: Opened, pair: ChannelKey, minted: string): Promise<string> {
     const { sender, fromPrior } = opened;
     if (fromPrior === null || sender === null) {
-      return;
+      return minted;
     }
     if (fromPrior.sub !== sender) {
       this.log(`from_prior names ${didPlaceholder(fromPrior.sub)} but the envelope is from someone else; ignoring the rotation`);
-      return;
+      return minted;
     }
     if (this.fold.channel(pair)?.dids.includes(fromPrior.iss) ?? false) {
-      return;
+      return (await this.promisedMid(fromPrior.iss, sender)) ?? minted;
     }
     const old = this.channelOf(fromPrior.iss)?.pair ?? pair;
-    await record(this.events, this.fold, drafts.peerRotated({ ...old, from: fromPrior.iss, to: sender, fromPrior: fromPrior.jwt, mid }));
+    await record(this.events, this.fold, drafts.peerRotated({ ...old, from: fromPrior.iss, to: sender, fromPrior: fromPrior.jwt, mid: minted }));
     this.log(`${didPlaceholder(fromPrior.iss)} moved to ${didPlaceholder(sender)}, vouched for by the old DID`);
+    return minted;
+  }
+
+  /** The mid a `peer.rotated` from `from` to `to` names while no message carries it: what a record cut off before landing was to be. */
+  private async promisedMid(from: string, to: string): Promise<string | null> {
+    for await (const event of this.events.scan({ type: "peer.rotated", data: { from, to } })) {
+      const named = event.data["mid"];
+      if (typeof named === "string" && this.fold.message(named) === null) {
+        return named;
+      }
+    }
+    return null;
   }
 
   /** The channel `did` was last resolved on (§3.1 `peer.resolved`): where its key was seen; null when never. */
@@ -350,16 +372,21 @@ export class Inbound {
       this.log(`a ${type} from a stranger; recorded, attributed to nobody until accepted`);
       return null;
     }
-    const cid = await this.newContact();
-    await record(this.events, this.fold, drafts.contactAttached({ ...pair, cid, because: "manual" }));
+    const cid = await this.adopt(pair, "manual", null);
     this.log("a stranger wrote to us; they have a thread now");
     return this.contactOf(cid);
   }
 
-  private async newContact(): Promise<string> {
-    const cid = uuidv7({ msecs: this.clock().getTime() });
-    await record(this.events, this.fold, drafts.contactCreated({ cid }));
+  /** A contact for a channel: `contact.created` and `contact.attached` as one write, so that nothing failing between the two leaves a contact with nothing on it. */
+  private async adopt(pair: ChannelKey, because: AttachCause, oobId: string | null): Promise<string> {
+    const cid = this.mint();
+    await recordAll(this.events, this.fold, [drafts.contactCreated({ cid }), drafts.contactAttached({ ...pair, cid, because, ...(oobId === null ? {} : { oobId }) })]);
     return cid;
+  }
+
+  /** A mid, or a cid: uuidv7 by the clock. */
+  private mint(): string {
+    return uuidv7({ msecs: this.clock().getTime() });
   }
 
   private contactOf(cid: string): ContactRecord {
