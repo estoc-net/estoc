@@ -132,6 +132,7 @@ export async function newVault(name: string, fill: number, mediatorDid: string |
 /** What a test swaps out of a party's agent. */
 export interface AttachOverrides {
   resolveDid?: (did: string) => Promise<DIDDoc | null>;
+  deliveryTimeoutMs?: number;
 }
 
 export function attach(
@@ -174,6 +175,7 @@ export function attach(
     fetch: mediator.fetch,
     WebSocket: mediator.WebSocket,
     reconnectDelayMs: 10,
+    ...(over.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: over.deliveryTimeoutMs }),
     handlers,
     events: {
       onStatus(status) {
@@ -230,12 +232,17 @@ export interface PartyOptions {
   webSocket?: typeof WebSocket;
   /** a resolver of the test's own (a DID gone dark); defaults to the package resolver */
   resolveDid?: (did: string) => Promise<DIDDoc | null>;
+  /** a budget of the test's own for deliveries, rituals and resolutions */
+  deliveryTimeoutMs?: number;
 }
 
 export async function newParty(name: string, fill: number, mediator: FakeMediator, options: PartyOptions = {}): Promise<Party> {
   const { backend, v, seedKey, clock } = await newVault(name, fill, options.mediated === false ? null : mediator.did);
   const transports = { fetch: options.fetch ?? mediator.fetch, WebSocket: options.webSocket ?? mediator.WebSocket };
-  return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? [], options.resolveDid === undefined ? {} : { resolveDid: options.resolveDid });
+  return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? [], {
+    ...(options.resolveDid === undefined ? {} : { resolveDid: options.resolveDid }),
+    ...(options.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: options.deliveryTimeoutMs }),
+  });
 }
 
 /** The same vault, opened fresh from its bytes — a page reload. */

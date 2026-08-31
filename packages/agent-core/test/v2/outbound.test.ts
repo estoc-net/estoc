@@ -794,4 +794,16 @@ describe("v2 outbox", () => {
     expect(s.v.fold.contact(cid)?.thread.map((message) => message.mid)).toContain(found.mid);
     expect(found.msg?.to).toEqual([bob.did]);
   });
+
+  it("a delivery whose resolution never settles fails at the deadline instead of holding the pass", async () => {
+    const s = await scene({ deliveryTimeoutMs: 60 });
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { record: one } = await s.write(cid, "one");
+    s.stalls.set(bob.did, new Promise<void>(() => undefined));
+    const tried = await s.outbox.drain();
+    expect(tried.map((event) => event.data)).toMatchObject([{ mid: one.mid, attempt: 1, outcome: "failed" }]);
+    expect(String(tried[0]?.data.error)).toMatch(/timeout|abort/i);
+    expect(s.posts).toEqual([]);
+  });
 });

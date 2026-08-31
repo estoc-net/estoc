@@ -736,4 +736,35 @@ describe("v2 agent hardened", () => {
     alice.agent.destroy();
     bob.agent.destroy();
   });
+
+  it("a resolver that never settles fails the send at the budget instead of parking the mint lock", async () => {
+    const mediator = await newMediator();
+    const dead = new Set<string>();
+    const alice = await newParty("Alice", 28, mediator, {
+      deliveryTimeoutMs: 300,
+      resolveDid: async (did) => {
+        if (dead.has(did)) {
+          await new Promise<void>(() => undefined);
+        }
+        return resolveDIDCommDoc(did);
+      },
+    });
+    const bob = await newParty("Bob", 29, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    const contact = contactByDid(alice, bob.agent.did as string) as Contact;
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.profileShared({ ...(contact.channels[0] as ChannelKey), mid: "0198a000-0000-7000-8000-000000000071" }));
+
+    // the compose's resolution parks: the send fails at the budget rather than hanging
+    dead.add(bob.agent.did as string);
+    await expect(withTimeout(alice.agent.sendBasicMessage(bob.agent.did as string, "one"), 8000, "the send should fail, not hang")).rejects.toThrow(/timeout|abort/i);
+
+    // the mint lock is free again: a restart's reload rides it and completes
+    dead.delete(bob.agent.did as string);
+    await withTimeout(alice.agent.start(), 8000, "a start after the stuck resolution");
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live again");
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
 });

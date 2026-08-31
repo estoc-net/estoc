@@ -408,4 +408,22 @@ describe("v2 link: the line to the mediator", () => {
     const alice = await party(mediator, 16, { fetch: hanging, timeoutMs: 50 });
     await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
   });
+
+  it("the deadline covers the whole ritual: a resolver that never settles fails it, and the late pack sends nothing", async () => {
+    const mediator = await newMediator();
+    let wake!: () => void;
+    const parked = new Promise<void>((resolve) => (wake = resolve));
+    const alice = await party(mediator, 17, {
+      resolveDid: async (did) => {
+        await parked;
+        return resolveDIDCommDoc(did);
+      },
+      timeoutMs: 50,
+    });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+    // the resolver comes back late: the abandoned pack completes, but the ritual is over — nothing goes out
+    wake();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mediator.seenTypes).toEqual([]);
+  });
 });

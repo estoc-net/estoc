@@ -49,7 +49,7 @@ import { userProfileHandler } from "./handlers/user-profile.js";
 import type { PeerVault } from "./identity.js";
 import { Inbound } from "./inbound.js";
 import { Keyring } from "./keyring.js";
-import { MediatorLink, type Opened } from "./link.js";
+import { bounded, MediatorLink, type Opened } from "./link.js";
 import { establish, leave, register, registerPending, rotateStale, routedOf } from "./mediation.js";
 import { invitationMessage, parseInvitation, type Invitation } from "./oob.js";
 import { Outbound, Outbox, type Attempted } from "./outbound.js";
@@ -106,7 +106,7 @@ export interface AgentOptions {
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
   reconnectDelayMs?: number;
-  /** how long one delivery or mediator round trip may take before it gives up (deliveries are retried later); default 15s */
+  /** how long one delivery, mediator round trip or DID resolution may take before it gives up (deliveries are retried later); default 15s */
   deliveryTimeoutMs?: number;
   /**
    * Application-protocol handlers, added to the built-in basicmessage/2.0,
@@ -181,7 +181,11 @@ export class Agent {
     this.vault = options.vault;
     this.didcomm = options.didcomm;
     this.events = options.events ?? {};
-    this.resolveDid = options.resolveDid ?? defaultResolveDid;
+    const resolver = options.resolveDid ?? defaultResolveDid;
+    // every resolution shares the delivery budget: a resolver that never
+    // settles must not park what awaits it — the mint lock under a compose
+    // (and with it `loadedRing`), the delivery queue under a ritual or a POST
+    this.resolveDid = (did) => bounded(AbortSignal.timeout(options.deliveryTimeoutMs ?? 15_000), () => resolver(did));
     this.fetchImpl = options.fetch;
     this.wsImpl = options.WebSocket;
     this.displayName = options.displayName ?? (() => this.fold.label() ?? "");

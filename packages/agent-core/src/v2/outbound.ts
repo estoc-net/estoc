@@ -29,7 +29,7 @@ import { outboundPair, resolvedOf } from "./channel.js";
 import type { SendOptions } from "./handler.js";
 import type { PeerVault } from "./identity.js";
 import type { Keyring, MyIdentity, Routed } from "./keyring.js";
-import type { MediatorLink } from "./link.js";
+import { bounded, type MediatorLink } from "./link.js";
 import { current, register, routedOf } from "./mediation.js";
 import { attributedTo, didPlaceholder, messageRecord, nameOf, type MessageRecord } from "./records.js";
 import type { TraceData } from "./trace.js";
@@ -39,7 +39,7 @@ export interface OutboundOptions {
   didcomm: DidcommApi;
   /** the DID we write to, and the mediator its service names: resolved before every compose and every delivery */
   resolveDid: (did: string) => Promise<DIDDoc | null>;
-  /** how long one delivery may take on the wire (default 15 s) */
+  /** how long one delivery may take, resolutions and seals included (default 15 s) */
   deliveryTimeoutMs?: number;
   /** the clock a mid is minted by, and a from_prior dated by */
   clock?: () => Date;
@@ -211,6 +211,9 @@ export class Outbound {
    * one.
    */
   async deliver(plain: IMessage, to: string, mid: string): Promise<void> {
+    // one budget from entry: the resolutions and seals before the POST ride
+    // the same delivery queue, and must not hold it past the deadline either
+    const signal = AbortSignal.timeout(this.timeoutMs);
     const from = plain.from;
     if (typeof from !== "string") {
       throw new Error("the plaintext names no DID of ours to seal from");
@@ -221,7 +224,7 @@ export class Outbound {
     if (name !== undefined) {
       await this.keyring.holdMinted(name);
     }
-    const doc = await this.resolveDid(to);
+    const doc = await bounded(signal, () => this.resolveDid(to));
     if (doc === null) {
       throw new Error(`${didPlaceholder(to)} does not resolve`);
     }
@@ -231,11 +234,11 @@ export class Outbound {
     }
     const documents = new Map<string, DIDDoc>([[to, doc]]);
     const addressed = plain.to?.includes(to) ? plain : ({ ...plain, to: [to] } as IMessage);
-    const inner = await this.link.seal(addressed, to, from, documents);
+    const inner = await bounded(signal, () => this.link.seal(addressed, to, from, documents));
     let endpoint: string;
     let outer: { packed: string; seal: TraceData; forward: IMessage } | null = null;
     if (service.startsWith("did:")) {
-      const routingDoc = await this.resolveDid(service);
+      const routingDoc = await bounded(signal, () => this.resolveDid(service));
       const http = routingDoc === null ? null : endpointOf(routingDoc, "http");
       if (routingDoc === null || http === null) {
         throw new Error(`${didPlaceholder(to)}'s mediator has no HTTP endpoint`);
@@ -245,7 +248,7 @@ export class Outbound {
         ...plainMessage(FORWARD, null, service, { next: to }),
         attachments: [{ id: crypto.randomUUID(), media_type: ENCRYPTED_MIME, data: { json: JSON.parse(inner.packed) as unknown } }],
       } as IMessage;
-      const sealed = await this.link.seal(forward, service, null, documents);
+      const sealed = await bounded(signal, () => this.link.seal(forward, service, null, documents));
       outer = { packed: sealed.packed, seal: sealed.seal, forward };
       endpoint = http;
     } else if (service.startsWith("http")) {
@@ -258,7 +261,7 @@ export class Outbound {
     const out = await this.link.traceOut("http", endpoint, packed, { type: plain.type });
     const wrap = outer === null ? out : await this.link.traceSeal(outer.seal, out, outer.forward);
     await this.link.traceSeal({ ...inner.seal, mid }, wrap);
-    const { ok, status } = await this.link.post(endpoint, packed, out, AbortSignal.timeout(this.timeoutMs));
+    const { ok, status } = await this.link.post(endpoint, packed, out, signal);
     if (!ok) {
       throw new Error(`endpoint answered ${status}`);
     }

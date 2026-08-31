@@ -40,7 +40,7 @@ export interface LinkOptions {
   mediatorDid: string;
   /** the mediator's document, resolved by the caller: where `http()` and `ws()` read the endpoints */
   mediatorDoc: DIDDoc;
-  /** how long a ritual round trip waits for the mediator before giving up; default 15s (`Outbound.deliver` times its own POSTs) */
+  /** how long a whole ritual round trip may take — pack, POST and unpack together — before giving up; default 15s (`Outbound.deliver` runs the same budget over a delivery) */
   timeoutMs?: number;
   /** a line for the human log: a trace that could not be written is reported here, not thrown, and a socket frame that failed */
   log?: (line: string) => void;
@@ -126,6 +126,39 @@ function messageOf(err: unknown): string {
 function openedWith(kids: readonly string[], secrets: readonly Secret[]): string | null {
   const held = new Set(secrets.map((secret) => secret.id));
   return didOf(kids.find((kid) => held.has(kid)));
+}
+
+/**
+ * `work`, unless `signal` fires first. The deadline is the caller's,
+ * one for a whole ritual or delivery: a resolver or a seal that never
+ * settles must not hold the queue it runs on. Work that loses the race
+ * is abandoned — its late result is dropped, its late failure
+ * swallowed; the caller has already thrown, so nothing downstream of
+ * the loss (a POST after a pack) runs.
+ */
+export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason as Error);
+      return;
+    }
+    const running = work();
+    const onAbort = (): void => {
+      running.catch(() => undefined);
+      reject(signal.reason as Error);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    running.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    );
+  });
 }
 
 export class MediatorLink {
@@ -272,23 +305,27 @@ export class MediatorLink {
    * `roundTrip` with the opened reply whole, for what needs its
    * observation as a parent. Throws when the line is cut, before or
    * during the answer (`wire.error` written), when the mediator
-   * answers anything but 2xx (the answer on `wire`, unopened), or when
-   * nothing comes back within `timeoutMs` — the queue a ritual rides
-   * must not hang on a wire that never answers, and none of them needs
-   * an answer to stay safe: `leave` drops every DID that might have
-   * been told, answered or not.
+   * answers anything but 2xx (the answer on `wire`, unopened), or at
+   * the deadline — `timeoutMs` runs from entry and covers the whole
+   * ritual, pack and unpack with their resolutions included, not just
+   * the POST: the queue a ritual rides must not hang on a wire or a
+   * resolver that never answers, and no ritual needs an answer to stay
+   * safe (`leave` drops every DID that might have been told, answered
+   * or not). A pack that loses the race is abandoned: nothing of it is
+   * sent.
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
+    const signal = AbortSignal.timeout(this.timeoutMs);
     const message = plainMessage(type, this.me().did, this.mediatorDid, body);
-    const { packed, seal } = await this.pack(message);
+    const { packed, seal } = await bounded(signal, () => this.pack(message));
     const endpoint = this.http();
     const out = await this.traceOut("http", endpoint, packed, { type });
     await this.traceSeal(seal, out, message);
-    const { ok, status, text, reply } = await this.post(endpoint, packed, out, AbortSignal.timeout(this.timeoutMs));
+    const { ok, status, text, reply } = await this.post(endpoint, packed, out, signal);
     if (!ok) {
       throw new Error(`mediator answered ${status} to ${type}`);
     }
-    const opened = await this.unpack(text, reply);
+    const opened = await bounded(signal, () => this.unpack(text, reply));
     await this.noteOpen(opened);
     this.noteRitual(opened);
     return opened;
