@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ESTOC_DIR, MemoryBackend, isSegmentName, segmentTime, type LocalOwner } from "@estoc/event-store";
 import { createSeedKeystore, type SeedKey } from "@estoc/keystore";
@@ -274,7 +274,10 @@ describe("v2 trace", () => {
     const plain = await next("envelope", "envelope.open", { parent: signed, kind: "plain" });
 
     // the answer and what came out of it belong to every message the frame carried; the other message's seal and what is inside it do not
+    const bytesScans = vi.spyOn(agent.trace("wire.bytes"), "scan");
     expect((await trace.traceOf("m1")).map((e) => e.eid)).toEqual([out, sealOne, answer, answerBytes, opened, ritual]);
+    // the bytes, a leaf and the largest stream, decoded once: nothing hangs on what it found, and nothing was found elsewhere after it
+    expect(bytesScans).toHaveBeenCalledTimes(1);
     expect((await trace.traceOf("m2")).map((e) => e.eid)).toEqual([out, sealTwo, signedTwo, answer, answerBytes, opened, ritual]);
     // two envelopes deep under the end, both taken
     expect((await trace.traceOf("m3")).map((e) => e.eid)).toEqual([frame, auth, signed, plain]);

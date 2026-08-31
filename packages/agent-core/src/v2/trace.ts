@@ -15,7 +15,8 @@
  *   - `wire`       every frame and request, headers only: where, how,
  *                  status, size, time.
  *   - `wire.bytes` the ciphertext itself, for peeling an envelope open on
- *                  screen; worthless after a day.
+ *                  screen; worthless after a day. A leaf: nothing hangs
+ *                  on it — what was opened hangs on the frame.
  *   - `mediation`  the plaintext of the mediation rituals (status,
  *                  delivery, grant, update) — the one place these live.
  *   - `diag`       one-line diagnostics.
@@ -52,6 +53,9 @@ export type TraceStream = (typeof TRACE_STREAMS)[number];
 export function isTraceStream(name: string): name is TraceStream {
   return (TRACE_STREAMS as readonly string[]).includes(name);
 }
+
+/** The streams nothing hangs on: a line there is never a `parent`. */
+const LEAVES: ReadonlySet<TraceStream> = new Set<TraceStream>(["wire.bytes"]);
 
 /** One line of the trace, and the stream it was read from: the directory's name, not a field of the line. */
 export type TraceEvent = LocalEvent & { stream: TraceStream };
@@ -248,8 +252,9 @@ export class AgentTrace {
    * the streams go in the order things hang on each other — a frame,
    * the envelopes on it, the ritual in those — with the bytes, the
    * largest and a leaf, last; and a stream is scanned again only if
-   * something was found since it was last scanned, so the bytes are
-   * usually decoded once.
+   * something was found since it was last scanned — for the leaf, found
+   * elsewhere, since nothing hangs on its own — so the bytes are usually
+   * decoded once.
    */
   async traceOf(mid: string): Promise<TraceEvent[]> {
     const found = new Map<string, TraceEvent>();
@@ -286,7 +291,9 @@ export class AgentTrace {
     // The chain is what outward found and does not grow with the onion.
     const chain = new Set(found.keys());
     const isEnd = new Set(ends.map((event) => event.eid));
-    /** per stream, how many were found when it was last scanned: no more since, nothing new hangs there */
+    // per stream, how many were found when it was last scanned: no more since, nothing new hangs there.
+    // Marked before the scan, so that what the scan itself found — a parent a line before it cites — is
+    // scanned for again; for a leaf, after, since nothing cites its lines.
     const scannedAt = new Map<TraceStream, number>();
     for (let grew = true; grew; ) {
       grew = false;
@@ -294,7 +301,10 @@ export class AgentTrace {
         if (scannedAt.get(stream) === found.size) {
           continue;
         }
-        scannedAt.set(stream, found.size);
+        const leaf = LEAVES.has(stream);
+        if (!leaf) {
+          scannedAt.set(stream, found.size);
+        }
         for await (const event of this.owner.trace(stream).scan()) {
           const parent = parentOf(event);
           if (parent === undefined || !found.has(parent) || found.has(event.eid)) {
@@ -305,6 +315,9 @@ export class AgentTrace {
           }
           found.set(event.eid, { ...event, stream });
           grew = true;
+        }
+        if (leaf) {
+          scannedAt.set(stream, found.size);
         }
       }
     }
