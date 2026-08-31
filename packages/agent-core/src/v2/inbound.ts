@@ -271,10 +271,13 @@ export class Inbound {
    * on the channel `iss` was last resolved on — the old pair (§3.1) —
    * else on this one, when `iss` was never seen: a stranger vouching
    * with a DID they used elsewhere. Once: a later message still carrying
-   * it, or this one redelivered, finds the two DIDs joined already.
-   * Returns the mid the message is recorded under — `minted`, or the one
-   * a rotation names that no message carries yet: an earlier attempt's,
-   * cut off before its record, whose evidence this record is.
+   * it, or this one redelivered, finds the rotation recorded already —
+   * the rotation, not the join: the same key under a moved DID joins the
+   * two by resolution alone, and only the rotation says which is the
+   * later one (§7.2). Returns the mid the message is recorded under —
+   * `minted`, or the one a rotation names that no message carries yet:
+   * an earlier attempt's, cut off before its record, whose evidence
+   * this record is.
    */
   private async noteRotation(opened: Opened, pair: ChannelKey, minted: string): Promise<string> {
     const { sender, fromPrior } = opened;
@@ -285,13 +288,18 @@ export class Inbound {
       this.log(`from_prior names ${didPlaceholder(fromPrior.sub)} but the envelope is from someone else; ignoring the rotation`);
       return minted;
     }
-    if (this.fold.channel(pair)?.dids.includes(fromPrior.iss) ?? false) {
+    if (this.rotated(fromPrior.iss, sender)) {
       return this.promisedMid(fromPrior.iss, sender, fromPrior.jwt) ?? minted;
     }
     const old = this.channelOf(fromPrior.iss)?.pair ?? pair;
     await record(this.events, this.fold, drafts.peerRotated({ ...old, from: fromPrior.iss, to: sender, fromPrior: fromPrior.jwt, mid: minted }));
     this.log(`${didPlaceholder(fromPrior.iss)} moved to ${didPlaceholder(sender)}, vouched for by the old DID`);
     return minted;
+  }
+
+  /** Whether some channel carries a `peer.rotated` from `from` to `to` already, by whatever JWT. */
+  private rotated(from: string, to: string): boolean {
+    return this.fold.channels().some((channel) => channel.rotated.some((rotation) => rotation.from === from && rotation.to === to));
   }
 
   /**

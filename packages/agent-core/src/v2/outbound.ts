@@ -7,7 +7,8 @@
  * when they have one, POSTed, traced layer by layer. The outbox is a
  * reading of the fold and holds nothing of its own: every `message.out`
  * not yet `sent`, tried in order per contact, each try one
- * `delivery.attempted` (§3.1); one held is left alone unless named.
+ * `delivery.attempted` (§3.1); one held is left alone unless named, and
+ * one on a channel since frozen (§3.2) is not sent from it.
  *
  * Moved from the v1 agent — compose, attachFromPrior, ensurePairwise,
  * logOutbound, deliverToContact, drainOutbox, attemptDelivery, retry,
@@ -19,7 +20,7 @@
 
 import type { DIDDoc } from "@estoc/did-peer";
 import type { Cid, EventStore } from "@estoc/event-store";
-import { drafts, notePeerResolved, record, recordMessage, type ChannelKey, type Contact, type Message, type VaultEvent, type VaultFold } from "@estoc/vault/v2";
+import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault/v2";
 import { v7 as uuidv7 } from "uuid";
 
 import { ENCRYPTED_MIME, endpointOf, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
@@ -65,6 +66,18 @@ function shortType(type: string): string {
   return type.split("/").slice(-3).join("/");
 }
 
+/**
+ * Minted under this device's current mediation *and* its routing DID:
+ * the mediation is this device's own (§5: a mediation binds one
+ * device), so the mediator delivers what comes back here; the route is
+ * the one the DID's service names now. A key under another device's
+ * mediation is derived here after a merge, and is not written from
+ * (§3.2): its mail is that device's.
+ */
+function underCurrent(key: MyKey | null, routed: Routed): key is MyKey & { minted: NonNullable<MyKey["minted"]> } {
+  return key !== null && key.minted !== null && key.minted.mediation === routed.id && key.minted.routingDid === routed.routingDid;
+}
+
 export class Outbound {
   private readonly didcomm: DidcommApi;
   private readonly resolveDid: OutboundOptions["resolveDid"];
@@ -72,6 +85,8 @@ export class Outbound {
   private readonly timeoutMs: number;
   private readonly clock: () => Date;
   private readonly log: (line: string) => void;
+  /** per contact: the `fromKey` in progress, so two first messages at once mint one key, not two */
+  private readonly choosing = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly opened: PeerVault,
@@ -109,17 +124,17 @@ export class Outbound {
    * recorded of the message itself: `record` is the next step.
    */
   async compose(cid: string, type: string, body: Record<string, unknown>, options: SendOptions = {}): Promise<Composed> {
-    const contact = this.contact(cid);
     const routed = routedOf(this.keyring.current());
     if (routed === null) {
       throw new Error("no mediation granted yet: nothing to write from");
     }
-    const to = this.toDid(contact);
+    const to = this.toDid(this.contact(cid));
     const doc = await this.resolveDid(to);
     if (doc === null) {
       throw new Error(`${didPlaceholder(to)} does not resolve`);
     }
-    const from = await this.fromKey(contact, routed);
+    const from = await this.fromKey(cid, routed);
+    const contact = this.contact(cid); // read again: a mint, or a send that took its turn first, is in the fold now
     const { pair } = outboundPair(from.key, doc);
     await notePeerResolved(this.events, this.fold, resolvedOf(pair, to, doc));
     const plain = plainMessage(type, from.identity.did, to, body);
@@ -168,17 +183,21 @@ export class Outbound {
 
   /**
    * One message on the wire, to `to` — the contact's DID now, which may
-   * not be the one the plaintext names: they may have moved since it was
-   * written. The record keeps the address it was written to; the copy on
-   * the wire names where it went, since an envelope is sealed only to a
-   * DID its plaintext addresses. Sealed from the DID the plaintext is
-   * from to the first agreement key their document lists (§11). When
-   * their service is a DID — a mediator — a forward for them, sealed to
-   * no one, is what goes on the wire, to the mediator's HTTP endpoint;
-   * when it is an endpoint, the envelope goes straight there. Traced as
-   * the frame, then the envelopes inside it, outermost first, the
-   * innermost naming `mid`. Throws on anything short of a 2xx, and on a
-   * line cut before one.
+   * not be the one the plaintext names: a DID they moved to under the
+   * same key. The record keeps the address it was written to; the copy
+   * on the wire names where it went, since an envelope is sealed only
+   * to a DID its plaintext addresses. Sealed from the DID the plaintext
+   * is from to the first agreement key their document lists (§11) — the
+   * document resolved once here, which the service is read off and the
+   * key is sealed to, so that a did:web changing between two
+   * resolutions cannot pair one version's key with the other's
+   * endpoint; the mediator's document the same. When their service is a
+   * DID — a mediator — a forward for them, sealed to no one, is what
+   * goes on the wire, to the mediator's HTTP endpoint; when it is an
+   * endpoint, the envelope goes straight there. Traced as the frame,
+   * then the envelopes inside it, outermost first, the innermost naming
+   * `mid`. Throws on anything short of a 2xx, and on a line cut before
+   * one.
    */
   async deliver(plain: IMessage, to: string, mid: string): Promise<void> {
     const from = plain.from;
@@ -193,21 +212,23 @@ export class Outbound {
     if (service === undefined) {
       throw new Error(`${didPlaceholder(to)} names no service endpoint`);
     }
+    const documents = new Map<string, DIDDoc>([[to, doc]]);
     const addressed = plain.to?.includes(to) ? plain : ({ ...plain, to: [to] } as IMessage);
-    const inner = await this.link.seal(addressed, to, from);
+    const inner = await this.link.seal(addressed, to, from, documents);
     let endpoint: string;
     let outer: { packed: string; seal: TraceData; forward: IMessage } | null = null;
     if (service.startsWith("did:")) {
       const routingDoc = await this.resolveDid(service);
       const http = routingDoc === null ? null : endpointOf(routingDoc, "http");
-      if (http === null) {
+      if (routingDoc === null || http === null) {
         throw new Error(`${didPlaceholder(to)}'s mediator has no HTTP endpoint`);
       }
+      documents.set(service, routingDoc);
       const forward = {
         ...plainMessage(FORWARD, null, service, { next: to }),
         attachments: [{ id: crypto.randomUUID(), media_type: ENCRYPTED_MIME, data: { json: JSON.parse(inner.packed) as unknown } }],
       } as IMessage;
-      const sealed = await this.link.seal(forward, service, null);
+      const sealed = await this.link.seal(forward, service, null, documents);
       outer = { packed: sealed.packed, seal: sealed.seal, forward };
       endpoint = http;
     } else if (service.startsWith("http")) {
@@ -250,15 +271,26 @@ export class Outbound {
 
   /**
    * The key of ours we write to this contact from: the latest live
-   * `contact.useKey` on the current route that this seed derives — a key
-   * minted toward them, or the invitation they took (§7.4) — else one
-   * minted now (`Keyring.mintToward`: `did.minted` + `contact.useKey`).
-   * A key on another route is no address any more (§3.2) and is passed
-   * over; one the ring does not hold is not ours to write from.
+   * `contact.useKey` under this device's current mediation and route
+   * (`underCurrent`) that the ring holds — a key minted toward them, or
+   * the invitation they took (§7.4) — else one minted now
+   * (`Keyring.mintToward`: `did.minted` + `contact.useKey`). A key on
+   * another route, or under another device's mediation, is no address
+   * of this device's (§3.2) and is passed over; one the ring does not
+   * hold is not ours to write from. One contact at a time: two first
+   * messages at once wait on one choice, and the second finds the
+   * first's mint in the fold rather than minting its own.
    */
-  private async fromKey(contact: Contact, routed: Routed): Promise<MyIdentity> {
+  private fromKey(cid: string, routed: Routed): Promise<MyIdentity> {
+    const run = (this.choosing.get(cid) ?? Promise.resolve()).then(() => this.chooseKey(cid, routed));
+    this.choosing.set(cid, run.catch(() => undefined));
+    return run;
+  }
+
+  private async chooseKey(cid: string, routed: Routed): Promise<MyIdentity> {
+    const contact = this.contact(cid);
     for (const use of [...contact.keys].reverse()) {
-      if (use.routingDid !== routed.routingDid) {
+      if (!underCurrent(this.fold.myKey(use.key), routed)) {
         continue;
       }
       const identity = this.keyring.identityOf(use.key);
@@ -266,7 +298,7 @@ export class Outbound {
         return { key: use.key, identity };
       }
     }
-    const minted = await this.keyring.mintToward(contact.cid, routed);
+    const minted = await this.keyring.mintToward(cid, routed);
     this.log(`minted a DID of our own toward ${nameOf(contact)}`);
     return minted;
   }
@@ -355,7 +387,11 @@ export type Attempted = VaultEvent<"delivery.attempted">;
  * overtake one another, and other contacts go on. Held messages (§3.1,
  * this device's `delivery.held`) are skipped unless named by `mid` —
  * that is what a retry by hand is. Passes are serialised, so a start, a
- * reconnect and a send cannot try one message at the same time.
+ * reconnect and a send cannot try one message at the same time. A
+ * message on a channel since frozen (§3.2) is tried and fails, saying
+ * why: nothing is sent from a key that is not this device's current
+ * address, or to a key that is not theirs any more; writing again from
+ * where both sides are now is the sender's to do.
  */
 export class Outbox {
   private readonly log: (line: string) => void;
@@ -462,20 +498,23 @@ export class Outbox {
   }
 
   /**
-   * One try at a waiting message: from the key it was written from, the
-   * mediator told of it first when it has not been (`register`), so that
-   * what comes back finds us; to the contact's DID now; sealed and
-   * POSTed (`Outbound.deliver`). Whatever happens is one
-   * `delivery.attempted` on the message's channel (§3.1): `sent`, and it
-   * is out of the outbox; `failed`, with why, and it waits for the next
-   * pass. Nothing here throws but the log refusing the event.
+   * One try at a waiting message: on the channel it was written on,
+   * which must still be one the contact is written to (`frozen`); from
+   * the key it was written from, the mediator told of it first when it
+   * has not been (`register`), so that what comes back finds us; to the
+   * contact's DID now; sealed and POSTed (`Outbound.deliver`). Whatever
+   * happens is one `delivery.attempted` on the message's channel
+   * (§3.1): `sent`, and it is out of the outbox; `failed`, with why, and
+   * it waits for the next pass. Nothing here throws but the log refusing
+   * the event.
    */
   private async attempt(message: Message, cid: string | null): Promise<Attempted> {
     const attempt = (message.delivery?.attempts.length ?? 0) + 1;
     let outcome: "sent" | "failed" = "sent";
     let error: string | undefined;
     try {
-      if (!this.routed()) {
+      const routed = routedOf(current(this.fold, this.opened.vault.self));
+      if (routed === null) {
         throw new Error("no mediation granted yet: nothing to write from");
       }
       if (cid === null) {
@@ -485,14 +524,15 @@ export class Outbox {
       if (contact === null) {
         throw new Error(`no contact ${cid}`);
       }
+      const frozen = this.frozen(contact, message.pair, routed);
+      if (frozen !== null) {
+        throw new Error(frozen);
+      }
       const found = await messageRecord(this.fold, this.opened.vault.blobs, message.mid);
       if (found === null || found.msg === null) {
         throw new Error(`its plaintext is ${found?.body ?? "gone"}`);
       }
-      if (message.pair.myKey === null) {
-        throw new Error("written from no key of ours");
-      }
-      await this.ensureRegistered(message.pair.myKey);
+      await this.ensureRegistered(message.pair.myKey as string);
       const to = contact.currentDids.at(-1);
       if (to === undefined) {
         throw new Error(`${nameOf(contact)} has no DID to write to`);
@@ -508,19 +548,42 @@ export class Outbox {
   }
 
   /**
-   * The mediator told of the key we write from (§5), when this device
-   * minted it and has not told it yet: what comes back rides that
-   * mapping. Another device's key is its own to register (`register`
-   * refuses it), a retired one is no address to tell of; both are
-   * sealed from as they are.
+   * Why nothing is sent on this channel (§3.2), or null while it is one
+   * the contact is written to: the key of ours is retired, or under a
+   * mediation that is not this device's current one (another device's,
+   * or one since left); the key of theirs is not in their current
+   * document; or the channel is claimed by more than one contact and is
+   * no one's to write from until merged (§7.1). The contact's `writeTo`
+   * is the fold's word on the last two.
+   */
+  private frozen(contact: Contact, pair: ChannelKey, routed: Routed): string | null {
+    const key = pair.myKey === null ? null : this.fold.myKey(pair.myKey);
+    if (key === null || key.minted === null) {
+      return "written from no key of ours";
+    }
+    if (key.retired !== null) {
+      return `written from a key since retired (${key.retired.because})`;
+    }
+    if (!underCurrent(key, routed)) {
+      return "written from a key that is not under this device's mediation";
+    }
+    if (contact.writeTo.some((entry) => sameChannel(entry, pair))) {
+      return null;
+    }
+    if (contact.channels.some((entry) => sameChannel(entry, pair))) {
+      return "written to a key that is not in their document any more";
+    }
+    return "written on a channel that is not this contact's alone";
+  }
+
+  /**
+   * The mediator told of the key we write from (§5), when it has not
+   * been yet: what comes back rides that mapping. The key is this
+   * device's own by now (`frozen` let it through), so `register` takes
+   * it; recorded once, it is not asked about again.
    */
   private async ensureRegistered(name: string): Promise<void> {
-    const key = this.fold.myKey(name);
-    if (key === null || key.minted === null) {
-      throw new Error(`${name} was never minted`);
-    }
-    const self = this.opened.vault.self;
-    if (key.minted.by !== self || key.retired !== null || key.registered.includes(self)) {
+    if (this.fold.myKey(name)?.registered.includes(this.opened.vault.self) ?? false) {
       return;
     }
     await register(this.link, this.opened, [name]);

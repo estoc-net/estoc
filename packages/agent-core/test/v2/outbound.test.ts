@@ -106,6 +106,8 @@ interface Scene {
   offline: { reason: string | null };
   /** DIDs that do not resolve, for the scene's resolver */
   dead: Set<string>;
+  /** how many times each DID was resolved, by anyone in the scene */
+  resolutions: Map<string, number>;
   clock: () => Date;
   /** the events appended since the last call, in canonical order */
   fresh(): Promise<Event[]>;
@@ -135,7 +137,11 @@ async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number }
   const endpoints: Scene["endpoints"] = new Map();
   const offline = { reason: null as string | null };
   const dead = new Set<string>();
-  const resolveDid = async (did: string): Promise<DIDDoc | null> => (dead.has(did) ? null : resolveDIDCommDoc(did));
+  const resolutions = new Map<string, number>();
+  const resolveDid = async (did: string): Promise<DIDDoc | null> => {
+    resolutions.set(did, (resolutions.get(did) ?? 0) + 1);
+    return dead.has(did) ? null : resolveDIDCommDoc(did);
+  };
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     if (offline.reason !== null) {
@@ -207,6 +213,7 @@ async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number }
     endpoints,
     offline,
     dead,
+    resolutions,
     clock,
     fresh: async () => {
       const events = await all(v);
@@ -308,6 +315,28 @@ describe("v2 outbound: composing", () => {
     expect(composed.plain.from).not.toBe(stale.identity.did);
     expect(composed.pair.myKey).not.toBe(stale.key);
     expect(s.v.fold.contact(cid)?.keys.map((use) => use.key)).toEqual([stale.key, composed.pair.myKey]);
+
+    // a key under another device's mediation at the same mediator, derived here after a merge: its mail is that device's
+    const theirs = await s.ring.mintToward(cid, { id: "0198c000-0000-7000-8000-00000000aaaa", routingDid: s.mediator.did });
+    await s.fresh();
+    const own = await s.outbound.compose(cid, BASIC_MESSAGE, { content: "hi" });
+    expect(types(await s.fresh())).toEqual([]);
+    expect(own.pair.myKey).toBe(composed.pair.myKey);
+    expect(own.pair.myKey).not.toBe(theirs.key);
+  });
+
+  it("mints one key for two first messages composed at once", async () => {
+    const s = await scene();
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+
+    const [one, two] = await Promise.all([s.outbound.compose(cid, BASIC_MESSAGE, { content: "one" }), s.outbound.compose(cid, BASIC_MESSAGE, { content: "two" })]);
+
+    expect(types(await s.fresh()).filter((type) => type === "did.minted")).toHaveLength(1);
+    expect(two.plain.from).toBe(one.plain.from);
+    expect(two.pair).toEqual(one.pair);
+    expect(s.v.fold.contact(cid)?.keys).toHaveLength(1);
+    expect(await vouchedBy(two.plain.from_prior as string)).toEqual({ iss: s.pub.identity.did, sub: one.plain.from as string });
   });
 
   it("answers their invitation: pthid names it until a profile of ours has gone out, and there is no prior to vouch with", async () => {
@@ -495,6 +524,14 @@ describe("v2 outbound: delivering", () => {
     const ritual = (await s.trace.read("mediation")).find((event) => event.data["parent"] === forward?.eid);
     expect(ritual).toMatchObject({ type: "mediation.out", data: { msg: { type: FORWARD, to: [s.mediator.did], body: { next: bob.did }, attachments: [{ data: { bytes: expect.any(Number) } }] } } });
     expect((ritual?.data["msg"] as { from?: unknown }).from).toBeUndefined();
+
+    // one resolution per document per delivery: the service is read off the same document the key is sealed to
+    await s.write(cid, "again");
+    const counted = (did: string) => s.resolutions.get(did) ?? 0;
+    const [bobBefore, mediatorBefore] = [counted(bob.did), counted(s.mediator.did)];
+    await s.outbox.drain();
+    expect(queuedFor(s, bob)).toHaveLength(2);
+    expect([counted(bob.did) - bobBefore, counted(s.mediator.did) - mediatorBefore]).toEqual([1, 1]);
   });
 
   it("fails, and says why: an endpoint that answers badly, a service that cannot be reached, a body since erased", async () => {
@@ -630,16 +667,61 @@ describe("v2 outbox", () => {
     expect(s.posts).toHaveLength(1);
   });
 
+  it("sends nothing on a channel since frozen, and says why", async () => {
+    const s = await scene();
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await s.wrote(bob, s.pub.identity.did, "hello");
+    const { composed, record: retired } = await s.write(cid, "one");
+    await record(s.v.vault.events, s.v.fold, drafts.didRetired({ key: composed.pair.myKey as string, because: "mediation-changed" }));
+    const [tried] = await s.outbox.drain();
+    expect(tried?.data).toMatchObject({ mid: retired.mid, outcome: "failed", error: "written from a key since retired (mediation-changed)" });
+
+    // written from a key under another device's mediation: derived here, but its mail is that device's
+    const theirs = await s.ring.mintToward(cid, { id: "0198c000-0000-7000-8000-00000000aaaa", routingDid: s.mediator.did });
+    const theirPair = { myKey: theirs.key, peerKey: fingerprint(bob, 2) };
+    await record(s.v.vault.events, s.v.fold, drafts.peerResolved(resolvedOf(theirPair, bob.did, bob.doc)));
+    await recordMessage(s.v.vault, s.v.fold, "out", enc.encode(JSON.stringify({ ...composed.plain, from: theirs.identity.did })), { ...theirPair, mid: "0198c000-0000-7000-8000-00000000fff1", wireId: "w", msgType: BASIC_MESSAGE, attachments: [] });
+    const [other] = await s.outbox.drain({ mid: "0198c000-0000-7000-8000-00000000fff1" });
+    expect(other?.data).toMatchObject({ outcome: "failed", error: "written from a key that is not under this device's mediation" });
+
+    // written to a key of theirs they have since rotated away from
+    const { composed: fresh, record: toOld } = await s.write(cid, "two");
+    const bobRekeyed = await peer(3, CAROL_HTTP);
+    const [jwt] = await new FromPrior({ iss: bob.did, sub: bobRekeyed.did, iat: 1 }).pack(`${bob.did}#key-1`, resolver, secretsResolverFor(bob.secrets));
+    expect(await s.wrote(bobRekeyed, fresh.plain.from as string, "new key", { from_prior: jwt })).toBe(cid);
+    expect(s.v.fold.contact(cid)?.currentDids).toEqual([bobRekeyed.did]);
+    const [stale] = await s.outbox.drain({ mid: toOld.mid });
+    expect(stale?.data).toMatchObject({ mid: toOld.mid, outcome: "failed", error: "written to a key that is not in their document any more" });
+    // and what is written now goes to the new key
+    const { record: toNew } = await s.write(cid, "three");
+    const [sent] = await s.outbox.drain({ mid: toNew.mid });
+    expect(sent?.data).toMatchObject({ mid: toNew.mid, outcome: "sent" });
+    expect(s.posts.map((post) => post.url)).toEqual([CAROL_HTTP]);
+
+    // a channel two contacts claim is no one's to write from until merged
+    const carol = await peer(4, CAROL_HTTP);
+    const carolCid = await known(s, carol);
+    const { composed: contested, record: toCarol } = await s.write(carolCid, "hi");
+    await record(s.v.vault.events, s.v.fold, drafts.contactAttached({ myKey: null, peerKey: fingerprint(carol, 2), cid, because: "manual" }));
+    expect(s.v.fold.attribution(contested.pair)).toMatchObject({ kind: "several" });
+    const [claimed] = await s.outbox.drain({ mid: toCarol.mid });
+    expect(claimed?.data).toMatchObject({ mid: toCarol.mid, outcome: "failed", error: "written on a channel that is not this contact's alone" });
+    expect(s.log.filter((line) => line.startsWith("could not deliver"))).toHaveLength(4);
+  });
+
   it("carries the mail to where they are now, not where it was written to", async () => {
     const s = await scene();
     const bob = await peer(2, BOB_HTTP);
-    const bobMoved = await peer(3, CAROL_HTTP);
+    // the same keys under a DID whose service moved: what a change of mediator leaves
+    const bobMoved = await peer(2, CAROL_HTTP);
+    expect(fingerprint(bobMoved, 2)).toBe(fingerprint(bob, 2));
     const cid = await s.wrote(bob, s.pub.identity.did, "hello");
     const { composed, record: found } = await s.write(cid, "hi");
-    // they rotate before we deliver: a message vouched for by the old DID, from the new key, to the key we wrote from
+    // they move before we deliver: a message vouched for by the old DID, from the new one, to the key we wrote from
     const [jwt] = await new FromPrior({ iss: bob.did, sub: bobMoved.did, iat: 1 }).pack(`${bob.did}#key-1`, resolver, secretsResolverFor(bob.secrets));
     expect(await s.wrote(bobMoved, composed.plain.from as string, "moved", { from_prior: jwt })).toBe(cid);
     expect(s.v.fold.contact(cid)?.currentDids).toEqual([bobMoved.did]);
+    expect(s.v.fold.contact(cid)?.writeTo).toContainEqual(composed.pair);
 
     const [tried] = await s.outbox.drain();
 

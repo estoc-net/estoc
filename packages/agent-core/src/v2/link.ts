@@ -182,17 +182,14 @@ export class MediatorLink {
    * Seal a message to `to` from a key of ours (`from`), or anonymously
    * (null): one layer, no forward — every layer an envelope has passes
    * through the caller's hands. What the envelope looks like is in
-   * `seal`, for `traceSeal` once the frame it rides is known.
+   * `seal`, for `traceSeal` once the frame it rides is known. A
+   * document among `documents` is what didcomm seals to, resolved
+   * again for no one: the caller read the address off it, and the key
+   * is read off the same.
    */
-  async seal(message: IMessage, to: string, from: string | null): Promise<Sealed> {
-    const [packed] = await new this.didcomm.Message(message).pack_encrypted(
-      to,
-      from,
-      null,
-      this.resolver,
-      secretsResolverFor(this.secrets()),
-      { forward: false }
-    );
+  async seal(message: IMessage, to: string, from: string | null, documents?: ReadonlyMap<string, DIDDoc>): Promise<Sealed> {
+    const resolver = documents === undefined ? this.resolver : { resolve: async (did: string): Promise<DIDDoc | null> => documents.get(did) ?? this.resolver.resolve(did) };
+    const [packed] = await new this.didcomm.Message(message).pack_encrypted(to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
     return { packed, seal: sealData(packed, message) };
   }
 
