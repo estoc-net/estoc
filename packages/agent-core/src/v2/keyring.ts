@@ -1,0 +1,198 @@
+/**
+ * The keys of ours this device holds (vault-events.md §2, §5): every
+ * `did/<id>` the fold says was minted, retired or not — inbound still
+ * opens — and the `me` of this device's current mediation, each derived
+ * from its name and checked against the DID the log recorded. What a
+ * DID of ours is named, what a name derives, the secrets didcomm opens
+ * with. Minting goes through `Keys` (the event first, the cache after)
+ * and lands here at once. The ring holds derived identities and nothing
+ * else: which key is `me`, which is `pub`, is the fold's answer, read
+ * fresh each time.
+ */
+
+import type { Secret } from "@estoc/did-peer";
+import { drafts, record, type Mediation, type MyKey } from "@estoc/vault/v2";
+
+import type { PeerIdentity } from "../identity/peer.js";
+import type { KeyOfDid } from "./channel.js";
+import type { PeerVault } from "./identity.js";
+
+/** A key of ours in hand: its name (§2) and what the name derives. */
+export interface MyIdentity {
+  /** `did/<id>` or `mediation/<id>/me` */
+  key: string;
+  identity: PeerIdentity;
+}
+
+/** A recorded key this seed does not derive as recorded (a log this device did not write, minted another way): left out of the ring. */
+export interface Skipped {
+  key: string;
+  /** the DID the log records */
+  did: string;
+  /** the DID the name derives here */
+  derived: string;
+}
+
+/** The mediation a mint takes its service from: granted, so it has a routing DID. */
+export interface Routed {
+  id: string;
+  routingDid: string;
+}
+
+export class Keyring {
+  private readonly byName = new Map<string, PeerIdentity>();
+  private readonly byDid = new Map<string, string>();
+  private readonly left: Skipped[] = [];
+
+  private constructor(private readonly opened: PeerVault) {}
+
+  /**
+   * Derive what the fold says is ours: every minted `did/<id>` (§7.3)
+   * and the `me` of this device's current mediation (§5), each checked
+   * against the DID the log recorded — a name that derives another DID
+   * is skipped, and said so in `skipped`.
+   */
+  static async load(opened: PeerVault): Promise<Keyring> {
+    const ring = new Keyring(opened);
+    for (const key of opened.fold.myKeys()) {
+      if (key.minted !== null) {
+        await ring.derive(key.key, key.minted.routingDid, key.minted.did);
+      }
+    }
+    const mediation = ring.current();
+    if (mediation !== null) {
+      await ring.derive(mediation.me.key, null, mediation.me.did);
+    }
+    return ring;
+  }
+
+  /** The recorded keys this seed does not derive as recorded. */
+  get skipped(): readonly Skipped[] {
+    return this.left;
+  }
+
+  // ---- what is ours ---------------------------------------------------------
+
+  /** The name of a DID of ours; null for a DID that is no one of ours — `inboundPair`'s `keyOfDid`. */
+  readonly keyOfDid: KeyOfDid = (did) => this.byDid.get(did) ?? null;
+
+  /** What a name derives; null for a name not held (never minted, or skipped). */
+  identityOf(name: string): PeerIdentity | null {
+    return this.byName.get(name) ?? null;
+  }
+
+  /** Every held key's secrets: what didcomm's `SecretsResolver` hands out. */
+  secrets(): Secret[] {
+    return [...this.byName.values()].flatMap((identity) => identity.secrets);
+  }
+
+  /** This device's current mediation (§5): the fold's, read fresh. */
+  current(): Mediation | null {
+    return this.opened.fold.device(this.opened.vault.self)?.mediation ?? null;
+  }
+
+  /** The `me` of the current mediation: how the mediator knows us. Null without a mediation, or with one whose key was skipped. */
+  get me(): MyIdentity | null {
+    const mediation = this.current();
+    return mediation === null ? null : this.held(mediation.me.key);
+  }
+
+  /**
+   * The DID of ours the current mediation publishes as a profile
+   * (`did.published { as: "profile" }`, §5): minted under it, not retired,
+   * held here — the latest minted when there are several. Null when
+   * there is none: `mintPublic` is the next step.
+   */
+  pub(): MyIdentity | null {
+    const mediation = this.current();
+    if (mediation === null) {
+      return null;
+    }
+    const profiles = this.opened.fold
+      .myKeys()
+      .filter((key) => key.minted?.mediation === mediation.id && key.retired === null && key.published.some((entry) => entry.as === "profile"));
+    for (const profile of profiles.reverse()) {
+      const held = this.held(profile.key);
+      if (held !== null) {
+        return held;
+      }
+    }
+    return null;
+  }
+
+  // ---- minting (§5, §6): the event first, the cache after, the ring at once --
+
+  /** This device's arrangement with a mediator: `mediation.created` and its `me` key (`Keys.createMediation`); `me` is it from here on. */
+  async createMediation(mediatorDid: string): Promise<{ id: string; me: MyIdentity }> {
+    const { id, key, identity } = await this.opened.keys.createMediation(this.opened.fold, mediatorDid);
+    this.hold(key, identity);
+    return { id, me: { key, identity } };
+  }
+
+  /** A DID for one contact: minted, then `contact.useKey { because: "minted" }` (§6). */
+  async mintToward(cid: string, mediation: Routed): Promise<MyIdentity> {
+    const minted = await this.mint(mediation);
+    await record(this.opened.vault.events, this.opened.fold, drafts.contactUseKey({ cid, key: minted.key, because: "minted" }));
+    return minted;
+  }
+
+  /** A DID for one taker: minted, then `did.published { as: "oob", uses: "one" }` — an open invitation (§7.4). */
+  async mintInvitation(mediation: Routed, oobId: string, goal: string | null): Promise<MyIdentity> {
+    const minted = await this.mint(mediation);
+    await record(this.opened.vault.events, this.opened.fold, drafts.didPublished({ key: minted.key, as: "oob", uses: "one", oobId, ...(goal === null ? {} : { goal }) }));
+    return minted;
+  }
+
+  /**
+   * A DID for anyone: `did.published { as: "profile", uses: "many" }` on
+   * a key minted under `mediation` — a fresh one, or an orphan (minted
+   * under it, never published, retired or given to a contact: a mint
+   * that stopped before its publish), so the interrupted mint heals
+   * rather than piling up. Whether one is wanted is `pub()`, asked first.
+   */
+  async mintPublic(mediation: Routed): Promise<MyIdentity> {
+    const minted = this.orphan(mediation.id) ?? (await this.mint(mediation));
+    await record(this.opened.vault.events, this.opened.fold, drafts.didPublished({ key: minted.key, as: "profile", uses: "many" }));
+    return minted;
+  }
+
+  // ---- inside ---------------------------------------------------------------
+
+  /** A held key minted under `mediationId` that nothing has happened to since: the first, or null. */
+  private orphan(mediationId: string): MyIdentity | null {
+    const idle = (key: MyKey): boolean => key.minted?.mediation === mediationId && key.published.length === 0 && key.retired === null && key.usedBy.length === 0 && key.takenBy.length === 0;
+    for (const key of this.opened.fold.myKeys()) {
+      const held = idle(key) ? this.held(key.key) : null;
+      if (held !== null) {
+        return held;
+      }
+    }
+    return null;
+  }
+
+  private held(name: string): MyIdentity | null {
+    const identity = this.byName.get(name);
+    return identity === undefined ? null : { key: name, identity };
+  }
+
+  private async mint(mediation: Routed): Promise<MyIdentity> {
+    const { key, identity } = await this.opened.keys.mintDid(this.opened.fold, mediation);
+    this.hold(key, identity);
+    return { key, identity };
+  }
+
+  /** Derive `name` with `serviceUri` and hold it when it derives `did`; else note the skip. */
+  private async derive(name: string, serviceUri: string | null, did: string): Promise<void> {
+    const identity = await this.opened.keys.identity(name, serviceUri);
+    if (identity.did === did) {
+      this.hold(name, identity);
+    } else {
+      this.left.push({ key: name, did, derived: identity.did });
+    }
+  }
+
+  private hold(name: string, identity: PeerIdentity): void {
+    this.byName.set(name, identity);
+    this.byDid.set(identity.did, name);
+  }
+}
