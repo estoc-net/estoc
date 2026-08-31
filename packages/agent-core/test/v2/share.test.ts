@@ -4,8 +4,8 @@ import { readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import { MemoryBackend } from "@estoc/event-store";
 
-import { attachmentsOf, closureOf, closureSize, OBJECT_SHARE, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
-import type { MessageRecord, PlainMessage } from "../../src/v2/index.js";
+import { attachmentsOf, BLOB_PUT_RESULT, closureOf, closureSize, OBJECT_SHARE, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
+import { placePackage, type MediatorLink, type MessageRecord, type PlainMessage, type Placing, type WireNote } from "../../src/v2/index.js";
 import { network, type FakeMediator } from "../fake-mediator.js";
 import { newMediator, newParty, recordsOf, until, withTimeout, type Party } from "./fixture.js";
 
@@ -369,5 +369,90 @@ describe("v2 agent sharing objects", () => {
     expect(mediator.blobs?.get(hash as string)?.bytes).not.toBeNull();
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  it("a delete that fails fails the turn, the dead reservation still ours to free", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const gate = { failAt: -1, count: 0 };
+    const flaky: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (init?.method === "POST" && url === mediator.http) {
+        gate.count += 1;
+        if (gate.count === gate.failAt) {
+          gate.failAt = -1;
+          return Promise.reject(new Error("the line dropped"));
+        }
+      }
+      return mediator.fetch(input, init);
+    };
+    const { alice, bob } = await squeezedOver(mediator, [1, 2], { fetch: flaky });
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(mediator.blobs?.size).toBe(1);
+    const before = [...(mediator.blobs?.keys() ?? [])][0] as string;
+    const row = mediator.blobs?.get(before);
+    if (row !== undefined) {
+      row.bytes = null;
+    }
+    // the renewal put goes through; the delete right behind it hits the cut
+    gate.count = 0;
+    gate.failAt = 2;
+    await expect(alice.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/line dropped/);
+    // nothing was placed over the dead reservation while it stands
+    expect([...(mediator.blobs?.keys() ?? [])]).toEqual([before]);
+    // the next share finds the placement still held: the delete is retried, then placed afresh
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(mediator.blobs?.size).toBe(1);
+    const [hash] = [...(mediator.blobs?.keys() ?? [])];
+    expect(hash).not.toBe(before);
+    expect(mediator.blobs?.get(hash as string)?.bytes).not.toBeNull();
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("a put the store refused lets the ciphertext go; a cut line keeps it for the retry", async () => {
+    const closure = await closureOf(files);
+    const note: WireNote = async () => undefined;
+    const quiet = () => undefined;
+    const okPut: typeof fetch = async () => new Response(null, { status: 200 });
+    const store = { cut: true };
+    const link = {
+      roundTrip: async (_type: string, body: Record<string, unknown>) => {
+        if (store.cut) {
+          throw new Error("the line is down");
+        }
+        const hash = body.hash as string;
+        return {
+          id: "answer",
+          type: BLOB_PUT_RESULT,
+          body: {
+            hash,
+            url: `http://store/${hash}`,
+            retain_until: "2027-01-01T00:00:00.000Z",
+            upload: { url: `http://store/${hash}?token=t`, expires: "2027-01-01T00:00:00.000Z" },
+          },
+        };
+      },
+    } as unknown as MediatorLink;
+    const packages = new Map<string, Placing>();
+    // the line is down: the result is unknown, the ciphertext stays for the retry
+    await expect(placePackage(link, packages, "m", closure, okPut, 500, note, quiet)).rejects.toThrow(/line is down/);
+    const slot = [...packages.values()][0] as Placing;
+    expect(slot.prepared).not.toBeNull();
+    const kept = slot.prepared?.hash as string;
+    store.cut = false;
+    const placed = await placePackage(link, packages, "m", closure, okPut, 500, note, quiet);
+    expect(placed.hash).toBe(kept); // the same bytes went up
+
+    // a refusal is an answer: no reservation stands, the buffer goes with the turn
+    const refusing = {
+      roundTrip: async () => ({
+        id: "answer",
+        type: "https://didcomm.org/report-problem/2.0/problem-report",
+        body: { code: "e.p.blob.too-large", comment: "at most 65536 bytes" },
+      }),
+    } as unknown as MediatorLink;
+    const refused = new Map<string, Placing>();
+    await expect(placePackage(refusing, refused, "m", closure, okPut, 500, note, quiet)).rejects.toThrow(/will not keep the package/);
+    expect(([...refused.values()][0] as Placing).prepared).toBeNull();
   });
 });

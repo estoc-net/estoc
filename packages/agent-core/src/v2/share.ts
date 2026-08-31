@@ -155,9 +155,13 @@ export async function placePackage(
  * the store lost the bytes: our copy is gone too (the ciphertext is
  * dropped once uploaded, and encrypting again cannot reproduce it), so
  * the reservation the re-put just revived is freed and the placing
- * starts over. Otherwise place: encrypt once — a retry finds `prepared`
- * and sends the same hash and bytes to the grant the re-put returns —
- * upload where the store says, and only then let the buffer go.
+ * starts over — freed for certain: a delete that fails fails the turn
+ * with `placed` still set, for the next turn to try again. Otherwise
+ * place: encrypt once — a retry finds `prepared` and sends the same
+ * hash and bytes to the grant the re-put returns — upload where the
+ * store says, and only then let the buffer go. One failure is answered,
+ * not suffered: a put the store refused made no reservation and will
+ * never take these bytes, so the buffer goes with the turn.
  */
 async function attempt(
   slot: Placing,
@@ -175,12 +179,11 @@ async function attempt(
       placed.retainUntil = renewed.retainUntil;
       return placed;
     }
+    // The re-put just revived (and extended) the reservation, so it must
+    // be freed before anything replaces it: a delete that fails fails the
+    // turn with `placed` still set, and the next turn tries it again.
+    await deleteBlob(link, placed.hash);
     slot.placed = null;
-    try {
-      await deleteBlob(link, placed.hash);
-    } catch (err) {
-      log(`could not free the lost package ${placed.hash}: ${messageOf(err)}`);
-    }
   }
   if (slot.prepared === null) {
     const key = freshKey();
@@ -188,7 +191,17 @@ async function attempt(
     slot.prepared = { hash: await blobHash(ciphertext), key, ciphertext };
   }
   const { hash, key, ciphertext } = slot.prepared;
-  const put = await putBlob(link, hash, ciphertext.length);
+  let put: BlobPlacement;
+  try {
+    put = await putBlob(link, hash, ciphertext.length);
+  } catch (err) {
+    if (err instanceof BlobRefused) {
+      // the store answered: no reservation stands and these bytes will not
+      // be taken — held on, the buffer buys the next try nothing
+      slot.prepared = null;
+    }
+    throw err;
+  }
   if (put.upload !== null) {
     // one deadline over the whole leg, the note before it included: a
     // fetch that ignores its signal, or a trace store that never answers,
@@ -210,14 +223,21 @@ async function attempt(
   return result;
 }
 
-/** blob-store/1.0 `put` to our mediator; a problem-report is an error naming its code. */
+/**
+ * The mediator answered a put with a problem-report: no reservation was
+ * made and these bytes will not be taken. A cut line is not this — there
+ * the result is unknown, and the retry sends the same bytes.
+ */
+export class BlobRefused extends Error {}
+
+/** blob-store/1.0 `put` to our mediator; a problem-report is `BlobRefused`, naming its code. */
 export async function putBlob(link: MediatorLink, hash: string, size: number): Promise<BlobPlacement> {
   const answer = await link.roundTrip(BLOB_PUT, { hash, size });
   const body = answer.body as Record<string, unknown>;
   if (answer.type !== BLOB_PUT_RESULT) {
     const code = typeof body.code === "string" ? body.code : answer.type;
     const comment = typeof body.comment === "string" ? `: ${body.comment}` : "";
-    throw new Error(`the mediator will not keep the package (${code}${comment})`);
+    throw new BlobRefused(`the mediator will not keep the package (${code}${comment})`);
   }
   return parsePutResult(body);
 }
@@ -230,10 +250,6 @@ export async function deleteBlob(link: MediatorLink, hash: string): Promise<void
     const code = typeof body.code === "string" ? body.code : answer.type;
     throw new Error(`the blob store will not delete (${code})`);
   }
-}
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**
