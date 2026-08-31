@@ -585,6 +585,17 @@ describe("restore", () => {
     const file = new MemoryBackend();
     await file.write(".estoc", enc.encode("a file"));
     await expect(restoreFolder(file, files)).rejects.toThrow(/not empty/);
+    // local/ without self.json is what a device keeps beside a vault (a daemon's pid file): not the vault, stays
+    const beside = new MemoryBackend();
+    await beside.write(".estoc/local/daemon/daemon.pid", enc.encode("4242"));
+    expect(await restoreFolder(beside, files)).toEqual({ files: 2 });
+    expect([...beside.files.keys()].sort()).toEqual([".estoc/local/daemon/daemon.pid", ...paths(files).filter((p) => !p.startsWith(".estoc/local/"))].sort());
+    expect((await FolderVault.open(beside)).self).not.toBe(vault.self);
+    // local/self.json is a previous copy's device pointer: the restore has to open as a fresh device, so it refuses
+    const previous = new MemoryBackend();
+    await previous.write(".estoc/local/self.json", enc.encode(JSON.stringify({ dev: vault.self, instance: "x" })));
+    await expect(restoreFolder(previous, files)).rejects.toThrow(/self\.json/);
+    expect([...previous.files.keys()]).toEqual([".estoc/local/self.json"]);
     const restored = await FolderVault.open(fresh);
     expect(restored.self).not.toBe(vault.self);
     expect((await all(restored.events.scan({ type: DEVICE_MINTED }))).map((e) => e.author).sort()).toEqual([vault.self, restored.self].sort());

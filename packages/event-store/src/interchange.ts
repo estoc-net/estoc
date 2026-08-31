@@ -24,6 +24,7 @@ import {
   EXTENSIONS_DIR,
   KEYSTORE_FILE,
   LOCAL_DIR,
+  SELF_FILE,
   concat,
   isStoreDir,
   jsonLine,
@@ -45,6 +46,8 @@ export const CONFIG_PATH = `${ESTOC_DIR}/${CONFIG_FILE}`;
 
 const ROOT = `${ESTOC_DIR}/`;
 const LOCAL = `${ROOT}${LOCAL_DIR}/`;
+const LOCAL_PATH = `${ROOT}${LOCAL_DIR}`;
+const SELF_PATH = `${LOCAL}${SELF_FILE}`;
 
 /** Whether `path` is in a snapshot (vault-folder.md §10.1): under `.estoc/` and not this copy's own. */
 export function isSnapshotPath(path: string): boolean {
@@ -535,13 +538,21 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
  * crash midway leaves no vault rather than a vault missing pieces.
  * Refuses a backend with anything at `.estoc` — a vault, the remains of
  * one, an empty directory the copy would land in — and a source that is
- * not one, before writing; `local/` in the source, should a hand-made
- * zip carry one, stays out.
+ * not one, before writing. The one thing that may already be there is
+ * `local/` without `self.json`: what a device keeps beside a vault
+ * rather than in it (a daemon's pid file, a preference, §7) is not the
+ * vault, and stays; `self.json` is a previous copy's device pointer, and
+ * the restore that has to open as a fresh device refuses it. `local/` in
+ * the source, should a hand-made zip carry one, stays out.
  */
 export async function restoreFolder(backend: VaultBackend, files: VaultFiles): Promise<{ files: number }> {
-  const there = [...(await backend.list(ESTOC_DIR)), ...(await backend.dirs(ESTOC_DIR))];
+  const there = [...(await backend.list(ESTOC_DIR)), ...(await backend.dirs(ESTOC_DIR)).filter((name) => name !== LOCAL_DIR)];
   if (there.length > 0 || (await backend.size(ESTOC_DIR)) !== null) {
     throw new NotAVault(`${ESTOC_DIR} is not empty${there.length > 0 ? ` (${there[0]}${there.length > 1 ? ", …" : ""})` : ""}: a restore needs an empty backend`);
+  }
+  // anything at that path, a directory of that name included: `size` is null for both absent and directory
+  if ((await backend.list(LOCAL_PATH)).includes(SELF_FILE) || (await backend.dirs(LOCAL_PATH)).includes(SELF_FILE)) {
+    throw new NotAVault(`${SELF_PATH} is here: a restore opens as a fresh device, and a previous copy's local/ is not an empty backend`);
   }
   const config = files[CONFIG_PATH];
   if (config === undefined) {
