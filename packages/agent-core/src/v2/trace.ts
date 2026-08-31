@@ -238,9 +238,13 @@ export class AgentTrace {
    *
    * Outward is read the way §7.2 means a chain to be read: a `parent`
    * is a lookup by `eid`, one filtered `scan` per link. Inward is a
-   * closure — what hung on the chain, what hung on that, as deep as the
-   * onion goes — so the streams are read once each and indexed by
-   * `data.parent` rather than looked up once per node.
+   * fixed point — what hung on the chain, what hung on that, as deep as
+   * the onion goes: each round scans every stream once, keeping what
+   * hangs on something found, until a round finds nothing. A stream is
+   * consumed as the store yields it and only the onion is kept, so what
+   * is held at once is one stream's worth (the store's own floor) and
+   * the onion. Nothing rests on a child following its parent in the
+   * order: a child scanned first is taken the round after.
    */
   async traceOf(mid: string): Promise<TraceEvent[]> {
     const found = new Map<string, TraceEvent>();
@@ -274,22 +278,24 @@ export class AgentTrace {
     // own onion. An envelope is taken under an end, or under what was
     // found inward (the frame's answer, what was opened out of it); the
     // bytes, the wire's answer and the mediator's part are taken anywhere.
+    // The chain is what outward found and does not grow with the onion.
     const chain = new Set(found.keys());
     const isEnd = new Set(ends.map((event) => event.eid));
-    const children = new Map<string, TraceEvent[]>();
-    for (const stream of ["wire", "wire.bytes", "mediation", "envelope"] as const) {
-      for (const event of await this.read(stream)) {
-        const parent = parentOf(event);
-        if (parent !== undefined) {
-          children.set(parent, [...(children.get(parent) ?? []), event]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const stream of ["wire", "wire.bytes", "mediation", "envelope"] as const) {
+        for await (const event of this.owner.trace(stream).scan()) {
+          const parent = parentOf(event);
+          if (parent === undefined || !found.has(parent) || found.has(event.eid)) {
+            continue;
+          }
+          if (stream === "envelope" && chain.has(parent) && !isEnd.has(parent)) {
+            continue;
+          }
+          found.set(event.eid, { ...event, stream });
+          grew = true;
         }
       }
-    }
-    const pending = [...chain];
-    while (pending.length > 0) {
-      const eid = pending.pop() as string;
-      const ours = (children.get(eid) ?? []).filter((event) => event.stream !== "envelope" || isEnd.has(eid) || !chain.has(eid));
-      pending.push(...take(ours).map((event) => event.eid));
     }
     return [...found.values()].sort(compareLocalEvents);
   }

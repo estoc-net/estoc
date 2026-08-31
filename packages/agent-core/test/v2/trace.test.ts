@@ -280,6 +280,22 @@ describe("v2 trace", () => {
     expect((await trace.traceOf("m3")).map((e) => e.eid)).toEqual([frame, auth, signed, plain]);
   });
 
+  it("traceOf(mid) does not lean on order: what a clock set back stamped before its parent is found the round after", async () => {
+    const c = clock("2026-08-29T10:00:00.000Z");
+    const { agent } = await scene(c);
+    const trace = new AgentTrace(agent, { clock: c.now });
+    const out = await trace.append("wire", "wire.out", { via: "http" });
+    const seal = await trace.append("envelope", "envelope.seal", { parent: out, kind: "authcrypt", mid: "m1" });
+    c.advance(1);
+    const answer = await trace.append("wire", "wire.in", { parent: out, status: 200 });
+    const opened = await trace.append("envelope", "envelope.open", { parent: answer, kind: "authcrypt" });
+    c.advance(-HOUR); // the clock set back: what comes next sorts before what it hung on
+    const inner = await trace.append("envelope", "envelope.open", { parent: opened, kind: "plain" });
+    const ritual = await trace.append("mediation", "mediation.in", { parent: inner });
+    // `inner` is scanned before `opened` is found, `ritual` before `inner`: two more rounds, both taken; canonical order is by `at`
+    expect((await trace.traceOf("m1")).map((e) => e.eid)).toEqual([inner, ritual, out, seal, answer, opened]);
+  });
+
   it("policy levels: off is all zero, verbose keeps longer than normal", () => {
     expect(Object.values(tracePolicy("off").streams).every((s) => s.keepMs === 0)).toBe(true);
     expect(tracePolicy("normal")).toBe(TRACE_NORMAL);
