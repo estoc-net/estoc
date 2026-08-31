@@ -339,6 +339,36 @@ describe("v2 outbound: composing", () => {
     expect(await vouchedBy(two.plain.from_prior as string)).toEqual({ iss: s.pub.identity.did, sub: one.plain.from as string });
   });
 
+  it("writes under the one contact a merged member names, whichever cid the caller holds", async () => {
+    const s = await scene();
+    const bob = await peer(2, BOB_HTTP);
+    const first = await known(s, bob);
+    const other = "0198cfff-0000-7000-8000-000000000001";
+    await record(s.v.vault.events, s.v.fold, drafts.contactCreated({ cid: other }));
+    await record(s.v.vault.events, s.v.fold, drafts.contactMerged({ cid: first, from: other }));
+    const rep = s.v.fold.contact(other)?.cid as string;
+    expect(s.v.fold.contact(first)?.cid).toBe(rep);
+    await s.fresh();
+
+    // two members of one contact composed at once: one lock, one key, the useKey under the representative
+    const [one, two] = await Promise.all([s.outbound.compose(other, BASIC_MESSAGE, { content: "one" }), s.outbound.compose(first, BASIC_MESSAGE, { content: "two" })]);
+    const events = await s.fresh();
+    expect(types(events).filter((type) => type === "did.minted")).toHaveLength(1);
+    expect(events.find((event) => event.type === "contact.useKey")?.data).toMatchObject({ cid: rep });
+    expect(two.plain.from).toBe(one.plain.from);
+    expect(s.v.fold.contact(rep)?.keys).toHaveLength(1);
+
+    // a member since tombstoned still names the contact: the key of record is used, nothing minted at nobody
+    const gone = "0198cfff-0000-7000-8000-000000000002";
+    await record(s.v.vault.events, s.v.fold, drafts.contactCreated({ cid: gone }));
+    await record(s.v.vault.events, s.v.fold, drafts.contactMerged({ cid: rep, from: gone }));
+    await record(s.v.vault.events, s.v.fold, drafts.contactDeleted({ cid: gone }));
+    await s.fresh();
+    const third = await s.outbound.compose(gone, BASIC_MESSAGE, { content: "three" });
+    expect(types(await s.fresh())).toEqual([]);
+    expect(third.plain.from).toBe(one.plain.from);
+  });
+
   it("answers their invitation: pthid names it until a profile of ours has gone out, and there is no prior to vouch with", async () => {
     const s = await scene();
     const bob = await peer(2, BOB_HTTP);

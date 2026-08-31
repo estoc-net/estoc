@@ -128,13 +128,16 @@ export class Outbound {
     if (routed === null) {
       throw new Error("no mediation granted yet: nothing to write from");
     }
-    const to = this.toDid(this.contact(cid));
+    // the representative (§6): a member's cid — held across a merge, or a deletion — locks, mints
+    // and writes under the one contact it is part of, not under a cid the fold reads nothing from
+    const rep = this.contact(cid).cid;
+    const to = this.toDid(this.contact(rep));
     const doc = await this.resolveDid(to);
     if (doc === null) {
       throw new Error(`${didPlaceholder(to)} does not resolve`);
     }
-    const from = await this.fromKey(cid, routed);
-    const contact = this.contact(cid); // read again: a mint, or a send that took its turn first, is in the fold now
+    const from = await this.fromKey(rep, routed);
+    const contact = this.contact(rep); // read again: a mint, or a send that took its turn first, is in the fold now
     const { pair } = outboundPair(from.key, doc);
     await notePeerResolved(this.events, this.fold, resolvedOf(pair, to, doc));
     const plain = plainMessage(type, from.identity.did, to, body);
@@ -298,7 +301,8 @@ export class Outbound {
         return { key: use.key, identity };
       }
     }
-    const minted = await this.keyring.mintToward(cid, routed);
+    // `contact.cid`, not `cid`: under a merge that landed while we waited, the representative of record
+    const minted = await this.keyring.mintToward(contact.cid, routed);
     this.log(`minted a DID of our own toward ${nameOf(contact)}`);
     return minted;
   }
