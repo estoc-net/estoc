@@ -1,13 +1,14 @@
 /**
  * The keys of ours this device holds (vault-events.md §2, §5): every
- * `did/<id>` the fold says was minted, retired or not — inbound still
- * opens — and the `me` of this device's current mediation, each derived
+ * `did/<id>` the fold says was minted and the `me` of every mediation
+ * this device made, retired or not — inbound still opens — each derived
  * from its name and checked against the DID the log recorded. What a
  * DID of ours is named, what a name derives, the secrets didcomm opens
  * with. Minting goes through `Keys` (the event first, the cache after)
  * and lands here at once. The ring holds derived identities and nothing
  * else: which key is `me`, which is `pub`, is the fold's answer, read
- * fresh each time.
+ * fresh each time — so what a running ring holds is what a reopened
+ * one derives, whatever was retired in between.
  */
 
 import type { Secret } from "@estoc/did-peer";
@@ -48,9 +49,9 @@ export class Keyring {
 
   /**
    * Derive what the fold says is ours: every minted `did/<id>` (§7.3)
-   * and the `me` of this device's current mediation (§5), each checked
-   * against the DID the log recorded — a name that derives another DID
-   * is skipped, and said so in `skipped`.
+   * and the `me` of every mediation this device made (§5), retired ones
+   * included, each checked against the DID the log recorded — a name
+   * that derives another DID is skipped, and said so in `skipped`.
    */
   static async load(opened: PeerVault): Promise<Keyring> {
     const ring = new Keyring(opened);
@@ -59,8 +60,7 @@ export class Keyring {
         await ring.derive(key.key, key.minted.routingDid, key.minted.did);
       }
     }
-    const mediation = ring.current();
-    if (mediation !== null) {
+    for (const mediation of opened.fold.device(opened.vault.self)?.mediations ?? []) {
       await ring.derive(mediation.me.key, null, mediation.me.did);
     }
     return ring;
@@ -99,18 +99,21 @@ export class Keyring {
 
   /**
    * The DID of ours the current mediation publishes as a profile
-   * (`did.published { as: "profile" }`, §5): minted under it, not retired,
-   * held here — the latest minted when there are several. Null when
-   * there is none: `mintPublic` is the next step.
+   * (`did.published { as: "profile" }`, §5): minted under it and its
+   * current routing DID — a later `mediation.granted` moves the route,
+   * and a DID whose service names the old one is no address — not
+   * retired, held here; the latest minted when there are several. Null
+   * when there is none, or the mediation is not granted: `mintPublic` is
+   * the next step, once it is.
    */
   pub(): MyIdentity | null {
     const mediation = this.current();
-    if (mediation === null) {
+    if (mediation === null || mediation.routingDid === null) {
       return null;
     }
     const profiles = this.opened.fold
       .myKeys()
-      .filter((key) => key.minted?.mediation === mediation.id && key.retired === null && key.published.some((entry) => entry.as === "profile"));
+      .filter((key) => under(key, mediation) && key.retired === null && key.published.some((entry) => entry.as === "profile"));
     for (const profile of profiles.reverse()) {
       const held = this.held(profile.key);
       if (held !== null) {
@@ -145,22 +148,23 @@ export class Keyring {
 
   /**
    * A DID for anyone: `did.published { as: "profile", uses: "many" }` on
-   * a key minted under `mediation` — a fresh one, or an orphan (minted
-   * under it, never published, retired or given to a contact: a mint
-   * that stopped before its publish), so the interrupted mint heals
-   * rather than piling up. Whether one is wanted is `pub()`, asked first.
+   * a key minted under `mediation` and its routing DID — a fresh one, or
+   * an orphan (minted under both, never published, retired or given to a
+   * contact: a mint that stopped before its publish), so the interrupted
+   * mint heals rather than piling up. Whether one is wanted is `pub()`,
+   * asked first.
    */
   async mintPublic(mediation: Routed): Promise<MyIdentity> {
-    const minted = this.orphan(mediation.id) ?? (await this.mint(mediation));
+    const minted = this.orphan(mediation) ?? (await this.mint(mediation));
     await record(this.opened.vault.events, this.opened.fold, drafts.didPublished({ key: minted.key, as: "profile", uses: "many" }));
     return minted;
   }
 
   // ---- inside ---------------------------------------------------------------
 
-  /** A held key minted under `mediationId` that nothing has happened to since: the first, or null. */
-  private orphan(mediationId: string): MyIdentity | null {
-    const idle = (key: MyKey): boolean => key.minted?.mediation === mediationId && key.published.length === 0 && key.retired === null && key.usedBy.length === 0 && key.takenBy.length === 0;
+  /** A held key minted under `mediation` and its routing DID that nothing has happened to since: the first, or null. */
+  private orphan(mediation: Routed): MyIdentity | null {
+    const idle = (key: MyKey): boolean => under(key, mediation) && key.published.length === 0 && key.retired === null && key.usedBy.length === 0 && key.takenBy.length === 0;
     for (const key of this.opened.fold.myKeys()) {
       const held = idle(key) ? this.held(key.key) : null;
       if (held !== null) {
@@ -195,4 +199,9 @@ export class Keyring {
     this.byName.set(name, identity);
     this.byDid.set(identity.did, name);
   }
+}
+
+/** Minted under this mediation *and* its routing DID: the service the DID carries is the route the mediation has now. */
+function under(key: MyKey, mediation: { id: string; routingDid: string | null }): boolean {
+  return key.minted !== null && key.minted.mediation === mediation.id && key.minted.routingDid === mediation.routingDid;
 }

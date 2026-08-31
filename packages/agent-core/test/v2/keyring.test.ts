@@ -161,6 +161,58 @@ describe("v2 keyring: the keys this device holds", () => {
     expect(v.fold.myKey(c.key)?.minted?.routingDid).toBe(ROUTING_2);
   });
 
+  it("a mediation re-granted moves the route: what was published under the old routing DID is no address, and no orphan to reuse", async () => {
+    const scene = await fresh();
+    const { v, ring } = scene;
+    const routed = await mediated(scene);
+    const stale = await ring.mintPublic(routed);
+    const idle = await v.keys.mintDid(v.fold, routed); // minted under the old route, never published
+    await record(v.vault.events, v.fold, drafts.mediationGranted({ id: routed.id, routingDid: ROUTING_2 }));
+    expect(ring.current()).toMatchObject({ id: routed.id, routingDid: ROUTING_2 });
+    expect(ring.pub()).toBeNull();
+    expect(ring.keyOfDid(stale.identity.did)).toBe(stale.key); // still held: inbound on it still opens
+
+    const again = await reopen(scene);
+    expect(again.ring.pub()).toBeNull();
+    const moved = { id: routed.id, routingDid: ROUTING_2 };
+    const pub = await again.ring.mintPublic(moved);
+    expect([stale.key, idle.key]).not.toContain(pub.key);
+    expect(again.v.fold.myKey(pub.key)?.minted).toMatchObject({ mediation: routed.id, routingDid: ROUTING_2 });
+    expect((await resolveDIDCommDoc(pub.identity.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: ROUTING_2 });
+    expect(again.ring.pub()).toEqual(pub);
+    // the stale one is still published and not retired: retiring it is the mediation ritual's (T09), not the ring's
+    expect(again.v.fold.myKey(stale.key)).toMatchObject({ retired: null, published: [expect.objectContaining({ as: "profile" })] });
+
+    // not granted at all: no address, whatever was published
+    await record(v.vault.events, v.fold, drafts.mediationRetired({ id: routed.id, because: "changed" }));
+    const { id } = await ring.createMediation(MEDIATOR);
+    expect(ring.current()).toMatchObject({ id, routingDid: null });
+    expect(ring.pub()).toBeNull();
+  });
+
+  it("holds the me of every mediation this device made, running and reopened alike: a retired mediation's mail still opens", async () => {
+    const scene = await fresh();
+    const { v, ring } = scene;
+    const first = await mediated(scene);
+    const oldMe = ring.me;
+    if (oldMe === null) {
+      throw new Error("no me");
+    }
+    await record(v.vault.events, v.fold, drafts.mediationRetired({ id: first.id, because: "changed" }));
+    const second = await mediated(scene, ROUTING_2);
+    expect(ring.me?.key).toBe(mediationKeyName(second.id));
+    expect(ring.keyOfDid(oldMe.identity.did)).toBe(oldMe.key);
+    expect(ring.identityOf(oldMe.key)).toBe(oldMe.identity);
+
+    const again = await reopen(scene);
+    expect(again.ring.me?.key).toBe(mediationKeyName(second.id));
+    expect(again.ring.keyOfDid(oldMe.identity.did)).toBe(oldMe.key);
+    expect(again.ring.identityOf(oldMe.key)).toEqual(oldMe.identity);
+    expect(secretIds(again.ring)).toEqual(secretIds(ring));
+    expect(secretIds(again.ring)).toContain(`${oldMe.identity.did}#key-2`);
+    expect(again.ring.skipped).toEqual([]);
+  });
+
   it("mintPublic heals a mint that stopped before its publish, and passes over a key a contact uses or a retired one", async () => {
     const scene = await fresh();
     const { v, ring } = scene;
