@@ -189,7 +189,7 @@ shows them once.
 { "eid": "0198…", "author": "k7q3ma", "at": "…", "type": "channel.firstSeen",
   "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" } }
 { "type": "message.in",  "blobs": ["<body>", "<att>"],
-  "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
+  "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "did": "did:peer:4…", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
 { "type": "message.out", "blobs": ["<body>"],
   "data": { "mid": "0198…", "wireId": "…", "msgType": "…", "thid": "…", "bytes": 1120, "body": "<body>", "attachments": [] } }
 { "type": "delivery.attempted", "data": { "mid": "0198…", "attempt": 1, "outcome": "failed", "error": "…" } }
@@ -216,7 +216,11 @@ shows them once.
   `thid`, `pthid`, `bytes` (the size of the plaintext), with `body`,
   the root of the blob holding the plaintext (§4), and `attachments`,
   the roots of every blob lifted out of it, saying which of them is
-  which; and `signedBy` when a signature rode inside the encryption.
+  which; on `message.in`, `did`, the DID the envelope's sender key was
+  resolved under (`encrypted_from_kid`'s), present exactly when
+  `peerKey` is — a key is known by its kid and a kid carries its DID;
+  anonymous, neither — and `signedBy` when a signature rode inside the
+  encryption.
   On the envelope, `blobs` (`event-store.md` §2.2) lists every root
   the line holds: exactly `body` plus `attachments`, stated twice
   because the collector reads only the envelope and never `data`. The
@@ -224,8 +228,12 @@ shows them once.
   collection (§8.3) reads it, never the body, so it works after the
   body is gone. Everything a thread view, a search index, or a
   collector needs is on the line; nothing a person said is.
-  `direction` is the event type and `sender` is the pair; neither is
-  a further field.
+  `direction` is the event type, not a field. Who sent it is the pair
+  — the key — and `did` is which DID that key wore at this message:
+  a key wears more than one over time (a rotation, a move to another
+  mediator), `peer.resolved` is written only on change, so the message
+  itself says which, and that is where a reply goes. The plaintext's
+  `from` is a claim the envelope did not prove and is not it.
 - `delivery.attempted`: one attempt on the wire and its `outcome`,
   `sent` or `failed` — an observation; the pair is the `to`, and the
   DID we sealed to is in the message's `msg.to`. `delivery.held`: this

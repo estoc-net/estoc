@@ -139,7 +139,7 @@ export async function buildScene(): Promise<Scene> {
   push(DEV_A, "channel.firstSeen", { ...ch1, peerPublicKey: bob.multibase, kind: "authcrypt", firstDid: "did:peer:4bob" });
   push(DEV_A, "peer.resolved", { ...ch1, did: "did:peer:4bob", keys: [bob.multibase], service: "did:peer:2bobroute" });
   const in1 = line.id();
-  push(DEV_A, "message.in", { ...ch1, mid: in1, wireId: "w-in1", msgType: "https://didcomm.org/basicmessage/2.0/message", bytes: 11, body: roots["in1"] as Cid, attachments: [roots["att1"] as Cid] }, [roots["in1"] as Cid, roots["att1"] as Cid]);
+  push(DEV_A, "message.in", { ...ch1, mid: in1, wireId: "w-in1", msgType: "https://didcomm.org/basicmessage/2.0/message", did: "did:peer:4bob", bytes: 11, body: roots["in1"] as Cid, attachments: [roots["att1"] as Cid] }, [roots["in1"] as Cid, roots["att1"] as Cid]);
   push(DEV_A, "profile.nameClaimed", { ...ch1, mid: in1, name: "Bob R." });
 
   const c1 = line.id();
@@ -162,7 +162,7 @@ export async function buildScene(): Promise<Scene> {
   push(DEV_A, "peer.resolved", { ...ch2, did: "did:peer:4bob2", keys: [bob2.multibase], service: "did:peer:2bobroute" });
   const in2 = line.id();
   push(DEV_A, "peer.rotated", { ...ch2, from: "did:peer:4bob", to: "did:peer:4bob2", fromPrior: "eyJhbGciOi…", mid: in2 });
-  push(DEV_A, "message.in", { ...ch2, mid: in2, wireId: "w-in2", msgType: "https://didcomm.org/basicmessage/2.0/message", bytes: 8, body: roots["in2"] as Cid, attachments: [] }, [roots["in2"] as Cid]);
+  push(DEV_A, "message.in", { ...ch2, mid: in2, wireId: "w-in2", msgType: "https://didcomm.org/basicmessage/2.0/message", did: "did:peer:4bob2", bytes: 8, body: roots["in2"] as Cid, attachments: [] }, [roots["in2"] as Cid]);
 
   const out2 = line.id();
   push(DEV_A, "message.out", { ...ch2, mid: out2, wireId: "w-out2", msgType: "https://didcomm.org/basicmessage/2.0/message", bytes: 9, body: roots["out2"] as Cid, attachments: [] }, [roots["out2"] as Cid]);

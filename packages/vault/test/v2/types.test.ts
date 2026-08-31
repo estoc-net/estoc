@@ -31,7 +31,7 @@ describe("v2 types: readVaultEvent", () => {
   it("reads a valid line of every type", () => {
     const samples: { [T in VaultType]: JsonObject } = {
       "channel.firstSeen": { ...pair, peerPublicKey: bob.multibase, kind: "authcrypt", firstDid: "did:peer:4bob" },
-      "message.in": { ...pair, mid: MID, wireId: "w1", msgType: "https://didcomm.org/basicmessage/2.0/message", thid: "t", pthid: "p", bytes: 5, body: root, attachments: [att], signedBy: "did:key:z6Mk" },
+      "message.in": { ...pair, mid: MID, wireId: "w1", msgType: "https://didcomm.org/basicmessage/2.0/message", thid: "t", pthid: "p", did: "did:peer:4bob", bytes: 5, body: root, attachments: [att], signedBy: "did:key:z6Mk" },
       "message.out": { ...pair, mid: MID, wireId: "w2", msgType: "m", bytes: 5, body: root, attachments: [] },
       "delivery.attempted": { ...pair, mid: MID, attempt: 1, outcome: "failed", error: "offline" },
       "delivery.held": { ...pair, mid: MID, because: "imported" },
@@ -82,6 +82,8 @@ describe("v2 types: readVaultEvent", () => {
       ["contact.merged", { cid: MID, from: MID }],
       ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: -1, body: root, attachments: [] }],
       ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: 1, body: "not-a-cid", attachments: [] }],
+      ["message.in", { myKey: "did/x", peerKey: null, mid: MID, wireId: "w", msgType: "m", did: "did:example:mallory", bytes: 1, body: root, attachments: [] }], // anonymous, yet a DID
+      ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: 1, body: root, attachments: [] }], // a key, yet no DID
       ["message.erased", { ...pair, mid: MID, drop: [root], because: "regret" }],
       ["delivery.attempted", { ...pair, mid: MID, attempt: 0, outcome: "sent" }],
       ["device.minted", { extra: 1 }],
