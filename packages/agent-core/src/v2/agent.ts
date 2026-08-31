@@ -19,7 +19,7 @@
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
-import type { Cid, EventStore } from "@estoc/event-store";
+import type { EventStore } from "@estoc/event-store";
 import type { FolderObject } from "@estoc/folder-object";
 import {
   deleteContact,
@@ -198,8 +198,8 @@ export class Agent {
   private receiving: Promise<unknown> = Promise.resolve();
   /** the mint lock, one chain for every composer this agent ever assembles (`OutboundOptions.choosing`) */
   private readonly choosing: { chain: Promise<unknown> } = { chain: Promise.resolve() };
-  /** packages of ours at the blob store, by root — placed once this run however many contacts get the share (see `placePackage`) */
-  private readonly packages = new Map<Cid, PlacedPackage>();
+  /** packages of ours at the blob store, by mediation and root — placed once this run however many contacts get the share (see `placePackage`) */
+  private readonly packages = new Map<string, Promise<PlacedPackage>>();
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
@@ -784,11 +784,14 @@ export class Agent {
    * link is up — the package road needs a mediator to place at.
    */
   private async placePackage(closure: Closure): Promise<PlacedPackage> {
+    // the link and the mediation read together: a placement is scoped to
+    // the store it goes to, and one from another mediation is never probed
     const link = this.link;
-    if (link === null) {
+    const mediation = this.fold.device(this.self)?.mediation ?? null;
+    if (link === null || mediation === null) {
       throw new Error("the mediator is not reachable yet: nowhere to place the package");
     }
-    return placePackage(link, this.packages, closure, this.fetchFn, this.packageTimeoutMs, (type, data) => this.noteWire(type, data), (line) => this.log(line));
+    return placePackage(link, this.packages, mediation.id, closure, this.fetchFn, this.packageTimeoutMs, (type, data) => this.noteWire(type, data), (line) => this.log(line));
   }
 
   /** One line on `wire` for the package road's own HTTP; a trace that cannot be written is logged, not thrown (as `MediatorLink`'s). */

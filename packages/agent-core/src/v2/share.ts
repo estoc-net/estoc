@@ -7,7 +7,7 @@
  * and the checks are `protocol/object-share.ts`, shared with v1.
  */
 
-import type { BlobStore, Cid } from "@estoc/event-store";
+import type { BlobStore } from "@estoc/event-store";
 import { blobHash, signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 
 import { BLOB_PUT, BLOB_PUT_RESULT, parsePutResult, type BlobPlacement } from "../protocol/blob-store.js";
@@ -25,7 +25,7 @@ import {
 } from "../protocol/object-share.js";
 import { encryptStream, freshKey } from "../protocol/streaming-aead.js";
 import type { PeerVault } from "./identity.js";
-import type { MediatorLink } from "./link.js";
+import { bounded, type MediatorLink } from "./link.js";
 import type { MessageRecord } from "./records.js";
 import type { TraceData } from "./trace.js";
 
@@ -104,44 +104,73 @@ export async function buildShare(
  * The closure as a package at our mediator (§8.1): CAR it, encrypt it
  * under a fresh key, `put` its name and size (blob-store/1.0, over the
  * standing link — a ritual, bounded as any), and upload the bytes where
- * the mediator says — unless it has them. A package placed earlier this
- * run for the same root is put again (the hold is renewed) and reused
- * when the store still has its bytes, so sharing one object with
- * several contacts is one upload. The upload waits on no shared queue
- * and is bounded by `timeoutMs` alone.
+ * the mediator says — unless it has them. The cache is keyed by
+ * mediation and root: a package placed earlier this run under the same
+ * mediation is put again (the hold is renewed) and reused when the
+ * store still has its bytes, and what the map holds is the placing
+ * itself, so two shares of one object meeting here — at once or in
+ * turn — are one upload; a placement under another mediation is
+ * another store's and is never probed, since the store keeps a put on
+ * its books, uploaded or not. A placing that failed does not poison
+ * the cache: the next share places afresh, over it.
  */
 export async function placePackage(
   link: MediatorLink,
-  packages: Map<Cid, PlacedPackage>,
+  packages: Map<string, Promise<PlacedPackage>>,
+  mediation: string,
   closure: Closure,
   fetchFn: typeof fetch,
   timeoutMs: number,
   note: WireNote,
   log: (line: string) => void
 ): Promise<PlacedPackage> {
-  const known = packages.get(closure.root);
-  if (known !== undefined) {
-    const renewed = await putBlob(link, known.hash, known.byteCount);
-    if (renewed.upload === null) {
-      known.retainUntil = renewed.retainUntil;
-      return known;
+  const at = `${mediation}\u0000${closure.root}`;
+  const pending = packages.get(at);
+  if (pending !== undefined) {
+    const known = await pending.catch(() => null);
+    if (known !== null) {
+      const renewed = await putBlob(link, known.hash, known.byteCount);
+      if (renewed.upload === null) {
+        known.retainUntil = renewed.retainUntil;
+        return known;
+      }
     }
   }
+  // check-to-set with no await between: a share arriving while this one
+  // is placing finds the placing, not a miss
+  const placing = placeFresh(link, closure, fetchFn, timeoutMs, note, log);
+  packages.set(at, placing);
+  return placing;
+}
+
+/** One fresh placement: encrypt, `put`, upload where the store says — unless it has the bytes. */
+async function placeFresh(
+  link: MediatorLink,
+  closure: Closure,
+  fetchFn: typeof fetch,
+  timeoutMs: number,
+  note: WireNote,
+  log: (line: string) => void
+): Promise<PlacedPackage> {
   const key = freshKey();
   const ciphertext = await encryptStream(key, packageCar(closure));
   const hash = await blobHash(ciphertext);
   const placed = await putBlob(link, hash, ciphertext.length);
   if (placed.upload !== null) {
-    const out = await note("wire.out", { via: "http", method: "PUT", endpoint: placed.upload.url, bytes: ciphertext.length, what: "package" });
+    // one deadline over the whole leg, the note before it included: a
+    // fetch that ignores its signal, or a trace store that never answers,
+    // must not hold the share past the budget (as `MediatorLink.exchange`)
+    const signal = AbortSignal.timeout(timeoutMs);
+    const url = placed.upload.url;
+    const out = await bounded(signal, () => note("wire.out", { via: "http", method: "PUT", endpoint: url, bytes: ciphertext.length, what: "package" }));
     const started = Date.now();
-    const response = await fetchFn(placed.upload.url, { method: "PUT", body: ciphertext, signal: AbortSignal.timeout(timeoutMs) });
+    const response = await bounded(signal, () => fetchFn(url, { method: "PUT", body: ciphertext, signal }));
     void note("wire.in", { via: "http", parent: out, status: response.status, ms: Date.now() - started });
     if (!response.ok) {
       throw new Error(`the blob store answered ${response.status} to the package upload`);
     }
   }
   const result = { hash, url: placed.url, byteCount: ciphertext.length, key, retainUntil: placed.retainUntil };
-  packages.set(closure.root, result);
   log(`package ${hash} (${ciphertext.length} bytes) placed at ${placed.url} until ${placed.retainUntil}`);
   return result;
 }
@@ -172,7 +201,9 @@ export async function putBlob(link: MediatorLink, hash: string, size: number): P
  * response announcing more is refused before a byte is read, the body
  * is read no further than that many bytes, and fewer or more is not
  * the package. Redirects are not followed — the URL names the bytes,
- * and where it points was checked as it stands (`packageOf`).
+ * and where it points was checked as it stands (`packageOf`). One
+ * deadline (`timeoutMs`) covers the transfer whole, headers to last
+ * byte, whatever the fetch does with its signal.
  */
 export async function fetchPackage(
   record: MessageRecord,
@@ -198,14 +229,18 @@ export async function fetchPackage(
         : `the share names a package this agent cannot use: ${before.packageProblem}`
     );
   }
-  const out = await note("wire.out", { via: "http", method: "GET", endpoint: pkg.url, what: "package", mid: record.mid });
+  // one deadline from here to the last byte: the note before the GET, the
+  // fetch — signal or no signal honoured — and the body read all race it,
+  // so a transfer really is bounded by `timeoutMs`, headers to last byte
+  const signal = AbortSignal.timeout(timeoutMs);
+  const out = await bounded(signal, () => note("wire.out", { via: "http", method: "GET", endpoint: pkg.url, what: "package", mid: record.mid }));
   const started = Date.now();
-  const response = await fetchFn(pkg.url, { redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
+  const response = await bounded(signal, () => fetchFn(pkg.url, { redirect: "error", signal }));
   void note("wire.in", { via: "http", parent: out, status: response.status, bytes: pkg.byteCount, ms: Date.now() - started });
   if (!response.ok) {
     throw new Error(`the package is not there: ${pkg.url} answered ${response.status}`);
   }
-  const ciphertext = await readExactly(response, pkg.byteCount);
+  const ciphertext = await bounded(signal, () => readExactly(response, pkg.byteCount));
   const blocks = await openPackage(pkg, ciphertext, before.root);
   const share = await verifyShare(msg, async (cid) => blocks.get(cid) ?? blobs.getBlock(cid));
   for (const [cid, bytes] of share.blocks) {

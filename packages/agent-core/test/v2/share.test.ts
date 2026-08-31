@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
-import { attachmentsOf, closureOf, OBJECT_SHARE, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
+import { MemoryBackend } from "@estoc/event-store";
+
+import { attachmentsOf, closureOf, closureSize, OBJECT_SHARE, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
 import type { MessageRecord, PlainMessage } from "../../src/v2/index.js";
-import type { FakeMediator } from "../fake-mediator.js";
-import { newMediator, newParty, recordsOf, withTimeout, type Party } from "./fixture.js";
+import { network, type FakeMediator } from "../fake-mediator.js";
+import { newMediator, newParty, recordsOf, until, withTimeout, type Party } from "./fixture.js";
 
 describe("v2 agent sharing objects", () => {
   const enc = (s: string) => new TextEncoder().encode(s);
@@ -182,5 +184,119 @@ describe("v2 agent sharing objects", () => {
     await expect(alice.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/at most 16/);
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  /** `maxShareBytes` set to the minimal closure's size: every share of `object` takes the package road. */
+  async function squeezedOver(mediator: FakeMediator, fills: [number, number], over: { fetch?: typeof fetch; webSocket?: typeof WebSocket; packageTimeoutMs?: number; backend?: MemoryBackend } = {}): Promise<{ alice: Party; bob: Party }> {
+    const { minimal } = await closureOf(files);
+    const alice = await newParty("Alice", fills[0], mediator, { maxShareBytes: closureSize(minimal), packageTimeoutMs: 200, ...over });
+    const bob = await newParty("Bob", fills[1], mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]), 8000, "both live");
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    return { alice, bob };
+  }
+
+  it("a package upload that never settles fails the share at the deadline, signal or no signal", async () => {
+    const mediator = await newMediator({ blobs: true });
+    // the store grants the upload; the line to it swallows the PUT whole, ignoring its signal
+    const deafPut: typeof fetch = (input, init) => (init?.method === "PUT" ? new Promise<Response>(() => undefined) : mediator.fetch(input, init));
+    const { alice, bob } = await squeezedOver(mediator, [1, 2], { fetch: deafPut });
+    await expect(alice.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/timeout|abort/i);
+    // the put was made, the bytes never arrived: the pending placement is the store's to expire
+    expect([...(mediator.blobs?.values() ?? [])].every((blob) => blob.bytes === null)).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("a trace store that never answers lets no upload out and fails the share at the deadline", async () => {
+    const decoder = new TextDecoder();
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (path.includes("/local/agent/trace/") && decoder.decode(data).includes('"what":"package"')) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+    }
+    const mediator = await newMediator({ blobs: true });
+    const { alice, bob } = await squeezedOver(mediator, [1, 2], { backend: new Parked() });
+    await expect(alice.agent.shareObject(bob.agent.did as string, object)).rejects.toThrow(/timeout|abort/i);
+    // the note before the PUT jammed: nothing went out, the put stayed pending
+    expect([...(mediator.blobs?.values() ?? [])].every((blob) => blob.bytes === null)).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("a package body that stalls after its headers fails the fetch at the deadline", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const { minimal } = await closureOf(files);
+    const alice = await newParty("Alice", 1, mediator, { maxShareBytes: closureSize(minimal) });
+    // the GET answers at once and then never yields a byte, signal ignored
+    const stalled: typeof fetch = async () => new Response(new ReadableStream<Uint8Array>({}), { status: 200 });
+    const bob = await newParty("Bob", 2, mediator, { packageFetch: stalled, packageTimeoutMs: 200 });
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]), 8000, "both live");
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    await eventually(async () => (await recordsOf(bob)).some((r) => r.msg?.type === OBJECT_SHARE), "bob's share");
+    const record = await shareRecordOf(bob);
+    await expect(bob.agent.fetchPackage(record)).rejects.toThrow(/timeout|abort/i);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("two shares of one object at once are one package: the placing single-flights", async () => {
+    const mediator = await newMediator({ blobs: true });
+    const { alice, bob } = await squeezedOver(mediator, [1, 2]);
+    const carol = await newParty("Carol", 3, mediator);
+    await carol.agent.start();
+    await withTimeout(carol.live, 8000, "carol live");
+    await alice.agent.addContact(carol.agent.did as string, "Carol");
+    const [toBob, toCarol] = await Promise.all([
+      alice.agent.shareObject(bob.agent.did as string, object),
+      alice.agent.shareObject(carol.agent.did as string, object),
+    ]);
+    expect(mediator.blobs?.size).toBe(1);
+    expect([...(mediator.blobs?.values() ?? [])][0]?.bytes).not.toBeNull();
+    const packageId = (msg: MessageRecord) => (msg.msg?.body as { package: { attachment_id: string } }).package.attachment_id;
+    expect(packageId(toCarol)).toBe(packageId(toBob));
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("a package placed under one mediation is not probed under the next: the cache is the store's", async () => {
+    const one = await newMediator({ blobs: true });
+    const two = await newMediator({ blobs: true, fill: 230, http: "http://mediator-two/", ws: "ws://mediator-two/ws" });
+    const net = network(one, two);
+    // `network` routes by exact endpoint; blob uploads live under the mediator's path
+    const routed: typeof fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const owner = [one, two].find((m) => url.startsWith(m.http));
+      return owner === undefined ? Promise.resolve(new Response("not found", { status: 404 })) : owner.fetch(input, init);
+    };
+    const { minimal } = await closureOf(files);
+    const alice = await newParty("Alice", 1, one, { maxShareBytes: closureSize(minimal), fetch: routed, webSocket: net.WebSocket });
+    const bob = await newParty("Bob", 2, one);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]), 8000, "both live");
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    await alice.agent.shareObject(bob.agent.did as string, object);
+    expect(one.blobs?.size).toBe(1);
+
+    await alice.agent.setMediator(two.did);
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live at two");
+    const carol = await newParty("Carol", 3, one);
+    await carol.agent.start();
+    await withTimeout(carol.live, 8000, "carol live");
+    await alice.agent.addContact(carol.agent.did as string, "Carol");
+    await alice.agent.shareObject(carol.agent.did as string, object);
+    // one placement at the new store, whole — no probe of the old mediation's hash left pending on its books
+    expect(two.blobs?.size).toBe(1);
+    expect([...(two.blobs?.values() ?? [])][0]?.bytes).not.toBeNull();
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
   });
 });

@@ -116,8 +116,7 @@ export interface Party {
   next(pred: (view: ChatMessage) => boolean): Promise<ChatMessage>;
 }
 
-export async function newVault(name: string, fill: number, mediatorDid: string | null) {
-  const backend = new MemoryBackend();
+export async function newVault(name: string, fill: number, mediatorDid: string | null, backend = new MemoryBackend()) {
   const clock = ticking();
   const { doc, seedKey } = await createSeedKeystore("", { seed: seedOf(fill) });
   const v = await createVault(backend, { label: name, keystore: doc, seedKey, clock });
@@ -134,6 +133,8 @@ export interface AttachOverrides {
   resolveDid?: (did: string) => Promise<DIDDoc | null>;
   deliveryTimeoutMs?: number;
   maxShareBytes?: number;
+  packageTimeoutMs?: number;
+  packageFetch?: typeof fetch;
 }
 
 export function attach(
@@ -178,6 +179,8 @@ export function attach(
     reconnectDelayMs: 10,
     ...(over.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: over.deliveryTimeoutMs }),
     ...(over.maxShareBytes === undefined ? {} : { maxShareBytes: over.maxShareBytes }),
+    ...(over.packageTimeoutMs === undefined ? {} : { packageTimeoutMs: over.packageTimeoutMs }),
+    ...(over.packageFetch === undefined ? {} : { packageFetch: over.packageFetch }),
     handlers,
     events: {
       onStatus(status) {
@@ -238,15 +241,23 @@ export interface PartyOptions {
   deliveryTimeoutMs?: number;
   /** the most block bytes one share may carry inline; defaults to the agent's 1 MiB */
   maxShareBytes?: number;
+  /** a budget of the test's own for package transfers */
+  packageTimeoutMs?: number;
+  /** the fetch that gets a shared package; defaults to the party's fetch */
+  packageFetch?: typeof fetch;
+  /** a backend of the test's own (a parked trace store); defaults to a fresh MemoryBackend */
+  backend?: MemoryBackend;
 }
 
 export async function newParty(name: string, fill: number, mediator: FakeMediator, options: PartyOptions = {}): Promise<Party> {
-  const { backend, v, seedKey, clock } = await newVault(name, fill, options.mediated === false ? null : mediator.did);
+  const { backend, v, seedKey, clock } = await newVault(name, fill, options.mediated === false ? null : mediator.did, options.backend);
   const transports = { fetch: options.fetch ?? mediator.fetch, WebSocket: options.webSocket ?? mediator.WebSocket };
   return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? [], {
     ...(options.resolveDid === undefined ? {} : { resolveDid: options.resolveDid }),
     ...(options.deliveryTimeoutMs === undefined ? {} : { deliveryTimeoutMs: options.deliveryTimeoutMs }),
     ...(options.maxShareBytes === undefined ? {} : { maxShareBytes: options.maxShareBytes }),
+    ...(options.packageTimeoutMs === undefined ? {} : { packageTimeoutMs: options.packageTimeoutMs }),
+    ...(options.packageFetch === undefined ? {} : { packageFetch: options.packageFetch }),
   });
 }
 
