@@ -50,7 +50,10 @@ pnpm build && pnpm typecheck && pnpm test
   its workspace siblings through their `dist/`, so after changing a
   library, rebuild it before checking what depends on it (or the
   dependant sees the old build).
-- `pnpm typecheck` — `tsc --noEmit` per library, `vue-tsc -b` for the app.
+- `pnpm typecheck` — `tsc -p tsconfig.test.json` per library (its `src/`
+  and `test/` both: vitest strips types without checking them, so a test
+  that reads a field that does not exist would otherwise pass in silence),
+  `vue-tsc -b` for the app.
 - `pnpm test` — every library's vitest suite. The app has no unit
   suite; its build and typecheck are its check, plus the browser e2e
   below.

@@ -107,7 +107,7 @@ describe("toDIDCommDIDDoc", () => {
       ],
     });
 
-    expect(didDoc.service[0].serviceEndpoint).toStrictEqual({
+    expect(didDoc.service[0]?.serviceEndpoint).toStrictEqual({
       uri: "https://example.com/endpoint",
       routingKeys: ["did:example:alice#key-2", "did:example:mediator#key-1"],
     });

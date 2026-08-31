@@ -80,8 +80,7 @@ describe("v2 identity: did:peer:4 over the folder", () => {
     const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
     const inspected = await inspectVault(backend);
     expect(inspected.vault.self).toBe(made.vault.self);
-    expect(inspected.keystore.keys.map((key) => key.name)).toEqual([KEY_ANCHOR]);
-    expect(inspected.keystore.seed).toEqual(doc.seed);
+    expect(inspected.keystore).toEqual(made.keys.keystore); // the document as create left it: sealed seed, the anchor cached
 
     await expect(inspectVault(new MemoryBackend())).rejects.toThrow(NotAVault);
 

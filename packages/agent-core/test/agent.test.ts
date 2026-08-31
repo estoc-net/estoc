@@ -1360,7 +1360,7 @@ describe("Agent sharing objects", () => {
     const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
     const share = await verifyShare(record.msg);
     expect(share.card).toEqual({ did: alice.vault.config.identity.anchor.did, root });
-    expect(share.card.did).toMatch(/^did:key:/);
+    expect(share.card?.did).toMatch(/^did:key:/);
     expect(share.object.meta.title).toBe("Sea day");
     expect(bob.log.some((l) => /post\/1.0 .* from .* \(signed by did:key:.*\): 3 files kept/.test(l))).toBe(true);
     alice.agent.destroy();
@@ -1579,8 +1579,8 @@ describe("Agent sharing objects", () => {
     await tight.agent.shareObject(bob.agent.did as string, object, { sign: true });
     await eventually(async () => (await bob.vault.messages.read()).some((r) => r.msg.type === OBJECT_SHARE), "bob's share");
     const record = (await bob.vault.messages.read()).find((r) => r.msg.type === OBJECT_SHARE) as MessageRecord;
-    const pkgOf = (msg: MessageRecord["msg"]) =>
-      (msg.attachments as { id: string; byte_count: number; data: { links: string[]; hash: string } }[])[4];
+    type Pkg = { id: string; media_type: string; byte_count: number; data: { links: string[]; hash: string } };
+    const pkgOf = (msg: MessageRecord["msg"]): Pkg => (msg.attachments as Pkg[])[4] as Pkg;
     const url = pkgOf(record.msg).data.links[0];
     const variant = (edit: (pkg: ReturnType<typeof pkgOf>) => void): MessageRecord => {
       const msg = structuredClone(record.msg);
@@ -1625,7 +1625,7 @@ describe("Agent sharing objects", () => {
     const long = variant((pkg) => { pkg.byte_count += 1; });
     await expect(bob.agent.fetchPackage(long)).rejects.toThrow(/should be \d+ bytes, the response/);
     // a package attachment that is not a CAR: named but unusable
-    const notCar = variant((pkg) => { (pkg as { media_type: string }).media_type = "application/zip"; });
+    const notCar = variant((pkg) => { pkg.media_type = "application/zip"; });
     expect((await verifyShare(notCar.msg)).packageProblem).toMatch(/application\/zip, not application\/vnd\.ipld\.car/);
     // one id, one attachment: a second under the same name is malformed, whatever it carries
     const twice = variant(() => undefined);

@@ -1,4 +1,6 @@
-import { BASIC_MESSAGE, PROFILE, type Agent, type MessageRecord } from "../src/index.js";
+import type { MessageRecord } from "@estoc/vault";
+
+import { BASIC_MESSAGE, PROFILE, type Agent } from "../src/index.js";
 
 /**
  * A chat projection of the log for the tests — the shape the app renders
