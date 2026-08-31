@@ -20,17 +20,24 @@ import { didOf } from "../protocol/didcomm.js";
 /**
  * What `unpack` says of the envelope it opened, the fields a channel is
  * read from: didcomm's `UnpackMetadata`, narrowed so that a test can
- * spell one out.
+ * spell one out. A field that is not there is absent or null: the
+ * binding hands back null for a key that did not take part, and both
+ * read the same here.
  */
 export interface Unpacked {
   encrypted: boolean;
   non_repudiation: boolean;
   /** authcrypt: the key that sealed it, as a kid */
-  encrypted_from_kid?: string;
+  encrypted_from_kid?: string | null;
   /** encrypted: the keys it was sealed to, as kids */
-  encrypted_to_kids?: string[];
+  encrypted_to_kids?: string[] | null;
   /** signed: the key that signed it, as a kid */
-  sign_from?: string;
+  sign_from?: string | null;
+}
+
+/** A kid the metadata names, or undefined for one it does not — however the binding spelled the absence. */
+function kidIn(value: string | null | undefined): string | undefined {
+  return value ?? undefined;
 }
 
 /** A key of ours by the DID it is under — the keyring's `keyOfDid`; null for a DID that is no one of ours. */
@@ -54,7 +61,7 @@ export interface Proved {
  * `anoncrypt`. Null: a plaintext proves no one and opens no channel.
  */
 export function envelopeKind(metadata: Unpacked): EnvelopeKind | null {
-  if (metadata.encrypted_from_kid !== undefined) {
+  if (kidIn(metadata.encrypted_from_kid) !== undefined) {
     return "authcrypt";
   }
   if (metadata.non_repudiation) {
@@ -111,15 +118,16 @@ export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfD
   if (kind === "anoncrypt") {
     return { pair: { myKey, peerKey: null }, kind };
   }
-  const kid = kind === "authcrypt" ? metadata.encrypted_from_kid : metadata.sign_from;
+  const kid = kidIn(kind === "authcrypt" ? metadata.encrypted_from_kid : metadata.sign_from);
   if (kid === undefined) {
     throw new Error(`${kind} by no kid`);
   }
   const peerPublicKey = publicKeyOfMethod(methodOf(senderDoc, kid));
   const proved: Proved = { pair: { myKey, peerKey: peerKeyOf(peerPublicKey) }, kind, peerPublicKey };
-  if (kind === "authcrypt" && metadata.non_repudiation && metadata.sign_from !== undefined) {
-    const own = didOf(metadata.sign_from) === didOf(kid);
-    proved.signedBy = publicKeyOfMethod(methodOf(own ? senderDoc : signerDoc, metadata.sign_from));
+  const signature = kidIn(metadata.sign_from);
+  if (kind === "authcrypt" && metadata.non_repudiation && signature !== undefined) {
+    const own = didOf(signature) === didOf(kid);
+    proved.signedBy = publicKeyOfMethod(methodOf(own ? senderDoc : signerDoc, signature));
   }
   return proved;
 }

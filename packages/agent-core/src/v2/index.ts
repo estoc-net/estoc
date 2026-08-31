@@ -4,8 +4,9 @@
  * until it replaces it. Opening and creating, the records a caller
  * reads, the trace of what this device saw, the channel an envelope
  * proves, the keys this device holds, the line to the mediator, the
- * rituals over it, the pickup of what it holds for us and the handlers
- * for what the mail says; the rest follows, one module at a time.
+ * rituals over it, the pickup of what it holds for us, the handlers
+ * for what the mail says and what one opened envelope becomes; the rest
+ * follows, one module at a time.
  */
 
 export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
@@ -30,8 +31,9 @@ export { current, establish, leave, register, registerPending, rotateStale, rout
 export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export { type HandlerContext, type InboundRecord, type ProtocolHandler, type SendOptions } from "./handler.js";
 export { basicmessageHandler } from "./handlers/basicmessage.js";
-export { objectShareHandler } from "./handlers/object-share.js";
 export { shareProfile, userProfileHandler } from "./handlers/user-profile.js";
+export { keepShare, objectShareHandler } from "./handlers/object-share.js";
+export { Inbound, type Handled, type InboundOptions } from "./inbound.js";
 export { GOAL_CONNECT, invitationMessage, invitationUrl, parseInvitation, type Invitation } from "./oob.js";
 export {
   contactRecord,

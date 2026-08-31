@@ -119,9 +119,15 @@ describe("inboundPair", () => {
     expect(() => inboundPair(metadata, bobDoc, keyOfDid, { ...web, id: "did:web:other.example" })).toThrow(/is not/);
   });
 
-  it("anoncrypt: our key, no peer key, nothing of theirs to hand back", async () => {
+  it("anoncrypt: our key, no peer key, nothing of theirs to hand back — however the binding spells the keys that took no part", async () => {
     const { aliceDoc, keyOfDid } = await scene();
     expect(inboundPair(anoncrypt(kid(aliceDoc, 2)), null, keyOfDid)).toEqual({ pair: { myKey: "did/alice", peerKey: null }, kind: "anoncrypt" });
+    // didcomm-node hands back null, not undefined, for a kid that is not there
+    const asBound: Unpacked = { encrypted: true, non_repudiation: false, encrypted_from_kid: null, encrypted_to_kids: [kid(aliceDoc, 2)], sign_from: null };
+    expect(envelopeKind(asBound)).toBe("anoncrypt");
+    expect(senderOf(asBound)).toBeNull();
+    expect(signerOf(asBound)).toBeNull();
+    expect(inboundPair(asBound, null, keyOfDid)).toEqual({ pair: { myKey: "did/alice", peerKey: null }, kind: "anoncrypt" });
   });
 
   it("signed: the signing key places it, inside anoncrypt with our key and bare with none", async () => {
