@@ -459,6 +459,7 @@ describe("v2 agent sharing objects", () => {
     for (const answer of [
       { type: "https://didcomm.org/basicmessage/2.0/message", body: {} },
       { type: PROBLEM_REPORT, body: { code: "e.p.me.res.storage", comment: "not about blobs" } },
+      { type: PROBLEM_REPORT, body: { code: "e.p.blob.internal", comment: "a code the spec does not define" } },
     ]) {
       const odd = new Map<string, Placing>();
       const oddLink = { roundTrip: async () => ({ id: "answer", ...answer }) } as unknown as MediatorLink;

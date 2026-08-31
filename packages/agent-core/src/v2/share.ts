@@ -225,13 +225,17 @@ async function attempt(
 }
 
 /**
- * The mediator refused the put: a problem-report coded `e.p.blob.*`
- * (docs/blob-store.md), the one answer that settles that no reservation
- * was made and these bytes will not be taken. A cut line, or any answer
- * short of that, is not this — there the result is unknown, and the
- * retry sends the same bytes.
+ * The mediator refused the put: a problem-report carrying one of the
+ * three refusal codes docs/blob-store.md defines, the answers that
+ * settle that no reservation was made and these bytes will not be
+ * taken. A cut line, an unknown code — `e.p.blob.` prefixed or not —
+ * or any other answer is not this: there the result is unknown, and
+ * the retry sends the same bytes.
  */
 export class BlobRefused extends Error {}
+
+/** The codes that settle a put as refused (docs/blob-store.md): exactly these, never the namespace. */
+const REFUSALS = new Set(["e.p.blob.too-large", "e.p.blob.quota", "e.p.blob.refused"]);
 
 /** blob-store/1.0 `put` to our mediator; a blob refusal is `BlobRefused`, any other unexpected answer a plain error — the result unknown. */
 export async function putBlob(link: MediatorLink, hash: string, size: number): Promise<BlobPlacement> {
@@ -240,7 +244,7 @@ export async function putBlob(link: MediatorLink, hash: string, size: number): P
   if (answer.type !== BLOB_PUT_RESULT) {
     const code = typeof body.code === "string" ? body.code : null;
     const comment = typeof body.comment === "string" ? `: ${body.comment}` : "";
-    if (answer.type === PROBLEM_REPORT && code !== null && code.startsWith("e.p.blob.")) {
+    if (answer.type === PROBLEM_REPORT && code !== null && REFUSALS.has(code)) {
       throw new BlobRefused(`the mediator will not keep the package (${code}${comment})`);
     }
     throw new Error(`the mediator answered ${answer.type} to the put${code === null ? "" : ` (${code}${comment})`}`);
