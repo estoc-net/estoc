@@ -26,6 +26,7 @@ import {
   record,
   recordAll,
   type AttachCause,
+  type ChannelKey,
   type Contact,
   type Delivery,
   type VaultDraft,
@@ -163,6 +164,12 @@ export class Agent {
   private _status: AgentStatus = { state: "idle" };
   /** per-key critical sections (see `locked`) */
   private readonly locks = new Map<string, Promise<unknown>>();
+  /** starts run one at a time, the newest the one that acts (see `start`) */
+  private startChain: Promise<void> = Promise.resolve();
+  /** moved by every start and by destroy: an older start's continuation stops at its next checkpoint */
+  private epoch = 0;
+  /** introductions run one at a time, across every contact (see `introduced`) */
+  private introducing: Promise<unknown> = Promise.resolve();
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
@@ -272,6 +279,11 @@ export class Agent {
    * and tries again by itself, at `reconnectDelayMs` doubling up to a
    * minute, until it comes up or the agent is destroyed: an app opened
    * with no network must not need reopening when the network returns.
+   *
+   * Starts are serialised: a second start while one runs queues behind
+   * it, and only the newest acts — the older one stops at its next
+   * checkpoint, as a start does after `destroy` — so two starts cannot
+   * each establish a mediation or leave a socket behind.
    */
   async start(): Promise<void> {
     if (this.startTimer !== null) {
@@ -283,9 +295,27 @@ export class Agent {
       this.pruneTimer = setInterval(() => void this.pruneTrace(), TRACE_PRUNE_MS);
       (this.pruneTimer as unknown as { unref?: () => void }).unref?.();
     }
+    const epoch = ++this.epoch;
+    const run = this.startChain.then(() => this.bringUp(epoch));
+    this.startChain = run.catch(() => undefined);
+    return run;
+  }
+
+  /** This start is not the one that counts any more: destroyed, or a newer start moved the epoch. */
+  private halted(epoch: number): boolean {
+    return this.destroyed || epoch !== this.epoch;
+  }
+
+  private async bringUp(epoch: number): Promise<void> {
+    if (this.halted(epoch)) {
+      return;
+    }
     try {
       this.setStatus({ state: "connecting", detail: "deriving keys" });
       const ring = await Keyring.load(this.vault);
+      if (this.halted(epoch)) {
+        return;
+      }
       this.ring = ring;
       for (const skip of ring.skipped) {
         this.log(`leaving ${skip.key} out of the ring: it derives ${didPlaceholder(skip.derived)}, the log says ${didPlaceholder(skip.did)}`);
@@ -301,10 +331,17 @@ export class Agent {
       if (mediatorDoc === null) {
         throw new Error("mediator DID does not resolve");
       }
-      const link = this.assemble(await this.traced(), mediation.mediatorDid, mediatorDoc);
+      const trace = await this.traced();
+      if (this.halted(epoch)) {
+        return;
+      }
+      const link = this.assemble(trace, mediation.mediatorDid, mediatorDoc);
 
       this.setStatus({ state: "connecting", detail: "requesting mediation" });
       await establish(link, ring, this.vault);
+      if (this.halted(epoch)) {
+        return;
+      }
       const rotated = await rotateStale(this.vault, ring);
       if (rotated.moved.length > 0) {
         this.log(`minted a fresh DID toward ${rotated.moved.length} contact(s); the old ones rode the old route`);
@@ -314,38 +351,53 @@ export class Agent {
         this.log(`registering ${pending.length} DID(s) with the mediator`);
         await register(link, this.vault, pending);
       }
+      if (this.halted(epoch)) {
+        return;
+      }
       if (rotated.moved.length > 0) {
         this.setStatus({ state: "connecting", detail: "telling contacts about the move" });
         await this.announceMove(rotated.moved);
       }
 
+      if (this.halted(epoch)) {
+        return;
+      }
       this.setStatus({ state: "connecting", detail: "picking up queued mail" });
       await (this.pickup as Pickup).drain();
+      if (this.halted(epoch)) {
+        return;
+      }
       if ((this.outbox as Outbox).waiting().length > 0) {
         this.setStatus({ state: "connecting", detail: "sending queued mail" });
         await this.drained();
       }
 
+      if (this.halted(epoch)) {
+        return;
+      }
       this.setStatus({ state: "connecting", detail: "opening live delivery" });
       this.startFailures = 0;
       this.openSocket(link);
     } catch (err) {
-      this.setStatus({ state: "error", detail: messageOf(err) });
-      if (!this.destroyed) {
-        const delay = Math.min(this.reconnectDelayMs * 2 ** this.startFailures, 60_000);
-        this.startFailures += 1;
-        this.startTimer = setTimeout(() => {
-          this.startTimer = null;
-          if (!this.destroyed) {
-            void this.start();
-          }
-        }, delay);
+      if (this.halted(epoch)) {
+        return;
       }
+      this.setStatus({ state: "error", detail: messageOf(err) });
+      const delay = Math.min(this.reconnectDelayMs * 2 ** this.startFailures, 60_000);
+      this.startFailures += 1;
+      this.startTimer = setTimeout(() => {
+        this.startTimer = null;
+        if (!this.destroyed) {
+          void this.start();
+        }
+      }, delay);
     }
   }
 
   /** The modules over one link, rebuilt at every start: the fold under them is the same. */
   private assemble(trace: AgentTrace, mediatorDid: string, mediatorDoc: DIDDoc): MediatorLink {
+    // a start over a standing assembly closes its socket first: one socket at a time
+    this.link?.closeSocket();
     const ring = this.ring as Keyring;
     const link = this.newLink(trace, ring, mediatorDid, mediatorDoc);
     this.link = link;
@@ -365,6 +417,9 @@ export class Agent {
     });
     this.pickup = new Pickup(link, (opened) => this.take(opened), {
       onLive: () => {
+        if (this.destroyed || this.link !== link) {
+          return;
+        }
         this.setStatus({ state: "live" });
         this.log("live delivery is on");
       },
@@ -405,6 +460,9 @@ export class Agent {
   }
 
   private openSocket(link: MediatorLink): void {
+    if (this.destroyed || this.link !== link) {
+      return;
+    }
     const pickup = this.pickup as Pickup;
     link.openSocket(
       (opened) => pickup.onFrame(opened),
@@ -523,6 +581,7 @@ export class Agent {
 
   destroy(): void {
     this.destroyed = true;
+    this.epoch += 1;
     if (this.startTimer !== null) {
       clearTimeout(this.startTimer);
       this.startTimer = null;
@@ -579,14 +638,22 @@ export class Agent {
     return found;
   }
 
-  /** Every handler's introduction, once per contact: `profile.shared` on the fold is the once. */
-  private async introduced(cid: string): Promise<void> {
+  /**
+   * Every handler's introduction, once per contact — `profile.shared` on
+   * the fold is the once. One introduction at a time, across every
+   * contact and not per contact: the representative a lock could key on
+   * can change under a merge while an introduction is in flight, and a
+   * lock keyed on it would split one contact across two locks and
+   * introduce twice (the same reasoning as `Outbound`'s mint lock).
+   * Introductions happen once per relationship, so the queue stays
+   * short; a later caller finds `profile.shared` on the fold and does
+   * nothing.
+   */
+  private introduced(cid: string): Promise<void> {
     if (this.contactRecordOf(cid).profileSharedAt !== null) {
-      return;
+      return Promise.resolve();
     }
-    const rep = this.contactRecordOf(cid).cid;
-    await this.locked(`introduce ${rep}`, async () => {
-      // re-read: a send that took its turn before us may have introduced us already
+    const run = this.introducing.then(async () => {
       const current = this.contactRecordOf(cid);
       if (current.profileSharedAt !== null) {
         return;
@@ -597,6 +664,8 @@ export class Agent {
         }
       }
     });
+    this.introducing = run.catch(() => undefined);
+    return run;
   }
 
   /** Try again to deliver one message of ours, held or failed — by hand, so a held one is tried too. */
@@ -691,16 +760,13 @@ export class Agent {
       if (have === null) {
         return this.adopt(invitation.from, name, "accepted", invitation.id);
       }
-      await record(this.eventLog, this.fold, drafts.contactPetname({ cid: have.cid, name }));
+      const batch: VaultDraft[] = [drafts.contactPetname({ cid: have.cid, name })];
       if (!have.attached.some((attach) => attach.because === "accepted")) {
-        const doc = await this.resolveDid(invitation.from);
-        if (doc !== null) {
-          const { pair } = outboundPair(null, doc);
-          await record(this.eventLog, this.fold, drafts.contactAttached({ ...pair, cid: have.cid, because: "accepted", oobId: invitation.id }));
-        }
+        const pair = await this.pairWearing(have, invitation.from);
+        batch.push(drafts.contactAttached({ ...pair, cid: have.cid, because: "accepted", oobId: invitation.id }));
       }
-      const named = this.contactRecordOf(have.cid);
-      this.events.onContact?.(named);
+      await recordAll(this.eventLog, this.fold, batch);
+      this.events.onContact?.(this.contactRecordOf(have.cid));
       return have.cid;
     });
     if (this.ring?.pub() !== null && this.ring !== null && this.contactRecordOf(cid).profileSharedAt === null) {
@@ -772,6 +838,31 @@ export class Agent {
     return this.fold.contacts().find((contact) => contact.theirDids.some((entry) => entry.did === did)) ?? null;
   }
 
+  /**
+   * The channel a DID of a contact's is on: the one it was resolved on,
+   * else one its identity graph names — the fold has both, so accepting
+   * an invitation for a known contact asks no resolver. A DID on none of
+   * their channels is resolved afresh, and a resolution that fails then
+   * is an error, not a silent shrug.
+   */
+  private async pairWearing(contact: Contact, did: string): Promise<ChannelKey> {
+    for (const pair of contact.channels) {
+      if (this.fold.channel(pair)?.resolved.some((entry) => entry.did === did) ?? false) {
+        return pair;
+      }
+    }
+    for (const pair of contact.channels) {
+      if (this.fold.channel(pair)?.dids.includes(did) ?? false) {
+        return pair;
+      }
+    }
+    const doc = await this.resolveDid(did);
+    if (doc === null) {
+      throw new Error(`${didPlaceholder(did)} does not resolve`);
+    }
+    return outboundPair(null, doc).pair;
+  }
+
   private contactRecordOf(cid: string): ContactRecord {
     const contact = this.fold.contact(cid);
     if (contact === null) {
@@ -787,7 +878,8 @@ export class Agent {
    * first, published as `oob`, registered with the mediator so their
    * answer has somewhere to land. A registration that fails throws — the
    * URL is not usable yet — but the invitation is on record, and the
-   * next start registers it (`registerPending`). `goal` is what the
+   * next start registers it (`registerPending`); with no link up at
+   * all, nothing is minted. `goal` is what the
    * invitation says it is for, in words for the person opening it.
    */
   async createInvitation(goal?: string): Promise<InvitationRecord> {
@@ -796,11 +888,12 @@ export class Agent {
     if (ring === null || routed === null) {
       throw new Error("no mediation granted yet: nothing to hand out");
     }
-    const minted = await ring.mintInvitation(routed, uuidv7(), goal ?? `Write to ${this.displayName()}`);
     const link = this.link;
-    if (link !== null) {
-      await register(link, this.vault, [minted.key]);
+    if (link === null) {
+      throw new Error("the mediator is not reachable yet: an invitation issued now would go unregistered");
     }
+    const minted = await ring.mintInvitation(routed, uuidv7(), goal ?? `Write to ${this.displayName()}`);
+    await register(link, this.vault, [minted.key]);
     this.log("issued an invitation; the first to write to it takes it");
     const issued = this.invitationOf(minted.key);
     this.events.onInvitation?.(issued);

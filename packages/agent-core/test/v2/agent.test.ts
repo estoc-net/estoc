@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { KEYSTORE_FILE } from "@estoc/event-store";
-import type { Contact } from "@estoc/vault/v2";
+import { drafts, record as recordEvent, type Contact } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, PROFILE } from "../../src/index.js";
-import { nameOf, type MessageRecord } from "../../src/v2/index.js";
+import { BASIC_MESSAGE, OOB_INVITATION, PLAIN_TYP, PROFILE } from "../../src/index.js";
+import { nameOf, openVault, type MessageRecord } from "../../src/v2/index.js";
+import type { FakeMediator, FakeSocket } from "../fake-mediator.js";
 import {
+  attach,
   contactByDid,
   history,
   keyWearing,
@@ -333,5 +335,162 @@ describe("v2 agent through a mediator", () => {
     again.agent.destroy();
     bob.agent.destroy();
     dan.agent.destroy();
+  });
+});
+
+/** A WebSocket that keeps every socket it opened, for counting and closing checks. */
+function watching(sockets: FakeSocket[], mediator: FakeMediator): typeof WebSocket {
+  return class extends mediator.WebSocket {
+    constructor(url: string) {
+      super(url);
+      sockets.push(this as unknown as FakeSocket);
+    }
+  } as typeof WebSocket;
+}
+
+describe("v2 agent hardened", () => {
+  it("runs one start at a time: mediation is asked for once, and a later start replaces the socket instead of leaking it", async () => {
+    const mediator = await newMediator();
+    const sockets: FakeSocket[] = [];
+    const alice = await newParty("Alice", 11, mediator, { webSocket: watching(sockets, mediator) });
+
+    await Promise.all([alice.agent.start(), alice.agent.start()]);
+    await withTimeout(alice.live);
+
+    expect(mediator.seenTypes.filter((t) => t.endsWith("mediate-request"))).toHaveLength(1);
+    expect(alice.v.fold.myKeys().filter((key) => key.published.some((p) => p.as === "profile"))).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+
+    // a later start brings the loop up again: the standing socket is closed, not orphaned
+    await alice.agent.start();
+    await withTimeout(until(() => sockets.length === 2 && alice.agent.status.state === "live"), 8000, "second start live");
+    expect(sockets[0]?.closed).toBe(true);
+    expect(sockets[1]?.closed).toBe(false);
+    expect(mediator.seenTypes.filter((t) => t.endsWith("mediate-request"))).toHaveLength(1);
+    alice.agent.destroy();
+    expect(sockets[1]?.closed).toBe(true);
+  });
+
+  it("a destroy in the middle of a start stops it: no socket opens for a dead agent", async () => {
+    const mediator = await newMediator();
+    const sockets: FakeSocket[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    const slow: typeof fetch = async (input, init) => {
+      if (first) {
+        first = false;
+        await held;
+      }
+      return mediator.fetch(input, init);
+    };
+    const carol = await newParty("Carol", 12, mediator, { fetch: slow, webSocket: watching(sockets, mediator) });
+
+    const starting = carol.agent.start();
+    await until(() => !first); // the start is inside its first round trip with the mediator
+    carol.agent.destroy();
+    release();
+    await starting; // resolves: the continuation stops at its next checkpoint
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sockets).toHaveLength(0);
+    expect(carol.statuses.every((status) => status.state !== "live")).toBe(true);
+  });
+
+  it("refuses to issue an invitation while the mediator cannot be reached", async () => {
+    const mediator = await newMediator();
+    const erin = await newParty("Erin", 13, mediator);
+    await erin.agent.start();
+    await withTimeout(erin.live);
+    erin.agent.destroy();
+
+    // reopened where the mediator's DID does not resolve: the ring stands, the link never comes up
+    const v = await openVault(erin.backend, erin.seedKey, { clock: erin.clock });
+    const blind = attach("Erin", erin.backend, v, erin.seedKey, erin.clock, mediator, [], {
+      resolveDid: async (did) => (did === mediator.did ? null : resolveDIDCommDoc(did)),
+    });
+    await blind.agent.start();
+    expect(blind.statuses.some((status) => status.state === "error" && status.detail === "mediator DID does not resolve")).toBe(true);
+
+    await expect(blind.agent.createInvitation()).rejects.toThrow(/not reachable yet/);
+    expect(blind.v.fold.invitations()).toEqual([]);
+    blind.agent.destroy();
+  });
+
+  it("accepts an invitation for a known contact from the fold alone, and answers it under its pthid", async () => {
+    const mediator = await newMediator();
+    const dead = new Set<string>();
+    const alice = await newParty("Alice", 14, mediator, {
+      resolveDid: async (did) => (dead.has(did) ? null : resolveDIDCommDoc(did)),
+    });
+    const bob = await newParty("Bob", 15, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    const before = contactByDid(alice, bob.agent.did as string) as Contact;
+
+    // the resolver goes dark for Bob's DID; the fold already knows the channel it is on
+    dead.add(bob.agent.did as string);
+    const accepted = await alice.agent.acceptInvitation(
+      { type: OOB_INVITATION, id: "oob-7", typ: PLAIN_TYP, from: bob.agent.did as string, body: { goal_code: "connect" } },
+      "Bobby"
+    );
+    expect(accepted.cid).toBe(before.cid);
+    const contact = contactByDid(alice, bob.agent.did as string) as Contact;
+    expect(contact.petname).toBe("Bobby");
+    const taken = contact.attached.find((attach) => attach.because === "accepted");
+    expect(taken?.oobId).toBe("oob-7");
+    expect(taken?.pair).toEqual(before.channels[0]);
+    // the introduction could not go out while the resolver was dark; the first message makes it
+    expect(alice.log.some((line) => line.startsWith("could not answer the invitation yet"))).toBe(true);
+
+    dead.delete(bob.agent.did as string);
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "hi bob");
+    const profile = (await recordsOf(alice)).find((r) => r.direction === "out" && r.msg?.type === PROFILE);
+    expect(profile?.skeleton.pthid).toBe("oob-7");
+    expect(profile?.msg?.from_prior).toBeUndefined();
+    await withTimeout(bob.next((v) => v.content === "hi bob"), 8000, "bob's chat");
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("introduces once when a merge lands in the middle of the introduction", async () => {
+    const mediator = await newMediator();
+    const stalls = new Map<string, Promise<void>>();
+    let resolutions = 0;
+    const alice = await newParty("Alice", 16, mediator, {
+      resolveDid: async (did) => {
+        resolutions += 1;
+        await stalls.get(did);
+        return resolveDIDCommDoc(did);
+      },
+    });
+    const bob = await newParty("Bob", 17, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    const elder = await alice.agent.addContact(bob.agent.did as string, "Bob");
+    // a second contact whose cid sorts first: the merge will hand it the representative's seat
+    const younger = "0198a000-0000-7000-8000-000000000021";
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.contactCreated({ cid: younger }));
+
+    // the first send stalls inside the introduction's compose; the merge lands while it waits
+    let release = (): void => undefined;
+    stalls.set(bob.agent.did as string, new Promise<void>((resolve) => (release = resolve)));
+    const before = resolutions;
+    const first = alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    await until(() => resolutions > before);
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.contactMerged({ cid: elder.cid, from: younger }));
+    expect(alice.v.fold.contact(elder.cid)?.cid).toBe(younger);
+    const second = alice.agent.sendBasicMessage(bob.agent.did as string, "two");
+    release();
+    stalls.delete(bob.agent.did as string);
+    await Promise.all([first, second]);
+
+    const profiles = (await recordsOf(alice)).filter((r) => r.direction === "out" && r.msg?.type === PROFILE);
+    expect(profiles).toHaveLength(1);
+    await withTimeout(bob.next((v) => v.content === "two"), 8000, "bob's second chat");
+    expect(bob.messages.filter((m) => m.view.kind === "profile" && m.view.direction === "received")).toHaveLength(1);
+    alice.agent.destroy();
+    bob.agent.destroy();
   });
 });

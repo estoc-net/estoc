@@ -1,7 +1,7 @@
 import { expect } from "vitest";
 import { FromPrior, Message } from "didcomm-node";
 
-import { resolveDIDCommDoc } from "@estoc/did-peer";
+import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
 import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey } from "@estoc/keystore";
 import type { Contact, Delivery } from "@estoc/vault/v2";
@@ -123,6 +123,11 @@ export async function newVault(name: string, fill: number, mediatorDid: string |
   return { backend, v, seedKey, clock };
 }
 
+/** What a test swaps out of a party's agent. */
+export interface AttachOverrides {
+  resolveDid?: (did: string) => Promise<DIDDoc | null>;
+}
+
 export function attach(
   name: string,
   backend: MemoryBackend,
@@ -130,7 +135,8 @@ export function attach(
   seedKey: SeedKey,
   clock: () => Date,
   mediator: Pick<FakeMediator, "fetch" | "WebSocket">,
-  handlers: ProtocolHandler[] = []
+  handlers: ProtocolHandler[] = [],
+  over: AttachOverrides = {}
 ): Party {
   const party = {
     name,
@@ -158,7 +164,7 @@ export function attach(
   party.agent = new Agent({
     vault: v,
     didcomm,
-    resolveDid: resolveDIDCommDoc,
+    resolveDid: over.resolveDid ?? resolveDIDCommDoc,
     fetch: mediator.fetch,
     WebSocket: mediator.WebSocket,
     reconnectDelayMs: 10,
@@ -214,12 +220,16 @@ export interface PartyOptions {
   handlers?: ProtocolHandler[];
   /** a fetch of the test's own (a flaky line); defaults to the mediator's */
   fetch?: typeof fetch;
+  /** a WebSocket of the test's own (counting sockets); defaults to the mediator's */
+  webSocket?: typeof WebSocket;
+  /** a resolver of the test's own (a DID gone dark); defaults to the package resolver */
+  resolveDid?: (did: string) => Promise<DIDDoc | null>;
 }
 
 export async function newParty(name: string, fill: number, mediator: FakeMediator, options: PartyOptions = {}): Promise<Party> {
   const { backend, v, seedKey, clock } = await newVault(name, fill, options.mediated === false ? null : mediator.did);
-  const transports = { fetch: options.fetch ?? mediator.fetch, WebSocket: mediator.WebSocket };
-  return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? []);
+  const transports = { fetch: options.fetch ?? mediator.fetch, WebSocket: options.webSocket ?? mediator.WebSocket };
+  return attach(name, backend, v, seedKey, clock, transports, options.handlers ?? [], options.resolveDid === undefined ? {} : { resolveDid: options.resolveDid });
 }
 
 /** The same vault, opened fresh from its bytes — a page reload. */
