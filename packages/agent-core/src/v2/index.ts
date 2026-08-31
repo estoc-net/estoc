@@ -3,8 +3,9 @@
  * (`@estoc/vault/v2`, docs/vault-events.md), built beside the v1 agent
  * until it replaces it. Opening and creating, the records a caller
  * reads, the trace of what this device saw, the channel an envelope
- * proves, the keys this device holds, the line to the mediator and the
- * rituals over it; the rest follows, one module at a time.
+ * proves, the keys this device holds, the line to the mediator, the
+ * rituals over it and the pickup of what it holds for us; the rest
+ * follows, one module at a time.
  */
 
 export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
@@ -26,6 +27,7 @@ export {
 export { Keyring, type MyIdentity, type Routed, type Skipped } from "./keyring.js";
 export { MediatorLink, ritual, sealData, type LinkOptions, type Opened, type Sealed } from "./link.js";
 export { current, establish, leave, register, registerPending, rotateStale, routedOf, type EstablishStep, type Established, type Left, type Rotated } from "./mediation.js";
+export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export {
   contactRecord,
   didPlaceholder,
