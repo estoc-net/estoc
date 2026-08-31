@@ -44,7 +44,6 @@ import {
   recordAll,
   recordMessage,
   type AttachCause,
-  type Attribution,
   type Channel,
   type ChannelKey,
   type InboundSkeleton,
@@ -60,7 +59,7 @@ import type { HandlerContext, InboundRecord, ProtocolHandler } from "./handler.j
 import { keepShare } from "./handlers/object-share.js";
 import type { PeerVault } from "./identity.js";
 import type { Opened } from "./link.js";
-import { contactRecord, didPlaceholder, messageRecord, type ContactRecord, type MessageRecord, type PlainMessage } from "./records.js";
+import { attributedTo, contactRecord, didPlaceholder, messageRecord, type ContactRecord, type MessageRecord, type PlainMessage } from "./records.js";
 
 export interface InboundOptions {
   /** the sender's document, and a signer's, which the channel is read from; null for a DID that does not resolve */
@@ -93,18 +92,6 @@ function messageOf(err: unknown): string {
 /** The dedup key: the wire id, from this key of theirs — an anonymous envelope's, from no one. */
 function seenKey(peerKey: string | null, wireId: string): string {
   return `${peerKey ?? ""}\n${wireId}`;
-}
-
-/** The cid an attribution names: one, or the first of several; null for none, and for deleted — the caller's to tell apart first. */
-function pick(attribution: Attribution): string | null {
-  switch (attribution.kind) {
-    case "one":
-      return attribution.cid;
-    case "several":
-      return attribution.cids[0] as string;
-    default:
-      return null;
-  }
 }
 
 /** The skeleton (§3.1) of a message that proved `proved`: `did` with a peer key, never without. */
@@ -263,7 +250,7 @@ export class Inbound {
     if (sender === null) {
       return null;
     }
-    const known = pick(this.fold.attribution(pair));
+    const known = attributedTo(this.fold.attribution(pair));
     if (known === null) {
       await this.adopt(pair, "invitation", invitation.oobId);
       this.log("someone took an invitation of ours; they have a thread now");
@@ -284,10 +271,13 @@ export class Inbound {
    * on the channel `iss` was last resolved on — the old pair (§3.1) —
    * else on this one, when `iss` was never seen: a stranger vouching
    * with a DID they used elsewhere. Once: a later message still carrying
-   * it, or this one redelivered, finds the two DIDs joined already.
-   * Returns the mid the message is recorded under — `minted`, or the one
-   * a rotation names that no message carries yet: an earlier attempt's,
-   * cut off before its record, whose evidence this record is.
+   * it, or this one redelivered, finds the rotation recorded already —
+   * the rotation, not the join: the same key under a moved DID joins the
+   * two by resolution alone, and only the rotation says which is the
+   * later one (§7.2). Returns the mid the message is recorded under —
+   * `minted`, or the one a rotation names that no message carries yet:
+   * an earlier attempt's, cut off before its record, whose evidence
+   * this record is.
    */
   private async noteRotation(opened: Opened, pair: ChannelKey, minted: string): Promise<string> {
     const { sender, fromPrior } = opened;
@@ -298,13 +288,18 @@ export class Inbound {
       this.log(`from_prior names ${didPlaceholder(fromPrior.sub)} but the envelope is from someone else; ignoring the rotation`);
       return minted;
     }
-    if (this.fold.channel(pair)?.dids.includes(fromPrior.iss) ?? false) {
+    if (this.rotated(fromPrior.iss, sender)) {
       return this.promisedMid(fromPrior.iss, sender, fromPrior.jwt) ?? minted;
     }
     const old = this.channelOf(fromPrior.iss)?.pair ?? pair;
     await record(this.events, this.fold, drafts.peerRotated({ ...old, from: fromPrior.iss, to: sender, fromPrior: fromPrior.jwt, mid: minted }));
     this.log(`${didPlaceholder(fromPrior.iss)} moved to ${didPlaceholder(sender)}, vouched for by the old DID`);
     return minted;
+  }
+
+  /** Whether some channel carries a `peer.rotated` from `from` to `to` already, by whatever JWT. */
+  private rotated(from: string, to: string): boolean {
+    return this.fold.channels().some((channel) => channel.rotated.some((rotation) => rotation.from === from && rotation.to === to));
   }
 
   /**
@@ -353,7 +348,7 @@ export class Inbound {
       this.log(`a ${type} from a contact since deleted; recorded, attributed to nobody`);
       return null;
     }
-    const known = pick(attribution);
+    const known = attributedTo(attribution);
     if (known !== null) {
       if (attribution.kind === "several") {
         this.log(`${attribution.cids.length} contacts claim one channel; shown under ${this.contactOf(known).name} until merged`);

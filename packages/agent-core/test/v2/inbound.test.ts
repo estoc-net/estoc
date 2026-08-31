@@ -51,9 +51,9 @@ interface Peer {
   doc: DIDDoc;
 }
 
-async function peer(fill: number): Promise<Peer> {
+async function peer(fill: number, service: string | null = null): Promise<Peer> {
   const { seedKey } = await createSeedKeystore("test", { seed: seedOf(fill) });
-  const identity = mintPeerDid(await deriveIdentity(seedKey, "did/peer"), null);
+  const identity = mintPeerDid(await deriveIdentity(seedKey, "did/peer"), service);
   return { ...identity, doc: (await resolveDIDCommDoc(identity.did)) as DIDDoc };
 }
 
@@ -644,6 +644,31 @@ describe("v2 inbound: rotation by from_prior", () => {
     await s.deliver(plain(BASIC_MESSAGE, bob2.did, s.me.identity.did, { content: "and again" }, { from_prior: jwt }), bob2);
     expect(types(await s.fresh())).toEqual(["message.in"]);
     expect(s.v.fold.contacts()).toHaveLength(1);
+  });
+
+  it("the same key under a moved DID: joined by resolution alone, the rotation still says which is current", async () => {
+    const s = await scene();
+    const bob = await peer(2);
+    const moved = await peer(2, "http://moved/");
+    expect(fingerprint(moved, 2)).toBe(fingerprint(bob, 2));
+    const known = await s.deliver(hello(bob, s.me.identity.did, "old address"), bob);
+    const cid = known.outcome === "recorded" ? (known.contact as ContactRecord).cid : "";
+    await s.fresh();
+    const jwt = await vouched(bob, moved);
+
+    const handled = await s.deliver(plain(BASIC_MESSAGE, moved.did, s.me.identity.did, { content: "new address" }, { from_prior: jwt }), moved);
+
+    const events = await s.fresh();
+    expect(types(events)).toEqual(["peer.resolved", "peer.rotated", "message.in"]);
+    expect(events[1]?.data).toMatchObject({ myKey: s.me.key, peerKey: fingerprint(bob, 2), from: bob.did, to: moved.did, fromPrior: jwt });
+    expect(handled.outcome === "recorded" && handled.contact?.cid).toBe(cid);
+    const contact = contactOf(s, cid);
+    expect(contact.currentDids).toEqual([moved.did]);
+    expect(contact.channels).toHaveLength(1);
+    expect(contact.writeTo).toEqual([{ myKey: s.me.key, peerKey: fingerprint(bob, 2) }]);
+
+    await s.deliver(plain(BASIC_MESSAGE, moved.did, s.me.identity.did, { content: "and again" }, { from_prior: jwt }), moved);
+    expect(types(await s.fresh())).toEqual(["message.in"]);
   });
 
   it("a stranger vouching with a DID never seen: recorded on their own channel, both DIDs theirs", async () => {

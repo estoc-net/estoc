@@ -182,17 +182,14 @@ export class MediatorLink {
    * Seal a message to `to` from a key of ours (`from`), or anonymously
    * (null): one layer, no forward — every layer an envelope has passes
    * through the caller's hands. What the envelope looks like is in
-   * `seal`, for `traceSeal` once the frame it rides is known.
+   * `seal`, for `traceSeal` once the frame it rides is known. A
+   * document among `documents` is what didcomm seals to, resolved
+   * again for no one: the caller read the address off it, and the key
+   * is read off the same.
    */
-  async seal(message: IMessage, to: string, from: string | null): Promise<Sealed> {
-    const [packed] = await new this.didcomm.Message(message).pack_encrypted(
-      to,
-      from,
-      null,
-      this.resolver,
-      secretsResolverFor(this.secrets()),
-      { forward: false }
-    );
+  async seal(message: IMessage, to: string, from: string | null, documents?: ReadonlyMap<string, DIDDoc>): Promise<Sealed> {
+    const resolver = documents === undefined ? this.resolver : { resolve: async (did: string): Promise<DIDDoc | null> => documents.get(did) ?? this.resolver.resolve(did) };
+    const [packed] = await new this.didcomm.Message(message).pack_encrypted(to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
     return { packed, seal: sealData(packed, message) };
   }
 
@@ -279,6 +276,25 @@ export class MediatorLink {
     const endpoint = this.http();
     const out = await this.traceOut("http", endpoint, packed, { type });
     await this.traceSeal(seal, out, message);
+    const { ok, status, text, reply } = await this.post(endpoint, packed, out);
+    if (!ok) {
+      throw new Error(`mediator answered ${status} to ${type}`);
+    }
+    const opened = await this.unpack(text, reply);
+    await this.noteOpen(opened);
+    this.noteRitual(opened);
+    return opened;
+  }
+
+  /**
+   * POST a frame already traced as `out` (`traceOut`) — to the mediator,
+   * or to wherever a contact's document says — and read what came back:
+   * the status, the text, and the `wire.in` line's eid, for what opens
+   * the text to hang on. Throws when the line is cut, before or during
+   * the answer, with `wire.error` written; a status that is no 2xx is
+   * the caller's to judge. `signal` bounds the wait.
+   */
+  async post(endpoint: string, packed: string, out: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; status: number; text: string; reply: string | undefined }> {
     const started = Date.now();
     let response: Response;
     let text: string;
@@ -287,6 +303,7 @@ export class MediatorLink {
         method: "POST",
         headers: { "Content-Type": ENCRYPTED_MIME },
         body: packed,
+        ...(signal === undefined ? {} : { signal }),
       });
       text = await response.text();
     } catch (err) {
@@ -294,13 +311,7 @@ export class MediatorLink {
       throw err;
     }
     const reply = await this.traceIn("http", text, { parent: out, status: response.status, ms: Date.now() - started });
-    if (!response.ok) {
-      throw new Error(`mediator answered ${response.status} to ${type}`);
-    }
-    const opened = await this.unpack(text, reply);
-    await this.noteOpen(opened);
-    this.noteRitual(opened);
-    return opened;
+    return { ok: response.ok, status: response.status, text, reply };
   }
 
   /**
