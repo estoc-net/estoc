@@ -4,12 +4,12 @@
  * finding what the last process wrote, a fragment healed on disk.
  */
 
-import { readdir, readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { DEVICE_MINTED, FolderVault, isSegmentName } from "../src/index.js";
+import { DEVICE_MINTED, FolderVault, NotAVault, isSegmentName, restoreFolder, snapshot } from "../src/index.js";
 import { FsBackend } from "../src/node.js";
 import { HELLO_CID } from "./suite/blob-suite.js";
 import { all } from "./suite/helpers.js";
@@ -91,6 +91,29 @@ describe("a vault on disk", () => {
     expect(await vault.blobs.collect([])).toEqual({ unlinked: [], young: [HELLO_CID] });
     offset = HOUR + 1000;
     expect(await vault.blobs.collect([])).toEqual({ unlinked: [HELLO_CID], young: [] });
+  });
+
+  it("restores beside a device's own local/ files, and refuses a self.json whether file or directory", async () => {
+    const source = new FsBackend(await tempDir());
+    const vault = await FolderVault.create(source, {});
+    await vault.events.append({ type: "t", data: {} });
+    const files = await snapshot(source);
+
+    const beside = await tempDir();
+    await mkdir(path.join(beside, ".estoc", "local", "daemon"), { recursive: true });
+    await writeFile(path.join(beside, ".estoc", "local", "daemon", "daemon.pid"), "4242");
+    expect(await restoreFolder(new FsBackend(beside), files)).toEqual({ files: 2 });
+    const restored = await FolderVault.open(new FsBackend(beside));
+    expect(restored.self).not.toBe(vault.self);
+    expect(await readFile(path.join(beside, ".estoc", "local", "daemon", "daemon.pid"), "utf8")).toBe("4242");
+
+    // a directory named self.json: size() cannot tell it from nothing, the listing can — refused before a byte is written
+    const dirNamed = await tempDir();
+    await mkdir(path.join(dirNamed, ".estoc", "local", "self.json"), { recursive: true });
+    await expect(restoreFolder(new FsBackend(dirNamed), files)).rejects.toThrow(NotAVault);
+    await expect(restoreFolder(new FsBackend(dirNamed), files)).rejects.toThrow(/self\.json/);
+    expect(await readdir(path.join(dirNamed, ".estoc"))).toEqual(["local"]);
+    expect(await readdir(path.join(dirNamed, ".estoc", "local"))).toEqual(["self.json"]);
   });
 
   it("heals a fragment on disk before the first append of the next process", async () => {

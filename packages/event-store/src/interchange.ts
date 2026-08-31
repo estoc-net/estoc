@@ -46,6 +46,7 @@ export const CONFIG_PATH = `${ESTOC_DIR}/${CONFIG_FILE}`;
 
 const ROOT = `${ESTOC_DIR}/`;
 const LOCAL = `${ROOT}${LOCAL_DIR}/`;
+const LOCAL_PATH = `${ROOT}${LOCAL_DIR}`;
 const SELF_PATH = `${LOCAL}${SELF_FILE}`;
 
 /** Whether `path` is in a snapshot (vault-folder.md §10.1): under `.estoc/` and not this copy's own. */
@@ -549,7 +550,8 @@ export async function restoreFolder(backend: VaultBackend, files: VaultFiles): P
   if (there.length > 0 || (await backend.size(ESTOC_DIR)) !== null) {
     throw new NotAVault(`${ESTOC_DIR} is not empty${there.length > 0 ? ` (${there[0]}${there.length > 1 ? ", …" : ""})` : ""}: a restore needs an empty backend`);
   }
-  if ((await backend.size(SELF_PATH)) !== null) {
+  // anything at that path, a directory of that name included: `size` is null for both absent and directory
+  if ((await backend.list(LOCAL_PATH)).includes(SELF_FILE) || (await backend.dirs(LOCAL_PATH)).includes(SELF_FILE)) {
     throw new NotAVault(`${SELF_PATH} is here: a restore opens as a fresh device, and a previous copy's local/ is not an empty backend`);
   }
   const config = files[CONFIG_PATH];
