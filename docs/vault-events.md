@@ -217,8 +217,10 @@ shows them once.
   the root of the blob holding the plaintext (§4), and `attachments`,
   the roots of every blob lifted out of it, saying which of them is
   which; on `message.in`, `did`, the DID the envelope's sender key was
-  resolved under (`encrypted_from_kid`'s), absent for an anonymous
-  envelope; and `signedBy` when a signature rode inside the encryption.
+  resolved under (`encrypted_from_kid`'s), present exactly when
+  `peerKey` is — a key is known by its kid and a kid carries its DID;
+  anonymous, neither — and `signedBy` when a signature rode inside the
+  encryption.
   On the envelope, `blobs` (`event-store.md` §2.2) lists every root
   the line holds: exactly `body` plus `attachments`, stated twice
   because the collector reads only the envelope and never `data`. The

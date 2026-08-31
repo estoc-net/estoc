@@ -12,7 +12,7 @@ import { linksOf } from "@estoc/event-store";
 
 import { drafts } from "./drafts.js";
 import { VaultFold, type Message } from "./fold.js";
-import type { ChannelFirstSeen, EraseCause, MessageIn, PeerResolved } from "./types.js";
+import type { ChannelFirstSeen, EraseCause, MessageIn, MessageOut, PeerResolved } from "./types.js";
 
 /** The vault's two stores as the procedures need them. */
 export interface VaultSide {
@@ -103,21 +103,30 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
 
 // ---- bodies (§4) -----------------------------------------------------------
 
+/** `Omit` branch by branch: the inbound skeleton's `peerKey`/`did` pairing survives it. */
+type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
+
+/** What `recordMessage` takes: the skeleton less what it fills in (`body`, `bytes`). */
+export type InboundSkeleton = DistributiveOmit<MessageIn, "body" | "bytes">;
+export type OutboundSkeleton = Omit<MessageOut, "body" | "bytes">;
+
 /**
  * A message, body first (§4): the plaintext into the blob store, then the
  * skeleton naming its root — never the other order. Attachment blobs are
  * the caller's to have put the same way, before this.
  */
+export function recordMessage(vault: VaultSide, fold: VaultFold, direction: "in", plaintext: Uint8Array, skeleton: InboundSkeleton): Promise<Event>;
+export function recordMessage(vault: VaultSide, fold: VaultFold, direction: "out", plaintext: Uint8Array, skeleton: OutboundSkeleton): Promise<Event>;
 export async function recordMessage(
   vault: VaultSide,
   fold: VaultFold,
   direction: "in" | "out",
   plaintext: Uint8Array,
-  skeleton: Omit<MessageIn, "body" | "bytes">
+  skeleton: InboundSkeleton | OutboundSkeleton
 ): Promise<Event> {
   const body = await vault.blobs.put(plaintext);
   const data = { ...skeleton, bytes: plaintext.length, body };
-  return record(vault.events, fold, direction === "in" ? drafts.messageIn(data) : drafts.messageOut(data));
+  return record(vault.events, fold, direction === "in" ? drafts.messageIn(data as MessageIn) : drafts.messageOut(data));
 }
 
 // ---- erasing (§8) ----------------------------------------------------------

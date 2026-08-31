@@ -114,6 +114,8 @@ export {
   sweepDeleted,
   type Absence,
   type Deleted,
+  type InboundSkeleton,
+  type OutboundSkeleton,
   type VaultSide,
 } from "./procedures.js";
 

@@ -82,6 +82,8 @@ describe("v2 types: readVaultEvent", () => {
       ["contact.merged", { cid: MID, from: MID }],
       ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: -1, body: root, attachments: [] }],
       ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: 1, body: "not-a-cid", attachments: [] }],
+      ["message.in", { myKey: "did/x", peerKey: null, mid: MID, wireId: "w", msgType: "m", did: "did:example:mallory", bytes: 1, body: root, attachments: [] }], // anonymous, yet a DID
+      ["message.in", { ...pair, mid: MID, wireId: "w", msgType: "m", bytes: 1, body: root, attachments: [] }], // a key, yet no DID
       ["message.erased", { ...pair, mid: MID, drop: [root], because: "regret" }],
       ["delivery.attempted", { ...pair, mid: MID, attempt: 0, outcome: "sent" }],
       ["device.minted", { extra: 1 }],

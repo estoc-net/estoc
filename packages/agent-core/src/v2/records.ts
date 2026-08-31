@@ -63,11 +63,20 @@ export async function messageRecord(fold: VaultFold, blobs: BlobStore, mid: stri
     at: message.at,
     direction: message.direction,
     pair: message.pair,
-    sender: message.direction === "in" ? ((message.skeleton as MessageIn).did ?? null) : null,
+    sender: senderOf(message),
     skeleton: message.skeleton,
     msg,
     body: msg === null && state === "present" ? "missing" : state,
   };
+}
+
+/** The skeleton's `did` (§3.1): with a peer key, the DID it wore; anonymous, none. */
+function senderOf(message: Message): string | null {
+  if (message.direction !== "in") {
+    return null;
+  }
+  const skeleton = message.skeleton as MessageIn;
+  return skeleton.peerKey === null ? null : skeleton.did;
 }
 
 async function plaintextOf(blobs: BlobStore, message: Message): Promise<PlainMessage | null> {

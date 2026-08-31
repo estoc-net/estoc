@@ -49,7 +49,7 @@ describe("v2 procedures: bodies and erasing", () => {
     const { vault, tick } = vaultAt(DEV_A);
     const fold = new VaultFold(DEV_A);
     const mid = new Line().id();
-    await recordMessage(vault, fold, "in", enc.encode("secret"), { ...pair, mid, wireId: "w", msgType: "m", attachments: [] });
+    await recordMessage(vault, fold, "in", enc.encode("secret"), { ...pair, mid, wireId: "w", msgType: "m", did: "did:example:bob", attachments: [] });
     const body = fold.message(mid)?.skeleton.body as string;
     expect(await readRoot(vault.blobs, fold, mid, body)).toEqual({ state: "present" });
 
@@ -75,7 +75,7 @@ describe("v2 procedures: bodies and erasing", () => {
     const fold = new VaultFold(DEV_A);
     const mid = new Line().id();
     const body = await other.blobs.put(enc.encode("never copied"));
-    await record(vault.events, fold, drafts.messageIn({ ...pair, mid, wireId: "w", msgType: "m", bytes: 12, body, attachments: [] }));
+    await record(vault.events, fold, drafts.messageIn({ ...pair, mid, wireId: "w", msgType: "m", did: "did:example:bob", bytes: 12, body, attachments: [] }));
     expect(await readRoot(vault.blobs, fold, mid, body)).toEqual({ state: "missing" });
   });
 
@@ -107,7 +107,7 @@ describe("v2 procedures: deleting a contact (§9)", () => {
     await record(vault.events, fold, drafts.didPublished({ key: "did/k1", as: "oob", uses: "one", oobId: "o1" }));
     await record(vault.events, fold, drafts.contactCreated({ cid }));
     await record(vault.events, fold, drafts.contactAttached({ ...pair, cid, because: "invitation", oobId: "o1" }));
-    await recordMessage(vault, fold, "in", enc.encode("hello"), { ...pair, mid: mid1, wireId: "w1", msgType: "m", attachments: [] });
+    await recordMessage(vault, fold, "in", enc.encode("hello"), { ...pair, mid: mid1, wireId: "w1", msgType: "m", did: "did:example:bob", attachments: [] });
     await recordMessage(vault, fold, "out", enc.encode("welcome"), { ...pair, mid: mid2, wireId: "w2", msgType: "m", attachments: [] });
     return { vault, tick, fold, cid, mid1, mid2 };
   }
@@ -207,7 +207,7 @@ describe("v2 procedures: merge (§10)", () => {
     const mid1 = line.id();
     const mid2 = line.id();
     const att = await alice.vault.blobs.put(enc.encode("a picture"));
-    await recordMessage(alice.vault, fold, "in", enc.encode("hello"), { ...pair, mid: mid1, wireId: "w1", msgType: "m", attachments: [att] });
+    await recordMessage(alice.vault, fold, "in", enc.encode("hello"), { ...pair, mid: mid1, wireId: "w1", msgType: "m", did: "did:example:bob", attachments: [att] });
     await recordMessage(alice.vault, fold, "out", enc.encode("welcome"), { ...pair, mid: mid2, wireId: "w2", msgType: "m", attachments: [] });
     await record(alice.vault.events, fold, drafts.deliveryAttempted({ ...pair, mid: mid2, attempt: 1, outcome: "failed", error: "offline" }));
     await eraseMessage(alice.vault.events, fold, mid1, "user", [att]);

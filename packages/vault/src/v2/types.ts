@@ -46,12 +46,23 @@ export type Skeleton = ChannelKey & {
   attachments: Cid[];
 };
 
-export type MessageIn = Skeleton & {
-  /** the DID the envelope's sender key was resolved under (`encrypted_from_kid`'s): which DID the key wore at this message; absent for an anonymous envelope */
-  did?: string;
-  /** a signature that rode inside the encryption */
-  signedBy?: string;
-};
+/**
+ * `did` is present exactly when `peerKey` is: a key is known by its kid,
+ * and a kid carries its DID; anonymous, neither. The reader holds the
+ * line to it; the union holds a writer's literal to it.
+ */
+export type MessageIn = Skeleton &
+  (
+    | {
+        peerKey: string;
+        /** the DID the envelope's sender key was resolved under (`encrypted_from_kid`'s): which DID the key wore at this message */
+        did: string;
+      }
+    | { peerKey: null }
+  ) & {
+    /** a signature that rode inside the encryption */
+    signedBy?: string;
+  };
 
 export type MessageOut = Skeleton;
 
@@ -443,7 +454,13 @@ const READERS: { [T in VaultType]: Reader<T> } = {
   },
   "message.in": (data) => {
     const c = new Check(data);
-    return { ...skeleton(c), ...optional({ did: c.optStr("did"), signedBy: c.optStr("signedBy") }) };
+    const base = skeleton(c);
+    const did = c.optStr("did");
+    if ((did === undefined) !== (base.peerKey === null)) {
+      throw "did is present exactly when peerKey is";
+    }
+    const signed = optional({ signedBy: c.optStr("signedBy") });
+    return base.peerKey === null ? { ...base, peerKey: null, ...signed } : { ...base, peerKey: base.peerKey, did: did as string, ...signed };
   },
   "message.out": (data) => skeleton(new Check(data)),
   "delivery.attempted": (data) => {
