@@ -464,6 +464,16 @@ accept events in any order, one at a time (`event-store.md` §4.4).
 They read every device's events. They are the only place the word
 "contact" means anything to a message.
 
+A message's **sender** is a fold too, of the pair's observations
+alone: for a `message.in`, the DID the peer key wore at it — the
+latest `peer.resolved` on the pair before the skeleton in canonical
+order, else the `firstDid` of the pair's `channel.firstSeen`, else none
+(anonymous). A resolution after the message is a rotation the message
+predates, and a later resolution of the same DID does not rewrite it.
+The plaintext's `from` is a claim the envelope did not prove and plays
+no part. A `message.out` has no sender; its addressee is in the
+plaintext.
+
 ### 7.1 Attribution — channel → `cid`
 
 Build the **identity graph**: nodes are channels and DIDs — leaving

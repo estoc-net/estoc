@@ -39,9 +39,10 @@ export interface MessageRecord {
   direction: "in" | "out";
   pair: ChannelKey;
   /**
-   * Inbound: the DID the peer key wore at the message — the pair's latest
-   * `peer.resolved` at or before it, else the DID it was first seen with,
-   * else null (anonymous). Outbound: null; the addressee is `msg.to[0]`.
+   * Inbound: the DID the peer key wore at the message, as the fold reads
+   * it (§7) — the latest `peer.resolved` on the pair before it, else the
+   * DID the key was first seen with, else null (anonymous). Outbound:
+   * null; the addressee is `msg.to[0]`.
    */
   sender: string | null;
   skeleton: MessageIn | MessageOut;
@@ -63,7 +64,7 @@ export async function messageRecord(fold: VaultFold, blobs: BlobStore, mid: stri
     at: message.at,
     direction: message.direction,
     pair: message.pair,
-    sender: senderOf(fold, message),
+    sender: message.sender,
     skeleton: message.skeleton,
     msg,
     body: msg === null && state === "present" ? "missing" : state,
@@ -88,30 +89,25 @@ async function plaintextOf(blobs: BlobStore, message: Message): Promise<PlainMes
   }
 }
 
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/** The shape `PlainMessage` promises: the required fields, and every optional one it names as the type it says, when present. */
 function isPlainMessage(value: unknown): value is PlainMessage {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isObject(value)) {
     return false;
   }
-  const msg = value as Record<string, unknown>;
-  return typeof msg["id"] === "string" && typeof msg["type"] === "string" && typeof msg["body"] === "object" && msg["body"] !== null && !Array.isArray(msg["body"]);
-}
-
-function senderOf(fold: VaultFold, message: Message): string | null {
-  if (message.direction === "out") {
-    return null;
-  }
-  const channel = fold.channel(message.pair);
-  if (channel === null) {
-    return null;
-  }
-  // the latest resolution at or before the message: a later one is a rotation the message predates
-  let latest: { did: string; at: string } | null = null;
-  for (const entry of channel.resolved) {
-    if (entry.at <= message.at && (latest === null || entry.at > latest.at || (entry.at === latest.at && entry.did > latest.did))) {
-      latest = entry;
-    }
-  }
-  return latest?.did ?? channel.firstSeen?.firstDid ?? null;
+  const present = (field: string): unknown => (Object.hasOwn(value, field) ? value[field] : undefined);
+  const optional = (field: string, ok: (v: unknown) => boolean): boolean => present(field) === undefined || ok(present(field));
+  return (
+    typeof value["id"] === "string" &&
+    typeof value["type"] === "string" &&
+    isObject(value["body"]) &&
+    ["typ", "from", "thid", "pthid", "from_prior"].every((field) => optional(field, (v) => typeof v === "string")) &&
+    ["created_time", "expires_time"].every((field) => optional(field, (v) => typeof v === "number")) &&
+    optional("to", isStrings) &&
+    optional("attachments", Array.isArray)
+  );
 }
 
 // ---- contacts --------------------------------------------------------------

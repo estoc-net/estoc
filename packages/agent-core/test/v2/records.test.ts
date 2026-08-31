@@ -74,6 +74,12 @@ describe("v2 records: messages", () => {
     const second = await messageRecord(v.fold, v.vault.blobs, uuid(2));
     expect(second?.sender).toBe(BOB2);
 
+    // both DIDs resolved again later, a service found: the messages keep the DIDs they were sent under
+    await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB1, keys: [bob.multibase], service: "did:peer:2.bobroute" }));
+    await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB2, keys: [bob.multibase], service: "did:peer:2.bobroute" }));
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(1)))?.sender).toBe(BOB1);
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(2)))?.sender).toBe(BOB2);
+
     const out = await messageRecord(v.fold, v.vault.blobs, uuid(3));
     expect(out?.direction).toBe("out");
     expect(out?.sender).toBeNull();
@@ -124,6 +130,19 @@ describe("v2 records: messages", () => {
     const unreadable = await messageRecord(v.fold, v.vault.blobs, uuid(3));
     expect(unreadable?.body).toBe("missing");
     expect(unreadable?.msg).toBeNull();
+
+    // JSON with the required fields but an optional one of the wrong type: not a `PlainMessage` either
+    const bent = await v.vault.blobs.put(enc.encode(JSON.stringify({ id: "w4", type: BASIC, body: {}, to: 17, attachments: {}, created_time: "yesterday" })));
+    await record(v.vault.events, v.fold, drafts.messageIn({ ...PAIR, mid: uuid(4), wireId: "w4", msgType: BASIC, bytes: 1, body: bent, attachments: [] }));
+    const wrong = await messageRecord(v.fold, v.vault.blobs, uuid(4));
+    expect(wrong?.body).toBe("missing");
+    expect(wrong?.msg).toBeNull();
+
+    // the optional fields as the type says: read
+    const full = { id: "w5", typ: "application/didcomm-plain+json", type: BASIC, from: BOB1, to: [ALICE], thid: "t", pthid: "p", created_time: 1, expires_time: 2, body: {}, attachments: [], from_prior: "jwt", extra: null };
+    const ok = await v.vault.blobs.put(enc.encode(JSON.stringify(full)));
+    await record(v.vault.events, v.fold, drafts.messageIn({ ...PAIR, mid: uuid(5), wireId: "w5", msgType: BASIC, bytes: 1, body: ok, attachments: [] }));
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(5)))?.msg).toEqual(full);
   });
 });
 

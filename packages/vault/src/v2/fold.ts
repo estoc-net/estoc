@@ -73,6 +73,13 @@ export interface Message {
   eid: string;
   at: string;
   author: string;
+  /**
+   * Inbound: the DID the peer key wore at this message — the latest
+   * `peer.resolved` on the pair before it in canonical order, else the
+   * DID the key was first seen with, else null (anonymous). Outbound:
+   * null; the addressee is in the plaintext.
+   */
+  sender: string | null;
   skeleton: MessageIn | MessageOut;
   /** the roots some `message.erased` for this mid dropped */
   erased: Cid[];
@@ -385,6 +392,7 @@ function project(set: EventSet, self: string): Projection {
       have.seenBy.push(event.author);
     }
   }
+  const resolutionsOf = new Map<string, VaultEvent<"peer.resolved">[]>();
   for (const event of set.of("peer.resolved")) {
     const have = channel(event.data);
     const entry = { did: event.data.did, keys: [...event.data.keys], service: event.data.service ?? null, at: event.at };
@@ -394,7 +402,14 @@ function project(set: EventSet, self: string): Projection {
     } else {
       have.resolved[at] = entry; // set.of is canonical order: the last one for a did is the latest
     }
+    const id = channelId(event.data);
+    resolutionsOf.set(id, [...(resolutionsOf.get(id) ?? []), event]); // every one, in canonical order: what a message's sender is read from
   }
+  /** the DID the pair's peer key wore at an inbound message: the latest resolution before it, else the first-seen DID */
+  const senderOf = (event: VaultEvent<"message.in">): string | null => {
+    const before = (resolutionsOf.get(channelId(event.data)) ?? []).filter((resolution) => compareEvents(resolution, event) < 0).at(-1);
+    return before?.data.did ?? channel(event.data).firstSeen?.firstDid ?? null;
+  };
 
   // ---- the identity graph (§7.1)
   const graph = new Components();
@@ -574,6 +589,7 @@ function project(set: EventSet, self: string): Projection {
       eid: event.eid,
       at: event.at,
       author: event.author,
+      sender: event.type === "message.in" ? senderOf(event) : null,
       skeleton: event.data,
       erased: [...(erasedOf.get(mid) ?? [])].sort(),
       delivery,
