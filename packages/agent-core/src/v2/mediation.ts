@@ -193,7 +193,7 @@ export interface Left {
   id: string;
   /** the keys retired: the public DID and every open invitation minted under the mediation */
   retired: string[];
-  /** the DIDs the mediator was asked to drop: every key it was told of */
+  /** the DIDs the mediator was asked to drop: every key it may have been told of */
   dropped: string[];
   /** why it could not be asked, when it could not; the leaving stands */
   failed: string | null;
@@ -204,7 +204,11 @@ export interface Left {
  * "mediation-changed" }` for the public DID and every open invitation
  * minted under it (their routes lead to a mediator that is no longer
  * ours), the mediator asked — best effort, in one breath — to drop
- * every DID it was told of, so mail to a stale DID fails at the sender
+ * every DID it may have been told of: every one this device minted
+ * under the arrangement, `did.registered` or not — that record lands
+ * only when an add's answer comes back, and an add whose answer was
+ * lost was applied all the same; removing what it never knew is a
+ * no_change — so mail to a stale DID fails at the sender
  * rather than queueing where nobody looks, then `mediation.retired {
  * because: "changed" }`. Keys toward contacts stay: `rotateStale`
  * replaces them once the next mediation is granted. Null when there is
@@ -227,7 +231,7 @@ export async function leave(link: MediatorLink, opened: PeerVault): Promise<Left
   }
   const dropped = fold
     .myKeys()
-    .filter((key): key is Minted => minted(key) && registeredBy(key, vault.self))
+    .filter((key): key is Minted => minted(key) && ownedBy(key, vault.self) && key.minted.mediation === mediation.id)
     .map((key) => key.minted.did);
   let failed: string | null = null;
   if (dropped.length > 0) {

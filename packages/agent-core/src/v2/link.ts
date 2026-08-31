@@ -40,6 +40,8 @@ export interface LinkOptions {
   mediatorDid: string;
   /** the mediator's document, resolved by the caller: where `http()` and `ws()` read the endpoints */
   mediatorDoc: DIDDoc;
+  /** how long a whole ritual round trip may take — pack, POST and unpack together — before giving up; default 15s (`Outbound.deliver` runs the same budget over a delivery) */
+  timeoutMs?: number;
   /** a line for the human log: a trace that could not be written is reported here, not thrown, and a socket frame that failed */
   log?: (line: string) => void;
 }
@@ -126,6 +128,39 @@ function openedWith(kids: readonly string[], secrets: readonly Secret[]): string
   return didOf(kids.find((kid) => held.has(kid)));
 }
 
+/**
+ * `work`, unless `signal` fires first. The deadline is the caller's,
+ * one for a whole ritual or delivery: a resolver or a seal that never
+ * settles must not hold the queue it runs on. Work that loses the race
+ * is abandoned — its late result is dropped, its late failure
+ * swallowed; the caller has already thrown, so nothing downstream of
+ * the loss (a POST after a pack) runs.
+ */
+export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason as Error);
+      return;
+    }
+    const running = work();
+    const onAbort = (): void => {
+      running.catch(() => undefined);
+      reject(signal.reason as Error);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    running.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    );
+  });
+}
+
 export class MediatorLink {
   private readonly didcomm: DidcommApi;
   private readonly resolver: { resolve: (did: string) => Promise<DIDDoc | null> };
@@ -135,6 +170,7 @@ export class MediatorLink {
   private readonly secrets: () => Secret[];
   private readonly me: () => PeerIdentity;
   private readonly mediatorDoc: DIDDoc;
+  private readonly timeoutMs: number;
   private readonly log: (line: string) => void;
   readonly mediatorDid: string;
   private socket: WebSocket | null = null;
@@ -152,6 +188,7 @@ export class MediatorLink {
     this.me = options.me;
     this.mediatorDid = options.mediatorDid;
     this.mediatorDoc = options.mediatorDoc;
+    this.timeoutMs = options.timeoutMs ?? 15_000;
     this.log = options.log ?? (() => undefined);
   }
 
@@ -267,21 +304,38 @@ export class MediatorLink {
   /**
    * `roundTrip` with the opened reply whole, for what needs its
    * observation as a parent. Throws when the line is cut, before or
-   * during the answer (`wire.error` written), or when the mediator
-   * answers anything but 2xx (the answer on `wire`, unopened).
+   * during the answer (`wire.error` written), when the mediator
+   * answers anything but 2xx (the answer on `wire`, unopened), or at
+   * the deadline — `timeoutMs` runs from entry and covers the whole
+   * ritual, pack and unpack with their resolutions included, not just
+   * the POST: the queue a ritual rides must not hang on a wire or a
+   * resolver that never answers, and no ritual needs an answer to stay
+   * safe (`leave` drops every DID that might have been told, answered
+   * or not). The cut is at the wire: before the POST every wait — the
+   * notes included — fails the ritual at the deadline, nothing having
+   * been sent; once the answer is in hand, only the noting of it can
+   * still lose the race, and it loses alone (`noted`) — the answer
+   * stands.
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
+    const signal = AbortSignal.timeout(this.timeoutMs);
     const message = plainMessage(type, this.me().did, this.mediatorDid, body);
-    const { packed, seal } = await this.pack(message);
+    const { packed, seal } = await bounded(signal, () => this.pack(message));
     const endpoint = this.http();
-    const out = await this.traceOut("http", endpoint, packed, { type });
-    await this.traceSeal(seal, out, message);
-    const { ok, status, text, reply } = await this.post(endpoint, packed, out);
+    const out = await bounded(signal, () => this.traceOut("http", endpoint, packed, { type }));
+    await bounded(signal, () => this.traceSeal(seal, out, message));
+    const { ok, status, text, ms } = await bounded(signal, () => this.post(endpoint, packed, out, signal));
+    // the note of the reply runs beside the unpack, not before it: a note
+    // that jams must not spend the budget the unpack still needs — and an
+    // answer is noted whatever its status, before a bad one throws
+    const noting = this.noted(signal, () => this.traceIn("http", text, { parent: out, status, ms }));
     if (!ok) {
+      await noting;
       throw new Error(`mediator answered ${status} to ${type}`);
     }
-    const opened = await this.unpack(text, reply);
-    await this.noteOpen(opened);
+    const opened = await bounded(signal, () => this.unpack(text));
+    opened.open.parent = await noting;
+    await this.noted(signal, () => this.noteOpen(opened));
     this.noteRitual(opened);
     return opened;
   }
@@ -289,12 +343,17 @@ export class MediatorLink {
   /**
    * POST a frame already traced as `out` (`traceOut`) — to the mediator,
    * or to wherever a contact's document says — and read what came back:
-   * the status, the text, and the `wire.in` line's eid, for what opens
-   * the text to hang on. Throws when the line is cut, before or during
-   * the answer, with `wire.error` written; a status that is no 2xx is
-   * the caller's to judge. `signal` bounds the wait.
+   * the status, the text, and how long the wire took. Throws when the
+   * line is cut, before or during the answer, with `wire.error`
+   * written; a status that is no 2xx is the caller's to judge. `signal`
+   * bounds the wait: an answer not in hand by the deadline is a
+   * failure — and the caller races the whole call too (`bounded`),
+   * since an injected fetch may ignore the signal. The reply's `wire.in` note is the caller's (`traceIn`),
+   * under its own semantics — once the answer is in hand, a note that
+   * hangs must lose alone, never retell a 2xx the far side applied as
+   * a failure, nor starve what the caller still does with the text.
    */
-  async post(endpoint: string, packed: string, out: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; status: number; text: string; reply: string | undefined }> {
+  async post(endpoint: string, packed: string, out: string | undefined, signal?: AbortSignal): Promise<{ ok: boolean; status: number; text: string; ms: number }> {
     const started = Date.now();
     let response: Response;
     let text: string;
@@ -310,8 +369,7 @@ export class MediatorLink {
       void this.note("wire", "wire.error", { via: "http", parent: out, ms: Date.now() - started, error: messageOf(err) });
       throw err;
     }
-    const reply = await this.traceIn("http", text, { parent: out, status: response.status, ms: Date.now() - started });
-    return { ok: response.ok, status: response.status, text, reply };
+    return { ok: response.ok, status: response.status, text, ms: Date.now() - started };
   }
 
   /**
@@ -431,6 +489,26 @@ export class MediatorLink {
       return await this.trace.append(stream, type, data);
     } catch (err) {
       this.log(`trace not written: ${messageOf(err)}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * A trace wait that is observability only: what it would note is
+   * already in hand, so losing the race loses the line alone — the
+   * waiting stops at the deadline, the loss is logged, and what was
+   * won stands. The notes before a POST ride `bounded` directly
+   * instead: no side effect has happened yet, and the deadline fails
+   * the whole exchange.
+   */
+  private async noted(signal: AbortSignal | undefined, work: () => Promise<string | undefined>): Promise<string | undefined> {
+    if (signal === undefined) {
+      return work();
+    }
+    try {
+      return await bounded(signal, work);
+    } catch {
+      this.log("trace not written: the deadline passed while noting");
       return undefined;
     }
   }

@@ -29,7 +29,7 @@ import { outboundPair, resolvedOf } from "./channel.js";
 import type { SendOptions } from "./handler.js";
 import type { PeerVault } from "./identity.js";
 import type { Keyring, MyIdentity, Routed } from "./keyring.js";
-import type { MediatorLink } from "./link.js";
+import { bounded, type MediatorLink } from "./link.js";
 import { current, register, routedOf } from "./mediation.js";
 import { attributedTo, didPlaceholder, messageRecord, nameOf, type MessageRecord } from "./records.js";
 import type { TraceData } from "./trace.js";
@@ -39,11 +39,18 @@ export interface OutboundOptions {
   didcomm: DidcommApi;
   /** the DID we write to, and the mediator its service names: resolved before every compose and every delivery */
   resolveDid: (did: string) => Promise<DIDDoc | null>;
-  /** how long one delivery may take on the wire (default 15 s) */
+  /** how long one delivery may take, resolutions and seals included (default 15 s) */
   deliveryTimeoutMs?: number;
   /** the clock a mid is minted by, and a from_prior dated by */
   clock?: () => Date;
   log?: (line: string) => void;
+  /**
+   * The mint-lock's chain (see `fromKey`), handed in by a caller that
+   * rebuilds composers across restarts: the lock is the identity's, not
+   * one composer's, and two composers over one vault must share it.
+   * Left out, the composer keeps one of its own.
+   */
+  choosing?: { chain: Promise<unknown> };
 }
 
 /** A message composed and not yet recorded: the plaintext, the channel it will go out on, the DID it is addressed to. */
@@ -85,8 +92,8 @@ export class Outbound {
   private readonly timeoutMs: number;
   private readonly clock: () => Date;
   private readonly log: (line: string) => void;
-  /** the `fromKey` in progress: one choice at a time, so two first messages at once mint one key, not two */
-  private choosing: Promise<unknown> = Promise.resolve();
+  /** the `fromKey` in progress (`OutboundOptions.choosing`): one choice at a time, so two first messages at once mint one key, not two */
+  private readonly choosing: { chain: Promise<unknown> };
 
   constructor(
     private readonly opened: PeerVault,
@@ -101,6 +108,7 @@ export class Outbound {
     this.timeoutMs = options.deliveryTimeoutMs ?? 15_000;
     this.clock = options.clock ?? (() => new Date());
     this.log = options.log ?? (() => undefined);
+    this.choosing = options.choosing ?? { chain: Promise.resolve() };
   }
 
   private get fold(): VaultFold {
@@ -203,11 +211,20 @@ export class Outbound {
    * one.
    */
   async deliver(plain: IMessage, to: string, mid: string): Promise<void> {
+    // one budget from entry: the resolutions and seals before the POST ride
+    // the same delivery queue, and must not hold it past the deadline either
+    const signal = AbortSignal.timeout(this.timeoutMs);
     const from = plain.from;
     if (typeof from !== "string") {
       throw new Error("the plaintext names no DID of ours to seal from");
     }
-    const doc = await this.resolveDid(to);
+    // the key it is sealed from must be held: derived now when its mint
+    // landed after this ring loaded (composed under an earlier assembly)
+    const name = this.fold.myKeys().find((key) => key.minted?.did === from)?.key;
+    if (name !== undefined) {
+      await this.keyring.holdMinted(name);
+    }
+    const doc = await bounded(signal, () => this.resolveDid(to));
     if (doc === null) {
       throw new Error(`${didPlaceholder(to)} does not resolve`);
     }
@@ -217,11 +234,11 @@ export class Outbound {
     }
     const documents = new Map<string, DIDDoc>([[to, doc]]);
     const addressed = plain.to?.includes(to) ? plain : ({ ...plain, to: [to] } as IMessage);
-    const inner = await this.link.seal(addressed, to, from, documents);
+    const inner = await bounded(signal, () => this.link.seal(addressed, to, from, documents));
     let endpoint: string;
     let outer: { packed: string; seal: TraceData; forward: IMessage } | null = null;
     if (service.startsWith("did:")) {
-      const routingDoc = await this.resolveDid(service);
+      const routingDoc = await bounded(signal, () => this.resolveDid(service));
       const http = routingDoc === null ? null : endpointOf(routingDoc, "http");
       if (routingDoc === null || http === null) {
         throw new Error(`${didPlaceholder(to)}'s mediator has no HTTP endpoint`);
@@ -231,7 +248,7 @@ export class Outbound {
         ...plainMessage(FORWARD, null, service, { next: to }),
         attachments: [{ id: crypto.randomUUID(), media_type: ENCRYPTED_MIME, data: { json: JSON.parse(inner.packed) as unknown } }],
       } as IMessage;
-      const sealed = await this.link.seal(forward, service, null, documents);
+      const sealed = await bounded(signal, () => this.link.seal(forward, service, null, documents));
       outer = { packed: sealed.packed, seal: sealed.seal, forward };
       endpoint = http;
     } else if (service.startsWith("http")) {
@@ -241,10 +258,17 @@ export class Outbound {
     }
     const packed = outer === null ? inner.packed : outer.packed;
     // the frame first, then the envelopes inside it, outermost first
-    const out = await this.link.traceOut("http", endpoint, packed, { type: plain.type });
-    const wrap = outer === null ? out : await this.link.traceSeal(outer.seal, out, outer.forward);
-    await this.link.traceSeal({ ...inner.seal, mid }, wrap);
-    const { ok, status } = await this.link.post(endpoint, packed, out, AbortSignal.timeout(this.timeoutMs));
+    const out = await bounded(signal, () => this.link.traceOut("http", endpoint, packed, { type: plain.type }));
+    const wrap = outer === null ? out : await bounded(signal, () => this.link.traceSeal(outer.seal, out, outer.forward));
+    await bounded(signal, () => this.link.traceSeal({ ...inner.seal, mid }, wrap));
+    const { ok, status, text, ms } = await bounded(signal, () => this.link.post(endpoint, packed, out, signal));
+    // the reply's note loses alone: the answer is in hand, and a 2xx the far
+    // side applied must not be retold as a failure because a local trace hung
+    try {
+      await bounded(signal, () => this.link.traceIn("http", text, { parent: out, status, ms }));
+    } catch {
+      this.log("trace not written: the deadline passed while noting the reply");
+    }
     if (!ok) {
       throw new Error(`endpoint answered ${status}`);
     }
@@ -279,8 +303,10 @@ export class Outbound {
    * the invitation they took (§7.4) — else one minted now
    * (`Keyring.mintToward`: `did.minted` + `contact.useKey`). A key on
    * another route, or under another device's mediation, is no address
-   * of this device's (§3.2) and is passed over; one the ring does not
-   * hold is not ours to write from. One choice at a time, across every
+   * of this device's (§3.2) and is passed over; one the ring has not
+   * derived yet is derived and held now (`holdMinted` — a mint that
+   * landed after this ring loaded, under an earlier assembly); one the
+   * seed does not derive is not ours to write from. One choice at a time, across every
    * contact — not per contact: the representative a cid resolves to can
    * change under a merge while a compose waits, and a lock keyed on it
    * can split one contact across two chains. Choosing is fold reads and
@@ -289,8 +315,8 @@ export class Outbound {
    * minting its own, whenever the two turn out to be one contact.
    */
   private fromKey(cid: string, routed: Routed): Promise<MyIdentity> {
-    const run = this.choosing.then(() => this.chooseKey(cid, routed));
-    this.choosing = run.catch(() => undefined);
+    const run = this.choosing.chain.then(() => this.chooseKey(cid, routed));
+    this.choosing.chain = run.catch(() => undefined);
     return run;
   }
 
@@ -300,9 +326,9 @@ export class Outbound {
       if (!underCurrent(this.fold.myKey(use.key), routed)) {
         continue;
       }
-      const identity = this.keyring.identityOf(use.key);
-      if (identity !== null) {
-        return { key: use.key, identity };
+      const held = await this.keyring.holdMinted(use.key);
+      if (held !== null) {
+        return held;
       }
     }
     // `contact.cid`, not `cid`: under a merge that landed while we waited, the representative of record

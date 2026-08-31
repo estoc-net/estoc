@@ -261,7 +261,7 @@ describe("v2 mediation: the rituals with the mediator", () => {
     expect(registerPending(v.fold, self)).toEqual([]);
   });
 
-  it("leaves: the public DID and open invitations retired, the mediator asked to drop every DID it knew, the mediation retired; nothing to leave twice", async () => {
+  it("leaves: the public DID and open invitations retired, the mediator asked to drop every DID it may have known — an unregistered mint included, its add's answer may just have been lost — the mediation retired; nothing to leave twice", async () => {
     const alice = await party(await newMediator(), 8);
     const { v, ring, link, self, mediator } = alice;
     await ring.createMediation(mediator.did);
@@ -274,7 +274,7 @@ describe("v2 mediation: the rituals with the mediator", () => {
     expect(mediator.recipients.size).toBe(3);
 
     const left = await leave(link, v);
-    expect(left).toEqual({ id: routed.id, retired: [pub.key, told.key, untold.key], dropped: [pub.identity.did, toward.identity.did, told.identity.did], failed: null });
+    expect(left).toEqual({ id: routed.id, retired: [pub.key, told.key, untold.key], dropped: [pub.identity.did, toward.identity.did, told.identity.did, untold.identity.did], failed: null });
     expect(mediator.recipients.size).toBe(0);
     for (const key of [pub.key, told.key, untold.key]) {
       expect(v.fold.myKey(key)?.retired).toMatchObject({ because: "mediation-changed" });

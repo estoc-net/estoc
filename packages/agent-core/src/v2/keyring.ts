@@ -55,15 +55,31 @@ export class Keyring {
    */
   static async load(opened: PeerVault): Promise<Keyring> {
     const ring = new Keyring(opened);
-    for (const key of opened.fold.myKeys()) {
-      if (key.minted !== null) {
-        await ring.derive(key.key, key.minted.routingDid, key.minted.did);
+    await ring.reload();
+    return ring;
+  }
+
+  /**
+   * Bring the ring back up to the fold: derive whatever it does not
+   * hold yet, and take the skip list fresh. A restart reloads the one
+   * ring rather than building another — a mint lands in the ring its
+   * composer holds, so the current ring and every composer's must be
+   * the same object for inbound to open mail to a key minted while the
+   * reload ran. Deriving is by name and lands the same material every
+   * time: rerunning over a concurrent mint is harmless.
+   */
+  async reload(): Promise<void> {
+    this.left.length = 0;
+    for (const key of this.opened.fold.myKeys()) {
+      if (key.minted !== null && this.byName.get(key.key)?.did !== key.minted.did) {
+        await this.derive(key.key, key.minted.routingDid, key.minted.did);
       }
     }
-    for (const mediation of opened.fold.device(opened.vault.self)?.mediations ?? []) {
-      await ring.derive(mediation.me.key, null, mediation.me.did);
+    for (const mediation of this.opened.fold.device(this.opened.vault.self)?.mediations ?? []) {
+      if (this.byName.get(mediation.me.key)?.did !== mediation.me.did) {
+        await this.derive(mediation.me.key, null, mediation.me.did);
+      }
     }
-    return ring;
   }
 
   /** The recorded keys this seed does not derive as recorded. */
@@ -79,6 +95,27 @@ export class Keyring {
   /** What a name derives; null for a name not held (never minted, or skipped). */
   identityOf(name: string): PeerIdentity | null {
     return this.byName.get(name) ?? null;
+  }
+
+  /**
+   * Hold a key the fold shows minted that this ring has not derived —
+   * a mint that reached the fold without passing through this ring: an
+   * import, an earlier process's record. Derives by name and checks the
+   * recorded DID, exactly as
+   * `load` does; null when the fold has no mint for the name, or the
+   * seed derives another DID (skipped then, as at load).
+   */
+  async holdMinted(name: string): Promise<MyIdentity | null> {
+    const have = this.held(name);
+    if (have !== null) {
+      return have;
+    }
+    const minted = this.opened.fold.myKey(name)?.minted ?? null;
+    if (minted === null) {
+      return null;
+    }
+    await this.derive(name, minted.routingDid, minted.did);
+    return this.held(name);
   }
 
   /** Every held key's secrets: what didcomm's `SecretsResolver` hands out. */

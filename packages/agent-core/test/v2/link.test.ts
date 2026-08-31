@@ -398,4 +398,82 @@ describe("v2 link: the line to the mediator", () => {
     expect(new Set(alice.log)).toEqual(new Set(["trace not written: disk full"]));
     expect(await alice.trace.read("wire")).toEqual([]);
   });
+
+  it("a ritual gives up after its timeout: a fetch that never settles does not hold the line forever", async () => {
+    const mediator = await newMediator();
+    const hanging: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason as Error));
+      });
+    const alice = await party(mediator, 16, { fetch: hanging, timeoutMs: 50 });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+  });
+
+  it("the deadline covers the whole ritual: a resolver that never settles fails it, and the late pack sends nothing", async () => {
+    const mediator = await newMediator();
+    let wake!: () => void;
+    const parked = new Promise<void>((resolve) => (wake = resolve));
+    const alice = await party(mediator, 17, {
+      resolveDid: async (did) => {
+        await parked;
+        return resolveDIDCommDoc(did);
+      },
+      timeoutMs: 50,
+    });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+    // the resolver comes back late: the abandoned pack completes, but the ritual is over — nothing goes out
+    wake();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mediator.seenTypes).toEqual([]);
+  });
+
+  it("a note that never settles before the POST fails the ritual at the deadline: nothing goes out", async () => {
+    const mediator = await newMediator();
+    const jam = { on: false };
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+      override async write(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.write(path, data);
+      }
+    }
+    const alice = await party(mediator, 18, { timeoutMs: 50 }, new Parked());
+    jam.on = true;
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+    expect(mediator.seenTypes).toEqual([]);
+  });
+
+  it("a note that never settles after the answer loses alone: the ritual result stands and the turn is released", async () => {
+    const mediator = await newMediator();
+    const decoder = new TextDecoder();
+    const jam = { on: false };
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/") && decoder.decode(data).includes("envelope.open")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+    }
+    const alice = await party(mediator, 19, { timeoutMs: 100 }, new Parked());
+    jam.on = true;
+    const opened = await alice.link.exchange(MEDIATE_REQUEST, {});
+    expect(opened.msg.type).toBe(MEDIATE_GRANT);
+    expect(opened.eid).toBeUndefined();
+    expect(alice.log.some((line) => line.startsWith("trace not written"))).toBe(true);
+  });
+
+  it("a fetch that ignores the signal and never settles still loses at the deadline", async () => {
+    const mediator = await newMediator();
+    const deaf: typeof fetch = () => new Promise<Response>(() => undefined);
+    const alice = await party(mediator, 20, { fetch: deaf, timeoutMs: 50 });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+  });
 });

@@ -18,6 +18,8 @@ import {
   didPlaceholder,
   establish,
   mintPeerDid,
+  register,
+  registerPending,
   resolvedOf,
   type Composed,
   type HandlerContext,
@@ -127,11 +129,11 @@ async function all(v: PeerVault): Promise<Event[]> {
   return events.sort(compareEvents);
 }
 
-async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number } = {}, fill = 1): Promise<Scene> {
+async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number; backend?: MemoryBackend } = {}, fill = 1): Promise<Scene> {
   const clock = ticking();
   const mediator = new FakeMediator(await deriveIdentity(await importSeed(seedOf(200)), "anchor"));
   const { doc, seedKey } = await createSeedKeystore("test", { seed: seedOf(fill) });
-  const v = await createVault(new MemoryBackend(), { keystore: doc, seedKey, label: "Alice", clock });
+  const v = await createVault(options.backend ?? new MemoryBackend(), { keystore: doc, seedKey, label: "Alice", clock });
   const ring = await Keyring.load(v);
   const trace = await AgentTrace.open(v.vault.local("agent"));
   const log: string[] = [];
@@ -175,6 +177,7 @@ async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number }
     mediatorDid: mediator.did,
     mediatorDoc: (await resolveDIDCommDoc(mediator.did)) as DIDDoc,
     log: (line) => log.push(line),
+    ...(options.deliveryTimeoutMs === undefined ? {} : { timeoutMs: options.deliveryTimeoutMs }),
   });
   let routed: Routed = { id: "", routingDid: "" };
   let pub: MyIdentity = { key: "", identity: { did: "", secrets: [] } };
@@ -793,5 +796,54 @@ describe("v2 outbox", () => {
     expect(opened.meta.encrypted_from_kid).toBe(`${composed.plain.from}#key-2`);
     expect(s.v.fold.contact(cid)?.thread.map((message) => message.mid)).toContain(found.mid);
     expect(found.msg?.to).toEqual([bob.did]);
+  });
+
+  it("a delivery whose resolution never settles fails at the deadline instead of holding the pass", async () => {
+    const s = await scene({ deliveryTimeoutMs: 60 });
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { record: one } = await s.write(cid, "one");
+    s.stalls.set(bob.did, new Promise<void>(() => undefined));
+    const tried = await s.outbox.drain();
+    expect(tried.map((event) => event.data)).toMatchObject([{ mid: one.mid, attempt: 1, outcome: "failed" }]);
+    expect(String(tried[0]?.data.error)).toMatch(/timeout|abort/i);
+    expect(s.posts).toEqual([]);
+  });
+
+  it("a reply note that never settles does not retell a delivered message as failed", async () => {
+    const decoder = new TextDecoder();
+    const jam = { on: false };
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (jam.on && path.includes("/local/agent/trace/") && decoder.decode(data).includes("wire.in")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+    }
+    const s = await scene({ deliveryTimeoutMs: 100, backend: new Parked() });
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { record: one } = await s.write(cid, "one");
+    // registered ahead, so the pass's only wire.in is the delivery's own reply
+    await register(s.link, s.v, registerPending(s.v.fold, s.v.vault.self));
+    jam.on = true;
+    const tried = await s.outbox.drain();
+    jam.on = false;
+    // the endpoint took it (2xx): the note of the reply lost the race, the delivery did not
+    expect(tried.map((event) => event.data)).toMatchObject([{ mid: one.mid, attempt: 1, outcome: "sent" }]);
+    expect(s.posts.map((post) => post.url)).toEqual([BOB_HTTP]);
+    expect(await s.outbox.flush()).toEqual([]);
+  });
+
+  it("an endpoint that never answers fails the attempt at the deadline, signal or no signal", async () => {
+    const s = await scene({ deliveryTimeoutMs: 100 });
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { record: one } = await s.write(cid, "one");
+    s.endpoints.set(BOB_HTTP, () => new Promise<Response>(() => undefined));
+    const tried = await s.outbox.drain();
+    expect(tried.map((event) => event.data)).toMatchObject([{ mid: one.mid, attempt: 1, outcome: "failed" }]);
+    expect(String(tried[0]?.data.error)).toMatch(/timeout|abort/i);
   });
 });
