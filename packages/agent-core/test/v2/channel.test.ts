@@ -15,6 +15,7 @@ import {
   publicKeyOfMethod,
   resolvedOf,
   senderOf,
+  signerOf,
   type Unpacked,
 } from "../../src/v2/index.js";
 
@@ -65,19 +66,21 @@ function jwkMethod(id: string, crv: "Ed25519" | "X25519", multibase: string): Ve
 }
 
 describe("envelopeKind and senderOf", () => {
-  it("reads the kind off what unpack proved, and whose DID proved it", async () => {
+  it("reads the kind off what unpack proved, whose DID proved it, and whose signed inside", async () => {
     const { alice, bob, aliceDoc, bobDoc } = await scene();
-    const cases: [Unpacked, ReturnType<typeof envelopeKind>, string | null][] = [
-      [authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2)), "authcrypt", bob.did],
-      [authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), kid(bobDoc, 1)), "authcrypt", bob.did],
-      [anoncrypt(kid(aliceDoc, 2)), "anoncrypt", null],
-      [anoncrypt(kid(aliceDoc, 2), kid(bobDoc, 1)), "signed", bob.did],
-      [signed(kid(bobDoc, 1)), "signed", bob.did],
-      [PLAIN, null, null],
+    const cases: [Unpacked, ReturnType<typeof envelopeKind>, string | null, string | null][] = [
+      [authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2)), "authcrypt", bob.did, null],
+      [authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), kid(bobDoc, 1)), "authcrypt", bob.did, bob.did],
+      [authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), `${WEB}#ed`), "authcrypt", bob.did, WEB],
+      [anoncrypt(kid(aliceDoc, 2)), "anoncrypt", null, null],
+      [anoncrypt(kid(aliceDoc, 2), kid(bobDoc, 1)), "signed", bob.did, null],
+      [signed(kid(bobDoc, 1)), "signed", bob.did, null],
+      [PLAIN, null, null, null],
     ];
-    for (const [metadata, kind, sender] of cases) {
+    for (const [metadata, kind, sender, signer] of cases) {
       expect(envelopeKind(metadata)).toBe(kind);
       expect(senderOf(metadata)).toBe(sender);
+      expect(signerOf(metadata)).toBe(signer);
     }
     expect(alice.did).not.toBe(bob.did);
   });
@@ -100,10 +103,17 @@ describe("inboundPair", () => {
     expect(proved?.kind).toBe("authcrypt");
     expect(proved?.pair).toEqual({ myKey: "did/alice", peerKey: peerKeyOf(key(bobDoc, 2)) });
     expect(proved?.signedBy).toBe(key(bobDoc, 1));
-    // a signature by a key of another DID is not the sender's document's to name
-    const other = inboundPair(authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), `${WEB}#ed`), bobDoc, keyOfDid);
-    expect(other?.pair).toEqual({ myKey: "did/alice", peerKey: peerKeyOf(key(bobDoc, 2)) });
-    expect(other).not.toHaveProperty("signedBy");
+  });
+
+  it("a signature by a key of another DID is named from that DID's document, and is an error without it", async () => {
+    const { aliceDoc, bobDoc, keyOfDid } = await scene();
+    const metadata = authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), `${WEB}#ed`);
+    const web: DIDDoc = { id: WEB, authentication: [`${WEB}#ed`], keyAgreement: [], verificationMethod: [jwkMethod(`${WEB}#ed`, "Ed25519", key(aliceDoc, 1))], service: [] };
+    const proved = inboundPair(metadata, bobDoc, keyOfDid, web);
+    expect(proved?.pair).toEqual({ myKey: "did/alice", peerKey: peerKeyOf(key(bobDoc, 2)) });
+    expect(proved?.signedBy).toBe(key(aliceDoc, 1));
+    expect(() => inboundPair(metadata, bobDoc, keyOfDid)).toThrow(/no document/);
+    expect(() => inboundPair(metadata, bobDoc, keyOfDid, { ...web, verificationMethod: [] })).toThrow(/lists no/);
   });
 
   it("anoncrypt: our key, no peer key, nothing of theirs to hand back", async () => {
@@ -176,6 +186,22 @@ describe("keys as a document lists them", () => {
     expect(publicKeyOf({ id: `${WEB}#bad`, type: "JsonWebKey2020", controller: WEB, publicKeyJwk: { kty: "OKP", crv: "X25519", x: "!!" } })).toBeNull();
     expect(publicKeyOf({ id: `${WEB}#other`, type: "Other", controller: WEB, publicKeyBase58: "abc" })).toBeNull();
     expect(publicKeyOf({ id: `${WEB}#none`, type: "Other", controller: WEB })).toBeNull();
+  });
+
+  it("a multibase is checked like the rest: base58btc, one of the two prefixes, 32 bytes", async () => {
+    const { bobDoc } = await scene();
+    const multibase = (value: string): VerificationMethod => ({ id: `${WEB}#m`, type: "Multikey", controller: WEB, publicKeyMultibase: value });
+    const ed = key(bobDoc, 1);
+    expect(publicKeyOf(multibase(ed))).toBe(ed);
+    const bytes = bs58.decode(ed.slice(1));
+    const p256 = new Uint8Array(35);
+    p256.set([0x80, 0x24]);
+    const cases = ["not-a-multibase", "z", "z0OIl", `m${ed.slice(1)}`, `z${bs58.encode(p256)}`, `z${bs58.encode(bytes.slice(0, 33))}`, `z${bs58.encode(bytes.slice(2))}`];
+    for (const value of cases) {
+      expect(publicKeyOf(multibase(value)), value).toBeNull();
+    }
+    const doc: DIDDoc = { id: WEB, authentication: [], keyAgreement: [], verificationMethod: cases.map(multibase).concat(multibase(ed)), service: [] };
+    expect(resolvedOf({ myKey: null, peerKey: null }, WEB, doc).keys).toEqual([ed]);
   });
 
   it("a did:web listing bob's keys as JWKs is bob's channel: the DID is not in the pair", async () => {

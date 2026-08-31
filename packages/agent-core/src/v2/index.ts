@@ -17,6 +17,7 @@ export {
   publicKeyOfMethod,
   resolvedOf,
   senderOf,
+  signerOf,
   type KeyOfDid,
   type Proved,
   type Unpacked,

@@ -42,7 +42,7 @@ export interface Proved {
   kind: EnvelopeKind;
   /** the peer's full public key as its document lists it, multibase; present exactly when `peerKey` is */
   peerPublicKey?: string;
-  /** authcrypt: a key that also signed the plaintext, as the sender's document lists it (§3.1 `signedBy`) */
+  /** authcrypt: a key that also signed the plaintext, as its document lists it (§3.1 `signedBy`) */
   signedBy?: string;
 }
 
@@ -80,15 +80,26 @@ export function senderOf(metadata: Unpacked): string | null {
 }
 
 /**
+ * The DID of a signature that rode inside authcrypt (§3.1 `signedBy`):
+ * `sign_from`'s, which may not be the sender's — then its document is
+ * the second one to resolve before `inboundPair`. Null when no signature
+ * rode inside authcrypt.
+ */
+export function signerOf(metadata: Unpacked): string | null {
+  return envelopeKind(metadata) === "authcrypt" && metadata.non_repudiation ? didOf(metadata.sign_from) : null;
+}
+
+/**
  * The channel an inbound envelope proves: `myKey` the key of ours that
  * opened it, `peerKey` the fingerprint of the key that sealed it
  * (authcrypt) or signed it (signed), looked up in the sender's document —
- * the DID the kid names, which is what `unpack` verified against. Null
- * for a plaintext. Throws when a kid names no key we can see: sealed to
- * no DID of ours, or a sealing or signing key the sender's document does
- * not list.
+ * the DID the kid names, which is what `unpack` verified against. A
+ * signature inside authcrypt is named from the sender's document, else
+ * from `signerDoc`, the document of `signerOf`'s DID. Null for a
+ * plaintext. Throws when a kid names no key we can see: sealed to no DID
+ * of ours, or a sealing or signing key no document at hand lists.
  */
-export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfDid: KeyOfDid): Proved | null {
+export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfDid: KeyOfDid, signerDoc: DIDDoc | null = null): Proved | null {
   const kind = envelopeKind(metadata);
   if (kind === null) {
     return null;
@@ -104,11 +115,8 @@ export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfD
   const peerPublicKey = publicKeyOfMethod(methodOf(senderDoc, kid));
   const proved: Proved = { pair: { myKey, peerKey: peerKeyOf(peerPublicKey) }, kind, peerPublicKey };
   if (kind === "authcrypt" && metadata.non_repudiation && metadata.sign_from !== undefined) {
-    // a signature by a key of another DID is verified by unpack, and not the sender's document's to name
-    const signer = findMethod(senderDoc, metadata.sign_from);
-    if (signer !== null) {
-      proved.signedBy = publicKeyOfMethod(signer);
-    }
+    const signer = findMethod(senderDoc, metadata.sign_from) ?? methodOf(signerDoc, metadata.sign_from);
+    proved.signedBy = publicKeyOfMethod(signer);
   }
   return proved;
 }
@@ -149,12 +157,23 @@ export function resolvedOf(pair: ChannelKey, did: string, doc: DIDDoc): PeerReso
 /**
  * A verification method's public key as the multibase a document lists
  * (`z…`, what a `did:key` encodes): given as such, or as an OKP JWK
- * (did:web's usual), or as base58 under a 2018/2019 suite. Null for a
- * key this vault has no name for — another curve, a malformed value.
+ * (did:web's usual), or as base58 under a 2018/2019 suite — each checked
+ * the same way, an Ed25519 or X25519 prefix over 32 bytes, and spelled
+ * afresh. Null for a key this vault has no name for: another curve, a
+ * malformed value.
  */
 export function publicKeyOf(method: VerificationMethod): string | null {
-  if (method.publicKeyMultibase !== undefined) {
-    return method.publicKeyMultibase;
+  const multibase = method.publicKeyMultibase;
+  if (multibase !== undefined) {
+    if (!multibase.startsWith("z")) {
+      return null;
+    }
+    const bytes = decoded(() => bs58.decode(multibase.slice(1)));
+    if (bytes === null) {
+      return null;
+    }
+    const prefix = [ED25519_PUB, X25519_PUB].find((known) => known[0] === bytes[0] && known[1] === bytes[1]) ?? null;
+    return rawKey(prefix, () => bytes.slice(2));
   }
   const jwk = method.publicKeyJwk;
   if (jwk !== undefined) {
@@ -191,13 +210,17 @@ function rawKey(prefix: number[] | null, decode: () => Uint8Array): string | nul
   if (prefix === null) {
     return null;
   }
-  let bytes: Uint8Array;
+  const bytes = decoded(decode);
+  return bytes !== null && bytes.length === 32 ? multibaseKey(prefix, bytes) : null;
+}
+
+/** What `decode` yields, or null when the text was not what it claimed to be. */
+function decoded(decode: () => Uint8Array): Uint8Array | null {
   try {
-    bytes = decode();
+    return decode();
   } catch {
     return null;
   }
-  return bytes.length === 32 ? multibaseKey(prefix, bytes) : null;
 }
 
 /** The key of ours an envelope was opened with: the first of the kids it was sealed to that is under a DID of ours. */
