@@ -22,7 +22,7 @@
  * and the contact's name follows from it at fold time.
  */
 
-import type { BlobStore } from "@estoc/event-store";
+import type { BlobStore, Cid } from "@estoc/event-store";
 import type { VaultDraft, VaultEvent, VaultFold, VaultType } from "@estoc/vault/v2";
 
 import type { ContactRecord, MessageRecord, PlainMessage } from "./records.js";
@@ -56,6 +56,12 @@ export interface SendOptions {
   /** the parent thread; when unset, the first messages answering an invitation name it */
   pthid?: string;
   attachments?: unknown[];
+  /**
+   * Roots of blocks the attachments carry, already in `blobs/` — the
+   * caller's to have put first — recorded on the message's skeleton
+   * (vault-events.md §3.1), as `keepShare` records a received share's.
+   */
+  roots?: Cid[];
 }
 
 /** What a handler may do through the agent. */

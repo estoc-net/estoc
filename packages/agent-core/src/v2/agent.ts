@@ -20,6 +20,7 @@
 
 import type { DIDDoc } from "@estoc/did-peer";
 import type { EventStore } from "@estoc/event-store";
+import type { FolderObject } from "@estoc/folder-object";
 import {
   deleteContact,
   drafts,
@@ -39,6 +40,7 @@ import { v7 as uuidv7 } from "uuid";
 import { BASIC_MESSAGE } from "../protocol/basicmessage.js";
 import type { DidcommApi } from "../protocol/didcomm.js";
 import { RECIPIENT_UPDATE } from "../protocol/mediation.js";
+import { DEFAULT_MAX_SHARE_BYTES, OBJECT_SHARE, type Closure, type VerifiedShare } from "../protocol/object-share.js";
 import { resolveDid as defaultResolveDid } from "../protocol/resolver.js";
 import { TRUST_PING } from "../protocol/spec.js";
 import { outboundPair, resolvedOf } from "./channel.js";
@@ -54,6 +56,7 @@ import { establish, leave, register, registerPending, rotateStale, routedOf } fr
 import { invitationMessage, parseInvitation, type Invitation } from "./oob.js";
 import { Outbound, Outbox, type Attempted } from "./outbound.js";
 import { Pickup, type Fate } from "./pickup.js";
+import { buildShare, fetchPackage, placePackage, type PlacedPackage, type Placing } from "./share.js";
 import {
   contactRecord,
   didPlaceholder,
@@ -64,7 +67,7 @@ import {
   type InvitationRecord,
   type MessageRecord,
 } from "./records.js";
-import { AgentTrace, type TraceEvent, type TraceLevel, type TracePruneReport } from "./trace.js";
+import { AgentTrace, type TraceData, type TraceEvent, type TraceLevel, type TracePruneReport } from "./trace.js";
 
 export type AgentStatus =
   | { state: "idle" }
@@ -102,12 +105,21 @@ export interface AgentOptions {
   /** transports, injectable for tests; default to the globals */
   fetch?: typeof fetch;
   WebSocket?: typeof WebSocket;
+  /**
+   * The fetch that gets a shared package: its URL is the sender's word,
+   * not the user's choice, so a host that can reach a private network (a
+   * Node daemon) passes one that refuses non-public addresses. Defaults to
+   * `fetch`.
+   */
+  packageFetch?: typeof fetch;
   /** the name announced over user-profile/1.0; defaults to the fold's `identity.label` */
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
   reconnectDelayMs?: number;
   /** how long one delivery, mediator round trip or DID resolution may take before it gives up (deliveries are retried later); default 15s */
   deliveryTimeoutMs?: number;
+  /** how long one package transfer may take, headers to last byte — the fetch of a share's package, the upload of ours; default 10 minutes */
+  packageTimeoutMs?: number;
   /**
    * Application-protocol handlers, added to the built-in basicmessage/2.0,
    * user-profile/1.0 and object-share/1.0 ones; a handler naming a type a
@@ -116,6 +128,12 @@ export interface AgentOptions {
   handlers?: ProtocolHandler[];
   /** a stranger's first message makes them a contact (default true); off, they stay unattributed */
   adoptStrangers?: boolean;
+  /**
+   * The most block bytes `shareObject` will put in one message; default
+   * 1 MiB. A bigger closure goes as a package at the mediator's blob
+   * store, the skeleton still inline (see docs/object-share.md §7–8).
+   */
+  maxShareBytes?: number;
 }
 
 /** How often the trace is pruned while the agent runs; `start` prunes too. */
@@ -138,6 +156,10 @@ export class Agent {
   private readonly resolveDid: (did: string) => Promise<DIDDoc | null>;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly wsImpl: typeof WebSocket | undefined;
+  private readonly fetchFn: typeof fetch;
+  private readonly packageFetchFn: typeof fetch;
+  private readonly packageTimeoutMs: number;
+  private readonly maxShareBytes: number;
   private readonly displayName: () => string;
   private readonly reconnectDelayMs: number;
   private readonly deliveryTimeoutMs: number | undefined;
@@ -176,6 +198,8 @@ export class Agent {
   private receiving: Promise<unknown> = Promise.resolve();
   /** the mint lock, one chain for every composer this agent ever assembles (`OutboundOptions.choosing`) */
   private readonly choosing: { chain: Promise<unknown> } = { chain: Promise.resolve() };
+  /** packages of ours at the blob store, one slot per mediation and root — however many shares meet it, one reservation (see `placePackage`) */
+  private readonly packages = new Map<string, Placing>();
 
   constructor(options: AgentOptions) {
     this.vault = options.vault;
@@ -188,6 +212,14 @@ export class Agent {
     this.resolveDid = (did) => bounded(AbortSignal.timeout(options.deliveryTimeoutMs ?? 15_000), () => resolver(did));
     this.fetchImpl = options.fetch;
     this.wsImpl = options.WebSocket;
+    // wrapped, not assigned: calling a native fetch with `this` bound to
+    // anything but the global is an "Illegal invocation" in browsers
+    const fetchImpl = options.fetch ?? fetch;
+    this.fetchFn = (input, init) => fetchImpl(input, init);
+    const packageFetchImpl = options.packageFetch ?? fetchImpl;
+    this.packageFetchFn = (input, init) => packageFetchImpl(input, init);
+    this.packageTimeoutMs = options.packageTimeoutMs ?? 600_000;
+    this.maxShareBytes = options.maxShareBytes ?? DEFAULT_MAX_SHARE_BYTES;
     this.displayName = options.displayName ?? (() => this.fold.label() ?? "");
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
     this.deliveryTimeoutMs = options.deliveryTimeoutMs;
@@ -704,6 +736,74 @@ export class Agent {
     return this.send(did, BASIC_MESSAGE, { content: text });
   }
 
+  /**
+   * Share an object (`docs/object-share.md`) with the contact who wears
+   * `did`: hash its canonical tree, keep the blocks in our own `blobs/`,
+   * and send one object-share/1.0 message — the root in the body, one
+   * attachment per block, and the record's skeleton naming the root, as
+   * `keepShare` names a received share's (vault-events.md §3.1). Two
+   * roads and no round trip (§7): the whole closure goes inline when it
+   * fits `maxShareBytes`; otherwise the skeleton and `index.json` go
+   * inline and the whole closure goes as one encrypted CAR — a package
+   * (§8) — put at our mediator's blob store under a fresh key, named in
+   * the share by URL, hash and key. An object whose skeleton and
+   * `index.json` do not fit cannot be shared this way; one whose
+   * mediator keeps no blobs cannot be shared beyond `maxShareBytes`.
+   * Plain, the share says only that we handed the object over. With
+   * `sign` the anchor signs a card and the share is a signed object we
+   * stand behind; with `card` (passing on an object someone else
+   * signed) the card must verify and name this very root.
+   */
+  async shareObject(did: string, object: FolderObject, options: { sign?: boolean; card?: string } = {}): Promise<MessageRecord> {
+    const { body, attachments, closure } = await buildShare(this.vault, object, options, this.maxShareBytes, (whole) => this.placePackage(whole));
+    for (const [cid, bytes] of closure.blocks) {
+      await this.vault.vault.blobs.putBlock(cid, bytes);
+    }
+    return this.send(did, OBJECT_SHARE, body as unknown as Record<string, unknown>, { attachments, roots: [closure.root] });
+  }
+
+  /**
+   * Fetch the package a received share names and fill the object in
+   * (§8): GET the ciphertext, check it against its name, open it, and
+   * walk the tree from the message's root over the package's blocks —
+   * only blocks the walk reaches are kept, put-if-absent in `blobs/`.
+   * Resolves to the share as verified afterwards; throws when the share
+   * names no package, the bytes cannot be fetched (the store's
+   * retention ran out), or they do not open — the share is then what it
+   * was, a partial object. The download is bounded by `packageTimeoutMs`
+   * and reads exactly the `byte_count` the share promised (`share.ts`).
+   */
+  async fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
+    return fetchPackage(record, this.vault.vault.blobs, this.packageFetchFn, this.packageTimeoutMs, (type, data) => this.noteWire(type, data), (line) => this.log(line));
+  }
+
+  /**
+   * The closure as a package at our mediator (`share.ts`): the `put` is
+   * a ritual over the standing link, bounded as any; the upload rides no
+   * shared queue and is bounded by `packageTimeoutMs`. Throws when no
+   * link is up — the package road needs a mediator to place at.
+   */
+  private async placePackage(closure: Closure): Promise<PlacedPackage> {
+    // the link and the mediation read together: a placement is scoped to
+    // the store it goes to, and one from another mediation is never probed
+    const link = this.link;
+    const mediation = this.fold.device(this.self)?.mediation ?? null;
+    if (link === null || mediation === null) {
+      throw new Error("the mediator is not reachable yet: nowhere to place the package");
+    }
+    return placePackage(link, this.packages, mediation.id, closure, this.fetchFn, this.packageTimeoutMs, (type, data) => this.noteWire(type, data), (line) => this.log(line));
+  }
+
+  /** One line on `wire` for the package road's own HTTP; a trace that cannot be written is logged, not thrown (as `MediatorLink`'s). */
+  private async noteWire(type: "wire.out" | "wire.in", data: TraceData): Promise<string | undefined> {
+    try {
+      return await (await this.traced()).append("wire", type, data);
+    } catch (err) {
+      this.log(`trace not written: ${messageOf(err)}`);
+      return undefined;
+    }
+  }
+
   /** `send` by contact — what `HandlerContext.send` is. */
   private async sendTo(cid: string, type: string, body: Record<string, unknown>, options?: SendOptions): Promise<MessageRecord> {
     await this.introduced(cid);
@@ -719,7 +819,7 @@ export class Agent {
   private async reply(contact: ContactRecord, type: string, body: Record<string, unknown>, options?: SendOptions): Promise<MessageRecord> {
     const composer = this.composerOf();
     const composed = await composer.compose(contact.cid, type, body, options);
-    const found = await composer.record(composed);
+    const found = await composer.record(composed, options?.roots);
     this.events.onMessage?.(found, this.contactRecordOf(contact.cid));
     await this.drained({ cid: this.contactRecordOf(contact.cid).cid });
     return found;
