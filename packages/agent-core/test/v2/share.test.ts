@@ -4,7 +4,7 @@ import { readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import { MemoryBackend } from "@estoc/event-store";
 
-import { attachmentsOf, BLOB_PUT_RESULT, closureOf, closureSize, OBJECT_SHARE, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
+import { attachmentsOf, BLOB_PUT_RESULT, closureOf, closureSize, OBJECT_SHARE, PROBLEM_REPORT, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
 import { placePackage, type MediatorLink, type MessageRecord, type PlainMessage, type Placing, type WireNote } from "../../src/v2/index.js";
 import { network, type FakeMediator } from "../fake-mediator.js";
 import { newMediator, newParty, recordsOf, until, withTimeout, type Party } from "./fixture.js";
@@ -454,5 +454,21 @@ describe("v2 agent sharing objects", () => {
     const refused = new Map<string, Placing>();
     await expect(placePackage(refusing, refused, "m", closure, okPut, 500, note, quiet)).rejects.toThrow(/will not keep the package/);
     expect(([...refused.values()][0] as Placing).prepared).toBeNull();
+
+    // anything short of a blob-coded problem-report settles nothing: the bytes stay for the retry
+    for (const answer of [
+      { type: "https://didcomm.org/basicmessage/2.0/message", body: {} },
+      { type: PROBLEM_REPORT, body: { code: "e.p.me.res.storage", comment: "not about blobs" } },
+    ]) {
+      const odd = new Map<string, Placing>();
+      const oddLink = { roundTrip: async () => ({ id: "answer", ...answer }) } as unknown as MediatorLink;
+      await expect(placePackage(oddLink, odd, "m", closure, okPut, 500, note, quiet)).rejects.toThrow(/answered .* to the put/);
+      const held = [...odd.values()][0] as Placing;
+      expect(held.prepared).not.toBeNull();
+      const heldHash = held.prepared?.hash as string;
+      // the mediator comes back to its senses: the retry sends the very same hash
+      const retried = await placePackage(link, odd, "m", closure, okPut, 500, note, quiet);
+      expect(retried.hash).toBe(heldHash);
+    }
   });
 });

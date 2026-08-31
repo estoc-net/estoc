@@ -23,6 +23,7 @@ import {
   type ObjectShareBody,
   type VerifiedShare,
 } from "../protocol/object-share.js";
+import { PROBLEM_REPORT } from "../protocol/spec.js";
 import { encryptStream, freshKey } from "../protocol/streaming-aead.js";
 import type { PeerVault } from "./identity.js";
 import { bounded, type MediatorLink } from "./link.js";
@@ -224,20 +225,25 @@ async function attempt(
 }
 
 /**
- * The mediator answered a put with a problem-report: no reservation was
- * made and these bytes will not be taken. A cut line is not this — there
- * the result is unknown, and the retry sends the same bytes.
+ * The mediator refused the put: a problem-report coded `e.p.blob.*`
+ * (docs/blob-store.md), the one answer that settles that no reservation
+ * was made and these bytes will not be taken. A cut line, or any answer
+ * short of that, is not this — there the result is unknown, and the
+ * retry sends the same bytes.
  */
 export class BlobRefused extends Error {}
 
-/** blob-store/1.0 `put` to our mediator; a problem-report is `BlobRefused`, naming its code. */
+/** blob-store/1.0 `put` to our mediator; a blob refusal is `BlobRefused`, any other unexpected answer a plain error — the result unknown. */
 export async function putBlob(link: MediatorLink, hash: string, size: number): Promise<BlobPlacement> {
   const answer = await link.roundTrip(BLOB_PUT, { hash, size });
   const body = answer.body as Record<string, unknown>;
   if (answer.type !== BLOB_PUT_RESULT) {
-    const code = typeof body.code === "string" ? body.code : answer.type;
+    const code = typeof body.code === "string" ? body.code : null;
     const comment = typeof body.comment === "string" ? `: ${body.comment}` : "";
-    throw new BlobRefused(`the mediator will not keep the package (${code}${comment})`);
+    if (answer.type === PROBLEM_REPORT && code !== null && code.startsWith("e.p.blob.")) {
+      throw new BlobRefused(`the mediator will not keep the package (${code}${comment})`);
+    }
+    throw new Error(`the mediator answered ${answer.type} to the put${code === null ? "" : ` (${code}${comment})`}`);
   }
   return parsePutResult(body);
 }
