@@ -514,10 +514,17 @@ Into an empty backend, a folder store copies the snapshot as it is,
 `config.json` written last: the snapshot is this tree, and a copy of
 it is a conforming folder — the one whole-file copy that survives
 §9.3, safe because there is nothing here for it to double. A store
-that is not a folder ingests it (§10.3). There is no `local/`, so the
-first open mints a `dev` and an `instance` (§7) and the imported
-directories stay as history — including the old device's mediation,
-visible until the person retires it (`vault-events.md` §7.3). The copy
+that is not a folder ingests it (§10.3). Empty means nothing at
+`.estoc` but, at most, a `local/` without `self.json`: what a device
+keeps beside a vault rather than in it (§7 — a daemon's pid file, a
+preference) is not the vault and stays put; `self.json` is a previous
+copy's device pointer, and a restore refuses it, since what follows
+depends on its absence. There is no `self.json`, so the first open
+mints a `dev` and an `instance` (§7) — a cache a previous copy left
+under the old instance is rejected by its token (§9.4) — and the
+imported directories stay as history, including the old device's
+mediation, visible until the person retires it (`vault-events.md`
+§7.3). The copy
 may carry a purged extension store the source had not yet disposed of
 (§10.1), and this copy has no memory of it, so the first open folds
 the extension lifecycle and applies every pending `dispose` before any
