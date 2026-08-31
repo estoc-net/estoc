@@ -105,15 +105,18 @@ describe("inboundPair", () => {
     expect(proved?.signedBy).toBe(key(bobDoc, 1));
   });
 
-  it("a signature by a key of another DID is named from that DID's document, and is an error without it", async () => {
+  it("a signature by a key of another DID is named from that DID's own document, and is an error without it", async () => {
     const { aliceDoc, bobDoc, keyOfDid } = await scene();
     const metadata = authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2), `${WEB}#ed`);
     const web: DIDDoc = { id: WEB, authentication: [`${WEB}#ed`], keyAgreement: [], verificationMethod: [jwkMethod(`${WEB}#ed`, "Ed25519", key(aliceDoc, 1))], service: [] };
-    const proved = inboundPair(metadata, bobDoc, keyOfDid, web);
+    // the sender's document lists a method under the signer's id with a key of its own: not the signer's word
+    const shadowed: DIDDoc = { ...bobDoc, verificationMethod: [...bobDoc.verificationMethod, jwkMethod(`${WEB}#ed`, "Ed25519", key(bobDoc, 1))] };
+    const proved = inboundPair(metadata, shadowed, keyOfDid, web);
     expect(proved?.pair).toEqual({ myKey: "did/alice", peerKey: peerKeyOf(key(bobDoc, 2)) });
     expect(proved?.signedBy).toBe(key(aliceDoc, 1));
-    expect(() => inboundPair(metadata, bobDoc, keyOfDid)).toThrow(/no document/);
+    expect(() => inboundPair(metadata, shadowed, keyOfDid)).toThrow(/no document/);
     expect(() => inboundPair(metadata, bobDoc, keyOfDid, { ...web, verificationMethod: [] })).toThrow(/lists no/);
+    expect(() => inboundPair(metadata, bobDoc, keyOfDid, { ...web, id: "did:web:other.example" })).toThrow(/is not/);
   });
 
   it("anoncrypt: our key, no peer key, nothing of theirs to hand back", async () => {
@@ -141,11 +144,15 @@ describe("inboundPair", () => {
     expect(() => inboundPair(anoncrypt(kid(bobDoc, 2)), null, keyOfDid)).toThrow(/no key of ours/);
   });
 
-  it("a sealing or signing key the sender's document does not list is an error", async () => {
+  it("a sealing or signing key the sender's document does not list, or a document that is not the sender's, is an error", async () => {
     const { aliceDoc, bobDoc, keyOfDid } = await scene();
     expect(() => inboundPair(authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2)), null, keyOfDid)).toThrow(/no document/);
     expect(() => inboundPair(authcrypt(`${bobDoc.id}#key-9`, kid(aliceDoc, 2)), bobDoc, keyOfDid)).toThrow(/lists no/);
     expect(() => inboundPair(signed(`${bobDoc.id}#key-9`), bobDoc, keyOfDid)).toThrow(/lists no/);
+    // alice's document listing bob's kid is not bob's word for it
+    const claiming: DIDDoc = { ...aliceDoc, verificationMethod: [...aliceDoc.verificationMethod, { ...bobDoc.verificationMethod[1] as VerificationMethod }] };
+    expect(() => inboundPair(authcrypt(kid(bobDoc, 2), kid(aliceDoc, 2)), claiming, keyOfDid)).toThrow(/is not/);
+    expect(() => inboundPair(signed(kid(bobDoc, 1)), aliceDoc, keyOfDid)).toThrow(/is not/);
   });
 });
 

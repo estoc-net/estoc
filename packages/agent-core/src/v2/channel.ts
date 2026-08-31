@@ -94,10 +94,13 @@ export function signerOf(metadata: Unpacked): string | null {
  * opened it, `peerKey` the fingerprint of the key that sealed it
  * (authcrypt) or signed it (signed), looked up in the sender's document —
  * the DID the kid names, which is what `unpack` verified against. A
- * signature inside authcrypt is named from the sender's document, else
- * from `signerDoc`, the document of `signerOf`'s DID. Null for a
- * plaintext. Throws when a kid names no key we can see: sealed to no DID
- * of ours, or a sealing or signing key no document at hand lists.
+ * signature inside authcrypt is named from the document of its own kid's
+ * DID: the sender's when that is the sender, else `signerDoc`, the
+ * document of `signerOf`'s DID — a document may list a method under
+ * another DID's id, and only the DID's own document says what key that
+ * is. Null for a plaintext. Throws when a kid names no key we can see:
+ * sealed to no DID of ours, a document that is not its DID's, or a
+ * sealing or signing key it does not list.
  */
 export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfDid: KeyOfDid, signerDoc: DIDDoc | null = null): Proved | null {
   const kind = envelopeKind(metadata);
@@ -115,8 +118,8 @@ export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfD
   const peerPublicKey = publicKeyOfMethod(methodOf(senderDoc, kid));
   const proved: Proved = { pair: { myKey, peerKey: peerKeyOf(peerPublicKey) }, kind, peerPublicKey };
   if (kind === "authcrypt" && metadata.non_repudiation && metadata.sign_from !== undefined) {
-    const signer = findMethod(senderDoc, metadata.sign_from) ?? methodOf(signerDoc, metadata.sign_from);
-    proved.signedBy = publicKeyOfMethod(signer);
+    const own = didOf(metadata.sign_from) === didOf(kid);
+    proved.signedBy = publicKeyOfMethod(methodOf(own ? senderDoc : signerDoc, metadata.sign_from));
   }
   return proved;
 }
@@ -238,14 +241,17 @@ function openedWith(kids: readonly string[], keyOfDid: KeyOfDid): string | null 
   throw new Error(`sealed to no key of ours: ${kids.join(", ")}`);
 }
 
-function findMethod(doc: DIDDoc | null, kid: string): VerificationMethod | null {
-  return doc?.verificationMethod.find((method) => method.id === kid) ?? null;
-}
-
+/** The method `kid` names, in the document of its own DID — no other document's word for it counts. */
 function methodOf(doc: DIDDoc | null, kid: string): VerificationMethod {
-  const method = findMethod(doc, kid);
-  if (method === null) {
-    throw new Error(doc === null ? `no document for ${kid}` : `${doc.id} lists no ${kid}`);
+  if (doc === null) {
+    throw new Error(`no document for ${kid}`);
+  }
+  if (doc.id !== didOf(kid)) {
+    throw new Error(`the document of ${doc.id} is not ${kid}'s`);
+  }
+  const method = doc.verificationMethod.find((entry) => entry.id === kid);
+  if (method === undefined) {
+    throw new Error(`${doc.id} lists no ${kid}`);
   }
   return method;
 }
