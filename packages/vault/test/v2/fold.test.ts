@@ -148,13 +148,6 @@ describe("v2 fold: the scene", () => {
     expect(ch1?.seenBy).toEqual([DEV_A]);
     expect(ch1?.resolved).toEqual([{ did: "did:peer:4bob", keys: [scene.bob.multibase], service: "did:peer:2bobroute", at: ch1?.resolved[0]?.at }]);
   });
-
-  it("names an inbound message's sender by the resolution before it, and no sender for outbound", () => {
-    expect(fold.message(scene.mids.in1)?.sender).toBe("did:peer:4bob");
-    expect(fold.message(scene.mids.in2)?.sender).toBe("did:peer:4bob2");
-    expect(fold.message(scene.mids.out1)?.sender).toBeNull();
-    expect(fold.message(scene.mids.out2)?.sender).toBeNull();
-  });
 });
 
 describe("v2 fold: attribution edges", () => {
@@ -301,52 +294,5 @@ describe("v2 fold: attribution edges", () => {
     expect(asA.delivery(mid)?.status).toBe("pending");
     expect(asB.delivery(mid)?.status).toBe("held");
     expect(asA.delivery(mid)?.heldBy).toEqual([{ dev: DEV_B, because: "user", at: events[1]?.at }]);
-  });
-});
-
-describe("v2 fold: a message's sender", () => {
-  const bob = peerKey(23);
-  const skeleton = (mid: string) => ({ mid, wireId: `w-${mid.slice(-1)}`, msgType: "m", bytes: 9, body: someRoot, attachments: [] });
-
-  it("is the latest resolution before the message; a later resolution of the same DID does not rewrite it", () => {
-    const line = new Line();
-    const fold = new VaultFold(DEV_A);
-    const pair = { myKey: "did/k", peerKey: bob.fingerprint };
-    const m1 = "0198aaaa-0000-7000-8000-0000000000a1";
-    const m2 = "0198aaaa-0000-7000-8000-0000000000a2";
-    fold.apply(line.next(DEV_A, "channel.firstSeen", { ...pair, peerPublicKey: bob.multibase, kind: "authcrypt", firstDid: "did:example:bob" }));
-    fold.apply(line.next(DEV_A, "peer.resolved", { ...pair, did: "did:example:bob", keys: [bob.multibase], service: null }));
-    fold.apply(line.next(DEV_A, "message.in", { ...pair, ...skeleton(m1) }, [someRoot]));
-    expect(fold.message(m1)?.sender).toBe("did:example:bob");
-
-    // bob rotates to a second DID on the same key; then both DIDs are resolved again with a service found
-    fold.apply(line.next(DEV_A, "peer.resolved", { ...pair, did: "did:example:bob2", keys: [bob.multibase], service: null }));
-    fold.apply(line.next(DEV_A, "message.in", { ...pair, ...skeleton(m2) }, [someRoot]));
-    fold.apply(line.next(DEV_A, "peer.resolved", { ...pair, did: "did:example:bob", keys: [bob.multibase], service: "did:peer:2route" }));
-    fold.apply(line.next(DEV_A, "peer.resolved", { ...pair, did: "did:example:bob2", keys: [bob.multibase], service: "did:peer:2route" }));
-    expect(fold.channel(pair)?.resolved.map((r) => r.service)).toEqual(["did:peer:2route", "did:peer:2route"]); // `resolved` shows the latest per DID
-    expect(fold.message(m1)?.sender).toBe("did:example:bob"); // the message keeps the DID it came under
-    expect(fold.message(m2)?.sender).toBe("did:example:bob2");
-  });
-
-  it("falls back to the first-seen DID, then to nobody", () => {
-    const line = new Line();
-    const fold = new VaultFold(DEV_A);
-    const seen = { myKey: "did/k", peerKey: bob.fingerprint };
-    const unseen = { myKey: "did/k", peerKey: peerKey(24).fingerprint };
-    const anonymous = { myKey: "did/k", peerKey: null };
-    const m1 = "0198aaaa-0000-7000-8000-0000000000b1";
-    const m2 = "0198aaaa-0000-7000-8000-0000000000b2";
-    const m3 = "0198aaaa-0000-7000-8000-0000000000b3";
-    fold.apply(line.next(DEV_A, "channel.firstSeen", { ...seen, peerPublicKey: bob.multibase, kind: "authcrypt", firstDid: "did:example:bob" }));
-    fold.apply(line.next(DEV_A, "message.in", { ...seen, ...skeleton(m1) }, [someRoot]));
-    fold.apply(line.next(DEV_A, "message.in", { ...unseen, ...skeleton(m2) }, [someRoot]));
-    fold.apply(line.next(DEV_A, "channel.firstSeen", { ...anonymous, kind: "anoncrypt" }));
-    fold.apply(line.next(DEV_A, "message.in", { ...anonymous, ...skeleton(m3) }, [someRoot]));
-    // a resolution after the fact does not reach back
-    fold.apply(line.next(DEV_A, "peer.resolved", { ...seen, did: "did:example:bob2", keys: [bob.multibase], service: null }));
-    expect(fold.message(m1)?.sender).toBe("did:example:bob");
-    expect(fold.message(m2)?.sender).toBeNull();
-    expect(fold.message(m3)?.sender).toBeNull();
   });
 });

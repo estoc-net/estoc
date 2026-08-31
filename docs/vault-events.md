@@ -216,7 +216,9 @@ shows them once.
   `thid`, `pthid`, `bytes` (the size of the plaintext), with `body`,
   the root of the blob holding the plaintext (§4), and `attachments`,
   the roots of every blob lifted out of it, saying which of them is
-  which; and `signedBy` when a signature rode inside the encryption.
+  which; on `message.in`, `did`, the DID the envelope's sender key was
+  resolved under (`encrypted_from_kid`'s), absent for an anonymous
+  envelope; and `signedBy` when a signature rode inside the encryption.
   On the envelope, `blobs` (`event-store.md` §2.2) lists every root
   the line holds: exactly `body` plus `attachments`, stated twice
   because the collector reads only the envelope and never `data`. The
@@ -224,8 +226,12 @@ shows them once.
   collection (§8.3) reads it, never the body, so it works after the
   body is gone. Everything a thread view, a search index, or a
   collector needs is on the line; nothing a person said is.
-  `direction` is the event type and `sender` is the pair; neither is
-  a further field.
+  `direction` is the event type, not a field. Who sent it is the pair
+  — the key — and `did` is which DID that key wore at this message:
+  a key wears more than one over time (a rotation, a move to another
+  mediator), `peer.resolved` is written only on change, so the message
+  itself says which, and that is where a reply goes. The plaintext's
+  `from` is a claim the envelope did not prove and is not it.
 - `delivery.attempted`: one attempt on the wire and its `outcome`,
   `sent` or `failed` — an observation; the pair is the `to`, and the
   DID we sealed to is in the message's `msg.to`. `delivery.held`: this
@@ -463,16 +469,6 @@ they were folded to (`event-store.md` §7.3); they must therefore
 accept events in any order, one at a time (`event-store.md` §4.4).
 They read every device's events. They are the only place the word
 "contact" means anything to a message.
-
-A message's **sender** is a fold too, of the pair's observations
-alone: for a `message.in`, the DID the peer key wore at it — the
-latest `peer.resolved` on the pair before the skeleton in canonical
-order, else the `firstDid` of the pair's `channel.firstSeen`, else none
-(anonymous). A resolution after the message is a rotation the message
-predates, and a later resolution of the same DID does not rewrite it.
-The plaintext's `from` is a claim the envelope did not prove and plays
-no part. A `message.out` has no sender; its addressee is in the
-plaintext.
 
 ### 7.1 Attribution — channel → `cid`
 

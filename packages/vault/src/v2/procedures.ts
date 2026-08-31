@@ -12,7 +12,7 @@ import { linksOf } from "@estoc/event-store";
 
 import { drafts } from "./drafts.js";
 import { VaultFold, type Message } from "./fold.js";
-import type { ChannelFirstSeen, EraseCause, PeerResolved, Skeleton } from "./types.js";
+import type { ChannelFirstSeen, EraseCause, MessageIn, PeerResolved } from "./types.js";
 
 /** The vault's two stores as the procedures need them. */
 export interface VaultSide {
@@ -113,7 +113,7 @@ export async function recordMessage(
   fold: VaultFold,
   direction: "in" | "out",
   plaintext: Uint8Array,
-  skeleton: Omit<Skeleton, "body" | "bytes"> & { signedBy?: string }
+  skeleton: Omit<MessageIn, "body" | "bytes">
 ): Promise<Event> {
   const body = await vault.blobs.put(plaintext);
   const data = { ...skeleton, bytes: plaintext.length, body };

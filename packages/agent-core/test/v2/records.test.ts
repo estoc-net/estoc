@@ -43,27 +43,30 @@ async function fresh(): Promise<PeerVault> {
 
 const plain = (id: string, from: string, to: string, content: string): PlainMessage => ({ id, type: BASIC, from, to: [to], body: { content } });
 
-async function message(v: PeerVault, direction: "in" | "out", pair: ChannelKey, mid: string, msg: PlainMessage): Promise<void> {
-  await recordMessage({ events: v.vault.events, blobs: v.vault.blobs }, v.fold, direction, enc.encode(JSON.stringify(msg)), { ...pair, mid, wireId: msg.id, msgType: msg.type, attachments: [] });
+/** `did` is what the envelope proved (§3.1): the inbound flow's to set, an authcrypt envelope's sender DID */
+async function message(v: PeerVault, direction: "in" | "out", pair: ChannelKey, mid: string, msg: PlainMessage, did?: string): Promise<void> {
+  const skeleton = { ...pair, mid, wireId: msg.id, msgType: msg.type, attachments: [], ...(did === undefined ? {} : { did }) };
+  await recordMessage({ events: v.vault.events, blobs: v.vault.blobs }, v.fold, direction, enc.encode(JSON.stringify(msg)), skeleton);
 }
 
 describe("v2 records: messages", () => {
-  it("reads the plaintext back, and names the sender by the DID resolved at the time of the message", async () => {
+  it("reads the plaintext back, and names the sender by the DID the envelope proved", async () => {
     const v = await fresh();
     await record(v.vault.events, v.fold, drafts.channelFirstSeen({ ...PAIR, peerPublicKey: bob.multibase, kind: "authcrypt", firstDid: BOB1 }));
     await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB1, keys: [bob.multibase], service: null }));
     const hi = plain("w1", BOB1, ALICE, "hi");
-    await message(v, "in", PAIR, uuid(1), hi);
-    // bob rotates: the same key wears a new DID from here on
+    await message(v, "in", PAIR, uuid(1), hi, BOB1);
+    // the same key under a second DID, then under the first again: each message says which
     await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB2, keys: [bob.multibase], service: null }));
-    await message(v, "in", PAIR, uuid(2), plain("w2", BOB2, ALICE, "hi again"));
-    await message(v, "out", PAIR, uuid(3), plain("w3", ALICE, BOB2, "hello"));
+    await message(v, "in", PAIR, uuid(2), plain("w2", BOB2, ALICE, "hi again"), BOB2);
+    await message(v, "in", PAIR, uuid(3), plain("w3", BOB1, ALICE, "and back"), BOB1); // no new resolution: BOB1's document is as it was
+    await message(v, "out", PAIR, uuid(4), plain("w4", ALICE, BOB2, "hello"));
 
     const first = await messageRecord(v.fold, v.vault.blobs, uuid(1));
     expect(first).not.toBeNull();
     expect(first?.direction).toBe("in");
     expect(first?.pair).toEqual(PAIR);
-    expect(first?.sender).toBe(BOB1); // not BOB2: that resolution came after
+    expect(first?.sender).toBe(BOB1);
     expect(first?.msg).toEqual(hi);
     expect(first?.body).toBe("present");
     expect(first?.skeleton.mid).toBe(uuid(1));
@@ -71,41 +74,29 @@ describe("v2 records: messages", () => {
     expect(first?.skeleton.bytes).toBe(JSON.stringify(hi).length);
     expect(first?.at).toBe(v.fold.message(uuid(1))?.at);
 
-    const second = await messageRecord(v.fold, v.vault.blobs, uuid(2));
-    expect(second?.sender).toBe(BOB2);
-
-    // both DIDs resolved again later, a service found: the messages keep the DIDs they were sent under
-    await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB1, keys: [bob.multibase], service: "did:peer:2.bobroute" }));
-    await record(v.vault.events, v.fold, drafts.peerResolved({ ...PAIR, did: BOB2, keys: [bob.multibase], service: "did:peer:2.bobroute" }));
-    expect((await messageRecord(v.fold, v.vault.blobs, uuid(1)))?.sender).toBe(BOB1);
     expect((await messageRecord(v.fold, v.vault.blobs, uuid(2)))?.sender).toBe(BOB2);
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(3)))?.sender).toBe(BOB1);
 
-    const out = await messageRecord(v.fold, v.vault.blobs, uuid(3));
+    const out = await messageRecord(v.fold, v.vault.blobs, uuid(4));
     expect(out?.direction).toBe("out");
     expect(out?.sender).toBeNull();
     expect(out?.msg?.to).toEqual([BOB2]);
 
-    expect(await messageRecord(v.fold, v.vault.blobs, uuid(4))).toBeNull();
+    expect(await messageRecord(v.fold, v.vault.blobs, uuid(5))).toBeNull();
   });
 
-  it("falls back to the DID the key was first seen with, then to nobody", async () => {
+  it("has no sender for an anonymous envelope, whatever the plaintext claims", async () => {
     const v = await fresh();
-    const seen: ChannelKey = { myKey: "did/a", peerKey: peerKey(8).fingerprint };
-    await record(v.vault.events, v.fold, drafts.channelFirstSeen({ ...seen, peerPublicKey: peerKey(8).multibase, kind: "authcrypt", firstDid: BOB1 }));
-    await message(v, "in", seen, uuid(1), plain("w1", BOB1, ALICE, "hi"));
-    expect((await messageRecord(v.fold, v.vault.blobs, uuid(1)))?.sender).toBe(BOB1);
-
     const anonymous: ChannelKey = { myKey: "did/a", peerKey: null };
     await record(v.vault.events, v.fold, drafts.channelFirstSeen({ ...anonymous, kind: "anoncrypt" }));
-    await message(v, "in", anonymous, uuid(2), plain("w2", "did:example:claimed", ALICE, "psst"));
-    const anon = await messageRecord(v.fold, v.vault.blobs, uuid(2));
+    await message(v, "in", anonymous, uuid(1), plain("w1", "did:example:claimed", ALICE, "psst"));
+    const anon = await messageRecord(v.fold, v.vault.blobs, uuid(1));
     expect(anon?.sender).toBeNull(); // the plaintext's `from` is a claim, not the sender
     expect(anon?.msg?.from).toBe("did:example:claimed");
 
-    // a skeleton with no `channel.firstSeen` at all (another device's, say)
-    const unseen: ChannelKey = { myKey: "did/a", peerKey: peerKey(9).fingerprint };
-    await message(v, "in", unseen, uuid(3), plain("w3", BOB2, ALICE, "hi"));
-    expect((await messageRecord(v.fold, v.vault.blobs, uuid(3)))?.sender).toBeNull();
+    // a skeleton with no `did`, whatever the pair: nothing to name
+    await message(v, "in", PAIR, uuid(2), plain("w2", BOB1, ALICE, "hi"));
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(2)))?.sender).toBeNull();
   });
 
   it("shows an erased body as erased, and a body it cannot read as missing", async () => {

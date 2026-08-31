@@ -47,6 +47,8 @@ export type Skeleton = ChannelKey & {
 };
 
 export type MessageIn = Skeleton & {
+  /** the DID the envelope's sender key was resolved under (`encrypted_from_kid`'s): which DID the key wore at this message; absent for an anonymous envelope */
+  did?: string;
   /** a signature that rode inside the encryption */
   signedBy?: string;
 };
@@ -441,7 +443,7 @@ const READERS: { [T in VaultType]: Reader<T> } = {
   },
   "message.in": (data) => {
     const c = new Check(data);
-    return { ...skeleton(c), ...optional({ signedBy: c.optStr("signedBy") }) };
+    return { ...skeleton(c), ...optional({ did: c.optStr("did"), signedBy: c.optStr("signedBy") }) };
   },
   "message.out": (data) => skeleton(new Check(data)),
   "delivery.attempted": (data) => {

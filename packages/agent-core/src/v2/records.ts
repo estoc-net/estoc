@@ -39,10 +39,9 @@ export interface MessageRecord {
   direction: "in" | "out";
   pair: ChannelKey;
   /**
-   * Inbound: the DID the peer key wore at the message, as the fold reads
-   * it (§7) — the latest `peer.resolved` on the pair before it, else the
-   * DID the key was first seen with, else null (anonymous). Outbound:
-   * null; the addressee is `msg.to[0]`.
+   * Inbound: the DID the envelope proved sent it — the skeleton's `did`
+   * (§3.1), which DID the peer key wore at this message; null for an
+   * anonymous envelope. Outbound: null; the addressee is `msg.to[0]`.
    */
   sender: string | null;
   skeleton: MessageIn | MessageOut;
@@ -64,7 +63,7 @@ export async function messageRecord(fold: VaultFold, blobs: BlobStore, mid: stri
     at: message.at,
     direction: message.direction,
     pair: message.pair,
-    sender: message.sender,
+    sender: message.direction === "in" ? ((message.skeleton as MessageIn).did ?? null) : null,
     skeleton: message.skeleton,
     msg,
     body: msg === null && state === "present" ? "missing" : state,
