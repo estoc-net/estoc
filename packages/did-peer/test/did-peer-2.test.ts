@@ -83,7 +83,7 @@ describe("a mediator's did:peer:2", () => {
 
     // The websocket service survives the conversion; the two did-communication
     // ones do not, being neither DIDCommMessaging nor v2.
-    expect(didDoc.service.map((service) => service.serviceEndpoint.uri)).toStrictEqual([
+    expect(didDoc.service.map((service) => (typeof service.serviceEndpoint === "string" ? service.serviceEndpoint : service.serviceEndpoint.uri))).toStrictEqual([
       MEDIATOR_ENDPOINT,
       "wss://ws.us-east2.public.mediator.indiciotech.io/ws",
     ]);

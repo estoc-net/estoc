@@ -42,7 +42,7 @@ describe("AES256_GCM_HKDF_1MB", () => {
     const sealed = await encryptStream(key, bytes(1000), SEG);
     await expect(decryptStream(freshKey(), sealed, SEG)).rejects.toThrow(/segment 0/);
     const flipped = new Uint8Array(sealed);
-    flipped[SEG + 5] ^= 1;
+    flipped[SEG + 5] = (flipped[SEG + 5] as number) ^ 1;
     await expect(decryptStream(key, flipped, SEG)).rejects.toThrow(/segment 1/);
     await expect(decryptStream(key, sealed.subarray(0, SEG), SEG)).rejects.toThrow(/segment 0/); // marked last, was not
     const swapped = new Uint8Array(sealed);

@@ -71,6 +71,9 @@ importers:
       '@estoc/did-peer':
         specifier: workspace:^
         version: link:../did-peer
+      '@estoc/event-store':
+        specifier: workspace:^
+        version: link:../event-store
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../folder-object
