@@ -6,9 +6,12 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 |---|---|---|
 | `app/` | `@estoc/app` | the offline-first DIDComm v2 messenger you install as a web app — [app.estoc.dev](https://app.estoc.dev); published as its built files, for `estoc serve` |
 | `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, over an `.estoc` vault |
+| `packages/vault/` | [`@estoc/vault`](https://www.npmjs.com/package/@estoc/vault) | the `.estoc` format as code, over a pluggable backend (OPFS, a folder on disk, memory); `@estoc/vault/v2` is the event-sourced format being built beside it ([`docs/vault-events.md`](docs/vault-events.md)) |
+| `packages/event-store/` | `@estoc/event-store` | the vault as an event store ([`docs/event-store.md`](docs/event-store.md)): envelope and canonical order, the `EventStore` / `BlobStore` / `FileStore` interfaces, the folder store, interchange (snapshot, import, restore, zip) |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |
 | `packages/folder-object/` | [`@estoc/folder-object`](https://www.npmjs.com/package/@estoc/folder-object) | an object is a folder — UnixFS merkle hashing, the folder-object format, did:key cards, signed objects |
+| `packages/post/` | [`@estoc/post`](https://www.npmjs.com/package/@estoc/post) | the post/1.0 format for folder-objects: recognise, validate, read, and the reference renderer |
 | `packages/daemon/` | `@estoc/daemon` | the daemon: agent + vault behind one RPC interface; a browser-worker host (the app) and a Node host (`estoc-daemon`, a folder on disk, the app served on the same origin) |
 | `packages/cli/` | [`@estoc/cli`](https://www.npmjs.com/package/@estoc/cli) | `estoc` — vaults on disk, `estoc object hash\|sign\|verify`, `estoc serve` |
 
@@ -27,16 +30,51 @@ published `@estoc/did-peer`.
 
 ```sh
 pnpm install
-pnpm build            # every package, in dependency order (libraries emit dist/)
-pnpm test             # every package's vitest suite
-pnpm typecheck
 pnpm dev              # tsc --watch on the libraries + vite dev server for the app
 ```
 
 Anything package-specific runs from that package's directory or via
-`pnpm --filter <name> …`; each package's README has the details. The app's
-e2e (`pnpm e2e`, after `pnpm build && pnpm --filter @estoc/app preview`) is
-documented in [`app/README.md`](app/README.md).
+`pnpm --filter <name> …`; each package's README has the details.
+
+## Check it
+
+What CI runs on every pull request and on `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)),
+and what a change should pass before it is pushed:
+
+```sh
+pnpm build && pnpm typecheck && pnpm test
+```
+
+- `pnpm build` — every package, in dependency order; the libraries emit
+  `dist/`. **Build comes first**: a package's typecheck and tests resolve
+  its workspace siblings through their `dist/`, so after changing a
+  library, rebuild it before checking what depends on it (or the
+  dependant sees the old build).
+- `pnpm typecheck` — `tsc --noEmit` per library, `vue-tsc -b` for the app.
+- `pnpm test` — every library's vitest suite. The app has no unit
+  suite; its build and typecheck are its check, plus the browser e2e
+  below.
+
+One package, one file, one test by name (vitest flags go after `--`):
+
+```sh
+pnpm --filter @estoc/vault build && pnpm --filter @estoc/vault typecheck && pnpm --filter @estoc/vault test
+pnpm --filter @estoc/vault test test/v2/fold.test.ts
+pnpm --filter @estoc/vault test -- -t "attachments"
+pnpm --filter @estoc/vault test:watch
+```
+
+The browser e2e is run by hand, against a served build and a mediator
+(a local [didcomm-mediator] on `:8080`, or `E2E_MEDIATOR=estoc` for
+production):
+
+```sh
+pnpm build && pnpm --filter @estoc/app preview      # the build on :4173
+pnpm e2e                                              # two browsers, Alice and Bob
+node app/scripts/e2e-daemon.mjs                       # the same, Alice on a Node daemon
+```
+
+[`app/README.md`](app/README.md) (Verify) has what each one exercises.
 
 ## Deploy the app
 
