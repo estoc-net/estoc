@@ -616,4 +616,82 @@ describe("v2 agent hardened", () => {
     alice.agent.destroy();
     bob.agent.destroy();
   });
+
+  it("hands out an invitation while the mediator changes: registered, then retired and dropped, not left behind", async () => {
+    const one = await newMediator();
+    const two = await newMediator({ fill: 230, http: "http://mediator-two/", ws: "ws://mediator-two/ws" });
+    const net = network(one, two);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const gate = { arm: false };
+    const slow: typeof fetch = async (input, init) => {
+      if (gate.arm) {
+        gate.arm = false;
+        await held;
+      }
+      return net.fetch(input, init);
+    };
+    const alice = await newParty("Alice", 23, one, { fetch: slow, webSocket: net.WebSocket });
+    await alice.agent.start();
+    await withTimeout(alice.live);
+
+    // the handout stalls inside its registration round trip; the move is asked for meanwhile
+    gate.arm = true;
+    const inviting = alice.agent.createInvitation("come in");
+    await until(() => !gate.arm);
+    const moving = alice.agent.setMediator(two.did);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    release();
+    const [invitation] = await Promise.all([inviting, moving]);
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live at the new mediator");
+
+    // the leaving waited for the handout's turn: the add landed in time for the drop list, and the invitation was withdrawn
+    expect(invitation.registered).toBe(true);
+    expect(one.recipients.size).toBe(0);
+    expect(two.recipients.size).toBeGreaterThan(0);
+    expect(alice.agent.invitations().find((entry) => entry.id === invitation.id)?.open).toBe(false);
+    alice.agent.destroy();
+  });
+
+  it("opens mail to a key minted while a restart was reloading the ring", async () => {
+    const mediator = await newMediator();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const gate = { arm: false };
+    const alice = await newParty("Alice", 24, mediator, {
+      // one-shot: only the restart's own mediator resolution stalls; sealing resolves it too, and must pass
+      resolveDid: async (did) => {
+        if (gate.arm && did === mediator.did) {
+          gate.arm = false;
+          await held;
+        }
+        return resolveDIDCommDoc(did);
+      },
+    });
+    const bob = await newParty("Bob", 25, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    const contact = contactByDid(alice, bob.agent.did as string) as Contact;
+    // introduced by decree: the send below composes directly and mints the first key toward Bob
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.profileShared({ ...(contact.channels[0] as ChannelKey), mid: "0198a000-0000-7000-8000-000000000051" }));
+
+    // the restart stalls at the mediator resolver: the ring reloaded, the standing assembly not yet replaced
+    gate.arm = true;
+    const restarting = alice.agent.start();
+    await until(() => !gate.arm);
+    // the mint lands after the reload's pass over the fold, through the standing assembly's composer
+    const sent = await alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    expect(alice.v.fold.delivery(sent.mid)?.status).toBe("sent");
+    await withTimeout(bob.next((view) => view.content === "one"), 8000, "bob's chat");
+
+    // the reply comes to that key: the ring is the identity's, one instance, so the restart holds it too
+    const replying = bob.agent.sendBasicMessage(myDidToward(alice, bob.agent.did as string), "two");
+    release();
+    await Promise.all([restarting, replying]);
+    await withTimeout(alice.next((view) => view.content === "two"), 8000, "alice hears the reply");
+    expect((contactByDid(alice, bob.agent.did as string) as Contact).keys).toHaveLength(1);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
 });

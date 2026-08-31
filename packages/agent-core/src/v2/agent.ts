@@ -170,7 +170,7 @@ export class Agent {
   private epoch = 0;
   /** introductions run one at a time, across every contact (see `introduced`) */
   private introducing: Promise<unknown> = Promise.resolve();
-  /** outbox passes run one at a time, across every assembly (see `deliverTurn`) */
+  /** what talks to the mediator over the standing link — outbox passes, invitation handouts and revocations, a move's leaving — one turn at a time, across every assembly (see `deliverTurn`) */
   private delivering: Promise<unknown> = Promise.resolve();
   /** inbound handling runs one opened envelope at a time, across every assembly, so two pickups cannot race the dedup (see `take`) */
   private receiving: Promise<unknown> = Promise.resolve();
@@ -318,17 +318,39 @@ export class Agent {
     return this.destroyed || epoch !== this.epoch;
   }
 
+  /**
+   * The ring, brought up to the fold — one instance for the life of the
+   * agent. A mint lands in the ring its composer holds; were a start to
+   * build a fresh one, a key minted while it reloaded would sit in the
+   * old ring only, and the assembly that follows could not open mail to
+   * it. The (re)load rides the mint lock, so no mint lands between the
+   * pass over the fold and its return.
+   */
+  private loadedRing(): Promise<Keyring> {
+    const run = this.choosing.chain.then(async () => {
+      const have = this.ring;
+      if (have !== null) {
+        await have.reload();
+        return have;
+      }
+      const ring = await Keyring.load(this.vault);
+      this.ring = ring;
+      return ring;
+    });
+    this.choosing.chain = run.catch(() => undefined);
+    return run;
+  }
+
   private async bringUp(epoch: number): Promise<void> {
     if (this.halted(epoch)) {
       return;
     }
     try {
       this.setStatus({ state: "connecting", detail: "deriving keys" });
-      const ring = await Keyring.load(this.vault);
+      const ring = await this.loadedRing();
       if (this.halted(epoch)) {
         return;
       }
-      this.ring = ring;
       for (const skip of ring.skipped) {
         this.log(`leaving ${skip.key} out of the ring: it derives ${didPlaceholder(skip.derived)}, the log says ${didPlaceholder(skip.did)}`);
       }
@@ -566,7 +588,11 @@ export class Agent {
    * The move rides the lifecycle queue. The epoch moves now, so a start
    * midway stops at its next checkpoint — before the leaving begins, and
    * with everything it registered still on the fold for the drop list —
-   * and the transition takes the next turn. Once its turn comes, the two
+   * and the transition takes the next turn. The leaving itself is a
+   * turn on the delivery queue: an add still in flight toward the old
+   * mediator — a stalled pass registering its key, an invitation being
+   * handed out — lands and is recorded before the drop list is read,
+   * and no pass runs mid-leave. Once its turn comes, the two
    * records (the retirement, the new arrangement) land whatever else was
    * asked meanwhile: a stop between them is the crash the next start
    * heals. Only the closing bring-up yields to a newer call, which does
@@ -574,7 +600,7 @@ export class Agent {
    */
   async setMediator(mediatorDid: string): Promise<void> {
     if (this.ring === null) {
-      this.ring = await Keyring.load(this.vault);
+      await this.loadedRing();
     }
     if (this.startTimer !== null) {
       clearTimeout(this.startTimer);
@@ -597,7 +623,7 @@ export class Agent {
       if (mediation.mediatorDid === mediatorDid) {
         throw new Error("already reached via that mediator");
       }
-      await this.leaveMediator(ring, mediation.mediatorDid);
+      await this.deliverTurn(() => this.leaveMediator(ring, mediation.mediatorDid));
     }
     await ring.createMediation(mediatorDid);
     await this.bringUp(epoch);
@@ -769,6 +795,9 @@ export class Agent {
    * flight on the old — two passes over one fold would each see the same
    * message unsent and send it twice. The outbox is read once the turn
    * comes, so a pass queued across a restart runs on the current one.
+   * What registers with the mediator rides the same queue — a pass's
+   * add, an invitation's — so a mediator move takes a turn to know
+   * every add has landed before it reads the drop list (`setMediator`).
    */
   private deliverTurn<T>(step: () => Promise<T>): Promise<T> {
     const run = this.delivering.then(step);
@@ -956,23 +985,28 @@ export class Agent {
    * next start registers it (`registerPending`); with no link up at
    * all, nothing is minted. `goal` is what the
    * invitation says it is for, in words for the person opening it.
+   * The handout is a turn on the delivery queue: a mediator move waits
+   * for it and retires and drops the invitation with the rest, rather
+   * than racing its registration.
    */
   async createInvitation(goal?: string): Promise<InvitationRecord> {
-    const ring = this.ring;
-    const routed = ring === null ? null : routedOf(ring.current());
-    if (ring === null || routed === null) {
-      throw new Error("no mediation granted yet: nothing to hand out");
-    }
-    const link = this.link;
-    if (link === null) {
-      throw new Error("the mediator is not reachable yet: an invitation issued now would go unregistered");
-    }
-    const minted = await ring.mintInvitation(routed, uuidv7(), goal ?? `Write to ${this.displayName()}`);
-    await register(link, this.vault, [minted.key]);
-    this.log("issued an invitation; the first to write to it takes it");
-    const issued = this.invitationOf(minted.key);
-    this.events.onInvitation?.(issued);
-    return issued;
+    return this.deliverTurn(async () => {
+      const ring = this.ring;
+      const routed = ring === null ? null : routedOf(ring.current());
+      if (ring === null || routed === null) {
+        throw new Error("no mediation granted yet: nothing to hand out");
+      }
+      const link = this.link;
+      if (link === null) {
+        throw new Error("the mediator is not reachable yet: an invitation issued now would go unregistered");
+      }
+      const minted = await ring.mintInvitation(routed, uuidv7(), goal ?? `Write to ${this.displayName()}`);
+      await register(link, this.vault, [minted.key]);
+      this.log("issued an invitation; the first to write to it takes it");
+      const issued = this.invitationOf(minted.key);
+      this.events.onInvitation?.(issued);
+      return issued;
+    });
   }
 
   /**
@@ -982,23 +1016,25 @@ export class Agent {
    * forget the contact instead.
    */
   async revokeInvitation(id: string): Promise<void> {
-    const found = this.invitations().find((invitation) => invitation.id === id);
-    if (found === undefined) {
-      return;
-    }
-    if (!found.open) {
-      throw new Error("that invitation was taken; its DID belongs to a contact now");
-    }
-    if (found.registered && found.did !== null && this.link !== null) {
-      try {
-        await this.link.roundTrip(RECIPIENT_UPDATE, { updates: [{ recipient_did: found.did, action: "remove" }] });
-      } catch (err) {
-        this.log(`could not unregister an invitation's DID: ${messageOf(err)}`);
+    return this.deliverTurn(async () => {
+      const found = this.invitations().find((invitation) => invitation.id === id);
+      if (found === undefined) {
+        return;
       }
-    }
-    await record(this.eventLog, this.fold, drafts.didRetired({ key: found.key, because: "revoked" }));
-    this.events.onInvitation?.(this.invitationOf(found.key));
-    this.log("revoked an invitation");
+      if (!found.open) {
+        throw new Error("that invitation was taken; its DID belongs to a contact now");
+      }
+      if (found.registered && found.did !== null && this.link !== null) {
+        try {
+          await this.link.roundTrip(RECIPIENT_UPDATE, { updates: [{ recipient_did: found.did, action: "remove" }] });
+        } catch (err) {
+          this.log(`could not unregister an invitation's DID: ${messageOf(err)}`);
+        }
+      }
+      await record(this.eventLog, this.fold, drafts.didRetired({ key: found.key, because: "revoked" }));
+      this.events.onInvitation?.(this.invitationOf(found.key));
+      this.log("revoked an invitation");
+    });
   }
 
   /** The invitations this vault has issued, open and taken, oldest first. */
