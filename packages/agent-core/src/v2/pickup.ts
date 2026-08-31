@@ -82,6 +82,22 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * The count a status carries. The specification makes `message_count`
+ * required; a status without one, or with something that is no count,
+ * is the mediator's error, not an empty queue.
+ */
+function countOf(status: IMessage): number {
+  const count = status.body["message_count"];
+  if (count === undefined) {
+    throw new Error("mediator's status has no message count");
+  }
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+    throw new Error(`mediator's status is not a count: ${JSON.stringify(count)}`);
+  }
+  return count;
+}
+
 export class Pickup {
   private readonly onLive: () => void;
   private readonly log: (line: string) => void;
@@ -101,8 +117,9 @@ export class Pickup {
    * queue is empty, a round acknowledges nothing — mail left queued
    * would only be fetched again in the same breath — or ten rounds have
    * run. Throws when the line is cut, or when the mediator answers
-   * something else than the ritual says (a problem report, say): that
-   * is not an empty queue.
+   * something else than the ritual says — a problem report, a status
+   * with no count or one that counts mail it does not deliver: none of
+   * that is an empty queue.
    */
   async drain(): Promise<Drained> {
     let acked = 0;
@@ -111,14 +128,18 @@ export class Pickup {
       if (status.type !== STATUS) {
         throw new Error(`mediator answered ${status.type} to status-request`);
       }
-      const count = status.body["message_count"];
-      if (typeof count !== "number" || count <= 0) {
+      const count = countOf(status);
+      if (count === 0) {
         return { acked, ended: "empty" };
       }
       this.log(`${count} message(s) queued at the mediator`);
       const delivery = await this.link.exchange(DELIVERY_REQUEST, { limit: count });
       if (delivery.msg.type === STATUS) {
-        // the queue emptied between the two questions
+        // a status instead of a delivery says the queue emptied between the two questions; one that counts mail and hands none over is no answer
+        const now = countOf(delivery.msg);
+        if (now !== 0) {
+          throw new Error(`mediator answered delivery-request with a status of ${now} queued and no delivery`);
+        }
         return { acked, ended: "empty" };
       }
       if (delivery.msg.type !== DELIVERY) {
@@ -208,7 +229,10 @@ export class Pickup {
       return 0;
     }
     try {
-      await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: taken });
+      const answer = await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: taken });
+      if (answer.type !== STATUS) {
+        throw new Error(`mediator answered ${answer.type} to messages-received`);
+      }
     } catch (err) {
       this.log(`ack failed (${messageOf(err)}); messages stay queued and will be deduplicated on the next pickup`);
       return 0;

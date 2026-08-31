@@ -315,17 +315,27 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     expect(queued(mediator, alice)).toEqual([]);
   });
 
-  it("a mediator that answers the ritual with something else is an error, not an empty queue; a status to a delivery-request is one", async () => {
+  it("a mediator that answers the ritual with something else, or a status that is no count, is an error, not an empty queue; a status of none to a delivery-request is one", async () => {
     const mediator = await newMediator();
     const alice = await party(mediator, 14);
     const bob = await party(mediator, 15);
-    // what the mediator answers instead, when it does; and a queue that empties between the two questions
-    const instead: { status: string | null; delivery: string | null } = { status: null, delivery: null };
+    // what the mediator answers instead, when it does: a type, or a status with this body; and a queue that empties between the two questions
+    type Instead = string | { message_count?: unknown } | null;
+    const instead: { status: Instead; delivery: Instead; ack: Instead } = { status: null, delivery: null, ack: null };
     let emptied = false;
-    const odd = (type: string) => plain(type, mediator.did, alice.me.identity.did, { code: "e.p.msg.unsupported" });
+    const odd = (what: string | { message_count?: unknown }) =>
+      typeof what === "string"
+        ? plain(what, mediator.did, alice.me.identity.did, { code: "e.p.msg.unsupported" })
+        : plain(STATUS, mediator.did, alice.me.identity.did, what as Record<string, unknown>);
     class Odd extends MediatorLink {
       override async roundTrip(type: string, body: Record<string, unknown>): Promise<IMessage> {
-        return type === STATUS_REQUEST && instead.status !== null ? odd(instead.status) : super.roundTrip(type, body);
+        if (type === STATUS_REQUEST && instead.status !== null) {
+          return odd(instead.status);
+        }
+        if (type === MESSAGES_RECEIVED && instead.ack !== null) {
+          return odd(instead.ack);
+        }
+        return super.roundTrip(type, body);
       }
       override async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
         if (type === DELIVERY_REQUEST && instead.delivery !== null) {
@@ -348,24 +358,55 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
       mediatorDoc: (await resolveDIDCommDoc(mediator.did)) as DIDDoc,
     });
     const seen: string[] = [];
-    const handle = new Pickup(link, (opened) => {
-      seen.push(contentOf(opened));
-      return "acked";
-    });
+    const log: string[] = [];
+    const handle = new Pickup(
+      link,
+      (opened) => {
+        seen.push(contentOf(opened));
+        return "acked";
+      },
+      { log: (line) => log.push(line) }
+    );
     await post(mediator, bob, alice, "waiting");
 
     instead.status = PROBLEM_REPORT;
     await expect(handle.drain()).rejects.toThrow(`mediator answered ${PROBLEM_REPORT} to status-request`);
+    // a status that carries no count, or something that is no count, is the mediator's error too
+    for (const [body, error] of [
+      [{}, "mediator's status has no message count"],
+      [{ message_count: "3" }, 'mediator\'s status is not a count: "3"'],
+      [{ message_count: -1 }, "mediator's status is not a count: -1"],
+      [{ message_count: 1.5 }, "mediator's status is not a count: 1.5"],
+    ] as [{ message_count?: unknown }, string][]) {
+      instead.status = body;
+      await expect(handle.drain()).rejects.toThrow(error);
+    }
     instead.status = null;
     instead.delivery = PROBLEM_REPORT;
     await expect(handle.drain()).rejects.toThrow(`mediator answered ${PROBLEM_REPORT} to delivery-request`);
+    // a status in place of a delivery must say the queue is empty; one that counts mail and hands none over is no answer
+    instead.delivery = { message_count: 2 };
+    await expect(handle.drain()).rejects.toThrow("mediator answered delivery-request with a status of 2 queued and no delivery");
     expect(seen).toEqual([]);
     expect(queued(mediator, alice)).toHaveLength(1);
 
+    // the acknowledgement answered with something else than a status is an acknowledgement that failed
     instead.delivery = null;
+    instead.ack = PROBLEM_REPORT;
+    log.length = 0;
+    expect(await handle.drain()).toEqual({ acked: 0, ended: "left" });
+    expect(seen).toEqual(["waiting"]);
+    expect(log).toEqual([
+      "1 message(s) queued at the mediator",
+      `ack failed (mediator answered ${PROBLEM_REPORT} to messages-received); messages stay queued and will be deduplicated on the next pickup`,
+      "nothing acknowledged this round; leaving the queue for a later pickup",
+    ]);
+    expect(queued(mediator, alice)).toHaveLength(1);
+
+    instead.ack = null;
     emptied = true;
     expect(await handle.drain()).toEqual({ acked: 0, ended: "empty" });
-    expect(seen).toEqual([]);
+    expect(seen).toEqual(["waiting"]);
   });
 
   it("the socket: live delivery is told, a delivery down it is taken and acknowledged, attachments that will not read stay queued beside one that is taken, a stray frame is logged; inbound steps run one after another", async () => {
