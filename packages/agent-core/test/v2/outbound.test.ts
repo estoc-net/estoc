@@ -106,6 +106,8 @@ interface Scene {
   offline: { reason: string | null };
   /** DIDs that do not resolve, for the scene's resolver */
   dead: Set<string>;
+  /** a resolution held back: the scene's resolver awaits a DID's entry here before answering */
+  stalls: Map<string, Promise<void>>;
   /** how many times each DID was resolved, by anyone in the scene */
   resolutions: Map<string, number>;
   clock: () => Date;
@@ -137,9 +139,11 @@ async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number }
   const endpoints: Scene["endpoints"] = new Map();
   const offline = { reason: null as string | null };
   const dead = new Set<string>();
+  const stalls = new Map<string, Promise<void>>();
   const resolutions = new Map<string, number>();
   const resolveDid = async (did: string): Promise<DIDDoc | null> => {
     resolutions.set(did, (resolutions.get(did) ?? 0) + 1);
+    await stalls.get(did);
     return dead.has(did) ? null : resolveDIDCommDoc(did);
   };
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -213,6 +217,7 @@ async function scene(options: { mediated?: boolean; deliveryTimeoutMs?: number }
     endpoints,
     offline,
     dead,
+    stalls,
     resolutions,
     clock,
     fresh: async () => {
@@ -367,6 +372,31 @@ describe("v2 outbound: composing", () => {
     const third = await s.outbound.compose(gone, BASIC_MESSAGE, { content: "three" });
     expect(types(await s.fresh())).toEqual([]);
     expect(third.plain.from).toBe(one.plain.from);
+  });
+
+  it("mints one key when the merge lands in the middle of composing", async () => {
+    const s = await scene();
+    const bob = await peer(2, BOB_HTTP);
+    const elder = await known(s, bob);
+    // a second contact whose cid sorts first: the merge will hand it the representative's seat
+    const younger = "0198a000-0000-7000-8000-000000000001";
+    await record(s.v.vault.events, s.v.fold, drafts.contactCreated({ cid: younger }));
+    await s.fresh();
+
+    // the first compose reads its representative, then waits on the resolver; the merge lands while it waits
+    let release = (): void => undefined;
+    s.stalls.set(bob.did, new Promise((resolve) => (release = resolve)));
+    const first = s.outbound.compose(elder, BASIC_MESSAGE, { content: "one" });
+    await Promise.resolve();
+    await record(s.v.vault.events, s.v.fold, drafts.contactMerged({ cid: elder, from: younger }));
+    expect(s.v.fold.contact(elder)?.cid).toBe(younger);
+    const second = s.outbound.compose(younger, BASIC_MESSAGE, { content: "two" });
+    release();
+
+    const [one, two] = await Promise.all([first, second]);
+    expect(types(await s.fresh()).filter((type) => type === "did.minted")).toHaveLength(1);
+    expect(two.plain.from).toBe(one.plain.from);
+    expect(s.v.fold.contact(younger)?.keys).toHaveLength(1);
   });
 
   it("answers their invitation: pthid names it until a profile of ours has gone out, and there is no prior to vouch with", async () => {

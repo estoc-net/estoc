@@ -85,8 +85,8 @@ export class Outbound {
   private readonly timeoutMs: number;
   private readonly clock: () => Date;
   private readonly log: (line: string) => void;
-  /** per contact: the `fromKey` in progress, so two first messages at once mint one key, not two */
-  private readonly choosing = new Map<string, Promise<unknown>>();
+  /** the `fromKey` in progress: one choice at a time, so two first messages at once mint one key, not two */
+  private choosing: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly opened: PeerVault,
@@ -280,13 +280,17 @@ export class Outbound {
    * (`Keyring.mintToward`: `did.minted` + `contact.useKey`). A key on
    * another route, or under another device's mediation, is no address
    * of this device's (§3.2) and is passed over; one the ring does not
-   * hold is not ours to write from. One contact at a time: two first
-   * messages at once wait on one choice, and the second finds the
-   * first's mint in the fold rather than minting its own.
+   * hold is not ours to write from. One choice at a time, across every
+   * contact — not per contact: the representative a cid resolves to can
+   * change under a merge while a compose waits, and a lock keyed on it
+   * can split one contact across two chains. Choosing is fold reads and
+   * at most one mint, nothing on the wire, so the queue is short; the
+   * second chooser finds the first's mint in the fold rather than
+   * minting its own, whenever the two turn out to be one contact.
    */
   private fromKey(cid: string, routed: Routed): Promise<MyIdentity> {
-    const run = (this.choosing.get(cid) ?? Promise.resolve()).then(() => this.chooseKey(cid, routed));
-    this.choosing.set(cid, run.catch(() => undefined));
+    const run = this.choosing.then(() => this.chooseKey(cid, routed));
+    this.choosing = run.catch(() => undefined);
     return run;
   }
 
