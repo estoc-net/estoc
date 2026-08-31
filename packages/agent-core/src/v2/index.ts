@@ -5,8 +5,9 @@
  * reads, the trace of what this device saw, the channel an envelope
  * proves, the keys this device holds, the line to the mediator, the
  * rituals over it, the pickup of what it holds for us, the handlers
- * for what the mail says and what one opened envelope becomes; the rest
- * follows, one module at a time.
+ * for what the mail says, what one opened envelope becomes, what a
+ * message of ours becomes on its way out and the outbox it waits in; the
+ * rest follows, one module at a time.
  */
 
 export { createVault, inspectVault, openVault, type CreateVaultOptions, type Inspected, type OpenOptions, type PeerVault } from "./identity.js";
@@ -34,8 +35,10 @@ export { basicmessageHandler } from "./handlers/basicmessage.js";
 export { shareProfile, userProfileHandler } from "./handlers/user-profile.js";
 export { keepShare, objectShareHandler } from "./handlers/object-share.js";
 export { Inbound, type Handled, type InboundOptions } from "./inbound.js";
+export { Outbound, Outbox, type Attempted, type Composed, type OutboundOptions, type OutboxOptions } from "./outbound.js";
 export { GOAL_CONNECT, invitationMessage, invitationUrl, parseInvitation, type Invitation } from "./oob.js";
 export {
+  attributedTo,
   contactRecord,
   didPlaceholder,
   invitationRecord,

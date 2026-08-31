@@ -44,7 +44,6 @@ import {
   recordAll,
   recordMessage,
   type AttachCause,
-  type Attribution,
   type Channel,
   type ChannelKey,
   type InboundSkeleton,
@@ -60,7 +59,7 @@ import type { HandlerContext, InboundRecord, ProtocolHandler } from "./handler.j
 import { keepShare } from "./handlers/object-share.js";
 import type { PeerVault } from "./identity.js";
 import type { Opened } from "./link.js";
-import { contactRecord, didPlaceholder, messageRecord, type ContactRecord, type MessageRecord, type PlainMessage } from "./records.js";
+import { attributedTo, contactRecord, didPlaceholder, messageRecord, type ContactRecord, type MessageRecord, type PlainMessage } from "./records.js";
 
 export interface InboundOptions {
   /** the sender's document, and a signer's, which the channel is read from; null for a DID that does not resolve */
@@ -93,18 +92,6 @@ function messageOf(err: unknown): string {
 /** The dedup key: the wire id, from this key of theirs — an anonymous envelope's, from no one. */
 function seenKey(peerKey: string | null, wireId: string): string {
   return `${peerKey ?? ""}\n${wireId}`;
-}
-
-/** The cid an attribution names: one, or the first of several; null for none, and for deleted — the caller's to tell apart first. */
-function pick(attribution: Attribution): string | null {
-  switch (attribution.kind) {
-    case "one":
-      return attribution.cid;
-    case "several":
-      return attribution.cids[0] as string;
-    default:
-      return null;
-  }
 }
 
 /** The skeleton (§3.1) of a message that proved `proved`: `did` with a peer key, never without. */
@@ -263,7 +250,7 @@ export class Inbound {
     if (sender === null) {
       return null;
     }
-    const known = pick(this.fold.attribution(pair));
+    const known = attributedTo(this.fold.attribution(pair));
     if (known === null) {
       await this.adopt(pair, "invitation", invitation.oobId);
       this.log("someone took an invitation of ours; they have a thread now");
@@ -353,7 +340,7 @@ export class Inbound {
       this.log(`a ${type} from a contact since deleted; recorded, attributed to nobody`);
       return null;
     }
-    const known = pick(attribution);
+    const known = attributedTo(attribution);
     if (known !== null) {
       if (attribution.kind === "several") {
         this.log(`${attribution.cids.length} contacts claim one channel; shown under ${this.contactOf(known).name} until merged`);

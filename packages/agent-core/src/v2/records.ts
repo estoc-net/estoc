@@ -7,7 +7,7 @@
  */
 
 import type { BlobStore } from "@estoc/event-store";
-import { readRoot, type Absence, type ChannelKey, type Contact, type Invitation, type Message, type MessageIn, type MessageOut, type VaultFold } from "@estoc/vault/v2";
+import { readRoot, type Absence, type Attribution, type ChannelKey, type Contact, type Invitation, type Message, type MessageIn, type MessageOut, type VaultFold } from "@estoc/vault/v2";
 
 /** A DIDComm plaintext message as JSON: what didcomm-rust's as_value() yields. */
 export interface PlainMessage {
@@ -126,6 +126,18 @@ export type ContactRecord = Omit<Contact, "thread"> & { name: string };
 export function contactRecord(contact: Contact): ContactRecord {
   const { thread, ...rest } = contact;
   return { ...rest, name: nameOf(contact) };
+}
+
+/** The cid an attribution names: one, or the first of several; null for none, and for deleted — the caller's to tell apart first. */
+export function attributedTo(attribution: Attribution): string | null {
+  switch (attribution.kind) {
+    case "one":
+      return attribution.cid;
+    case "several":
+      return attribution.cids[0] as string;
+    default:
+      return null;
+  }
 }
 
 /** What a contact is shown by: the petname, else what they claimed, else a stand-in for their current DID, else for the cid. */
