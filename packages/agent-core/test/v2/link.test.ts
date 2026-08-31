@@ -398,4 +398,14 @@ describe("v2 link: the line to the mediator", () => {
     expect(new Set(alice.log)).toEqual(new Set(["trace not written: disk full"]));
     expect(await alice.trace.read("wire")).toEqual([]);
   });
+
+  it("a ritual gives up after its timeout: a fetch that never settles does not hold the line forever", async () => {
+    const mediator = await newMediator();
+    const hanging: typeof fetch = (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason as Error));
+      });
+    const alice = await party(mediator, 16, { fetch: hanging, timeoutMs: 50 });
+    await expect(alice.link.roundTrip(MEDIATE_REQUEST, {})).rejects.toThrow(/timeout|abort/i);
+  });
 });

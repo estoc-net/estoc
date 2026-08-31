@@ -40,6 +40,8 @@ export interface LinkOptions {
   mediatorDid: string;
   /** the mediator's document, resolved by the caller: where `http()` and `ws()` read the endpoints */
   mediatorDoc: DIDDoc;
+  /** how long a ritual round trip waits for the mediator before giving up; default 15s (`Outbound.deliver` times its own POSTs) */
+  timeoutMs?: number;
   /** a line for the human log: a trace that could not be written is reported here, not thrown, and a socket frame that failed */
   log?: (line: string) => void;
 }
@@ -135,6 +137,7 @@ export class MediatorLink {
   private readonly secrets: () => Secret[];
   private readonly me: () => PeerIdentity;
   private readonly mediatorDoc: DIDDoc;
+  private readonly timeoutMs: number;
   private readonly log: (line: string) => void;
   readonly mediatorDid: string;
   private socket: WebSocket | null = null;
@@ -152,6 +155,7 @@ export class MediatorLink {
     this.me = options.me;
     this.mediatorDid = options.mediatorDid;
     this.mediatorDoc = options.mediatorDoc;
+    this.timeoutMs = options.timeoutMs ?? 15_000;
     this.log = options.log ?? (() => undefined);
   }
 
@@ -267,8 +271,12 @@ export class MediatorLink {
   /**
    * `roundTrip` with the opened reply whole, for what needs its
    * observation as a parent. Throws when the line is cut, before or
-   * during the answer (`wire.error` written), or when the mediator
-   * answers anything but 2xx (the answer on `wire`, unopened).
+   * during the answer (`wire.error` written), when the mediator
+   * answers anything but 2xx (the answer on `wire`, unopened), or when
+   * nothing comes back within `timeoutMs` — the queue a ritual rides
+   * must not hang on a wire that never answers, and none of them needs
+   * an answer to stay safe: `leave` drops every DID that might have
+   * been told, answered or not.
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const message = plainMessage(type, this.me().did, this.mediatorDid, body);
@@ -276,7 +284,7 @@ export class MediatorLink {
     const endpoint = this.http();
     const out = await this.traceOut("http", endpoint, packed, { type });
     await this.traceSeal(seal, out, message);
-    const { ok, status, text, reply } = await this.post(endpoint, packed, out);
+    const { ok, status, text, reply } = await this.post(endpoint, packed, out, AbortSignal.timeout(this.timeoutMs));
     if (!ok) {
       throw new Error(`mediator answered ${status} to ${type}`);
     }

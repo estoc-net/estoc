@@ -106,7 +106,7 @@ export interface AgentOptions {
   displayName?: () => string;
   /** how long to wait before reopening a closed socket */
   reconnectDelayMs?: number;
-  /** how long one delivery may take before it counts as failed (and is retried later); default 15s */
+  /** how long one delivery or mediator round trip may take before it gives up (deliveries are retried later); default 15s */
   deliveryTimeoutMs?: number;
   /**
    * Application-protocol handlers, added to the built-in basicmessage/2.0,
@@ -482,6 +482,7 @@ export class Agent {
       mediatorDid,
       mediatorDoc,
       log: (line) => this.log(line),
+      ...(this.deliveryTimeoutMs === undefined ? {} : { timeoutMs: this.deliveryTimeoutMs }),
       ...(this.fetchImpl === undefined ? {} : { fetch: this.fetchImpl }),
       ...(this.wsImpl === undefined ? {} : { WebSocket: this.wsImpl }),
     });

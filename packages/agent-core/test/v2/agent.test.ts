@@ -694,4 +694,46 @@ describe("v2 agent hardened", () => {
     alice.agent.destroy();
     bob.agent.destroy();
   });
+
+  it("drops a DID whose add was applied but never answered: the move cleans what might have been told", async () => {
+    const one = await newMediator();
+    const two = await newMediator({ fill: 232, http: "http://mediator-two/", ws: "ws://mediator-two/ws" });
+    const net = network(one, two);
+    const gate = { arm: false };
+    // the mediator gets the request and applies it; the answer is lost on the way back
+    const flaky: typeof fetch = async (input, init) => {
+      const response = await net.fetch(input, init);
+      if (gate.arm) {
+        gate.arm = false;
+        throw new Error("connection lost");
+      }
+      return response;
+    };
+    const alice = await newParty("Alice", 26, one, { fetch: flaky, webSocket: net.WebSocket });
+    const bob = await newParty("Bob", 27, one);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    const contact = contactByDid(alice, bob.agent.did as string) as Contact;
+    // introduced by decree: the send below composes directly and mints the first key toward Bob
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.profileShared({ ...(contact.channels[0] as ChannelKey), mid: "0198a000-0000-7000-8000-000000000061" }));
+
+    // the attempt's add reached the mediator, its answer did not come back: no did.registered, the delivery failed
+    gate.arm = true;
+    const sent = await alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    expect(alice.v.fold.delivery(sent.mid)?.attempts.map((attempt) => attempt.outcome)).toEqual(["failed"]);
+    const minted = myDidToward(alice, bob.agent.did as string);
+    expect(one.recipients.has(minted)).toBe(true);
+    expect(alice.v.fold.myKey(keyWearing(alice, minted) as string)?.registered ?? []).not.toContain(alice.v.vault.self);
+
+    // the move drops every DID this device minted under the old arrangement, answered or not
+    const oldPublic = alice.agent.did as string;
+    await alice.agent.setMediator(two.did);
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live at the new mediator");
+    expect(one.recipients.has(minted)).toBe(false);
+    expect(one.recipients.has(oldPublic)).toBe(false);
+    expect(two.recipients.size).toBeGreaterThan(0);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
 });
