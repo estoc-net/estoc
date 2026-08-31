@@ -102,6 +102,14 @@ async function contact({ v }: Party, cid: string): Promise<void> {
   await record(v.vault.events, v.fold, drafts.contactCreated({ cid }));
 }
 
+/** Another device's events folded into this one's: what a merge (§10) leaves in the fold. */
+async function merged(into: Party, from: Party): Promise<void> {
+  for await (const event of from.v.vault.events.scan()) {
+    into.v.fold.apply(event);
+  }
+  into.ring = await Keyring.load(into.v); // the same seed derives the other device's keys too: held, inbound opens
+}
+
 /** a contact's keys, as the fold lists them: the live ones */
 const keysOf = ({ v }: Party, cid: string) => v.fold.contact(cid)?.keys ?? [];
 const count = (mediator: FakeMediator, type: string) => mediator.seenTypes.filter((seen) => seen === type).length;
@@ -362,5 +370,89 @@ describe("v2 mediation: the rituals with the mediator", () => {
     expect(await rotateStale(v, ring)).toEqual({ moved: [C1], retired: [c1Stale.key] });
     expect(keysOf(alice, C1)).toHaveLength(1);
     expect(v.fold.myKey(keysOf(alice, C1)[0]?.key ?? "")?.minted).toMatchObject({ mediation: routed.id, routingDid: routed.routingDid });
+  });
+
+  it("another device on the same mediator: its keys are seen in the fold, not registered under this device's me, not counted as ours", async () => {
+    const mediator = await newMediator();
+    const alice = await party(mediator, 12);
+    const bob = await party(mediator, 12); // the same seed, another device
+    expect(bob.self).not.toBe(alice.self);
+    await alice.ring.createMediation(mediator.did);
+    const mine = await establish(alice.link, alice.ring, alice.v);
+    await bob.ring.createMediation(mediator.did);
+    const theirs = await establish(bob.link, bob.ring, bob.v);
+    await contact(bob, C1);
+    const bobRouted = theirs.mediation;
+    const bobToward = await bob.ring.mintToward(C1, bobRouted);
+    const bobInvitation = await bob.ring.mintInvitation(bobRouted, "oob-b", null);
+    await register(bob.link, bob.v, [bobToward.key, bobInvitation.key]);
+    expect(mediator.recipients.get(bobToward.identity.did)).toBe(bob.ring.me?.identity.did);
+    const asked = mediator.seenTypes.length;
+
+    await merged(alice, bob);
+    const { v, ring, link, self } = alice;
+    expect(v.fold.contact(C1)?.keys.map((use) => use.key)).toEqual([bobToward.key]);
+    expect(v.fold.invitations().filter((invitation) => invitation.open).map((invitation) => invitation.key)).toEqual([bobInvitation.key]);
+    expect(ring.keyOfDid(bobToward.identity.did)).toBe(bobToward.key); // held: the seed is the same
+    expect(v.fold.myKey(theirs.pub.key)?.minted?.routingDid).toBe(mediator.did); // the same route as ours
+
+    expect(registerPending(v.fold, self)).toEqual([]);
+    for (const key of [theirs.pub.key, bobToward.key, bobInvitation.key]) {
+      await expect(register(link, v, [key])).rejects.toThrow("another device");
+    }
+    expect(await establish(link, ring, v)).toEqual({ ...mine, steps: [] });
+    expect(await rotateStale(v, ring)).toEqual({ moved: [], retired: [] });
+    expect(mediator.seenTypes).toHaveLength(asked);
+    expect(mediator.recipients.get(bobToward.identity.did)).toBe(bob.ring.me?.identity.did);
+    expect(mediator.recipients.get(theirs.pub.identity.did)).toBe(bob.ring.me?.identity.did);
+
+    // our own key toward the contact is ours to register, beside theirs
+    const toward = await ring.mintToward(C1, mine.mediation);
+    expect(registerPending(v.fold, self)).toEqual([toward.key]);
+    expect(await register(link, v, registerPending(v.fold, self))).toEqual([toward.key]);
+    expect(v.fold.contact(C1)?.keys.map((use) => use.key)).toEqual([bobToward.key, toward.key]);
+
+    // leaving drops what we told the mediator, not what they did
+    const left = await leave(link, v);
+    expect(left).toMatchObject({ retired: [mine.pub.key], dropped: [mine.pub.identity.did, toward.identity.did] });
+    expect(mediator.recipients.get(bobToward.identity.did)).toBe(bob.ring.me?.identity.did);
+    expect(v.fold.myKey(theirs.pub.key)?.retired).toBeNull();
+    expect(v.fold.myKey(bobInvitation.key)?.retired).toBeNull();
+  });
+
+  it("another device on another mediator: its keys toward a contact are neither counted as ours nor retired when our route moves", async () => {
+    const mediator = await newMediator();
+    const alice = await party(mediator, 13);
+    const bob = await party(await newMediator(203), 13);
+    const created = await mediation(alice, OLD_ROUTE);
+    await contact(alice, C1);
+    const stale = await alice.ring.mintToward(C1, created);
+    await bob.ring.createMediation(bob.mediator.did);
+    const theirs = await establish(bob.link, bob.ring, bob.v);
+    await contact(bob, C1);
+    await contact(bob, C2);
+    const bobC1 = await bob.ring.mintToward(C1, theirs.mediation);
+    const bobC2 = await bob.ring.mintToward(C2, theirs.mediation);
+    await merged(alice, bob);
+    const { v, ring, link, self } = alice;
+    expect(v.fold.contact(C1)?.keys.map((use) => use.key)).toEqual([stale.key, bobC1.key]);
+
+    // our route moves: our stale key toward C1 is replaced, theirs is left as it is; C2, theirs alone, is not ours to move
+    await record(v.vault.events, v.fold, drafts.mediationGranted({ id: created.id, routingDid: mediator.did }));
+    await establish(link, ring, v);
+    const rotated = await rotateStale(v, ring);
+    expect(rotated).toEqual({ moved: [C1], retired: [stale.key] });
+    expect(v.fold.myKey(bobC1.key)?.retired).toBeNull();
+    expect(v.fold.myKey(bobC2.key)?.retired).toBeNull();
+    expect(v.fold.myKey(theirs.pub.key)?.retired).toBeNull();
+    const fresh = keysOf(alice, C1).filter((use) => use.key !== bobC1.key);
+    expect(fresh).toHaveLength(1);
+    expect(v.fold.myKey(fresh[0]?.key ?? "")?.minted).toMatchObject({ by: self, routingDid: mediator.did });
+    expect(keysOf(alice, C2).map((use) => use.key)).toEqual([bobC2.key]);
+    expect(registerPending(v.fold, self)).toEqual([fresh[0]?.key]);
+    expect(await rotateStale(v, ring)).toEqual({ moved: [], retired: [] });
+
+    // and theirs, riding their route, is not "one of ours on the route" that would spare a mint
+    expect(bobC1.identity.did).not.toBe(fresh[0]?.did);
   });
 });

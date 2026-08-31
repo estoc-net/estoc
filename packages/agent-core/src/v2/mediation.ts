@@ -8,9 +8,14 @@
  * what the log already says. The rituals decide nothing about contacts
  * or mail; they keep one invariant — every DID of ours that is an
  * address rides the current routing DID, and the mediator has been told
- * of it — and report what they did. Moved from the v1 agent
- * (`establishMediation`, `registerRecipients`, `registerPending`,
- * `leaveMediator`, `rotateStale`), the records now events.
+ * of it — and report what they did. "Ours" here is this device's: the
+ * keys it minted (`did.minted` by `self`). Another device's keys are
+ * seen in the fold and left alone (§5, §7.3: seen, not adopted) — not
+ * registered under this device's `me`, which would take the mediator's
+ * mapping from it, and not retired for riding a route that is not
+ * ours. Moved from the v1 agent (`establishMediation`,
+ * `registerRecipients`, `registerPending`, `leaveMediator`,
+ * `rotateStale`), the records now events.
  */
 
 import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault/v2";
@@ -39,11 +44,12 @@ export function routedOf(mediation: Mediation | null): Routed | null {
 }
 
 /**
- * The keys of ours on the current routing DID that this device's
+ * The keys this device minted on the current routing DID that its
  * mediator has not been told of (§7.3: `registered` without this
  * device) — the public DID, every live key toward a contact, every open
  * invitation — a mint that happened while the mediator could not be
- * told, or was told and the answer never recorded. What `register`
+ * told, or was told and the answer never recorded. Another device's
+ * keys on the same route are its own to register. What `register`
  * takes; empty without a granted mediation.
  */
 export function registerPending(fold: VaultFold, self: string): string[] {
@@ -54,7 +60,7 @@ export function registerPending(fold: VaultFold, self: string): string[] {
   const routingDid = mediation.routingDid;
   const pending = new Set<string>();
   const consider = (key: MyKey | null): void => {
-    if (key !== null && live(key) && key.minted.routingDid === routingDid && !registeredBy(key, self)) {
+    if (key !== null && live(key) && ownedBy(key, self) && key.minted.routingDid === routingDid && !registeredBy(key, self)) {
       pending.add(key.key);
     }
   };
@@ -136,7 +142,9 @@ export async function establish(link: MediatorLink, keyring: Keyring, opened: Pe
  * fold already shows registered by this device are not asked about
  * again; none left, no round trip. One refused fails the call — after
  * the accepted are recorded, so the next run asks about the refused
- * alone. Returns the keys recorded this time.
+ * alone. A key another device minted is refused here, before anything
+ * is asked: registering it would take its mail. Returns the keys
+ * recorded this time.
  */
 export async function register(link: MediatorLink, opened: PeerVault, keys: readonly string[]): Promise<string[]> {
   const { fold, vault } = opened;
@@ -144,8 +152,11 @@ export async function register(link: MediatorLink, opened: PeerVault, keys: read
   const pending: { key: string; did: string }[] = [];
   for (const key of new Set(keys)) {
     const have = fold.myKey(key);
-    if (have === null || have.minted === null) {
+    if (have === null || !minted(have)) {
       throw new Error(`${key} was never minted`);
+    }
+    if (!ownedBy(have, vault.self)) {
+      throw new Error(`${key} was minted by another device: its to register`);
     }
     if (!registeredBy(have, vault.self)) {
       pending.push({ key, did: have.minted.did });
@@ -239,16 +250,18 @@ export interface Rotated {
 
 /**
  * The invariant a mediator change (or a grant that moved the route)
- * leaves to the next start: every live key toward a contact rides the
- * current routing DID. For a contact with one that does not — the
- * mediator was changed, whether or not this process saw it — a fresh
- * key is minted toward it (`Keyring.mintToward`) unless one on the
- * route is there already (a run that stopped before retiring), then
- * every stale one is `did.retired { because: "mediation-changed" }`;
- * the contact learns by `from_prior` on what goes out next. The
- * mediation's own public DID and open invitations on an old route are
- * retired the same way; `establish` mints the next public DID. Nothing
- * without a granted mediation.
+ * leaves to the next start: every live key this device minted toward a
+ * contact rides the current routing DID. For a contact with one that
+ * does not — the mediator was changed, whether or not this process saw
+ * it — a fresh key is minted toward it (`Keyring.mintToward`) unless
+ * one of ours on the route is there already (a run that stopped before
+ * retiring), then every stale one is `did.retired { because:
+ * "mediation-changed" }`; the contact learns by `from_prior` on what
+ * goes out next. Another device's keys toward the contact ride its
+ * route and are neither counted nor retired. The mediation's own public
+ * DID and open invitations on an old route are retired the same way;
+ * `establish` mints the next public DID. Nothing without a granted
+ * mediation.
  */
 export async function rotateStale(opened: PeerVault, keyring: Keyring): Promise<Rotated> {
   const { fold, vault } = opened;
@@ -258,8 +271,9 @@ export async function rotateStale(opened: PeerVault, keyring: Keyring): Promise<
   if (mediation === null || routed === null) {
     return done;
   }
-  const onRoute = (key: MyKey | null): boolean => key !== null && live(key) && key.minted.routingDid === routed.routingDid;
-  const stale = (key: MyKey | null): key is Minted => key !== null && live(key) && key.minted.routingDid !== routed.routingDid;
+  const ours = (key: MyKey | null): key is Minted => key !== null && live(key) && ownedBy(key, vault.self);
+  const onRoute = (key: MyKey | null): boolean => ours(key) && key.minted.routingDid === routed.routingDid;
+  const stale = (key: MyKey | null): key is Minted => ours(key) && key.minted.routingDid !== routed.routingDid;
   const retire = async (key: string): Promise<void> => {
     await record(vault.events, fold, drafts.didRetired({ key, because: MEDIATION_CHANGED }));
     done.retired.push(key);
@@ -306,6 +320,11 @@ function isProfile(key: MyKey): boolean {
 
 function registeredBy(key: MyKey | null, self: string): boolean {
   return key !== null && key.registered.includes(self);
+}
+
+/** Minted by this device: the one whose mediator it is registered with, and whose route it rides. */
+function ownedBy(key: Minted, self: string): boolean {
+  return key.minted.by === self;
 }
 
 function openInvitations(fold: VaultFold): Set<string> {
