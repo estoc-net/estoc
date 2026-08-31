@@ -1,25 +1,34 @@
 /**
  * Inbound policy: one opened envelope, the events it leaves and the
  * answer it gets (vault-events.md §3, §6, §7). In order: the channel it
- * proves, read off the envelope and the sender's document; the
- * observations a device writes on first sight (`channel.firstSeen`,
- * `peer.resolved`); the same wire id from the same key again, dropped;
- * an invitation of ours taken, when the key is one; an object-share's
- * blocks kept; the message itself, body first; the `from_prior` a
- * sender vouched with, as `peer.rotated`; the contact the channel
+ * proves, read off the envelope and the documents it was opened with;
+ * the same wire id from the same key again, dropped; the observations a
+ * device writes on first sight (`channel.firstSeen`, `peer.resolved`);
+ * the `from_prior` a sender vouched with, as `peer.rotated`; an
+ * invitation of ours taken, when the key is one; the contact the channel
  * belongs to, by attribution — a stranger adopted, a second taker of an
- * invitation turned away; and the answer: the specification's own types
+ * invitation turned away; an object-share's blocks kept; the message
+ * itself, body first; and the answer: the specification's own types
  * here, the rest to the handler for the type, with the contact.
+ *
+ * The record comes last on purpose. The wire id seen is what makes a
+ * redelivery a duplicate, and it is read from the record; so every event
+ * a message gives rise to is in the log before the record is, and a
+ * step that fails — the disk, a crash — leaves an envelope the mediator
+ * still holds and a log the redelivery finishes: each step before the
+ * record finds its own work done and does it once. What follows the
+ * record, the answer, is not retried: a handler's reply to a message
+ * recorded just before a crash is lost, as it was in v1.
  *
  * Every decision is the fold's to explain afterwards: nothing is kept
  * outside the log but the wire ids seen, and those are loaded from it.
  * What an envelope becomes is final once it is handed back — recorded,
- * a duplicate, or ignored, the pickup may acknowledge it; what throws
- * (a sender's document that does not resolve now) is left for a later
- * pickup. Moved from the v1 agent — processDelivery's inner loop,
- * claimInvitation, applyRotation, ensureContact, handleSpecMessage —
- * with one change under all of it: a contact is a component of events,
- * not a record saved (§6), so every step here appends and asks the fold.
+ * a duplicate, or ignored, the pickup may acknowledge it; what throws is
+ * left for a later pickup. Moved from the v1 agent — processDelivery's
+ * inner loop, claimInvitation, applyRotation, ensureContact,
+ * handleSpecMessage — with one change under all of it: a contact is a
+ * component of events, not a record saved (§6), so every step here
+ * appends and asks the fold.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
@@ -152,25 +161,26 @@ export class Inbound {
     this.ctx.log(line);
   }
 
-  /** One opened envelope, through every step; throws only when a document it needs does not resolve now. */
+  /** One opened envelope, through every step; throws when a step fails — a document that does not resolve now, a disk that will not take the body. */
   async handle(opened: Opened): Promise<Handled> {
-    const { msg, metadata, sender } = opened;
-    // 1. the channel it proves (§3)
-    const senderDoc = await this.document(sender);
+    const { msg, metadata, sender, recipient, documents } = opened;
+    // 1. the channel it proves (§3): the keys didcomm verified against, and the key of ours it found a secret for
+    const senderDoc = await this.document(sender, documents);
     const signer = signerOf(metadata);
-    const signerDoc = signer === null || signer === sender ? null : await this.document(signer);
-    const proved = inboundPair(metadata, senderDoc, this.keyOfDid, signerDoc);
+    const signerDoc = signer === null || signer === sender ? null : await this.document(signer, documents);
+    const proved = inboundPair(metadata, senderDoc, (did) => (did === recipient ? this.keyOfDid(did) : null), signerDoc);
     if (proved === null) {
       this.log(`a plaintext ${msg.type} reached us as mail; it proves no one and is not kept`);
       return { outcome: "ignored" };
     }
     const { pair } = proved;
+    // 2. seen before: recorded, so everything before the record was done too
     const key = seenKey(pair.peerKey, msg.id);
     if (this.seen.has(key)) {
       this.log(`${msg.type} ${msg.id} arrived again; recorded already`);
       return { outcome: "duplicate" };
     }
-    // 2. what a device writes on sight (§3.1)
+    // 3. what a device writes on sight (§3.1)
     await noteFirstSeen(this.events, this.fold, {
       ...pair,
       kind: proved.kind,
@@ -180,33 +190,39 @@ export class Inbound {
     if (sender !== null && senderDoc !== null) {
       await notePeerResolved(this.events, this.fold, resolvedOf(pair, sender, senderDoc));
     }
-    // 3. an invitation of ours (§7.4)
-    const refusal = await this.takeInvitation(pair, sender);
-    // 4. what the message carries, lifted out (§4)
-    const attachments = msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : [];
-    // 5. the message, body first (§4)
+    // 4. the rotation it vouched for (§3.1 `peer.rotated`), before anything asks who the channel belongs to
     const mid = uuidv7({ msecs: this.clock().getTime() });
+    await this.noteRotation(opened, pair, mid);
+    // 5. an invitation of ours (§7.4)
+    const refusal = await this.takeInvitation(pair, sender);
+    // 6. whose it is (§7.1)
+    const homed = await this.home(pair, sender, msg.type, refusal);
+    // 7. what the message carries, lifted out (§4)
+    const attachments = msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : [];
+    // 8. the message, body first (§4): the last event, and the one a redelivery is told apart by
     await recordMessage(this.opened.vault, this.fold, "in", utf8.encode(JSON.stringify(msg)), skeletonOf(proved, sender, msg, mid, attachments));
     this.seen.add(key);
-    // 6. the rotation it vouched for (§3.1 `peer.rotated`)
-    await this.noteRotation(opened, pair, mid);
-    // 7. whose it is (§7.1)
-    const contact = await this.home(pair, sender, msg.type, refusal);
     const found = await messageRecord(this.fold, this.opened.vault.blobs, mid);
     if (found === null) {
       throw new Error(`${mid} was recorded and is not in the fold`);
     }
-    // 8. the answer
+    const contact = homed === null ? null : this.contactOf(homed.cid);
+    // 9. the answer
     await this.answer(found, contact, sender);
     return { outcome: "recorded", record: found, contact };
   }
 
-  /** The document of a DID the envelope named; throws when it does not resolve now — didcomm resolved it to open the envelope, so this is a hiccup, not a verdict. */
-  private async document(did: string | null): Promise<DIDDoc | null> {
+  /**
+   * The document of a DID the envelope named: the one didcomm opened it
+   * with, when it is among `documents`; else resolved now — and a DID
+   * that does not resolve now is thrown on, a hiccup and not a verdict,
+   * since didcomm resolved it to open the envelope.
+   */
+  private async document(did: string | null, documents: ReadonlyMap<string, DIDDoc>): Promise<DIDDoc | null> {
     if (did === null) {
       return null;
     }
-    const doc = await this.resolveDid(did);
+    const doc = documents.get(did) ?? (await this.resolveDid(did));
     if (doc === null) {
       throw new Error(`${did} does not resolve now`);
     }
@@ -219,10 +235,12 @@ export class Inbound {
    * belongs to, when it does (they wrote to us by another key of ours
    * before), else to a contact created for them; `because: invitation`,
    * with the `oobId` their first messages name as `pthid`. Taken by
-   * another key, or withdrawn (the key retired): nothing is attributed,
-   * here or by adoption — the reason is handed to `home` to say, once
-   * the rotation a message may carry has had its say. Anonymous mail
-   * takes nothing. A key that is no invitation is nothing to this step.
+   * another key, or withdrawn (the key retired): nothing is attributed
+   * here, and the reason is handed to `home`, which says it when nothing
+   * else — a rotation just recorded, an attachment made elsewhere — homes
+   * the channel. Anonymous mail takes nothing. A key that is no
+   * invitation is nothing to this step. Done once: a redelivery finds
+   * the invitation taken, and the channel attributed.
    */
   private async takeInvitation(pair: ChannelKey, sender: string | null): Promise<string | null> {
     if (pair.myKey === null) {
@@ -259,7 +277,7 @@ export class Inbound {
    * on the channel `iss` was last resolved on — the old pair (§3.1) —
    * else on this one, when `iss` was never seen: a stranger vouching
    * with a DID they used elsewhere. Once: a later message still carrying
-   * it finds the two DIDs joined already.
+   * it, or this one redelivered, finds the two DIDs joined already.
    */
   private async noteRotation(opened: Opened, pair: ChannelKey, mid: string): Promise<void> {
     const { sender, fromPrior } = opened;
@@ -298,7 +316,7 @@ export class Inbound {
    * they wrote, not pinged: not anonymous, not turned away from an
    * invitation, not sealed to a mediation key (no contact's channel is
    * under one, §3), not a type the specification defines (pinging is
-   * not writing).
+   * not writing). Once: a redelivery finds the channel attributed.
    */
   private async home(pair: ChannelKey, sender: string | null, type: string, refusal: string | null): Promise<ContactRecord | null> {
     const attribution = this.fold.attribution(pair);

@@ -25,6 +25,7 @@ import {
   type InboundRecord,
   type MessageRecord,
   type MyIdentity,
+  type Opened,
   type PeerVault,
   type ProtocolHandler,
   type SendOptions,
@@ -122,9 +123,10 @@ async function scene(options: Partial<InboundOptions> & { extraHandlers?: Protoc
   const me = ring.identityOf(minted.key) as MyIdentity["identity"];
   const inv = ring.identityOf(invited.key) as MyIdentity["identity"];
   const trace = await AgentTrace.open(v.vault.local("agent"));
+  const resolveDid = options.resolveDid ?? resolveDIDCommDoc;
   const link = new MediatorLink({
     didcomm,
-    resolveDid: resolveDIDCommDoc,
+    resolveDid,
     trace,
     secrets: () => ring.secrets(),
     me: () => {
@@ -162,7 +164,7 @@ async function scene(options: Partial<InboundOptions> & { extraHandlers?: Protoc
     },
   };
   const inbound = new Inbound(v, ctx, {
-    resolveDid: resolveDIDCommDoc,
+    resolveDid,
     keyOfDid: ring.keyOfDid,
     handlers: [userProfileHandler, objectShareHandler, collect, ...(options.extraHandlers ?? [])],
     clock,
@@ -212,21 +214,21 @@ describe("v2 inbound: a message from a stranger", () => {
 
     const pair = { myKey: s.me.key, peerKey: fingerprint(bob, 2) };
     const events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached"]);
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
     expect(events[0]?.data).toEqual({ ...pair, kind: "authcrypt", peerPublicKey: key(bob.doc, 2), firstDid: bob.did });
     expect(events[1]?.data).toEqual({ ...pair, did: bob.did, keys: [key(bob.doc, 1), key(bob.doc, 2)], service: null });
-    expect(events[2]?.data).toMatchObject({ ...pair, did: bob.did, wireId: msg.id, msgType: BASIC_MESSAGE, attachments: [] });
-    expect(events[2]?.data).not.toHaveProperty("signedBy");
+    expect(events[4]?.data).toMatchObject({ ...pair, did: bob.did, wireId: msg.id, msgType: BASIC_MESSAGE, attachments: [] });
+    expect(events[4]?.data).not.toHaveProperty("signedBy");
     if (handled.outcome !== "recorded") throw new Error(handled.outcome);
     const { record: found, contact } = handled;
     expect(found).toMatchObject({ direction: "in", pair, sender: bob.did, body: "present" });
     expect(found.msg?.body).toEqual({ content: "hi" });
-    expect(found.mid).toBe((events[2]?.data as { mid: string }).mid);
+    expect(found.mid).toBe((events[4]?.data as { mid: string }).mid);
     expect(contact).not.toBeNull();
     expect(contact?.name).toBe(didPlaceholder(bob.did));
     expect(contact?.currentDids).toEqual([bob.did]);
     expect(contact?.attached).toMatchObject([{ pair, because: "manual", oobId: null }]);
-    expect(events[4]?.data).toEqual({ ...pair, cid: contact?.cid, because: "manual" });
+    expect(events[3]?.data).toEqual({ ...pair, cid: contact?.cid, because: "manual" });
     expect(s.handled).toEqual([{ mid: found.mid, cid: contact?.cid, type: BASIC_MESSAGE }]);
     expect(s.log).toEqual(["a stranger wrote to us; they have a thread now"]);
 
@@ -259,7 +261,7 @@ describe("v2 inbound: a message from a stranger", () => {
 
     // carol, with bob's wire id: her key, her message
     expect((await s.deliver({ ...msg, from: carol.did }, carol)).outcome).toBe("recorded");
-    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached"]);
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
   });
 
   it("what the envelope proved is what the skeleton says: anonymous, signed inside anoncrypt, signed inside authcrypt", async () => {
@@ -285,20 +287,20 @@ describe("v2 inbound: a message from a stranger", () => {
     // signed inside anoncrypt: the signing key places it, the signer's DID is the sender
     const signed = await s.deliver(hello(bob, me, "signed"), null, { signBy: bob });
     events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached"]);
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
     const bobSigning = { myKey: s.me.key, peerKey: fingerprint(bob, 1) };
     expect(events[0]?.data).toEqual({ ...bobSigning, kind: "signed", peerPublicKey: key(bob.doc, 1), firstDid: bob.did });
-    expect(events[2]?.data).toMatchObject({ ...bobSigning, did: bob.did });
-    expect(events[2]?.data).not.toHaveProperty("signedBy");
+    expect(events[4]?.data).toMatchObject({ ...bobSigning, did: bob.did });
+    expect(events[4]?.data).not.toHaveProperty("signedBy");
     expect(signed.outcome === "recorded" && signed.record.sender).toBe(bob.did);
 
     // authcrypt with a signature inside: the sealing key places it, the signature is noted
     const both = await s.deliver(hello(carol, me, "both"), carol, { signBy: carol });
     events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached"]);
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
     const carolSealing = { myKey: s.me.key, peerKey: fingerprint(carol, 2) };
     expect(events[0]?.data).toEqual({ ...carolSealing, kind: "authcrypt", peerPublicKey: key(carol.doc, 2), firstDid: carol.did });
-    expect(events[2]?.data).toMatchObject({ ...carolSealing, did: carol.did, signedBy: key(carol.doc, 1) });
+    expect(events[4]?.data).toMatchObject({ ...carolSealing, did: carol.did, signedBy: key(carol.doc, 1) });
     expect(both.outcome === "recorded" && both.contact?.currentDids).toEqual([carol.did]);
     expect(s.v.fold.contacts()).toHaveLength(2);
   });
@@ -311,10 +313,104 @@ describe("v2 inbound: a message from a stranger", () => {
     expect(await s.fresh()).toEqual([]);
     expect(s.log).toEqual([`a plaintext ${BASIC_MESSAGE} reached us as mail; it proves no one and is not kept`]);
 
-    const flaky = await scene({ resolveDid: async (did) => (did === bob.did ? null : resolveDIDCommDoc(did)) });
-    const opened = await flaky.link.unpack(await sealed(hello(bob, flaky.me.identity.did, "later"), flaky.me.identity.did, bob));
-    await expect(flaky.inbound.handle(opened)).rejects.toThrow(`${bob.did} does not resolve now`);
-    expect(await flaky.fresh()).toEqual([]);
+    // a document didcomm did not hand over (a hand-built open) and a resolver that has nothing now
+    const flaky = new Inbound(s.v, s.inbound["ctx"], { resolveDid: async (did) => (did === bob.did ? null : resolveDIDCommDoc(did)), keyOfDid: s.ring.keyOfDid });
+    const opened = await s.link.unpack(await sealed(hello(bob, s.me.identity.did, "later"), s.me.identity.did, bob));
+    await expect(flaky.handle({ ...opened, documents: new Map() })).rejects.toThrow(`${bob.did} does not resolve now`);
+    expect(await s.fresh()).toEqual([]);
+  });
+
+  it("the key of ours that opened it is the one the link found a secret for, whatever kid is named first", async () => {
+    const s = await scene();
+    await invite(s);
+    const bob = await peer(2);
+    const msg = hello(bob, s.me.identity.did, "sneaky");
+    // crafted by hand: a kid under the invitation's DID that names no key of ours, ahead of the key that opened it
+    const opened = {
+      msg,
+      sender: bob.did,
+      recipient: s.me.identity.did,
+      fromPrior: null,
+      metadata: { encrypted: true, non_repudiation: false, encrypted_from_kid: `${bob.did}#key-2`, encrypted_to_kids: [`${s.inv.identity.did}#key-9`, `${s.me.identity.did}#key-2`], sign_from: null },
+      documents: new Map([[bob.did, bob.doc]]),
+      open: {},
+    } as unknown as Opened;
+
+    const handled = await s.inbound.handle(opened);
+
+    const events = await s.fresh();
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
+    expect(events[0]?.data).toMatchObject({ myKey: s.me.key, peerKey: fingerprint(bob, 2) });
+    expect(handled.outcome === "recorded" && handled.record.pair).toEqual({ myKey: s.me.key, peerKey: fingerprint(bob, 2) });
+    expect(invitationOf(s)).toMatchObject({ open: true, takenBy: [] });
+  });
+
+  it("the channel is read from the document didcomm opened the envelope with, not from a later resolution", async () => {
+    const bob = await peer(2);
+    const carol = await peer(3);
+    // bob's DID, resolving to carol's agreement key from the second look on: a did:web changing keys under one kid
+    const swapped: DIDDoc = {
+      ...bob.doc,
+      verificationMethod: bob.doc.verificationMethod.map((method) => (method.id === `${bob.did}#key-2` ? { ...method, publicKeyMultibase: key(carol.doc, 2) } : method)),
+    };
+    let calls = 0;
+    const s = await scene({ resolveDid: async (did) => (did === bob.did ? (calls++ === 0 ? bob.doc : swapped) : resolveDIDCommDoc(did)) });
+    const opened = await s.link.unpack(await sealed(hello(bob, s.me.identity.did, "then"), s.me.identity.did, bob));
+    expect(opened.documents.get(bob.did)).toBe(bob.doc);
+    const during = calls;
+
+    const handled = await s.inbound.handle(opened);
+
+    expect(calls).toBe(during);
+    const events = await s.fresh();
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
+    expect(events[0]?.data).toMatchObject({ peerKey: fingerprint(bob, 2), peerPublicKey: key(bob.doc, 2) });
+    expect(events[1]?.data).toMatchObject({ did: bob.did, keys: [key(bob.doc, 1), key(bob.doc, 2)] });
+    expect(handled.outcome === "recorded" && handled.record.pair.peerKey).toBe(fingerprint(bob, 2));
+  });
+
+  it("interrupted before the record, the redelivery finishes: every step before it is done once", async () => {
+    const s = await scene();
+    const bob = await peer(2);
+    const bob2 = await peer(22);
+    const dan = await peer(4);
+    const me = s.me.identity.did;
+    const known = await s.deliver(hello(bob, me, "old me"), bob);
+    const cid = known.outcome === "recorded" ? (known.contact as ContactRecord).cid : "";
+    await s.fresh();
+    const blobs = s.v.vault.blobs;
+    const put = blobs.put.bind(blobs);
+    let failing = false;
+    blobs.put = async (bytes: Uint8Array) => {
+      if (failing) {
+        failing = false;
+        throw new Error("disk full");
+      }
+      return put(bytes);
+    };
+
+    // a rotation, cut off at the body: the rotation is in the log, the record is not
+    const moved = await sealed(plain(BASIC_MESSAGE, bob2.did, me, { content: "new me" }, { from_prior: await vouched(bob, bob2) }), me, bob2);
+    failing = true;
+    await expect(s.take(moved)).rejects.toThrow("disk full");
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated"]);
+    const again = await s.take(moved);
+    expect(types(await s.fresh())).toEqual(["message.in"]);
+    expect(again.outcome === "recorded" && again.contact?.cid).toBe(cid);
+    expect(contactOf(s, cid).currentDids).toEqual([bob2.did]);
+
+    // a stranger, cut off the same way: adopted once
+    const knock = await sealed(hello(dan, me, "knock"), me, dan);
+    failing = true;
+    await expect(s.take(knock)).rejects.toThrow("disk full");
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached"]);
+    const opened = await s.take(knock);
+    expect(types(await s.fresh())).toEqual(["message.in"]);
+    expect(opened.outcome === "recorded" && opened.contact?.currentDids).toEqual([dan.did]);
+    expect(s.v.fold.contacts()).toHaveLength(2);
+    expect((await all(s.v)).filter((event) => event.type === "peer.rotated")).toHaveLength(1);
+    expect(s.handled.map((entry) => entry.type)).toEqual([BASIC_MESSAGE, BASIC_MESSAGE, BASIC_MESSAGE]);
+    expect(await s.take(knock)).toEqual({ outcome: "duplicate" });
   });
 });
 
@@ -415,6 +511,35 @@ describe("v2 inbound: invitations", () => {
     expect(s.log).toEqual([`${didPlaceholder(bob.did)} took an invitation of ours; that key is ours toward them now`]);
     expect(s.v.fold.contacts()).toHaveLength(1);
   });
+
+  it("taken by someone we know from a new DID, vouched for by the old: the rotation first, then attached to them, no twin", async () => {
+    const s = await scene();
+    await invite(s);
+    const bob = await peer(2);
+    const bob2 = await peer(22);
+    const known = await s.deliver(hello(bob, s.me.identity.did, "hello"), bob);
+    const cid = known.outcome === "recorded" ? (known.contact as ContactRecord).cid : "";
+    await s.fresh();
+    s.log.length = 0;
+    const jwt = await vouched(bob, bob2);
+    const to = s.inv.identity.did;
+
+    const handled = await s.deliver(plain(BASIC_MESSAGE, bob2.did, to, { content: "your link, new me" }, { from_prior: jwt }), bob2, { to });
+
+    const events = await s.fresh();
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated", "contact.attached", "message.in"]);
+    expect(events[2]?.data).toMatchObject({ myKey: s.me.key, peerKey: fingerprint(bob, 2), from: bob.did, to: bob2.did });
+    expect(events[3]?.data).toEqual({ myKey: s.inv.key, peerKey: fingerprint(bob2, 2), cid, because: "invitation", oobId: "oob-1" });
+    expect(handled.outcome === "recorded" && handled.contact?.cid).toBe(cid);
+    expect(s.v.fold.attribution({ myKey: s.inv.key, peerKey: fingerprint(bob2, 2) })).toEqual({ kind: "one", cid });
+    expect(contactOf(s, cid).currentDids).toEqual([bob2.did]);
+    expect(invitationOf(s)).toMatchObject({ open: false, takenBy: [cid] });
+    expect(s.v.fold.contacts()).toHaveLength(1);
+    expect(s.log).toEqual([
+      `${didPlaceholder(bob.did)} moved to ${didPlaceholder(bob2.did)}, vouched for by the old DID`,
+      `${didPlaceholder(bob2.did)} took an invitation of ours; that key is ours toward them now`,
+    ]);
+  });
 });
 
 describe("v2 inbound: rotation by from_prior", () => {
@@ -431,9 +556,9 @@ describe("v2 inbound: rotation by from_prior", () => {
     const moved = await s.deliver(plain(BASIC_MESSAGE, bob2.did, s.me.identity.did, { content: "new me" }, { from_prior: jwt }), bob2);
 
     const events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "peer.rotated"]);
-    const mid = (events[2]?.data as { mid: string }).mid;
-    expect(events[3]?.data).toEqual({ myKey: s.me.key, peerKey: fingerprint(bob, 2), from: bob.did, to: bob2.did, fromPrior: jwt, mid });
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated", "message.in"]);
+    const mid = (events[3]?.data as { mid: string }).mid;
+    expect(events[2]?.data).toEqual({ myKey: s.me.key, peerKey: fingerprint(bob, 2), from: bob.did, to: bob2.did, fromPrior: jwt, mid });
     expect(moved.outcome === "recorded" && moved.contact?.cid).toBe(cid);
     const contact = contactOf(s, cid);
     expect(contact.currentDids).toEqual([bob2.did]);
@@ -460,8 +585,8 @@ describe("v2 inbound: rotation by from_prior", () => {
     const handled = await s.deliver(plain(BASIC_MESSAGE, fresh.did, s.me.identity.did, { content: "we met elsewhere" }, { from_prior: jwt }), fresh);
 
     const events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "peer.rotated", "contact.created", "contact.attached"]);
-    expect(events[3]?.data).toMatchObject({ myKey: s.me.key, peerKey: fingerprint(fresh, 2), from: elsewhere.did, to: fresh.did, fromPrior: jwt });
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "peer.rotated", "contact.created", "contact.attached", "message.in"]);
+    expect(events[2]?.data).toMatchObject({ myKey: s.me.key, peerKey: fingerprint(fresh, 2), from: elsewhere.did, to: fresh.did, fromPrior: jwt });
     const contact = handled.outcome === "recorded" ? (handled.contact as ContactRecord) : null;
     expect(contact?.currentDids).toEqual([fresh.did]);
     expect(contact?.theirDids.map((entry) => entry.did)).toEqual([elsewhere.did, fresh.did]);
@@ -505,14 +630,14 @@ describe("v2 inbound: object-share", () => {
     const kept = await s.deliver(share, bob);
 
     const events = await s.fresh();
-    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached"]);
-    expect(events[2]?.data).toMatchObject({ msgType: OBJECT_SHARE, attachments: [root] });
-    expect(events[2]?.blobs).toEqual([(events[2]?.data as { body: string }).body, root]);
+    expect(types(events)).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in"]);
+    expect(events[4]?.data).toMatchObject({ msgType: OBJECT_SHARE, attachments: [root] });
+    expect(events[4]?.blobs).toEqual([(events[4]?.data as { body: string }).body, root]);
     for (const cid of blocks.keys()) {
       expect(await s.v.vault.blobs.has(cid)).toBe(true);
     }
     expect(kept.outcome === "recorded" && kept.record.skeleton.attachments).toEqual([root]);
-    expect(s.log).toEqual([`https://estoc.dev/post/1.0 ${root} (unsigned): 3 files kept`, "a stranger wrote to us; they have a thread now"]);
+    expect(s.log).toEqual(["a stranger wrote to us; they have a thread now", `https://estoc.dev/post/1.0 ${root} (unsigned): 3 files kept`]);
     s.log.length = 0;
 
     const bad = await s.deliver({ ...plain(OBJECT_SHARE, bob.did, s.me.identity.did, {}), attachments: attachmentsOf(blocks) } as IMessage, bob);
@@ -571,7 +696,7 @@ describe("v2 inbound: what is answered", () => {
     const me = s.me.identity.did;
 
     const named = await s.deliver(plain(PROFILE, bob.did, me, { profile: { displayName: "Bob" }, send_back_yours: false }), bob);
-    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "message.in", "contact.created", "contact.attached", "profile.nameClaimed"]);
+    expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in", "profile.nameClaimed"]);
     expect(named.outcome === "recorded" && named.contact?.name).toBe(didPlaceholder(bob.did)); // as handed over: the claim lands after
     const cid = named.outcome === "recorded" ? (named.contact as ContactRecord).cid : "";
     expect(contactOf(s, cid).name).toBe("Bob");

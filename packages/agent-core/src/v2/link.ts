@@ -56,6 +56,13 @@ export interface Opened {
   /** what didcomm says of the envelope: the channel is read from it (`inboundPair`) */
   metadata: UnpackMetadata;
   /**
+   * The documents didcomm resolved to open it — the sender's, a signer's,
+   * a `from_prior` issuer's — by DID: what the envelope was verified
+   * against, so that the channel is read from the same and not from a
+   * later resolution that may say otherwise.
+   */
+  documents: ReadonlyMap<string, DIDDoc>;
+  /**
    * The `envelope.open` observation, prepared at unpack and written by
    * `noteOpen` once the message's fate is known — so the line can name
    * the record it ended in.
@@ -207,9 +214,19 @@ export class MediatorLink {
   async unpack(packed: string, parent?: string): Promise<Opened> {
     const open: TraceData = { ...envelopeHeader(packed), parent };
     const secrets = this.secrets();
+    const documents = new Map<string, DIDDoc>();
+    const resolver = {
+      resolve: async (did: string): Promise<DIDDoc | null> => {
+        const doc = await this.resolver.resolve(did);
+        if (doc !== null) {
+          documents.set(did, doc);
+        }
+        return doc;
+      },
+    };
     let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
     try {
-      unpacked = await this.didcomm.Message.unpack(packed, this.resolver, secretsResolverFor(secrets), {});
+      unpacked = await this.didcomm.Message.unpack(packed, resolver, secretsResolverFor(secrets), {});
     } catch (err) {
       void this.note("envelope", "envelope.error", { ...open, error: messageOf(err) });
       throw err;
@@ -230,6 +247,7 @@ export class MediatorLink {
       recipient: openedWith(metadata.encrypted_to_kids ?? [], secrets),
       fromPrior: rotation === null ? null : { iss: rotation.iss, sub: rotation.sub, jwt: value.from_prior as string },
       metadata,
+      documents,
       open,
     };
   }
