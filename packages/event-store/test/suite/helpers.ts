@@ -1,3 +1,5 @@
+import { expect } from "vitest";
+
 import type { Event } from "../../src/index.js";
 
 /** A clock the test moves by hand. */
@@ -50,4 +52,21 @@ export function reordered(event: Event): unknown {
 /** `event` with one field of `data` changed: same eid, other content. */
 export function altered(event: Event): Event {
   return { ...event, data: { ...event.data, altered: true } };
+}
+
+/**
+ * `expect(actual).toEqual(expected)` for bytes. vitest's deep equality walks
+ * a typed array element by element — over a second for a MiB — where a byte
+ * compare is instant; and a mismatch names the first byte that differs, which
+ * the diff of a MiB never would.
+ */
+export function expectBytes(actual: Uint8Array | null | undefined, expected: Uint8Array): void {
+  expect(actual).toBeInstanceOf(Uint8Array);
+  const got = actual as Uint8Array;
+  expect(got.length, "byte length").toBe(expected.length);
+  let at = 0;
+  while (at < got.length && got[at] === expected[at]) {
+    at += 1;
+  }
+  expect(at, `bytes differ at offset ${at}: ${got[at]} here, ${expected[at]} expected`).toBe(got.length);
 }

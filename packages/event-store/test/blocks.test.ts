@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { BadBlock, DAG_PB_CODE, checkBlock, decodeNode, hashFile, linksOf, nameOf, reachable, readFile } from "../src/index.js";
 import { HELLO_CID, bigBytes } from "./suite/blob-suite.js";
+import { expectBytes } from "./suite/helpers.js";
 
 const enc = new TextEncoder();
 
@@ -16,7 +17,7 @@ describe("blocks of the profile", () => {
       for (const [cid, block] of blocks) {
         await checkBlock(cid, block); // every block put minted passes the check a putBlock makes
         if (cid !== root || root.startsWith("bafybei")) {
-          expect(tree.nodes.get(cid)).toEqual(block);
+          expectBytes(tree.nodes.get(cid), block);
         }
       }
     }
@@ -53,7 +54,7 @@ describe("blocks of the profile", () => {
     const partial = new Map([[root, rootBytes]]);
     expect([...(await reachable([root, HELLO_CID], async (cid) => partial.get(cid) ?? null))]).toEqual([root]);
     expect(await readFile(root, async (cid) => partial.get(cid) ?? null)).toBeNull();
-    expect(await readFile(root, get)).toEqual(bigBytes());
+    expectBytes(await readFile(root, get), bigBytes());
     expect(await readFile(HELLO_CID, async () => enc.encode("hello"))).toEqual(enc.encode("hello"));
   });
 

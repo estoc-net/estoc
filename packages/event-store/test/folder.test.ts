@@ -12,7 +12,7 @@ import {
   type VaultBackend,
 } from "../src/index.js";
 import { HELLO_CID, bigBytes, blobSuite } from "./suite/blob-suite.js";
-import { all, clock } from "./suite/helpers.js";
+import { all, clock, expectBytes } from "./suite/helpers.js";
 import { storeSuite } from "./suite/store-suite.js";
 
 const enc = new TextEncoder();
@@ -314,7 +314,7 @@ describe("folder: blobs on disk", () => {
     const files = [...backend.files.keys()].filter((p) => p.startsWith(".estoc/blobs/"));
     expect(files).toHaveLength(4);
     expect(files.every((p) => kindOf(p.slice(".estoc/".length)) === "blob")).toBe(true);
-    expect(await blobs.get(root)).toEqual(bigBytes());
+    expectBytes(await blobs.get(root), bigBytes());
   });
 
   it("rewrites a block it already holds so the file's time is renewed", async () => {

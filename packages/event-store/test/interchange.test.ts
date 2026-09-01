@@ -20,7 +20,7 @@ import {
   type VaultStores,
 } from "../src/index.js";
 import { HELLO_CID, bigBytes } from "./suite/blob-suite.js";
-import { all, clock } from "./suite/helpers.js";
+import { all, clock, expectBytes } from "./suite/helpers.js";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -93,6 +93,20 @@ async function contents(vault: VaultStores, exceptMinted: string[] = []): Promis
     out.files[path] = dec.decode((await vault.files.read(path)) as Uint8Array);
   }
   return out;
+}
+
+/** The same contents: events and files by deep equality, every block by a byte compare (see `expectBytes`). */
+function expectContents(actual: Contents, expected: Contents): void {
+  expect(actual.events).toEqual(expected.events);
+  expect(actual.files).toEqual(expected.files);
+  expect(Object.keys(actual.blobs).sort()).toEqual(Object.keys(expected.blobs).sort());
+  for (const [store, blocks] of Object.entries(expected.blobs)) {
+    const got = actual.blobs[store] ?? {};
+    expect(Object.keys(got).sort()).toEqual(Object.keys(blocks).sort());
+    for (const [cid, bytes] of Object.entries(blocks)) {
+      expectBytes(got[cid], bytes);
+    }
+  }
 }
 
 function paths(files: VaultFiles): string[] {
@@ -171,17 +185,17 @@ describe("round trip (event-store.md §10.1)", () => {
     expect([...backend.files.keys()].sort()).toEqual(paths(files));
     const folder = await FolderVault.open(backend);
     const original = await contents(vault);
-    expect(await contents(folder, [folder.self])).toEqual(original);
+    expectContents(await contents(folder, [folder.self]), original);
     const back = new MemoryVault({ self: "cccccc", clock: c.now });
     const report = await importVault(back, await snapshot(backend));
     expect(report.kind).toBe("restored");
     expect(report.events["vault"]?.added).toBe(original.events["vault"]?.length as number + 1);
     expect(report.blobs.copied).toBe(Object.keys(original.blobs["vault"] ?? {}).length + 1);
-    expect(await contents(back, [folder.self])).toEqual(original);
+    expectContents(await contents(back, [folder.self]), original);
     // and memory → memory straight, which is the same import
     const direct = new MemoryVault({ self: "dddddd", clock: c.now });
     await importVault(direct, files);
-    expect(await contents(direct)).toEqual(original);
+    expectContents(await contents(direct), original);
   });
 
   it("folder → memory → folder: the same set, however the segments were chunked", async () => {
@@ -198,11 +212,11 @@ describe("round trip (event-store.md §10.1)", () => {
     const original = await contents(folder);
     const memory = new MemoryVault({ self: "cccccc", clock: c.now });
     await importVault(memory, await snapshot(backend));
-    expect(await contents(memory)).toEqual(original);
+    expectContents(await contents(memory), original);
     const again = new MemoryBackend({ clock: c.now });
     await restoreFolder(again, await exportVault(memory, { clock: c.now }));
     const restored = await FolderVault.open(again, { clock: c.now });
-    expect(await contents(restored, [restored.self])).toEqual(original);
+    expectContents(await contents(restored, [restored.self]), original);
     // the export chunked differently: one segment per author, not the folder's own
     expect([...again.files.keys()].filter((p) => p.includes("/devices/")).sort()).not.toEqual(
       [...backend.files.keys()].filter((p) => p.includes("/devices/")).sort()
@@ -430,7 +444,7 @@ describe("import: blobs (rule 2)", () => {
     expect(blocks).not.toContain("bafkreigl3o5l6rnjuinwyorjwbdl6xr6njkrcbe6qkhhc2ejo6cmgdvuse");
     expect(await target.blobs.get(HELLO_CID)).toEqual(enc.encode("hello"));
     expect(backend.files.get(`.estoc/local/damaged/blobs/${HELLO_CID}`)).toEqual(enc.encode("damaged here"));
-    expect(await target.blobs.get(big)).toEqual(bigBytes());
+    expectBytes(await target.blobs.get(big), bigBytes());
     expect(report.blobs.copied).toBe(5); // hello, big's root and two chunks, and the extension's
     expect(report.blobs.damaged).toEqual([{ store: "vault", cid: "bafkreigl3o5l6rnjuinwyorjwbdl6xr6njkrcbe6qkhhc2ejo6cmgdvuse", error: expect.stringMatching(/hash/) as string }]);
     expect(await target.extension(EXT_A).blobs.list()).toHaveLength(1);

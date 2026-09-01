@@ -3,6 +3,16 @@ import { decryptStream, encryptStream, freshKey } from "../src/protocol/streamin
 
 const SEG = 256; // a small segment so a few KiB spans many
 
+/** `toEqual` for bytes: vitest walks a typed array element by element — seconds for a MiB — where a byte compare is instant. */
+function expectBytes(actual: Uint8Array, expected: Uint8Array): void {
+  expect(actual.length, "byte length").toBe(expected.length);
+  let at = 0;
+  while (at < actual.length && actual[at] === expected[at]) {
+    at += 1;
+  }
+  expect(at, `bytes differ at offset ${at}`).toBe(actual.length);
+}
+
 function bytes(n: number): Uint8Array {
   const out = new Uint8Array(n);
   for (let i = 0; i < n; i++) out[i] = (i * 7 + 3) & 0xff;
@@ -17,7 +27,7 @@ describe("AES256_GCM_HKDF_1MB", () => {
       const sealed = await encryptStream(key, plain, SEG);
       expect(sealed[0]).toBe(40);
       expect(sealed.length).toBe(40 + n + 16 * Math.max(1, Math.ceil((n + 40) / (SEG - 16))));
-      expect(await decryptStream(key, sealed, SEG)).toEqual(plain);
+      expectBytes(await decryptStream(key, sealed, SEG), plain);
     }
   });
 
@@ -34,7 +44,7 @@ describe("AES256_GCM_HKDF_1MB", () => {
     const n = SEG - 40 - 16 + (SEG - 16);
     const sealed = await encryptStream(key, bytes(n), SEG);
     expect(sealed.length).toBe(2 * SEG);
-    expect(await decryptStream(key, sealed, SEG)).toEqual(bytes(n));
+    expectBytes(await decryptStream(key, sealed, SEG), bytes(n));
   });
 
   it("rejects the wrong key, a flipped byte, a truncation, and a swapped segment", async () => {
@@ -58,6 +68,6 @@ describe("AES256_GCM_HKDF_1MB", () => {
     const plain = bytes(1024 * 1024 + 123);
     const sealed = await encryptStream(key, plain);
     expect(sealed.length).toBe(plain.length + 40 + 32);
-    expect(await decryptStream(key, sealed)).toEqual(plain);
+    expectBytes(await decryptStream(key, sealed), plain);
   });
 });
