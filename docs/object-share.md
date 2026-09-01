@@ -201,7 +201,9 @@ merged by union on import. A share's blocks are there once, whichever
 road and however many shares brought them: the record's body keeps the
 block attachments by id and without their `data` (`docs/vault-events.md`
 §4), so erasing the share's root erases the bytes, and a delivery of a
-share of ours puts them back from `blobs/`. Nothing changes on the wire.
+share of ours puts them back from `blobs/` — or refuses, naming the
+block, when one of the object's is gone since. Nothing changes on the
+wire.
 
 ## 7. Two roads, no round trip
 

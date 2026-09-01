@@ -57,12 +57,13 @@ export interface SendOptions {
   pthid?: string;
   attachments?: unknown[];
   /**
-   * Roots of blocks the attachments carry, already in `blobs/` — the
-   * caller's to have put first — recorded on the message's skeleton
-   * (vault-events.md §3.1), as `keepShare` records a received share's.
-   * Named, the body is stored without the bytes of the blocks those
-   * roots reach — no other attachment's (`lift.ts`); the outbox puts
-   * them back for the wire.
+   * Roots of blocks the attachments carry, the whole closure under each
+   * already in `blobs/` — the caller's to have put first — recorded on
+   * the message's skeleton (vault-events.md §3.1), as `keepShare`
+   * records a received share's. Named, the body is stored without the
+   * bytes of the blocks those roots reach — no other attachment's
+   * (`lift.ts`); the outbox puts them back for the wire, and refuses to
+   * send, naming the block, once any block of a closure is gone.
    */
   roots?: Cid[];
 }

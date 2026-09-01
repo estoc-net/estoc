@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **`reach(roots, get)`**: the walk `reachable` makes, also saying what
+  it asked for and did not find — a root, or a link of a reached block
+  — under which nothing is known. `reachable` is its `reached`. For a
+  caller that must not go on past an absent block: a delivery that
+  would otherwise put a partial object on the wire.
+
 ## 0.1.0 — 2026-09-01
 
 - The event model of `docs/event-store.md` §2–§4: envelope validation,

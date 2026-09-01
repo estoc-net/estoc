@@ -19,7 +19,7 @@
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
-import { reachable, type Cid, type EventStore } from "@estoc/event-store";
+import { reach, reachable, type Cid, type EventStore } from "@estoc/event-store";
 import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
@@ -550,8 +550,9 @@ export class Outbox {
    * happens is one `delivery.attempted` on the message's channel
    * (§3.1): `sent`, and it is out of the outbox; `failed`, with why, and
    * it waits for the next pass. A message whose body, or whose lifted
-   * blocks, were erased since it was written (§8) fails saying so: what
-   * the record no longer holds is not sent. Nothing here throws but the
+   * blocks, were erased since it was written (§8), or a block of whose
+   * object is gone (§4), fails saying so: what the record no longer
+   * holds is not sent, and nothing partial is. Nothing here throws but the
    * log refusing the event.
    */
   private async attempt(message: Message, cid: string | null): Promise<Attempted> {
@@ -584,9 +585,15 @@ export class Outbox {
         throw new Error(`what it carries is erased (${erased})`);
       }
       // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/` — those the record's roots
-      // reach and no other, as they were stripped; an attachment named after any other block is the wire's
+      // reach and no other, as they were stripped; an attachment named after any other block is the wire's. A block
+      // of the object gone since (§4: damage, or a collection) is a refusal naming it, before anything is filled:
+      // under an absent block nothing can be told, and nothing partial goes on the wire
       const blobs = this.opened.vault.blobs;
-      const reached = await reachable(found.skeleton.attachments, (cid) => blobs.getBlock(cid));
+      const { reached, absent } = await reach(found.skeleton.attachments, (cid) => blobs.getBlock(cid));
+      const [gone] = absent;
+      if (gone !== undefined) {
+        throw new Error(`a block of what it carries is gone: ${gone}`);
+      }
       const plain = await fillBlocks(found.msg, blobs, (cid) => reached.has(cid));
       await this.ensureRegistered(message.pair.myKey as string);
       const to = contact.currentDids.at(-1);

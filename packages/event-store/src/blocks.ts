@@ -232,31 +232,46 @@ export async function readFile(root: string, get: GetBlock): Promise<Uint8Array 
   return out;
 }
 
+/** What a walk from some roots found: the blocks it reached, and the names it asked `get` for and did not find — under which nothing is known. */
+export interface Reach {
+  reached: Set<string>;
+  absent: Set<string>;
+}
+
 /**
- * Every block any of `roots` reaches through the blocks `get` holds: a
- * block that is absent is not walked, and nothing is checked — what a
- * collector keeps.
+ * Every block any of `roots` reaches through the blocks `get` holds, and
+ * every name the walk asked for that `get` did not hold — a root, or a
+ * link of a reached block. An absent block is not walked past, and
+ * nothing is checked. A block that does not decode is reached and not
+ * walked past either: damage the store sets aside on its own finding.
  */
-export async function reachable(roots: Iterable<string>, get: GetBlock): Promise<Set<string>> {
-  const seen = new Set<string>();
+export async function reach(roots: Iterable<string>, get: GetBlock): Promise<Reach> {
+  const reached = new Set<string>();
+  const absent = new Set<string>();
   const pending = [...roots];
   while (pending.length > 0) {
     const cid = pending.pop() as string;
-    if (seen.has(cid) || parseCid(cid) === null) {
+    if (reached.has(cid) || absent.has(cid) || parseCid(cid) === null) {
       continue;
     }
     const bytes = await get(cid);
     if (bytes === null) {
+      absent.add(cid);
       continue;
     }
-    seen.add(cid);
+    reached.add(cid);
     let links: string[];
     try {
       links = linksOf(cid, bytes);
     } catch {
-      continue; // damage: not walked; the store sets it aside on its own finding
+      continue;
     }
     pending.push(...links);
   }
-  return seen;
+  return { reached, absent };
+}
+
+/** Every block any of `roots` reaches through the blocks `get` holds — what a collector keeps; an absent block ends the walk there, unremarked. */
+export async function reachable(roots: Iterable<string>, get: GetBlock): Promise<Set<string>> {
+  return (await reach(roots, get)).reached;
 }

@@ -666,6 +666,21 @@ describe("v2 outbound: delivering", () => {
     expect(refused?.data).toMatchObject({ mid: again.mid, attempt: 1, outcome: "failed", error: `what it carries is erased (${root})` });
     expect(s.log).toContain(`could not deliver object-share/1.0/share (try 1): what it carries is erased (${root})`);
     expect(s.posts).toHaveLength(1);
+
+    // a block of the object gone since — damage, or a collection — is not sent either, naming the block: a leaf, then
+    // the root itself, under which nothing can be told; nothing partial goes on the wire
+    const third = await share();
+    const blobs = s.v.vault.blobs;
+    const held = blobs.getBlock.bind(blobs);
+    const leaf = [...blocks.keys()].find((cid) => cid !== root) as string;
+    blobs.getBlock = async (cid) => (cid === leaf ? null : held(cid));
+    const [leafless] = await s.outbox.drain({ mid: third.mid });
+    expect(leafless?.data).toMatchObject({ mid: third.mid, attempt: 1, outcome: "failed", error: `a block of what it carries is gone: ${leaf}` });
+    blobs.getBlock = async (cid) => (cid === root ? null : held(cid));
+    const [rootless] = await s.outbox.drain({ mid: third.mid });
+    expect(rootless?.data).toMatchObject({ mid: third.mid, attempt: 2, outcome: "failed", error: `a block of what it carries is gone: ${root}` });
+    blobs.getBlock = held;
+    expect(s.posts).toHaveLength(1);
   });
 
   it("waits only so long for an endpoint", async () => {
