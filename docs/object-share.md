@@ -158,7 +158,11 @@ envelope proves. The handler (`verifyShare`) then:
 The application shows the record either way and runs the same check to
 decide how: a share that does not verify is shown as that, not hidden; a
 partial object is shown as an object with missing files — its title,
-paths and sizes all known — never as a broken one.
+paths and sizes all known — never as a broken one. A share whose root
+the record says erased (`docs/vault-events.md` §8.2) is shown as erased
+and not verified over `blobs/` — the blocks may still be there, for
+another record that names them or until a collection — and its package
+is not fetched.
 
 ## 5. What the card says, and what it does not
 

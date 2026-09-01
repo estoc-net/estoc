@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import { MemoryBackend } from "@estoc/event-store";
+import { eraseMessage } from "@estoc/vault";
 
 import {
   BLOB_PUT_RESULT,
@@ -157,6 +158,19 @@ describe("v2 agent sharing objects", () => {
     await eventually(() => carol.v.vault.blobs.has(root), "carol's copy");
     const carols = await shareRecordOf(carol);
     expect((await verifyShare(carols.msg as PlainMessage, heldBy(carol))).card?.did).toBe(alice.v.anchor.did);
+
+    // Bob erases the object from the record Alice sent him: the blocks live on for the share he
+    // passed to Carol, and it is the record, not the blocks, that says his copy is gone (§8.2)
+    await eraseMessage(bob.v.vault.events, bob.v.fold, record.mid, "user", [root]);
+    const bobs = await recordsOf(bob);
+    const erasedRecord = bobs.find((r) => r.mid === record.mid) as MessageRecord;
+    expect(erasedRecord.erased).toEqual([root]);
+    expect(erasedRecord.body).toBe("present");
+    expect(bobs.find((r) => r.direction === "out" && r.msg?.type === OBJECT_SHARE)?.erased).toEqual([]);
+    expect(await bob.v.vault.blobs.has(root)).toBe(true);
+    expect(bob.v.fold.held()).toContain(root);
+    expect((await verifyShare(erasedRecord.msg as PlainMessage, heldBy(bob))).complete).toBe(true); // the blocks do not know; the record does
+    await expect(bob.agent.fetchPackage(erasedRecord)).rejects.toThrow(/erased from this vault/);
 
     await expect(
       bob.agent.shareObject(carol.agent.did as string, readObject({ ...files, "files/body.dj": enc("edited") }), { card })

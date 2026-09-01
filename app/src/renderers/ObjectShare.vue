@@ -101,6 +101,12 @@ onMounted(async () => {
     view.value = { state: "bad", reason: "the message body is not in this vault any more" };
     return;
   }
+  // the erase asked before the blocks (vault-events.md §8.2): they may live on for another record naming them
+  const root = (msg.body as { root?: unknown }).root;
+  if (typeof root === "string" && props.entry.record.erased.includes(root)) {
+    view.value = { state: "bad", reason: "the object was erased from this vault" };
+    return;
+  }
   let share: VerifiedShare;
   try {
     share = await verifyShare(msg, heldBlock);

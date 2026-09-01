@@ -17,9 +17,9 @@
  * messages (`data.base64`, `data.json`) are not lifted yet (§11).
  */
 
-import type { BlobStore, Cid } from "@estoc/event-store";
+import { isCid, type BlobStore, type Cid } from "@estoc/event-store";
 
-import { DAG_PB_MEDIA_TYPE, RAW_MEDIA_TYPE, bytesToBase64url } from "./protocol/object-share.js";
+import { bytesToBase64url } from "./protocol/object-share.js";
 import type { PlainMessage } from "./records.js";
 
 /** What lifting leaves of a message: the plaintext as it is stored, and the roots lifted out of it, for the skeleton's `attachments`. */
@@ -28,33 +28,38 @@ export interface Lifted {
   attachments: Cid[];
 }
 
-const BLOCK_MEDIA_TYPES = new Set([DAG_PB_MEDIA_TYPE, RAW_MEDIA_TYPE]);
-
-/** An attachment of block shape (`attachmentsOf`): a CID for its id, a block media type; `data` on the wire, none as stored. */
-interface BlockShaped {
+/** An attachment with an id, as the wire has it or as stored: `data` there or not. `media_type` is informative and not read. */
+interface Named {
   id: string;
-  media_type: string;
   data?: unknown;
   [extra: string]: unknown;
 }
 
-function blockShaped(attachment: unknown): attachment is BlockShaped {
-  const a = attachment as Partial<BlockShaped> | null;
-  return typeof a === "object" && a !== null && typeof a.id === "string" && typeof a.media_type === "string" && BLOCK_MEDIA_TYPES.has(a.media_type);
+function named(attachment: unknown): attachment is Named {
+  const a = attachment as Partial<Named> | null;
+  return typeof a === "object" && a !== null && typeof a.id === "string";
 }
 
-function carriesBytes(attachment: BlockShaped): boolean {
+/** What `blocksOf` takes for a block: an id and `data.base64`, whatever else the attachment says of itself. */
+function carriesBytes(attachment: Named): boolean {
   const data = attachment.data as { base64?: unknown } | null | undefined;
   return typeof data === "object" && data !== null && typeof data.base64 === "string";
 }
 
+/** A block as stored: its id is a block's name and its `data` is gone. One with no `data` under some other id was not stripped here, and is left alone. */
+function storedBlock(attachment: Named): boolean {
+  return attachment.data === undefined && isCid(attachment.id);
+}
+
 /**
- * The plaintext as stored: every block attachment whose bytes `kept`
- * vouches for as being in `blobs/` loses its `data` — the id names the
- * block. Anything else rides along as it came: an attachment of another
- * shape, or a block `kept` does not know (one beside a share that its
- * tree does not reach is recorded as a fact and never put). The message
- * given is not touched; one with nothing to strip is returned as it is.
+ * The plaintext as stored: every attachment carrying bytes (`id` and
+ * `data.base64`, the block shape as `blocksOf` reads it — `media_type`
+ * is informative and not consulted) whose bytes `kept` vouches for as
+ * being in `blobs/` loses its `data`; the id names the block. Anything
+ * else rides along as it came: an attachment of another shape, or one
+ * `kept` does not know (a block beside a share that its tree does not
+ * reach is recorded as a fact and never put). The message given is not
+ * touched; one with nothing to strip is returned as it is.
  */
 export async function stripBlocks(msg: PlainMessage, kept: (cid: string) => Promise<boolean> | boolean): Promise<PlainMessage> {
   if (msg.attachments === undefined) {
@@ -63,7 +68,7 @@ export async function stripBlocks(msg: PlainMessage, kept: (cid: string) => Prom
   let changed = false;
   const stored: unknown[] = [];
   for (const attachment of msg.attachments) {
-    if (blockShaped(attachment) && carriesBytes(attachment) && (await kept(attachment.id))) {
+    if (named(attachment) && carriesBytes(attachment) && (await kept(attachment.id))) {
       const { data: _data, ...rest } = attachment;
       stored.push(rest);
       changed = true;
@@ -75,8 +80,9 @@ export async function stripBlocks(msg: PlainMessage, kept: (cid: string) => Prom
 }
 
 /**
- * The plaintext as it goes on the wire: every block attachment stored
- * without its `data` gets the bytes back from `blobs/`, base64url as
+ * The plaintext as it goes on the wire: every block stored without its
+ * `data` — an attachment whose id is a block's name and whose `data`
+ * is gone — gets the bytes back from `blobs/`, base64url as
  * `attachmentsOf` writes them. Throws naming the first block that is
  * not there — erased since, or never put — so a delivery says why it
  * cannot send what the record names. A message with nothing to fill is
@@ -89,7 +95,7 @@ export async function fillBlocks(msg: PlainMessage, blobs: Pick<BlobStore, "getB
   let changed = false;
   const wire: unknown[] = [];
   for (const attachment of msg.attachments) {
-    if (blockShaped(attachment) && attachment.data === undefined) {
+    if (named(attachment) && storedBlock(attachment)) {
       const bytes = await blobs.getBlock(attachment.id);
       if (bytes === null) {
         throw new Error(`a block it carries is gone: ${attachment.id}`);

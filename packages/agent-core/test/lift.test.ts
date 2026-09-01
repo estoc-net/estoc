@@ -39,6 +39,18 @@ describe("lifting a message's blocks (vault-events.md §4)", () => {
     expect(await fillBlocks(none, { getBlock: async () => null })).toBe(none);
   });
 
+  it("reads a block as blocksOf does — by id and bytes, whatever its media_type says", async () => {
+    const { blocks } = await closureOf(files);
+    const bare = attachmentsOf(blocks).map(({ media_type: _type, ...rest }, i) => (i % 2 === 0 ? rest : { ...rest, media_type: "application/octet-stream" }));
+    const msg: PlainMessage = { id: "m", type: "t", body: {}, attachments: bare };
+    const stored = await stripBlocks(msg, () => true);
+    expect((stored.attachments as { data?: unknown }[]).every((a) => a.data === undefined)).toBe(true);
+    expect(await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null })).toEqual(msg);
+    // an attachment without data whose id is no block's name is not a stored block: left alone, nothing asked for it
+    const odd: PlainMessage = { id: "m", type: "t", body: {}, attachments: [{ id: "not-a-cid", media_type: "text/plain" }] };
+    expect(await fillBlocks(odd, { getBlock: async () => null })).toBe(odd);
+  });
+
   it("a block that is gone fails the fill, named", async () => {
     const { blocks } = await closureOf(files);
     const stored = await stripBlocks({ id: "m", type: "t", body: {}, attachments: attachmentsOf(blocks) }, () => true);

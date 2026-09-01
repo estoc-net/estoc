@@ -573,8 +573,8 @@ export class Outbox {
       if (found === null || found.msg === null) {
         throw new Error(`its plaintext is ${found?.body ?? "gone"}`);
       }
-      // what it carries, erased since (§8): as the body, asked before the blocks are
-      const erased = message.skeleton.attachments.find((root) => message.erased.includes(root));
+      // what it carries, erased since (§8.2): as the body, asked before the blocks are
+      const erased = found.skeleton.attachments.find((root) => found.erased.includes(root));
       if (erased !== undefined) {
         throw new Error(`what it carries is erased (${erased})`);
       }

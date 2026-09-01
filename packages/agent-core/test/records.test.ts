@@ -140,6 +140,22 @@ describe("v2 records: messages", () => {
     expect(wrong?.body).toBe("missing");
     expect(wrong?.msg).toBeNull();
 
+    // what is erased is on the record, attachments included: the object of a share can be
+    // erased with its message kept, and a reader asks the record before the blocks (§8.2)
+    const object = await v.vault.blobs.put(enc.encode("an object's bytes"));
+    const kept = await v.vault.blobs.put(enc.encode(JSON.stringify({ id: "w6", type: BASIC, body: { root: object }, attachments: [{ id: object }] })));
+    await record(v.vault.events, v.fold, drafts.messageIn({ ...PAIR, mid: uuid(6), wireId: "w6", msgType: BASIC, did: BOB1, bytes: 1, body: kept, attachments: [object] }));
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(6)))?.erased).toEqual([]);
+    await eraseMessage(v.vault.events, v.fold, uuid(6), "user", [object]);
+    const objectGone = await messageRecord(v.fold, v.vault.blobs, uuid(6));
+    expect(objectGone?.erased).toEqual([object]);
+    expect(objectGone?.body).toBe("present");
+    expect(objectGone?.msg?.body).toEqual({ root: object });
+    expect(await v.vault.blobs.has(object)).toBe(true); // the bytes wait for a collection; the record does not
+    await eraseMessage(v.vault.events, v.fold, uuid(6), "user");
+    expect((await messageRecord(v.fold, v.vault.blobs, uuid(6)))?.erased).toEqual([kept, object].sort());
+    expect(erased?.erased).toEqual([erased?.skeleton.body]);
+
     // the optional fields as the type says: read
     const full = { id: "w5", typ: "application/didcomm-plain+json", type: BASIC, from: BOB1, to: [ALICE], thid: "t", pthid: "p", created_time: 1, expires_time: 2, body: {}, attachments: [], from_prior: "jwt", extra: null };
     const ok = await v.vault.blobs.put(enc.encode(JSON.stringify(full)));
