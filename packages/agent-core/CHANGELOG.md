@@ -14,8 +14,14 @@
   road; `MessageRecord.msg` is the plaintext as stored. `stripBlocks`,
   `fillBlocks` and `Lifted` are exported; `keepShare` resolves to a
   `Lifted` (the stored plaintext and the roots), no longer to the roots
-  alone. Records written before this — attachments inline — read and
-  send as they did.
+  alone. A share sent naming `roots` has the blocks those roots reach
+  stripped and no other, and the outbox fills back those and no other
+  — `fillBlocks` takes the same `kept` as `stripBlocks` — so an
+  attachment named after a block of another object goes out as it was
+  composed, never as that block. A share a block of whose object is
+  gone since it was recorded — damage, or a collection — is not sent,
+  naming the block; nothing partial goes on the wire. Records written
+  before this — attachments inline — read and send as they did.
 - **`MessageRecord.erased`**: the roots of the message the fold says
   erased — the body and any attachment lifted out of it. A reader asks
   it before the blocks (vault-events.md §8.2): a block may live on in

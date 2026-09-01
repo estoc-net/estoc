@@ -19,7 +19,7 @@
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
-import type { Cid, EventStore } from "@estoc/event-store";
+import { reach, reachable, type Cid, type EventStore } from "@estoc/event-store";
 import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
@@ -171,14 +171,19 @@ export class Outbound {
    * The `message.out` (§3.1), body first (§4): the plaintext into the
    * blob store, then the skeleton — `roots` the blobs lifted out of it,
    * put by the caller before this. With roots named, the body is the
-   * plaintext as stored (`lift.ts`): the block attachments whose bytes
-   * `blobs/` holds keep their id and lose their `data`; the outbox puts
-   * the bytes back for the wire. Nothing has touched the wire: what is
-   * recorded waits in the outbox, and a delivery is the outbox's to try.
+   * plaintext as stored (`lift.ts`): the block attachments those roots
+   * reach keep their id and lose their `data`, and no other — not every
+   * attachment whose id `blobs/` happens to hold — so that what the
+   * outbox puts back for the wire is the message's own object and
+   * nothing named after another's. Nothing has touched the wire: what
+   * is recorded waits in the outbox, and a delivery is the outbox's to
+   * try.
    */
   async record({ plain, pair }: Composed, roots: Cid[] = []): Promise<MessageRecord> {
     const mid = uuidv7({ msecs: this.clock().getTime() });
-    const stored = roots.length === 0 ? plain : await stripBlocks(plain as PlainMessage, (cid) => this.opened.vault.blobs.has(cid));
+    const blobs = this.opened.vault.blobs;
+    const reached = roots.length === 0 ? null : await reachable(roots, (cid) => blobs.getBlock(cid));
+    const stored = reached === null ? plain : await stripBlocks(plain as PlainMessage, (cid) => reached.has(cid));
     await recordMessage(this.opened.vault, this.fold, "out", utf8.encode(JSON.stringify(stored)), {
       ...pair,
       mid,
@@ -545,8 +550,9 @@ export class Outbox {
    * happens is one `delivery.attempted` on the message's channel
    * (§3.1): `sent`, and it is out of the outbox; `failed`, with why, and
    * it waits for the next pass. A message whose body, or whose lifted
-   * blocks, were erased since it was written (§8) fails saying so: what
-   * the record no longer holds is not sent. Nothing here throws but the
+   * blocks, were erased since it was written (§8), or a block of whose
+   * object is gone (§4), fails saying so: what the record no longer
+   * holds is not sent, and nothing partial is. Nothing here throws but the
    * log refusing the event.
    */
   private async attempt(message: Message, cid: string | null): Promise<Attempted> {
@@ -578,8 +584,17 @@ export class Outbox {
       if (erased !== undefined) {
         throw new Error(`what it carries is erased (${erased})`);
       }
-      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/`
-      const plain = await fillBlocks(found.msg, this.opened.vault.blobs);
+      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/` — those the record's roots
+      // reach and no other, as they were stripped; an attachment named after any other block is the wire's. A block
+      // of the object gone since (§4: damage, or a collection) is a refusal naming it, before anything is filled:
+      // under an absent block nothing can be told, and nothing partial goes on the wire
+      const blobs = this.opened.vault.blobs;
+      const { reached, absent } = await reach(found.skeleton.attachments, (cid) => blobs.getBlock(cid));
+      const [gone] = absent;
+      if (gone !== undefined) {
+        throw new Error(`a block of what it carries is gone: ${gone}`);
+      }
+      const plain = await fillBlocks(found.msg, blobs, (cid) => reached.has(cid));
       await this.ensureRegistered(message.pair.myKey as string);
       const to = contact.currentDids.at(-1);
       if (to === undefined) {

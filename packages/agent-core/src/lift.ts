@@ -58,8 +58,10 @@ function storedBlock(attachment: Named): boolean {
  * being in `blobs/` loses its `data`; the id names the block. Anything
  * else rides along as it came: an attachment of another shape, or one
  * `kept` does not know (a block beside a share that its tree does not
- * reach is recorded as a fact and never put). The message given is not
- * touched; one with nothing to strip is returned as it is.
+ * reach is recorded as a fact and never put). `kept` is the caller's
+ * precision — the blocks the tree reaches, not whatever `blobs/`
+ * happens to hold — and `fillBlocks` is given the same. The message
+ * given is not touched; one with nothing to strip is returned as it is.
  */
 export async function stripBlocks(msg: PlainMessage, kept: (cid: string) => Promise<boolean> | boolean): Promise<PlainMessage> {
   if (msg.attachments === undefined) {
@@ -82,20 +84,24 @@ export async function stripBlocks(msg: PlainMessage, kept: (cid: string) => Prom
 /**
  * The plaintext as it goes on the wire: every block stored without its
  * `data` — an attachment whose id is a block's name and whose `data`
- * is gone — gets the bytes back from `blobs/`, base64url as
- * `attachmentsOf` writes them. Throws naming the first block that is
- * not there — erased since, or never put — so a delivery says why it
+ * is gone — that `kept` vouches for gets the bytes back from `blobs/`,
+ * base64url as `attachmentsOf` writes them. `kept` is the same
+ * precision `stripBlocks` was given — the blocks the record's roots
+ * reach — so what is put back is the message's own object: an
+ * attachment of the stored shape named after any other block is the
+ * wire's, and is left alone. Throws naming the first block that is not
+ * there — erased since, or never put — so a delivery says why it
  * cannot send what the record names. A message with nothing to fill is
  * returned as it is.
  */
-export async function fillBlocks(msg: PlainMessage, blobs: Pick<BlobStore, "getBlock">): Promise<PlainMessage> {
+export async function fillBlocks(msg: PlainMessage, blobs: Pick<BlobStore, "getBlock">, kept: (cid: string) => Promise<boolean> | boolean): Promise<PlainMessage> {
   if (msg.attachments === undefined) {
     return msg;
   }
   let changed = false;
   const wire: unknown[] = [];
   for (const attachment of msg.attachments) {
-    if (named(attachment) && storedBlock(attachment)) {
+    if (named(attachment) && storedBlock(attachment) && (await kept(attachment.id))) {
       const bytes = await blobs.getBlock(attachment.id);
       if (bytes === null) {
         throw new Error(`a block it carries is gone: ${attachment.id}`);

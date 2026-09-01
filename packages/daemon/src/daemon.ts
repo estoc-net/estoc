@@ -402,7 +402,8 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       running().send(contactDid, type, body, options),
     shareObject: (contactDid, object: FolderObject, options) => running().shareObject(contactDid, object, options),
     fetchPackage: (record): Promise<VerifiedShare> => running().fetchPackage(record),
-    blob: (cid) => (vault === null ? Promise.resolve(null) : vault.vault.blobs.get(cid)),
+    block: (cid) => (vault === null ? Promise.resolve(null) : vault.vault.blobs.getBlock(cid)),
+    blob: (root) => (vault === null ? Promise.resolve(null) : vault.vault.blobs.get(root)),
     async retry(mid) {
       await running().retry(mid);
     },

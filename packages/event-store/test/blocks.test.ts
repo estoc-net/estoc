@@ -2,7 +2,7 @@ import { hashTree } from "@estoc/folder-object";
 import * as dagPB from "@ipld/dag-pb";
 import { describe, expect, it } from "vitest";
 
-import { BadBlock, DAG_PB_CODE, checkBlock, decodeNode, hashFile, linksOf, nameOf, reachable, readFile } from "../src/index.js";
+import { BadBlock, DAG_PB_CODE, checkBlock, decodeNode, hashFile, linksOf, nameOf, reach, reachable, readFile } from "../src/index.js";
 import { HELLO_CID, bigBytes } from "./suite/blob-suite.js";
 import { expectBytes } from "./suite/helpers.js";
 
@@ -53,6 +53,11 @@ describe("blocks of the profile", () => {
     // a partial tree: only what is held is walked, and a missing root is skipped
     const partial = new Map([[root, rootBytes]]);
     expect([...(await reachable([root, HELLO_CID], async (cid) => partial.get(cid) ?? null))]).toEqual([root]);
+    // the same walk, saying what it asked for and did not find: the missing root, and the links under the held one
+    const { reached, absent } = await reach([root, HELLO_CID], async (cid) => partial.get(cid) ?? null);
+    expect([...reached]).toEqual([root]);
+    expect([...absent].sort()).toEqual([HELLO_CID, ...links].sort());
+    expect(await reach([root], get)).toEqual({ reached: new Set(blocks.keys()), absent: new Set() });
     expect(await readFile(root, async (cid) => partial.get(cid) ?? null)).toBeNull();
     expectBytes(await readFile(root, get), bigBytes());
     expect(await readFile(HELLO_CID, async () => enc.encode("hello"))).toEqual(enc.encode("hello"));

@@ -96,8 +96,20 @@ export interface Daemon {
   send(contactDid: string, type: string, body: Record<string, unknown>, options?: SendOptions): Promise<MessageRecord>;
   shareObject(contactDid: string, object: FolderObject, options: { sign?: boolean; card?: string }): Promise<MessageRecord>;
   fetchPackage(record: MessageRecord): Promise<VerifiedShare>;
-  /** a block held in the vault's `blobs/`, by CID */
-  blob(cid: string): Promise<Uint8Array | null>;
+  /**
+   * A block held in the vault's `blobs/`, by CID — what a renderer hands
+   * `verifyShare` as `held`, so a share's tree is read over the blocks
+   * the vault holds, its own and those that came by any road. Null for
+   * one not held.
+   */
+  block(cid: string): Promise<Uint8Array | null>;
+  /**
+   * A file held in the vault's `blobs/`, by root — an attachment lifted
+   * out of a message (`lift.ts`), its chunks rejoined. Null when the
+   * root or a chunk is absent; throws on a root that names a directory,
+   * which is a block to read, not a file.
+   */
+  blob(root: string): Promise<Uint8Array | null>;
   retry(mid: string): Promise<void>;
 
   /**

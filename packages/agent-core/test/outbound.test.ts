@@ -639,19 +639,24 @@ describe("v2 outbound: delivering", () => {
     for (const [block, bytes] of blocks) {
       await s.v.vault.blobs.putBlock(block, bytes);
     }
+    // a block beside the tree named after one the vault holds of another object, its bytes not that block's: the
+    // root does not reach it, so it is neither stripped nor filled — what goes out is what was composed
+    const outside = await s.v.vault.blobs.put(enc.encode("a block of another object"));
+    const stray = { id: outside, media_type: "application/octet-stream", byte_count: 4, data: { base64: Buffer.from("junk").toString("base64url") } };
     const share = async (): Promise<MessageRecord> =>
-      s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: attachmentsOf(blocks) }), [root]);
+      s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: [...attachmentsOf(blocks), stray] }), [root]);
     const found = await share();
     // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
     const stored = found.msg?.attachments as { id: string; media_type: string; byte_count: number; data?: unknown }[];
-    expect(stored.map((a) => a.id)).toEqual([...blocks.keys()].sort());
-    expect(stored.every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
+    expect(stored.map((a) => a.id)).toEqual([...[...blocks.keys()].sort(), outside]);
+    expect(stored.slice(0, -1).every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
+    expect(stored.at(-1)?.data).toEqual(stray.data);
     expect(found.skeleton.attachments).toEqual([root]);
-    // on the wire, whole: what Bob opens carries every block, bytes and all
+    // on the wire, whole: what Bob opens carries every block, bytes and all, and the stray as it was composed
     const [sent] = await s.outbox.drain();
     expect(sent?.data).toMatchObject({ mid: found.mid, outcome: "sent" });
     const { msg } = await bob.open(s.posts.at(-1)?.body as string);
-    expect(msg.attachments).toEqual(attachmentsOf(blocks));
+    expect(msg.attachments).toEqual([...attachmentsOf(blocks), stray]);
     expect(msg.body).toEqual({ root });
 
     // a second share of it, its object erased before it goes: not sent, and why
@@ -660,6 +665,21 @@ describe("v2 outbound: delivering", () => {
     const [refused] = await s.outbox.drain({ mid: again.mid });
     expect(refused?.data).toMatchObject({ mid: again.mid, attempt: 1, outcome: "failed", error: `what it carries is erased (${root})` });
     expect(s.log).toContain(`could not deliver object-share/1.0/share (try 1): what it carries is erased (${root})`);
+    expect(s.posts).toHaveLength(1);
+
+    // a block of the object gone since — damage, or a collection — is not sent either, naming the block: a leaf, then
+    // the root itself, under which nothing can be told; nothing partial goes on the wire
+    const third = await share();
+    const blobs = s.v.vault.blobs;
+    const held = blobs.getBlock.bind(blobs);
+    const leaf = [...blocks.keys()].find((cid) => cid !== root) as string;
+    blobs.getBlock = async (cid) => (cid === leaf ? null : held(cid));
+    const [leafless] = await s.outbox.drain({ mid: third.mid });
+    expect(leafless?.data).toMatchObject({ mid: third.mid, attempt: 1, outcome: "failed", error: `a block of what it carries is gone: ${leaf}` });
+    blobs.getBlock = async (cid) => (cid === root ? null : held(cid));
+    const [rootless] = await s.outbox.drain({ mid: third.mid });
+    expect(rootless?.data).toMatchObject({ mid: third.mid, attempt: 2, outcome: "failed", error: `a block of what it carries is gone: ${root}` });
+    blobs.getBlock = held;
     expect(s.posts).toHaveLength(1);
   });
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **`block(cid)`** reads a block of the vault's `blobs/` by CID — what
+  the app's object-share renderer hands `verifyShare` as `held`. It read
+  `blob(cid)` before, which is a *file* read: since a recorded share's
+  blocks are in `blobs/` and its body names them by id (agent-core
+  0.18 unreleased), the renderer read the share's directory nodes that
+  way and every stored share failed to show, "not a file". `blob(root)`
+  stays a file read, chunks rejoined, and is documented as one.
+
 ## 0.2.0 — 2026-09-01
 
 The daemon over the version-2 vault (`@estoc/agent-core` 0.18,
