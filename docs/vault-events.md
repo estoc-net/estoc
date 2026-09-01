@@ -744,7 +744,18 @@ where it says "delete".
   the body blob (§4); a share's blocks are lifted. The skeleton's
   `attachments[]` and §8's per-blob erase assume lifting; a message
   that keeps them inline simply has `attachments: []`. Where lifting
-  is, the body blob is the stored form, not the wire form.
+  is, the body blob is the stored form, not the wire form. Two things
+  are settled for when it is done. Nothing in the body can say which
+  attachments were taken from: the wire may carry an attachment of any
+  shape, a link that looks like the vault's included, so a delivery
+  that told the stored form by its shape would read a blob on the
+  wire's say-so — the skeleton would have to list the positions taken
+  from, and a delivery fill exactly those. A share's blocks need no
+  such list, because what is put back is bounded by what its roots
+  reach: bytes the message carries in any case. And whether a file in
+  a message is a bare attachment at all, rather than an object shared
+  as one (`object-share.md`) — the lifting already done — is the
+  question to answer first.
 - Whether a signature inside authcrypt is a field of the skeleton's
   `data` (`signedBy`, §3.1) or its own event.
 - A per-channel erase for the case where the residue of §10 is not
