@@ -5,7 +5,7 @@ import { sha256, sha512 } from "multiformats/hashes/sha2";
 import { describe, expect, it } from "vitest";
 
 import { BadBlock, DAG_PB_CODE, MAX_RAW_BYTES, NotAFile, RAW_CODE, hashFile, nameOf, type BlobStore } from "../../src/index.js";
-import { clock } from "./helpers.js";
+import { clock, expectBytes } from "./helpers.js";
 
 export interface OpenBlobOptions {
   clock?: () => Date;
@@ -70,7 +70,7 @@ export function blobSuite(name: string, open: OpenBlobs): void {
       const root = await store.put(bytes);
       expect(root.startsWith("bafybei")).toBe(true);
       expect(await store.list()).toHaveLength(3);
-      expect(await store.get(root)).toEqual(bytes);
+      expectBytes(await store.get(root), bytes);
       const rootBytes = await store.getBlock(root);
       expect(rootBytes).not.toBeNull();
       expect(dagPB.decode(rootBytes as Uint8Array).Links).toHaveLength(2);
@@ -88,7 +88,7 @@ export function blobSuite(name: string, open: OpenBlobs): void {
       await store.putBlock(chunk1, blocks.get(chunk1) as Uint8Array);
       expect(await store.get(root)).toBeNull();
       await store.putBlock(chunk2, blocks.get(chunk2) as Uint8Array);
-      expect(await store.get(root)).toEqual(bigBytes());
+      expectBytes(await store.get(root), bigBytes());
     });
 
     it("putBlock takes a block only when it is what its name says", async () => {
@@ -226,7 +226,7 @@ export function blobSuite(name: string, open: OpenBlobs): void {
       expect(await store.list()).toHaveLength(4);
       expect(await store.collect([root])).toEqual({ unlinked: [loose], young: [] });
       expect(await store.list()).toHaveLength(3);
-      expect(await store.get(root)).toEqual(bigBytes());
+      expectBytes(await store.get(root), bigBytes());
       const gone = await store.collect([]);
       expect(gone.unlinked).toHaveLength(3);
       expect(gone.young).toEqual([]);

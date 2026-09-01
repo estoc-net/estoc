@@ -15,6 +15,16 @@ import type { HashedTree, TreeFiles } from "../src/index.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
+/** `toEqual` for bytes: vitest walks a typed array element by element — seconds for a MiB — where a byte compare is instant. */
+function expectBytes(actual: Uint8Array, expected: Uint8Array): void {
+  expect(actual.length, "byte length").toBe(expected.length);
+  let at = 0;
+  while (at < actual.length && actual[at] === expected[at]) {
+    at += 1;
+  }
+  expect(at, `bytes differ at offset ${at}`).toBe(actual.length);
+}
+
 /** The UnixFS empty directory — the CID every tool on earth agrees on. */
 const EMPTY_DIR = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354";
 
@@ -443,7 +453,7 @@ describe("resolvePath", () => {
     );
     expect(hit.kind).toBe("file");
     expect(hit.bytes.length).toBe((files["big.bin"] as Uint8Array).length);
-    expect(hit.bytes).toEqual(files["big.bin"]);
+    expectBytes(hit.bytes, files["big.bin"] as Uint8Array);
   });
 
   it("resolves the empty path to the root directory node", async () => {
