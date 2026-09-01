@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- **A share's blocks are in the vault once.** A recorded object-share —
+  received (`keepShare`) or sent (`Agent.shareObject`, any `send` naming
+  `roots`) — keeps its block attachments by id alone: the `data` is gone
+  from the body and the bytes are in `blobs/`, so an erase of the
+  share's root really removes them, and a share no longer costs its
+  size twice (vault-events.md §4, `lift.ts`). The outbox fills the bytes
+  back in for the wire (`fillBlocks`); a share whose root was erased
+  before it went out is not sent, saying so. A reader passes
+  `blobs.getBlock` to `verifyShare`, as for leaves that came by another
+  road; `MessageRecord.msg` is the plaintext as stored. `stripBlocks`,
+  `fillBlocks` and `Lifted` are exported; `keepShare` resolves to a
+  `Lifted` (the stored plaintext and the roots), no longer to the roots
+  alone. Records written before this — attachments inline — read and
+  send as they did.
+- **`verifyShare(…).blocks` is what the walk reached**: the blocks the
+  tree from `root` reaches and finds, carried or held — not every
+  block-shaped attachment the message carries. A block beside the tree
+  is not put in `blobs/` (a stray whose bytes did not hash to its id
+  used to fail the whole inbound) and stays in the record as it came.
+
 ## 0.18.0 — 2026-09-01
 
 The agent over the version-2 vault, in place of the version-1 one.

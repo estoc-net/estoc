@@ -743,7 +743,9 @@ export class Agent {
    * `did`: hash its canonical tree, keep the blocks in our own `blobs/`,
    * and send one object-share/1.0 message — the root in the body, one
    * attachment per block, and the record's skeleton naming the root, as
-   * `keepShare` names a received share's (vault-events.md §3.1). Two
+   * `keepShare` names a received share's (vault-events.md §3.1); the
+   * record's body names the blocks by id, the bytes are in `blobs/` once,
+   * and the outbox fills them back in for the wire (`lift.ts`). Two
    * roads and no round trip (§7): the whole closure goes inline when it
    * fits `maxShareBytes`; otherwise the skeleton and `index.json` go
    * inline and the whole closure goes as one encrypted CAR — a package

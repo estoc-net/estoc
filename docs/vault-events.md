@@ -303,14 +303,20 @@ own blob, the body blob is written with that `data` replaced by a
 `links` entry naming the blob (the attachment's own `hash` stays), and
 the blob's root goes into the line's `attachments[]`. An object that
 arrived as blocks (`object-share/1.0`) is lifted as it is: each block
-by `putBlock`, its root into `attachments[]`, and from then on it is
-read by `@estoc/folder-object` over the vault's own blocks — the
-share's leaves that were absent, or fetched later by package, land
-beside the rest under the same root. The body blob is then the
-plaintext *as stored*, not byte-for-byte as it crossed the wire; the
-wire form is what the trace keeps. A message left inline has
-`attachments: []` and its attachments are erased with its body.
-Whether to lift at all is open (§11).
+the tree reaches by `putBlock`, the root into `attachments[]`, and in
+the body each of those blocks' attachments stays by `id` alone — the
+id is the CID, the name the block is read by — its `data` gone; a
+block carried beside the tree is not lifted and stays as it came.
+From then on the object is read by `@estoc/folder-object` over the
+vault's own blocks — the share's leaves that were absent, or fetched
+later by package, land beside the rest under the same root — and a
+delivery of the message puts the bytes back from the same blocks. The
+body blob is then the plaintext *as stored*, not byte-for-byte as it
+crossed the wire, and `bytes` is its size as stored; the wire form is
+what the trace keeps. A message nothing was lifted from — a share that
+did not verify, any other message — has `attachments: []` and its
+attachments are erased with its body. A share's blocks are lifted;
+whether inline attachments are is open (§11).
 
 A block that is **absent** under a root a line names means one of
 three things, and the reader tells them apart by the events (§8.2):
@@ -733,11 +739,12 @@ where it says "delete".
 - Which key when a document lists several agreement keys: the one the
   envelope used (inbound) and the first listed (outbound) is the
   working rule; the fold joins them regardless.
-- Whether attachments are lifted out of the plaintext into their own
-  blobs at append time or left inline in the body blob (§4). The
-  skeleton's `attachments[]` and §8's per-blob erase assume lifting; a
-  message that keeps them inline simply has `attachments: []`. If
-  lifting stays, the body blob is the stored form, not the wire form.
+- Whether inline attachments (`data.base64`, `data.json`) are lifted
+  out of the plaintext into their own blobs at append time or left in
+  the body blob (§4); a share's blocks are lifted. The skeleton's
+  `attachments[]` and §8's per-blob erase assume lifting; a message
+  that keeps them inline simply has `attachments: []`. Where lifting
+  is, the body blob is the stored form, not the wire form.
 - Whether a signature inside authcrypt is a field of the skeleton's
   `data` (`signedBy`, §3.1) or its own event.
 - A per-channel erase for the case where the residue of §10 is not

@@ -29,9 +29,10 @@ import { outboundPair, resolvedOf } from "./channel.js";
 import type { SendOptions } from "./handler.js";
 import type { PeerVault } from "./identity.js";
 import type { Keyring, MyIdentity, Routed } from "./keyring.js";
+import { fillBlocks, stripBlocks } from "./lift.js";
 import { bounded, type MediatorLink } from "./link.js";
 import { current, register, routedOf } from "./mediation.js";
-import { attributedTo, didPlaceholder, messageRecord, nameOf, type MessageRecord } from "./records.js";
+import { attributedTo, didPlaceholder, messageRecord, nameOf, type MessageRecord, type PlainMessage } from "./records.js";
 import type { TraceData } from "./trace.js";
 
 export interface OutboundOptions {
@@ -169,12 +170,16 @@ export class Outbound {
   /**
    * The `message.out` (§3.1), body first (§4): the plaintext into the
    * blob store, then the skeleton — `roots` the blobs lifted out of it,
-   * put by the caller before this. Nothing has touched the wire: what is
+   * put by the caller before this. With roots named, the body is the
+   * plaintext as stored (`lift.ts`): the block attachments whose bytes
+   * `blobs/` holds keep their id and lose their `data`; the outbox puts
+   * the bytes back for the wire. Nothing has touched the wire: what is
    * recorded waits in the outbox, and a delivery is the outbox's to try.
    */
   async record({ plain, pair }: Composed, roots: Cid[] = []): Promise<MessageRecord> {
     const mid = uuidv7({ msecs: this.clock().getTime() });
-    await recordMessage(this.opened.vault, this.fold, "out", utf8.encode(JSON.stringify(plain)), {
+    const stored = roots.length === 0 ? plain : await stripBlocks(plain as PlainMessage, (cid) => this.opened.vault.blobs.has(cid));
+    await recordMessage(this.opened.vault, this.fold, "out", utf8.encode(JSON.stringify(stored)), {
       ...pair,
       mid,
       wireId: plain.id,
@@ -539,8 +544,10 @@ export class Outbox {
    * contact's DID now; sealed and POSTed (`Outbound.deliver`). Whatever
    * happens is one `delivery.attempted` on the message's channel
    * (§3.1): `sent`, and it is out of the outbox; `failed`, with why, and
-   * it waits for the next pass. Nothing here throws but the log refusing
-   * the event.
+   * it waits for the next pass. A message whose body, or whose lifted
+   * blocks, were erased since it was written (§8) fails saying so: what
+   * the record no longer holds is not sent. Nothing here throws but the
+   * log refusing the event.
    */
   private async attempt(message: Message, cid: string | null): Promise<Attempted> {
     const attempt = (message.delivery?.attempts.length ?? 0) + 1;
@@ -566,12 +573,19 @@ export class Outbox {
       if (found === null || found.msg === null) {
         throw new Error(`its plaintext is ${found?.body ?? "gone"}`);
       }
+      // what it carries, erased since (§8): as the body, asked before the blocks are
+      const erased = message.skeleton.attachments.find((root) => message.erased.includes(root));
+      if (erased !== undefined) {
+        throw new Error(`what it carries is erased (${erased})`);
+      }
+      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/`
+      const plain = await fillBlocks(found.msg, this.opened.vault.blobs);
       await this.ensureRegistered(message.pair.myKey as string);
       const to = contact.currentDids.at(-1);
       if (to === undefined) {
         throw new Error(`${nameOf(contact)} has no DID to write to`);
       }
-      await this.outbound.deliver(found.msg as IMessage, to, message.mid);
+      await this.outbound.deliver(plain as IMessage, to, message.mid);
     } catch (err) {
       outcome = "failed";
       error = messageOf(err);

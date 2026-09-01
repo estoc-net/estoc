@@ -45,7 +45,12 @@ export interface MessageRecord {
    */
   sender: string | null;
   skeleton: MessageIn | MessageOut;
-  /** the plaintext, when the body is present */
+  /**
+   * The plaintext as stored (vault-events.md §4, `lift.ts`), when the
+   * body is present: an object-share's blocks are in `blobs/` and its
+   * attachments name them by id alone, `data` gone — `verifyShare` over
+   * `blobs.getBlock` reads the object, `fillBlocks` makes the wire form.
+   */
   msg: PlainMessage | null;
   body: BodyState;
 }

@@ -119,8 +119,10 @@ content byte moving. There is no ask in the protocol (§7).
    object, verify its card and require its `root` to equal the root just
    computed; the message then carries the author's testimony, not ours.
    One card per share: signing and passing on are not combined.
-4. Put every block of the closure in our own `blobs/` and send. The log
-   record is the message as sent, attachments inline.
+4. Put every block of the closure in our own `blobs/` and send. The
+   record's body names the blocks by id — the block attachments without
+   their `data`, the bytes in `blobs/` once (`docs/vault-events.md` §4);
+   a delivery fills them back in from there.
 
 ## 4. Receiving
 
@@ -139,10 +141,13 @@ envelope proves. The handler (`verifyShare`) then:
 4. reads the tree as an object (`readObject`). `index.json` absent or
    malformed is malformed, not a missing leaf: a well-hashed tree that is
    not an object does not verify, however good its hashes;
-5. on success puts every block it holds in `blobs/<cid>` (put-if-absent),
-   and the object is **complete** if no leaf is missing, **partial**
-   otherwise. Leaves held from an earlier share count as present: the CID
-   names them, whoever sent them;
+5. on success puts every block the tree reaches in `blobs/<cid>`
+   (put-if-absent) and records the message with those attachments by id
+   alone, their bytes in `blobs/`; a block carried beside the tree is no
+   part of the object, neither put nor stripped. The object is
+   **complete** if no leaf is missing, **partial** otherwise. Leaves held
+   from an earlier share count as present: the CID names them, whoever
+   sent them;
 6. on failure keeps the record as it arrived — a fact about what was
    sent — and notes why; nothing goes to `blobs/`;
 7. if the object is partial and the share names a usable package (§8),
@@ -188,9 +193,11 @@ card's.
 ## 6. Storage
 
 `blobs/<cid>` (`docs/vault-folder.md` §8): immutable, named by content,
-merged by union on import. The message log still holds the attachments
-inline; lifting them out of log lines into `blobs/` references is a later
-step and changes nothing on the wire.
+merged by union on import. A share's blocks are there once, whichever
+road and however many shares brought them: the record's body keeps the
+block attachments by id and without their `data` (`docs/vault-events.md`
+§4), so erasing the share's root erases the bytes, and a delivery of a
+share of ours puts them back from `blobs/`. Nothing changes on the wire.
 
 ## 7. Two roads, no round trip
 

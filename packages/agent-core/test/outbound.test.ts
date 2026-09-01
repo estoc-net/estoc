@@ -13,10 +13,13 @@ import {
   Inbound,
   Keyring,
   MediatorLink,
+  OBJECT_SHARE,
   Outbound,
   Outbox,
   PLAIN_TYP,
   RECIPIENT_UPDATE,
+  attachmentsOf,
+  closureOf,
   createVault,
   didPlaceholder,
   establish,
@@ -623,6 +626,41 @@ describe("v2 outbound: delivering", () => {
     await eraseMessage(s.v.vault.events, s.v.fold, unroutable.mid, "user");
     const [gone] = await s.outbox.drain({ mid: unroutable.mid });
     expect(gone?.data).toMatchObject({ mid: unroutable.mid, attempt: 2, outcome: "failed", error: "its plaintext is erased" });
+  });
+
+  it("a share goes out with its blocks back from blobs/, stored without them; one erased since is not sent, saying so", async () => {
+    const s = await scene();
+    const bob = await peer(2, BOB_HTTP);
+    const cid = await known(s, bob);
+    const { root, blocks } = await closureOf({
+      "index.json": enc.encode(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000", title: "Sea day" })),
+      "files/body.md": enc.encode("# Sea day\n\nWaves.\n"),
+    });
+    for (const [block, bytes] of blocks) {
+      await s.v.vault.blobs.putBlock(block, bytes);
+    }
+    const share = async (): Promise<MessageRecord> =>
+      s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: attachmentsOf(blocks) }), [root]);
+    const found = await share();
+    // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
+    const stored = found.msg?.attachments as { id: string; media_type: string; byte_count: number; data?: unknown }[];
+    expect(stored.map((a) => a.id)).toEqual([...blocks.keys()].sort());
+    expect(stored.every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
+    expect(found.skeleton.attachments).toEqual([root]);
+    // on the wire, whole: what Bob opens carries every block, bytes and all
+    const [sent] = await s.outbox.drain();
+    expect(sent?.data).toMatchObject({ mid: found.mid, outcome: "sent" });
+    const { msg } = await bob.open(s.posts.at(-1)?.body as string);
+    expect(msg.attachments).toEqual(attachmentsOf(blocks));
+    expect(msg.body).toEqual({ root });
+
+    // a second share of it, its object erased before it goes: not sent, and why
+    const again = await share();
+    await eraseMessage(s.v.vault.events, s.v.fold, again.mid, "user", [root]);
+    const [refused] = await s.outbox.drain({ mid: again.mid });
+    expect(refused?.data).toMatchObject({ mid: again.mid, attempt: 1, outcome: "failed", error: `what it carries is erased (${root})` });
+    expect(s.log).toContain(`could not deliver object-share/1.0/share (try 1): what it carries is erased (${root})`);
+    expect(s.posts).toHaveLength(1);
   });
 
   it("waits only so long for an endpoint", async () => {
