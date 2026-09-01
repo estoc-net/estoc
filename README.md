@@ -62,7 +62,7 @@ One package, one file, one test by name (vitest flags go after `--`):
 
 ```sh
 pnpm --filter @estoc/vault build && pnpm --filter @estoc/vault typecheck && pnpm --filter @estoc/vault test
-pnpm --filter @estoc/vault test test/v2/fold.test.ts
+pnpm --filter @estoc/vault test test/fold.test.ts
 pnpm --filter @estoc/vault test -- -t "attachments"
 pnpm --filter @estoc/vault test:watch
 ```
