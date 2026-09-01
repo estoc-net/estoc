@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.18.0 — unreleased
+## 0.18.0 — 2026-09-01
 
 The agent over the version-2 vault, in place of the version-1 one.
 

@@ -1,6 +1,6 @@
 {
   "name": "@estoc/vault",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "What the events of an .estoc vault mean (docs/vault-events.md): the event types and what each carries, the peer-key fingerprint, the folds that turn a set of events into contacts, channels, messages, my keys, invitations and deliveries, the procedures (erase, delete a contact, merge), and the keystore glue that mints keys by name — over any @estoc/event-store. Format only: what a DID is minted as is the caller's.",
   "license": "Apache-2.0",
   "author": "merely",

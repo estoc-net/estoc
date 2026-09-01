@@ -1,6 +1,6 @@
 {
   "name": "@estoc/daemon",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The Estoc daemon: an agent and its vault behind one RPC interface the UI talks to. The same core runs in a browser worker (OPFS) and as a Node process (`estoc-daemon`, a folder on disk, a WebSocket the app connects to).",
   "license": "Apache-2.0",
   "author": "merely",
