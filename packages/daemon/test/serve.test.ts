@@ -4,6 +4,8 @@ import path from "node:path";
 import { WebSocket } from "ws";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { zipFiles } from "@estoc/event-store";
+
 import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "../src/index.js";
 import { nodeHost, serveDaemon } from "../src/node/index.js";
 
@@ -99,6 +101,53 @@ describe("the daemon over a socket", () => {
       await reopened;
     } finally {
       await served.close();
+    }
+  });
+
+  it("leaves nothing behind when a backup is refused after its files are down: every retry starts from the empty folder", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
+    dirs.push(root);
+    const served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
+    // a backup of Alice's, made elsewhere
+    const elsewhere = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
+    dirs.push(elsewhere);
+    const there = await serveDaemon({ host: nodeHost(elsewhere), port: 0, token: "t0k3n" });
+    try {
+      const a = recorder();
+      const alice = connect<Daemon>(await clientPort(there.url), a.handlers as never);
+      await alice.boot();
+      const opened = a.next("opened");
+      await alice.createIdentity("Alice", "alice-passes-the-salt");
+      await opened;
+      const backup = await alice.exportBackup();
+
+      const r = recorder();
+      const here = connect<Daemon>(await clientPort(served.url), r.handlers as never);
+      await here.boot();
+      expect(r.events.at(-1)).toEqual(["phase", "onboarding"]);
+
+      // a zip that is a vault by its config but has no keystore: refused
+      // after the copy, and refused the same way again — not "a vault
+      // already exists here"
+      const headless = zipFiles({
+        ".estoc/config.json": new TextEncoder().encode(JSON.stringify({ format: "estoc", version: 2, identity: { anchor: { key: "anchor", did: "did:key:z6Mk" } } })),
+      });
+      await expect(here.restoreIdentity(headless, "x")).rejects.toThrow(/no keystore\.json/);
+      await expect(here.restoreIdentity(headless, "x")).rejects.toThrow(/no keystore\.json/);
+      await expect(stat(path.join(root, ".estoc", "config.json"))).rejects.toThrow();
+
+      // the real backup under the wrong passphrase: refused, and gone again
+      await expect(here.restoreIdentity(backup.bytes, "not-it")).rejects.toThrow(/does not open this backup/);
+      await expect(stat(path.join(root, ".estoc", "config.json"))).rejects.toThrow();
+
+      // the right passphrase: the same folder, third try, opens as Alice
+      const restored = r.next("opened");
+      await here.restoreIdentity(backup.bytes, "alice-passes-the-salt");
+      expect(((await restored)[0] as { label: string }).label).toBe("Alice");
+      await stat(path.join(root, ".estoc", "config.json"));
+    } finally {
+      await served.close();
+      await there.close();
     }
   });
 

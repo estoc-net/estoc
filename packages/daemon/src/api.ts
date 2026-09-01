@@ -38,6 +38,13 @@ import type {
 export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
 
 /** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
+/** A message with the fold's word on whose it is: the app homes it by `contactCid`, never by guessing from DIDs. */
+export interface SnapshotMessage {
+  record: MessageRecord;
+  /** the contact the channel is attributed to (a contested channel: the first of them); null while unattributed */
+  contactCid: string | null;
+}
+
 export interface Snapshot {
   label: string;
   mediatorDid: string | null;
@@ -45,7 +52,7 @@ export interface Snapshot {
   contacts: ContactRecord[];
   invitations: InvitationRecord[];
   /** every message of every channel still attributed to someone (or to nobody yet) — a deleted contact's are not read */
-  messages: MessageRecord[];
+  messages: SnapshotMessage[];
   /** the fold's word on every outbound message: sent, pending, failed, held */
   deliveries: Delivery[];
   /** damaged log lines skipped while reading, plus message bodies that could not be read back */

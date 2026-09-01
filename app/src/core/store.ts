@@ -19,14 +19,13 @@ import {
 import type { Daemon, Snapshot } from "@estoc/daemon";
 import { startDaemon } from "../daemon/client.js";
 import { saveFile } from "./backup.js";
-import { counterpartyOf, entryOf } from "./entries.js";
+import { entryOf } from "./entries.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
 import type {
   AgentStatus,
   Contact,
   DeliveryView,
-  Entry,
   Identity,
   InvitationView,
   Phase,
@@ -156,19 +155,9 @@ function deliveryView(delivery: Delivery): DeliveryView {
 
 /** Project the vault's records into views. */
 function viewsOf(snapshot: Snapshot): Identity {
-  // Threads are keyed by contact, not by DID: a contact's DIDs are a
-  // history, and every message is homed through it.
-  const cidOf = new Map<string, string>();
-  for (const contact of snapshot.contacts) {
-    for (const their of contact.theirDids) {
-      cidOf.set(their.did, contact.cid);
-    }
-  }
-  const messages: Entry[] = [];
-  for (const record of snapshot.messages) {
-    const did = counterpartyOf(record);
-    messages.push(entryOf(record, did === null ? null : (cidOf.get(did) ?? null)));
-  }
+  // Threads are keyed by contact, not by DID: the daemon says whose each
+  // message is (the fold's attribution of its channel), and it is homed by that.
+  const messages = snapshot.messages.map(({ record, contactCid }) => entryOf(record, contactCid));
   if (snapshot.damaged > 0) {
     log(`skipped ${snapshot.damaged} damaged line${snapshot.damaged === 1 ? "" : "s"} in the logs`);
   }

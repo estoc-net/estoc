@@ -6,6 +6,7 @@ import type { VerifiedShare } from "@estoc/agent-core";
 import {
   Agent,
   AgentTrace,
+  attributedTo,
   contactRecord,
   createVault,
   inspectVault,
@@ -23,7 +24,7 @@ import {
   type TraceLevel,
 } from "@estoc/agent-core/v2";
 
-import type { Daemon, Phase, Snapshot } from "./api.js";
+import type { Daemon, Phase, Snapshot, SnapshotMessage } from "./api.js";
 import { exportBackup, filesFromZip } from "./backup.js";
 import type { DaemonHost } from "./host.js";
 
@@ -95,12 +96,13 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
 
   async function snapshot(v: PeerVault): Promise<Snapshot> {
     const fold = v.fold;
-    const messages: MessageRecord[] = [];
+    const messages: SnapshotMessage[] = [];
     const deliveries: Delivery[] = [];
     let unreadable = 0;
     for (const message of fold.messages()) {
       // a deleted contact's channels are tombstoned (§9): nothing of them is shown
-      if (fold.attribution(message.pair).kind === "deleted") {
+      const attribution = fold.attribution(message.pair);
+      if (attribution.kind === "deleted") {
         continue;
       }
       const record = await messageRecord(fold, v.vault.blobs, message.mid);
@@ -110,7 +112,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if (record.body === "missing") {
         unreadable += 1;
       }
-      messages.push(record);
+      messages.push({ record, contactCid: attributedTo(attribution) });
       if (message.delivery !== null) {
         deliveries.push(message.delivery);
       }
@@ -270,22 +272,32 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if ((await backend.size(CONFIG_PATH)) !== null) {
         throw new Error("a vault already exists here");
       }
-      await restoreFolder(backend, filesFromZip(zip));
-      const restored = await inspectVault(backend);
+      // a zip that does not unpack fails before a byte lands
+      const files = filesFromZip(zip);
       let key: CryptoKey;
+      let v: PeerVault;
       try {
-        key = await unlockSeedKeystore(restored.keystore, passphrase);
-      } catch {
-        // wrong passphrase: leave no half-restored vault behind
+        await restoreFolder(backend, files);
+        const restored = await inspectVault(backend);
+        try {
+          key = await unlockSeedKeystore(restored.keystore, passphrase);
+        } catch {
+          throw new Error("that passphrase does not open this backup");
+        }
+        v = await openVault(backend, key);
+        // the snapshot carried no local/, so this open is a fresh device: the
+        // old device's unsent mail is held, not this one's to send (§10); a
+        // mediation of this device's own is chosen in the UI afterwards
+        await holdImported(v.vault.events, v.fold);
+      } catch (err) {
+        // whatever refused the backup once its files were down — no
+        // keystore, not a vault, the wrong passphrase, a seed that is not
+        // the anchor's — leaves no half-restored vault behind: the next
+        // try, with another zip or passphrase, starts from the empty folder
         await host.wipe();
-        throw new Error("that passphrase does not open this backup");
+        throw err;
       }
       await host.cacheSeedKey(key);
-      const v = await openVault(backend, key);
-      // the snapshot carried no local/, so this open is a fresh device: the
-      // old device's unsent mail is held, not this one's to send (§10); a
-      // mediation of this device's own is chosen in the UI afterwards
-      await holdImported(v.vault.events, v.fold);
       await open(v, key);
     },
 

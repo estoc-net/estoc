@@ -123,6 +123,9 @@ importers:
       '@estoc/daemon':
         specifier: workspace:^
         version: link:../daemon
+      '@estoc/event-store':
+        specifier: workspace:^
+        version: link:../event-store
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../folder-object

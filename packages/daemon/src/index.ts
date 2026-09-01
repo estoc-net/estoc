@@ -1,4 +1,4 @@
-export type { Daemon, DaemonEvents, Phase, Snapshot } from "./api.js";
+export type { Daemon, DaemonEvents, Phase, Snapshot, SnapshotMessage } from "./api.js";
 export type { DaemonHost } from "./host.js";
 export { createDaemon, type DaemonCore, type Emit } from "./daemon.js";
 export { connect, serve, type Port } from "./rpc.js";

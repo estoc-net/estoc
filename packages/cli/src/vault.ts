@@ -1,30 +1,27 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  addDerivedKey,
   createSeedKeystore,
+  parseSeedKeystore,
+  serializeKeystore,
   unlockSeedKeystore,
   type DerivedIdentity,
   type SeedKeystoreDocument,
 } from "@estoc/keystore";
-import {
-  ESTOC_DIR,
-  KEY_ANCHOR,
-  KEYSTORE_PATH,
-  Vault as EstocVault,
-  type KeyRef,
-  type MintDid,
-  type VaultConfig,
-} from "@estoc/vault";
-import { FsBackend } from "@estoc/vault/node";
+import { CONFIG_PATH, ESTOC_DIR, FolderVault, KEYSTORE_FILE, NotAVault, isJsonObject, readConfig as checkConfig } from "@estoc/event-store";
+import { FsBackend } from "@estoc/event-store/node";
+import { KEY_ANCHOR, VaultFold, createFolderVault, drafts, openFolderVault, record, type MintDid } from "@estoc/vault/v2";
 
-export { ESTOC_DIR, type KeyRef, type VaultConfig };
+export { ESTOC_DIR };
 
 /**
  * A vault is any folder the user owns with a `.estoc` directory inside —
  * the git model: the folder holds the user's content, `.estoc` holds ours.
- * The on-disk format is `@estoc/vault` (docs/vault-format.md); this module
- * finds the folder and opens it on a folder-on-disk backend for what a CLI
- * needs — the config, the keystore, keys by name.
+ * The on-disk format is version 2 of `@estoc/vault` (docs/vault-folder.md,
+ * docs/vault-events.md); this module finds the folder and opens it on a
+ * folder-on-disk backend for what a CLI needs — the config, the keystore,
+ * keys by name.
  */
 export interface Vault {
   /** The user's folder. */
@@ -33,7 +30,25 @@ export interface Vault {
   dir: string;
 }
 
-/** The identity's root key (vault-format §5): what `estoc init` mints. */
+/** A key by the name it derives under, and the did:key it derives. */
+export interface KeyRef {
+  key: string;
+  did: string;
+}
+
+/**
+ * What `estoc status` shows of a vault: `config.json` (vault-folder §6.1)
+ * plus the label the identity gave itself in its events.
+ */
+export interface VaultConfig {
+  format: "estoc";
+  version: 2;
+  /** the latest `identity.label`; null before one is recorded */
+  label: string | null;
+  identity: { anchor: KeyRef };
+}
+
+/** The identity's root key (vault-folder §6.1): what `estoc init` mints. */
 export const ANCHOR_KEY_NAME = KEY_ANCHOR;
 
 /**
@@ -44,6 +59,9 @@ export const ANCHOR_KEY_NAME = KEY_ANCHOR;
 const noDids: MintDid = () => {
   throw new Error("estoc mints no DIDs of its own; the app and the daemon do");
 };
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 function vaultAt(root: string): Vault {
   const resolved = path.resolve(root);
@@ -56,10 +74,6 @@ async function isDirectory(p: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function open(vault: Vault): Promise<EstocVault> {
-  return EstocVault.open(new FsBackend(vault.root), { mint: noDids });
 }
 
 /**
@@ -93,13 +107,14 @@ export interface InitResult {
 }
 
 /**
- * Create `root`/.estoc with a fresh seed sealed under `passphrase` and the
- * anchor key derived from it. Creates `root` itself if needed; refuses to
- * touch an existing `.estoc` — it holds keys. `Vault.create` writes the
- * keystore before the config, so a crash midway leaves "no vault", not a
- * vault without keys (vault-format §7); `.estoc` is 0700 and the keystore
- * 0600 from its first byte: an empty 0600 placeholder is laid down before
- * `create`, and the backend's rewrite keeps that mode.
+ * Create `root`/.estoc with a fresh seed sealed under `passphrase`, the
+ * anchor key derived from it, and `label` recorded as the identity's
+ * first `identity.label`. Creates `root` itself if needed; refuses to
+ * touch an existing `.estoc` — it holds keys. `createFolderVault` writes
+ * the keystore before the config, so a crash midway leaves "no vault", not
+ * a vault without keys (vault-folder §6.2); `.estoc` is 0700 and the
+ * keystore 0600 from its first byte: an empty 0600 placeholder is laid
+ * down before `create`, and the backend's rewrite keeps that mode.
  */
 export async function initVault(root: string, label: string, passphrase: string): Promise<InitResult> {
   const vault = vaultAt(root);
@@ -113,29 +128,48 @@ export async function initVault(root: string, label: string, passphrase: string)
   await mkdir(vault.dir, { mode: 0o700 });
   // Seed the keystore path at 0600 so the backend's mode-preserving rewrite
   // inherits it; key material is never on disk at a wider mode, even briefly.
-  await writeFile(path.join(vault.root, KEYSTORE_PATH), "", { mode: 0o600 });
-  const created = await EstocVault.create(new FsBackend(vault.root), { label, keystore: doc, seedKey, mint: noDids });
-  return { vault, did: created.config.identity.anchor.did };
+  await writeFile(path.join(vault.dir, KEYSTORE_FILE), "", { mode: 0o600 });
+  const created = await createFolderVault(new FsBackend(vault.root), doc, seedKey, { mint: noDids });
+  await record(created.vault.events, created.fold, drafts.identityLabel({ name: label }));
+  return { vault, did: created.anchor.did };
 }
 
+/** `config.json` checked (format `estoc`, version 2, an anchor), and the label folded from the events. */
 export async function readConfig(vault: Vault): Promise<VaultConfig> {
-  return (await open(vault)).config;
+  const backend = new FsBackend(vault.root);
+  const bytes = await backend.read(CONFIG_PATH);
+  if (bytes === null) {
+    throw new NotAVault(`no ${CONFIG_PATH} in ${vault.root}`);
+  }
+  const config = checkConfig(bytes);
+  const identity = config["identity"];
+  const anchor = isJsonObject(identity) ? identity["anchor"] : null;
+  if (!isJsonObject(anchor) || anchor["key"] !== KEY_ANCHOR || typeof anchor["did"] !== "string") {
+    throw new NotAVault(`config.json has no identity.anchor { key: ${JSON.stringify(KEY_ANCHOR)}, did }`);
+  }
+  const folder = await FolderVault.open(backend);
+  const fold = await VaultFold.of(folder.events);
+  return { format: "estoc", version: 2, label: fold.label(), identity: { anchor: { key: KEY_ANCHOR, did: anchor["did"] } } };
 }
 
+/** `keystore.json` as it is: sealed, nothing derived. */
 export async function readKeystore(vault: Vault): Promise<SeedKeystoreDocument> {
-  return (await open(vault)).keystore;
+  const bytes = await new FsBackend(vault.root).read(`${ESTOC_DIR}/${KEYSTORE_FILE}`);
+  if (bytes === null) {
+    throw new NotAVault(`no ${KEYSTORE_FILE} in ${vault.dir}`);
+  }
+  return parseSeedKeystore(decoder.decode(bytes));
 }
 
 /**
  * Open the key named `name`: unlock the seed with the vault passphrase and
- * derive. Also checks the anchor first (vault-format §6.1): a seed that
+ * derive. The open checks the anchor first (vault-folder §6.1): a seed that
  * does not derive the recorded anchor is the wrong seed for this vault.
  */
 export async function openVaultKey(vault: Vault, name: string, passphrase: string): Promise<DerivedIdentity> {
-  const opened = await open(vault);
-  const seedKey = await unlockSeedKeystore(opened.keystore, passphrase);
-  await opened.verifyAnchor(seedKey);
-  return opened.derive(seedKey, name);
+  const seedKey = await unlockSeedKeystore(await readKeystore(vault), passphrase);
+  const opened = await openFolderVault(new FsBackend(vault.root), seedKey, { mint: noDids });
+  return opened.keys.derive(name);
 }
 
 /**
@@ -145,10 +179,13 @@ export async function openVaultKey(vault: Vault, name: string, passphrase: strin
  * did:key.
  */
 export async function createVaultKey(vault: Vault, name: string, passphrase: string): Promise<string> {
-  const opened = await open(vault);
-  if (opened.keystore.keys.some((k) => k.name === name)) {
+  const keystore = await readKeystore(vault);
+  if (keystore.keys.some((k) => k.name === name)) {
     throw new Error(`key ${JSON.stringify(name)} already exists`);
   }
-  const seedKey = await unlockSeedKeystore(opened.keystore, passphrase);
-  return (await opened.mintKey(seedKey, name)).did;
+  const seedKey = await unlockSeedKeystore(keystore, passphrase);
+  const opened = await openFolderVault(new FsBackend(vault.root), seedKey, { mint: noDids });
+  const { doc, identity } = await addDerivedKey(opened.keys.keystore, seedKey, name);
+  await opened.vault.files.write(KEYSTORE_FILE, encoder.encode(serializeKeystore(doc)));
+  return identity.did;
 }

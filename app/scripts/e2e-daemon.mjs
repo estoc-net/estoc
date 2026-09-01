@@ -1,5 +1,5 @@
 /**
- * The app on a Node daemon: `estoc-daemon` runs on a temp folder
+ * The app on a Node daemon: `estoc serve` runs the daemon on a temp folder
  * and serves the app (@estoc/app) for it; Alice's page is opened at that origin and talks to the
  * process over its own socket; Bob is an ordinary in-browser install at
  * the preview. The preview opened with the `?_daemon=` link the daemon also
@@ -14,7 +14,7 @@
  *
  * The mediator is the rail's localhost entry unless E2E_MEDIATOR=estoc.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,7 @@ const APP_URL = process.argv[2] ?? "http://localhost:4173";
 const MEDIATOR_LABEL = process.env.E2E_MEDIATOR === "estoc" ? "mediator.estoc.dev" : "localhost:8080";
 const executablePath = "/usr/bin/chromium";
 const PASS = { Alice: "alice-passes-the-salt", Bob: "bob-builds-boats-2026" };
-const BIN = fileURLToPath(new URL("../../packages/daemon/dist/node/bin.js", import.meta.url));
+const BIN = fileURLToPath(new URL("../../packages/cli/dist/bin.js", import.meta.url));
 
 function fail(message) {
   console.error(`✗ ${message}`);
@@ -61,6 +61,15 @@ async function createIdentity(page, name, startUrl) {
   return mediate(page, name);
 }
 
+/** A vault `estoc init` made: the page finds it locked and unlocks it. */
+async function unlockIdentity(page, name, startUrl) {
+  await page.goto(startUrl);
+  await page.waitForSelector('input[placeholder="passphrase"]', { timeout: 15000 });
+  await page.fill('input[placeholder="passphrase"]', PASS[name]);
+  await page.click('button:has-text("Unlock")');
+  return mediate(page, name);
+}
+
 async function mediate(page, name) {
   await page.waitForSelector("text=not reachable yet", { timeout: 20000 });
   await page.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
@@ -86,7 +95,7 @@ async function expectBubble(page, text, timeout = 15000) {
 
 /** Start `estoc serve` on `root`; resolves to the links it prints: its own app, and the preview with `?_daemon=`. */
 function startDaemon(root) {
-  const child = spawn(process.execPath, [BIN, "--port", "0", "--app-dir", fileURLToPath(new URL("../dist", import.meta.url)), "--app", APP_URL], {
+  const child = spawn(process.execPath, [BIN, "serve", "--port", "0", "--app", APP_URL], {
     cwd: root,
     stdio: ["ignore", "inherit", "pipe"],
   });
@@ -100,20 +109,22 @@ function startDaemon(root) {
       }
       process.stderr.write(chunk.toString().replace(/^/gm, "[daemon] "));
     });
-    child.once("exit", (code) => reject(new Error(`estoc-daemon exited with ${code}\n${out}`)));
+    child.once("exit", (code) => reject(new Error(`estoc serve exited with ${code}\n${out}`)));
   });
   return { child, link };
 }
 
 const root = await mkdtemp(join(tmpdir(), "estoc-e2e-daemon-"));
-// no `estoc init` here: the daemon serves onboarding on an empty folder and
-// lays the vault down itself (the cli's init still writes the version 1
-// format until it switches)
+execFileSync(process.execPath, [BIN, "init", "--label", "Alice"], {
+  cwd: root,
+  env: { ...process.env, ESTOC_PASSPHRASE: PASS.Alice },
+  stdio: "inherit",
+});
 const daemon = startDaemon(root);
 const browser = await chromium.launch({ executablePath });
 try {
   const link = await daemon.link;
-  ok(`estoc-daemon up on ${root}, serving the app at ${link.own}`);
+  ok(`estoc serve up on ${root}, serving the app at ${link.own}`);
   const aliceCtx = await browser.newContext();
   const bobCtx = await browser.newContext();
   const alice = await aliceCtx.newPage();
@@ -121,14 +132,14 @@ try {
   watch(alice, "alice");
   watch(bob, "bob");
 
-  const aliceDid = await createIdentity(alice, "Alice", link.own);
+  const aliceDid = await unlockIdentity(alice, "Alice", link.own);
   await alice.waitForSelector("text=via estoc-daemon at", { timeout: 5000 });
   // the link carried the token; the page took it off the URL and kept it
   if (new URL(alice.url()).origin !== new URL(link.own).origin || alice.url().includes("token=")) {
     fail(`Alice should be at the daemon's own origin with the token taken off the URL, not ${alice.url()}`);
   }
   await stat(join(root, ".estoc", "config.json"));
-  ok("Alice's vault is the folder the daemon laid down, on disk; the rail says so");
+  ok("Alice's vault is the folder estoc init made, unlocked in the daemon; the rail says so");
   const bobDid = await createIdentity(bob, "Bob", APP_URL);
 
   await addContact(alice, "Bob", bobDid);

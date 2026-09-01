@@ -104,7 +104,7 @@ async function cmdStatus(vaultFlag: string | undefined) {
   const config = await readConfig(vault);
   const keys = listKeys(await readKeystore(vault));
   process.stdout.write(`vault   ${vault.root}\n`);
-  process.stdout.write(`label   ${config.label}\n`);
+  process.stdout.write(`label   ${config.label ?? "(none)"}\n`);
   process.stdout.write(`anchor  ${config.identity.anchor.did}\n`);
   for (const key of keys) {
     process.stdout.write(`key     ${key.name}  ${key.did}  ${key.createdAt}\n`);
