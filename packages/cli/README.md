@@ -8,7 +8,8 @@ one seed sealed under a passphrase ([`@estoc/keystore`](../keystore) v3),
 from which every key is derived by name. `estoc init` never touches your
 files; it only adds `.estoc`. Commands discover the enclosing vault by
 walking upward from the working directory, exactly like git finds its
-repository. The layout is [docs/vault-format.md](../../docs/vault-format.md);
+repository. The layout is [docs/vault-folder.md](../../docs/vault-folder.md)
+and what the logs hold is [docs/vault-events.md](../../docs/vault-events.md);
 the app writes the same `.estoc` into the browser's private file system.
 
 ```sh
