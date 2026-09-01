@@ -134,9 +134,13 @@ export async function initVault(root: string, label: string, passphrase: string)
   return { vault, did: created.anchor.did };
 }
 
-/** `config.json` checked (format `estoc`, version 2, an anchor), and the label folded from the events. */
-export async function readConfig(vault: Vault): Promise<VaultConfig> {
-  const backend = new FsBackend(vault.root);
+/**
+ * Where every read of a vault starts (vault-folder §11): `config.json`
+ * says `estoc`, version 2, and names the anchor, or nothing else of the
+ * folder is read — a version 1 vault, an unknown version or a damaged
+ * config is refused here, before the keystore or the events.
+ */
+async function preflight(backend: FsBackend, vault: Vault): Promise<KeyRef> {
   const bytes = await backend.read(CONFIG_PATH);
   if (bytes === null) {
     throw new NotAVault(`no ${CONFIG_PATH} in ${vault.root}`);
@@ -147,14 +151,23 @@ export async function readConfig(vault: Vault): Promise<VaultConfig> {
   if (!isJsonObject(anchor) || anchor["key"] !== KEY_ANCHOR || typeof anchor["did"] !== "string") {
     throw new NotAVault(`config.json has no identity.anchor { key: ${JSON.stringify(KEY_ANCHOR)}, did }`);
   }
-  const folder = await FolderVault.open(backend);
-  const fold = await VaultFold.of(folder.events);
-  return { format: "estoc", version: 2, label: fold.label(), identity: { anchor: { key: KEY_ANCHOR, did: anchor["did"] } } };
+  return { key: KEY_ANCHOR, did: anchor["did"] };
 }
 
-/** `keystore.json` as it is: sealed, nothing derived. */
+/** `config.json` checked (format `estoc`, version 2, an anchor), and the label folded from the events. */
+export async function readConfig(vault: Vault): Promise<VaultConfig> {
+  const backend = new FsBackend(vault.root);
+  const anchor = await preflight(backend, vault);
+  const folder = await FolderVault.open(backend);
+  const fold = await VaultFold.of(folder.events);
+  return { format: "estoc", version: 2, label: fold.label(), identity: { anchor } };
+}
+
+/** `keystore.json` as it is: sealed, nothing derived — after the config is checked, never before. */
 export async function readKeystore(vault: Vault): Promise<SeedKeystoreDocument> {
-  const bytes = await new FsBackend(vault.root).read(`${ESTOC_DIR}/${KEYSTORE_FILE}`);
+  const backend = new FsBackend(vault.root);
+  await preflight(backend, vault);
+  const bytes = await backend.read(`${ESTOC_DIR}/${KEYSTORE_FILE}`);
   if (bytes === null) {
     throw new NotAVault(`no ${KEYSTORE_FILE} in ${vault.dir}`);
   }

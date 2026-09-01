@@ -171,6 +171,15 @@ describe("readConfig", () => {
     const v1 = { format: "estoc", version: 1, label: "v", identity: { anchor: { key: ANCHOR_KEY_NAME, did: "did:key:z6Mk" } }, mediation: null };
     await writeFile(path.join(vault.dir, "config.json"), JSON.stringify(v1));
     await expect(readConfig(vault)).rejects.toThrow(/version 1 is not 2/);
+    // and nothing else of the folder is read (§11): the keystore, intact, is not listed
+    await expect(readKeystore(vault)).rejects.toThrow(/version 1 is not 2/);
+    await expect(createVaultKey(vault, "x", PASSPHRASE)).rejects.toThrow(/version 1 is not 2/);
+  });
+
+  it("refuses to read the keystore of a folder whose config is damaged", async () => {
+    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
+    await writeFile(path.join(vault.dir, "config.json"), "{not json");
+    await expect(readKeystore(vault)).rejects.toThrow(/not JSON/);
   });
 
   it("rejects an unsupported version", async () => {
