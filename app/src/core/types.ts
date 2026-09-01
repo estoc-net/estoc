@@ -1,8 +1,9 @@
-import type { DeliveryState, DeliveryStatus, ImportOutcome } from "@estoc/vault";
-import type { AgentStatus, Invitation } from "@estoc/agent-core";
+import type { Imported } from "@estoc/event-store";
+import type { Delivery, DeliveryStatus } from "@estoc/vault/v2";
+import type { AgentStatus, Invitation } from "@estoc/agent-core/v2";
 import type { Entry } from "./entries.js";
 
-export type { AgentStatus, DeliveryState, DeliveryStatus, Entry, ImportOutcome, Invitation };
+export type { AgentStatus, Delivery, DeliveryStatus, Entry, Imported, Invitation };
 
 /**
  * What the UI renders: reactive views mirrored from the vault. The vault
@@ -41,6 +42,16 @@ export interface InvitationView {
   takenBy: string | null;
 }
 
+/** The fold's `Delivery`, thinned for a bubble: where it stands, how many tries, the last try's word. */
+export interface DeliveryView {
+  status: DeliveryStatus;
+  attempts: number;
+  /** when the last try ended */
+  at?: string;
+  /** why the last try failed */
+  error?: string;
+}
+
 export interface Identity {
   name: string;
   /** the mediator this identity is reached through; null until one is chosen */
@@ -52,11 +63,11 @@ export interface Identity {
   /** every log record, homed to its contact; what a thread shows of them is the renderers' call */
   messages: Entry[];
   /**
-   * The delivery log folded, by mid: what became of each message of ours.
+   * The fold's delivery per message of ours, by mid: what became of it.
    * A sent entry with no state here is pending — written, not yet tried.
    * Received entries have none.
    */
-  deliveries: Record<string, DeliveryState>;
+  deliveries: Record<string, DeliveryView>;
 }
 
 export type { Phase } from "@estoc/daemon";

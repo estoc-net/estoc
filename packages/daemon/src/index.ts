@@ -3,4 +3,4 @@ export type { DaemonHost } from "./host.js";
 export { createDaemon, type DaemonCore, type Emit } from "./daemon.js";
 export { connect, serve, type Port } from "./rpc.js";
 export { decode, encode } from "./codec.js";
-export { exportBackup, importBackup, vaultFilesFromZip } from "./backup.js";
+export { exportBackup, filesFromZip } from "./backup.js";

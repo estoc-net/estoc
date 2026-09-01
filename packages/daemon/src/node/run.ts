@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ESTOC_DIR } from "@estoc/vault";
+import { ESTOC_DIR } from "@estoc/event-store";
 
 import { nodeHost } from "./host.js";
 import { serveDaemon, type Served } from "./serve.js";
@@ -79,7 +79,7 @@ export function exitOnSignal(served: Served): void {
 
 /** The token that stays with the vault, minted the first time. */
 async function storedToken(root: string): Promise<string> {
-  const file = path.join(root, ESTOC_DIR, "cache", "daemon.token");
+  const file = path.join(root, ESTOC_DIR, "local", "daemon", "daemon.token");
   try {
     const token = (await readFile(file, "utf8")).trim();
     if (token !== "") {

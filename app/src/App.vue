@@ -64,9 +64,11 @@ const daemonHost = computed(() => (state.daemonAt === null ? "its origin" : new 
       </p>
       <p class="fine">
         Nothing has been changed. If it came from a newer version, update the app.
-        If it is from an older, pre-release format, there is no upgrade path:
-        <button class="link" @click="forget">start over</button> deletes it and
-        begins a new identity.
+        If it is a version 1 vault from before the format change, this version
+        cannot read it: export a backup with the app version that wrote it if
+        you want to keep it, then
+        <button class="link" @click="forget">start over</button> to delete it
+        and begin a new identity.
       </p>
     </div>
   </div>

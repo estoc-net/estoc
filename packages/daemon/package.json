@@ -39,11 +39,11 @@
   },
   "dependencies": {
     "@estoc/agent-core": "workspace:^",
+    "@estoc/event-store": "workspace:^",
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/vault": "workspace:^",
     "didcomm-node": "^0.4.1",
-    "fflate": "^0.8.2",
     "ipaddr.js": "^2.2.0",
     "undici": "^7.29.0",
     "ws": "^8.18.0"

@@ -488,6 +488,8 @@ export class Agent {
       keyOfDid: (did) => this.ring?.keyOfDid(did) ?? null,
       handlers: this.handlerList,
       ...(this.adoptStrangers === undefined ? {} : { adoptStrangers: this.adoptStrangers }),
+      onContact: (contact) => this.events.onContact?.(contact),
+      onInvitation: (key) => this.events.onInvitation?.(this.invitationOf(key)),
     });
     this.pickup = new Pickup(link, (opened) => this.take(opened), {
       onLive: () => {

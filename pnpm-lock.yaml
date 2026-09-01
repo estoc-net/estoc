@@ -20,6 +20,9 @@ importers:
       '@estoc/daemon':
         specifier: workspace:^
         version: link:../packages/daemon
+      '@estoc/event-store':
+        specifier: workspace:^
+        version: link:../packages/event-store
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../packages/folder-object
@@ -148,6 +151,9 @@ importers:
       '@estoc/agent-core':
         specifier: workspace:^
         version: link:../agent-core
+      '@estoc/event-store':
+        specifier: workspace:^
+        version: link:../event-store
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../folder-object
@@ -160,9 +166,6 @@ importers:
       didcomm-node:
         specifier: ^0.4.1
         version: 0.4.1
-      fflate:
-        specifier: ^0.8.2
-        version: 0.8.3
       ipaddr.js:
         specifier: ^2.2.0
         version: 2.5.0

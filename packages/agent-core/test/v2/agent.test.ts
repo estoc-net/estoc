@@ -78,6 +78,11 @@ describe("v2 agent through a mediator", () => {
     // pasting her business card later finds this contact, not a twin.
     const bobsAlice = contactByDid(bob, aliceToBob) as Contact;
     expect(bobsAlice.cid).toBe(got.contactCid);
+    // the adoption surfaced as an event too: a UI's contact list mirrors
+    // the fold by events, and a thread needs its contact to hang on — and
+    // when Alice's claimed name landed, the changed contact surfaced again
+    expect(bob.contacts.some((c) => c.cid === got.contactCid)).toBe(true);
+    expect(bob.contacts.some((c) => c.cid === got.contactCid && c.claimedName === "Alice")).toBe(true);
     expect(bobsAlice.theirDids.map((u) => u.did)).toEqual([alice.agent.did, aliceToBob]);
     expect(bobsAlice.theirDids[0]?.rotatedTo).toEqual([aliceToBob]);
     expect(bobsAlice.currentDids).toEqual([aliceToBob]);
@@ -430,6 +435,10 @@ describe("v2 agent through a mediator", () => {
     expect(alice.v.fold.myKey(issued.key)?.minted?.did).toBe(issued.did);
     expect(alice.v.fold.myKey(issued.key)?.registered).toContain(alice.v.vault.self);
     expect(alicesBob.addressedAs).toBe(issued.key); // the key they last wrote to is the invitation's
+    // both surfaced as events while the mail was handled: the new contact,
+    // and the invitation now taken
+    expect(alice.contacts.some((c) => c.cid === alicesBob.cid)).toBe(true);
+    expect(alice.invitations.some((i) => i.id === issued.id && !i.open)).toBe(true);
     expect(nameOf(alicesBob)).toBe("Bob"); // his claimed name, the record was a placeholder
 
     // A conversation follows, from those two DIDs, with no from_prior anywhere

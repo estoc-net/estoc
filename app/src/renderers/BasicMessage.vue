@@ -9,8 +9,8 @@ import Bubble from "./Bubble.vue";
 const props = defineProps<{ entry: Entry; contact: Contact | null }>();
 
 const content = computed(() => {
-  const body = props.entry.record.msg.body as { content?: unknown };
-  return String(body.content ?? "");
+  const body = props.entry.record.msg?.body as { content?: unknown } | undefined;
+  return String(body?.content ?? "");
 });
 </script>
 

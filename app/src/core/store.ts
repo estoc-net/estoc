@@ -1,35 +1,31 @@
 import { reactive, toRaw } from "vue";
 import type { FolderObject } from "@estoc/folder-object";
+import type { Imported } from "@estoc/event-store";
+import type { Delivery } from "@estoc/vault/v2";
+import { BASIC_MESSAGE, type VerifiedShare } from "@estoc/agent-core";
 import {
-  counterpartyOf,
-  currentDid,
-  currentMyDid,
-  foldDeliveries,
-  type ContactRecord,
-  type ImportOutcome,
-  type InvitationRecord,
-  type MessageRecord,
-} from "@estoc/vault";
-import {
-  BASIC_MESSAGE,
   invitationMessage,
   invitationUrl,
   parseInvitation,
+  type ContactRecord,
   type Invitation,
+  type InvitationRecord,
+  type MessageRecord,
   type SendOptions,
-  type VerifiedShare,
-} from "@estoc/agent-core";
+  type TraceEvent,
+  type TraceLevel,
+} from "@estoc/agent-core/v2";
 
 import type { Daemon, Snapshot } from "@estoc/daemon";
-import type { TraceEvent, TraceLevel } from "@estoc/vault";
 import { startDaemon } from "../daemon/client.js";
 import { saveFile } from "./backup.js";
-import { entryOf } from "./entries.js";
+import { counterpartyOf, entryOf } from "./entries.js";
 import { isInstalled, setupPwa } from "./pwa.js";
 import { isStoragePersisted, persistStorage } from "./storage.js";
 import type {
   AgentStatus,
   Contact,
+  DeliveryView,
   Entry,
   Identity,
   InvitationView,
@@ -76,8 +72,9 @@ export const state = reactive({
   pendingMediatorInvitation: null as string | null,
   /**
    * What this device keeps of what its agent observes (envelopes, frames,
-   * the mediator's rituals): a device preference the daemon's host holds,
-   * never a fact of the vault. `off` means no lens has a trace to read.
+   * the mediator's rituals): this copy's own state, in the vault's
+   * `local/agent/` and never in a backup. `off` means no lens has a trace
+   * to read.
    */
   traceLevel: "normal" as TraceLevel,
 });
@@ -103,11 +100,11 @@ export function invitationLink(record: InvitationRecord): string {
 function invitationView(record: InvitationRecord): InvitationView {
   return {
     id: record.id,
-    goal: record.goal,
-    createdAt: record.createdAt,
+    goal: record.goal ?? "",
+    createdAt: record.at,
     url: invitationLink(record),
-    ready: record.registeredAt !== undefined,
-    takenBy: record.acceptedBy ?? null,
+    ready: record.registered,
+    takenBy: record.takenBy[0] ?? null,
   };
 }
 
@@ -130,10 +127,10 @@ function upsertInvitation(identity: Identity, record: InvitationRecord, gone = f
 function contactView(record: ContactRecord): Contact {
   return {
     cid: record.cid,
-    did: currentDid(record),
-    myDid: currentMyDid(record)?.did ?? null,
+    did: record.currentDids.at(-1) ?? "",
+    myDid: record.keys.at(-1)?.did ?? null,
     label: record.name,
-    ...(record.claimedName === undefined ? {} : { claimedName: record.claimedName }),
+    ...(record.claimedName === null ? {} : { claimedName: record.claimedName }),
   };
 }
 
@@ -147,14 +144,24 @@ function upsertContact(identity: Identity, record: ContactRecord): void {
   }
 }
 
+/** The fold's word on one message of ours, thinned for a bubble. */
+function deliveryView(delivery: Delivery): DeliveryView {
+  const last = delivery.attempts.at(-1);
+  return {
+    status: delivery.status,
+    attempts: delivery.attempts.length,
+    ...(last === undefined ? {} : { at: last.at, ...(last.error === null ? {} : { error: last.error }) }),
+  };
+}
+
 /** Project the vault's records into views. */
 function viewsOf(snapshot: Snapshot): Identity {
   // Threads are keyed by contact, not by DID: a contact's DIDs are a
   // history, and every message is homed through it.
   const cidOf = new Map<string, string>();
   for (const contact of snapshot.contacts) {
-    for (const use of contact.dids) {
-      cidOf.set(use.did, contact.cid);
+    for (const their of contact.theirDids) {
+      cidOf.set(their.did, contact.cid);
     }
   }
   const messages: Entry[] = [];
@@ -172,7 +179,7 @@ function viewsOf(snapshot: Snapshot): Identity {
     contacts: snapshot.contacts.map(contactView),
     invitations: snapshot.invitations.map(invitationView),
     messages,
-    deliveries: Object.fromEntries(foldDeliveries(snapshot.deliveries)),
+    deliveries: Object.fromEntries(snapshot.deliveries.map((delivery) => [delivery.mid, deliveryView(delivery)])),
   };
 }
 
@@ -205,19 +212,12 @@ function connectDaemon(): Daemon {
       }
       identity.messages.push(entryOf(record, contact?.cid ?? null));
     },
-    delivery(event) {
+    delivery(delivery) {
       const identity = state.identity;
       if (identity === null) {
         return;
       }
-      const prior = identity.deliveries[event.mid];
-      identity.deliveries[event.mid] = {
-        status: event.status,
-        attempts: Math.max(prior?.attempts ?? 0, event.attempt),
-        at: event.at,
-        ...(event.to === undefined ? {} : { to: event.to }),
-        ...(event.error === undefined ? {} : { error: event.error }),
-      };
+      identity.deliveries[delivery.mid] = deliveryView(delivery);
     },
     contact(record, gone) {
       if (state.identity === null) {
@@ -336,7 +336,7 @@ export async function lock(): Promise<void> {
 export async function forgetIdentity(): Promise<void> {
   await running().forgetIdentity();
   state.log = [];
-  // the trace level is the device's, not the vault's; ask again so the rail says what the daemon now does
+  // the level lived in the vault's local state and went with it; ask again so the rail says so
   state.traceLevel = await running().traceLevel();
 }
 
@@ -351,14 +351,14 @@ export async function downloadBackup(): Promise<void> {
 }
 
 /** Merge a backup zip into the open vault; the daemon reopens on the merged vault after. */
-export async function mergeBackup(zip: Uint8Array): Promise<ImportOutcome> {
+export async function mergeBackup(zip: Uint8Array): Promise<Imported> {
   const outcome = await running().mergeBackup(zip);
   if (outcome.kind === "merged") {
+    const added = Object.values(outcome.events).reduce((sum, ingested) => sum + ingested.added, 0);
     log(
-      `merged a backup: ${outcome.messagesAdded} new message${outcome.messagesAdded === 1 ? "" : "s"}, ` +
-        `${outcome.contactsAdded} new contact${outcome.contactsAdded === 1 ? "" : "s"}, ` +
-        `${outcome.contactsUpdated} updated` +
-        (outcome.held === 0 ? "" : `; ${outcome.held} unsent message${outcome.held === 1 ? "" : "s"} held for you to retry`)
+      `merged a backup: ${added} new event${added === 1 ? "" : "s"}, ` +
+        `${outcome.blobs.copied} block${outcome.blobs.copied === 1 ? "" : "s"} copied` +
+        (outcome.damaged.length === 0 ? "" : `; ${outcome.damaged.length} damaged line${outcome.damaged.length === 1 ? "" : "s"} skipped`)
     );
   }
   return outcome;

@@ -792,7 +792,7 @@ describe("v2 inbound: what is answered", () => {
 
     const named = await s.deliver(plain(PROFILE, bob.did, me, { profile: { displayName: "Bob" }, send_back_yours: false }), bob);
     expect(types(await s.fresh())).toEqual(["channel.firstSeen", "peer.resolved", "contact.created", "contact.attached", "message.in", "profile.nameClaimed"]);
-    expect(named.outcome === "recorded" && named.contact?.name).toBe(didPlaceholder(bob.did)); // as handed over: the claim lands after
+    expect(named.outcome === "recorded" && named.contact?.name).toBe("Bob"); // the claim landed while answering, and the hand-over reads fresh
     const cid = named.outcome === "recorded" ? (named.contact as ContactRecord).cid : "";
     expect(contactOf(s, cid).name).toBe("Bob");
     s.log.length = 0;
