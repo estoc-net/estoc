@@ -5,12 +5,12 @@
  * the record they start from changed.
  */
 
-import { PLAIN_TYP } from "../protocol/didcomm.js";
-import { GOAL_CONNECT, type Invitation } from "../protocol/oob.js";
-import { OOB_INVITATION } from "../protocol/spec.js";
+import { PLAIN_TYP } from "./protocol/didcomm.js";
+import { GOAL_CONNECT, type Invitation } from "./protocol/oob.js";
+import { OOB_INVITATION } from "./protocol/spec.js";
 import type { InvitationRecord } from "./records.js";
 
-export { GOAL_CONNECT, invitationUrl, parseInvitation, type Invitation } from "../protocol/oob.js";
+export { GOAL_CONNECT, invitationUrl, parseInvitation, type Invitation } from "./protocol/oob.js";
 
 /**
  * The invitation message an issued invitation record stands for: its

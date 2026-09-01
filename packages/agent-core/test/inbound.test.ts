@@ -6,21 +6,27 @@ import { MemoryBackend, compareEvents, type Event } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity } from "@estoc/keystore";
 import { drafts, peerKeyOf, record, recordMessage, type ChannelKey, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, OBJECT_SHARE, PLAIN_TYP, PROFILE, attachmentsOf, closureOf, secretsResolverFor, type IMessage } from "../../src/index.js";
-import { TRUST_PING, TRUST_PING_RESPONSE } from "../../src/protocol/spec.js";
 import {
   AgentTrace,
+  BASIC_MESSAGE,
   Inbound,
   Keyring,
   MediatorLink,
+  OBJECT_SHARE,
+  PLAIN_TYP,
+  PROFILE,
+  attachmentsOf,
+  closureOf,
   createVault,
   didPlaceholder,
   messageRecord,
   mintPeerDid,
   objectShareHandler,
+  secretsResolverFor,
   userProfileHandler,
   type ContactRecord,
   type HandlerContext,
+  type IMessage,
   type InboundOptions,
   type InboundRecord,
   type MessageRecord,
@@ -29,7 +35,8 @@ import {
   type PeerVault,
   type ProtocolHandler,
   type SendOptions,
-} from "../../src/v2/index.js";
+} from "../src/index.js";
+import { TRUST_PING, TRUST_PING_RESPONSE } from "../src/protocol/spec.js";
 
 const didcomm = { Message, FromPrior };
 const resolver = { resolve: resolveDIDCommDoc };

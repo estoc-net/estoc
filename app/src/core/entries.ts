@@ -1,4 +1,4 @@
-import type { MessageRecord } from "@estoc/agent-core/v2";
+import type { MessageRecord } from "@estoc/agent-core";
 
 /**
  * A log record as the UI holds it: the record itself, plus the two things

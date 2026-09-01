@@ -6,31 +6,29 @@ import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 
 import {
+  AgentTrace,
   BASIC_MESSAGE,
   DELIVERY,
   FORWARD,
+  Keyring,
   LIVE_DELIVERY_CHANGE,
   MEDIATE_GRANT,
   MEDIATE_REQUEST,
+  MediatorLink,
   PLAIN_TYP,
   RECIPIENT_UPDATE,
   RECIPIENT_UPDATE_RESPONSE,
   STATUS,
+  createVault,
   secretsResolverFor,
   type IMessage,
-} from "../../src/index.js";
-import {
-  AgentTrace,
-  Keyring,
-  MediatorLink,
-  createVault,
   type LinkOptions,
   type MyIdentity,
   type Opened,
   type PeerVault,
   type TraceEvent,
-} from "../../src/v2/index.js";
-import { FakeMediator, MEDIATOR_HTTP, MEDIATOR_WS, mintMediatorIdentity, type FakeSocket } from "../fake-mediator.js";
+} from "../src/index.js";
+import { FakeMediator, MEDIATOR_HTTP, MEDIATOR_WS, mintMediatorIdentity, type FakeSocket } from "./fake-mediator.js";
 
 const didcomm = { Message, FromPrior };
 const seedOf = (fill: number) => new Uint8Array(32).map((_, i) => (i * 7 + fill) & 0xff);

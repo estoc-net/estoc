@@ -1,102 +1,99 @@
 import { describe, expect, it } from "vitest";
-import { createSeedKeystore, importSeed } from "@estoc/keystore";
-import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { KEY_ANCHOR, KEY_INVITE_PREFIX, MemoryBackend, mediationKeyName, newContact } from "@estoc/vault";
 
-import {
-  createVault,
-  invitationMessage,
-  invitationUrl,
-  mintPeerDid,
-  openVault,
-  parseInvitation,
-} from "../src/index.js";
+import { resolveDIDCommDoc } from "@estoc/did-peer";
+import { CONFIG_PATH, ESTOC_DIR, KEYSTORE_FILE, MemoryBackend, NotAVault } from "@estoc/event-store";
+import { createSeedKeystore } from "@estoc/keystore";
+import { KEY_ANCHOR, mediationKeyName } from "@estoc/vault/v2";
+
+import { createVault, inspectVault, mintPeerDid, openVault } from "../src/index.js";
 
 const FIXED_SEED = new Uint8Array(32).map((_, i) => i);
+const OTHER_SEED = new Uint8Array(32).map((_, i) => 31 - i);
 
-async function freshKeystore() {
-  return createSeedKeystore("test", { seed: FIXED_SEED });
+async function freshKeystore(seed = FIXED_SEED) {
+  return createSeedKeystore("test", { seed });
 }
 
 /**
- * The vault's format is tested in `@estoc/vault` with a minter that is
- * only a name. What the agent binds it to — did:peer:4 from a seed-derived
- * key, the routing DID as the service — is pinned here.
+ * The folder is tested in `@estoc/vault` with a minter that is only a
+ * name. What the agent binds it to — did:peer:4 from a seed-derived key,
+ * the routing DID as the service — is pinned here, on the v2 folder.
  */
-describe("did:peer:4 over the vault", () => {
-  it("pins the anchor and a mediator-facing DID for the fixed seed", async () => {
+describe("v2 identity: did:peer:4 over the folder", () => {
+  it("creates, labels, and reopens as the same identity; the anchor and a mediator-facing DID are pinned for the fixed seed", async () => {
     // Any change to derivation (`estoc/v3/<purpose>/<name>`) or to the
-    // did:peer:4 document shape shows up here. The mediation id is
-    // random per vault, so the peer DID is pinned under a fixed name.
+    // did:peer:4 document shape shows up here. The mediation id is random
+    // per vault, so the peer DID is pinned under a fixed name — the same
+    // name v1 used, so the same DID as v1's pin.
+    const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();
-    const vault = await createVault(new MemoryBackend(), { label: "x", keystore: doc, seedKey });
-    expect(vault.config.identity.anchor.did).toBe("did:key:z6Mkk4RzvEvh61iNGk7gJVk9UPSrGofjLgLDrtEqzdCATJ5A");
-    const me = mintPeerDid(await vault.derive(seedKey, mediationKeyName("0198b7c0-0000-7000-8000-000000000000", "me")), null);
+    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
+    expect(made.anchor).toEqual({ key: KEY_ANCHOR, did: "did:key:z6Mkk4RzvEvh61iNGk7gJVk9UPSrGofjLgLDrtEqzdCATJ5A" });
+    expect(made.fold.label()).toBe("Alice");
+    expect(made.keys.keystore.keys.map((key) => key.name)).toEqual([KEY_ANCHOR]);
+
+    const opened = await openVault(backend, seedKey);
+    expect(opened.anchor).toEqual(made.anchor);
+    expect(opened.vault.self).toBe(made.vault.self);
+    expect(opened.fold.label()).toBe("Alice");
+    expect(opened.fold.device(opened.vault.self)?.mintedAt).not.toBeNull();
+
+    const me = await opened.keys.identity(mediationKeyName("0198b7c0-0000-7000-8000-000000000000"), null);
+    expect(me.did.slice(0, 40)).toBe("did:peer:4zQmRG8Tb4SW5rtKZZUwZxTVHAmCy8N");
+    expect(me.secrets.map((s) => s.id)).toEqual([`${me.did}#key-1`, `${me.did}#key-2`]);
     const resolved = await resolveDIDCommDoc(me.did);
     expect(resolved?.verificationMethod).toHaveLength(2);
     expect(resolved?.service).toEqual([]);
-    expect(me.did.slice(0, 40)).toBe("did:peer:4zQmRG8Tb4SW5rtKZZUwZxTVHAmCy8N");
   });
 
-  it("the mediator-facing DID is a did:peer:4 with no service, and its secrets are the DID's own", async () => {
+  it("refuses the wrong seed on open, and a used keystore on create", async () => {
     const backend = new MemoryBackend();
     const { doc, seedKey } = await freshKeystore();
-    const vault = await createVault(backend, { label: "Alice", keystore: doc, seedKey, mediatorDid: "did:web:mediator.example" });
-    const mediation = vault.config.mediation!;
-    expect(mediation.me.did).toMatch(/^did:peer:4/);
-    expect(vault.keystore.keys.map((k) => k.name)).toEqual([KEY_ANCHOR, mediation.me.key]);
-    // reopened: the DID re-derives from the seed and matches its snapshot
-    const again = await openVault(backend);
-    const me = await again.peerIdentity(seedKey, mediation.me, null);
-    expect(me.did).toBe(mediation.me.did);
-    expect(me.secrets.map((s) => s.id)).toEqual([`${me.did}#key-1`, `${me.did}#key-2`]);
-    // and another seed does not
-    const otherSeed = await importSeed(new Uint8Array(32).map((_, i) => 31 - i));
-    await expect(vault.peerIdentity(otherSeed, mediation.me, null)).rejects.toThrow(/does not derive its recorded DID/);
+    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
+    const other = await freshKeystore(OTHER_SEED);
+    await expect(openVault(backend, other.seedKey)).rejects.toThrow(/wrong seed/);
+    await expect(createVault(new MemoryBackend(), { keystore: made.keys.keystore, seedKey, label: "again" })).rejects.toThrow(/no keys/);
   });
 
-  it("pairwise and invitation DIDs carry the routing DID as their service", async () => {
+  it("a DID with a service carries the routing DID; the same key and service give the same DID", async () => {
     const { doc, seedKey } = await freshKeystore();
-    const routing = "did:web:mediator.example";
-    const vault = await createVault(new MemoryBackend(), { label: "Alice", keystore: doc, seedKey, mediatorDid: routing });
-    const contact = newContact("Bob", "did:peer:4bob");
-    await vault.contacts.put(contact);
-    const pairwise = await vault.mintPairwise(seedKey, contact, routing);
-    expect(pairwise.did).toMatch(/^did:peer:4/);
-    expect((await resolveDIDCommDoc(pairwise.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: routing });
-    expect(pairwise.secrets.map((s) => s.id)).toEqual([`${pairwise.did}#key-1`, `${pairwise.did}#key-2`]);
-
-    const { record, identity } = await vault.createInvitation(seedKey, routing, "Write to Alice");
-    expect(record.key).toBe(`${KEY_INVITE_PREFIX}${record.id}`);
-    expect(identity.did).toBe(record.did);
-    expect((await resolveDIDCommDoc(record.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: routing });
-    // the invitation message and its URL round-trip through the parser
-    const message = invitationMessage(record);
-    expect(message).toMatchObject({ id: record.id, from: record.did, body: { goal_code: "connect", goal: "Write to Alice", accept: ["didcomm/v2"] } });
-    expect(parseInvitation(invitationUrl("https://any.host/x", message))).toEqual(message);
-    // and the parser refuses what is not an invitation
-    expect(() => parseInvitation("did:peer:4abc")).toThrow(/a DID, not an invitation/);
-    expect(() => parseInvitation("not base64 at all!")).toThrow(/does not decode/);
-    expect(() => parseInvitation("https://any.host/?x=1")).toThrow(/carries no _oob/);
-    expect(() => parseInvitation(JSON.stringify({ type: "https://didcomm.org/basicmessage/2.0/message", id: "1", from: "did:x" }))).toThrow(/not an out-of-band/);
-    expect(() => parseInvitation(JSON.stringify({ ...message, from: "nope" }))).toThrow(/names no DID/);
-  });
-
-  it("mintPeerDid is deterministic and service-sensitive", async () => {
-    const { doc, seedKey } = await freshKeystore();
-    const vault = await createVault(new MemoryBackend(), { label: "a", keystore: doc, seedKey });
-    const identity = await vault.mintKey(seedKey, "extra");
-    const a = mintPeerDid(identity, "did:peer:2.Ez6routing");
-    const b = mintPeerDid(identity, "did:peer:2.Ez6routing");
-    const c = mintPeerDid(identity, null);
+    const made = await createVault(new MemoryBackend(), { keystore: doc, seedKey, label: "Alice" });
+    const routing = "did:peer:2.Ez6routing";
+    const a = await made.keys.identity("did/x", routing);
+    const b = await made.keys.identity("did/x", routing);
+    const c = await made.keys.identity("did/x", null);
     expect(a.did).toBe(b.did);
     expect(a.did).not.toBe(c.did);
     const doc2 = await resolveDIDCommDoc(a.did);
-    expect(doc2?.service[0]?.serviceEndpoint).toEqual({
-      uri: "did:peer:2.Ez6routing",
-      accept: ["didcomm/v2"],
-      routingKeys: [],
-    });
+    expect(doc2?.service[0]?.serviceEndpoint).toEqual({ uri: routing, accept: ["didcomm/v2"], routingKeys: [] });
     expect(doc2?.keyAgreement).toEqual([`${a.did}#key-2`]);
+    // `identity` derives; it does not mint: the cache lists the anchor alone
+    expect(made.keys.keystore.keys.map((key) => key.name)).toEqual([KEY_ANCHOR]);
+    expect(mintPeerDid).toBeTypeOf("function");
+  });
+
+  it("inspects without the seed: the folder and the sealed keystore; a v1 folder, or none, is not a vault", async () => {
+    const backend = new MemoryBackend();
+    const { doc, seedKey } = await freshKeystore();
+    const made = await createVault(backend, { keystore: doc, seedKey, label: "Alice" });
+    const inspected = await inspectVault(backend);
+    expect(inspected.vault.self).toBe(made.vault.self);
+    expect(inspected.keystore).toEqual(made.keys.keystore); // the document as create left it: sealed seed, the anchor cached
+
+    await expect(inspectVault(new MemoryBackend())).rejects.toThrow(NotAVault);
+
+    // a version-1 folder, as the v1 agent laid one down: config.json says
+    // version 1 and carries the label and mediation, the keystore is a v3
+    // document like ours — refused at the config, the keystore never read
+    const other = await freshKeystore(OTHER_SEED);
+    const v1 = new MemoryBackend();
+    const encoder = new TextEncoder();
+    await v1.write(
+      CONFIG_PATH,
+      encoder.encode(JSON.stringify({ format: "estoc", version: 1, label: "Alice", identity: { anchor: { key: KEY_ANCHOR, did: "did:key:z6Mk" } }, mediation: null }))
+    );
+    await v1.write(`${ESTOC_DIR}/${KEYSTORE_FILE}`, encoder.encode(JSON.stringify(other.doc)));
+    await expect(inspectVault(v1)).rejects.toThrow(NotAVault);
+    await expect(openVault(v1, other.seedKey)).rejects.toThrow(NotAVault);
   });
 });

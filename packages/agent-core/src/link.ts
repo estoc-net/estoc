@@ -19,10 +19,10 @@
 import type { DIDDoc, Secret } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store";
 
-import type { PeerIdentity } from "../identity/peer.js";
-import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "../protocol/didcomm.js";
-import { envelopeHeader } from "../protocol/envelope.js";
-import { LIVE_DELIVERY_CHANGE } from "../protocol/mediation.js";
+import type { PeerIdentity } from "./identity/peer.js";
+import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "./protocol/didcomm.js";
+import { envelopeHeader } from "./protocol/envelope.js";
+import { LIVE_DELIVERY_CHANGE } from "./protocol/mediation.js";
 import { senderOf } from "./channel.js";
 import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
 

@@ -14,8 +14,8 @@ import type { DIDDoc, VerificationMethod } from "@estoc/did-peer";
 import { base64urlToBytes } from "@estoc/did-peer";
 import { peerKeyOf, type ChannelKey, type EnvelopeKind, type PeerResolved } from "@estoc/vault/v2";
 
-import { ED25519_PUB, X25519_PUB, multibaseKey } from "../identity/peer.js";
-import { didOf } from "../protocol/didcomm.js";
+import { ED25519_PUB, X25519_PUB, multibaseKey } from "./identity/peer.js";
+import { didOf } from "./protocol/didcomm.js";
 
 /**
  * What `unpack` says of the envelope it opened, the fields a channel is

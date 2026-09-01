@@ -1,6 +1,6 @@
 import type { Imported } from "@estoc/event-store";
 import type { Delivery, DeliveryStatus } from "@estoc/vault/v2";
-import type { AgentStatus, Invitation } from "@estoc/agent-core/v2";
+import type { AgentStatus, Invitation } from "@estoc/agent-core";
 import type { Entry } from "./entries.js";
 
 export type { AgentStatus, Delivery, DeliveryStatus, Entry, Imported, Invitation };

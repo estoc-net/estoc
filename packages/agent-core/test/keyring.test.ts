@@ -5,7 +5,7 @@ import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore, type SeedKey } from "@estoc/keystore";
 import { drafts, mediationKeyName, record } from "@estoc/vault/v2";
 
-import { Keyring, createVault, openVault, type PeerVault, type Routed } from "../../src/v2/index.js";
+import { Keyring, createVault, openVault, type PeerVault, type Routed } from "../src/index.js";
 
 const SEED = new Uint8Array(32).map((_, i) => i);
 const OTHER_SEED = new Uint8Array(32).map((_, i) => 31 - i);

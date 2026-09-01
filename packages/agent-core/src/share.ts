@@ -4,13 +4,13 @@
  * the closure as one encrypted CAR at our mediator's blob store, and
  * the fetch that fills a received share in. The receiving side is the
  * handler's (`handlers/object-share.ts`, `keepShare`); the wire format
- * and the checks are `protocol/object-share.ts`, shared with v1.
+ * and the checks are `protocol/object-share.ts`.
  */
 
 import type { BlobStore } from "@estoc/event-store";
 import { blobHash, signRoot, verifyCard, type FolderObject } from "@estoc/folder-object";
 
-import { BLOB_DELETE, BLOB_DELETE_RESULT, BLOB_PUT, BLOB_PUT_RESULT, parsePutResult, type BlobPlacement } from "../protocol/blob-store.js";
+import { BLOB_DELETE, BLOB_DELETE_RESULT, BLOB_PUT, BLOB_PUT_RESULT, parsePutResult, type BlobPlacement } from "./protocol/blob-store.js";
 import {
   attachmentsOf,
   closureOf,
@@ -22,9 +22,9 @@ import {
   type Closure,
   type ObjectShareBody,
   type VerifiedShare,
-} from "../protocol/object-share.js";
-import { PROBLEM_REPORT } from "../protocol/spec.js";
-import { encryptStream, freshKey } from "../protocol/streaming-aead.js";
+} from "./protocol/object-share.js";
+import { PROBLEM_REPORT } from "./protocol/spec.js";
+import { encryptStream, freshKey } from "./protocol/streaming-aead.js";
 import type { PeerVault } from "./identity.js";
 import { bounded, type MediatorLink } from "./link.js";
 import type { MessageRecord } from "./records.js";

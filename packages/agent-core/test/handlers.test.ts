@@ -5,10 +5,13 @@ import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
 import { drafts, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, OBJECT_SHARE, PLAIN_TYP, PROFILE, REQUEST_PROFILE } from "../../src/index.js";
-import { OOB_INVITATION } from "../../src/protocol/spec.js";
 import {
+  BASIC_MESSAGE,
   GOAL_CONNECT,
+  OBJECT_SHARE,
+  PLAIN_TYP,
+  PROFILE,
+  REQUEST_PROFILE,
   basicmessageHandler,
   contactRecord,
   createVault,
@@ -27,7 +30,8 @@ import {
   type PeerVault,
   type PlainMessage,
   type SendOptions,
-} from "../../src/v2/index.js";
+} from "../src/index.js";
+import { OOB_INVITATION } from "../src/protocol/spec.js";
 
 const enc = new TextEncoder();
 const SEED = new Uint8Array(32).map((_, i) => i);

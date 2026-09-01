@@ -1,6 +1,5 @@
 import { base64urlToUtf8, utf8ToBase64url } from "@estoc/did-peer";
 
-import type { InvitationRecord } from "@estoc/vault";
 import { PLAIN_TYP } from "./didcomm.js";
 import { OOB_INVITATION } from "./spec.js";
 
@@ -28,21 +27,6 @@ export interface Invitation {
     goal_code?: string;
     goal?: string;
     accept?: string[];
-  };
-}
-
-/** The invitation message an issued invitation record stands for. */
-export function invitationMessage(record: InvitationRecord): Invitation {
-  return {
-    type: OOB_INVITATION,
-    id: record.id,
-    typ: PLAIN_TYP,
-    from: record.did,
-    body: {
-      goal_code: GOAL_CONNECT,
-      goal: record.goal,
-      accept: ["didcomm/v2"],
-    },
   };
 }
 

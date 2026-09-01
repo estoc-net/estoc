@@ -4,9 +4,25 @@ import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } fro
 
 import { MemoryBackend } from "@estoc/event-store";
 
-import { attachmentsOf, BLOB_PUT_RESULT, closureOf, closureSize, encryptStream, missingBytes, OBJECT_SHARE, PROBLEM_REPORT, RAW_MEDIA_TYPE, verifyShare } from "../../src/index.js";
-import { placePackage, type MediatorLink, type MessageRecord, type PlainMessage, type Placing, type WireNote } from "../../src/v2/index.js";
-import { BLOB_MAX, MEDIATOR_HTTP, network, type FakeMediator } from "../fake-mediator.js";
+import {
+  BLOB_PUT_RESULT,
+  OBJECT_SHARE,
+  PROBLEM_REPORT,
+  RAW_MEDIA_TYPE,
+  attachmentsOf,
+  closureOf,
+  closureSize,
+  encryptStream,
+  missingBytes,
+  placePackage,
+  verifyShare,
+  type MediatorLink,
+  type MessageRecord,
+  type Placing,
+  type PlainMessage,
+  type WireNote,
+} from "../src/index.js";
+import { BLOB_MAX, MEDIATOR_HTTP, network, type FakeMediator } from "./fake-mediator.js";
 import { newMediator, newParty, recordsOf, until, withTimeout, type Party } from "./fixture.js";
 
 describe("v2 agent sharing objects", () => {

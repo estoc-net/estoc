@@ -6,10 +6,11 @@ import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey } from "@estoc/keystore";
 import type { Contact, Delivery } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, PROFILE } from "../../src/index.js";
 import {
   Agent,
+  BASIC_MESSAGE,
   Keyring,
+  PROFILE,
   attributedTo,
   createVault,
   messageRecord,
@@ -20,8 +21,8 @@ import {
   type MessageRecord,
   type PeerVault,
   type ProtocolHandler,
-} from "../../src/v2/index.js";
-import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
+} from "../src/index.js";
+import { FakeMediator, MEDIATOR_HTTP } from "./fake-mediator.js";
 
 /**
  * The scene the v2 agent tests play in: a fake mediator, parties made of

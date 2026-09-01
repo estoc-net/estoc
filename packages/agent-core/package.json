@@ -1,7 +1,7 @@
 {
   "name": "@estoc/agent-core",
   "version": "0.17.0",
-  "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery and hand-layered packing over an .estoc vault (@estoc/vault: config, seed keystore, contacts, append-only message log, through a pluggable VaultBackend). Runs wherever didcomm-rust's WASM does.",
+  "description": "The DIDComm v2 agent behind Estoc's clients: mediation, pickup, live delivery, pairwise DIDs, invitations and object sharing over an .estoc vault (@estoc/event-store + @estoc/vault: an append-only event log folded into contacts, channels and messages, through a pluggable VaultBackend). Runs wherever didcomm-rust's WASM does.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -14,10 +14,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./v2": {
-      "types": "./dist/v2/index.d.ts",
-      "default": "./dist/v2/index.js"
     }
   },
   "files": [

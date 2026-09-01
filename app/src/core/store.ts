@@ -2,8 +2,8 @@ import { reactive, toRaw } from "vue";
 import type { FolderObject } from "@estoc/folder-object";
 import type { Imported } from "@estoc/event-store";
 import type { Delivery } from "@estoc/vault/v2";
-import { BASIC_MESSAGE, type VerifiedShare } from "@estoc/agent-core";
 import {
+  BASIC_MESSAGE,
   invitationMessage,
   invitationUrl,
   parseInvitation,
@@ -14,7 +14,8 @@ import {
   type SendOptions,
   type TraceEvent,
   type TraceLevel,
-} from "@estoc/agent-core/v2";
+  type VerifiedShare,
+} from "@estoc/agent-core";
 
 import type { Daemon, Snapshot } from "@estoc/daemon";
 import { startDaemon } from "../daemon/client.js";

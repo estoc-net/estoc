@@ -1,4 +1,4 @@
-import { tracePolicy, type TraceEvent, type TraceLevel } from "@estoc/agent-core/v2";
+import { tracePolicy, type TraceEvent, type TraceLevel } from "@estoc/agent-core";
 
 /**
  * A message's trace, folded into the layers it crossed: the frame on the
