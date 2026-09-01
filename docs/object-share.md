@@ -187,7 +187,7 @@ card's.
 
 ## 6. Storage
 
-`blobs/<cid>` (`docs/vault-format.md` §6.8): immutable, named by content,
+`blobs/<cid>` (`docs/vault-folder.md` §8): immutable, named by content,
 merged by union on import. The message log still holds the attachments
 inline; lifting them out of log lines into `blobs/` references is a later
 step and changes nothing on the wire.

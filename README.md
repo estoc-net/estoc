@@ -6,7 +6,7 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 |---|---|---|
 | `app/` | `@estoc/app` | the offline-first DIDComm v2 messenger you install as a web app — [app.estoc.dev](https://app.estoc.dev); published as its built files, for `estoc serve` |
 | `packages/agent-core/` | [`@estoc/agent-core`](https://www.npmjs.com/package/@estoc/agent-core) | the agent: mediation, pickup, live delivery, pairwise DIDs, invitations, over an `.estoc` vault |
-| `packages/vault/` | [`@estoc/vault`](https://www.npmjs.com/package/@estoc/vault) | the `.estoc` format as code, over a pluggable backend (OPFS, a folder on disk, memory); `@estoc/vault/v2` is the event-sourced format being built beside it ([`docs/vault-events.md`](docs/vault-events.md)) |
+| `packages/vault/` | [`@estoc/vault`](https://www.npmjs.com/package/@estoc/vault) | what the vault's events mean ([`docs/vault-events.md`](docs/vault-events.md)): the event types, the folds that turn them into contacts, channels, messages, keys, invitations and deliveries, the procedures (erase, delete, merge), keys minted by name from the seed |
 | `packages/event-store/` | `@estoc/event-store` | the vault as an event store ([`docs/event-store.md`](docs/event-store.md)): envelope and canonical order, the `EventStore` / `BlobStore` / `FileStore` interfaces, the folder store, interchange (snapshot, import, restore, zip) |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |

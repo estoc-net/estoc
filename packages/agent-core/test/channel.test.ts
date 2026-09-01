@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { bytesToBase64url, resolveDIDCommDoc, type DIDDoc, type VerificationMethod } from "@estoc/did-peer";
 import { createSeedKeystore, deriveIdentity } from "@estoc/keystore";
-import { peerKeyOf, sameChannel } from "@estoc/vault/v2";
+import { peerKeyOf, sameChannel } from "@estoc/vault";
 
 import {
   envelopeKind,

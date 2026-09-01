@@ -16,7 +16,7 @@ import {
   recordMessage,
   sweepDeleted,
   drafts,
-} from "../../src/v2/index.js";
+} from "../src/index.js";
 import { DEV_A, DEV_B, Line, peerKey } from "./helpers.js";
 
 const enc = new TextEncoder();

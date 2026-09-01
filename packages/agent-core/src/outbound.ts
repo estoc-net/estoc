@@ -20,7 +20,7 @@
 
 import type { DIDDoc } from "@estoc/did-peer";
 import type { Cid, EventStore } from "@estoc/event-store";
-import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault/v2";
+import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
 import { ENCRYPTED_MIME, endpointOf, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "./protocol/didcomm.js";

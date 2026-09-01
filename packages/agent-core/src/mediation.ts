@@ -18,7 +18,7 @@
  * `rotateStale`), the records now events.
  */
 
-import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault/v2";
+import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault";
 
 import type { IMessage } from "./protocol/didcomm.js";
 import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "./protocol/mediation.js";

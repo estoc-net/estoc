@@ -4,7 +4,7 @@ import { FromPrior, Message } from "didcomm-node";
 import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
 import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey } from "@estoc/keystore";
-import type { Contact, Delivery } from "@estoc/vault/v2";
+import type { Contact, Delivery } from "@estoc/vault";
 
 import {
   Agent,

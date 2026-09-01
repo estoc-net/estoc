@@ -4,7 +4,7 @@ import { FromPrior, Message } from "didcomm-node";
 import { resolveDIDCommDoc, type DIDDoc, type Secret, type VerificationMethod } from "@estoc/did-peer";
 import { MemoryBackend, compareEvents, type Event } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
-import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault/v2";
+import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault";
 
 import {
   AgentTrace,

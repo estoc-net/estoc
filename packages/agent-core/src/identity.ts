@@ -1,5 +1,5 @@
 /**
- * The v2 vault as the agent knows it: `@estoc/vault/v2`'s folder,
+ * The v2 vault as the agent knows it: `@estoc/vault`'s folder,
  * minting did:peer:4 (`mintPeerDid`) — Multikey long form, one Ed25519
  * and one X25519 key, the mediator's routing DID as the service when
  * there is one. The format records the DIDs; this binding decides what
@@ -9,7 +9,7 @@
 import type { OpenVaultOptions, VaultBackend } from "@estoc/event-store";
 import { FolderVault, KEYSTORE_FILE, NotAVault } from "@estoc/event-store";
 import { parseSeedKeystore, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
-import { createFolderVault, drafts, openFolderVault, record, type FolderOptions, type Opened } from "@estoc/vault/v2";
+import { createFolderVault, drafts, openFolderVault, record, type FolderOptions, type Opened } from "@estoc/vault";
 
 import { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
 

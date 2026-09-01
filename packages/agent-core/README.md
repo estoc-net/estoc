@@ -30,7 +30,7 @@ Agent            every module below under one running loop: start · setMediator
   ├─ protocol/   the protocols as the specifications have them: spec (forward, ping, oob, from_prior), mediation,
   │              didcomm helpers, resolver (did:web + did:peer), mediator input, object-share's wire format and checks,
   │              streaming AEAD, blob-store — nothing here reads a vault
-  ├─ @estoc/vault (v2)   what the events mean: the fold — contacts, channels, messages, my keys, invitations, deliveries
+  ├─ @estoc/vault        what the events mean: the fold — contacts, channels, messages, my keys, invitations, deliveries
   └─ @estoc/event-store  the folder: events in devices/<dev>/<seg>.jsonl, blobs/<cid>, config.json, keystore.json, local/
        └─ VaultBackend   bytes: OpfsBackend (browser) · FsBackend (Node, @estoc/event-store/node) · MemoryBackend (tests)
 ```

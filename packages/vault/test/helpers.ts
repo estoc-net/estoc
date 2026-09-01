@@ -4,7 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 import type { Cid, Event, JsonObject } from "@estoc/event-store";
 import { MemoryBlobStore } from "@estoc/event-store";
 
-import { peerKeyOf, type VaultFold } from "../../src/v2/index.js";
+import { peerKeyOf, type VaultFold } from "../src/index.js";
 
 export const DEV_A = "aaaaaa";
 export const DEV_B = "bbbbbb";

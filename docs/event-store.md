@@ -1,6 +1,6 @@
 # The vault as an event store — draft
 
-Status: **draft**, 2026-08-30. Not implemented.
+Status: **implemented** as of 2026-09-01 (`@estoc/event-store`); drafted 2026-08-30.
 
 The first of three documents that together define a version-2 vault:
 

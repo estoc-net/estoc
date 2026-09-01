@@ -1,130 +1,119 @@
 # @estoc/vault
 
-The `.estoc` vault format as code. The contract is
-[`docs/vault-format.md`](../../docs/vault-format.md) at the repository
-root; this package is its reference implementation, and nothing more than
-the format: no agent, no protocol, no DID method.
+What the events of an `.estoc` vault mean. The contract is
+[`docs/vault-events.md`](../../docs/vault-events.md) at the repository
+root; this package is its reference implementation, and nothing more
+than the meaning: no folder, no agent, no protocol, no DID method.
 
-A vault is a directory, and the directory **is** the format: a backup is
-the directory zipped, a second device is the directory copied. This
-package holds the bytes through a pluggable `VaultBackend`, reads and
-writes the layout over it, and moves vaults around (snapshot, merge
-import). Runs in the browser (OPFS), Node (a folder on disk), and tests
-(memory).
+A version-2 vault is an event log — one append-only log per device,
+merged by union — and everything a person sees in it is a *fold* over
+the set of events: contacts, channels, messages, my keys and devices,
+invitations, deliveries. The store that holds the events, the folder
+that serializes them, blobs, local state and interchange are
+[`@estoc/event-store`](../event-store/README.md)
+([`docs/event-store.md`](../../docs/event-store.md),
+[`docs/vault-folder.md`](../../docs/vault-folder.md)); the store knows no
+event type. This package is the first layer that does.
 
 ```
-.estoc/
-  config.json            singleton: label, identity anchor, mediation snapshot
-  keystore.json          singleton: @estoc/keystore v3 — one sealed seed + a plaintext cache of key names
-  contacts/<cid>.json    record: one mutable file per contact, DID history with evidence
-  invitations/<id>.json  record: single-use invitations issued, a DID waiting for whoever answers first
-  messages/<uuidv7>.jsonl    log: append-only; segments named by uuidv7, read in name order
-  deliveries/<uuidv7>.jsonl  log: what became of each outbound message: sent / failed / held, per try
-  trace/<stream>/<uuidv7>.jsonl
-                         log with a retention: what this device observed (envelope, wire,
-                         wire.bytes, mediation, diag); the one log segments are deleted from;
-                         never snapshotted
-  blobs/<hash>           content-addressed bytes (attachments, shared objects)
-  state/ cache/          reserved (per-person state · rebuildable, never snapshotted)
+@estoc/agent-core      the agent: DIDComm, mediation, delivery, the handlers
+  ├─ @estoc/vault        what the events mean: types, folds, procedures, keys minted by name   ← this package
+  └─ @estoc/event-store  the folder: events in devices/<dev>/<seg>.jsonl, blobs/<cid>, config.json, keystore.json, local/
+       └─ VaultBackend   bytes: OpfsBackend (browser) · FsBackend (Node, @estoc/event-store/node) · MemoryBackend (tests)
 ```
 
 ## What is here
 
-- **`Vault`** — the directory as an object: the two singletons in memory
-  (`config`, `keystore`), the stores over the records and logs
-  (`contacts`, `invitations`, `messages`, `deliveries`, `blobs`, `trace`), and the
-  keys by name (`derive`, `mintKey`, `verifyAnchor`). `Vault.create` lays
-  down the anchor; `setMediator`, `mintPairwise`, `createInvitation` and
-  `peerIdentity` do the bookkeeping the contract asks for around a DID —
-  the key name, the record written before the cache entry, the retired
-  public DID kept for the unanswered.
-- **Key names are derivation paths.** The seed and a name give the key
-  (`@estoc/keystore` v3: `estoc/v3/<purpose>/<name>`), so `keystore.json`'s
-  key list is a cache and the records are the truth: every mint writes
-  the record naming the key (config, a contact's `myDids[]`, an
-  invitation) before the cache entry, and a name the cache never heard
-  of derives all the same. No name is a counter and none is reused:
-  `anchor`, `mediation/<id>/me|public` by the mediation's uuidv7,
-  `pair/<cid>/<uuidv7>`, `invite/<id>`.
-- **DIDs are snapshots**, recorded when minted and checked against the
-  seed rather than recomputed: the anchor by `verifyAnchor`, every other
-  ref by `peerIdentity`. Rotating a mediator later never silently renames
-  an identity.
-- **What a DID is, is not the format's to say.** `Vault` takes a `MintDid`
-  when opened — `(identity, serviceUri) => { did, … }` — and records what
-  it returns. `@estoc/agent-core` binds it to did:peer:4 with the
-  mediator's routing DID as the service (`openVault`, `createVault`
-  there); a test binds it to a name. The minter must be deterministic:
-  that is how the recorded DIDs are checked against the seed.
-- **Contacts** are keyed by `cid` (uuidv7). Their DIDs form a history
-  (`dids[]`, closed with `until`, hops proven by `fromPrior`), and so do
-  ours toward them (`myDids[]`: the keystore `key` that derives each,
-  `registeredAt` once a mediator accepts it). `addressedAs` is the DID of
-  ours their latest envelope was sealed to. The file is named by `cid`,
-  so a record has one home for life; `updatedAt`, stamped on every
-  write, is what a merge compares.
-- **Logs** (`SegmentedLog`) are append-only JSONL in segments named by
-  uuidv7: readers take every segment in name order, skip a damaged or
-  cut-short line and report it, and a later session appends behind the
-  newest segment. The message log stores `{mid, at, direction, sender?,
-  msg}`; the delivery log stores what became of each outbound message.
-
-### Moving a vault: snapshot and import
-
-`snapshotVault(backend)` is every file under `.estoc/` except `cache/` and `trace/`,
-byte for byte, keyed by vault-relative path — the shape a zip holds, and
-not an allowlist: what another client wrote travels too.
-`importVault(backend, files)` lays them down and **merges, never
-overwrites**: into an empty backend it is a restore; into a vault of the
-same identity (same anchor DID) the snapshot's messages become a new log
-segment minus what is already here (same `mid`, or the same wire message
-received twice), its delivery events likewise (minus tries already here;
-a `held` is one device's own and does not travel), its contacts win by
-`updatedAt`, its invitations are added when missing (and marked taken
-when the snapshot saw the answer — only `acceptedBy`/`acceptedAt` cross
-over; `registeredAt` is this device's own), its config stays local
-(mediation is a fact about this device), its keystore's key cache is
-unioned by name over this device's sealed seed, and any other path is
-copied when absent and never overwritten; a vault of a different identity
-is refused. Either way, an outbound message that arrives undelivered is
-held for a retry by hand (`held` in the outcome). How the files travel —
-zip, folder, paste — is the application's business.
-
-### Backends
-
-`VaultBackend` is six methods over vault-relative paths: `read`, `write`
-(whole-file, atomic), `append`, `remove`, `list` (files), `dirs`
-(subdirectories); `walk(backend, dir)` builds the recursive view a
-snapshot takes.
-
-- `MemoryBackend` — the test double and the shape a zip unpacks into.
-- `OpfsBackend` — wraps a `FileSystemDirectoryHandle` (needs
-  `createWritable()`).
-- `FsBackend` (`@estoc/vault/node`) — a folder on disk: whole-file writes
-  go to a sibling temp file and are renamed into place, a replaced file
-  keeps its mode, appends are `appendFile`.
-
-`test/backend-suite.ts` is the conformance suite any backend should pass.
+- **The event types** (`types.ts`, `docs/vault-events.md` §2–§6): what
+  `data` holds under each `type` — `did.minted`, `did.published`,
+  `did.registered`, `did.retired`, `mediation.created`,
+  `mediation.granted`, `mediation.retired`, `device.minted`,
+  `device.label`, `identity.label`, `channel.firstSeen`,
+  `peer.resolved`, `peer.rotated`, `message.in`, `message.out`,
+  `message.erased`, `delivery.attempted`, `delivery.held`,
+  `contact.created`, `contact.attached`, `contact.detached`,
+  `contact.merged`, `contact.useKey`, `contact.petname`, `contact.flag`,
+  `contact.deleted`, `profile.nameClaimed`, `profile.shared`,
+  `extension.installed` / `removed` / `purged` — and `readVaultEvent`,
+  which tells a line of one of these types from a line that only claims
+  to be (a `Malformed` is kept, never applied). Key names
+  (`anchor`, `did/<id>`, `mediation/<id>`) and `channelId` /
+  `sameChannel` over a `ChannelKey` live here too.
+- **The peer key** (`peerKeyOf`, `fingerprint`, §3): a channel is
+  `(my key name, their public key's fingerprint)` —
+  `base32lower(sha256(multicodec-prefixed raw public key))[0:26]`, the
+  hash of the bytes a `did:key` of that key encodes — so a peer who
+  rotates their DID but keeps their key stays the same channel, and one
+  who rotates their key is a `peer.rotated` edge between two.
+- **The fold** (`VaultFold`, §7): one class over one `EventSet`, with
+  `self` (this device) as its one parameter. Pure and order-free: the
+  projection is a function of the set, recomputed as each event is
+  applied, so events arrive in any order, one at a time, and the result
+  is the same (`test/properties.test.ts` shuffles a scene and checks).
+  `contacts()`, `contact(cid)`, `deletedContacts()`, `channels()`,
+  `channel(pair)`, `attribution(pair)` (channel → `cid`, §7.1),
+  `myKeys()`, `myKey(name)`, `devices()`, `label()`, `invitations()`,
+  `messages()`, `message(mid)`, `delivery(mid)`, `held()`,
+  `erased(mid, root)`, `extensions()`, and `malformed` for what was
+  refused. `VaultFold.of(events)` folds a store; `apply(event)` advances
+  it.
+- **Drafts** (`drafts`): one constructor per type for what `append`
+  takes, `blobs` filled in where the type references roots.
+- **The procedures** (§8–§10): what a device appends when a person acts,
+  each a set of ordinary events decided over the fold and the fold
+  advanced as they land. `record` / `recordAll` (append and fold in one
+  motion), `recordMessage` (the skeleton with its body and attachments
+  put to blobs first), `eraseMessage` and `readRoot` (an absence is
+  `erased`, `present` or `missing`, §8.2), `collectBlobs` (the keep-set,
+  §8.3), `deleteContact` and `sweepDeleted` (§9), `noteFirstSeen` /
+  `notePeerResolved` (channel observations, deduplicated), and
+  `holdImported` with `importPolicy()` — the vault's `ImportPolicy` for
+  `@estoc/event-store`'s import: an outbound message of another device's
+  that arrives without an outcome is held, never sent by this one
+  (§10).
+- **Keys** (`Keys`, §2, §5) over `@estoc/keystore` v3: one seed, keys
+  derived by name, the log the truth about which names exist and
+  `keystore.json`'s `keys[]` a cache of it. Every mint appends the event
+  that names the key first and writes the cache second (`mintDid`,
+  `createMediation`; `rebuildCache` re-derives the cache from the fold).
+  What a key is minted *as* is the caller's: a `MintDid` —
+  `(identity, serviceUri) => { did, … }`, deterministic — turns a
+  derived key and a routing DID into a did:peer:4 (`@estoc/agent-core`)
+  or anything with a `did` (a test); `verifyAnchor` checks the recorded
+  anchor DID against the seed rather than trusting the file.
+- **The folder, opened for an identity** (`createFolderVault`,
+  `openFolderVault`): `@estoc/event-store`'s `FolderVault` plus the
+  anchor fixed in `config.json` at creation, the seed checked against it
+  on every open, `Keys` beside it, and the fold over every device's
+  events — the application's first read. Returns
+  `{ vault, keys, fold, anchor }`. A version-1 folder, or any folder that
+  is not a vault, is refused with `NotAVault`; there is nothing to
+  migrate.
 
 ## Usage
 
 ```ts
 import { createSeedKeystore } from "@estoc/keystore";
-import { MemoryBackend, Vault, type MintDid } from "@estoc/vault";
+import { MemoryBackend } from "@estoc/event-store";
+import { createFolderVault, drafts, record, type MintDid } from "@estoc/vault";
 
 const mint: MintDid = (identity, service) => ({ did: /* your DID method over identity + service */ });
 const { doc, seedKey } = await createSeedKeystore(passphrase);
-const vault = await Vault.create(new MemoryBackend(), { label: "Alice", keystore: doc, seedKey, mint });
-await vault.contacts.put(newContact("Bob", bobDid));
-const records = await vault.messages.read();
+const { vault, keys, fold } = await createFolderVault(new MemoryBackend(), doc, seedKey, { mint });
+
+await record(vault.events, fold, drafts.identityLabel({ name: "Alice" }));
+const { event, key } = await keys.mintDid(fold, null);   // did.minted, key did/<id>
+fold.myKeys();                                             // [{ name: "anchor", … }, { name: key, … }]
 ```
 
-With did:peer:4, use `openVault` / `createVault` from `@estoc/agent-core`.
+To open the same folder later: `openFolderVault(backend, seedKey, { mint })`.
+With did:peer:4 and a mediator, use `openVault` / `createVault` from
+`@estoc/agent-core`, which binds `mint` and adds the agent on top.
 
 ## Development
 
 ```
-pnpm test       # vitest: backends (memory, fs), vault format, snapshot + import
+pnpm test       # vitest: types, the fold and its properties, procedures, identity
 pnpm build      # tsc → dist/
 ```
 

@@ -1,6 +1,17 @@
 # The `.estoc` vault format, version 1
 
-Status: **contract** — version 1, frozen 2026-08-17. This document is the
+Status: **retired** 2026-09-01. Version 1 was the on-disk format of
+`@estoc/agent-core` 0.13–0.17 and `@estoc/vault` 0.1, frozen 2026-08-17;
+nothing reads or writes it any more. Version 2 is three documents —
+[`event-store.md`](event-store.md), [`vault-folder.md`](vault-folder.md),
+[`vault-events.md`](vault-events.md) — and a version-2 reader refuses a
+version-1 folder (`vault-folder.md` §11). No vault was written outside
+development before version 2, so there is nothing to migrate. Kept as
+the record of what version 1 was.
+
+---
+
+Status as of 2026-08-17: **contract** — version 1. This document is the
 on-disk format every Estoc client reads and writes. `@estoc/vault`
 (moved out of `@estoc/agent-core` 0.13–0.16 on 2026-08-29, over
 `@estoc/keystore` 0.3 and later) is the reference implementation; where the

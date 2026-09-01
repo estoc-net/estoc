@@ -23,7 +23,7 @@
  */
 
 import type { BlobStore, Cid } from "@estoc/event-store";
-import type { VaultDraft, VaultEvent, VaultFold, VaultType } from "@estoc/vault/v2";
+import type { VaultDraft, VaultEvent, VaultFold, VaultType } from "@estoc/vault";
 
 import type { ContactRecord, MessageRecord, PlainMessage } from "./records.js";
 

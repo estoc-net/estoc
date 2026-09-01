@@ -12,7 +12,7 @@
  */
 
 import type { Secret } from "@estoc/did-peer";
-import { drafts, record, type Mediation, type MyKey } from "@estoc/vault/v2";
+import { drafts, record, type Mediation, type MyKey } from "@estoc/vault";
 
 import type { PeerIdentity } from "./identity/peer.js";
 import type { KeyOfDid } from "./channel.js";

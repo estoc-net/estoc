@@ -1,7 +1,7 @@
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import type { FolderObject } from "@estoc/folder-object";
 import { CONFIG_PATH, importVault, restoreFolder, type FolderVault, type Imported, type VaultBackend } from "@estoc/event-store";
-import { holdImported, importPolicy, type Delivery, type VaultFold } from "@estoc/vault/v2";
+import { holdImported, importPolicy, type Delivery, type VaultFold } from "@estoc/vault";
 import {
   Agent,
   AgentTrace,
