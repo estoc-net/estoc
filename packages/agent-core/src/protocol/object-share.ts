@@ -152,7 +152,12 @@ export interface VerifiedShare {
   package: SharePackage | null;
   /** why the named package is unusable, when one is named and `package` is null; null otherwise */
   packageProblem: string | null;
-  /** every block held — the message's, and any the caller supplied — CID → bytes */
+  /**
+   * Every block the walk from `root` reached and found — carried by the
+   * message, or supplied through `held` — CID → bytes: what a keeper
+   * puts in `blobs/`. A block the message carries that the tree does not
+   * reach is not here: it is not part of the object.
+   */
   blocks: Map<string, Uint8Array>;
 }
 
@@ -387,7 +392,9 @@ export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {
  * root. Leaves under `files/` may be absent: the result says which
  * (`tree.missing`, `tree.partial`, `complete`). Blocks the message does
  * not carry are looked up through `held` when given — the vault's
- * `blobs/`, so leaves that arrived by another road count as present.
+ * `blobs/`, so leaves that arrived by another road count as present,
+ * and a recorded share, whose body names its blocks by id alone
+ * (`lift.ts`), verifies over them. `blocks` is what the walk reached.
  * Throws naming the first thing wrong.
  */
 export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<VerifiedShare> {
@@ -406,17 +413,18 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
       throw new Error(`the card is about ${card.root}, not the object shared (${root})`);
     }
   }
-  const blocks = blocksOf(msg);
+  const carried = blocksOf(msg);
+  const blocks = new Map<string, Uint8Array>(); // what the walk reaches and finds, wherever from
   const getBlock: GetBlock = async (cid) => {
-    const inline = blocks.get(cid);
-    if (inline !== undefined) {
-      return inline;
+    const reached = blocks.get(cid);
+    if (reached !== undefined) {
+      return reached;
     }
-    const kept = held === undefined ? null : await held(cid);
-    if (kept !== null) {
-      blocks.set(cid, kept);
+    const found = carried.get(cid) ?? (held === undefined ? null : await held(cid));
+    if (found !== null) {
+      blocks.set(cid, found);
     }
-    return kept;
+    return found;
   };
   const tree = await verifyTree(root, getBlock, { leaves: "optional" });
   if (!tree.files.has("index.json")) {

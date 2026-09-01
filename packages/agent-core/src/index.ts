@@ -93,6 +93,7 @@ export { type HandlerContext, type InboundRecord, type ProtocolHandler, type Sen
 export { basicmessageHandler } from "./handlers/basicmessage.js";
 export { shareProfile, userProfileHandler } from "./handlers/user-profile.js";
 export { keepShare, objectShareHandler } from "./handlers/object-share.js";
+export { fillBlocks, stripBlocks, type Lifted } from "./lift.js";
 export { Inbound, type Handled, type InboundOptions } from "./inbound.js";
 export { Outbound, Outbox, type Attempted, type Composed, type OutboundOptions, type OutboxOptions } from "./outbound.js";
 export { BlobRefused, buildShare, deleteBlob, fetchPackage, placePackage, putBlob, type PlacedPackage, type Placing, type ShareParts, type WireNote } from "./share.js";

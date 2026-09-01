@@ -743,7 +743,9 @@ export class Agent {
    * `did`: hash its canonical tree, keep the blocks in our own `blobs/`,
    * and send one object-share/1.0 message — the root in the body, one
    * attachment per block, and the record's skeleton naming the root, as
-   * `keepShare` names a received share's (vault-events.md §3.1). Two
+   * `keepShare` names a received share's (vault-events.md §3.1); the
+   * record's body names the blocks by id, the bytes are in `blobs/` once,
+   * and the outbox fills them back in for the wire (`lift.ts`). Two
    * roads and no round trip (§7): the whole closure goes inline when it
    * fits `maxShareBytes`; otherwise the skeleton and `index.json` go
    * inline and the whole closure goes as one encrypted CAR — a package
@@ -774,8 +776,15 @@ export class Agent {
    * retention ran out), or they do not open — the share is then what it
    * was, a partial object. The download is bounded by `packageTimeoutMs`
    * and reads exactly the `byte_count` the share promised (`share.ts`).
+   * A share whose object the fold says erased (§8.2) is not filled in:
+   * the record is asked, not the caller's copy of it.
    */
   async fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
+    const message = this.vault.fold.message(record.mid);
+    const erased = message?.skeleton.attachments.find((root) => message.erased.includes(root));
+    if (erased !== undefined) {
+      throw new Error(`the share's object is erased from this vault (${erased}): nothing to fill in`);
+    }
     return fetchPackage(record, this.vault.vault.blobs, this.packageFetchFn, this.packageTimeoutMs, (type, data) => this.noteWire(type, data), (line) => this.log(line));
   }
 

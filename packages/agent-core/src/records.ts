@@ -6,7 +6,7 @@
  * The fold's `Delivery` is handed over as it is.
  */
 
-import type { BlobStore } from "@estoc/event-store";
+import type { BlobStore, Cid } from "@estoc/event-store";
 import { readRoot, type Absence, type Attribution, type ChannelKey, type Contact, type Invitation, type Message, type MessageIn, type MessageOut, type VaultFold } from "@estoc/vault";
 
 /** A DIDComm plaintext message as JSON: what didcomm-rust's as_value() yields. */
@@ -45,9 +45,22 @@ export interface MessageRecord {
    */
   sender: string | null;
   skeleton: MessageIn | MessageOut;
-  /** the plaintext, when the body is present */
+  /**
+   * The plaintext as stored (vault-events.md §4, `lift.ts`), when the
+   * body is present: an object-share's blocks are in `blobs/` and its
+   * attachments name them by id alone, `data` gone — `verifyShare` over
+   * `blobs.getBlock` reads the object, `fillBlocks` makes the wire form.
+   */
   msg: PlainMessage | null;
   body: BodyState;
+  /**
+   * The roots of this message the fold says erased (§8.2): the body,
+   * and any attachment lifted out of it. A reader asks this before the
+   * blocks — a block may live on in `blobs/` for another message that
+   * names it, or until a collection — so an erased share is shown as
+   * erased, not verified over what is still there.
+   */
+  erased: Cid[];
 }
 
 /** The message as a caller reads it, or null for a mid the fold has no skeleton for. */
@@ -67,6 +80,7 @@ export async function messageRecord(fold: VaultFold, blobs: BlobStore, mid: stri
     skeleton: message.skeleton,
     msg,
     body: msg === null && state === "present" ? "missing" : state,
+    erased: message.erased,
   };
 }
 

@@ -58,6 +58,7 @@ import { inboundPair, resolvedOf, signerOf, type KeyOfDid, type Proved } from ".
 import type { HandlerContext, InboundRecord, ProtocolHandler } from "./handler.js";
 import { keepShare } from "./handlers/object-share.js";
 import type { PeerVault } from "./identity.js";
+import type { Lifted } from "./lift.js";
 import type { Opened } from "./link.js";
 import { attributedTo, contactRecord, didPlaceholder, messageRecord, type ContactRecord, type MessageRecord, type PlainMessage } from "./records.js";
 
@@ -195,10 +196,11 @@ export class Inbound {
     const refusal = await this.takeInvitation(pair, sender);
     // 6. whose it is (§7.1)
     const homed = await this.home(pair, sender, msg.type, refusal);
-    // 7. what the message carries, lifted out (§4)
-    const attachments = msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : [];
+    // 7. what the message carries, lifted out (§4, `lift.ts`): a share's blocks to `blobs/`, its body stored without them
+    const lifted: Lifted =
+      msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : { plaintext: msg as PlainMessage, attachments: [] };
     // 8. the message, body first (§4): the last event, and the one a redelivery is told apart by
-    await recordMessage(this.opened.vault, this.fold, "in", utf8.encode(JSON.stringify(msg)), skeletonOf(proved, sender, msg, mid, attachments));
+    await recordMessage(this.opened.vault, this.fold, "in", utf8.encode(JSON.stringify(lifted.plaintext)), skeletonOf(proved, sender, msg, mid, lifted.attachments));
     this.seen.add(key);
     const found = await messageRecord(this.fold, this.opened.vault.blobs, mid);
     if (found === null) {

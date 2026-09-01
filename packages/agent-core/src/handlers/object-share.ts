@@ -1,7 +1,8 @@
-import type { BlobStore, Cid } from "@estoc/event-store";
+import type { BlobStore } from "@estoc/event-store";
 
 import { OBJECT_SHARE, missingBytes, verifyShare, type VerifiedShare } from "../protocol/object-share.js";
 import type { ProtocolHandler } from "../handler.js";
+import { stripBlocks, type Lifted } from "../lift.js";
 import type { PlainMessage } from "../records.js";
 
 /**
@@ -14,29 +15,35 @@ import type { PlainMessage } from "../records.js";
  * the rest fills in from wherever it arrives: the package the share
  * names, when the application fetches it, or a later share. The type is
  * registered so it is known mail. A reader that wants the verdict again
- * runs `verifyShare(msg, (cid) => blobs.getBlock(cid))`.
+ * runs `verifyShare(msg, (cid) => blobs.getBlock(cid))` — over `blobs/`,
+ * where the record's blocks are: its body names them by id (`lift.ts`).
  */
 export const objectShareHandler: ProtocolHandler = {
   types: [OBJECT_SHARE],
 };
 
 /**
- * The receiving side, run before the message is recorded: a share that
- * verifies has every block it carries put in `blobs/` and its root
- * returned, for the skeleton's `attachments`; one that does not is
- * noted and yields nothing — the message is recorded as it came, a fact
- * about what arrived, and the application runs the same check to decide
- * how to show it. A share whose leaves are not all here is a partial
- * object, kept as far as it goes: `blobs/` is by CID, so leaves that
- * arrived by another road count as present and the rest fills in later.
+ * The receiving side, run before the message is recorded — the lifting
+ * of a share (`lift.ts`, vault-events.md §4): one that verifies has
+ * every block its tree reaches put in `blobs/`, its root returned for
+ * the skeleton's `attachments`, and its plaintext returned as it is
+ * stored — those blocks' attachments by id alone, the bytes in the
+ * vault once. One that does not verify is noted and yields the message
+ * as it came, a fact about what arrived, with nothing lifted; the
+ * application runs the same check to decide how to show it. A block the
+ * message carries beside the tree is neither put nor stripped: it stays
+ * in the record as it came. A share whose leaves are not all here is a
+ * partial object, kept as far as it goes: `blobs/` is by CID, so leaves
+ * that arrived by another road count as present and the rest fills in
+ * later.
  */
-export async function keepShare(msg: PlainMessage, blobs: BlobStore, log: (line: string) => void): Promise<Cid[]> {
+export async function keepShare(msg: PlainMessage, blobs: BlobStore, log: (line: string) => void): Promise<Lifted> {
   let share: VerifiedShare;
   try {
     share = await verifyShare(msg, (cid) => blobs.getBlock(cid));
   } catch (err) {
     log(`an object-share does not verify; recorded as it came: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    return { plaintext: msg, attachments: [] };
   }
   for (const [cid, bytes] of share.blocks) {
     await blobs.putBlock(cid, bytes);
@@ -50,5 +57,5 @@ export async function keepShare(msg: PlainMessage, blobs: BlobStore, log: (line:
         : "";
   const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes${road}`;
   log(`${share.object.meta.format} ${share.root} (${who}): ${share.tree.files.size} files kept${state}`);
-  return [share.root];
+  return { plaintext: await stripBlocks(msg, (cid) => share.blocks.has(cid)), attachments: [share.root] };
 }

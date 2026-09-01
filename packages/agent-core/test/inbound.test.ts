@@ -739,6 +739,10 @@ describe("v2 inbound: object-share", () => {
       expect(await s.v.vault.blobs.has(cid)).toBe(true);
     }
     expect(kept.outcome === "recorded" && kept.record.skeleton.attachments).toEqual([root]);
+    // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
+    const stored = (kept.outcome === "recorded" ? kept.record.msg?.attachments : undefined) as { id: string; media_type: string; byte_count: number; data?: unknown }[];
+    expect(stored.map((a) => a.id).sort()).toEqual([...blocks.keys()].sort());
+    expect(stored.every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
     expect(s.log).toEqual(["a stranger wrote to us; they have a thread now", `https://estoc.dev/post/1.0 ${root} (unsigned): 3 files kept`]);
     s.log.length = 0;
 
@@ -746,7 +750,25 @@ describe("v2 inbound: object-share", () => {
     expect(types(await s.fresh())).toEqual(["message.in"]);
     expect(bad.outcome === "recorded" && bad.record.skeleton.attachments).toEqual([]);
     expect(bad.outcome === "recorded" && bad.record.msg?.type).toBe(OBJECT_SHARE);
+    const asCame = (bad.outcome === "recorded" ? bad.record.msg?.attachments : undefined) as { data?: { base64?: unknown } }[];
+    expect(asCame.every((a) => typeof a.data?.base64 === "string")).toBe(true);
     expect(s.log).toEqual(["an object-share does not verify; recorded as it came: object-share message has no root"]);
+    s.log.length = 0;
+
+    // a block beside the tree — one the walk from root never reaches, whose bytes are not even
+    // its own — is neither kept nor stripped: the share is, and the stray is recorded as it came
+    const other = await closureOf({ ...files, "files/body.md": enc.encode("# Sea day\n\nCalm.\n") });
+    const stray = [...other.blocks.keys()].find((cid) => !blocks.has(cid)) as string;
+    const junk = attachmentsOf(new Map([[stray, enc.encode("not those bytes")]]));
+    const beside = { ...plain(OBJECT_SHARE, bob.did, s.me.identity.did, { root }), attachments: [...attachmentsOf(blocks), ...junk] } as IMessage;
+    const withStray = await s.deliver(beside, bob);
+    expect(types(await s.fresh())).toEqual(["message.in"]);
+    expect(withStray.outcome === "recorded" && withStray.record.skeleton.attachments).toEqual([root]);
+    expect(await s.v.vault.blobs.has(stray)).toBe(false);
+    const besideStored = (withStray.outcome === "recorded" ? withStray.record.msg?.attachments : undefined) as { id: string; data?: unknown }[];
+    expect(besideStored.filter((a) => a.data !== undefined).map((a) => a.id)).toEqual([stray]);
+    expect(besideStored.filter((a) => a.data === undefined).map((a) => a.id).sort()).toEqual([...blocks.keys()].sort());
+    expect(s.log).toEqual([`https://estoc.dev/post/1.0 ${root} (unsigned): 3 files kept`]);
   });
 });
 

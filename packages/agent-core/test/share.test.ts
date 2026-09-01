@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import { MemoryBackend } from "@estoc/event-store";
+import { eraseMessage } from "@estoc/vault";
 
 import {
   BLOB_PUT_RESULT,
@@ -59,6 +60,12 @@ describe("v2 agent sharing objects", () => {
     return (await recordsOf(party)).find((r) => r.msg?.type === OBJECT_SHARE) as MessageRecord;
   }
 
+  /** `party`'s `blobs/`, for `verifyShare`: a recorded share names its blocks by id and verifies over them */
+  const heldBy = (party: Party) => (cid: string) => party.v.vault.blobs.getBlock(cid);
+
+  /** true when no attachment of `record` carries bytes: the stored form, the blocks in `blobs/` */
+  const storedByName = (record: MessageRecord): boolean => (record.msg?.attachments as { data?: unknown }[]).every((a) => a.data === undefined);
+
   it("hands a contact a whole tree in one message, signed by the anchor, kept block by block", async () => {
     const { alice, bob } = await connected();
     const { root, blocks } = await closureOf(files);
@@ -67,9 +74,11 @@ describe("v2 agent sharing objects", () => {
     expect(sent.msg?.type).toBe(OBJECT_SHARE);
     expect((sent.msg?.body as { root: string }).root).toBe(root);
     expect(sent.msg?.attachments).toHaveLength(blocks.size);
-    // the sender keeps the blocks too, and the record's skeleton holds the root
+    // the sender keeps the blocks too, and the record's skeleton holds the root; the record's
+    // body names the blocks by id alone — the bytes are in blobs/, once
     expect(sent.skeleton.attachments).toEqual([root]);
     expect(await alice.v.vault.blobs.has(root)).toBe(true);
+    expect(storedByName(sent)).toBe(true);
 
     await eventually(() => bob.v.vault.blobs.has(root), "bob's copy");
     const fromBlobs = new Map<string, Uint8Array>();
@@ -84,7 +93,8 @@ describe("v2 agent sharing objects", () => {
     // Alice's anchor — not the pairwise DID the envelope came from
     const record = await shareRecordOf(bob);
     expect(record.skeleton.attachments).toEqual([root]);
-    const share = await verifyShare(record.msg as PlainMessage);
+    expect(storedByName(record)).toBe(true);
+    const share = await verifyShare(record.msg as PlainMessage, heldBy(bob));
     expect(share.card).toEqual({ did: alice.v.anchor.did, root });
     expect(share.card?.did).toMatch(/^did:key:/);
     expect(share.object.meta.title).toBe("Sea day");
@@ -99,7 +109,7 @@ describe("v2 agent sharing objects", () => {
     const sent = await alice.agent.shareObject(bob.agent.did as string, object);
     expect(sent.msg?.body).toEqual({ root });
     await eventually(() => bob.v.vault.blobs.has(root), "bob's copy");
-    const share = await verifyShare((await shareRecordOf(bob)).msg as PlainMessage);
+    const share = await verifyShare((await shareRecordOf(bob)).msg as PlainMessage, heldBy(bob));
     expect(share.card).toBeNull();
     expect(share.root).toBe(root);
     expect(share.object.meta.title).toBe("Sea day");
@@ -147,7 +157,20 @@ describe("v2 agent sharing objects", () => {
     await bob.agent.shareObject(carol.agent.did as string, object, { card });
     await eventually(() => carol.v.vault.blobs.has(root), "carol's copy");
     const carols = await shareRecordOf(carol);
-    expect((await verifyShare(carols.msg as PlainMessage)).card?.did).toBe(alice.v.anchor.did);
+    expect((await verifyShare(carols.msg as PlainMessage, heldBy(carol))).card?.did).toBe(alice.v.anchor.did);
+
+    // Bob erases the object from the record Alice sent him: the blocks live on for the share he
+    // passed to Carol, and it is the record, not the blocks, that says his copy is gone (§8.2)
+    await eraseMessage(bob.v.vault.events, bob.v.fold, record.mid, "user", [root]);
+    const bobs = await recordsOf(bob);
+    const erasedRecord = bobs.find((r) => r.mid === record.mid) as MessageRecord;
+    expect(erasedRecord.erased).toEqual([root]);
+    expect(erasedRecord.body).toBe("present");
+    expect(bobs.find((r) => r.direction === "out" && r.msg?.type === OBJECT_SHARE)?.erased).toEqual([]);
+    expect(await bob.v.vault.blobs.has(root)).toBe(true);
+    expect(bob.v.fold.held()).toContain(root);
+    expect((await verifyShare(erasedRecord.msg as PlainMessage, heldBy(bob))).complete).toBe(true); // the blocks do not know; the record does
+    await expect(bob.agent.fetchPackage(erasedRecord)).rejects.toThrow(/erased from this vault/);
 
     await expect(
       bob.agent.shareObject(carol.agent.did as string, readObject({ ...files, "files/body.dj": enc("edited") }), { card })
@@ -517,7 +540,7 @@ describe("v2 agent sharing objects", () => {
     const bodyCid = [...blocks.keys()].find((c) => !minimal.has(c)) as string;
     expect(await bob.v.vault.blobs.has(bodyCid)).toBe(false);
     const record = await shareRecordOf(bob);
-    const partial = await verifyShare(record.msg as PlainMessage);
+    const partial = await verifyShare(record.msg as PlainMessage, heldBy(bob));
     expect(partial.complete).toBe(false);
     expect(partial.card?.did).toBe(alice.v.anchor.did);
     expect(partial.object.meta.title).toBe("Sea day");
@@ -535,8 +558,9 @@ describe("v2 agent sharing objects", () => {
     expect(whole.complete).toBe(true);
     expect(Object.keys(whole.object.tree).sort()).toEqual(["files/body.dj", "files/images/dot.png", "index.json"]);
     expect(await bob.v.vault.blobs.has(bodyCid)).toBe(true);
-    expect((await verifyShare(record.msg as PlainMessage)).complete).toBe(false); // the message alone is still what it was
-    expect((await verifyShare(record.msg as PlainMessage, (cid) => bob.v.vault.blobs.getBlock(cid))).complete).toBe(true);
+    // the record is what it was — the skeleton's blocks by id, the package named — and blobs/ is what filled in
+    expect((record.msg?.attachments as { data?: unknown }[]).slice(0, 4).every((a) => a.data === undefined)).toBe(true);
+    expect((await verifyShare(record.msg as PlainMessage, heldBy(bob))).complete).toBe(true);
     expect(await bob.agent.fetchPackage(record)).toMatchObject({ complete: true }); // already whole: nothing fetched
 
     // a second share of the same object reuses the one package
@@ -572,7 +596,7 @@ describe("v2 agent sharing objects", () => {
       const bad = variant((pkg) => {
         pkg.data.links = links as string[];
       });
-      const seen = await verifyShare(bad.msg as PlainMessage);
+      const seen = await verifyShare(bad.msg as PlainMessage, heldBy(bob));
       expect(seen.package).toBeNull();
       expect(seen.packageProblem).toMatch(/exactly one http\(s\) URL/);
       expect(seen.complete).toBe(false); // the skeleton is still a verified, partial share
@@ -612,14 +636,15 @@ describe("v2 agent sharing objects", () => {
       ],
     ];
     for (const [edit, problem] of cases) {
-      const seen = await verifyShare(bodyVariant(edit).msg as PlainMessage);
+      const seen = await verifyShare(bodyVariant(edit).msg as PlainMessage, heldBy(bob));
       expect(seen.package).toBeNull();
       expect(seen.packageProblem).toMatch(problem);
     }
     const none = await verifyShare(
       bodyVariant((b) => {
         delete b.package;
-      }).msg as PlainMessage
+      }).msg as PlainMessage,
+      heldBy(bob)
     );
     expect(none.package).toBeNull();
     expect(none.packageProblem).toBeNull();
@@ -643,13 +668,13 @@ describe("v2 agent sharing objects", () => {
     const notCar = variant((pkg) => {
       pkg.media_type = "application/zip";
     });
-    expect((await verifyShare(notCar.msg as PlainMessage)).packageProblem).toMatch(/application\/zip, not application\/vnd\.ipld\.car/);
+    expect((await verifyShare(notCar.msg as PlainMessage, heldBy(bob))).packageProblem).toMatch(/application\/zip, not application\/vnd\.ipld\.car/);
     // one id, one attachment: a second under the same name is malformed, whatever it carries
     const twice = variant(() => undefined);
     ((twice.msg as PlainMessage).attachments as unknown[]).push(structuredClone(((twice.msg as PlainMessage).attachments as unknown[])[0]));
-    await expect(verifyShare(twice.msg as PlainMessage)).rejects.toThrow(/appears twice/);
+    await expect(verifyShare(twice.msg as PlainMessage, heldBy(bob))).rejects.toThrow(/appears twice/);
     // a package that decrypts fine but is some other object's: rooted elsewhere, discarded whole
-    const key = (await verifyShare(record.msg as PlainMessage)).package?.key as Uint8Array;
+    const key = (await verifyShare(record.msg as PlainMessage, heldBy(bob))).package?.key as Uint8Array;
     const other = await closureOf({ "index.json": files["index.json"], "files/other.txt": enc("other") });
     const stray = await encryptStream(key, encodeCar([other.root], other.blocks));
     const strayHash = await blobHash(stray);

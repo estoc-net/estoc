@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { ref, watch } from "vue";
 import { missingBytes, verifyShare, type VerifiedShare } from "@estoc/agent-core";
 import { isPost, readPost, renderPost, validatePost } from "@estoc/post";
 
@@ -94,22 +94,64 @@ function page(bodyHtml: string): string {
   </style>${bodyHtml}`;
 }
 
-onMounted(async () => {
-  const msg = props.entry.record.msg;
+/** Which reading of the record is current: a record replaced while a check is in flight makes that check stale. */
+let reading = 0;
+
+/**
+ * One reading of a record: the view it makes, unless a newer reading
+ * began meanwhile — then this one is dropped and the newer stands. The
+ * erase is asked before the blocks (vault-events.md §8.2): they may live
+ * on for another record naming them. A fetch's outcome belongs to the
+ * reading it was begun under: a new reading lets a finished one go
+ * (its error was about a record that is no longer shown), while a fetch
+ * still running keeps its busy state and clears it itself when it ends
+ * overtaken (`fetchBytes`), so one fetch runs at a time.
+ */
+async function read(record: Entry["record"]): Promise<void> {
+  const run = ++reading;
+  if (fetching.value.state !== "busy") {
+    fetching.value = { state: "idle" };
+  }
+  const msg = record.msg;
   if (msg === null) {
     // the body was erased or is missing: the record stands, its object does not
     view.value = { state: "bad", reason: "the message body is not in this vault any more" };
+    return;
+  }
+  const root = (msg.body as { root?: unknown }).root;
+  if (typeof root === "string" && record.erased.includes(root)) {
+    view.value = { state: "bad", reason: "the object was erased from this vault" };
     return;
   }
   let share: VerifiedShare;
   try {
     share = await verifyShare(msg, heldBlock);
   } catch (err) {
-    view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
+    if (run === reading) {
+      view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
+    }
     return;
   }
-  show(share);
-});
+  if (run === reading) {
+    show(share);
+  }
+}
+
+/**
+ * The record as it stands, read again whenever it changes under this
+ * component: a snapshot after a merge, a restore or a change of mediator
+ * replaces every entry in place (the thread keys by mid, so nothing
+ * remounts), and what it brought — the body or the object erased, a
+ * partial share made whole — must show. The view shown stays until the
+ * new reading is in.
+ */
+watch(
+  () => props.entry.record,
+  (record) => {
+    void read(record);
+  },
+  { immediate: true }
+);
 
 /** "available until <date>" or "may be gone since <date>": the store's word, not a promise. */
 function untilWords(iso: string): string {
@@ -118,14 +160,35 @@ function untilWords(iso: string): string {
   return when.getTime() < Date.now() ? `may be gone since ${date}` : `available until ${date}`;
 }
 
-/** Fetch the package the share names, and show the object as it is after. */
+/**
+ * Fetch the package the share names, and show the object as it is after.
+ * The blocks land in `blobs/` whatever happens to the record meanwhile —
+ * they are by CID, any record naming them reads them — so a fetch
+ * overtaken by a newer record does not drop what it brought: it reads
+ * the record as it stands now, since blocks landing change no record and
+ * nothing else would look again. Only the reading a fetch was begun
+ * under shows its outcome; overtaken, it clears its own busy state and
+ * says nothing — and an outcome it did show is let go by the next
+ * reading (`read`).
+ */
 async function fetchBytes(): Promise<void> {
+  const run = reading;
   fetching.value = { state: "busy" };
   try {
-    show(await fetchPackage(props.entry.record));
+    const share = await fetchPackage(props.entry.record);
     fetching.value = { state: "idle" };
+    if (run === reading) {
+      show(share);
+    } else {
+      await read(props.entry.record);
+    }
   } catch (err) {
-    fetching.value = { state: "failed", reason: err instanceof Error ? err.message : String(err) };
+    if (run === reading) {
+      fetching.value = { state: "failed", reason: err instanceof Error ? err.message : String(err) };
+    } else {
+      fetching.value = { state: "idle" };
+      await read(props.entry.record);
+    }
   }
 }
 
