@@ -639,19 +639,24 @@ describe("v2 outbound: delivering", () => {
     for (const [block, bytes] of blocks) {
       await s.v.vault.blobs.putBlock(block, bytes);
     }
+    // a block beside the tree named after one the vault holds of another object, its bytes not that block's: the
+    // root does not reach it, so it is neither stripped nor filled — what goes out is what was composed
+    const outside = await s.v.vault.blobs.put(enc.encode("a block of another object"));
+    const stray = { id: outside, media_type: "application/octet-stream", byte_count: 4, data: { base64: Buffer.from("junk").toString("base64url") } };
     const share = async (): Promise<MessageRecord> =>
-      s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: attachmentsOf(blocks) }), [root]);
+      s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: [...attachmentsOf(blocks), stray] }), [root]);
     const found = await share();
     // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
     const stored = found.msg?.attachments as { id: string; media_type: string; byte_count: number; data?: unknown }[];
-    expect(stored.map((a) => a.id)).toEqual([...blocks.keys()].sort());
-    expect(stored.every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
+    expect(stored.map((a) => a.id)).toEqual([...[...blocks.keys()].sort(), outside]);
+    expect(stored.slice(0, -1).every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);
+    expect(stored.at(-1)?.data).toEqual(stray.data);
     expect(found.skeleton.attachments).toEqual([root]);
-    // on the wire, whole: what Bob opens carries every block, bytes and all
+    // on the wire, whole: what Bob opens carries every block, bytes and all, and the stray as it was composed
     const [sent] = await s.outbox.drain();
     expect(sent?.data).toMatchObject({ mid: found.mid, outcome: "sent" });
     const { msg } = await bob.open(s.posts.at(-1)?.body as string);
-    expect(msg.attachments).toEqual(attachmentsOf(blocks));
+    expect(msg.attachments).toEqual([...attachmentsOf(blocks), stray]);
     expect(msg.body).toEqual({ root });
 
     // a second share of it, its object erased before it goes: not sent, and why

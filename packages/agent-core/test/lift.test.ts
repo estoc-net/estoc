@@ -28,15 +28,17 @@ describe("lifting a message's blocks (vault-events.md §4)", () => {
     // the message given is not touched
     expect((msg.attachments as { data?: unknown }[]).every((a) => typeof a === "string" || a.data !== undefined)).toBe(true);
 
-    const filled = await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null });
+    const filled = await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null }, () => true);
     expect(filled).toEqual(msg);
+    // what `kept` does not vouch for is the wire's, whatever its shape: left alone
+    expect(await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null }, () => false)).toBe(stored);
 
     // nothing to do: the same message back
     expect(await stripBlocks(msg, () => false)).toBe(msg);
-    expect(await fillBlocks(msg, { getBlock: async () => null })).toBe(msg);
+    expect(await fillBlocks(msg, { getBlock: async () => null }, () => true)).toBe(msg);
     const none: PlainMessage = { id: "m", type: "t", body: {} };
     expect(await stripBlocks(none, () => true)).toBe(none);
-    expect(await fillBlocks(none, { getBlock: async () => null })).toBe(none);
+    expect(await fillBlocks(none, { getBlock: async () => null }, () => true)).toBe(none);
   });
 
   it("reads a block as blocksOf does — by id and bytes, whatever its media_type says", async () => {
@@ -45,17 +47,17 @@ describe("lifting a message's blocks (vault-events.md §4)", () => {
     const msg: PlainMessage = { id: "m", type: "t", body: {}, attachments: bare };
     const stored = await stripBlocks(msg, () => true);
     expect((stored.attachments as { data?: unknown }[]).every((a) => a.data === undefined)).toBe(true);
-    expect(await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null })).toEqual(msg);
+    expect(await fillBlocks(stored, { getBlock: async (cid) => blocks.get(cid) ?? null }, () => true)).toEqual(msg);
     // an attachment without data whose id is no block's name is not a stored block: left alone, nothing asked for it
     const odd: PlainMessage = { id: "m", type: "t", body: {}, attachments: [{ id: "not-a-cid", media_type: "text/plain" }] };
-    expect(await fillBlocks(odd, { getBlock: async () => null })).toBe(odd);
+    expect(await fillBlocks(odd, { getBlock: async () => null }, () => true)).toBe(odd);
   });
 
   it("a block that is gone fails the fill, named", async () => {
     const { blocks } = await closureOf(files);
     const stored = await stripBlocks({ id: "m", type: "t", body: {}, attachments: attachmentsOf(blocks) }, () => true);
     const [gone] = [...blocks.keys()].sort() as [string];
-    await expect(fillBlocks(stored, { getBlock: async (cid) => (cid === gone ? null : (blocks.get(cid) ?? null)) })).rejects.toThrow(
+    await expect(fillBlocks(stored, { getBlock: async (cid) => (cid === gone ? null : (blocks.get(cid) ?? null)) }, () => true)).rejects.toThrow(
       `a block it carries is gone: ${gone}`
     );
   });

@@ -60,8 +60,9 @@ export interface SendOptions {
    * Roots of blocks the attachments carry, already in `blobs/` — the
    * caller's to have put first — recorded on the message's skeleton
    * (vault-events.md §3.1), as `keepShare` records a received share's.
-   * Named, the body is stored without those blocks' bytes (`lift.ts`);
-   * the outbox puts them back for the wire.
+   * Named, the body is stored without the bytes of the blocks those
+   * roots reach — no other attachment's (`lift.ts`); the outbox puts
+   * them back for the wire.
    */
   roots?: Cid[];
 }

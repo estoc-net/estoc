@@ -19,7 +19,7 @@
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
-import type { Cid, EventStore } from "@estoc/event-store";
+import { reachable, type Cid, type EventStore } from "@estoc/event-store";
 import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
@@ -171,14 +171,19 @@ export class Outbound {
    * The `message.out` (§3.1), body first (§4): the plaintext into the
    * blob store, then the skeleton — `roots` the blobs lifted out of it,
    * put by the caller before this. With roots named, the body is the
-   * plaintext as stored (`lift.ts`): the block attachments whose bytes
-   * `blobs/` holds keep their id and lose their `data`; the outbox puts
-   * the bytes back for the wire. Nothing has touched the wire: what is
-   * recorded waits in the outbox, and a delivery is the outbox's to try.
+   * plaintext as stored (`lift.ts`): the block attachments those roots
+   * reach keep their id and lose their `data`, and no other — not every
+   * attachment whose id `blobs/` happens to hold — so that what the
+   * outbox puts back for the wire is the message's own object and
+   * nothing named after another's. Nothing has touched the wire: what
+   * is recorded waits in the outbox, and a delivery is the outbox's to
+   * try.
    */
   async record({ plain, pair }: Composed, roots: Cid[] = []): Promise<MessageRecord> {
     const mid = uuidv7({ msecs: this.clock().getTime() });
-    const stored = roots.length === 0 ? plain : await stripBlocks(plain as PlainMessage, (cid) => this.opened.vault.blobs.has(cid));
+    const blobs = this.opened.vault.blobs;
+    const reached = roots.length === 0 ? null : await reachable(roots, (cid) => blobs.getBlock(cid));
+    const stored = reached === null ? plain : await stripBlocks(plain as PlainMessage, (cid) => reached.has(cid));
     await recordMessage(this.opened.vault, this.fold, "out", utf8.encode(JSON.stringify(stored)), {
       ...pair,
       mid,
@@ -578,8 +583,11 @@ export class Outbox {
       if (erased !== undefined) {
         throw new Error(`what it carries is erased (${erased})`);
       }
-      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/`
-      const plain = await fillBlocks(found.msg, this.opened.vault.blobs);
+      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/` — those the record's roots
+      // reach and no other, as they were stripped; an attachment named after any other block is the wire's
+      const blobs = this.opened.vault.blobs;
+      const reached = await reachable(found.skeleton.attachments, (cid) => blobs.getBlock(cid));
+      const plain = await fillBlocks(found.msg, blobs, (cid) => reached.has(cid));
       await this.ensureRegistered(message.pair.myKey as string);
       const to = contact.currentDids.at(-1);
       if (to === undefined) {
