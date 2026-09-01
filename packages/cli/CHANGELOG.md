@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 — 2026-09-01
+
+- The vault `estoc init` writes and `estoc serve` opens is version 2
+  (`docs/vault-folder.md`, `docs/vault-events.md`): `initVault` is
+  `createFolderVault` from `@estoc/vault` over `FsBackend` from
+  `@estoc/event-store/node`, plus the label as the first `identity.label`
+  event; `readConfig` checks the v2 `config.json` and folds the label;
+  `readKeystore` reads `keystore.json` as it is; `openVaultKey` /
+  `createVaultKey` go through `openFolderVault` (anchor checked) and the
+  keystore cache. `VaultConfig` is `{ format, version: 2, label,
+  identity.anchor }`; a version-1 config is refused ("version 1 is not
+  2") and nothing else of the folder is read. `.estoc` 0700 and the
+  keystore 0600 as before.
+
 ## 0.4.0 — 2026-08-29
 
 - The vault is read and written through `@estoc/vault` (`Vault` over

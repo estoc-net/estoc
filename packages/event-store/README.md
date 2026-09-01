@@ -32,8 +32,9 @@ No event type is known here — `device.minted` is the one name the
 folder writes, because the format says the folder writes it. What an
 event *means*, and the folds that turn a set of them into contacts
 and threads, are `@estoc/vault`'s (`docs/vault-events.md`).
-Interchange — snapshot, export, import, restore — is the next thing
-to land here.
+Interchange — `snapshot`, `exportVault`, `importVault`,
+`restoreFolder`, and `zipFiles` / `filesFromZip` for the shape a
+backup travels in — is here too (`docs/event-store.md` §10).
 
 `test/suite/` holds the conformance suites — `storeSuite`,
 `blobSuite`, and the backend cases — that every store and backend of

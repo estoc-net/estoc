@@ -1,6 +1,6 @@
 {
   "name": "@estoc/cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "estoc — the command-line client for Estoc vaults. `estoc init` marks a folder as yours by adding a .estoc directory (git model: your files stay untouched, the machinery lives in .estoc) with one seed-sealed keystore; `estoc object …` hashes, signs and verifies folder-objects with the vault's keys; `estoc serve` runs the daemon on a folder and serves the app for it.",
   "license": "Apache-2.0",
   "author": "merely",
