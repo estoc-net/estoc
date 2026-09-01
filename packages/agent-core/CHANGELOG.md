@@ -32,6 +32,7 @@ The agent over the version-2 vault, in place of the version-1 one.
   this package's records (`records.ts`), readings of the fold; `announcedName`
   and `verifyShare` take the package's `PlainMessage`.
 
+## 0.17.0 — 2026-08-29
 
 - `openVault(backend, options?)`: the vault's options apart from minting (today the `trace` policy).
 
