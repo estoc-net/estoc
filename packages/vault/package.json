@@ -1,7 +1,7 @@
 {
   "name": "@estoc/vault",
   "version": "0.1.0",
-  "description": "The .estoc vault format as code: the on-disk contract (docs/vault-format.md) every Estoc client reads and writes \u2014 config and seed keystore singletons, contact and invitation records, append-only message and delivery logs, blobs \u2014 over a pluggable VaultBackend (OPFS in the browser, a folder on disk in Node, memory for tests), with snapshot and merge-import. Format only: what a DID is minted as is the caller's.",
+  "description": "What the events of an .estoc vault mean (docs/vault-events.md): the event types and what each carries, the peer-key fingerprint, the folds that turn a set of events into contacts, channels, messages, my keys, invitations and deliveries, the procedures (erase, delete a contact, merge), and the keystore glue that mints keys by name — over any @estoc/event-store. Format only: what a DID is minted as is the caller's.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -14,14 +14,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./node": {
-      "types": "./dist/node.d.ts",
-      "default": "./dist/node.js"
-    },
-    "./v2": {
-      "types": "./dist/v2/index.d.ts",
-      "default": "./dist/v2/index.js"
     }
   },
   "files": [
@@ -40,7 +32,7 @@
   "keywords": [
     "estoc",
     "vault",
-    "opfs",
+    "event-sourcing",
     "keystore",
     "decentralized-identity"
   ],

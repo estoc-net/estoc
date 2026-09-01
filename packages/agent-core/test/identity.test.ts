@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { CONFIG_PATH, ESTOC_DIR, KEYSTORE_FILE, MemoryBackend, NotAVault } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
-import { KEY_ANCHOR, mediationKeyName } from "@estoc/vault/v2";
+import { KEY_ANCHOR, mediationKeyName } from "@estoc/vault";
 
 import { createVault, inspectVault, mintPeerDid, openVault } from "../src/index.js";
 

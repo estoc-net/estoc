@@ -1,7 +1,7 @@
 # The vault's events, version 2 — draft
 
-Status: **draft**, 2026-08-30. Not implemented. Sections marked
-*provisional* are leanings, not decisions.
+Status: **implemented** as of 2026-09-01 (`@estoc/vault`); drafted 2026-08-30.
+Sections marked *provisional* are leanings, not decisions.
 
 The third of three documents. Every line below is an event of
 `event-store.md` §2 — an envelope of `eid`, `at`, `author`, `type`,

@@ -11,7 +11,7 @@ import {
 } from "@estoc/keystore";
 import { CONFIG_PATH, ESTOC_DIR, FolderVault, KEYSTORE_FILE, NotAVault, isJsonObject, readConfig as checkConfig } from "@estoc/event-store";
 import { FsBackend } from "@estoc/event-store/node";
-import { KEY_ANCHOR, VaultFold, createFolderVault, drafts, openFolderVault, record, type MintDid } from "@estoc/vault/v2";
+import { KEY_ANCHOR, VaultFold, createFolderVault, drafts, openFolderVault, record, type MintDid } from "@estoc/vault";
 
 export { ESTOC_DIR };
 

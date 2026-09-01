@@ -1,9 +1,9 @@
 /**
  * @estoc/agent-core — the DIDComm v2 agent behind Estoc's clients, over
- * the `.estoc` vault as `@estoc/vault/v2` folds it (docs/vault-events.md).
+ * the `.estoc` vault as `@estoc/vault` folds it (docs/vault-events.md).
  *
  * Bottom up: the folder and its events (`@estoc/event-store`,
- * `@estoc/vault/v2`), bound here to did:peer:4 minted from a seed-derived
+ * `@estoc/vault`), bound here to did:peer:4 minted from a seed-derived
  * key (`openVault`, `createVault`, `inspectVault`); the protocols as the
  * specifications have them (`protocol/`: types, message shapes, the
  * checks — nothing that reads a vault); and the agent's own modules: the

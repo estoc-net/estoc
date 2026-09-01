@@ -1,108 +1,125 @@
 /**
- * @estoc/vault — the `.estoc` vault format as code.
+ * @estoc/vault — the vault's events and folds (docs/vault-events.md).
  *
- * The contract is `docs/vault-format.md` at the repository root; this
- * package is its reference implementation, and nothing more: a
- * `VaultBackend` (bytes: OPFS, memory; a folder on disk via
- * `@estoc/vault/node`), the layout over it (config and keystore
- * singletons, contact and invitation records, message and delivery logs,
- * blobs, the trace log with its retention), snapshot and merge-import, and the `Vault` object that holds
- * the two singletons and mints keys by name. What a key is minted *as* —
- * a did:peer:4 with a mediator's routing DID as its service, say — is not
- * a format question: the caller hands `Vault` a `MintDid`, and the vault
- * records the DID it returns as the snapshot the contract asks for.
+ * What each event type's `data` holds, the peer-key fingerprint, the
+ * folds (attribution, contact state, my DIDs and devices, invitations,
+ * deliveries, the keep-set), the procedures (erase, delete, merge), and
+ * the keystore glue. Runs over any `@estoc/event-store` stores; the
+ * folder is one of them.
  */
 
-export { MemoryBackend } from "./backend/memory.js";
-export { OpfsBackend } from "./backend/opfs.js";
-export { segmentsOf, walk, type VaultBackend } from "./backend/types.js";
+export type {
+  AttachCause,
+  ChannelFirstSeen,
+  ChannelKey,
+  ContactAttached,
+  ContactCreated,
+  ContactDeleted,
+  ContactDetached,
+  ContactFlag,
+  ContactMerged,
+  ContactPetname,
+  ContactUseKey,
+  DeliveryAttempted,
+  DeliveryHeld,
+  DeliveryOutcome,
+  DeviceLabel,
+  DeviceMinted,
+  DeviceRetired,
+  DidMinted,
+  DidPublished,
+  DidRegistered,
+  DidRetired,
+  EnvelopeKind,
+  EraseCause,
+  ExtensionInstalled,
+  ExtensionPurged,
+  ExtensionRemoved,
+  IdentityLabel,
+  MediationCreated,
+  MediationGranted,
+  MediationRetired,
+  MessageErased,
+  MessageIn,
+  MessageOut,
+  PeerResolved,
+  PeerRotated,
+  ProfileNameClaimed,
+  ProfileShared,
+  PublishedAs,
+  Skeleton,
+  Uses,
+  VaultData,
+  VaultEvent,
+  VaultType,
+} from "./types.js";
+export {
+  CHANNEL_DECISIONS,
+  DID_KEY_PREFIX,
+  KEY_ANCHOR,
+  KEY_NAME,
+  MEDIATION_KEY_PREFIX,
+  Malformed,
+  OBSERVATIONS,
+  PEER_KEY,
+  VAULT_TYPES,
+  channelId,
+  didKeyName,
+  isMediationKey,
+  isVaultType,
+  mediationKeyName,
+  readVaultEvent,
+  sameChannel,
+} from "./types.js";
+
+export { fingerprint, isPeerKey, peerKeyOf } from "./peer-key.js";
+
+export { Components, EventSet, latest } from "./set.js";
 
 export {
-  BLOBS_DIR,
-  CACHE_DIR,
-  CONFIG_PATH,
-  CONTACTS_DIR,
-  DELIVERIES_DIR,
-  ESTOC_DIR,
-  INVITATIONS_DIR,
-  KEYSTORE_PATH,
-  MESSAGES_DIR,
-  STATE_DIR,
-  TRACE_DIR,
-} from "./layout.js";
-export { parseConfig, type KeyRef, type Mediation, type VaultConfig } from "./config.js";
-export {
-  ContactStore,
-  contactFile,
-  currentDid,
-  currentMyDid,
-  didPlaceholder,
-  newContact,
-  previousMyDid,
-  parseContact,
-  type ContactRecord,
-  type DidUse,
-  type MyDidUse,
-} from "./contacts.js";
-export {
-  InvitationStore,
-  isOpenInvitation,
-  parseInvitationRecord,
-  type InvitationRecord,
-} from "./invitations.js";
-export {
-  MessageLog,
-  counterpartyOf,
-  newMessageRecord,
-  parseSegment,
-  type MessageRecord,
-  type PlainMessage,
-} from "./messages.js";
-export { SegmentedLog, orderSegments, isSegment, newSegment, type DamagedLine, type LineParser } from "./log.js";
-export {
-  DeliveryLog,
-  deliveryKey,
-  deliveryStatusOf,
-  foldDeliveries,
-  type DeliveryEvent,
-  type DeliveryState,
+  VaultFold,
+  type Attribution,
+  type Channel,
+  type Attached,
+  type Contact,
+  type ContactKey,
+  type DeletedContact,
+  type Delivery,
   type DeliveryStatus,
-} from "./deliveries.js";
+  type Device,
+  type Extension,
+  type Invitation,
+  type Mediation,
+  type Message,
+  type MyKey,
+  type Published,
+  type TheirDid,
+} from "./fold.js";
+
+export { drafts, type VaultDraft } from "./drafts.js";
+
 export {
-  importVault,
-  snapshotVault,
-  type ImportOutcome,
-  type VaultFiles,
-} from "./transfer.js";
-export { BlobStore } from "./blobs.js";
-export {
-  TRACE_NORMAL,
-  TRACE_OFF,
-  TRACE_STREAMS,
-  TRACE_VERBOSE,
-  TraceLog,
-  isTracePath,
-  isTraceStream,
-  segmentTime,
-  tracePolicy,
-  type PruneReport,
-  type StreamRetention,
-  type TraceEvent,
-  type TraceInput,
-  type TraceLevel,
-  type TracePolicy,
-  type TraceStream,
-} from "./trace.js";
-export {
-  KEY_ANCHOR,
-  KEY_INVITE_PREFIX,
-  KEY_MEDIATION_PREFIX,
-  KEY_PAIRWISE_PREFIX,
-  Vault,
-  isRelationshipKey,
-  mediationKeyName,
-  type CreateVaultOptions,
-  type MintDid,
-  type MintedDid,
-  type VaultOptions,
-} from "./vault.js";
+  allRoots,
+  collectBlobs,
+  deleteContact,
+  eraseMessage,
+  heldRoots,
+  holdImported,
+  importPolicy,
+  noteFirstSeen,
+  notePeerResolved,
+  readRoot,
+  record,
+  recordAll,
+  recordMessage,
+  sweepDeleted,
+  type Absence,
+  type Deleted,
+  type InboundSkeleton,
+  type OutboundSkeleton,
+  type VaultSide,
+} from "./procedures.js";
+
+export { Keys, type KeysOptions, type MintDid, type MintedDid } from "./identity.js";
+
+export { createFolderVault, openFolderVault, type FolderOptions, type Opened } from "./folder.js";

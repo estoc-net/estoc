@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryBackend } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
-import { drafts, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault/v2";
+import { drafts, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault";
 
 import {
   BASIC_MESSAGE,

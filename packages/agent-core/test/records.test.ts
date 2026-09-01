@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { MemoryBackend, MemoryBlobStore } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
-import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type ChannelKey, type InboundSkeleton } from "@estoc/vault/v2";
+import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type ChannelKey, type InboundSkeleton } from "@estoc/vault";
 
 import { createVault, type PeerVault } from "../src/index.js";
 import { contactRecord, didPlaceholder, invitationRecord, messageRecord, nameOf, type PlainMessage } from "../src/records.js";

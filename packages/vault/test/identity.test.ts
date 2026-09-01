@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryBackend, MemoryVault, NotAVault } from "@estoc/event-store";
 import { addDerivedKey, createSeedKeystore, parseSeedKeystore, serializeKeystore, type DerivedIdentity } from "@estoc/keystore";
 
-import { KEY_ANCHOR, Keys, VaultFold, createFolderVault, openFolderVault, type MintDid } from "../../src/v2/index.js";
+import { KEY_ANCHOR, Keys, VaultFold, createFolderVault, openFolderVault, type MintDid } from "../src/index.js";
 
 const FIXED_SEED = new Uint8Array(32).map((_, i) => i);
 const OTHER_SEED = new Uint8Array(32).map((_, i) => 31 - i);

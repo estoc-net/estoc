@@ -34,7 +34,7 @@ import {
   type VaultEvent,
   type VaultFold,
   type VaultType,
-} from "@estoc/vault/v2";
+} from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
 import { BASIC_MESSAGE } from "./protocol/basicmessage.js";

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { ESTOC_DIR, KEYSTORE_FILE, MemoryBackend, restoreFolder, snapshot } from "@estoc/event-store";
 import { deriveIdentity, importSeed } from "@estoc/keystore";
-import { drafts, holdImported, mediationKeyName, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
+import { drafts, holdImported, mediationKeyName, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault";
 
 import {
   AgentTrace,

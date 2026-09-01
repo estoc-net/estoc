@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { MemoryBlobStore } from "@estoc/event-store";
 
-import { VaultFold, channelId } from "../../src/v2/index.js";
+import { VaultFold, channelId } from "../src/index.js";
 import { DEV_A, DEV_B, DEV_C, Line, buildScene, peerKey, type Scene } from "./helpers.js";
 
 let scene: Scene;

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+The version-2 vault is the package. What was `@estoc/vault/v2` is now
+the root entry, and the version-1 format — `VaultBackend` and its
+backends, the layout constants, `SegmentedLog`, the contact and
+invitation stores, the message and delivery logs, `BlobStore`, the
+trace log, `snapshotVault` / `importVault`, `Vault` — is deleted with
+its tests and `docs/vault-format.md` retired. The folder, its backends
+(`MemoryBackend`, `OpfsBackend`, `FsBackend` in
+`@estoc/event-store/node`), blobs, local state, the trace and
+interchange live in `@estoc/event-store` (`docs/event-store.md`,
+`docs/vault-folder.md`); this package is what the events mean
+(`docs/vault-events.md`).
+
+- `exports` is `"."` only: `./node` is gone with `FsBackend` (import it
+  from `@estoc/event-store/node`), `./v2` is the root.
+- Everything `@estoc/vault/v2` exported is exported here unchanged: the
+  event types and `readVaultEvent`, `peerKeyOf` / `fingerprint`,
+  `EventSet`, `VaultFold`, `drafts`, the procedures (`record`,
+  `recordMessage`, `eraseMessage`, `deleteContact`, `holdImported`,
+  `importPolicy`, `collectBlobs`, `readRoot`, `sweepDeleted`, …),
+  `Keys` with `MintDid`, `createFolderVault` / `openFolderVault`.
+- A version-1 folder is refused on open (`NotAVault`), as it was by
+  `@estoc/vault/v2`; there is nothing to migrate.
+
 ## 0.1.0 — 2026-08-29
 
 - `TraceLog.setPolicy(policy)`: keep by another policy from now on (a device

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { VaultFold } from "../../src/v2/index.js";
+import { VaultFold } from "../src/index.js";
 import { DEV_A, buildScene, dump, shuffle, type Scene } from "./helpers.js";
 
 let scene: Scene;

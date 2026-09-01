@@ -48,7 +48,7 @@ import {
   type ChannelKey,
   type InboundSkeleton,
   type VaultFold,
-} from "@estoc/vault/v2";
+} from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
 import type { IMessage } from "./protocol/didcomm.js";

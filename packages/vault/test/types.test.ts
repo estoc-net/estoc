@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { Cid, Event, JsonObject } from "@estoc/event-store";
 import { MemoryBlobStore } from "@estoc/event-store";
 
-import { Malformed, fingerprint, isPeerKey, peerKeyOf, readVaultEvent, VAULT_TYPES, type VaultType } from "../../src/v2/index.js";
+import { Malformed, fingerprint, isPeerKey, peerKeyOf, readVaultEvent, VAULT_TYPES, type VaultType } from "../src/index.js";
 import { DEV_A, Line, peerKey } from "./helpers.js";
 
 let root: Cid;

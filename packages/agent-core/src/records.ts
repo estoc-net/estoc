@@ -7,7 +7,7 @@
  */
 
 import type { BlobStore } from "@estoc/event-store";
-import { readRoot, type Absence, type Attribution, type ChannelKey, type Contact, type Invitation, type Message, type MessageIn, type MessageOut, type VaultFold } from "@estoc/vault/v2";
+import { readRoot, type Absence, type Attribution, type ChannelKey, type Contact, type Invitation, type Message, type MessageIn, type MessageOut, type VaultFold } from "@estoc/vault";
 
 /** A DIDComm plaintext message as JSON: what didcomm-rust's as_value() yields. */
 export interface PlainMessage {

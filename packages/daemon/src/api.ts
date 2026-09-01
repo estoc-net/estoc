@@ -1,6 +1,6 @@
 import type { FolderObject } from "@estoc/folder-object";
 import type { Imported } from "@estoc/event-store";
-import type { Delivery } from "@estoc/vault/v2";
+import type { Delivery } from "@estoc/vault";
 import type {
   AgentStatus,
   ContactRecord,
