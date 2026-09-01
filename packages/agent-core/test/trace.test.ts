@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ESTOC_DIR, MemoryBackend, isSegmentName, segmentTime, type LocalOwner } from "@estoc/event-store";
 import { createSeedKeystore, type SeedKey } from "@estoc/keystore";
 
-import { AgentTrace, TRACE_NORMAL, TRACE_OFF, createVault, openVault, traceLevelOf, tracePolicy, type PeerVault, type TracePolicy, type TraceStream } from "../../src/v2/index.js";
+import { AgentTrace, TRACE_NORMAL, TRACE_OFF, createVault, openVault, traceLevelOf, tracePolicy, type PeerVault, type TracePolicy, type TraceStream } from "../src/index.js";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;

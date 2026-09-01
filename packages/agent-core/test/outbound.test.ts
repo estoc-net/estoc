@@ -6,14 +6,17 @@ import { MemoryBackend, compareEvents, type Event } from "@estoc/event-store";
 import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
 import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type VaultDraft, type VaultEvent, type VaultType } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, FORWARD, PLAIN_TYP, RECIPIENT_UPDATE, secretsResolverFor, type IMessage } from "../../src/index.js";
 import {
   AgentTrace,
+  BASIC_MESSAGE,
+  FORWARD,
   Inbound,
   Keyring,
   MediatorLink,
   Outbound,
   Outbox,
+  PLAIN_TYP,
+  RECIPIENT_UPDATE,
   createVault,
   didPlaceholder,
   establish,
@@ -21,14 +24,16 @@ import {
   register,
   registerPending,
   resolvedOf,
+  secretsResolverFor,
   type Composed,
   type HandlerContext,
+  type IMessage,
   type MessageRecord,
   type MyIdentity,
   type PeerVault,
   type Routed,
-} from "../../src/v2/index.js";
-import { FakeMediator } from "../fake-mediator.js";
+} from "../src/index.js";
+import { FakeMediator } from "./fake-mediator.js";
 
 const didcomm = { Message, FromPrior };
 const resolver = { resolve: resolveDIDCommDoc };

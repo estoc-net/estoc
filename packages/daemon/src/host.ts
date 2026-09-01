@@ -1,6 +1,5 @@
 import type { VaultBackend } from "@estoc/event-store";
-import type { DidcommApi } from "@estoc/agent-core";
-import type { AgentOptions } from "@estoc/agent-core/v2";
+import type { AgentOptions, DidcommApi } from "@estoc/agent-core";
 
 /**
  * What a place the daemon runs in has to provide: where the bytes are, how

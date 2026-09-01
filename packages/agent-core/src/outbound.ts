@@ -23,8 +23,8 @@ import type { Cid, EventStore } from "@estoc/event-store";
 import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault/v2";
 import { v7 as uuidv7 } from "uuid";
 
-import { ENCRYPTED_MIME, endpointOf, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
-import { FORWARD } from "../protocol/spec.js";
+import { ENCRYPTED_MIME, endpointOf, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "./protocol/didcomm.js";
+import { FORWARD } from "./protocol/spec.js";
 import { outboundPair, resolvedOf } from "./channel.js";
 import type { SendOptions } from "./handler.js";
 import type { PeerVault } from "./identity.js";

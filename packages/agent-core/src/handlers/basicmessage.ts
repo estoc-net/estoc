@@ -1,4 +1,4 @@
-import { BASIC_MESSAGE } from "../../protocol/basicmessage.js";
+import { BASIC_MESSAGE } from "../protocol/basicmessage.js";
 import type { ProtocolHandler } from "../handler.js";
 
 /**

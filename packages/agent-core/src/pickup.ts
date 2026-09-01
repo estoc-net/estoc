@@ -23,8 +23,8 @@
 
 import { base64urlToUtf8 } from "@estoc/did-peer";
 
-import type { IMessage } from "../protocol/didcomm.js";
-import { DELIVERY, DELIVERY_REQUEST, MESSAGES_RECEIVED, STATUS, STATUS_REQUEST } from "../protocol/mediation.js";
+import type { IMessage } from "./protocol/didcomm.js";
+import { DELIVERY, DELIVERY_REQUEST, MESSAGES_RECEIVED, STATUS, STATUS_REQUEST } from "./protocol/mediation.js";
 import type { MediatorLink, Opened } from "./link.js";
 
 /** What became of an opened message: taken (acknowledged, the mediator drops it) or left queued for a later pickup. */

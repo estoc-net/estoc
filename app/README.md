@@ -52,8 +52,9 @@ your data never touches the place the app was served from.
 - **A vault in the browser.** Contacts and messages live in an `.estoc/`
   directory in this origin's private file system (OPFS) — the same folder
   format every Estoc client reads, written by [@estoc/agent-core]:
-  `config.json`, `keystore.json`, `contacts/*.json`, an append-only
-  `messages/*.jsonl` log. Nothing about you is stored anywhere else.
+  `config.json`, `keystore.json`, an append-only event log under
+  `devices/<dev>/`, the bytes it names under `blobs/`
+  (`docs/vault-folder.md`). Nothing about you is stored anywhere else.
 - **Backups you own.** **Export backup** zips that directory, unchanged.
   **Restore a backup** on a fresh install makes that browser your
   identity's home. **Import backup** into a live vault *merges*: new
@@ -152,7 +153,8 @@ shell opening offline.
 - **The agent is [@estoc/agent-core]**: mediation (coordinate-mediation
   3.0), pickup and live delivery (messagepickup 3.0 over HTTP and
   WebSocket), routing 2.0 forwards, user-profile/1.0 introductions, and
-  the `.estoc` vault format over an OPFS backend.
+  object-share/1.0 — over the `.estoc` vault (`@estoc/event-store`,
+  `@estoc/vault`) on an OPFS backend.
 - **The daemon is a worker — or a process**: the agent and its vault run
   behind the `Daemon` interface of `@estoc/daemon` (`packages/daemon`), and
   the UI reaches it only through that interface over an RPC: records and

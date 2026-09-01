@@ -11,7 +11,7 @@ import { FolderVault, KEYSTORE_FILE, NotAVault } from "@estoc/event-store";
 import { parseSeedKeystore, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import { createFolderVault, drafts, openFolderVault, record, type FolderOptions, type Opened } from "@estoc/vault/v2";
 
-import { mintPeerDid, type PeerIdentity } from "../identity/peer.js";
+import { mintPeerDid, type PeerIdentity } from "./identity/peer.js";
 
 /** What an open hands back: the folder, the keys minting did:peer:4, the fold, the anchor. */
 export type PeerVault = Opened<PeerIdentity>;

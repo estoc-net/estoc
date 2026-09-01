@@ -17,7 +17,7 @@ import {
   senderOf,
   signerOf,
   type Unpacked,
-} from "../../src/v2/index.js";
+} from "../src/index.js";
 
 const SEED = new Uint8Array(32).map((_, i) => i);
 const ROUTING = "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE9VVs";

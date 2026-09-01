@@ -1,6 +1,37 @@
 # Changelog
 
-## 0.17.0 — 2026-08-29
+## 0.18.0 — unreleased
+
+The agent over the version-2 vault, in place of the version-1 one.
+
+- **The v2 agent is the package.** What was `@estoc/agent-core/v2` is now
+  the root export, and the `./v2` entry is gone: `Agent`, `createVault`,
+  `openVault`, `inspectVault`, the records (`MessageRecord`,
+  `ContactRecord`, `InvitationRecord`), the trace (`AgentTrace`,
+  `TRACE_*`, `tracePolicy`), the handler seam (`ProtocolHandler`,
+  `HandlerContext`), the built-in handlers, `Keyring`, `MediatorLink`,
+  the mediation rituals, `Pickup`, `Inbound`, `Outbound`, `Outbox`, the
+  share road (`buildShare`, `placePackage`, `fetchPackage`) — all from
+  `@estoc/agent-core`. The protocol helpers (`protocol/`: the spec and
+  mediation types, the didcomm helpers, the object-share wire format and
+  checks, streaming AEAD, blob-store, `resolveDid`, `resolveMediatorInput`)
+  are exported as before.
+- **The v1 agent is removed**: `Agent` over `@estoc/vault`'s v1 format,
+  its `createVault`/`openVault` (`Vault.create`/`Vault.open` with
+  `mintPeerDid`), `PEER_DIDS`, the v1 handler seam and the v1
+  `basicmessageHandler`, `userProfileHandler`, `objectShareHandler`,
+  `shareProfile`, and `invitationMessage` over a v1 record. A version-1
+  folder is `NotAVault` to `inspectVault` and `openVault`; nothing here
+  reads or converts it (vault-folder.md §11).
+- `openVault(backend, seedKey, options?)`: the seed is an argument now,
+  checked against the anchor as the folder opens; `createVault(backend,
+  { keystore, seedKey, label, ...options })` records the label as the first
+  `identity.label` event. `AgentOptions` has no `seedKey`: the opened
+  vault's `keys` hold it.
+- `PlainMessage`, `ContactRecord`, `InvitationRecord`, `MessageRecord` are
+  this package's records (`records.ts`), readings of the fold; `announcedName`
+  and `verifyShare` take the package's `PlainMessage`.
+
 
 - `openVault(backend, options?)`: the vault's options apart from minting (today the `trace` policy).
 

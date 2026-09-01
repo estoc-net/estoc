@@ -18,8 +18,7 @@ import {
   type VerifiedTree,
 } from "@estoc/folder-object";
 
-import type { PlainMessage } from "@estoc/vault";
-import type { ProtocolHandler } from "./handler.js";
+import type { PlainMessage } from "../records.js";
 import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
 
 /**
@@ -447,43 +446,6 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
     blocks,
   };
 }
-
-/**
- * The receiving side: a share that verifies has its blocks put in
- * `blobs/`; one that does not is left as it is in the log — a fact about
- * what arrived — and noted. Either way the record is there for the
- * application to show, which will run the same check to decide how. A
- * share whose leaves are not all here is a partial object, kept as far
- * as it goes: `blobs/` is by CID, so the rest fills in from wherever it
- * comes — the package it names, when the application fetches it
- * (`Agent.fetchPackage`), or a later share.
- */
-export const objectShareHandler: ProtocolHandler = {
-  types: [OBJECT_SHARE],
-
-  async onInbound(record, contact, agent) {
-    let share: VerifiedShare;
-    try {
-      share = await verifyShare(record.msg, (cid) => agent.vault.blobs.get(cid));
-    } catch (err) {
-      agent.log(`object from ${contact.name} does not verify: ${err instanceof Error ? err.message : err}`);
-      return;
-    }
-    for (const [cid, bytes] of share.blocks) {
-      await agent.vault.blobs.put(cid, bytes);
-    }
-    const who = share.card === null ? "unsigned" : `signed by ${share.card.did}`;
-    const kept = `${share.tree.files.size} files kept`;
-    const road =
-      share.package !== null
-        ? ` (${share.package.byteCount} bytes packaged at ${share.package.url} until ${share.package.availableUntil})`
-        : share.packageProblem !== null
-          ? ` (a package is named but unusable: ${share.packageProblem})`
-          : "";
-    const state = share.complete ? "" : `, ${share.tree.partial.size} awaiting ${missingBytes(share.tree)} bytes${road}`;
-    agent.log(`${share.object.meta.format} ${share.root} from ${contact.name} (${who}): ${kept}${state}`);
-  },
-};
 
 /** The bytes a partial share still lacks, as the skeleton sizes them. */
 export function missingBytes(tree: VerifiedTree): number {

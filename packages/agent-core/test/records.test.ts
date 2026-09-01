@@ -5,8 +5,8 @@ import { MemoryBackend, MemoryBlobStore } from "@estoc/event-store";
 import { createSeedKeystore } from "@estoc/keystore";
 import { drafts, eraseMessage, peerKeyOf, record, recordMessage, type ChannelKey, type InboundSkeleton } from "@estoc/vault/v2";
 
-import { createVault, type PeerVault } from "../../src/v2/index.js";
-import { contactRecord, didPlaceholder, invitationRecord, messageRecord, nameOf, type PlainMessage } from "../../src/v2/records.js";
+import { createVault, type PeerVault } from "../src/index.js";
+import { contactRecord, didPlaceholder, invitationRecord, messageRecord, nameOf, type PlainMessage } from "../src/records.js";
 
 const enc = new TextEncoder();
 const SEED = new Uint8Array(32).map((_, i) => i);

@@ -20,8 +20,8 @@
 
 import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault/v2";
 
-import type { IMessage } from "../protocol/didcomm.js";
-import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "../protocol/mediation.js";
+import type { IMessage } from "./protocol/didcomm.js";
+import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "./protocol/mediation.js";
 import type { PeerVault } from "./identity.js";
 import type { Keyring, MyIdentity, Routed } from "./keyring.js";
 import type { MediatorLink } from "./link.js";

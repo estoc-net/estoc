@@ -51,9 +51,9 @@ import {
 } from "@estoc/vault/v2";
 import { v7 as uuidv7 } from "uuid";
 
-import type { IMessage } from "../protocol/didcomm.js";
-import { OBJECT_SHARE } from "../protocol/object-share.js";
-import { TRUST_PING, TRUST_PING_RESPONSE, isSpecType } from "../protocol/spec.js";
+import type { IMessage } from "./protocol/didcomm.js";
+import { OBJECT_SHARE } from "./protocol/object-share.js";
+import { TRUST_PING, TRUST_PING_RESPONSE, isSpecType } from "./protocol/spec.js";
 import { inboundPair, resolvedOf, signerOf, type KeyOfDid, type Proved } from "./channel.js";
 import type { HandlerContext, InboundRecord, ProtocolHandler } from "./handler.js";
 import { keepShare } from "./handlers/object-share.js";

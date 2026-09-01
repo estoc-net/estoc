@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import type { TraceEvent } from "@estoc/agent-core/v2";
+import type { TraceEvent } from "@estoc/agent-core";
 
 import type { Entry } from "../core/entries.js";
 import LayerOnion from "./LayerOnion.vue";

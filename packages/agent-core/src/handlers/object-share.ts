@@ -1,6 +1,6 @@
 import type { BlobStore, Cid } from "@estoc/event-store";
 
-import { OBJECT_SHARE, missingBytes, verifyShare, type VerifiedShare } from "../../protocol/object-share.js";
+import { OBJECT_SHARE, missingBytes, verifyShare, type VerifiedShare } from "../protocol/object-share.js";
 import type { ProtocolHandler } from "../handler.js";
 import type { PlainMessage } from "../records.js";
 

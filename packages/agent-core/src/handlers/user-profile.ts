@@ -1,6 +1,6 @@
 import { drafts } from "@estoc/vault/v2";
 
-import { PROFILE, REQUEST_PROFILE, announcedName } from "../../protocol/user-profile.js";
+import { PROFILE, REQUEST_PROFILE, announcedName } from "../protocol/user-profile.js";
 import type { HandlerContext, ProtocolHandler } from "../handler.js";
 import type { ContactRecord } from "../records.js";
 
