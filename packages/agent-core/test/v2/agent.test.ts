@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 import { KEYSTORE_FILE } from "@estoc/event-store";
-import { drafts, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
+import { drafts, mediationKeyName, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, FORWARD, OOB_INVITATION, PLAIN_TYP, PROFILE } from "../../src/index.js";
-import { invitationUrl, nameOf, openVault, parseInvitation, type InvitationRecord, type MessageRecord } from "../../src/v2/index.js";
+import { BASIC_MESSAGE, FORWARD, OOB_INVITATION, PLAIN_TYP, PROFILE, TRUST_PING } from "../../src/index.js";
+import { Keyring, invitationUrl, nameOf, openVault, parseInvitation, type InvitationRecord, type MessageRecord } from "../../src/v2/index.js";
 import { network, type FakeMediator, type FakeSocket } from "../fake-mediator.js";
 import {
   attach,
@@ -544,6 +544,184 @@ describe("v2 agent through a mediator", () => {
     await withTimeout(eve.live);
     expect(eve.agent.did?.startsWith("did:peer:4")).toBe(true);
     eve.agent.destroy();
+  });
+
+  it("moves to another mediator: every DID re-minted, contacts follow by the vouch, the old address dead", async () => {
+    const one = await newMediator();
+    const two = await newMediator({ fill: 201, http: "http://other-mediator/", ws: "ws://other-mediator/ws" });
+    const net = network(one, two);
+    const party = (name: string, fill: number) => newParty(name, fill, one, { fetch: net.fetch, webSocket: net.WebSocket });
+    let alice = await party("Alice", 41);
+    const bob = await party("Bob", 42);
+    const carol = await party("Carol", 43);
+    const dan = await party("Dan", 44);
+    await Promise.all([alice.agent.start(), bob.agent.start(), carol.agent.start(), dan.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live, carol.live, dan.live]));
+
+    // Bob: a conversation both ways (he knows Alice by her pairwise DID)
+    await alice.agent.addContact(bob.agent.did as string, "Bob");
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "hello bob");
+    await withTimeout(bob.next((v) => v.content === "hello bob"));
+    const aliceToBob1 = myDidToward(alice, bob.agent.did as string);
+    await bob.agent.sendBasicMessage(aliceToBob1, "hi alice");
+    await withTimeout(alice.next((v) => v.content === "hi alice"));
+    // Carol: wrote to Alice's public DID; Alice's only answer was the automatic
+    // profile (from a pairwise DID), so Carol has never written to anything but the public one
+    await carol.agent.sendBasicMessage(alice.agent.did as string, "hey, stranger");
+    await withTimeout(alice.next((v) => v.content === "hey, stranger"));
+    await withTimeout(carol.next((v) => v.kind === "profile" && v.direction === "received"));
+    const aliceToCarol1 = myDidToward(alice, carol.agent.did as string);
+    // Dan: came in through an invitation of Alice's; a second one stays open
+    const invitation = await alice.agent.createInvitation();
+    await dan.agent.acceptInvitation(invitationUrl("https://estoc.example/", alice.agent.invitationMessage(invitation)), "Alice");
+    await withTimeout(until(() => alice.agent.invitations().some((i) => i.id === invitation.id && !i.open)));
+    await withTimeout(dan.next((v) => v.kind === "profile" && v.direction === "received"));
+    const open = await alice.agent.createInvitation();
+    const alicePub1 = alice.agent.did as string;
+    const before = alice.v.fold.device(alice.v.vault.self)?.mediation;
+    // Alice knows Dan by the DID he minted toward her, never his public one
+    const danDid = myDidToward(dan, invitation.did as string);
+    const aliceToDan1 = myDidToward(alice, danDid);
+    expect(aliceToDan1).toBe(invitation.did);
+    expect(one.recipients.has(alicePub1)).toBe(true);
+    expect(one.recipients.has(open.did as string)).toBe(true);
+
+    // the move
+    await alice.agent.setMediator(two.did);
+    await withTimeout(until(() => alice.agent.status.state === "live"), 8000, "live at the new mediator");
+    const device = alice.v.fold.device(alice.v.vault.self);
+    const mediation = device?.mediation;
+    expect(mediation?.mediatorDid).toBe(two.did);
+    expect(mediation?.id).not.toBe(before?.id);
+    expect(mediation?.me.key).toBe(mediationKeyName(mediation?.id as string));
+    expect(mediation?.routingDid).toBe(two.did);
+    expect(device?.mediations.map((m) => [m.id, m.retired !== null])).toEqual([
+      [before?.id, true],
+      [mediation?.id, false],
+    ]);
+    const alicePub2 = alice.agent.did as string;
+    expect(alicePub2).not.toBe(alicePub1);
+    // fresh DIDs toward Bob and Dan, on the new route, registered there
+    const aliceToBob2 = myDidToward(alice, bob.agent.did as string);
+    const aliceToDan2 = myDidToward(alice, danDid);
+    expect(aliceToBob2).not.toBe(aliceToBob1);
+    expect(aliceToDan2).not.toBe(aliceToDan1);
+    expect(aliceToDan2.startsWith("did:peer:4")).toBe(true);
+    for (const did of [alicePub2, aliceToBob2, aliceToDan2]) {
+      expect((await resolveDIDCommDoc(did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: two.did });
+      expect(two.recipients.get(did)).toBe(mediation?.me.did);
+    }
+    // the old mediator was asked to drop everything, the open link is withdrawn;
+    // the records stay — both invitations listed, neither open
+    for (const did of [alicePub1, aliceToBob1, aliceToDan1, open.did as string]) {
+      expect(one.recipients.has(did)).toBe(false);
+    }
+    expect(alice.agent.invitations().map((i) => [i.id, i.open, i.retired])).toEqual([
+      [invitation.id, false, true],
+      [open.id, false, true],
+    ]);
+    expect(alice.log).toContain("withdrew 1 open invitation link(s); they led to the old mediator");
+    expect(alice.log).toContain("minted a fresh DID toward 3 contact(s); the old ones rode the old route");
+
+    // Carol's history on Alice's side: the fresh key is the only live one — the first
+    // pairwise key, and the public key she wrote to, are retired, not forgotten
+    const aliceToCarol2 = myDidToward(alice, carol.agent.did as string);
+    expect(aliceToCarol2).not.toBe(aliceToCarol1);
+    const carolRecord = contactByDid(alice, carol.agent.did as string) as Contact;
+    expect(carolRecord.keys.map((u) => alice.v.fold.myKey(u.key)?.minted?.did)).toEqual([aliceToCarol2]);
+    expect(alice.v.fold.myKey(keyWearing(alice, aliceToCarol1))?.retired).toMatchObject({ because: "mediation-changed" });
+    expect(carolRecord.addressedAs).toBe(keyWearing(alice, alicePub1));
+    expect(alice.v.fold.myKey(keyWearing(alice, alicePub1))?.retired).toMatchObject({ because: "mediation-changed" });
+
+    // Bob, Carol and Dan were pinged from the new DIDs and moved by the vouch — no message from Alice needed
+    await withTimeout(until(() => bob.log.some((l) => l.endsWith("vouched for by the old DID"))), 8000, "Bob's rotation");
+    await withTimeout(until(() => dan.log.some((l) => l.endsWith("vouched for by the old DID"))), 8000, "Dan's rotation");
+    await withTimeout(until(() => carol.log.some((l) => l.endsWith("vouched for by the old DID"))), 8000, "Carol's rotation");
+    const bobsAlice = contactByDid(bob, aliceToBob2) as Contact;
+    expect(bobsAlice.currentDids).toEqual([aliceToBob2]);
+    expect(bobsAlice.theirDids.map((d) => d.did)).toEqual([alicePub1, aliceToBob1, aliceToBob2]);
+    expect(bobsAlice.theirDids.find((d) => d.did === aliceToBob1)?.rotatedTo).toEqual([aliceToBob2]);
+    expect(bob.log).toContain("Alice pinged us");
+    const dansAlice = contactByDid(dan, aliceToDan2) as Contact;
+    expect(dansAlice.theirDids.map((d) => d.did)).toEqual([aliceToDan1, aliceToDan2]);
+    // the ping is a fact between contacts, recorded in both folds — and never a chat message
+    await withTimeout(until(() => bob.v.fold.messages().some((m) => m.direction === "in" && m.skeleton.msgType === TRUST_PING)));
+    const bobsPings = (await recordsOf(bob)).filter((r) => r.msg?.type === TRUST_PING);
+    expect(bobsPings.map((r) => [r.direction, r.sender])).toEqual([["in", aliceToBob2]]);
+    expect((await recordsOf(alice)).filter((r) => r.msg?.type === TRUST_PING && r.direction === "out")).toHaveLength(3);
+    expect(bob.messages.some((m) => m.record.msg?.type === TRUST_PING)).toBe(false);
+
+    // they write to the new DIDs; the mail arrives through the new mediator
+    await bob.agent.sendBasicMessage(aliceToBob2, "still there?");
+    await withTimeout(alice.next((v) => v.content === "still there?"));
+    expect((contactByDid(alice, bob.agent.did as string) as Contact).addressedAs).toBe(keyWearing(alice, aliceToBob2));
+    await dan.agent.sendBasicMessage(aliceToDan2, "found you");
+    await withTimeout(alice.next((v) => v.content === "found you"));
+    // Carol, who only ever wrote to the retired public DID, was vouched to by it — signed after it stopped being ours to receive at
+    const carolsAlice = contactByDid(carol, aliceToCarol2) as Contact;
+    expect(carolsAlice.theirDids.map((d) => d.did)).toEqual([alicePub1, aliceToCarol1, aliceToCarol2]);
+    await alice.agent.sendBasicMessage(carol.agent.did as string, "who is this?");
+    await withTimeout(carol.next((v) => v.content === "who is this?"));
+    await carol.agent.sendBasicMessage(aliceToCarol2, "it's carol");
+    await withTimeout(alice.next((v) => v.content === "it's carol"));
+
+    // the old business card: for Bob, who knows Alice, it still finds her (and goes to her current DID);
+    // for someone who only ever held the card, it is dead — the old mediator bounces it
+    await bob.agent.sendBasicMessage(alicePub1, "old card, same alice");
+    await withTimeout(alice.next((v) => v.content === "old card, same alice"));
+    await undelivered(dan, dan.agent.sendBasicMessage(alicePub1, "old card"));
+    // the same mediator again is refused, nothing torn down
+    await expect(alice.agent.setMediator(two.did)).rejects.toThrow(/already reached via/);
+    expect(alice.agent.status.state).toBe("live");
+
+    // a restart finds nothing stale and still receives
+    alice = await reopen(alice, net);
+    await alice.agent.start();
+    await withTimeout(alice.live);
+    expect(alice.log.some((l) => l.startsWith("minted a fresh DID toward"))).toBe(false);
+    expect(alice.v.fold.device(alice.v.vault.self)?.mediation?.id).toBe(mediation?.id);
+    await bob.agent.sendBasicMessage(aliceToBob2, "after reload");
+    await withTimeout(alice.next((v) => v.content === "after reload"));
+
+    for (const p of [alice, bob, carol, dan]) p.agent.destroy();
+  });
+
+  it("heals a move interrupted before the DIDs were re-minted at the next start", async () => {
+    const one = await newMediator();
+    const two = await newMediator({ fill: 202, http: "http://other-mediator/", ws: "ws://other-mediator/ws" });
+    const net = network(one, two);
+    let alice = await newParty("Alice", 45, one, { fetch: net.fetch, webSocket: net.WebSocket });
+    const bob = await newParty("Bob", 46, one, { fetch: net.fetch, webSocket: net.WebSocket });
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "hello");
+    await withTimeout(bob.next((v) => v.content === "hello"));
+    const aliceToBob1 = myDidToward(alice, bob.agent.did as string);
+    const alicePub1 = alice.agent.did as string;
+
+    // the vault recorded the move — what `leave` retires and the new arrangement —
+    // and the process died before the bring-up: no grant, no rotation, nothing registered
+    alice.agent.destroy();
+    const old = alice.v.fold.device(alice.v.vault.self)?.mediation;
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.didRetired({ key: keyWearing(alice, alicePub1), because: "mediation-changed" }));
+    await recordEvent(alice.v.vault.events, alice.v.fold, drafts.mediationRetired({ id: old?.id as string, because: "changed" }));
+    const ring = await Keyring.load(alice.v);
+    await ring.createMediation(two.did);
+
+    alice = await reopen(alice, net);
+    await alice.agent.start();
+    await withTimeout(alice.live);
+    expect(alice.v.fold.device(alice.v.vault.self)?.mediation?.mediatorDid).toBe(two.did);
+    expect(alice.agent.did).not.toBe(alicePub1);
+    expect(alice.log).toContain("minted a fresh DID toward 1 contact(s); the old ones rode the old route");
+    const aliceToBob2 = myDidToward(alice, bob.agent.did as string);
+    expect(aliceToBob2).not.toBe(aliceToBob1);
+    expect(two.recipients.has(aliceToBob2)).toBe(true);
+    await withTimeout(until(() => bob.log.some((l) => l.endsWith("vouched for by the old DID"))), 8000, "Bob's rotation");
+    await bob.agent.sendBasicMessage(aliceToBob2, "found you");
+    await withTimeout(alice.next((v) => v.content === "found you"));
+    alice.agent.destroy();
+    bob.agent.destroy();
   });
 });
 
