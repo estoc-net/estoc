@@ -470,7 +470,7 @@ export async function fetchPackage(record: MessageRecord): Promise<VerifiedShare
  * `verifyShare` so leaves that came by any road count as present.
  */
 export async function heldBlock(cid: string): Promise<Uint8Array | null> {
-  return daemon === null ? null : daemon.blob(cid);
+  return daemon === null ? null : daemon.block(cid);
 }
 
 /** A line of chat: basicmessage/2.0. */
