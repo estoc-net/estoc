@@ -101,10 +101,17 @@ let reading = 0;
  * One reading of a record: the view it makes, unless a newer reading
  * began meanwhile — then this one is dropped and the newer stands. The
  * erase is asked before the blocks (vault-events.md §8.2): they may live
- * on for another record naming them.
+ * on for another record naming them. A fetch's outcome belongs to the
+ * reading it was begun under: a new reading lets a finished one go
+ * (its error was about a record that is no longer shown), while a fetch
+ * still running keeps its busy state and clears it itself when it ends
+ * overtaken (`fetchBytes`), so one fetch runs at a time.
  */
 async function read(record: Entry["record"]): Promise<void> {
   const run = ++reading;
+  if (fetching.value.state !== "busy") {
+    fetching.value = { state: "idle" };
+  }
   const msg = record.msg;
   if (msg === null) {
     // the body was erased or is missing: the record stands, its object does not
@@ -161,7 +168,8 @@ function untilWords(iso: string): string {
  * the record as it stands now, since blocks landing change no record and
  * nothing else would look again. Only the reading a fetch was begun
  * under shows its outcome; overtaken, it clears its own busy state and
- * says nothing.
+ * says nothing — and an outcome it did show is let go by the next
+ * reading (`read`).
  */
 async function fetchBytes(): Promise<void> {
   const run = reading;
