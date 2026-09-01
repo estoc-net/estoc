@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { ref, watch } from "vue";
 import { missingBytes, verifyShare, type VerifiedShare } from "@estoc/agent-core";
 import { isPost, readPost, renderPost, validatePost } from "@estoc/post";
 
@@ -94,28 +94,48 @@ function page(bodyHtml: string): string {
   </style>${bodyHtml}`;
 }
 
-onMounted(async () => {
-  const msg = props.entry.record.msg;
-  if (msg === null) {
-    // the body was erased or is missing: the record stands, its object does not
-    view.value = { state: "bad", reason: "the message body is not in this vault any more" };
-    return;
-  }
-  // the erase asked before the blocks (vault-events.md §8.2): they may live on for another record naming them
-  const root = (msg.body as { root?: unknown }).root;
-  if (typeof root === "string" && props.entry.record.erased.includes(root)) {
-    view.value = { state: "bad", reason: "the object was erased from this vault" };
-    return;
-  }
-  let share: VerifiedShare;
-  try {
-    share = await verifyShare(msg, heldBlock);
-  } catch (err) {
-    view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
-    return;
-  }
-  show(share);
-});
+/** Which reading of the record is current: a record replaced while a check is in flight makes that check stale. */
+let reading = 0;
+
+/**
+ * The record as it stands, read again whenever it changes under this
+ * component: a snapshot after a merge, a restore or a change of mediator
+ * replaces every entry in place (the thread keys by mid, so nothing
+ * remounts), and what it brought — the body or the object erased, a
+ * partial share made whole — must show. The view shown stays until the
+ * new reading is in; a reading overtaken by a newer record is dropped.
+ */
+watch(
+  () => props.entry.record,
+  async (record) => {
+    const run = ++reading;
+    const msg = record.msg;
+    if (msg === null) {
+      // the body was erased or is missing: the record stands, its object does not
+      view.value = { state: "bad", reason: "the message body is not in this vault any more" };
+      return;
+    }
+    // the erase asked before the blocks (vault-events.md §8.2): they may live on for another record naming them
+    const root = (msg.body as { root?: unknown }).root;
+    if (typeof root === "string" && record.erased.includes(root)) {
+      view.value = { state: "bad", reason: "the object was erased from this vault" };
+      return;
+    }
+    let share: VerifiedShare;
+    try {
+      share = await verifyShare(msg, heldBlock);
+    } catch (err) {
+      if (run === reading) {
+        view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
+      }
+      return;
+    }
+    if (run === reading) {
+      show(share);
+    }
+  },
+  { immediate: true }
+);
 
 /** "available until <date>" or "may be gone since <date>": the store's word, not a promise. */
 function untilWords(iso: string): string {
@@ -127,8 +147,13 @@ function untilWords(iso: string): string {
 /** Fetch the package the share names, and show the object as it is after. */
 async function fetchBytes(): Promise<void> {
   fetching.value = { state: "busy" };
+  const run = reading;
   try {
-    show(await fetchPackage(props.entry.record));
+    const share = await fetchPackage(props.entry.record);
+    // a record replaced while the fetch ran has been read again by then; its reading stands
+    if (run === reading) {
+      show(share);
+    }
     fetching.value = { state: "idle" };
   } catch (err) {
     fetching.value = { state: "failed", reason: err instanceof Error ? err.message : String(err) };
