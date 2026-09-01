@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
-import { KEYSTORE_FILE } from "@estoc/event-store";
-import { drafts, mediationKeyName, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
+import { KEYSTORE_FILE, MemoryBackend, restoreFolder, snapshot } from "@estoc/event-store";
+import { deriveIdentity, importSeed } from "@estoc/keystore";
+import { drafts, holdImported, mediationKeyName, record as recordEvent, type ChannelKey, type Contact } from "@estoc/vault/v2";
 
-import { BASIC_MESSAGE, FORWARD, OOB_INVITATION, PLAIN_TYP, PROFILE, TRUST_PING } from "../../src/index.js";
-import { Keyring, invitationUrl, nameOf, openVault, parseInvitation, type InvitationRecord, type MessageRecord } from "../../src/v2/index.js";
-import { network, type FakeMediator, type FakeSocket } from "../fake-mediator.js";
+import { BASIC_MESSAGE, ENCRYPTED_MIME, FORWARD, OOB_INVITATION, PLAIN_TYP, PROFILE, REQUEST_PROFILE, TRUST_PING, mintPeerDid, secretsResolverFor, type IMessage } from "../../src/index.js";
+import { Keyring, invitationUrl, nameOf, openVault, parseInvitation, type InvitationRecord, type MessageRecord, type PlainMessage } from "../../src/v2/index.js";
+import { MEDIATOR_HTTP, network, type FakeMediator, type FakeSocket } from "../fake-mediator.js";
 import {
   attach,
   contactByDid,
+  didcomm,
   history,
   keyWearing,
   myDidToward,
@@ -18,6 +20,7 @@ import {
   newVault,
   recordsOf,
   reopen,
+  seedOf,
   undelivered,
   until,
   withTimeout,
@@ -734,6 +737,395 @@ function watching(sockets: FakeSocket[], over: Pick<FakeMediator, "WebSocket">):
     }
   } as typeof WebSocket;
 }
+
+/**
+ * Deliver an already-packed inner envelope to `recipientDid` the way any
+ * sender would: a routing/2.0 forward, sealed anonymously to the mediator,
+ * POSTed to its endpoint. `innerPacked` may be anything — that is the point.
+ */
+async function forwardTo(mediator: FakeMediator, recipientDid: string, innerPacked: string): Promise<void> {
+  const forward = {
+    id: crypto.randomUUID(),
+    typ: PLAIN_TYP,
+    type: FORWARD,
+    to: [mediator.did],
+    created_time: Math.floor(Date.now() / 1000),
+    body: { next: recipientDid },
+    attachments: [{ id: crypto.randomUUID(), media_type: ENCRYPTED_MIME, data: { json: JSON.parse(innerPacked) as unknown } }],
+  };
+  const [outer] = await new didcomm.Message(forward).pack_encrypted(mediator.did, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
+  const response = await mediator.fetch(MEDIATOR_HTTP, { method: "POST", headers: { "Content-Type": ENCRYPTED_MIME }, body: outer });
+  expect(response.ok).toBe(true);
+}
+
+/** A stranger with keys but no mediator: a did:peer:4 whose service is `endpoint`. */
+async function stranger(fill: number, endpoint: string) {
+  const identity = await deriveIdentity(await importSeed(seedOf(fill)), "anchor");
+  return mintPeerDid(identity, endpoint);
+}
+
+const plain = (type: string, from: string | null, to: string, body: Record<string, unknown>) =>
+  ({ id: crypto.randomUUID(), typ: PLAIN_TYP, type, ...(from === null ? {} : { from }), to: [to], created_time: Math.floor(Date.now() / 1000), body }) as IMessage;
+
+describe("v2 agent with application protocols", () => {
+  it("records every message between contacts whatever its type, and lets a handler answer inside its protocol", async () => {
+    const POLL = "https://estoc.dev/poll/1.0/question";
+    const VOTE = "https://estoc.dev/poll/1.0/vote";
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 21, mediator);
+    // Bob's application speaks a poll protocol: a question gets a vote back on the thread
+    const seenByHandler: string[] = [];
+    const bob = await newParty("Bob", 22, mediator, {
+      handlers: [
+        {
+          types: [POLL, VOTE],
+          async onInbound(record, contact, ctx) {
+            seenByHandler.push(`${contact.name}:${record.msg.type}`);
+            if (record.msg.type === POLL) {
+              await ctx.reply(contact, VOTE, { choice: (record.msg.body["options"] as string[])[1] }, { thid: record.msg.id });
+            }
+          },
+        },
+      ],
+    });
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+
+    // Alice, whose agent has no poll handler, still sends one: `send` takes any type
+    const question = await alice.agent.send(bob.agent.did as string, POLL, { question: "lunch?", options: ["rice", "noodles"] });
+    expect(question.msg?.type).toBe(POLL);
+    const aliceToBob = myDidToward(alice, bob.agent.did as string);
+
+    // Bob's handler saw it under Alice's contact and voted on the thread;
+    // Alice recorded the vote though nothing of hers handles it.
+    await withTimeout(until(() => alice.log.some((l) => l.startsWith(`a ${VOTE} from `) && l.endsWith("recorded, no handler for it"))));
+    // (Alice's introduction arrived first, so the handler already saw her by name)
+    expect(seenByHandler).toEqual([`Alice:${POLL}`]);
+    const aliceLog = await recordsOf(alice);
+    const vote = aliceLog.find((r) => r.msg?.type === VOTE);
+    expect(vote?.direction).toBe("in");
+    expect(vote?.sender).toBe(myDidToward(bob, aliceToBob));
+    expect(vote?.msg?.thid).toBe((question.msg as PlainMessage).id);
+    expect(vote?.msg?.body).toEqual({ choice: "noodles" });
+    // the introduction still preceded the first message, and every fact is in order
+    expect(aliceLog.map((r) => `${r.direction}:${r.msg?.type.split("/").at(-1)}`)).toEqual([
+      "out:profile",
+      "out:question",
+      "in:profile",
+      "in:vote",
+    ]);
+    // the application saw the vote through onMessage, homed to Bob, and chatView (rightly) made nothing of it
+    expect(alice.messages.every((m) => m.record.msg?.type !== VOTE)).toBe(true);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+});
+
+describe("v2 agent with an outbox", () => {
+  /** A party whose line to the mediator can be cut and restored. */
+  async function flakyParty(name: string, fill: number, mediator: FakeMediator) {
+    const line = { cut: false };
+    const flaky: typeof fetch = (input, init) => {
+      if (line.cut) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      return mediator.fetch(input, init);
+    };
+    const party = await newParty(name, fill, mediator, { fetch: flaky });
+    return { party, line };
+  }
+
+  it("keeps what is written offline, sends it in order when the socket comes back, and never twice", async () => {
+    const mediator = await newMediator();
+    const { party: alice, line } = await flakyParty("Alice", 51, mediator);
+    const bob = await newParty("Bob", 52, mediator);
+    const carol = await newParty("Carol", 53, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start(), carol.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live, carol.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "one");
+    await withTimeout(bob.next((v) => v.content === "one"));
+
+    // offline: two to Bob, one to Carol (never written to before: her
+    // introduction waits too). Every send resolves; every record is in
+    // the fold; nothing is sent.
+    line.cut = true;
+    const two = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "two"), /fetch failed/);
+    const three = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "three"));
+    const toCarol = await undelivered(alice, alice.agent.sendBasicMessage(carol.agent.did as string, "hi carol"));
+    expect(alice.messages.filter((m) => m.view.kind === "chat" && m.view.direction === "sent").map((m) => m.view.content)).toEqual(["one", "two", "three", "hi carol"]);
+    // "two" was tried (and failed) twice: once on its own send, once ahead
+    // of "three" — which itself was never tried, so as not to overtake it
+    expect(alice.deliveries.filter((e) => e.mid === two.mid).map((e) => e.status)).toEqual(["failed", "failed"]);
+    expect(alice.v.fold.delivery(three.mid)).toMatchObject({ status: "pending", attempts: [] });
+    expect(alice.v.fold.delivery(two.mid)?.attempts.at(-1)?.error).toMatch(/fetch failed/);
+
+    // the line comes back and the mediator drops Alice's socket: the
+    // reconnect drains the outbox, in order per contact
+    line.cut = false;
+    mediator.dropSocket(alice.v.fold.device(alice.v.vault.self)?.mediation?.me.did as string);
+    await withTimeout(bob.next((v) => v.content === "three"));
+    await withTimeout(carol.next((v) => v.content === "hi carol"));
+    expect(bob.messages.filter((m) => m.view.kind === "chat").map((m) => m.view.content)).toEqual(["one", "two", "three"]);
+    // Carol was introduced first, then written to
+    expect(carol.messages.filter((m) => m.view.direction === "received").map((m) => m.view.kind)).toEqual(["profile", "chat"]);
+    for (const record of [two, three, toCarol]) {
+      expect(alice.v.fold.delivery(record.mid)?.status).toBe("sent");
+    }
+    // the wire ids never changed across the retries
+    expect(bob.messages.find((m) => m.view.content === "two")?.record.msg?.id).toBe((two.msg as PlainMessage).id);
+    // and a try that reached Bob but looked failed to Alice is not a second message for Bob
+    const inner = mediator.fetch;
+    let dropAnswerOnce = true;
+    (mediator as { fetch: typeof fetch }).fetch = async (input, init) => {
+      const response = await inner(input, init);
+      if (dropAnswerOnce && String(init?.body).includes("ciphertext")) {
+        dropAnswerOnce = false;
+        throw new TypeError("connection reset after the POST");
+      }
+      return response;
+    };
+    const four = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "four"), /connection reset/);
+    await withTimeout(bob.next((v) => v.content === "four"));
+    // by hand: the retry goes, and Bob keeps one "four"
+    expect((await alice.agent.retry(four.mid)).data).toMatchObject({ outcome: "sent", attempt: 2 });
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "five");
+    await withTimeout(bob.next((v) => v.content === "five"));
+    expect(bob.messages.filter((m) => m.view.content === "four")).toHaveLength(1);
+    expect((await recordsOf(bob)).filter((r) => (r.msg?.body as { content?: string } | undefined)?.content === "four")).toHaveLength(1);
+    await expect(alice.agent.retry(four.mid)).rejects.toThrow(/not waiting/);
+
+    alice.agent.destroy();
+    bob.agent.destroy();
+    carol.agent.destroy();
+  });
+
+  it("holds what a restore brought in undelivered: the old device's mail is not this one's to send", async () => {
+    const mediator = await newMediator();
+    const { party: alice, line } = await flakyParty("Alice", 54, mediator);
+    const bob = await newParty("Bob", 55, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "sent before the backup");
+    await withTimeout(bob.next((v) => v.content === "sent before the backup"));
+    line.cut = true;
+    const stuck = await undelivered(alice, alice.agent.sendBasicMessage(bob.agent.did as string, "written offline"));
+    const files = await snapshot(alice.backend);
+    alice.agent.destroy();
+
+    // restored on another device (same seed, so every key derives): the
+    // snapshot carries no `local/`, so the open is a fresh device — whose
+    // own hold (`delivery.held { imported }`, vault-events.md §10) keeps
+    // the old device's unsent mail out of the outbox
+    const other = new MemoryBackend();
+    await restoreFolder(other, files);
+    const v = await openVault(other, alice.seedKey, { clock: alice.clock });
+    expect(v.vault.self).not.toBe(alice.v.vault.self);
+    const held = await holdImported(v.vault.events, v.fold);
+    expect(held.map((event) => event.data["mid"])).toEqual([stuck.mid]);
+    // the mediation slot is per device: the new device arranges its own
+    const ring = await Keyring.load(v);
+    await ring.createMediation(mediator.did);
+    const again = attach("Alice again", other, v, alice.seedKey, alice.clock, mediator);
+    await again.agent.start();
+    await withTimeout(again.live);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
+    expect(again.v.fold.delivery(stuck.mid)).toMatchObject({ status: "held", heldBy: [{ because: "imported" }] });
+    expect(again.v.fold.delivery(stuck.mid)?.attempts).toHaveLength(1);
+    // a new message to Bob goes — from a key of this device's own
+    // minting, vouched for by the old one — and does not drag the held one along
+    const fresh = await again.agent.sendBasicMessage(bob.agent.did as string, "from the new device");
+    await withTimeout(bob.next((v2) => v2.content === "from the new device"));
+    expect(fresh.pair.myKey).not.toBe(stuck.pair.myKey);
+    expect(contactByDid(bob, (fresh.msg as PlainMessage).from as string)?.cid).toBe(contactByDid(bob, (stuck.msg as PlainMessage).from as string)?.cid);
+    expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
+    // by hand it is tried — and refused: the key it was written from is
+    // the old device's address, under that device's mediation, and mail
+    // written elsewhere is not this device's to send (vault-events.md §3.2)
+    expect((await again.agent.retry(stuck.mid)).data).toMatchObject({
+      outcome: "failed",
+      attempt: 2,
+      error: "written from a key that is not under this device's mediation",
+    });
+    expect(again.v.fold.delivery(stuck.mid)?.status).toBe("held");
+    // writing it again from where both sides are now is the sender's to do
+    await again.agent.sendBasicMessage(bob.agent.did as string, "written offline, sent again");
+    await withTimeout(bob.next((v2) => v2.content === "written offline, sent again"));
+    expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
+
+    again.agent.destroy();
+    bob.agent.destroy();
+  });
+});
+
+describe("v2 agent under hostile mail", () => {
+  it("does not attribute an anonymous envelope to whoever its plaintext names", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 11, mediator);
+    const bob = await newParty("Bob", 12, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "real");
+    await withTimeout(bob.next((v) => v.content === "real"));
+    const aliceToBob = myDidToward(alice, bob.agent.did as string);
+
+    // Mallory seals two messages anonymously to Bob, both claiming to be
+    // from Alice: a chat line, and a profile renaming her.
+    const forged = plain(BASIC_MESSAGE, aliceToBob, bob.agent.did as string, { content: "forged" });
+    const [anon1] = await new didcomm.Message(forged).pack_encrypted(bob.agent.did as string, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
+    await forwardTo(mediator, bob.agent.did as string, anon1);
+    const forgedProfile = plain(PROFILE, aliceToBob, bob.agent.did as string, { profile: { displayName: "Mallory" }, send_back_yours: false });
+    const [anon2] = await new didcomm.Message(forgedProfile).pack_encrypted(bob.agent.did as string, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
+    await forwardTo(mediator, bob.agent.did as string, anon2);
+    // and, for contrast, a genuine follow-up from Alice
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "still real");
+    await withTimeout(bob.next((v) => v.content === "still real"));
+
+    // Both forgeries were recorded as facts — sender null — but reached no
+    // thread, and Alice's name is untouched.
+    const log = await recordsOf(bob);
+    const anonymous = log.filter((r) => r.direction === "in" && r.sender === null);
+    expect(
+      anonymous.map((r) => {
+        const body = r.msg?.body as { content?: string; profile?: { displayName?: string } };
+        return body.content ?? body.profile?.displayName;
+      })
+    ).toEqual(["forged", "Mallory"]);
+    expect(bob.messages.map((m) => m.view.content)).not.toContain("forged");
+    expect((await history(bob)).map((v) => v.content)).not.toContain("forged");
+    const bobsAlice = contactByDid(bob, aliceToBob);
+    expect(bobsAlice?.claimedName).toBe("Alice");
+    expect(nameOf(bobsAlice as Contact)).toBe("Alice");
+    // and they were acked: handled, not stuck
+    await withTimeout(until(() => [...mediator.queues.values()].every((q) => q.length === 0)));
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("answers a profile request only from a proven sender, and survives one whose reply path is dead", async () => {
+    const mediator = await newMediator();
+    let bob = await newParty("Bob", 13, mediator);
+    await bob.agent.start();
+    await withTimeout(bob.live);
+    bob.agent.destroy();
+
+    // Mallory has real keys but her service endpoint answers nothing.
+    const mallory = await stranger(14, "http://nowhere.invalid/");
+    const ask = plain(REQUEST_PROFILE, mallory.did, bob.agent.did as string, { query: ["displayName"] });
+    const [authAsk] = await new didcomm.Message(ask).pack_encrypted(bob.agent.did as string, mallory.did, null, { resolve: resolveDIDCommDoc }, secretsResolverFor(mallory.secrets), { forward: false });
+    await forwardTo(mediator, bob.agent.did as string, authAsk);
+    // and an anonymous ask claiming to be her
+    const [anonAsk] = await new didcomm.Message(ask).pack_encrypted(bob.agent.did as string, null, null, { resolve: resolveDIDCommDoc }, secretsResolverFor([]), { forward: false });
+    await forwardTo(mediator, bob.agent.did as string, anonAsk);
+    const account = bob.v.fold.device(bob.v.vault.self)?.mediation?.me.did as string;
+    expect(mediator.queues.get(account)).toHaveLength(2);
+
+    // Bob starts into that queue: the dead reply path is logged, not fatal;
+    // both asks are acked; the agent comes up live.
+    bob = await reopen(bob, mediator);
+    await bob.agent.start();
+    await withTimeout(bob.live);
+    expect(bob.agent.status).toEqual({ state: "live" });
+    await withTimeout(until(() => mediator.queues.get(account)?.length === 0));
+    expect(bob.log.some((l) => l.startsWith("could not deliver user-profile/1.0/profile"))).toBe(true);
+    expect(bob.log).toContain(`recorded an anonymous ${REQUEST_PROFILE}; it is attributed to nobody`);
+    // the proven asker became a contact and got an answer — recorded, waiting
+    // in the outbox since her endpoint is dead; nothing for the anonymous one
+    expect(contactByDid(bob, mallory.did)).not.toBeNull();
+    const log = await recordsOf(bob);
+    const answers = log.filter((r) => r.direction === "out");
+    expect(answers.map((r) => [r.msg?.type, r.msg?.to?.[0]])).toEqual([[PROFILE, mallory.did]]);
+    expect(bob.v.fold.delivery((answers[0] as MessageRecord).mid)?.status).toBe("failed");
+    // both asks are facts in the log — one attributed, one not
+    expect(log.filter((r) => r.msg?.type === REQUEST_PROFILE).map((r) => r.sender)).toEqual([mallory.did, null]);
+    bob.agent.destroy();
+  });
+
+  it("leaves an envelope it cannot open queued, and still handles the rest", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 15, mediator);
+    let bob = await newParty("Bob", 16, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    bob.agent.destroy();
+
+    // garbage that is not an envelope at all, then a real message behind it
+    await forwardTo(mediator, bob.agent.did as string, JSON.stringify({ garbage: true }));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "after the garbage");
+    const account = bob.v.fold.device(bob.v.vault.self)?.mediation?.me.did as string;
+    expect(mediator.queues.get(account)).toHaveLength(3); // garbage, profile intro, chat
+
+    bob = await reopen(bob, mediator);
+    await bob.agent.start();
+    await withTimeout(bob.live);
+    expect((await history(bob)).filter((v) => v.direction === "received").map((v) => v.content)).toEqual(["Alice", "after the garbage"]);
+    // the garbage is still there for a later, maybe luckier, pickup — and
+    // the drain did not spin on it
+    expect(mediator.queues.get(account)).toHaveLength(1);
+    expect(bob.log.some((l) => l.startsWith("could not open a delivered envelope; leaving it queued"))).toBe(true);
+    expect(bob.log).toContain("nothing acknowledged this round; leaving the queue for a later pickup");
+    expect(mediator.seenTypes.filter((t) => t.endsWith("delivery-request")).length).toBeLessThanOrEqual(4);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("picks up what queued during a socket outage when it reconnects", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 17, mediator);
+    const bob = await newParty("Bob", 18, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "before");
+    await withTimeout(bob.next((v) => v.content === "before"));
+
+    // The mediator drops Bob's socket; Alice writes while it is down.
+    const account = bob.v.fold.device(bob.v.vault.self)?.mediation?.me.did as string;
+    const liveCount = bob.statuses.filter((s) => s.state === "live").length;
+    mediator.dropSocket(account);
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "during");
+    // No push happened (nobody was connected) — the reconnect's pickup
+    // fetches it, and live delivery resumes after.
+    const got = await withTimeout(bob.next((v) => v.content === "during"));
+    expect(got.direction).toBe("received");
+    await withTimeout(until(() => bob.statuses.filter((s) => s.state === "live").length > liveCount));
+    await alice.agent.sendBasicMessage(bob.agent.did as string, "after");
+    await withTimeout(bob.next((v) => v.content === "after"));
+    expect((await history(bob)).filter((v) => v.kind === "chat").map((v) => v.content)).toEqual(["before", "during", "after"]);
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+
+  it("handles a burst of socket frames one at a time, losing none", async () => {
+    const mediator = await newMediator();
+    const alice = await newParty("Alice", 19, mediator);
+    const bob = await newParty("Bob", 20, mediator);
+    await Promise.all([alice.agent.start(), bob.agent.start()]);
+    await withTimeout(Promise.all([alice.live, bob.live]));
+    // Bob's backend appends yield mid-way, like OPFS; two appends to one
+    // file overlapping would compute one offset and overwrite each other.
+    // (Different files — the event log, each trace stream — may overlap.)
+    const inner = bob.backend.append.bind(bob.backend);
+    const inFlight = new Map<string, number>();
+    let overlapped = false;
+    bob.backend.append = async (path, data) => {
+      inFlight.set(path, (inFlight.get(path) ?? 0) + 1);
+      if ((inFlight.get(path) as number) > 1) {
+        overlapped = true;
+      }
+      await new Promise((r) => setTimeout(r, 2));
+      await inner(path, data);
+      inFlight.set(path, (inFlight.get(path) as number) - 1);
+    };
+    const texts = Array.from({ length: 8 }, (_, i) => `burst ${i}`);
+    await Promise.all(texts.map((t) => alice.agent.sendBasicMessage(bob.agent.did as string, t)));
+    await withTimeout(Promise.all(texts.map((t) => bob.next((v) => v.content === t))));
+    expect(overlapped).toBe(false);
+    const chats = (await history(bob)).filter((v) => v.kind === "chat").map((v) => v.content);
+    expect(chats.sort()).toEqual([...texts].sort());
+    alice.agent.destroy();
+    bob.agent.destroy();
+  });
+});
 
 describe("v2 agent hardened", () => {
   it("runs one start at a time: mediation is asked for once, and a later start replaces the socket instead of leaking it", async () => {
