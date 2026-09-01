@@ -1,6 +1,6 @@
 import type { Component } from "vue";
 
-import type { TraceEvent, TraceLevel } from "@estoc/vault";
+import type { TraceEvent, TraceLevel } from "@estoc/agent-core/v2";
 
 import type { Entry } from "../core/entries.js";
 

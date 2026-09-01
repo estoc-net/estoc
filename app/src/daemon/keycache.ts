@@ -47,26 +47,6 @@ export async function cacheSeedKey(key: CryptoKey): Promise<void> {
   db.close();
 }
 
-/** What this device keeps of what it observes (the trace level), remembered beside the seed. */
-const TRACE_LEVEL = "trace-level";
-
-export async function traceLevel(): Promise<"off" | "normal" | "verbose"> {
-  try {
-    const db = await openDb();
-    const level: unknown = await done(db.transaction(STORE, "readonly").objectStore(STORE).get(TRACE_LEVEL));
-    db.close();
-    return level === "off" || level === "verbose" ? level : "normal";
-  } catch {
-    return "normal";
-  }
-}
-
-export async function setTraceLevel(level: "off" | "normal" | "verbose"): Promise<void> {
-  const db = await openDb();
-  await done(db.transaction(STORE, "readwrite").objectStore(STORE).put(level, TRACE_LEVEL));
-  db.close();
-}
-
 export async function forgetSeedKey(): Promise<void> {
   try {
     const db = await openDb();

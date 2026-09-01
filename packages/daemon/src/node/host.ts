@@ -1,8 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ESTOC_DIR, type TraceLevel } from "@estoc/vault";
-import { FsBackend } from "@estoc/vault/node";
+import { ESTOC_DIR } from "@estoc/event-store";
+import { FsBackend } from "@estoc/event-store/node";
 import type { DidcommApi } from "@estoc/agent-core";
 
 import type { DaemonHost } from "../host.js";
@@ -11,16 +11,15 @@ import { guardedFetch } from "./guarded-fetch.js";
 /**
  * The daemon in a folder on disk: `<root>/.estoc/` is the vault (the git
  * model — the person's files stay theirs, the machinery is in `.estoc`).
- * One daemon per folder is kept by a pid file under `.estoc/cache/`,
- * which snapshots skip; the seed unlocked from the keystore lives in this
+ * One daemon per folder is kept by a pid file under `.estoc/local/daemon/`
+ * — this copy's own state, which snapshots leave out (vault-folder.md
+ * §7, §10.1); the seed unlocked from the keystore lives in this
  * process's memory only, so every start is a locked vault until a UI
  * types the passphrase.
  */
 export function nodeHost(root: string): DaemonHost {
   const dir = path.join(root, ESTOC_DIR);
-  const pidFile = path.join(dir, "cache", "daemon.pid");
-  /** the trace level, a device preference: under cache/ like the pid, where snapshots do not look */
-  const traceFile = path.join(dir, "cache", "trace-level");
+  const pidFile = path.join(dir, "local", "daemon", "daemon.pid");
   let seedKey: CryptoKey | null = null;
 
   async function takePid(): Promise<boolean> {
@@ -56,13 +55,8 @@ export function nodeHost(root: string): DaemonHost {
       return new FsBackend(root);
     },
     async wipe() {
-      // the vault goes; the device's preferences do not — they were never the vault's
-      const level = await readFile(traceFile, "utf8").catch(() => null);
       await rm(dir, { recursive: true, force: true });
       await takePid();
-      if (level !== null) {
-        await writeFile(traceFile, level);
-      }
     },
     cachedSeedKey: async () => seedKey,
     async cacheSeedKey(key) {
@@ -70,18 +64,6 @@ export function nodeHost(root: string): DaemonHost {
     },
     async forgetSeedKey() {
       seedKey = null;
-    },
-    async traceLevel() {
-      try {
-        const text = (await readFile(traceFile, "utf8")).trim();
-        return text === "off" || text === "verbose" ? text : "normal";
-      } catch {
-        return "normal";
-      }
-    },
-    async setTraceLevel(level: TraceLevel) {
-      await mkdir(path.dirname(traceFile), { recursive: true });
-      await writeFile(traceFile, level + "\n");
     },
     async didcomm(): Promise<DidcommApi> {
       const { Message, FromPrior } = await import("didcomm-node");

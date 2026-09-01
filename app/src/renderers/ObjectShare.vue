@@ -95,9 +95,15 @@ function page(bodyHtml: string): string {
 }
 
 onMounted(async () => {
+  const msg = props.entry.record.msg;
+  if (msg === null) {
+    // the body was erased or is missing: the record stands, its object does not
+    view.value = { state: "bad", reason: "the message body is not in this vault any more" };
+    return;
+  }
   let share: VerifiedShare;
   try {
-    share = await verifyShare(props.entry.record.msg, heldBlock);
+    share = await verifyShare(msg, heldBlock);
   } catch (err) {
     view.value = { state: "bad", reason: err instanceof Error ? err.message : String(err) };
     return;

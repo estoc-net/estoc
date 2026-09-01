@@ -8,7 +8,8 @@ one seed sealed under a passphrase ([`@estoc/keystore`](../keystore) v3),
 from which every key is derived by name. `estoc init` never touches your
 files; it only adds `.estoc`. Commands discover the enclosing vault by
 walking upward from the working directory, exactly like git finds its
-repository. The layout is [docs/vault-format.md](../../docs/vault-format.md);
+repository. The layout is [docs/vault-folder.md](../../docs/vault-folder.md)
+and what the logs hold is [docs/vault-events.md](../../docs/vault-events.md);
 the app writes the same `.estoc` into the browser's private file system.
 
 ```sh
@@ -47,14 +48,20 @@ a TTY, else one line of stdin per prompt (`printf 'pw\npw\n' | estoc init`).
 my-vault/
   your files, untouched…
   .estoc/                # mode 0700
-    config.json          # {"format":"estoc","version":1,"label":…,"identity":{"anchor":{key,did}},"mediation":null}
+    config.json          # {"format":"estoc","version":2,"identity":{"anchor":{key,did}}}
     keystore.json        # @estoc/keystore v3: sealed seed + a cache of key names, mode 0600
+    devices/<dev>/       # each device's event log; init records the label there as identity.label
+    local/               # this copy's own state (device id, daemon pid and token, agent options and trace); left out of backups
 ```
 
-The CLI only ever writes these two singletons. Everything else the format
-allows (mediation, contacts, logs) is the app's business until the CLI
-grows an agent. Keystore writes go through a same-directory temp file plus
-rename, so a crash never leaves a truncated keystore behind.
+The format is version 2 of `@estoc/vault` (`docs/vault-folder.md`,
+`docs/vault-events.md`). The CLI writes the config, the keystore and the
+one label event; everything else (mediation, contacts, messages) is the
+agent's business, which `estoc serve` runs. Every read starts at
+`config.json`: a version 1 vault, an unknown version or a damaged config is
+refused before anything else of the folder is read. Keystore writes go
+through a same-directory temp file plus rename, so a crash never leaves a
+truncated keystore behind.
 
 ## Commands
 
@@ -73,7 +80,7 @@ estoc serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
 `estoc init` first if there is none — and serves the app
 (`@estoc/app`) for it at `http://127.0.0.1:37862/`: the page talks to this
 process, and the vault is the folder's `.estoc`, on disk. The link it prints
-carries the token (`.estoc/cache/daemon.token`), the one key to the socket;
+carries the token (`.estoc/local/daemon/daemon.token`), the one key to the socket;
 open that link, not the bare address. `--app <url>` also prints a `?_daemon=`
 link for an app served elsewhere (a dev server, or app.estoc.dev), which
 connects here with the same token.

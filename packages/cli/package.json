@@ -36,6 +36,7 @@
   "dependencies": {
     "@estoc/app": "workspace:^",
     "@estoc/daemon": "workspace:^",
+    "@estoc/event-store": "workspace:^",
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@estoc/post": "workspace:^",

@@ -20,7 +20,7 @@ const label = computed(() => {
   return parts.length === 0 ? name : `${parts.join("/")} · ${name}`;
 });
 
-const body = computed(() => JSON.stringify(props.entry.record.msg.body ?? {}, null, 2));
+const body = computed(() => JSON.stringify(props.entry.record.msg?.body ?? {}, null, 2));
 </script>
 
 <template>

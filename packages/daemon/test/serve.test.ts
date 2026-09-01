@@ -4,6 +4,8 @@ import path from "node:path";
 import { WebSocket } from "ws";
 import { afterAll, describe, expect, it } from "vitest";
 
+import { zipFiles } from "@estoc/event-store";
+
 import { connect, decode, encode, type Daemon, type DaemonEvents, type Port } from "../src/index.js";
 import { nodeHost, serveDaemon } from "../src/node/index.js";
 
@@ -67,7 +69,7 @@ describe("the daemon over a socket", () => {
       expect(snapshot.label).toBe("Alice");
       expect(snapshot.contacts).toEqual([]);
       await stat(path.join(root, ".estoc", "config.json"));
-      await stat(path.join(root, ".estoc", "cache", "daemon.pid"));
+      await stat(path.join(root, ".estoc", "local", "daemon", "daemon.pid"));
 
       // a second UI joins: its boot is a replay, not a second open
       const b = recorder();
@@ -102,7 +104,54 @@ describe("the daemon over a socket", () => {
     }
   });
 
-  it("keeps the trace level as a device preference, remembered across runs and not in the vault", async () => {
+  it("leaves nothing behind when a backup is refused after its files are down: every retry starts from the empty folder", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
+    dirs.push(root);
+    const served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
+    // a backup of Alice's, made elsewhere
+    const elsewhere = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
+    dirs.push(elsewhere);
+    const there = await serveDaemon({ host: nodeHost(elsewhere), port: 0, token: "t0k3n" });
+    try {
+      const a = recorder();
+      const alice = connect<Daemon>(await clientPort(there.url), a.handlers as never);
+      await alice.boot();
+      const opened = a.next("opened");
+      await alice.createIdentity("Alice", "alice-passes-the-salt");
+      await opened;
+      const backup = await alice.exportBackup();
+
+      const r = recorder();
+      const here = connect<Daemon>(await clientPort(served.url), r.handlers as never);
+      await here.boot();
+      expect(r.events.at(-1)).toEqual(["phase", "onboarding"]);
+
+      // a zip that is a vault by its config but has no keystore: refused
+      // after the copy, and refused the same way again — not "a vault
+      // already exists here"
+      const headless = zipFiles({
+        ".estoc/config.json": new TextEncoder().encode(JSON.stringify({ format: "estoc", version: 2, identity: { anchor: { key: "anchor", did: "did:key:z6Mk" } } })),
+      });
+      await expect(here.restoreIdentity(headless, "x")).rejects.toThrow(/no keystore\.json/);
+      await expect(here.restoreIdentity(headless, "x")).rejects.toThrow(/no keystore\.json/);
+      await expect(stat(path.join(root, ".estoc", "config.json"))).rejects.toThrow();
+
+      // the real backup under the wrong passphrase: refused, and gone again
+      await expect(here.restoreIdentity(backup.bytes, "not-it")).rejects.toThrow(/does not open this backup/);
+      await expect(stat(path.join(root, ".estoc", "config.json"))).rejects.toThrow();
+
+      // the right passphrase: the same folder, third try, opens as Alice
+      const restored = r.next("opened");
+      await here.restoreIdentity(backup.bytes, "alice-passes-the-salt");
+      expect(((await restored)[0] as { label: string }).label).toBe("Alice");
+      await stat(path.join(root, ".estoc", "config.json"));
+    } finally {
+      await served.close();
+      await there.close();
+    }
+  });
+
+  it("keeps the trace level in the vault's local state: across runs, readable while locked, gone with the vault", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "estoc-daemon-"));
     dirs.push(root);
     let served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
@@ -113,33 +162,42 @@ describe("the daemon over a socket", () => {
       const opened = a.next("opened");
       await alice.createIdentity("Alice", "alice-passes-the-salt");
       await opened;
+      // the trace is the vault's to answer, straight after "opened": the
+      // agent attaches in the background and is not needed for it (issue #12)
       expect(await alice.traceLevel()).toBe("normal");
       expect(await alice.traceOf("no-such-record")).toEqual([]);
       await expect(alice.setTraceLevel("loud" as never)).rejects.toThrow(/no such trace level/);
 
       expect(await alice.setTraceLevel("off")).toBe("off");
-      expect((await readFile(path.join(root, ".estoc", "cache", "trace-level"), "utf8")).trim()).toBe("off");
+      const options = path.join(root, ".estoc", "local", "agent", "options.json");
+      expect(JSON.parse(await readFile(options, "utf8"))).toMatchObject({ trace: "off" });
     } finally {
       await served.close();
     }
 
-    // a later run of the daemon on the same folder keeps the preference; the vault carries none of it
+    // a later run on the same folder: the seed was only in memory, so the
+    // vault is locked, and the level still answers from local/agent/
     served = await serveDaemon({ host: nodeHost(root), port: 0, token: "t0k3n" });
     try {
       const b = recorder();
       const again = connect<Daemon>(await clientPort(served.url), b.handlers as never);
       await again.boot();
+      expect(b.events.at(-1)).toEqual(["phase", "locked"]);
       expect(await again.traceLevel()).toBe("off");
+      const reopened = b.next("opened");
+      await again.unlock("alice-passes-the-salt");
+      await reopened;
       expect(await again.setTraceLevel("verbose")).toBe("verbose");
-      // forgetting the identity wipes the vault, not the device's preference
+      // forgetting the identity removes the vault, and the level goes with
+      // it: local state is this copy's, not a preference beside the vault
       const onboarding = b.next("phase");
       await again.forgetIdentity();
       await onboarding;
-      expect(await again.traceLevel()).toBe("verbose");
-      const reopened = b.next("opened");
+      expect(await again.traceLevel()).toBe("normal");
+      const fresh = b.next("opened");
       await again.createIdentity("Alice again", "alice-passes-the-salt");
-      await reopened;
-      expect(await again.traceLevel()).toBe("verbose");
+      await fresh;
+      expect(await again.traceLevel()).toBe("normal");
     } finally {
       await served.close();
     }

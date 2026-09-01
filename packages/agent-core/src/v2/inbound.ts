@@ -70,6 +70,10 @@ export interface InboundOptions {
   handlers?: ProtocolHandler[];
   /** a stranger's first message makes them a contact (default true); off, they stay unattributed until the person accepts them */
   adoptStrangers?: boolean;
+  /** a contact came to be (a stranger adopted, an invitation taken) while handling mail — the application's mirror is told */
+  onContact?: (contact: ContactRecord) => void;
+  /** an invitation of ours was taken while handling mail, by the key it was published on */
+  onInvitation?: (key: string) => void;
   /** the clock a mid, and a cid, is minted by */
   clock?: () => Date;
 }
@@ -114,6 +118,8 @@ export class Inbound {
   private readonly keyOfDid: KeyOfDid;
   private readonly handlers = new Map<string, ProtocolHandler>();
   private readonly adoptStrangers: boolean;
+  private readonly onContact: ((contact: ContactRecord) => void) | undefined;
+  private readonly onInvitation: ((key: string) => void) | undefined;
   private readonly clock: () => Date;
   /** every inbound wire id the fold holds, and the ones recorded since */
   private readonly seen = new Set<string>();
@@ -132,6 +138,8 @@ export class Inbound {
       }
     }
     this.adoptStrangers = options.adoptStrangers ?? true;
+    this.onContact = options.onContact;
+    this.onInvitation = options.onInvitation;
     this.clock = options.clock ?? (() => new Date());
     for (const message of opened.fold.messages()) {
       if (message.direction === "in") {
@@ -199,7 +207,16 @@ export class Inbound {
     const contact = homed === null ? null : this.contactOf(homed.cid);
     // 9. the answer
     await this.answer(found, contact, sender);
-    return { outcome: "recorded", record: found, contact };
+    if (homed === null) {
+      return { outcome: "recorded", record: found, contact: null };
+    }
+    // what the handlers recorded may read differently now (a claimed name
+    // landed, say): hand back the fresh read, and tell the mirror it moved
+    const after = this.contactOf(homed.cid);
+    if (contact !== null && JSON.stringify(after) !== JSON.stringify(contact)) {
+      this.onContact?.(after);
+    }
+    return { outcome: "recorded", record: found, contact: after };
   }
 
   /**
@@ -252,12 +269,15 @@ export class Inbound {
     }
     const known = attributedTo(this.fold.attribution(pair));
     if (known === null) {
-      await this.adopt(pair, "invitation", invitation.oobId);
+      const cid = await this.adopt(pair, "invitation", invitation.oobId);
       this.log("someone took an invitation of ours; they have a thread now");
+      this.onContact?.(this.contactOf(cid));
     } else {
       await record(this.events, this.fold, drafts.contactAttached({ ...pair, cid: known, because: "invitation", ...(invitation.oobId === null ? {} : { oobId: invitation.oobId }) }));
       this.log(`${this.contactOf(known).name} took an invitation of ours; that key is ours toward them now`);
+      this.onContact?.(this.contactOf(known));
     }
+    this.onInvitation?.(pair.myKey);
     return null;
   }
 
@@ -376,7 +396,9 @@ export class Inbound {
     }
     const cid = await this.adopt(pair, "manual", null);
     this.log("a stranger wrote to us; they have a thread now");
-    return this.contactOf(cid);
+    const adopted = this.contactOf(cid);
+    this.onContact?.(adopted);
+    return adopted;
   }
 
   /** A contact for a channel: `contact.created` and `contact.attached` as one write, so that nothing failing between the two leaves a contact with nothing on it. */

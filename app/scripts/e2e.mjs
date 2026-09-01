@@ -304,6 +304,9 @@ try {
   await bob.click('button:has-text("New invitation link")');
   await bob.waitForSelector("[data-invitation-url]", { timeout: 20000 });
   const bobHeadToAliceBefore = bobHeadMyDid;
+  // rotations already in Alice's log (every first message vouches its fresh
+  // DID): the move is seen when one more lands, without Bob writing
+  const aliceRotationsBefore = await alice.locator('.rail-log p:has-text("vouched for by the old DID")').count();
   await bob.click("[data-change-mediator]");
   await bob.selectOption(".rail-form select.field", { label: `via ${OTHER_LABEL}` });
   await bob.click('button:has-text("Move to this mediator")');
@@ -333,7 +336,11 @@ try {
     { timeout: 10000 }
   );
   ok("Bob writes to Alice as a fresh DID now");
-  await alice.waitForSelector('.rail-log:has-text("Bob moved to a new DID, vouched for by the old one")', { timeout: 30000 });
+  await alice.waitForFunction(
+    (n) => [...document.querySelectorAll(".rail-log p")].filter((line) => line.textContent?.includes("vouched for by the old DID")).length > n,
+    aliceRotationsBefore,
+    { timeout: 30000 }
+  );
   ok("Alice was told by from_prior and moved Bob to his new DID — no message from Bob needed");
   await send(alice, "Bob", "still there after the move?");
   await expectBubble(bob, "still there after the move?");
@@ -404,17 +411,29 @@ try {
   await alice2.setInputFiles('input[type=file]', zipPath);
   await alice2.fill('input[placeholder="the backup\'s passphrase"]', PASS.Alice);
   await alice2.click('button.btn:has-text("Restore")');
-  const restoredDid = await waitLive(alice2);
-  if (restoredDid !== aliceDid) {
-    fail("restored Alice has a different public DID");
-  }
+  // The vault is the identity's record; a mediation is each device's own
+  // arrangement. The restore opens with the full history and no mediator:
+  // the rail says so and offers the choice, like a fresh identity.
+  await alice2.waitForSelector("text=not reachable yet", { timeout: 20000 });
   await expectBubble(alice2, "hello bob");
   await expectBubble(alice2, "hi alice");
-  ok("a fresh browser restored Alice from the zip: same DID, full history");
+  ok("a fresh browser restored Alice from the zip: full history, no mediator yet");
+  await alice2.selectOption(".rail-form select.field", { label: `via ${MEDIATOR_LABEL}` });
+  await alice2.click('button:has-text("Use this mediator")');
+  const restoredDid = await waitLive(alice2);
+  if (restoredDid === aliceDid) {
+    fail("the restored device arranged its own mediation: its public DID should be fresh");
+  }
+  ok("restored Alice mediated as a device of her own: live, a fresh public DID");
 
+  // Another device's keys toward Bob are not this one's to rotate: the
+  // restored device mints its own on its first write, vouched for by the
+  // old DID, and Bob follows from there.
+  await send(alice2, "Bob", "back from a backup");
+  await expectBubble(bob, "back from a backup");
   await send(bob, "Alice", "welcome back, alice");
   await expectBubble(alice2, "welcome back");
-  ok("restored Alice receives new mail live");
+  ok("restored Alice wrote first — a DID of this device's own, vouched — and receives Bob's reply live");
 
   // Offline: with a service worker in charge, the shell opens with the network off.
   // (The worker registered on this page's first load takes control on the next;

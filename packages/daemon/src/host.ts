@@ -1,5 +1,6 @@
-import type { TraceLevel, VaultBackend } from "@estoc/vault";
-import type { AgentOptions, DidcommApi } from "@estoc/agent-core";
+import type { VaultBackend } from "@estoc/event-store";
+import type { DidcommApi } from "@estoc/agent-core";
+import type { AgentOptions } from "@estoc/agent-core/v2";
 
 /**
  * What a place the daemon runs in has to provide: where the bytes are, how
@@ -19,13 +20,6 @@ export interface DaemonHost {
   cacheSeedKey(key: CryptoKey): Promise<void>;
   forgetSeedKey(): Promise<void>;
   didcomm(): Promise<DidcommApi>;
-  /**
-   * The trace level this device keeps (`@estoc/vault` §6.10), a device
-   * preference the host remembers between runs — never the vault's to
-   * carry. Left out: `normal`, and `setTraceLevel` holds for this run.
-   */
-  traceLevel?(): Promise<TraceLevel>;
-  setTraceLevel?(level: TraceLevel): Promise<void>;
   /** Called when the network comes back, if the host can tell. */
   onOnline?(callback: () => void): void;
   /** transports and the like, passed through to the agent */

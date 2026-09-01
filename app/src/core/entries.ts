@@ -1,4 +1,4 @@
-import { counterpartyOf, type MessageRecord } from "@estoc/vault";
+import type { MessageRecord } from "@estoc/agent-core/v2";
 
 /**
  * A log record as the UI holds it: the record itself, plus the two things
@@ -35,11 +35,10 @@ export interface Entry {
 }
 
 export function entryOf(record: MessageRecord, contactCid: string | null): Entry {
-  const { msg } = record;
   return {
     mid: record.mid,
-    id: msg.id,
-    type: msg.type,
+    id: record.skeleton.wireId,
+    type: record.skeleton.msgType,
     direction: record.direction === "in" ? "received" : "sent",
     contactDid: counterpartyOf(record),
     contactCid,
@@ -48,13 +47,21 @@ export function entryOf(record: MessageRecord, contactCid: string | null): Entry
   };
 }
 
+/** The proven sender for inbound (the skeleton's, not the plaintext's); the addressee for outbound; anonymous, null. */
+export function counterpartyOf(record: MessageRecord): string | null {
+  if (record.direction === "in") {
+    return record.sender;
+  }
+  return record.msg?.to?.[0] ?? null;
+}
+
 /**
  * When a record happened, in epoch milliseconds. created_time is spec'd
  * in epoch seconds; senders that used milliseconds are tolerated. Outbound
  * records use their own append time.
  */
 function timeOf(record: MessageRecord): number {
-  const created = record.msg.created_time;
+  const created = record.msg?.created_time;
   if (record.direction === "out" || typeof created !== "number") {
     return Date.parse(record.at);
   }

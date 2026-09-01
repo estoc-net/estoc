@@ -167,11 +167,11 @@ async function importZip(event: Event) {
   try {
     const outcome = await mergeBackup(await bytesOf(file));
     if (outcome.kind === "merged") {
+      const added = Object.values(outcome.events).reduce((sum, ingested) => sum + ingested.added, 0);
       importNote.value =
-        outcome.messagesAdded === 0 && outcome.contactsAdded === 0 && outcome.contactsUpdated === 0
+        added === 0 && outcome.blobs.copied === 0 && outcome.files.copied.length === 0
           ? "nothing new in that backup"
-          : `merged: ${outcome.messagesAdded} messages, ${outcome.contactsAdded + outcome.contactsUpdated} contacts` +
-            (outcome.held === 0 ? "" : `; ${outcome.held} unsent held — retry them from the thread`);
+          : `merged: ${added} new event${added === 1 ? "" : "s"}, ${outcome.blobs.copied} block${outcome.blobs.copied === 1 ? "" : "s"}`;
     }
   } catch (err) {
     importNote.value = err instanceof Error ? err.message : String(err);

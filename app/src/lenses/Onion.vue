@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import type { TraceEvent } from "@estoc/vault";
+import type { TraceEvent } from "@estoc/agent-core/v2";
 
 import type { Entry } from "../core/entries.js";
 import LayerOnion from "./LayerOnion.vue";
@@ -28,7 +28,7 @@ const onion = computed(() => foldOnion(props.events, props.entry.mid, props.entr
       <LayerOnion :layers="onion.layers" />
       <details v-if="onion.mediation.length" class="onion-mediation">
         <summary>the mediator's part on this frame ({{ onion.mediation.length }})</summary>
-        <pre>{{ JSON.stringify(onion.mediation.map((e) => e.msg ?? e), null, 2) }}</pre>
+        <pre>{{ JSON.stringify(onion.mediation.map((e) => e.data["msg"] ?? e), null, 2) }}</pre>
       </details>
     </template>
     <p v-else class="hop-note">

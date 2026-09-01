@@ -1,28 +1,31 @@
 import { createSeedKeystore, unlockSeedKeystore } from "@estoc/keystore";
 import type { FolderObject } from "@estoc/folder-object";
-import {
-  Vault,
-  type ContactRecord,
-  type ImportOutcome,
-  type InvitationRecord,
-  type MessageRecord,
-  type VaultBackend,
-  tracePolicy,
-  type TraceLevel,
-} from "@estoc/vault";
+import { CONFIG_PATH, importVault, restoreFolder, type FolderVault, type Imported, type VaultBackend } from "@estoc/event-store";
+import { holdImported, importPolicy, type Delivery, type VaultFold } from "@estoc/vault/v2";
+import type { VerifiedShare } from "@estoc/agent-core";
 import {
   Agent,
+  AgentTrace,
+  attributedTo,
+  contactRecord,
   createVault,
+  inspectVault,
+  invitationRecord,
+  isTraceLevel,
+  messageRecord,
   openVault,
   type AgentStatus,
+  type ContactRecord,
+  type Inspected,
   type Invitation,
+  type MessageRecord,
   type PeerVault,
   type SendOptions,
-  type VerifiedShare,
-} from "@estoc/agent-core";
+  type TraceLevel,
+} from "@estoc/agent-core/v2";
 
-import type { Daemon, Phase, Snapshot } from "./api.js";
-import { exportBackup, importBackup } from "./backup.js";
+import type { Daemon, Phase, Snapshot, SnapshotMessage } from "./api.js";
+import { exportBackup, filesFromZip } from "./backup.js";
 import type { DaemonHost } from "./host.js";
 
 /** How the daemon raises an event: a name and its arguments, to whoever listens. */
@@ -34,6 +37,25 @@ export interface DaemonCore extends Daemon {
   readonly booted: boolean;
   /** Say where things stand again, to `to` alone — for a listener that was not there the first time. */
   replayTo(to: Emit): Promise<void>;
+}
+
+/** The public DID the fold says this device's mediation publishes: what `Keyring.pub` reads, without the agent. */
+function publicDidOf(fold: VaultFold): string | null {
+  const mediation = fold.device(fold.self)?.mediation ?? null;
+  if (mediation === null || mediation.routingDid === null) {
+    return null;
+  }
+  const profiles = fold
+    .myKeys()
+    .filter(
+      (key) =>
+        key.minted !== null &&
+        key.minted.mediation === mediation.id &&
+        key.minted.routingDid === mediation.routingDid &&
+        key.retired === null &&
+        key.published.some((entry) => entry.as === "profile")
+    );
+  return profiles.at(-1)?.minted?.did ?? null;
 }
 
 /**
@@ -50,6 +72,10 @@ export interface DaemonCore extends Daemon {
  */
 export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   let backend: VaultBackend | null = null;
+  /** the folder in hand: the inspected one while locked, the opened vault's after */
+  let folder: FolderVault | null = null;
+  /** the locked phase's read: the folder and the sealed keystore, for `unlock` */
+  let inspected: Inspected | null = null;
   let vault: PeerVault | null = null;
   let seedKey: CryptoKey | null = null;
   let agent: Agent | null = null;
@@ -69,39 +95,56 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
   const failure = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
   async function snapshot(v: PeerVault): Promise<Snapshot> {
-    let damaged = 0;
-    const contacts = await v.contacts.all();
-    const invitations = await v.invitations.all();
-    const messages = await v.messages.read(() => (damaged += 1));
-    const deliveries = await v.deliveries.read(() => (damaged += 1));
+    const fold = v.fold;
+    const messages: SnapshotMessage[] = [];
+    const deliveries: Delivery[] = [];
+    let unreadable = 0;
+    for (const message of fold.messages()) {
+      // a deleted contact's channels are tombstoned (§9): nothing of them is shown
+      const attribution = fold.attribution(message.pair);
+      if (attribution.kind === "deleted") {
+        continue;
+      }
+      const record = await messageRecord(fold, v.vault.blobs, message.mid);
+      if (record === null) {
+        continue;
+      }
+      if (record.body === "missing") {
+        unreadable += 1;
+      }
+      messages.push({ record, contactCid: attributedTo(attribution) });
+      if (message.delivery !== null) {
+        deliveries.push(message.delivery);
+      }
+    }
     return {
-      label: v.config.label,
-      mediatorDid: v.config.mediation?.mediatorDid ?? null,
-      did: v.config.mediation?.public?.did ?? null,
-      contacts,
-      invitations,
+      label: fold.label() ?? "",
+      mediatorDid: fold.device(fold.self)?.mediation?.mediatorDid ?? null,
+      did: publicDidOf(fold),
+      contacts: fold.contacts().map(contactRecord),
+      invitations: fold
+        .invitations()
+        .map((invitation) => invitationRecord(fold, invitation))
+        .filter((record) => !record.retired),
       messages,
       deliveries,
-      damaged,
+      damaged: v.vault.events.damaged().length + unreadable,
     };
   }
 
-  async function attachAgent(v: PeerVault, key: CryptoKey): Promise<void> {
+  async function attachAgent(v: PeerVault): Promise<void> {
     const didcomm = await host.didcomm();
     const a = new Agent({
       ...host.agentOptions,
       vault: v,
-      seedKey: key,
       didcomm,
       events: {
         onStatus: (s) => status(s, a.did),
         onMessage: (record, contact) => emit("message", record, contact),
-        onDelivery: (event) => emit("delivery", event),
+        onDelivery: (delivery, record) => emit("delivery", delivery, record),
         onContact: (record) => emit("contact", record, false),
-        onInvitation(record) {
-          // issued or taken: the record; revoked: the record, no longer in the vault
-          void a.vault.invitations.byId(record.id).then((still) => emit("invitation", record, still === null));
-        },
+        // issued or taken: the record; revoked or withdrawn: the record, retired
+        onInvitation: (record) => emit("invitation", record, record.retired),
         onLog: log,
       },
     });
@@ -109,23 +152,15 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     await a.start();
   }
 
-  /** The trace level the host remembers; `normal` when it remembers none. */
-  async function traceLevel(): Promise<TraceLevel> {
-    return (await host.traceLevel?.()) ?? "normal";
-  }
-
-  /** The options every open or create of the vault takes: the device's trace policy. */
-  async function vaultOptions(): Promise<{ trace: ReturnType<typeof tracePolicy> }> {
-    return { trace: tracePolicy(await traceLevel()) };
-  }
-
   /** A vault and its unlocked seed are in hand: report, start. */
   async function open(v: PeerVault, key: CryptoKey): Promise<void> {
     vault = v;
+    folder = v.vault;
+    inspected = null;
     seedKey = key;
     current = "open";
     emit("opened", await snapshot(v));
-    void attachAgent(v, key).catch((err) => status({ state: "error", detail: failure(err) }, null));
+    void attachAgent(v).catch((err) => status({ state: "error", detail: failure(err) }, null));
   }
 
   function stopAgent(): void {
@@ -138,6 +173,20 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       throw new Error("the agent is not running");
     }
     return agent;
+  }
+
+  /**
+   * The trace over this device's `local/agent/`, from the folder in hand
+   * — the locked one or the open vault's — so `traceOf` and the level
+   * answer without the agent (which attaches after `opened`). Writes go
+   * through the running agent when there is one: its own instance caches
+   * the level, and a write around it would leave that cache stale.
+   */
+  async function traced(): Promise<AgentTrace> {
+    if (folder === null) {
+      throw new Error("no vault: the trace lives in it");
+    }
+    return AgentTrace.open(folder.local("agent"));
   }
 
   /**
@@ -183,28 +232,27 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         phase("onboarding");
         return;
       }
-      if (!(await Vault.exists(backend))) {
+      if ((await backend.size(CONFIG_PATH)) === null) {
         phase("onboarding");
         return;
       }
-      let v: PeerVault;
       try {
-        v = await openVault(backend, await vaultOptions());
+        inspected = await inspectVault(backend);
       } catch (err) {
         // a vault this version cannot read: written by a newer client, or by
-        // an older format this one does not migrate — say so, and leave the
-        // bytes alone until the person decides
+        // the version 1 format this one does not migrate — say so, and leave
+        // the bytes alone until the person decides
         status({ state: "error", detail: failure(err) }, null);
         phase("unreadable");
         return;
       }
+      folder = inspected.vault;
       const key = await host.cachedSeedKey();
       if (key === null) {
-        vault = v;
         phase("locked");
         return;
       }
-      await open(v, key);
+      await open(await openVault(backend, key), key);
     },
 
     async createIdentity(name, passphrase) {
@@ -212,7 +260,7 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
         throw new Error("storage is not available");
       }
       const { doc, seedKey: key } = await createSeedKeystore(passphrase);
-      const v = await createVault(backend, { label: name, keystore: doc, seedKey: key, ...(await vaultOptions()) });
+      const v = await createVault(backend, { label: name, keystore: doc, seedKey: key });
       await host.cacheSeedKey(key);
       await open(v, key);
     },
@@ -221,40 +269,61 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if (backend === null) {
         throw new Error("storage is not available");
       }
-      const outcome = await importBackup(backend, zip);
-      if (outcome.kind !== "restored") {
+      if ((await backend.size(CONFIG_PATH)) !== null) {
         throw new Error("a vault already exists here");
       }
-      const v = await openVault(backend, await vaultOptions());
+      // a zip that does not unpack fails before a byte lands
+      const files = filesFromZip(zip);
       let key: CryptoKey;
+      let v: PeerVault;
       try {
-        key = await unlockSeedKeystore(v.keystore, passphrase);
-      } catch {
-        // wrong passphrase: leave no half-restored vault behind
+        await restoreFolder(backend, files);
+        const restored = await inspectVault(backend);
+        try {
+          key = await unlockSeedKeystore(restored.keystore, passphrase);
+        } catch {
+          throw new Error("that passphrase does not open this backup");
+        }
+        v = await openVault(backend, key);
+        // the snapshot carried no local/, so this open is a fresh device: the
+        // old device's unsent mail is held, not this one's to send (§10); a
+        // mediation of this device's own is chosen in the UI afterwards
+        await holdImported(v.vault.events, v.fold);
+      } catch (err) {
+        // whatever refused the backup once its files were down — no
+        // keystore, not a vault, the wrong passphrase, a seed that is not
+        // the anchor's — leaves no half-restored vault behind: the next
+        // try, with another zip or passphrase, starts from the empty folder
         await host.wipe();
-        throw new Error("that passphrase does not open this backup");
+        throw err;
       }
       await host.cacheSeedKey(key);
       await open(v, key);
     },
 
     async unlock(passphrase) {
-      if (vault === null) {
+      if (inspected === null || backend === null) {
         throw new Error("nothing to unlock");
       }
       let key: CryptoKey;
       try {
-        key = await unlockSeedKeystore(vault.keystore, passphrase);
+        key = await unlockSeedKeystore(inspected.keystore, passphrase);
       } catch {
         throw new Error("wrong passphrase");
       }
       await host.cacheSeedKey(key);
-      await open(vault, key);
+      await open(await openVault(backend, key), key);
     },
 
     async lock() {
       stopAgent();
+      vault = null;
       seedKey = null;
+      if (backend !== null) {
+        // the folder stays in hand, seedless, so unlock (and the trace) can read it
+        inspected = await inspectVault(backend);
+        folder = inspected.vault;
+      }
       await host.forgetSeedKey();
       status({ state: "idle" }, null);
       phase("locked");
@@ -263,6 +332,8 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     async forgetIdentity() {
       stopAgent();
       vault = null;
+      folder = null;
+      inspected = null;
       seedKey = null;
       await host.forgetSeedKey();
       await host.wipe();
@@ -274,18 +345,23 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       if (backend === null || vault === null) {
         throw new Error("no open vault");
       }
-      return exportBackup(backend, vault.config.label);
+      return exportBackup(backend, vault.fold.label() ?? "vault");
     },
 
-    async mergeBackup(zip): Promise<ImportOutcome> {
-      if (backend === null || seedKey === null) {
+    async mergeBackup(zip): Promise<Imported> {
+      if (backend === null || vault === null || seedKey === null) {
         throw new Error("no open vault to merge into");
       }
-      const outcome = await importBackup(backend, zip);
-      // the agent is restarted on the merged vault: its stores cache what
-      // they read, and the merge wrote past them
+      const outcome = await importVault(vault.vault, filesFromZip(zip), importPolicy());
+      // the agent is restarted on the merged vault: the fold and every cache
+      // were read before the merge wrote past them
       stopAgent();
-      await open(await openVault(backend, await vaultOptions()), seedKey);
+      const reopened = await openVault(backend, seedKey);
+      // what another device wrote and did not send is not sent by this one
+      // unasked (§10); the cache learns the keys the merged log minted
+      await holdImported(reopened.vault.events, reopened.fold);
+      await reopened.keys.rebuildCache(reopened.fold);
+      await open(reopened, seedKey);
       return outcome;
     },
 
@@ -299,23 +375,24 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
     addContact: (did, label): Promise<ContactRecord> => running().addContact(did, label),
     async removeContact(cid) {
       const a = running();
-      const record = await a.vault.contacts.byCid(cid);
+      const contact = a.vault.fold.contact(cid);
       await a.removeContact(cid);
-      if (record !== null) {
-        emit("contact", record, true);
+      if (contact !== null) {
+        emit("contact", contactRecord(contact), true);
       }
     },
     acceptInvitation: (invitation: Invitation, label): Promise<ContactRecord> =>
       running().acceptInvitation(invitation, label),
-    async createInvitation(): Promise<InvitationRecord> {
+    async createInvitation() {
       const a = running();
       try {
         return await a.createInvitation();
       } catch (err) {
-        // the record may exist unregistered (the mediator could not be told):
-        // report it as not ready rather than pretend nothing happened
-        for (const record of await a.vault.invitations.all()) {
-          emit("invitation", record, false);
+        // a key may be minted and published yet unregistered (the mediator
+        // could not be told): report it as not ready rather than pretend
+        // nothing happened
+        for (const record of a.invitations()) {
+          emit("invitation", record, record.retired);
         }
         throw err;
       }
@@ -325,21 +402,21 @@ export function createDaemon(host: DaemonHost, emit: Emit): DaemonCore {
       running().send(contactDid, type, body, options),
     shareObject: (contactDid, object: FolderObject, options) => running().shareObject(contactDid, object, options),
     fetchPackage: (record): Promise<VerifiedShare> => running().fetchPackage(record),
-    blob: (cid) => (agent === null ? Promise.resolve(null) : agent.vault.blobs.get(cid)),
+    blob: (cid) => (vault === null ? Promise.resolve(null) : vault.vault.blobs.get(cid)),
     async retry(mid) {
       await running().retry(mid);
     },
 
-    traceOf: (mid) => running().vault.trace.traceOf(mid),
-    traceLevel,
+    traceOf: async (mid) => (folder === null ? [] : (await traced()).traceOf(mid)),
+    traceLevel: async (): Promise<TraceLevel> => (folder === null ? "normal" : (await traced()).level),
     async setTraceLevel(level) {
-      if (level !== "off" && level !== "normal" && level !== "verbose") {
+      if (!isTraceLevel(level)) {
         throw new Error(`no such trace level: ${String(level)}`);
       }
-      await host.setTraceLevel?.(level);
-      if (vault !== null) {
-        vault.trace.setPolicy(tracePolicy(level));
-        await vault.trace.prune();
+      if (agent !== null) {
+        await agent.setTraceLevel(level);
+      } else {
+        await (await traced()).setLevel(level);
       }
       return level;
     },

@@ -1,14 +1,14 @@
-import { tracePolicy, type TraceEvent, type TraceLevel } from "@estoc/vault";
+import { tracePolicy, type TraceEvent, type TraceLevel } from "@estoc/agent-core/v2";
 
 /**
  * A message's trace, folded into the layers it crossed: the frame on the
  * wire outermost, then each envelope inside it, then the plaintext. The
  * agent only ever recorded raw observations — `wire.in`, `envelope.open`,
- * `envelope.seal`, … each hung on the one it happened inside by `parent`
- * — so the onion is nothing but that parent chain read outermost-first,
- * from the envelope that ended in (or began as) the record. What a layer
- * means to a person — who can see into it, what it is for — is this
- * fold's reading, not the trace's.
+ * `envelope.seal`, … each hung on the one it happened inside by
+ * `data.parent` — so the onion is nothing but that parent chain read
+ * outermost-first, from the envelope that ended in (or began as) the
+ * record. What a layer means to a person — who can see into it, what it
+ * is for — is this fold's reading, not the trace's.
  */
 export type LayerKind = "wire" | "forward" | "anoncrypt" | "authcrypt" | "signed" | "plain" | "unknown" | "plaintext";
 
@@ -50,19 +50,25 @@ function names(ids: unknown): string {
   return Array.isArray(ids) ? [...new Set(ids.map((k) => short(didOf(String(k)))))].join(", ") : "?";
 }
 
+/** The observation for the raw view: when and what, and everything it recorded — the chain pointer aside. */
+function rawOf(event: TraceEvent): unknown {
+  const { parent: _parent, ...data } = event.data;
+  return { type: event.type, at: event.at, ...data };
+}
+
 function kindOf(event: TraceEvent): LayerKind {
-  if (event.type === FORWARD) {
+  if (event.data["type"] === FORWARD) {
     return "forward";
   }
-  const kind = event.kind;
+  const kind = event.data["kind"];
   return kind === "authcrypt" || kind === "anoncrypt" || kind === "signed" || kind === "plain" ? kind : "unknown";
 }
 
 function envelopeLayer(event: TraceEvent, direction: "sent" | "received", innermost: boolean): OnionLayer {
   const kind = kindOf(event);
-  const raw = Object.fromEntries(Object.entries(event).filter(([k]) => k !== "stream" && k !== "parent"));
+  const raw = rawOf(event);
   const opened = direction === "received";
-  const tos = names(event.to_kids ?? event.kids);
+  const tos = names(event.data["to_kids"] ?? event.data["kids"]);
   switch (kind) {
     case "forward":
       return {
@@ -85,14 +91,14 @@ function envelopeLayer(event: TraceEvent, direction: "sent" | "received", innerm
         event,
       };
     case "authcrypt": {
-      const from = event.from_kid ?? event.skid;
+      const from = event.data["from_kid"] ?? event.data["skid"];
       const who = typeof from === "string" ? short(didOf(from)) : "?";
       return {
         kind,
         title: innermost ? (opened ? "the message, sealed to you" : "the message, sealed to them") : opened ? "the mediator's delivery, sealed to you" : "sealed to the mediator",
         visibleTo: `${who} and ${tos}`,
         note: innermost
-          ? `Encrypted to ${tos} and authenticated as ${who}: only the two ends can read it, and the reader knows who sealed it.${event.re_wrapped_in_forward ? " It reached you inside a forward the mediator opened." : ""}`
+          ? `Encrypted to ${tos} and authenticated as ${who}: only the two ends can read it, and the reader knows who sealed it.${event.data["re_wrapped_in_forward"] ? " It reached you inside a forward the mediator opened." : ""}`
           : "The mediator's own message to you (its pickup protocol), sealed and authenticated as the mediator.",
         raw,
         event,
@@ -103,26 +109,31 @@ function envelopeLayer(event: TraceEvent, direction: "sent" | "received", innerm
     case "plain":
       return { kind, title: "a plaintext envelope", visibleTo: "anyone who holds it", note: "Neither sealed nor signed.", raw, event };
     default:
-      return { kind, title: "an envelope", visibleTo: "?", note: `Not read: ${String(event.error ?? "an envelope of a kind this build does not know")}`, raw, event };
+      return { kind, title: "an envelope", visibleTo: "?", note: `Not read: ${String(event.data["error"] ?? "an envelope of a kind this build does not know")}`, raw, event };
   }
 }
 
 function wireLayer(event: TraceEvent, children: TraceEvent[]): OnionLayer {
-  const via = event.via === "ws" ? "the WebSocket" : "HTTP";
-  const bytes = typeof event.bytes === "number" ? `${event.bytes} bytes` : "";
-  const body = children.find((c) => c.stream === "wire.bytes")?.body;
-  const reply = children.find((c) => c.stream === "wire" && c.event === "wire.in");
-  const failed = children.find((c) => c.stream === "wire" && c.event === "wire.error");
-  const out = event.event === "wire.out";
-  const where = typeof event.endpoint === "string" ? ` to ${event.endpoint}` : "";
+  const via = event.data["via"] === "ws" ? "the WebSocket" : "HTTP";
+  const bytes = typeof event.data["bytes"] === "number" ? `${event.data["bytes"]} bytes` : "";
+  const body = children.find((c) => c.stream === "wire.bytes")?.data["body"];
+  const reply = children.find((c) => c.stream === "wire" && c.type === "wire.in");
+  const failed = children.find((c) => c.stream === "wire" && c.type === "wire.error");
+  const out = event.type === "wire.out";
+  const endpoint = event.data["endpoint"];
+  const where = typeof endpoint === "string" ? ` to ${endpoint}` : "";
   const answered =
-    reply !== undefined ? ` The endpoint answered ${String(reply.status)} in ${String(reply.ms)} ms.` : failed !== undefined ? ` The request failed: ${String(failed.error)}.` : "";
+    reply !== undefined
+      ? ` The endpoint answered ${String(reply.data["status"])} in ${String(reply.data["ms"])} ms.`
+      : failed !== undefined
+        ? ` The request failed: ${String(failed.data["error"])}.`
+        : "";
   return {
     kind: "wire",
     title: out ? `sent over ${via}${where}` : `arrived over ${via}`,
     visibleTo: "the network between here and the endpoint (TLS aside)",
     note: `${bytes ? `${bytes} on the wire. ` : ""}${out ? "The outermost envelope is what left this device." : "The outermost envelope is what reached this device."}${answered}`.trim(),
-    raw: body ?? Object.fromEntries(Object.entries(event).filter(([k]) => k !== "stream")),
+    raw: body ?? rawOf(event),
     event,
   };
 }
@@ -134,29 +145,32 @@ function wireLayer(event: TraceEvent, children: TraceEvent[]): OnionLayer {
  * its part is pruned.
  */
 export function foldOnion(events: TraceEvent[], mid: string, plaintext?: unknown): Onion {
-  const byTid = new Map(events.map((e) => [e.tid, e]));
+  const byEid = new Map(events.map((e) => [e.eid, e]));
   const children = new Map<string, TraceEvent[]>();
   for (const e of events) {
-    if (e.parent !== undefined) {
-      children.set(e.parent, [...(children.get(e.parent) ?? []), e]);
+    const parent = e.data["parent"];
+    if (typeof parent === "string") {
+      children.set(parent, [...(children.get(parent) ?? []), e]);
     }
   }
   // the innermost envelopes that ended in this record — one per delivery attempt; the latest is shown
-  const ends = events.filter((e) => e.stream === "envelope" && e.mid === mid).sort((a, b) => a.at.localeCompare(b.at));
+  const ends = events.filter((e) => e.stream === "envelope" && e.data["mid"] === mid).sort((a, b) => a.at.localeCompare(b.at));
   const end = ends[ends.length - 1];
   if (end === undefined) {
     return { layers: [], direction: "received", attempts: 0, mediation: [] };
   }
-  const direction = end.event === "envelope.seal" ? "sent" : "received";
+  const direction = end.type === "envelope.seal" ? "sent" : "received";
   // walk out along parent
   const chain: TraceEvent[] = [];
-  for (let e: TraceEvent | undefined = end; e !== undefined; e = e.parent === undefined ? undefined : byTid.get(e.parent)) {
+  for (let e: TraceEvent | undefined = end; e !== undefined; ) {
     chain.unshift(e);
+    const parent: unknown = e.data["parent"];
+    e = typeof parent === "string" ? byEid.get(parent) : undefined;
   }
   const layers: OnionLayer[] = [];
   const mediation: TraceEvent[] = [];
   for (const [i, e] of chain.entries()) {
-    const inside = children.get(e.tid) ?? [];
+    const inside = children.get(e.eid) ?? [];
     if (e.stream === "wire") {
       layers.push(wireLayer(e, inside));
     } else if (e.stream === "envelope") {

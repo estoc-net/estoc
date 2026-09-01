@@ -42,11 +42,13 @@ describe("initVault", () => {
     const config = await readConfig(vault);
     expect(config).toEqual({
       format: "estoc",
-      version: 1,
+      version: 2,
       label: "my-vault",
       identity: { anchor: { key: ANCHOR_KEY_NAME, did } },
-      mediation: null,
     });
+    // version 2 on disk: the config carries the anchor only, the label is an event
+    const onDisk = JSON.parse(await readFile(path.join(vault.dir, "config.json"), "utf8"));
+    expect(onDisk).toEqual({ format: "estoc", version: 2, identity: { anchor: { key: ANCHOR_KEY_NAME, did } } });
 
     const doc = parseSeedKeystore(await readFile(path.join(vault.dir, "keystore.json"), "utf8"));
     expect(doc.version).toBe(3);
@@ -161,12 +163,28 @@ describe("readConfig", () => {
   it("rejects a config that is not an estoc vault", async () => {
     const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
     await writeFile(path.join(vault.dir, "config.json"), JSON.stringify({ format: "something-else" }));
-    await expect(readConfig(vault)).rejects.toThrow(/not an estoc vault/);
+    await expect(readConfig(vault)).rejects.toThrow(/format is "something-else"/);
+  });
+
+  it("rejects a version 1 vault: this reader opens version 2 only", async () => {
+    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
+    const v1 = { format: "estoc", version: 1, label: "v", identity: { anchor: { key: ANCHOR_KEY_NAME, did: "did:key:z6Mk" } }, mediation: null };
+    await writeFile(path.join(vault.dir, "config.json"), JSON.stringify(v1));
+    await expect(readConfig(vault)).rejects.toThrow(/version 1 is not 2/);
+    // and nothing else of the folder is read (§11): the keystore, intact, is not listed
+    await expect(readKeystore(vault)).rejects.toThrow(/version 1 is not 2/);
+    await expect(createVaultKey(vault, "x", PASSPHRASE)).rejects.toThrow(/version 1 is not 2/);
+  });
+
+  it("refuses to read the keystore of a folder whose config is damaged", async () => {
+    const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
+    await writeFile(path.join(vault.dir, "config.json"), "{not json");
+    await expect(readKeystore(vault)).rejects.toThrow(/not JSON/);
   });
 
   it("rejects an unsupported version", async () => {
     const { vault } = await initVault(path.join(base, "v"), "v", PASSPHRASE);
     await writeFile(path.join(vault.dir, "config.json"), JSON.stringify({ format: "estoc", version: 99, label: "v" }));
-    await expect(readConfig(vault)).rejects.toThrow(/unsupported vault version/);
+    await expect(readConfig(vault)).rejects.toThrow(/version 99 is not 2/);
   });
 });

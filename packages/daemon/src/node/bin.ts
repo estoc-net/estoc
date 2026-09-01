@@ -17,7 +17,7 @@ const USAGE = `usage: estoc-daemon [folder] [options]
   --app <url>       also print a link for an app served elsewhere (e.g. a dev
                     server): that page connects here with \`?_daemon=\` and the
                     token, and remembers it until \`?_daemon=off\`
-  --token <t>       the access token (default: kept in .estoc/cache/daemon.token)
+  --token <t>       the access token (default: kept in .estoc/local/daemon/daemon.token)
 `;
 
 async function main(): Promise<void> {

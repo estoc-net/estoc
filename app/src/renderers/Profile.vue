@@ -12,8 +12,8 @@ import Bubble from "./Bubble.vue";
 const props = defineProps<{ entry: Entry; contact: Contact | null }>();
 
 const line = computed(() => {
-  const body = props.entry.record.msg.body as { profile?: { displayName?: unknown } };
-  const name = typeof body.profile?.displayName === "string" ? body.profile.displayName : "";
+  const body = props.entry.record.msg?.body as { profile?: { displayName?: unknown } } | undefined;
+  const name = typeof body?.profile?.displayName === "string" ? body.profile.displayName : "";
   return props.entry.direction === "sent"
     ? `you introduced yourself as “${name}”`
     : `introduced themself as “${name}”`;

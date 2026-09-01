@@ -12,7 +12,7 @@ Two hosts ship:
   the seed in IndexedDB, the DIDComm WASM as Vite loads it. The RPC rides a
   message port (`serve` / `connect` in `src/rpc.ts`; structured clone).
 - **A Node process** (`@estoc/daemon/node`, the `estoc-daemon` command): a
-  folder on disk (`FsBackend` from `@estoc/vault/node`, `<folder>/.estoc` the vault), a pid file for
+  folder on disk (`FsBackend` from `@estoc/event-store/node`, `<folder>/.estoc` the vault), a pid file for
   one daemon per folder, the seed in memory only (every start is locked
   until a UI types the passphrase), `didcomm-node`, and one HTTP server
   that serves the app and takes the app's WebSocket on the same origin. The
@@ -27,7 +27,7 @@ cd ~/my-vault && estoc init && estoc serve   # open the link it prints: http://1
 estoc-daemon . --port 0 --app http://localhost:5173   # also a ?_daemon= link for a dev server
 ```
 
-The token (kept in `.estoc/cache/daemon.token`) is the one key to the
+The token (kept in `.estoc/local/daemon/daemon.token`) is the one key to the
 socket, whoever asks: the page the daemon serves finds the socket at its
 own origin (index.html is sent with a `<meta name="estoc-daemon">`) and
 takes the token from the `?token=` in the link, remembering it for reloads
@@ -45,14 +45,16 @@ things stand.
 ## The trace
 
 The vault keeps what its agent observes on the way in and out — frames,
-envelopes, the rituals with mediators — in `.estoc/trace/`, under a
-retention (`@estoc/vault` format §6.10). The daemon reads it for the UI:
-`traceOf(mid)` is one message's onion, outermost frame to innermost
-envelope, empty when the trace is off or that part is pruned. How much is
-kept is a device preference, `off` / `normal` / `verbose`: `traceLevel()`
-and `setTraceLevel(level)`, which the host remembers between runs (the
-Node host in `.estoc/cache/trace-level`, the worker in IndexedDB beside the
-seed) and never writes into the vault; a stricter level prunes at once.
+envelopes, the rituals with mediators — in `.estoc/local/agent/trace/`,
+one stream per kind, under a retention (`docs/vault-folder.md` §7, local
+state: this device's own, left out of backups). The daemon reads it for
+the UI straight from the folder, so it answers the moment the vault is
+open — locked included: `traceOf(mid)` is one message's onion, outermost
+frame to innermost envelope, empty when the trace is off or that part is
+pruned. How much is kept is a device preference, `off` / `normal` /
+`verbose`: `traceLevel()` and `setTraceLevel(level)`, kept in
+`.estoc/local/agent/options.json` — with the vault, so forgetting the
+identity resets it — and a stricter level prunes at once.
 
 ## Fetching what others name
 

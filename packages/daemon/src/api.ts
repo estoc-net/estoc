@@ -1,6 +1,17 @@
 import type { FolderObject } from "@estoc/folder-object";
-import type { ContactRecord, DeliveryEvent, ImportOutcome, InvitationRecord, MessageRecord, TraceEvent, TraceLevel } from "@estoc/vault";
-import type { AgentStatus, Invitation, SendOptions, VerifiedShare } from "@estoc/agent-core";
+import type { Imported } from "@estoc/event-store";
+import type { Delivery } from "@estoc/vault/v2";
+import type { VerifiedShare } from "@estoc/agent-core";
+import type {
+  AgentStatus,
+  ContactRecord,
+  Invitation,
+  InvitationRecord,
+  MessageRecord,
+  SendOptions,
+  TraceEvent,
+  TraceLevel,
+} from "@estoc/agent-core/v2";
 
 /**
  * The daemon: the agent and its vault, behind one interface the UI talks
@@ -27,15 +38,24 @@ import type { AgentStatus, Invitation, SendOptions, VerifiedShare } from "@estoc
 export type Phase = "booting" | "elsewhere" | "onboarding" | "unreadable" | "locked" | "open" | "unreachable";
 
 /** The vault as records, read whole when it opens; the UI projects from here and keeps up by events. */
+/** A message with the fold's word on whose it is: the app homes it by `contactCid`, never by guessing from DIDs. */
+export interface SnapshotMessage {
+  record: MessageRecord;
+  /** the contact the channel is attributed to (a contested channel: the first of them); null while unattributed */
+  contactCid: string | null;
+}
+
 export interface Snapshot {
   label: string;
   mediatorDid: string | null;
   did: string | null;
   contacts: ContactRecord[];
   invitations: InvitationRecord[];
-  messages: MessageRecord[];
-  deliveries: DeliveryEvent[];
-  /** damaged log lines skipped while reading */
+  /** every message of every channel still attributed to someone (or to nobody yet) — a deleted contact's are not read */
+  messages: SnapshotMessage[];
+  /** the fold's word on every outbound message: sent, pending, failed, held */
+  deliveries: Delivery[];
+  /** damaged log lines skipped while reading, plus message bodies that could not be read back */
   damaged: number;
 }
 
@@ -46,10 +66,11 @@ export interface DaemonEvents {
   /** the agent's state, and its public DID as of then */
   status(status: AgentStatus, did: string | null): void;
   message(record: MessageRecord, contact: ContactRecord | null): void;
-  delivery(event: DeliveryEvent): void;
+  /** a try at delivering a message of ours ended; the fold's word on it, and the record it is about */
+  delivery(delivery: Delivery, record: MessageRecord): void;
   /** added or changed: the record; removed: the record, `gone` */
   contact(record: ContactRecord, gone: boolean): void;
-  /** issued or taken: the record; revoked: the record, `gone` */
+  /** issued or taken: the record; revoked or withdrawn: the record, `gone` */
   invitation(record: InvitationRecord, gone: boolean): void;
   log(line: string): void;
 }
@@ -63,7 +84,7 @@ export interface Daemon {
   lock(): Promise<void>;
   forgetIdentity(): Promise<void>;
   exportBackup(): Promise<{ name: string; bytes: Uint8Array }>;
-  mergeBackup(zip: Uint8Array): Promise<ImportOutcome>;
+  mergeBackup(zip: Uint8Array): Promise<Imported>;
 
   /** Name (or change) the mediator; resolves to the public DID after. */
   setMediator(mediatorDid: string): Promise<string | null>;
@@ -80,13 +101,15 @@ export interface Daemon {
   retry(mid: string): Promise<void>;
 
   /**
-   * One message's onion: every observation the trace (`@estoc/vault`
-   * §6.10) holds around the record `mid` — the frame it rode, each
-   * envelope inside, the rituals with mediators — outermost first. Empty
-   * when the trace is off, or that part of it is pruned.
+   * One message's onion: every observation this device's trace
+   * (`local/agent/trace/`, vault-folder.md §7) holds around the record
+   * `mid` — the frame it rode, each envelope inside, the rituals with
+   * mediators — outermost first. Empty when the trace is off, or that
+   * part of it is pruned. Read from the vault, not the agent, so it
+   * answers the moment the vault is open.
    */
   traceOf(mid: string): Promise<TraceEvent[]>;
-  /** what this device keeps of what it observes: `off`, `normal`, `verbose` */
+  /** what this device keeps of what it observes: `off`, `normal`, `verbose` — the vault's `local/agent/options.json` */
   traceLevel(): Promise<TraceLevel>;
   /** Change it for this device, now and for later runs; what a stricter level no longer keeps is pruned at once. */
   setTraceLevel(level: TraceLevel): Promise<TraceLevel>;
