@@ -43,8 +43,9 @@ Three things, and a pointer:
 
 **What a backup is.** A backup is the record — every event, every
 blob, every file — and the keys stay with the devices. Carrying the
-folder to a new machine and opening it there is a **new device
-joining** (§7), which the identity's other devices and its contacts
+folder to a new machine is copying it, and opening the copy there is
+a **new device joining** (§7) — the copy is that device's vault from
+then on — which the identity's other devices and its contacts
 learn of by the events and protocol of `devices.md`; "all devices
 lost" is answered by a pre-commitment kept cold, not by the zip. That
 is the reason for the split: a seed that never leaves a device cannot
@@ -87,10 +88,15 @@ Where the root is, is the host's:
   carries, and the device is what must not travel with it. A daemon's
   pid file and access token are the agent's local state (§5) and live
   here, not in the vault.
-- **One machine, two devices, one vault** is legal: each writes its own
-  `devices/<dev>/` in the vault, blobs are content-addressed and
-  shared, and the lock that serialises writers is per device (§6), not
-  per vault. Two *processes* of one device is what the lock prevents.
+- **One vault, one device.** The folder is this device's copy of the
+  record; the other authors in its logs got there by sync and import
+  (union), not by opening it. A second device on the same machine is a
+  second folder — a copy, brought level by import or sync — and two
+  `device.json` naming one `vault` path is a misconfiguration, not a
+  shared vault: nothing here serialises two devices over one folder,
+  and blob collection and extension disposal (`event-store.md` §5,
+  §8) assume there is nothing to serialise. What the lock (§6)
+  prevents is two *processes* of one device.
 
 The directory is never in a snapshot, never exported, never merged,
 never read by another device; nothing in it is a file in the
@@ -290,8 +296,8 @@ A device opens a vault; nothing else does. In order:
    (`vault-folder.md` §10).
 3. Take the device's lock: one process per device. In the browser a
    Web Lock named for the device; on disk a lock file in the device
-   directory. The lock is the device's, not the vault's, which is what
-   lets two devices share a folder (§2).
+   directory. One device, one vault (§2), so this also serialises the
+   vault's only writer.
 4. If `devices/<dev>/` in the vault holds no `device.minted`
    (`vault-events.md` §5), append one — on every open, not the first,
    since a crash between birth and the first append leaves exactly this

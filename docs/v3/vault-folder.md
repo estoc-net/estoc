@@ -476,11 +476,12 @@ old devices' outbound not `sent` — is `vault-events.md` §10.
   Anything else is the next version.
 - **Writers.** One writer per device directory is the format-level
   rule (rule 2); the device serialises its own processes (`device.md`
-  §6: a Web Lock in the browser, a lock file on disk), and two devices
-  on one folder are two writers that need no lock between them. Two
-  processes sharing one `dev` is a bug, not a merge: it shows up when
-  either imports the other — events of `self` it never wrote (§8.3) —
-  as one `eid` with two contents (§8.5), or as a second
+  §6: a Web Lock in the browser, a lock file on disk), and a folder is
+  one device's (`device.md` §2): two devices are two folders, each a
+  copy, and their union is an import (§9.3) or a sync, never a shared
+  folder. Two processes sharing one `dev` is a bug, not a merge: it
+  shows up when either imports the other — events of `self` it never
+  wrote (§8.3) — as one `eid` with two contents (§8.5), or as a second
   `device.minted` under one `dev` (`vault-events.md` §5), and the
   remedy is for one of them to mint its own.
 - **Crashes.** A log is appended; a crash may leave a cut-short last
