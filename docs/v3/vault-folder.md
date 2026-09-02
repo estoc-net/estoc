@@ -141,9 +141,11 @@ its `author` held against the directory. There is nothing else to map:
   itself, including who wrote it.
 - **The path checks the line.** A line whose `author` is not the `dev`
   of the directory it sits in is refused as damaged (§8.5); the
-  directory never supplies the author, it confirms it.
+  directory never supplies the author, it confirms it — and the
+  signature (`event-store.md` §2.5) is what the line proves on its
+  own, wherever it is found.
 - **Every directory under `devices/` that holds segments is a device.**
-  A name that is not a device id (six lowercase base32 characters,
+  A name that is not a device key (`z6Mk…`, a did:key id,
   `event-store.md` §3), or anything under it that is not a segment, is
   not part of the event set; it is a file, carried as any unknown path
   is (§6.3).
@@ -364,7 +366,7 @@ a judgement about which is right.
 
 `FileStore` is the backend's read/write/list over every path in the
 snapshot that is not a segment or a blob — not
-`devices/<dev>/<seg>.jsonl` with `dev` a device id and `seg` a uuidv7,
+`devices/<dev>/<seg>.jsonl` with `dev` a device key and `seg` a uuidv7,
 not `blobs/<cid>` with `cid` a fifty-nine character base32-lower CIDv1
 (§7). The test is the shape of the path, not its prefix: a path under
 `devices/` or `blobs/` that is not shaped like that is a file, carried
@@ -445,7 +447,8 @@ it is a conforming folder — the one whole-file copy that survives
 that is not a folder ingests it (§9.3). Empty means nothing at
 `.estoc`. The device that opens the copy is whichever device was
 pointed at it (`device.md` §7) — one just born for it, or one whose
-folder was lost — and its first open appends its `device.minted` (§8);
+folder was lost — and its first unlock appends its `device.minted`
+(`device.md` §6);
 the imported directories stay as history, the old devices' mediations
 included, visible until the person retires them (`vault-events.md`
 §7.3), and their keys did not come: the old devices hold them, or they

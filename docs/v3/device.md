@@ -108,7 +108,7 @@ look like one: no `config.json`, no `devices/`, no `blobs/`.
 ```jsonc
 {
   "version": 1,
-  "dev": "k7q3ma",                // the author this device writes as
+  "dev": "z6MkhaXg…",             // the author this device writes as: its device key's public half
   "instance": "01991c2e-…",       // what this device's change tokens name
   "vault": "/home/alice/Estoc"    // the vault's root, as the host resolves it; in the browser, the OPFS root
 }
@@ -122,10 +122,13 @@ there is nowhere else the vault could be. Pointing runs one way only:
 nothing in the vault names a device directory, and a vault opened by a
 device it has never met simply gains an author (§6).
 
-- **`dev`** is the device id of `event-store.md` §3 — six characters of
-  lowercase base32, minted here. It is what `devices/<dev>/` in the
-  vault is named for, and what every event this device appends carries
-  as `author`. Not secret.
+- **`dev`** is the device key of `event-store.md` §3 — the public half
+  of the keystore's `device` key (§4.1), as a did:key id, `z6Mk…`,
+  derived from this seed and never rotated. It is what `devices/<dev>/`
+  in the vault is named for, what every event this device appends
+  carries as `author`, and what verifies its signature. Not secret;
+  kept here as a name so that the device knows who it is before it is
+  unlocked.
 - **`instance`** names this device to the change tokens it issues
   (`event-store.md` §4.4, `vault-folder.md` §8.4), so that a fold cache
   (§5) folded under another device is rejected rather than applied. A
@@ -149,6 +152,7 @@ never private key bytes, except through the one escape hatch (§4.3).
   "version": 4,
   "seedJwe": "eyJhbGciOiJQQkVTMi1IUzUxMitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIi…",
   "keys": [
+    { "name": "device",    "did": "did:key:z6MkhaXg…", "createdAt": "2026-09-02T…", "source": "seed" },
     { "name": "anchor",    "did": "did:key:z6Mk…", "createdAt": "2026-09-02T…", "source": "seed" },
     { "name": "did/0198…", "did": "did:key:z6Mk…", "createdAt": "2026-09-02T…", "source": "seed" },
     { "name": "did/0199…", "did": "did:key:z6Mk…", "createdAt": "2026-09-02T…", "source": "stored",
@@ -187,6 +191,13 @@ since the device wrote the event as it minted the key.
   (`vault-events.md` §2). The Ed25519 and X25519 halves are derived
   independently — no Ed→X conversion — so that a hardware signer can
   one day hold one while software holds the other.
+- **The device key** is the `seed` entry named `device`, the first
+  key a device derives (§7): its public half is `dev` (§3), and it
+  signs every event this device appends (`event-store.md` §2.5). It
+  is the one key that is never a `did/<id>` — never published, never
+  toward a contact, never rotated: a device whose device key has
+  leaked is a compromised device and is retired whole (§7). Its X25519
+  half is derived like any other's and unused.
 - **`stored`** is a key that was not derived here: brought in from
   elsewhere, or made at random for a purpose the seed should not be
   able to reproduce. Its entry carries `jwe`, the private OKP JWK
@@ -293,26 +304,33 @@ A device opens a vault; nothing else does. In order:
 
 1. Read `device.json` (§3). Absent, the device is born first (§7).
 2. Open the vault at `vault`: `config.json` must be version 3
-   (`vault-folder.md` §10).
+   (`vault-folder.md` §10). Its stores get `dev` as `self` and a
+   signer for the `device` key that answers once the device is
+   unlocked (`event-store.md` §9, §2.5).
 3. Take the device's lock: one process per device. In the browser a
    Web Lock named for the device; on disk a lock file in the device
    directory. One device, one vault (§2), so this also serialises the
    vault's only writer.
-4. If `devices/<dev>/` in the vault holds no `device.minted`
-   (`vault-events.md` §5), append one — on every open, not the first,
-   since a crash between birth and the first append leaves exactly this
-   gap, and idempotently. This is the device joining the vault, at the
-   vault's level; joining the identity toward its contacts is a
-   sibling's vouch (`devices.md` §3.2).
-5. Fold the extension lifecycle (`vault-events.md` §7.3) and apply
+4. Fold the extension lifecycle (`vault-events.md` §7.3) and apply
    every `dispose` owed — the application's first act on any open,
    before any extension is handed its store — so that a purged store a
-   snapshot still carried is gone before anything could open it.
-6. Unlock (§4.4), or run locked until a UI supplies the passphrase.
+   snapshot still carried is gone before anything could open it. No
+   key is needed: a `dispose` appends nothing.
+5. Unlock (§4.4), or run locked until a UI supplies the passphrase.
+   Every append is signed by the device key (`event-store.md` §2.5),
+   so a locked device is a reader — it folds and shows — and writes
+   nothing until the passphrase comes.
+6. Once unlocked, if `devices/<dev>/` in the vault holds no
+   `device.minted` (`vault-events.md` §5), append one — on every
+   unlock, not the first, since a crash between birth and the first
+   append leaves exactly this gap, and idempotently. This is the
+   device joining the vault, at the vault's level; joining the
+   identity toward its contacts is a sibling's vouch (`devices.md`
+   §3.2).
 
 ```ts
 interface Device {
-  readonly self: string;                 // dev
+  readonly self: string;                 // dev — the device key's public half (§3)
   readonly instance: string;
   readonly vault: Vault;                 // event-store.md §9, opened at device.json's `vault`
   readonly keys: Keystore;               // §4: signers by name, never bytes
@@ -336,11 +354,12 @@ dead from the call on. One decision, two roots, one rule.
 ## 7. Birth, restore, loss
 
 **Birth.** A device is born when a program with no `device.json` is
-asked to open or create a vault: it mints `dev` and `instance`, makes
-a seed and seals it under the passphrase given, writes `keystore.json`
-and then `device.json`. The three are minted together and die
-together; there is no device with a `dev` and no seed, and no seed that
-is not a device's. Creating a vault at the same time — `config.json`
+asked to open or create a vault: it makes a seed and seals it under
+the passphrase given, derives the `device` key from it — its public
+half is `dev` (§3) — mints `instance`, and writes `keystore.json` and
+then `device.json`. The three are one act and die together; there is
+no device with a `dev` and no seed, since `dev` is the seed's, and no
+seed that is not a device's. Creating a vault at the same time — `config.json`
 with the anchor, the anchor minted from this seed under the name
 `anchor` — is the identity's birth; the device that did it is the one
 that can sign as the anchor, and the vault records which by the
@@ -348,7 +367,7 @@ that can sign as the anchor, and the vault records which by the
 
 **Restore** is placing a snapshot somewhere and pointing a device at
 it (`vault-folder.md` §9.4): a new device, or an existing one that has
-lost its folder. The device's first open appends its `device.minted`
+lost its folder. The device's first unlock appends its `device.minted`
 (§6), and the imported devices' events are history — visible, their
 mediations listed, their outbound not `sent` held as imported
 (`vault-events.md` §10) — until the person retires them. There is no
@@ -365,7 +384,9 @@ copied, and both copies writing.
 **Loss.** A device lost, wiped or stolen is retired by a decision from
 any other device (`device.retired`, `vault-events.md` §5): its events
 stay, its mediation stops being a live address, later events from it
-are suspect. Its keys are lost with it — every `did/<id>` it minted can
+are suspect — and are its own: it can still sign as itself and as no
+other device (`event-store.md` §2.5), which is what keeps *suspect* a
+bounded set. Its keys are lost with it — every `did/<id>` it minted can
 no longer sign or decrypt for the identity — which the identity's
 contacts must be told; that is `devices.md` §3.3, and a stolen device
 that still answers is `devices.md` §3.4. Nothing here can wipe a device
@@ -419,6 +440,10 @@ device, and a device that has left is retired.
   devices of one identity have two. Whether a client offers a platform
   keychain in its place is the client's. Changing it re-seals `seedJwe`
   and nothing else.
+- **The device key does not rotate.** A device's `dev` is its key,
+  and a device is retired whole (§7) rather than re-keyed; a chain of
+  device keys, KERI-shaped, is what would change that
+  (`event-store.md` §12), and nothing in this version asks for it.
 - **`vault` as a pointer.** A path on disk is a poor name for
   something the person may move. Whether `device.json` should also
   record the vault's identity — `config.json`'s anchor — so that a

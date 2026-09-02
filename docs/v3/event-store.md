@@ -82,8 +82,8 @@ the ones about meaning.
 
 ## 2. The event
 
-An event is a JSON object of six fields. Five are the **envelope**,
-which the store reads and validates; the sixth, `data`, is the
+An event is a JSON object of seven fields. Six are the **envelope**,
+which the store reads and validates; the seventh, `data`, is the
 **payload**, which the store carries and never reads.
 
 | field    | meaning |
@@ -93,11 +93,12 @@ which the store reads and validates; the sixth, `data`, is the
 | `author` | the authoring device (§3) |
 | `type`   | the event type, a non-empty string; `vault-events.md` names the vault's own |
 | `blobs`  | every blob this event references, as roots (§5): the complete list, always present, `[]` when the event references nothing |
+| `sig`    | the author's signature over the other six fields (§2.5): the event's own proof of who wrote it |
 | `data`   | the payload: a JSON object, always present, `{}` when the type carries nothing |
 
 ```jsonc
-{ "eid": "0198…", "at": "2026-08-29T10:00:00Z", "author": "k7q3ma", "type": "contact.petname",
-  "data": { "cid": "0198…", "name": "alice" } }
+{ "eid": "0198…", "at": "2026-08-29T10:00:00Z", "author": "z6MkhaXg…", "type": "contact.petname", "blobs": [],
+  "data": { "cid": "0198…", "name": "alice" }, "sig": "b0WmU7…" }
 ```
 
 ### 2.1 `data`
@@ -115,8 +116,8 @@ grep, a copy. The store does not know the vault's shape at all.
 
 The payload is one nested field rather than the rest of the object so
 that the two halves cannot collide. Flat, the envelope would be frozen
-at the names it has: a sixth envelope field added later — a version, a
-signature, where an ingested event came from — would clash with any
+at the names it has: a seventh envelope field added later — a version,
+where an ingested event came from — would clash with any
 payload that had already used the name. Nested, the envelope can grow
 and **nothing is reserved inside `data`**: a type may use any name
 there, the envelope's included, and the store never looks. It is the
@@ -158,26 +159,64 @@ way back.
 The store validates the envelope and nothing else. On `append` and
 `ingest` it checks that the value is a JSON object; that `eid` is a
 well-formed uuidv7; that `at` is RFC 3339 UTC; that `type` is a
-non-empty string; that `author` is a device id; that `blobs` is an
-array of CIDs (§5), `[]` included; that `data` is a JSON object; and
-that no other top-level field is present — a field that belongs to no
+non-empty string; that `author` is a device key (§3); that `blobs` is
+an array of CIDs (§5), `[]` included; that `data` is a JSON object;
+that `sig` verifies under `author` over the rest (§2.5); and that no
+other top-level field is present — a field that belongs to no
 version of the envelope is a malformed event, not an extension. An
 event that fails is rejected — `append` throws, `ingest` reports
 (§4.2) — and never stored. `data` is opaque: type-specific validation
 is the fold's. Bytes a serialization holds that do not parse as an
 event at all are a *damaged* line (§4.5), reported, not stored.
 
+### 2.5 `sig`
+
+`sig` is the authoring device's Ed25519 signature over the event's
+other six fields, and is what makes `author` a fact rather than a
+claim once events travel by any road but the device's own directory.
+The signed bytes are the JSON Canonicalization Scheme (RFC 8785)
+serialization of the object `{ eid, at, author, type, blobs, data }`
+— the six fields, `sig` left out — which is the same for any two
+events that have the same content in the sense of §2.3, so a
+signature survives a store that re-serializes (§10.1) and a copy made
+by hand. The signature is base64url without padding; the key is the
+public key `author` spells (§3), so verification needs nothing but
+the event.
+
+The store signs on `append` (§4.1) with the signer the device handed
+it when it opened the vault (§9, `device.md` §6) — every store of the
+vault, the extension stores (§8) included, under the one device key —
+and verifies on `ingest` (§4.2) as part of validation (§2.4): an event
+whose signature does not verify is rejected as any malformed envelope
+is, never a conflict. A store may verify again what it reads back and
+report a line that fails as damaged (§4.5); it is not required to,
+since everything in it came in checked.
+
+What this proves is who wrote an event, not that they were right to:
+a live device writes what it likes, in its own name. What it rules
+out is one device writing in another's name — which is what a sync
+between siblings (`devices.md` §5.3) needs, since a retired device's
+events are suspect by `author` (`vault-events.md` §5), and only a
+signature keeps a device from leaving words behind under a sibling's
+name that would outlive its retirement. A backup is trusted for
+nothing an event does not prove itself (§10.3).
+
 ## 3. Identity, time, order
 
-- **`author`** — a device id: 6 characters of lowercase RFC 4648
-  base32, minted by the device when it is born (`device.md` §3, §7)
-  and given to the store when the device opens the vault; the store
-  exposes it as `self` (§4). It is not part of the event set and does
-  not travel in a backup: whoever opens a restored folder is a device
-  of their own, and the old devices' events stay as history. Not
-  secret. A device announces itself with its first event,
-  `device.minted` (`vault-events.md` §5), so a device's existence
-  travels with its events and needs no side channel.
+- **`author`** — a device key: the public half of the device's
+  signing key (`device.md` §4.1), spelled as the did:key
+  method-specific id — multibase base58btc of the multicodec
+  `ed25519-pub` prefix and the 32 key bytes, `z6Mk…`, 48 characters —
+  so that `did:key:` + `author` is the DID that verifies the event's
+  `sig` (§2.5). Derived from the device's seed when it is born
+  (`device.md` §3, §7), never rotated, and given to the store when
+  the device opens the vault; the store exposes it as `self` (§4). It
+  is not part of the event set and does not travel in a backup:
+  whoever opens a restored folder is a device of their own, and the
+  old devices' events stay as history. Not secret. A device announces
+  itself with its first event, `device.minted` (`vault-events.md`
+  §5), signed by the key it names, so a device's existence travels
+  with its events and needs no side channel.
 - **instance** — a random id the device mints together with `self`
   and keeps beside it (`device.md` §3). Not an event field, not in a
   backup. It names this device's store to the tokens it issues (§4.4):
@@ -220,13 +259,14 @@ type Cid = string;                    // CIDv1, sha-256, codec raw or dag-pb, ba
 type Event<D extends JsonObject = JsonObject> = {
   eid: string;                        // a bare uuidv7
   at: string;                         // RFC 3339 UTC
-  author: string;                     // a device id
+  author: string;                     // a device key (§3)
   type: string;
   blobs: Cid[];                       // every root the event references, `[]` for none; checked, never read, here
   data: D;                            // the payload; opaque here — `vault-events.md` types it per `type`
+  sig: string;                        // the author's signature over the six fields above (§2.5)
 };
 
-/** What a caller hands to `append`: no eid, at, or author — the store mints them; `blobs` left out is `[]`. */
+/** What a caller hands to `append`: no eid, at, author or sig — the store mints and signs; `blobs` left out is `[]`. */
 type Draft<D extends JsonObject = JsonObject> = { type: string; blobs?: Cid[]; data: D };
 
 /** Equality, by `===` on primitives: on the envelope fields named, and on the top-level fields of
@@ -248,7 +288,7 @@ interface Ingested {
 interface EventStore {
   /** Which device this store appends as (§3). */
   readonly self: string;
-  /** This device's own event. The store mints eid and at, sets author = self, returns the whole event. */
+  /** This device's own event. The store mints eid and at, sets author = self, signs (§2.5), returns the whole event. */
   append(draft: Draft): Promise<Event>;
   /** Several of this device's events as one write: all validated first — one bad draft and
    *  nothing lands — then minted in input order at one instant; the batch lands whole or
@@ -280,7 +320,8 @@ event, and in what bytes, is the store's own, and is what
 ### 4.1 `append`
 
 Takes a draft, sets `author` to `self`, mints the uuidv7 at that
-instant and `at` from the same clock, and writes the event. The store
+instant and `at` from the same clock, signs (§2.5), and writes the
+event. The store
 mints because the id is minted *at append* (§3) and that is the only
 way to keep one device's ids monotone: a caller that minted its own
 could hand over an old one. The whole event is returned; a caller that
@@ -313,10 +354,12 @@ daemon on disk).
 ### 4.2 `ingest`
 
 Takes events from anywhere, authored by anyone, in any order;
-validates each envelope (§2.4); and adds those whose `eid` is not
-already present. An `eid` already present with the same content is a
-*duplicate* and is skipped; with different content it is a *conflict*:
-the store keeps what it had, stores nothing, and reports it. Never
+validates each envelope (§2.4), signature included — what claims an
+author is that author's or is rejected (§2.5); and adds those whose
+`eid` is not already present. An `eid` already present with the same
+content is a *duplicate* and is skipped; with different content it is
+a *conflict*: the store keeps what it had, stores nothing, and reports
+it. Never
 rewrites, never drops, never reorders what was there. This is the
 whole of merge, at every level: the folder store does it in one pass
 over the other copy (`vault-folder.md` §8.3), and there is no
@@ -426,7 +469,8 @@ for the reason in §4.2.
 read (`DamagedLine`: where, the text, the error). They are reported,
 never stored, never counted anywhere. A database store has none by
 construction; a folder store meets them after a crash or a careless
-edit.
+edit. A line whose signature no longer verifies is damage of the same
+kind, where a store checks (§2.5).
 
 **Conflicts** are two contents under one `eid`. `ingest` finds them
 against what it holds and reports them (§4.2). A reader can also meet
@@ -827,7 +871,8 @@ interface Vault {
 
 What a device keeps for itself (§7), and the keys it holds, are none
 of these: they are the device's (`device.md`), which opens the vault
-and hands the store its `self`. The folder is
+and hands the store its `self` and the signer for it (§2.5). The
+folder is
 `vault-folder.md` §3; export and import loop over the map (§10.2,
 §10.3).
 
@@ -846,7 +891,8 @@ directions: `locate(event)` — where in the tree an event goes — and
 **Round trip.** For any event set *S* produced by any conforming
 store, rendering *S* as a folder and reading that folder back yields
 *S*: same events, same content in the sense of §2.3, with `eid` as
-identity. Blobs and files round-trip byte for byte. This is the
+identity, every signature still verifying (§2.5). Blobs and files
+round-trip byte for byte. This is the
 conformance test every store passes, and the definition of "a
 version-3 vault" that is independent of the medium.
 
@@ -896,7 +942,9 @@ restates it.
    is true of an anchor found wrong after the events went in, which is
    why the anchor is checked here and not with the files.
 1. **Events**: `ingest` every event the source holds (§4.2), `self`'s
-   included — a duplicate is a duplicate. A device whose events arrive
+   included — a duplicate is a duplicate — each verified on the way in
+   (§2.5): a backup is trusted for nothing an event does not prove
+   itself. A device whose events arrive
    without its `device.minted` is read — its events are still that
    device's — and reported as incomplete. **Import never copies a
    segment**, even between two folders: a copied segment is not read,
@@ -1009,6 +1057,12 @@ is a question for when a fold is too slow to run at open, not before.
   field ever needs "the person's last decision" rather than "the
   latest timestamp", the change is a hybrid logical clock in the
   envelope, not a rule in a fold; nothing in this version needs it.
+- **Per-device chains** (§2.5). A signature says who wrote an event;
+  a hash chain per device — each event naming the author's previous —
+  would also say that nothing of that device's was withheld between
+  two it holds, and is what rotating a device key would need. Neither
+  is needed while a device key never rotates and a compromised device
+  is retired whole (`device.md` §7); the shape, if ever, is KERI's.
 - **Daemon RPC.** Once the store is the interface, the daemon could
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this

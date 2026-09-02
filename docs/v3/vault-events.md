@@ -11,8 +11,9 @@ words used here. Every field this document defines is a field of
 `data`; the envelope is the store's. The examples are the folder's
 lines (`vault-folder.md` §4), which are the events themselves: the
 envelope fields other than `type` and `blobs` are shown once per
-example block and elided after, `blobs` is shown only when it is not
-`[]`, and so are the fields of `data` that a block's events share.
+example block and elided after — `sig` (`event-store.md` §2.5) is
+elided throughout — `blobs` is shown only when it is not `[]`, and so
+are the fields of `data` that a block's events share.
 
 **The model, in one paragraph.** Every event is either an
 **observation** (what an envelope proved, what the wire returned) or a
@@ -71,7 +72,8 @@ from.
   (`device.md` §7), and on no other. Two vaults are the same identity iff their
   anchor DIDs are equal, and that is the check every merge starts
   with. What the identity calls itself is `identity.label` (§5).
-- **A device** is an `author` (`event-store.md` §3). A device's first
+- **A device** is an `author` (`event-store.md` §3): its signing key,
+  which signs every event it writes. A device's first
   event is `device.minted`; a device is named, and retired, by
   decisions from any device (§5). `self` is the device a fold is asked
   from. A device holds keys of its own (`device.md`): every
@@ -196,7 +198,7 @@ Every observation's `data` carries `myKey` and `peerKey`; the block
 shows them once.
 
 ```jsonc
-{ "eid": "0198…", "author": "k7q3ma", "at": "…", "type": "channel.firstSeen",
+{ "eid": "0198…", "author": "z6MkhaXg…", "at": "…", "type": "channel.firstSeen",
   "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "peerPublicKey": "did:key:z6LS…", "kind": "authcrypt", "firstDid": "did:peer:4…" } }
 { "type": "message.in",  "blobs": ["<body>", "<att>"],
   "data": { "mid": "0198…", "wireId": "<wire id>", "msgType": "https://…/message", "did": "did:peer:4…", "thid": "…", "pthid": "…", "bytes": 48213, "body": "<body>", "attachments": ["<att>"], "signedBy": "did:key:z6Mk…" } }
@@ -347,7 +349,7 @@ What a device says about the identity, about itself and the other
 devices, and what its mediator answered.
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "device.minted", "data": {} }
+{ "eid": "…", "author": "z6MkhaXg…", "at": "…", "type": "device.minted", "data": {} }
 { "type": "did.minted",     "data": { "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" } }
 { "type": "did.registered", "data": { "key": "did/0198…" } }                     // the mediator accepted it as a recipient
 { "type": "did.published",  "data": { "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" } }
@@ -357,8 +359,8 @@ devices, and what its mediator answered.
 { "type": "mediation.granted", "data": { "id": "0198…", "routingDid": "did:peer:2…" } }
 { "type": "mediation.retired", "data": { "id": "0198…", "because": "changed" } }
 { "type": "identity.label", "data": { "name": "Alice" } }
-{ "type": "device.label",   "data": { "dev": "k7q3ma", "name": "phone" } }
-{ "type": "device.retired", "data": { "dev": "p2x8rq", "because": "lost" } }
+{ "type": "device.label",   "data": { "dev": "z6MkhaXg…", "name": "phone" } }
+{ "type": "device.retired", "data": { "dev": "z6MkrJVn…", "because": "lost" } }
 { "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: `blobs` is `[]`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
@@ -366,7 +368,11 @@ devices, and what its mediator answered.
 
 - `device.minted`: the first event a device writes — that this device
   exists, and when (`at`). Nothing about a device is a file: a
-  device's existence travels with its events. Immutable by being an
+  device's existence travels with its events, and its key is its
+  `author`, so the event is signed by the key it announces
+  (`event-store.md` §2.5) and proves nothing but that the key's holder
+  wrote it — that the device is one of *ours* is its presence in the
+  set, which is `devices.md` §5.3's concern. Immutable by being an
   event; a second `device.minted` from one `author` is two writers
   sharing it (`vault-folder.md` §10).
 - `did.minted` and `mediation.created` are the only places a DID
@@ -403,9 +409,11 @@ devices, and what its mediator answered.
 - `device.retired`: a decision about another device (lost, replaced).
   Its events stay — history is history — but a fold stops treating
   its mediation as a live address and shows any later events from it
-  as suspect. Its keys went with it (`device.md` §7): no `did/<id>` it
-  minted signs or decrypts for the identity again, which the
-  identity's contacts have to be told — `devices.md` §3.3, by a revoke
+  as suspect — exactly the events it signed, since it can sign as no
+  other device (`event-store.md` §2.5). Its keys went with it
+  (`device.md` §7): no `did/<id>` it minted signs or decrypts for the
+  identity again, which the identity's contacts have to be told —
+  `devices.md` §3.3, by a revoke
   from every live device.
 - `extension.installed` / `removed` / `purged`: the three decisions the
   vault's set keeps about an extension, whose own events live in a
@@ -434,7 +442,7 @@ contact's log is the union, across devices, of the events that name
 it.
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "contact.created",
+{ "eid": "…", "author": "z6MkhaXg…", "at": "…", "type": "contact.created",
   "data": { "cid": "0198…" } }
 { "type": "contact.petname",  "data": { "name": "alice" } }
 { "type": "contact.flag",     "data": { "pinned": true } }
@@ -614,7 +622,7 @@ because the person said so; an absence with no such record is damage.
 ### 8.1 Erase
 
 ```jsonc
-{ "eid": "…", "author": "k7q3ma", "at": "…", "type": "message.erased",
+{ "eid": "…", "author": "z6MkhaXg…", "at": "…", "type": "message.erased",
   "data": { "myKey": "did/0198…", "peerKey": "k3j9…", "mid": "0198…", "drop": ["<body root>", "<attachment root>"], "because": "user" } }
 ```
 
@@ -806,10 +814,14 @@ where it says "delete".
   contact (§6); no event cuts an edge. Detach the channel, create a
   contact, attach: the recovery for a wrong merge. A `contact.split`
   would be the shape; not in this version.
-- A device's own key in `device.minted`, for authenticating a device's
-  events when they are exchanged over a wire rather than by hand.
-  Every device has keys (`device.md`); whether its first event should
-  name one is still not needed while a merge is a backup.
+- What the device key does not cover. Every event is signed by its
+  author's key (`event-store.md` §2.5); the files are not —
+  `config.json`, `state/`, the key cache — and travel only by backup
+  for now. And a signature says who wrote, not who is ours: a
+  `device.minted` that arrives by sync is one of ours because a
+  sibling pushed it, and recording which sibling — the introducer,
+  which a `since` on a revoke would need (`devices.md` §8) — is not in
+  this version.
 - **The contacts' side of devices** — several devices with a key
   each, vouched for and revoked toward a contact, what a message from
   a revoked one means, pairing and sync — is `devices.md`; this

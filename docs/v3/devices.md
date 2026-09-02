@@ -588,7 +588,12 @@ device-internal, as §4.4 requires; nothing of it crosses the wire.
   reported, and an event of `self` it never wrote is a forked self and
   stops the ingest — a sibling that sends us our own events back is
   fine, one that sends us events of ours we do not have is the fault
-  that check exists for.
+  that check exists for. Every event carries its author's signature
+  (`event-store.md` §2.5) and `ingest` checks it, so a sibling can
+  relay any device's events and forge none: what a push says C wrote
+  is what C wrote, or is rejected. Sync rests on this — without it a
+  compromised sibling could write in a live device's name and leave
+  words behind that its own retirement would not make suspect.
 - `attachments` — blocks, by CID as `object-share.md` §2 carries them:
   those the message's events hold (`vault-events.md` §8.3) that fit
   inline; ones that do not travel by package (`object-share.md` §8) or
@@ -717,7 +722,10 @@ its own device, each forwarded to on its own.
   application marking an end whose every voucher has since been revoked
   — is not in this version, and neither is a primary device that alone
   may vouch, which is how the services that share this model close the
-  hole.
+  hole. A `since` needs to know which device introduced which — for a
+  sibling that arrived by sync, the sibling whose push carried its
+  `device.minted` (`vault-events.md` §11) — which sync does not yet
+  record.
 - **A pool of keys** (§3.1): a device pre-minting keys and writing
   their public halves to the vault, so that a sibling meeting a new
   contact can vouch for the newcomer's key in the same breath and no
