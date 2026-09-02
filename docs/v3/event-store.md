@@ -200,8 +200,14 @@ out is one device writing in another's name — which is what a sync
 between siblings (`sync.md`) needs, since a retired device's
 events are suspect by `author` (`vault-events.md` §5), and only a
 signature keeps a device from leaving words behind under a sibling's
-name that would outlive its retirement. A backup is trusted for
-nothing an event does not prove itself (§10.3).
+name that would outlive its retirement. Nor does it prove that the
+writer is one of the identity's devices: any key can sign a
+`device.minted`. Which authors are the identity's is a decision in
+the events — a vouch by a device already admitted, rooted in the
+anchor (`devices.md` §3) — that the store never asks and a fold
+always does. A backup is trusted for what its events prove, who wrote
+each, and for nothing else (§10.3): not that a device in it is ours,
+and not that nothing was left out of it (§12).
 
 ## 3. Identity, time, order
 
@@ -218,7 +224,8 @@ nothing an event does not prove itself (§10.3).
   old devices' events stay as history. Not secret. A device announces
   itself with its first event, `device.minted` (`vault-events.md`
   §5), signed by the key it names, so a device's existence travels
-  with its events and needs no side channel.
+  with its events and needs no side channel; that it is one of the
+  identity's is another event's to say (`devices.md` §3).
 - **instance** — a random id the device mints together with `self`
   and keeps beside it (`device.md` §3). Not an event field, not in a
   backup. It names this device's store to the tokens it issues (§4.4):
@@ -957,7 +964,12 @@ restates it.
    to this copy's line, so the set is exact — its fold, and the roots
    **held** over it (`vault-events.md` §8.3). Every line of the source
    was verified in the reading (§2.4, §2.5): a backup is trusted for
-   nothing an event does not prove itself.
+   what its events prove, who wrote each, and for nothing else. Which
+   of the devices in it are ours is the fold's question (`devices.md`
+   §3), asked of the merged set as of any other; a source that was
+   tampered with brings a device nobody vouched for, whose decisions
+   count for nothing, and the import does not refuse it — it is
+   reported, as an incomplete device is (rule 2).
 1. **Blobs**, before the events: a block absent here — a damaged one is
    absent (§5.1), so a source that has it sound repairs it — and
    present there is copied iff a root held over the merged set (step
@@ -1078,9 +1090,11 @@ is a question for when a fold is too slow to run at open, not before.
 - **Per-device chains** (§2.5). A signature says who wrote an event;
   a hash chain per device — each event naming the author's previous —
   would also say that nothing of that device's was withheld between
-  two it holds, and is what rotating a device key would need. Neither
-  is needed while a device key never rotates and a compromised device
-  is retired whole (`device.md` §7); the shape, if ever, is KERI's.
+  two it holds — the one thing a backup cannot show today (§10.3: a
+  copy with events stripped is a copy made by filter) — and is what
+  rotating a device key would need. Neither is needed while a device
+  key never rotates and a compromised device is retired whole
+  (`device.md` §7); the shape, if ever, is KERI's.
 - **Daemon RPC.** Once the store is the interface, the daemon could
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this

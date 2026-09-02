@@ -53,6 +53,13 @@ The principles of `event-store.md` §1, as they apply to meaning.
    (`contact.merged`, §6).
 5. **Nothing is deleted.** An erase is a decision plus an unlinked blob
    (§8); a deleted contact is a tombstone (§9).
+6. **A decision counts by its author.** Who may decide is itself
+   decided: a device is ours by a `device.vouched` from a device that
+   is, rooted in the anchor (`devices.md` §3), and a decision from any
+   other author — a stranger in the record, a retired device's later
+   ones — is shown and applied to nothing. An observation has no such
+   test: an envelope proved it, and a fold reads its author only to
+   say whose evidence it is.
 
 **Type names.** Every type is `subject.fact` — `did.minted`,
 `contact.attached`, `message.in`, `device.label`. The subject names
@@ -69,9 +76,13 @@ from.
 - **The identity** is the anchor: a `did:key`, fixed at creation and
   recorded in `config.json` (`vault-folder.md` §6.1); the key behind
   it is named `anchor` on the device that created the vault
-  (`device.md` §7), and on no other. Two vaults are the same identity iff their
-  anchor DIDs are equal, and that is the check every merge starts
-  with. What the identity calls itself is `identity.label` (§5).
+  (`device.md` §7), and on no other unless the person carries it there
+  as a `stored` key (`device.md` §4.1). It signs one thing in the
+  vault: the proof on the `device.vouched` that makes a device ours
+  (`devices.md` §3), the root the rest of the devices are vouched
+  from. Two vaults are the same identity iff their anchor DIDs are
+  equal, and that is the check every merge starts with. What the
+  identity calls itself is `identity.label` (§5).
 - **A device** is an `author` (`event-store.md` §3): its signing key,
   which signs every event it writes. A device's first
   event is `device.minted`; a device is named, and retired, by
@@ -302,7 +313,7 @@ shows them once.
   shown, without effect. *Provisional:* written on receipt, as
   `peer.rotated` is, rather than derived from the message on fold. On
   the sending side `did.vouched` / `did.revoked`, that one went, are
-  `devices.md` §4.1 and §4.2; all four carry a pair.
+  `devices.md` §5.1 and §5.2; all four carry a pair.
 - Nothing about which contact the peer is goes on any of these.
 
 ### 3.2 Frozen channels
@@ -365,6 +376,8 @@ devices, and what its mediator answered.
 
 ```jsonc
 { "eid": "…", "author": "z6MkhaXg…", "at": "…", "type": "device.minted", "data": {} }
+{ "type": "device.vouched", "data": { "dev": "z6MkhaXg…", "proof": "eyJ…" } }   // the root: by the anchor, for the creating device
+{ "type": "device.vouched", "data": { "dev": "z6MkrJVn…" } }                     // by a device that is ours, at pairing
 { "type": "did.minted",     "data": { "key": "did/0198…", "did": "did:peer:4…", "routingDid": "did:peer:2…", "mediation": "0198…" } }
 { "type": "did.registered", "data": { "key": "did/0198…" } }                     // the mediator accepted it as a recipient
 { "type": "did.published",  "data": { "key": "did/0198…", "as": "oob", "oobId": "…", "goal": "Write to Alice", "uses": "one" } }
@@ -376,6 +389,7 @@ devices, and what its mediator answered.
 { "type": "identity.label", "data": { "name": "Alice" } }
 { "type": "device.label",   "data": { "dev": "z6MkhaXg…", "name": "phone" } }
 { "type": "device.retired", "data": { "dev": "z6MkrJVn…", "because": "lost" } }
+{ "type": "device.verdict", "data": { "dev": "z6MkrJVn…", "verdict": "live" } }
 { "type": "extension.installed", "data": { "ext": "0198…", "name": "onion", "object": "<root>" } }   // object names, never references: `blobs` is `[]`
 { "type": "extension.removed",   "data": { "ext": "0198…" } }
 { "type": "extension.purged",    "data": { "ext": "0198…" } }
@@ -386,10 +400,18 @@ devices, and what its mediator answered.
   device's existence travels with its events, and its key is its
   `author`, so the event is signed by the key it announces
   (`event-store.md` §2.5) and proves nothing but that the key's holder
-  wrote it — that the device is one of *ours* is its presence in the
-  set, which is `sync.md`'s concern. Immutable by being an
-  event; a second `device.minted` from one `author` is two writers
-  sharing it (`vault-folder.md` §10).
+  wrote it — that the device is one of *ours* is a `device.vouched`
+  for it, never its presence in the set (`devices.md` §3). Immutable
+  by being an event; a second `device.minted` from one `author` is two
+  writers sharing it (`vault-folder.md` §10).
+- `device.vouched { dev, proof? }`: `dev` is a device of ours — the
+  decision that admits a device, by a device that is already ours, or
+  by the anchor's `proof` for the first (`devices.md` §3). Written by
+  the creating device for itself, and by the inviting device at
+  pairing (`devices.md` §6).
+- `device.verdict { dev, verdict }`: the person's ruling, `live` or
+  `dead`, on a device the vault's fold cannot settle — two devices
+  that retired each other (`devices.md` §3). Latest wins per `dev`.
 - `did.minted` and `mediation.created` are the only places a DID
   string of ours is recorded; the writing device holds the key,
   derives or looks it up by the name, and compares on use
@@ -402,7 +424,7 @@ devices, and what its mediator answered.
   invitation, `uses: many` a public address. An invitation is
   therefore not a file: it is a `did.published` with `as: oob`, and
   "open" is a fold (§7.4). `as: pairing` is an invitation to a device
-  of ours (`devices.md` §5), one-use like `oob`.
+  of ours (`devices.md` §6), one-use like `oob`.
 - `did.retired`: no further outbound from this key; inbound still
   opens.
 - `mediation.created` / `granted` / `retired`: one device's
@@ -421,14 +443,15 @@ devices, and what its mediator answered.
 - `device.label`: a name for a device, the person's, for lists. `dev`
   is the device the decision is about — `data`, not authorship; the
   author is the event's `author`.
-- `device.retired`: a decision about another device (lost, replaced).
+- `device.retired`: a decision about another device (lost, replaced),
+  counted from a device that is ours and live (`devices.md` §3).
   Its events stay — history is history — but a fold stops treating
   its mediation as a live address and shows any later events from it
   as suspect — exactly the events it signed, since it can sign as no
   other device (`event-store.md` §2.5). Its keys went with it
   (`device.md` §7): no `did/<id>` it minted signs or decrypts for the
   identity again, which the identity's contacts have to be told —
-  `devices.md` §4.2, by a revoke
+  `devices.md` §5.2, by a revoke
   from every live device.
 - `extension.installed` / `removed` / `purged`: the three decisions the
   vault's set keeps about an extension, whose own events live in a
@@ -483,7 +506,7 @@ it.
   known before any reply, and our own first message is attributed
   from the start); when the person adopts a stranger (`manual`); and
   when the other end is a device of ours (`paired`, `devices.md`
-  §5).
+  §6).
   Nothing else attributes: not the key we used, not the DID they
   claimed in a plaintext, not who happened to write first to a key we
   minted toward someone.
@@ -597,7 +620,7 @@ component every member of which is deleted is deleted:
   with the challenge's `msgType` on a channel under the end's key,
   from any device of ours; `challenges[]` is every end that is `dead`
   by a counted revoke that was not its own, has no verdict, and is not
-  `challenged` (`devices.md` §4.3). A message's `did` (§3.1) says
+  `challenged` (`devices.md` §5.3). A message's `did` (§3.1) says
   which end sent it. Two devices of ours fold this each from their own
   observations and union by sync: both may see the same vouch,
   arrived on each's own channel, as two counted edges; both may
@@ -651,9 +674,16 @@ without adopting another's mediation. **What `self` may use** — as
 `myKey`, to publish, to write to a channel, to open an envelope — is
 only a key whose `did.minted` or `mediation.created` `self` authored;
 another device's key is listed, shown, and never used, and the
-envelope's `author` says which is which with no field added. What
-`self` owes each contact for its siblings — vouches, revokes — is
-`devices.md` §4.5. For the identity: its `label`,
+envelope's `author` says which is which with no field added.
+**Which devices are ours**, and which of them is live, retired or in
+conflict, is the fold of `devices.md` §3 — `self`, and every device a
+counted `device.vouched` names, from the anchor's root — and it is the
+first thing every other fold asks: a decision counts only from a
+device that is ours and live at that point in canonical order (§1
+principle 6); one from any other author is listed as suspect and
+applied to nothing. What `self` owes each contact for its siblings —
+vouches, revokes — is `devices.md` §5.5. For the identity: its
+`label`,
 and its extensions — every `extension.installed`, marked removed or
 not and purged or not (§5), so the application can list them, run the
 ones this device's option says to, and `dispose` of the purged
@@ -879,11 +909,9 @@ where it says "delete".
 - What the device key does not cover. Every event is signed by its
   author's key (`event-store.md` §2.5); the files are not —
   `config.json`, `state/`, the key cache — and travel only by backup
-  for now. And a signature says who wrote, not who is ours: a
-  `device.minted` that arrives by sync is one of ours because a
-  sibling sent it, and recording which sibling — the introducer,
-  which a `since` on a revoke would need (`devices.md` §8) — is not in
-  this version.
+  for now. A signature says who wrote, not who is ours; who is ours
+  is `device.vouched` (`devices.md` §3), whose `author` is the
+  introducer a `since` on a revoke would need (`devices.md` §9).
 - **The contacts' side of devices** — several devices with a key
   each, vouched for and revoked toward a contact, what a message from
   a revoked one means — is `devices-protocol.md`; the identity's own

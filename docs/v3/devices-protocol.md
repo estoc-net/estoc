@@ -94,7 +94,7 @@ it — or before any such channel exists, since the contact may now
 write to `for` (§8) and resolve it before sending.
 
 Which devices vouch, and when, is the identity's own affair
-(`devices.md` §4.1); what the contact has to allow for is that every
+(`devices.md` §5.1); what the contact has to allow for is that every
 device of the counterpart may vouch for the same key, so that the
 introduction does not wait on the one device that happens to be
 offline, and that a key vouched for by several is not orphaned when
@@ -173,7 +173,7 @@ it is still there:
 
 A device answers every challenge it can open, automatically, whenever
 it is unlocked — one that its own identity has dropped included
-(`devices.md` §4.3 says why), and one that is wiped or locked cannot.
+(`devices.md` §5.3 says why), and one that is wiped or locked cannot.
 The answer carries nothing: the envelope is the whole claim, "the key
 you were told is dead just sealed this". On the contact's side it is
 an inbound message on a dead chain and needs no type of its own in the
@@ -208,7 +208,7 @@ extends stays dead. What the person then does is a decision, the
   is their contact's device: the chain is live again, written to, its
   words acted on from here on. It says nothing about the end that
   revoked it; the person rules on that one too if they mean to, and
-  usually does (`devices.md` §7: if the old phone is honest, the one
+  usually does (`devices.md` §8: if the old phone is honest, the one
   that revoked it is not).
 - `dead` — the person has decided it is gone: no challenge is sent, its
   words are conflicts. A revoke need not have come first; a person told
@@ -314,7 +314,7 @@ A message to a counterpart is written once and goes to every live end:
   of the receiver's that got a copy. This protocol accepts that: two
   answers with one id are one message to the party that folds them,
   and which of its devices answers is the receiver's own arrangement
-  (`devices.md` §4.4). What no device acts on is a word from a dead
+  (`devices.md` §5.4). What no device acts on is a word from a dead
   end (§6).
 
 The counterpart's mediators are told nothing new: each copy is a
@@ -353,7 +353,7 @@ its own device, each forwarded to on its own.
   own fold the only reader; a JWS inside — the shape `from_prior` has
   — would let a third party check it, and is what a vouch by a key
   that never seals an envelope (a pre-committed successor to a lost
-  identity, `devices.md` §7) will need. Add it then, as an optional
+  identity, `devices.md` §8) will need. Add it then, as an optional
   `proof` on `vouch` and `revoke`.
 - **Vouches by a compromised device.** A vouch is a fact (§1
   principle 2): a device that was stolen and, before it was dropped,
@@ -366,6 +366,6 @@ its own device, each forwarded to on its own.
   in this version, and neither is a primary device that alone may
   vouch, which is how the services that share this model close the
   hole. What a `since` needs of the identity's side is `devices.md`
-  §8.
+  §9.
 - **Timeouts** are the application's throughout (§5): nothing in the
   fold expires.

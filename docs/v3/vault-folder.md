@@ -449,7 +449,8 @@ that is not a folder ingests it (§9.3). Empty means nothing at
 `vault/` in the device that restores (`device.md` §7) — one just born
 for it, or one whose `vault/` was lost; the copy is that device's
 vault from then on, and its first unlock appends its `device.minted`
-(`device.md` §6);
+(`device.md` §6) — ours to itself, and to its siblings once one
+vouches for it (`devices.md` §3);
 the imported directories stay as history, the old devices' mediations
 included, visible until the person retires them (`vault-events.md`
 §7.3), and their keys did not come: the old devices hold them, or they
@@ -503,7 +504,11 @@ old devices' outbound not `sent` — is `vault-events.md` §10.
 - **A backup is the record, not the identity.** A zip carries every
   event, blob and file, and no key; unpacking it and opening it is a
   new device joining (§9.4), which the identity's other devices and
-  contacts learn of by `devices.md` §5 and §4.1. A backup is a move,
+  contacts learn of by `devices.md` §6 and §5.1. Nor is a backup
+  trusted for who is in it: a device it carries is ours by the vouches
+  its events hold (`devices.md` §3), so a copy that was tampered with
+  where it was kept adds no device that counts; what it may have left
+  out, nothing in it shows (`event-store.md` §12). A backup is a move,
   not a sync, and the folder does not stand in the way of one: a sync
   is "ingest what the other device holds that I lack, and the blobs
   those events name" (`sync.md`), and nothing here should have
@@ -530,8 +535,10 @@ old devices' outbound not `sent` — is `vault-events.md` §10.
   may lift an earlier folder's keystore and local state into a device
   directory once, or such vaults are started over, is the one
   migration question this version has.
-- **`identity`** (§6.1) is a DID: the anchor's did:key, fixed. Whether
-  it should instead be the identifier of an inception event — the
-  anchor's public key in the event, so that the anchor can be rotated
-  against a pre-committed successor — is the rotation design's
-  question, and would be the next change to §6.1.
+- **`identity`** (§6.1) is a DID: the anchor's did:key, fixed. The
+  anchor now signs one event, the root `device.vouched`
+  (`devices.md` §3), which is the shape an inception event has.
+  Whether `identity` should instead be the identifier of that event —
+  the anchor's public key in the event, so that the anchor can be
+  rotated against a pre-committed successor — is the rotation
+  design's question, and would be the next change to §6.1.

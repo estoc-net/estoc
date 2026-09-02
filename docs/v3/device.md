@@ -344,10 +344,14 @@ A device opens a vault; nothing else does. In order:
 6. Once unlocked, if `devices/<dev>/` in the vault holds no
    `device.minted` (`vault-events.md` §5), append one — on every
    unlock, not the first, since a crash between birth and the first
-   append leaves exactly this gap, and idempotently. This is the
-   device joining the vault, at the vault's level; joining the
-   identity toward its contacts is a sibling's vouch (`devices.md`
-   §4.1).
+   append leaves exactly this gap, and idempotently; and, for the
+   device that created the vault, a `device.vouched` for itself under
+   the anchor's proof, by the same rule (§7). This is the device
+   announcing itself, at the vault's level; joining the identity is a
+   `device.vouched` from a device already in it (`devices.md` §3) —
+   the creating device's own, or the inviting device's at pairing —
+   and joining the identity toward its contacts is a sibling's vouch
+   (`devices.md` §5.1).
 
 ```ts
 interface Device {
@@ -383,16 +387,21 @@ there is no device with a `dev` and no seed, since `dev` is the seed's,
 and no seed that is not a device's. Then, once, the device gets its
 record, and `vault/` comes into being with it: **created** —
 `config.json` with the anchor, the anchor minted from this seed under
-the name `anchor` — which is the identity's birth; the device that did
-it is the one that can sign as the anchor, and the vault records which
-by the `author` of the anchor's events; or **restored**, below. There
-is no record without a device around it, and no device with two.
+the name `anchor`, and the first two events, this device's
+`device.minted` and a `device.vouched` for itself carrying the
+anchor's proof (`devices.md` §3) — which is the identity's birth, and
+the root every later device is vouched from; the device that did it
+is the one that can sign as the anchor, and the vault records which by
+the `author` of that root; or **restored**, below. There is no record
+without a device around it, and no device with two.
 
 **Restore** is a device taking a snapshot as its `vault/`
 (`vault-folder.md` §9.4): one just born, or one whose `vault/` is gone.
 A folder store takes it whole into the empty `vault/` before the first
 open; any store imports it (`vault-folder.md` §9.3). The device's first
-unlock appends its `device.minted` (§6), and the imported devices'
+unlock appends its `device.minted` (§6); it is a device of the
+identity to itself, and to its siblings once one of them vouches for
+it at pairing (`devices.md` §3, §6). The imported devices'
 events are history — visible, their mediations listed, their outbound
 not `sent` held as imported (`vault-events.md` §10) — until the person
 retires them. There is no restore *of a device*: a device that is gone
@@ -413,8 +422,8 @@ are suspect — and are its own: it can still sign as itself and as no
 other device (`event-store.md` §2.5), which is what keeps *suspect* a
 bounded set. Its keys are lost with it — every `did/<id>` it minted can
 no longer sign or decrypt for the identity — which the identity's
-contacts must be told; that is `devices.md` §4.2, and a stolen device
-that still answers is `devices.md` §4.3. Nothing here can wipe a device
+contacts must be told; that is `devices.md` §5.2, and a stolen device
+that still answers is `devices.md` §5.3. Nothing here can wipe a device
 remotely: a retired device that cooperates deletes its own directory,
 and one that does not is what the challenge there exists for.
 If the device that held the anchor is the one lost, the anchor's

@@ -3,7 +3,7 @@
 Status: **draft**, 2026-09-02, *provisional throughout*; not
 implemented. A DIDComm protocol, `https://estoc.dev/sync/1.0`, spoken
 only between devices of one identity — the siblings of `devices.md`,
-over the channels of the self contact (`devices.md` §6). Goes with
+over the channels of the self contact (`devices.md` §7). Goes with
 version 3 of the vault: what it carries is the interchange format of
 `event-store.md` §10.1, and every rule about what may be written is
 that document's. Design history:
@@ -74,6 +74,14 @@ live sibling, with those of their blocks that fit:
   §10): an erased blob is never sent.
 - Files (`state/` and the unknown paths, `vault-folder.md` §6) are not
   in the first version's sync; a backup carries them.
+
+**From whom.** A receiver ingests a `sync/1.0` message only from a
+channel of the self contact (`devices.md` §7) whose sibling is ours
+and live (`devices.md` §3); a message on any other channel — a
+stranger's, a retired sibling's — is not ingested, and is shown. The
+one message read before that test is the first on a `pairing` channel
+(`devices.md` §6): held, unread by the store, until the person accepts
+and the vouch is written, then ingested.
 
 A push that is lost, or reaches a device that crashes before it wrote,
 or is stopped by a forked self, is gone: no token, no receipt and no
@@ -153,12 +161,13 @@ state a slower first turn and nothing else. A forked self stops an
 `ingest` and is reported, and reconciliation does not paper over it:
 the range stays unequal round after round until the person acts
 (`event-store.md` §4.2) — the alarm, not a fault of the sync. A
-retired device is sent nothing, no round is opened toward it, and a
-`have` from it is not answered; what it pushes is ingested and folds
-as its events do — suspect (`vault-events.md` §5).
+retired device is sent nothing, no round is opened toward it, a
+`have` from it is not answered, and what it pushes is not ingested
+(§2); its later events, if they reach the vault by a copy, fold as a
+retired device's do — not counted (`devices.md` §3).
 
 A device new to the identity starts, in this version, from a snapshot
-(`devices.md` §5). A round from an empty set is the whole vault and
+(`devices.md` §6). A round from an empty set is the whole vault and
 would converge — every range unequal, every event pushed — but through
 the mediator's envelopes, which is what the zip spares; a first sync
 that replaces the zip is open (§4). The cost is the mediator's: a
@@ -186,4 +195,4 @@ online.
   policy, is a later version.
 - **The self contact's channels** carry sync and nothing else; whether
   a person's note to themself across devices is a message in it, or
-  an event of its own, is `devices.md` §8's question.
+  an event of its own, is `devices.md` §9's question.
