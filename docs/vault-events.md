@@ -1,7 +1,9 @@
-# The vault's events, version 2 — draft
+# The vault's events, version 3 — draft
 
 Status: **implemented** as of 2026-09-01 (`@estoc/vault`); drafted 2026-08-30.
 Sections marked *provisional* are leanings, not decisions.
+**Draft, 2026-09-02:** §2, §5, §7.3, §10 and §11 changed for the device
+split (`device.md`): every key is one device's; unimplemented.
 
 The third of three documents. Every line below is an event of
 `event-store.md` §2 — an envelope of `eid`, `at`, `author`, `type`,
@@ -73,20 +75,26 @@ from.
 - **A device** is an `author` (`event-store.md` §3). A device's first
   event is `device.minted`; a device is named, and retired, by
   decisions from any device (§5). `self` is the device a fold is asked
-  from.
-- **Keys.** One seed, sealed under a passphrase in `keystore.json`
-  (`vault-folder.md` §6.2), derives every key: HKDF-SHA256 over the
-  seed with salt `estoc-keystore` and info
-  `estoc/v3/<purpose>/<name>`, purpose ∈ { `ed25519`, `x25519` }.
-  **The name is the derivation path**: the same seed and the same name
-  always give the same key, so a key can be derived from its name
-  alone, before or without its cache entry existing. Names match
-  `[A-Za-z0-9._/-]+`, are never renamed and never reused. There are
-  three:
+  from. A device holds keys of its own (`device.md`): every
+  `did.minted` and `mediation.created` it writes names a key in its
+  keystore, and in no other device's.
+- **Keys.** Every key is a device's, in that device's keystore
+  (`device.md` §4), and the vault records of it a name, a public DID
+  and which device minted it — the `author` of its `did.minted` or
+  `mediation.created`. A key of source `seed` is derived from its
+  device's seed by its name: HKDF-SHA256, salt `estoc-keystore`, info
+  `estoc/v3/<purpose>/<name>`, purpose ∈ { `ed25519`, `x25519` } —
+  **the name is the derivation path, on the device that minted it**,
+  so that device derives the key from the name alone, before or
+  without a cache entry; a key of source `stored` is what its entry
+  holds. Which source a key has, the log does not say and no fold
+  asks; what a fold asks is which device minted it (§7.3). Names match
+  `[A-Za-z0-9._/-]+`, are never renamed and never reused, on any
+  device. There are three:
 
   | name | derives | notes |
   | --- | --- | --- |
-  | `anchor` | did:key — the identity | fixed; the seed alone recovers it |
+  | `anchor` | did:key — the identity | fixed; held by the device that created the vault |
   | `mediation/<id>/me` | did:peer:4, no service — how the mediator knows us | one per mediation |
   | `did/<id>` | did:peer:4, service = routing DID — a DID of ours handed to people | `id` random uuidv7 |
 
@@ -96,8 +104,11 @@ from.
   belongs to — these are decisions about it (§5, §6), not in the name.
   Nothing reads a `cid` out of a key name.
 
-- **The key cache** (`keystore.json` `keys[]`) is rebuilt by walking
-  every device's log for `did.minted` and `mediation.created`.
+- **Which names exist**, across the identity, is a walk of every
+  device's log for `did.minted` and `mediation.created`; which of them
+  *this* device can use is the same walk narrowed to `author = self`
+  (§7.3), and each of those is in its keystore by construction
+  (`device.md` §4.1).
 
 ## 3. Channels
 
@@ -355,8 +366,9 @@ devices, and what its mediator answered.
   event; a second `device.minted` from one `author` is two writers
   sharing it (`vault-folder.md` §11).
 - `did.minted` and `mediation.created` are the only places a DID
-  string of ours is recorded; the key is derived from the name and
-  compared on use. The `mediation` id says which device's arrangement
+  string of ours is recorded; the writing device holds the key,
+  derives or looks it up by the name, and compares on use
+  (`device.md` §4). The `mediation` id says which device's arrangement
   the routing DID came from.
 - `did.registered` is an observation — what the writing device's
   mediator answered (principle 1); a fold treats it as binding for
@@ -386,7 +398,10 @@ devices, and what its mediator answered.
 - `device.retired`: a decision about another device (lost, replaced).
   Its events stay — history is history — but a fold stops treating
   its mediation as a live address and shows any later events from it
-  as suspect.
+  as suspect. Its keys went with it (`device.md` §7): no `did/<id>` it
+  minted signs or decrypts for the identity again, which the
+  identity's contacts have to be told — a protocol above this
+  document (§11).
 - `extension.installed` / `removed` / `purged`: the three decisions the
   vault's set keeps about an extension, whose own events live in a
   store of its own (`event-store.md` §8). `installed` mints `ext`, the
@@ -548,7 +563,12 @@ channels). Per device: its current mediation, the channel its
 mediator's key opened (`myKey` = `mediation/<id>/me`, joined to
 `mediatorDid` by `peer.resolved`), its label, whether it is retired —
 so the application can list "your addresses" across every device
-without adopting another's mediation. For the identity: its `label`,
+without adopting another's mediation. **What `self` may use** — as
+`myKey`, to publish, to write to a channel, to open an envelope — is
+only a key whose `did.minted` or `mediation.created` `self` authored;
+another device's key is listed, shown, and never used, and the
+envelope's `author` says which is which with no field added. For the
+identity: its `label`,
 and its extensions — every `extension.installed`, marked removed or
 not and purged or not (§5), so the application can list them, run the
 ones this device's option says to, and `dispose` of the purged
@@ -707,10 +727,13 @@ dropped, or reordered. What the events then require:
   earlier `held` answers, and importing the same backup twice appends
   nothing. A decision made on the merged set, appended by `self`, and
   no store's business.
-- **A restored device is history.** A restore mints a fresh device
-  (`event-store.md` §3, `vault-folder.md` §10.4); the old device's
-  events stay, including its mediation, visible (§7.3) until the
-  person retires it (`device.retired`, §5).
+- **A restored folder's devices are history.** Whoever opens a
+  restored folder is a device of its own (`vault-folder.md` §10.4,
+  `device.md` §7); the old devices' events stay, their mediations
+  included, visible (§7.3) until the person retires them
+  (`device.retired`, §5), and their keys did not come with the folder
+  — which is why their outbound is held (above) and not sent by the
+  new device.
 - **Two writers sharing one `author`** is a bug, not a merge: it shows
   as one `eid` with two contents, as two `device.minted` from one
   `author`, or — when either imports the other — as events of `self`
@@ -729,7 +752,8 @@ reading the disk can see *that* the identity corresponded with a
 given key, when, and how much; not what was said, except the names
 just listed. This is a deliberate trade for merge safety and is
 within the vault's trust statement (`vault-folder.md` §11: plaintext
-at rest but for the seed); an application must say so in its copy
+at rest, the keys being the devices'); an application must say so in
+its copy
 where it says "delete".
 
 ## 11. Open
@@ -767,9 +791,16 @@ where it says "delete".
   contact (§6); no event cuts an edge. Detach the channel, create a
   contact, attach: the recovery for a wrong merge. A `contact.split`
   would be the shape; not in this version.
-- A per-device key, as a field of `device.minted` (for authenticating
-  a device's events when they are exchanged over a wire rather than by
-  hand). Not needed while a merge is a backup.
+- A device's own key in `device.minted`, for authenticating a device's
+  events when they are exchanged over a wire rather than by hand.
+  Every device now has keys (`device.md`); whether its first event
+  should name one is still not needed while a merge is a backup.
+- **The contacts' side of devices.** That a contact's identity is
+  several devices with a key each, how a device is vouched for and
+  revoked toward a contact, what a message from a revoked device
+  means, and how two devices of one identity pair and sync — the rest
+  of the per-device design — is not in this version; this document
+  only makes each device's keys its own.
 - A device-side space policy for bodies (§8.4): an eviction event that
   explains a local absence without binding anyone.
 - **Third-party extensions.** This version's are first-party and the

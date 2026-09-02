@@ -1,6 +1,9 @@
-# The `.estoc` folder, version 2 — draft
+# The `.estoc` folder, version 3 — draft
 
-Status: **implemented** as of 2026-09-01 (`@estoc/event-store`'s folder store); drafted 2026-08-30.
+Status: **draft** — version 3, 2026-09-02: the vault holds no keys and
+no local state; both are the device's (`device.md`). Version 2
+(`@estoc/event-store`'s folder store, implemented 2026-09-01, drafted
+2026-08-30) differs by §1, §6.2, §7, §10 and §11, and by nothing else.
 
 The second of three documents. `event-store.md` says what a vault is
 to a program — the event, the store, interchange. This document is
@@ -18,15 +21,16 @@ asks a fold and applies the answer.
 
 A vault is a directory. The directory **is** the format: a backup is
 the directory zipped, a restore is the zip unpacked, and any client
-that can read files can read a vault. Nothing about an identity lives
-anywhere else.
+that can read files can read a vault. Nothing about an identity's
+*record* lives anywhere else; its keys live in its devices
+(`device.md`), and none of them is here.
 
 The directory has two halves. `.estoc/` is the machine's: identity,
-keys, events, blobs. Whatever surrounds it is the person's — documents
-to publish, one day — and is not specified here. In the browser the
-vault root is the origin's OPFS root and only `.estoc/` exists; the
-passphrase-unlocked seed cached in IndexedDB is a device convenience,
-not part of the vault.
+events, blobs. Whatever surrounds it is the person's — documents to
+publish, one day — and is not specified here. In the browser the vault
+root is the origin's OPFS root, where `.estoc/` sits beside the
+device's own directory (`device.md` §2); the passphrase-unlocked seed
+cached in IndexedDB is the device's, not part of the vault.
 
 Paths are `/`-separated, relative to the vault root, ASCII with no
 backslash, with no `.` or `..` segments. Text files are UTF-8; JSON files are
@@ -53,8 +57,7 @@ The principles of `event-store.md` §1 as they land on a file system.
    `eid`. A merge never copies a segment: it reads the other copy's
    lines and appends the ones it lacks.
 3. **Nothing under `devices/` is ever unlinked.** Not a line, not a
-   segment, not a directory. The only thing ever unlinked is a blob —
-   and, under `local/`, what was never part of the vault.
+   segment, not a directory. The only thing ever unlinked is a blob.
 4. **A path says the author and nothing more.** What an event is about
    is a field of the line's `data` (`event-store.md` §2.1); a segment
    name says nothing about the events in it (§5); no name encodes
@@ -65,24 +68,18 @@ The principles of `event-store.md` §1 as they land on a file system.
 ```
 .estoc/
   config.json                    singleton — format/version, anchor; immutable
-  keystore.json                  singleton — @estoc/keystore v3
   blobs/<cid>                    content-addressed blocks — message bodies, attachments, received objects; the one place anything is unlinked
   devices/<dev>/<seg>.jsonl      everything device <dev> wrote: one log, every event a line
   state/                         reserved; §6.3
-  extensions/<ext>/              an extension's own store: this tree again, less config, keystore and local; §3.1
+  extensions/<ext>/              an extension's own store: this tree again, less config; §3.1
     devices/<dev>/<seg>.jsonl
     blobs/<cid>
-  local/                         this copy's own; never in a snapshot, never merged; §7
-    self.json                    which <dev> this copy writes as, and which instance
-    agent/                       the agent's local state; the application's folds' would be beside it, by name
-      options.json               what this device was told; kept, not rebuildable
-      cache/                     rebuildable; delete at will
-      trace/<seg>.jsonl          what this device saw; not rebuildable, pruned by retention
-    extensions/<ext>/            an extension's local state: the same three, mirroring extensions/<ext>/ above
-      options.json
-      cache/
-      trace/<seg>.jsonl
 ```
+
+Nothing here is a secret and nothing here is one copy's own: the keys
+and the local state are the device's (§7, `device.md`), and the two
+paths version 2 kept them at, `keystore.json` and `local/`, are
+reserved and refused (§6.2, §7).
 
 There is no per-device file — a device announces itself with an event
 (`vault-events.md` §5) — and no directory per contact or per channel:
@@ -97,9 +94,8 @@ An extension's store (`event-store.md` §8) is this tree again, under
 its `ext`: `devices/<dev>/<seg>.jsonl` and `blobs/<cid>`, by every
 rule of §4, §5, §8 and §9 — one writer per device directory, segments
 named uuidv7, blobs flat — and nothing else: no `config.json` (the
-identity is the vault's), no `keystore.json`, no `local/` (an
-extension's local state is `local/extensions/<ext>/`, §7), and no
-`extensions/` of its own. `ext` is the uuidv7 that
+identity is the vault's), no local state (an extension's is the
+device's, `device.md` §5), and no `extensions/` of its own. `ext` is the uuidv7 that
 `extension.installed` minted (`vault-events.md` §5); a directory under
 `extensions/` not named like one is a file (§9.6). A folder store
 opens one store per such directory, and a reader with a text editor
@@ -115,9 +111,10 @@ what an empty directory is. Whether an `ext` may be opened at all is
 the lifecycle fold's answer, asked by the application above; the
 folder reads no type.
 
-`dispose(ext)` removes every file under `extensions/<ext>/` and
-`local/extensions/<ext>/` — the two mirror each other so that the one
-removal is one rule — in the store's serialisation (§9.2): after every
+`dispose(ext)` removes every file under `extensions/<ext>/` — and,
+called through the device, the extension's local state, which mirrors
+this path so that the one removal is one rule (`device.md` §6) — in
+the store's serialisation (§9.2): after every
 operation that has taken its turn there, reads included, and before
 any other takes one. An operation still preparing outside it — an
 `ingest` reading its input, a `put` hashing its bytes — has touched
@@ -209,20 +206,19 @@ identical on both sides — the anchor check is what makes it a merge at
 all — and a differing `version` is refused (§11). Restore writes it
 last.
 
-### 6.2 `keystore.json`
+### 6.2 `keystore.json` — not here
 
-`@estoc/keystore` v3: `seedJwe`, the one seed sealed under a
-passphrase — the only secret in the vault — and `keys[]`, a cache of
-which names have been minted, when, and the did:key of each Ed25519
-half, so a client can list keys without unlocking. The cache is not
-the truth about which keys exist; every device's log is
-(`vault-events.md` §2), and the cache is rebuilt from it. A name is
-`[A-Za-z0-9._/-]+`, as `@estoc/keystore` v3 has it, and each appears
-once; an import (§10.3) refuses a `keystore.json` on either side that
-is not this shape — `version` 3, `seedJwe`, `keys[]` each with
-`name`, `did` and `createdAt` — before writing anything. Merge:
-`seedJwe` stays local (same seed, possibly a different passphrase);
-`keys[]` is the union by name.
+Version 2 kept the identity's one seed at this path, sealed under a
+passphrase, with a cache of the names derived from it, and an import
+unioned the cache. Version 3 has no seed to keep: every key is a
+device's, in that device's keystore (`device.md` §4), and the vault
+records of a key its name, its public DID and which device minted it —
+all in events (`vault-events.md` §2), none in a file. The path is
+**reserved and refused**: `write` refuses it (§9.6), an import that
+finds one on either side refuses before writing anything (§10.3), and
+a snapshot cannot contain one. It is the one path a reader must not
+carry along as unknown (§6.4), because what a version-2 file at it held
+was a secret, and carrying it would put a seed in a backup.
 
 ### 6.3 `state/`
 
@@ -236,67 +232,37 @@ for (§6.4).
 
 ### 6.4 Unknown paths
 
-Any other path a reader meets and does not understand is carried:
-copied when absent, never read, never overwritten (§11). This includes
+Any other path a reader meets and does not understand — the reserved
+`keystore.json` and `local/` excepted (§6.2, §7) — is carried: copied
+when absent, never read, never overwritten (§11). This includes
 a path under `devices/` or `blobs/` that is not shaped like a segment
 or a blob (§9.6), so that a path a later version defines survives a
 reader that does not know it.
 
-## 7. `local/` — this copy's own
+## 7. What is not here — the device
 
 Everything that is true of *this copy on this machine* and of nothing
-else (`event-store.md` §7). Never in a snapshot, never merged, never
-read by another device; neither an event nor a file in the `FileStore`
-sense: never listed, never exported.
+else (`event-store.md` §7) — which device this copy writes as, the keys
+it holds, its options, its caches, its trace — is the **device's**,
+kept in a directory of its own that points at this folder and is
+defined in `device.md`. Version 2 kept it under `local/` here, excepted
+from every snapshot, export and merge; version 3 keeps nothing here
+that needs excepting, so the folder is the snapshot (§10.1) and there
+is no path in it a backup leaves out.
 
-```jsonc
-// local/self.json
-{ "dev": "k7q3ma", "instance": "01991c2e-…" }
-// local/agent/options.json — shape owned by the owner; e.g.
-{ "trace": { "wire": { "keep": "P30D", "cap": 33554432 } } }
-```
+What the folder needs from the device it takes at open (`device.md`
+§6): `self`, the `dev` it writes under, and `instance`, which its
+change tokens name (§9.4). A device that opens this folder and finds no
+`device.minted` of its own under `devices/<self>/` appends one, on
+every open, idempotently — that is how a device joins a vault, and how
+a restored folder gains its new device (§10.4). Two devices may open
+one folder (`device.md` §2), each writing its own directory; two
+*processes* of one device is the bug of §11, and the lock that prevents
+it is the device's.
 
-**`self.json`** is the pointer every write, every merge, and every
-fold that depends on the asking device needs: which `devices/<dev>/`
-is mine, in the vault's store and in every extension's (§3.1); it is
-`self` on each store (`event-store.md` §4). `instance` is minted with
-it — a random id, a uuid will do — and is what this copy's change
-tokens name, together with which store issued each (§9.4), so a cache
-folded under another device, or under this device before a restore
-re-minted it, is rejected rather than applied. Missing means "first
-open on this copy": mint both (`event-store.md` §3), write the file,
-go on. Then, on **every** open, not only the first: if
-`devices/<dev>/` holds no `device.minted` (`vault-events.md` §5),
-append one. A crash between writing `self.json` and the first append
-leaves exactly that gap, and the check is idempotent. Two processes
-sharing one `local/` share one `dev` and must serialise (§11).
-
-**Everything else under `local/` belongs to an owner**
-(`event-store.md` §7.1), in a directory of its own: `local/agent/` for
-the agent, a name of the application's beside it for its folds, and
-`local/extensions/<ext>/` for an extension — under `extensions/` so
-that the named owners and the minted ids do not share a directory, and
-so that the path mirrors `extensions/<ext>/` (§3.1), which is what
-lets `dispose` remove the two by one rule. Each holds the owner's
-three kinds of local state, each in its place:
-
-- `options.json`: what this device was told, and only this device — a
-  retention policy, whether to run an installed extension here. Kept
-  until changed; not rebuildable. `local/` is not what a backup
-  carries, so a policy has a file here without becoming a fact of the
-  vault; a setting that should follow the identity is an event, not a
-  line here (`event-store.md` §7.1).
-- `cache/`: rebuildable. The folds, with the change token each was
-  folded to (`event-store.md` §7.3). Deleting it is always safe.
-- `trace/`: what this device saw, as segments (§5) so that retention
-  can go by segment name alone and never rewrite a line
-  (`event-store.md` §7.2). Not rebuildable, not exchanged, pruned
-  whole segments at a time. How an owner divides its trace below this
-  (the agent keeps one directory per stream) is the owner's.
-
-The three are told apart by what may be done to them, and a reader
-that finds one kind where another belongs — a segment under `cache/`
-— treats the directory as damaged, not as the other kind.
+`local/` is reserved and refused as `keystore.json` is (§6.2, §9.6,
+§10.3): a folder holding one is a version-2 folder's leftover, and what
+was under it was never part of the vault.
 
 ## 8. Blobs — `blobs/<cid>`
 
@@ -329,7 +295,8 @@ the file with the same bytes so that the time is renewed, as
 what `keep` reaches, and removes the rest that is old enough; it runs
 under the same per-instance serialisation as the store's appends
 (§9.2), never beside a `put`. A block the folder finds damaged (§10.3)
-is moved aside, out of `blobs/`, and is from then on absent. What a
+is moved aside, out of `blobs/` and out of the vault, into the
+device's `damaged/` (`device.md` §2), and is from then on absent. What a
 block's absence means — erased, missing, or not yet fetched — is read
 from the events (`vault-events.md` §8.2); the folder only reports that
 it is not there.
@@ -371,12 +338,12 @@ store minted, so it is the open segment from then on.
 ### 9.3 Ingesting
 
 One pass, reading first. The store reads its input whole and, before
-writing anything, checks every incoming event whose `author` is `self`
-(`local/self.json`): one already here with the same content is a
+writing anything, checks every incoming event whose `author` is `self` (`device.md`
+§3): one already here with the same content is a
 duplicate; one not here, or here with other content, stops the call
 with nothing written and is reported as a forked self
 (`event-store.md` §4.2) — two writers have shared this `dev`, and the
-remedy is to mint a fresh one (§7) and import again.
+remedy is a fresh device (`device.md` §7) and importing again.
 
 Then, for each incoming event: validate; if the `eid` is already under
 `devices/<author>/`, compare (`event-store.md` §2.3) and count it
@@ -397,7 +364,7 @@ new. The one whole-file copy is a restore into an empty backend
 
 ### 9.4 Changes
 
-The token is the copy's `instance` (§7), which store — the vault's, or
+The token is the device's `instance` (`device.md` §3), which store — the vault's, or
 an `ext` (§3.1) — and that store's segment table: every `<seg>.jsonl`
 under its `devices/*/`, by path, with its byte length, taken when
 `changes` is called (one walk, one `size` per segment). `events` reads
@@ -442,13 +409,14 @@ not `blobs/<cid>` with `cid` a fifty-nine character base32-lower CIDv1
 and never read (§6.4), so that it survives a trip through a store that
 is not a folder. The same test applies under `extensions/<ext>/`
 (§3.1): a segment or a blob there is the extension store's, and
-anything else there is a file. `local/` is neither an event nor a file
-in this sense (§7).
+anything else there is a file. `keystore.json` and `local/` are
+neither: reserved paths, refused (§6.2, §7).
 
 `write` refuses what is not a file's path (`event-store.md` §6): a
-segment's or a blob's shape, `local/`, a directory the layout owns —
-`devices`, `devices/<dev>`, `blobs`, `extensions`, `extensions/<ext>`
-and the `devices`, `devices/<dev>` and `blobs` under it, `local` — and
+segment's or a blob's shape, the reserved `keystore.json` and `local/`
+(§6.2, §7), a directory the layout owns — `devices`, `devices/<dev>`,
+`blobs`, `extensions`, `extensions/<ext>` and the `devices`,
+`devices/<dev>` and `blobs` under it — and
 a path that with what the folder holds would make a file and a
 directory of one name. A folder that holds such a path anyway was not
 written by a store, and an import (§10.3) refuses it before writing.
@@ -457,10 +425,12 @@ written by a store, and an import (§10.3) refuses it before writing.
 
 ### 10.1 Snapshot
 
-Everything under `.estoc/` except `local/`, `extensions/` included —
-every file, so an `extensions/<ext>/` with nothing in it is not in it
-(§3.1). A folder store's snapshot is a copy; the zip a backup carries
-is this tree. A purged extension store still on disk — the application
+Everything under `.estoc/`, without exception — the folder is the
+snapshot: every file, `extensions/` included, so an `extensions/<ext>/`
+with nothing in it is not in it (§3.1). A folder store's snapshot is a
+copy; the zip a backup carries is this tree, and carries no key of the
+identity (§7): it is the record, and whoever opens it is a device of
+their own (§10.4). A purged extension store still on disk — the application
 has not yet applied the fold (§3.1) — travels with it and is dropped
 by whoever imports it (§10.3).
 
@@ -470,8 +440,8 @@ A store that is not a folder renders one: each event to
 `devices/<author>/<seg>.jsonl`, in segments the export mints as it
 goes — one per author is enough, in any order — one line each; blobs
 to `blobs/<cid>`, flat; every path in `FileStore` in place; each
-extension store the same way under `extensions/<ext>/` (§3.1); no
-`local/`. Nothing about the chunking is remembered: a reader of the
+extension store the same way under `extensions/<ext>/` (§3.1).
+Nothing about the chunking is remembered: a reader of the
 export unions by `eid` and assumes no order (§5, `event-store.md`
 §10.2).
 
@@ -481,8 +451,9 @@ The algorithm is `event-store.md` §10.3 — preflight, then events,
 blobs, files, then each extension store — and is not restated here;
 this is what each step is on a folder.
 
-- **Preflight** reads `config.json` first: not version 2 (§11), or a
-  format or anchor that differs from this folder's (§6.1), refuses the
+- **Preflight** reads `config.json` first: not version 3 (§11), a
+  format or anchor that differs from this folder's (§6.1), or a
+  `keystore.json` or `local/` on either side (§6.2, §7), refuses the
   import before a line is decoded. Then every line of every segment
   under `devices/*/` and `extensions/*/devices/*/` is decoded (§4) —
   the whole source, so that the forked-self check runs over every set
@@ -497,9 +468,8 @@ this is what each step is on a folder.
   the check (§8); one that does not is damage in the source, reported,
   not copied.
 - **Files**: `config.json` is not touched, having been checked;
-  `keystore.json` unioned (§6.2); `state/` and any other path copied
-  when absent, never overwritten (§6.3, §6.4); `local/` is not in the
-  snapshot and is not touched.
+  `state/` and any other path copied when absent, never overwritten
+  (§6.3, §6.4).
 - **Extension stores** are the directories under `extensions/` named
   like an `ext` (§3.1), each into the store of the same `ext` here,
   which comes into being with the first line written if this copy had
@@ -515,43 +485,44 @@ Into an empty backend, a folder store copies the snapshot as it is,
 it is a conforming folder — the one whole-file copy that survives
 §9.3, safe because there is nothing here for it to double. A store
 that is not a folder ingests it (§10.3). Empty means nothing at
-`.estoc` but, at most, a `local/` without `self.json`: what a device
-keeps beside a vault rather than in it (§7 — a daemon's pid file, a
-preference) is not the vault and stays put; `self.json` is a previous
-copy's device pointer, and a restore refuses it, since what follows
-depends on its absence. There is no `self.json`, so the first open
-mints a `dev` and an `instance` (§7) — a cache a previous copy left
-under the old instance is rejected by its token (§9.4) — and the
-imported directories stay as history, including the old device's
-mediation, visible until the person retires it (`vault-events.md`
-§7.3). The copy
-may carry a purged extension store the source had not yet disposed of
-(§10.1), and this copy has no memory of it, so the first open folds
-the extension lifecycle and applies every pending `dispose` before any
-extension is opened or run (`event-store.md` §8) — the application's
-first act on any open, not only after a restore. What the application
-then does with the merged set — `held` on the old devices' outbound
-not `sent` — is `vault-events.md` §10.
+`.estoc`. The device that opens the copy is whichever device was
+pointed at it (`device.md` §7) — one just born for it, or one whose
+folder was lost — and its first open appends its `device.minted` (§7);
+a cache that device kept under an earlier vault is its own affair
+(`device.md` §3). The imported directories stay as history, the old
+devices' mediations included, visible until the person retires them
+(`vault-events.md` §7.3); their keys did not come, because the old
+devices hold them or they are gone. The copy may carry a purged
+extension store the source had not yet disposed of (§10.1), and this
+device has no memory of it, so the first open folds the extension
+lifecycle and applies every pending `dispose` before any extension is
+opened or run (`event-store.md` §8) — the application's first act on
+any open, not only after a restore. What the application then does
+with the merged set — `held` on the old devices' outbound not `sent` —
+is `vault-events.md` §10.
 
 ## 11. Versioning, robustness, boundaries
 
 - **Version.** `config.version` is the version of the whole vault;
-  this document is version 2. A reader refuses any other version:
+  this document is version 3. A reader refuses any other version:
   nothing is read past `config.json`, nothing is written, nothing is
   renamed. There is no migration from an earlier version; a vault of
-  one is used by a reader of that version or started over.
-  `keystore.json` carries its own `version` (3) and the derivation
-  label matches it (`estoc/v3`); changing either is a vault version
-  change too, since the DIDs change. No line-level version field:
-  `config.version` covers every file.
+  one is used by a reader of that version or started over (§12, for
+  the one question version 2 leaves). The derivation label of a
+  device's `seed` keys (`estoc/v3`, `device.md` §4.1) is the key
+  scheme's version, not the folder's; changing it would change every
+  DID, which would be a vault version change too. The device's own
+  versions (`device.md` §9) are not the folder's. No line-level
+  version field: `config.version` covers every file.
 - **Within a version** change is additive: a new event type, a new
   field of `data`, a new kind of file. A field's meaning never
   changes. Unknown paths are carried, not read, never overwritten
   (§6.4); an event of an unknown type is an event like any other.
   Anything else is the next version.
 - **Writers.** One writer per device directory is the format-level
-  rule (rule 2); the application still serialises writers on one
-  directory (a Web Lock in the browser, one daemon on disk). Two
+  rule (rule 2); the device serialises its own processes (`device.md`
+  §6: a Web Lock in the browser, a lock file on disk), and two devices
+  on one folder are two writers that need no lock between them. Two
   processes sharing one `dev` is a bug, not a merge: it shows up when
   either imports the other — events of `self` it never wrote (§9.3) —
   as one `eid` with two contents (§9.5), or as a second
@@ -561,16 +532,24 @@ not `sent` — is `vault-events.md` §10.
   line, which readers report and skip, and the next append terminates
   first (§5). Durability past a process crash is the backend's to
   claim (§9.2).
-- **At rest, the vault is plaintext** except the seed. Events, key
-  *names* and blobs are readable files, and so is a backup zip apart
-  from `seedJwe`. The passphrase protects the ability to *use* the
-  identity, not the history; a client wanting encryption at rest wraps
-  the backend, and must say so plainly in its copy.
-- **A backup is a move, not a sync**, but the folder does not stand in
-  the way of one: a sync is "ingest what the other device holds that I
-  lack, and the blobs those events name", and nothing here should have
-  to change for it. What a deletion leaves on disk, and why, is
-  `vault-events.md` §10.
+- **At rest, the vault is plaintext**, all of it: events, key
+  *names*, blobs, and so is a backup zip. There is no secret in it to
+  protect (§7); the keys that *use* the identity are in its devices,
+  under a passphrase there (`device.md` §8). A client wanting
+  encryption at rest wraps the backend; a backup that should not be
+  readable is a transport question — a passphrase on the zip — not the
+  format's; either way the client must say plainly in its copy what it
+  does.
+- **A backup is the record, not the identity.** Under version 2 a zip
+  carried the seed, and unpacking it anywhere was being the person;
+  under version 3 it carries every event, blob and file and no key,
+  and unpacking it is a new device joining (§10.4), which the
+  identity's other devices and contacts learn of above this document.
+  A backup is still a move, not a sync, and the folder does not stand
+  in the way of one: a sync is "ingest what the other device holds
+  that I lack, and the blobs those events name", and nothing here
+  should have to change for it. What a deletion leaves on disk, and
+  why, is `vault-events.md` §10.
 
 ## 12. Open
 
@@ -586,5 +565,20 @@ not `sent` — is `vault-events.md` §10.
 - **Reading by hand.** A backup is one JSONL per device; finding one
   conversation in it is `grep` for its `peerKey`. Whether a folder
   store should also keep a per-channel index under its owner's cache
-  directory (§7) for its own reads is `event-store.md` §12, not the
-  format's.
+  directory (`device.md` §5) for its own reads is `event-store.md`
+  §12, not the format's.
+- **Version-2 folders.** A version-2 folder is a version-3 folder with
+  `keystore.json` and `local/` in it. Whether a reader may, once, lift
+  the two into a device directory — the keystore read as v4
+  (`device.md` §4.5), `local/self.json` become `device.json`, the
+  owners moved — and rewrite `config.version`, or whether version-2
+  vaults are started over as version-1 vaults were, is the one
+  migration question this version has. The rule above says no
+  migration; what keeping it costs is every existing vault.
+- **`identity` in `config.json`** (§6.1) still names a key, `anchor`,
+  by its derivation name — the one place the vault says how a key is
+  derived, and now a name only the device that minted it can derive.
+  Replacing it with an identifier of the anchor's inception event,
+  with the anchor's public key in that event, is the next change to
+  §6.1, and ships under this version number: no reader of version 3
+  ships before both.
