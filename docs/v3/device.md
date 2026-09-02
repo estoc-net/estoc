@@ -48,9 +48,9 @@ every blob, every file — and the keys stay with the device around it.
 Carrying the record to a new machine is copying that subtree, and a
 device born there takes it as its own (§7) — a **new device joining**;
 the copy is that device's vault from then on — which the identity's
-other devices and its contacts learn of by the events and protocol of
-`devices.md`; "all devices lost" is answered by a pre-commitment kept
-cold, not by the zip. That
+other devices and its contacts learn of by the events and protocols
+of `devices.md`, `devices-protocol.md` and `sync.md`; "all devices
+lost" is answered by a pre-commitment kept cold, not by the zip. That
 is the reason for the split: a seed that never leaves a device cannot
 be lost with a backup, leaked by a sync, or shared by two copies that
 both went on writing.
@@ -347,7 +347,7 @@ A device opens a vault; nothing else does. In order:
    append leaves exactly this gap, and idempotently. This is the
    device joining the vault, at the vault's level; joining the
    identity toward its contacts is a sibling's vouch (`devices.md`
-   §3.2).
+   §4.1).
 
 ```ts
 interface Device {
@@ -413,8 +413,8 @@ are suspect — and are its own: it can still sign as itself and as no
 other device (`event-store.md` §2.5), which is what keeps *suspect* a
 bounded set. Its keys are lost with it — every `did/<id>` it minted can
 no longer sign or decrypt for the identity — which the identity's
-contacts must be told; that is `devices.md` §3.3, and a stolen device
-that still answers is `devices.md` §3.4. Nothing here can wipe a device
+contacts must be told; that is `devices.md` §4.2, and a stolen device
+that still answers is `devices.md` §4.3. Nothing here can wipe a device
 remotely: a retired device that cooperates deletes its own directory,
 and one that does not is what the challenge there exists for.
 If the device that held the anchor is the one lost, the anchor's

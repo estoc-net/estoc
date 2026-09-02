@@ -3,7 +3,7 @@
 Status: **draft**, 2026-09-02; not implemented.
 
 The first of three documents that together define a version-3 vault,
-and two beside them:
+and four beside them:
 
 | document | defines |
 |----------|---------|
@@ -11,7 +11,9 @@ and two beside them:
 | `vault-folder.md` | how a vault folder serializes that store, in both directions — the interchange format every store must read and write |
 | `vault-events.md` | what the events *mean*: the types a vault records, what each carries, and the folds that turn them into contacts, threads and addresses |
 | `device.md` | not a vault document: the device that opens a vault — which author it is, the keys it holds, what it keeps for itself. Nothing of it is in the vault |
-| `devices.md` | an identity's devices toward its contacts and toward each other: vouching, revoking, challenging, fan-out, pairing, sync — a few events and folds on top of `vault-events.md`, and two DIDComm protocols |
+| `devices-protocol.md` | not a vault document: `devices/1.0`, the DIDComm protocol by which a contact holds a counterpart that writes from several devices — vouching, revoking, challenging, fan-out, and the contact's fold |
+| `devices.md` | an identity's own devices: what each owes its contacts for its siblings, pairing, the self contact, what becomes of a device that is lost — a few events and folds on top of `vault-events.md` |
+| `sync.md` | `sync/1.0`, provisional: how two devices of one identity converge on one record — a push of each append and a reconciliation by `eid` ranges, carrying the interchange format of §10 |
 
 Dependency runs one way. The folder implements this document; the
 events are written on top of it; folder and events know each other
@@ -195,7 +197,7 @@ since everything in it came in checked.
 What this proves is who wrote an event, not that they were right to:
 a live device writes what it likes, in its own name. What it rules
 out is one device writing in another's name — which is what a sync
-between siblings (`devices.md` §5.3) needs, since a retired device's
+between siblings (`sync.md`) needs, since a retired device's
 events are suspect by `author` (`vault-events.md` §5), and only a
 signature keeps a device from leaving words behind under a sibling's
 name that would outlive its retirement. A backup is trusted for
@@ -459,7 +461,7 @@ deleted.
 
 What `changes` is not: a device-to-device sync. "What do you have that
 I do not" between two vaults is a reconciliation over `eid` sets
-(`devices.md` §5.3, provisionally); it does not use this token, which
+(`sync.md`, provisionally); it does not use this token, which
 is local, and a per-device high-water mark would be wrong for the
 reason in §4.2.
 
@@ -565,7 +567,7 @@ state unreachable, since a crash between the writes leaves only
 orphan blocks, harmless (§5.3). A store that can make the writes one
 transaction (§11) may; a folder cannot and orders them. The one path
 on which a line lawfully precedes its blocks is a sync that could not
-carry them (`devices.md` §5.3): the line arrives, the blocks follow by
+carry them (`sync.md` §2): the line arrives, the blocks follow by
 `want`, and until they do the vault reads the gap as `vault-events.md`
 §8.2 says.
 
@@ -1083,7 +1085,7 @@ is a question for when a fold is too slow to run at open, not before.
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this
   document's call.
-- **Device-to-device sync** (§4.4). `devices.md` §5.3 reconciles `eid`
+- **Device-to-device sync** (§4.4). `sync.md` reconciles `eid`
   sets by range and pushes each append beside it, provisionally;
   nothing here should have to change for it beyond what
   `vault-folder.md` §10 already says.

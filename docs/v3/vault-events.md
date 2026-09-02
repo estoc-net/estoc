@@ -211,6 +211,8 @@ shows them once.
 { "type": "profile.shared",      "data": { "mid": "0198…" } }
 { "type": "peer.resolved", "data": { "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" } }
 { "type": "peer.rotated",  "data": { "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" } }
+{ "type": "peer.vouched",  "data": { "by": "did:peer:4…B", "for": "did:peer:4…C", "mid": "0198…" } }
+{ "type": "peer.revoked",  "data": { "by": "did:peer:4…A", "dids": ["did:peer:4…B1", "did:peer:4…B2"], "mid": "0198…" } }
 { "type": "message.erased", "data": { "mid": "0198…", "drop": ["<body>"], "because": "user" } }
 ```
 
@@ -285,9 +287,22 @@ shows them once.
   1).
 - `peer.vouched` / `peer.revoked`: the two other edges of the identity
   graph — a key the contact holds introducing a sibling's key, or
-  revoking one — lifted from `devices/1.0` messages, and on the
-  sending side `did.vouched` / `did.revoked`, that one went: all four
-  carry a pair and are `devices.md` §3.2 and §3.3.
+  revoking one — lifted from `devices/1.0` messages
+  (`devices-protocol.md` §3, §4). Observations on the channel that
+  carried them: `by` is the DID the sealing key wore, `for` the
+  vouch's `body.did`, `dids` the revoke's `body.dids`, `mid` the
+  message each came from. In the identity graph (§7.1) a vouch is an
+  edge from `by` to `for`, so a channel later opened by a key of
+  `for`'s document is attributed to the contact the moment
+  `peer.resolved` joins it — or before any such channel exists, since
+  the contact may now write to `for` and `peer.resolved` before
+  sending fixes the pair. A revoke's effect is the fold's (§7.2): the
+  named chains are dead from the moment it is folded, and a DID named
+  that is not in this contact's component is ignored — recorded,
+  shown, without effect. *Provisional:* written on receipt, as
+  `peer.rotated` is, rather than derived from the message on fold. On
+  the sending side `did.vouched` / `did.revoked`, that one went, are
+  `devices.md` §4.1 and §4.2; all four carry a pair.
 - Nothing about which contact the peer is goes on any of these.
 
 ### 3.2 Frozen channels
@@ -372,7 +387,7 @@ devices, and what its mediator answered.
   `author`, so the event is signed by the key it announces
   (`event-store.md` §2.5) and proves nothing but that the key's holder
   wrote it — that the device is one of *ours* is its presence in the
-  set, which is `devices.md` §5.3's concern. Immutable by being an
+  set, which is `sync.md`'s concern. Immutable by being an
   event; a second `device.minted` from one `author` is two writers
   sharing it (`vault-folder.md` §10).
 - `did.minted` and `mediation.created` are the only places a DID
@@ -387,7 +402,7 @@ devices, and what its mediator answered.
   invitation, `uses: many` a public address. An invitation is
   therefore not a file: it is a `did.published` with `as: oob`, and
   "open" is a fold (§7.4). `as: pairing` is an invitation to a device
-  of ours (`devices.md` §5.1), one-use like `oob`.
+  of ours (`devices.md` §5), one-use like `oob`.
 - `did.retired`: no further outbound from this key; inbound still
   opens.
 - `mediation.created` / `granted` / `retired`: one device's
@@ -413,7 +428,7 @@ devices, and what its mediator answered.
   other device (`event-store.md` §2.5). Its keys went with it
   (`device.md` §7): no `did/<id>` it minted signs or decrypts for the
   identity again, which the identity's contacts have to be told —
-  `devices.md` §3.3, by a revoke
+  `devices.md` §4.2, by a revoke
   from every live device.
 - `extension.installed` / `removed` / `purged`: the three decisions the
   vault's set keeps about an extension, whose own events live in a
@@ -452,6 +467,7 @@ it.
 { "type": "contact.attached", "data": { "myKey": null,        "peerKey": "m8v2…", "because": "manual" } }
 { "type": "contact.detached", "data": { "myKey": "…",         "peerKey": "…" } }
 { "type": "contact.merged",   "data": { "from": "<cid>" } }
+{ "type": "contact.verdict",  "data": { "did": "did:peer:4…B1", "verdict": "dead" } }
 { "type": "contact.deleted",  "data": {} }
 ```
 
@@ -467,7 +483,7 @@ it.
   known before any reply, and our own first message is attributed
   from the start); when the person adopts a stranger (`manual`); and
   when the other end is a device of ours (`paired`, `devices.md`
-  §5.1).
+  §5).
   Nothing else attributes: not the key we used, not the DID they
   claimed in a plaintext, not who happened to write first to a key we
   minted toward someone.
@@ -495,7 +511,10 @@ it.
   contact through attribution (§7.1).
 - `contact.verdict { did, verdict }`: the person's ruling on one of
   the contact's devices, live or dead, when the wire could not say
-  (`devices.md` §3.5).
+  (`devices-protocol.md` §6). `did` names a chain, by any DID in it;
+  `verdict` is `live` or `dead`; latest wins per chain by canonical
+  order. Never sent: what the contact did with its devices is its own
+  vault's business, and what we believe is ours.
 - `contact.deleted` is a tombstone (§9).
 - Latest-wins fields (`petname`, each `flag`) resolve by canonical
   order (`event-store.md` §3).
@@ -562,19 +581,62 @@ component every member of which is deleted is deleted:
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
   end, and its current keys are the latest `peer.resolved` for it.
   Several chains are several devices of the contact's, each live,
-  dead or in conflict — `ends[]`, `devices.md` §3.6; a fork within one
-  chain is the conflict shown.
+  dead or in conflict — `ends[]`, below; a fork within one chain is
+  the conflict shown.
+- `ends[]`: the fold of `devices-protocol.md` §7, run over the
+  contact's events in canonical order (`event-store.md` §3), one `End`
+  per chain. The identity graph gains one edge — a counted
+  `peer.vouched` joins `by` to `for` — and chains are the components
+  under `peer.rotated` edges alone. The protocol's rules read here as:
+  a chain appears through a live `contact.attached` channel under one
+  of its DIDs, or through a counted `peer.vouched`; a `peer.revoked`,
+  `peer.vouched` or `peer.rotated` on a live chain is counted; any
+  observation on a dead chain — a `message.in`, a response, an edge
+  not applied — is a word from a dead end, its `mid` in `words`; a
+  `contact.verdict` sets the state. `challenged` is a `message.out`
+  with the challenge's `msgType` on a channel under the end's key,
+  from any device of ours; `challenges[]` is every end that is `dead`
+  by a counted revoke that was not its own, has no verdict, and is not
+  `challenged` (`devices.md` §4.3). A message's `did` (§3.1) says
+  which end sent it. Two devices of ours fold this each from their own
+  observations and union by sync: both may see the same vouch,
+  arrived on each's own channel, as two counted edges; both may
+  challenge; the last verdict wins.
 - `addressedAs`: the `myKey` of the latest `message.in` across
   attributed channels.
 - `writeTo`: the unfrozen channels (§3.2). There may be several — more
   than one key of ours, more than one of theirs; the default is the
   one with the latest `message.in`, else the one under the latest
   `contact.useKey`. None means "must mint or rotate before sending".
-  With several live ends there is one per end, and a message goes to
-  all of them (`devices.md` §4).
+  With several live ends there is one per end — for every **live**
+  end, the unfrozen channels from a key of `self`'s to that end's
+  current keys, the rule above picking one when there are several —
+  and a message goes to all of them (`devices-protocol.md` §8). Empty
+  for a contact with no live end: the person is told, and the
+  conflicts, if any, are where the answer is.
 - `thread`: the union of `message.*` across attributed channels and
   devices, in canonical order. Cross-channel and cross-device order
-  relies on `at` alone.
+  relies on `at` alone. **It folds by wire id**: skeleton lines that
+  share a `wireId` and a direction are one message — the copies of one
+  outbound to several ends, or the copies of one inbound that the
+  contact sealed to several keys of ours and that reached us on
+  several devices (`devices-protocol.md` §8). A message to a contact
+  with several live ends is one plaintext, one `id`, its `to` naming
+  every end, and one **copy per end**: a `message.out` in the channel
+  from `self`'s key to that end's key, all sharing the `wireId` and
+  the same body root (the plaintext is one blob; the skeletons name
+  it), each sealed to its end, each delivered on its own with its own
+  `delivery.attempted`s — the channel model gains no shape, fan-out is
+  N skeleton lines over one blob. Inbound, each of our devices
+  receives its own copy, in its own channel, and appends its own
+  `message.in`; after sync every device holds every copy, folded to
+  one line; a device the contact never reached reads the message from
+  its sibling's copy. The message's deliveries are the union of its
+  copies'; erasing it erases every copy (`message.erased` per `mid`,
+  §8.1, the roots going when the last copy drops them). Dedup is by
+  `(cid, direction, wireId)`; a wire id is the sender's claim and is
+  never a storage identity (`event-store.md` §3), which is exactly why
+  the copies keep their own `mid`s.
 
 ### 7.3 My DIDs and devices
 
@@ -591,7 +653,7 @@ only a key whose `did.minted` or `mediation.created` `self` authored;
 another device's key is listed, shown, and never used, and the
 envelope's `author` says which is which with no field added. What
 `self` owes each contact for its siblings — vouches, revokes — is
-`devices.md` §3.7. For the identity: its `label`,
+`devices.md` §4.5. For the identity: its `label`,
 and its extensions — every `extension.installed`, marked removed or
 not and purged or not (§5), so the application can list them, run the
 ones this device's option says to, and `dispose` of the purged
@@ -824,11 +886,12 @@ where it says "delete".
   this version.
 - **The contacts' side of devices** — several devices with a key
   each, vouched for and revoked toward a contact, what a message from
-  a revoked one means, pairing and sync — is `devices.md`; this
-  document only makes each device's keys its own, and the events that
-  document adds (`peer.vouched`, `peer.revoked`, `did.vouched`,
-  `did.revoked`, `contact.verdict`, `as: pairing`, `because: paired`)
-  are additions within this version.
+  a revoked one means — is `devices-protocol.md`; the identity's own
+  side, pairing included, is `devices.md`, and sync is `sync.md`; this
+  document only makes each device's keys its own, and the events those
+  add (`peer.vouched`, `peer.revoked`, `did.vouched`, `did.revoked`,
+  `contact.verdict`, `as: pairing`, `because: paired`) are additions
+  within this version.
 - A device-side space policy for bodies (§8.4): an eviction event that
   explains a local absence without binding anyone.
 - **Third-party extensions.** This version's are first-party and the
