@@ -497,10 +497,11 @@ old devices' outbound not `sent` — is `vault-events.md` §10.
 - **A backup is the record, not the identity.** A zip carries every
   event, blob and file, and no key; unpacking it and opening it is a
   new device joining (§9.4), which the identity's other devices and
-  contacts learn of above this document. A backup is a move, not a
-  sync, and the folder does not stand in the way of one: a sync is
-  "ingest what the other device holds that I lack, and the blobs those
-  events name", and nothing here should have to change for it. What a
+  contacts learn of by `devices.md` §5.1 and §3.2. A backup is a move,
+  not a sync, and the folder does not stand in the way of one: a sync
+  is "ingest what the other device holds that I lack, and the blobs
+  those events name" (`devices.md` §5.3), and nothing here should have
+  to change for it. What a
   deletion leaves on disk, and why, is `vault-events.md` §10.
 
 ## 11. Open

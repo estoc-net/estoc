@@ -3,7 +3,7 @@
 Status: **draft**, 2026-09-02; not implemented.
 
 The first of three documents that together define a version-3 vault,
-and a fourth beside them:
+and two beside them:
 
 | document | defines |
 |----------|---------|
@@ -11,6 +11,7 @@ and a fourth beside them:
 | `vault-folder.md` | how a `.estoc/` folder serializes that store, in both directions — the interchange format every store must read and write |
 | `vault-events.md` | what the events *mean*: the types a vault records, what each carries, and the folds that turn them into contacts, threads and addresses |
 | `device.md` | not a vault document: the device that opens a vault — which author it is, the keys it holds, what it keeps for itself. Nothing of it is in the vault |
+| `devices.md` | an identity's devices toward its contacts and toward each other: vouching, revoking, challenging, fan-out, pairing, sync — a few events and folds on top of `vault-events.md`, and two DIDComm protocols |
 
 Dependency runs one way. The folder implements this document; the
 events are written on top of it; folder and events know each other
@@ -1012,9 +1013,10 @@ is a question for when a fold is too slow to run at open, not before.
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this
   document's call.
-- **Device-to-device sync** (§4.4). Anti-entropy over `eid` sets, its
-  own design; nothing here should have to change for it beyond what
-  `vault-folder.md` §10 already says.
+- **Device-to-device sync** (§4.4). `devices.md` §5.3 pushes deltas
+  against a local token, provisionally; anti-entropy over `eid` sets
+  is what would replace it, and nothing here should have to change for
+  either beyond what `vault-folder.md` §10 already says.
 - **Third-party extensions.** This version's extensions are
   first-party: the application ships them, the vault carries no code.
   Deferred with them: what `extension.installed` names — a hash of the

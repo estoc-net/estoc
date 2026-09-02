@@ -45,7 +45,7 @@ Three things, and a pointer:
 blob, every file — and the keys stay with the devices. Carrying the
 folder to a new machine and opening it there is a **new device
 joining** (§7), which the identity's other devices and its contacts
-learn of by events and protocols above this document; "all devices
+learn of by the events and protocol of `devices.md`; "all devices
 lost" is answered by a pre-commitment kept cold, not by the zip. That
 is the reason for the split: a seed that never leaves a device cannot
 be lost with a backup, leaked by a sync, or shared by two copies that
@@ -297,7 +297,7 @@ A device opens a vault; nothing else does. In order:
    since a crash between birth and the first append leaves exactly this
    gap, and idempotently. This is the device joining the vault, at the
    vault's level; joining the identity toward its contacts is a
-   protocol above this document.
+   sibling's vouch (`devices.md` §3.2).
 5. Fold the extension lifecycle (`vault-events.md` §7.3) and apply
    every `dispose` owed — the application's first act on any open,
    before any extension is handed its store — so that a purged store a
@@ -361,10 +361,10 @@ any other device (`device.retired`, `vault-events.md` §5): its events
 stay, its mediation stops being a live address, later events from it
 are suspect. Its keys are lost with it — every `did/<id>` it minted can
 no longer sign or decrypt for the identity — which the identity's
-contacts must be told; that is a protocol above this document, and so
-is a stolen device that still answers. Nothing here can wipe a device
+contacts must be told; that is `devices.md` §3.3, and a stolen device
+that still answers is `devices.md` §3.4. Nothing here can wipe a device
 remotely: a retired device that cooperates deletes its own directory,
-and one that does not is what the contacts-side protocol exists for.
+and one that does not is what the challenge there exists for.
 If the device that held the anchor is the one lost, the anchor's
 signing key is lost with it, and what stands in for it is the
 pre-commitment the identity kept cold — the rotation design, not this
