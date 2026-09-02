@@ -599,9 +599,12 @@ device-internal, as §4.4 requires; nothing of it crosses the wire.
   inline; ones that do not travel by package (`object-share.md` §8) or
   are left for the receiver to be without until a later push carries
   them — a block a line names and the store lacks is *missing*, and
-  `vault-events.md` §8.2 says what that reads as. Blocks come in by
-  collectability, as a merge's do (`vault-events.md` §10): an erased
-  blob is never sent.
+  `vault-events.md` §8.2 says what that reads as. A receiver writes
+  the blocks a push carries before it ingests the push's lines
+  (`event-store.md` §5.2); the gap this leaves for blocks that did not
+  fit is the one that rule allows. Blocks come in by collectability,
+  as a merge's do (`vault-events.md` §10): an erased blob is never
+  sent.
 - Files (`state/` and the unknown paths, `vault-folder.md` §6) are not
   in the first version's sync; a backup carries them.
 

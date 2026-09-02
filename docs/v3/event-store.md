@@ -386,7 +386,7 @@ store fed by another store's `changes` — each can deliver an old event
 after a newer one from the same author. This is why there is no
 per-device cursor (§4.4).
 
-`ingest` is not import. Import is ingest plus blobs plus files, in
+`ingest` is not import. Import is blobs, then ingest, then files, in
 that order (§10.3); and after a merge the application folds, and
 `held`s every outbound of *another* device whose delivery is not
 `sent` and that `self` has not already held (`vault-events.md` §10).
@@ -555,11 +555,19 @@ returns the bytes it was given.
 ### 5.2 Write order
 
 A blob is written **before** the event that names it — every block of
-it, leaves before the root, root before the line. The other order is
-never used: an event whose blocks were never written would be
-indistinguishable from an erase. A store that can make the writes one
-transaction (§11) may; a folder cannot and orders them, and a crash
-between the writes leaves orphan blocks, harmless.
+it, leaves before the root, root before the line. This is the rule for
+every writer that has both in hand: a `put` and the `append` that
+follows it, and an import, which has read its source whole before it
+writes anything (§10.3). A line whose blocks this copy never had
+reads as *missing*, reported as damage (`vault-events.md` §8.2), and
+a sync would carry the line on as damage; blocks first makes that
+state unreachable, since a crash between the writes leaves only
+orphan blocks, harmless (§5.3). A store that can make the writes one
+transaction (§11) may; a folder cannot and orders them. The one path
+on which a line lawfully precedes its blocks is a sync that could not
+carry them (`devices.md` §5.3): the line arrives, the blocks follow in
+a later push, and until they do the vault reads the gap as
+`vault-events.md` §8.2 says.
 
 ### 5.3 Collection
 
@@ -940,11 +948,27 @@ restates it.
    the import, not for each store in turn, or a fork found in the
    third store would find the first two already written — and the same
    is true of an anchor found wrong after the events went in, which is
-   why the anchor is checked here and not with the files.
-1. **Events**: `ingest` every event the source holds (§4.2), `self`'s
-   included — a duplicate is a duplicate — each verified on the way in
-   (§2.5): a backup is trusted for nothing an event does not prove
-   itself. A device whose events arrive
+   why the anchor is checked here and not with the files. Preflight
+   also settles what the import will write, since the source is in
+   hand: the **merged set** — this copy's events, plus every event of
+   the source whose `eid` this copy lacks; a conflict (§4.2) resolves
+   to this copy's line, so the set is exact — its fold, and the roots
+   **held** over it (`vault-events.md` §8.3). Every line of the source
+   was verified in the reading (§2.4, §2.5): a backup is trusted for
+   nothing an event does not prove itself.
+1. **Blobs**, before the events: a block absent here — a damaged one is
+   absent (§5.1), so a source that has it sound repairs it — and
+   present there is copied iff a root held over the merged set (step
+   0) reaches it, walking the blocks either copy holds, and iff it
+   passes the block check (§5.1) — one that does not is damage in the
+   source, reported, not copied; leaves before roots (§5.2). An erased
+   blob never comes back. The rule is the events'; preflight, which
+   has the merged set before a write, is what makes it answerable
+   first, and §5.2 is why it is asked first: a crash in this step
+   leaves orphans (§5.3), and a crash in any later step leaves lines
+   whose blocks are all in place.
+2. **Events**: `ingest` every event the source holds (§4.2), `self`'s
+   included — a duplicate is a duplicate. A device whose events arrive
    without its `device.minted` is read — its events are still that
    device's — and reported as incomplete. **Import never copies a
    segment**, even between two folders: a copied segment is not read,
@@ -953,27 +977,19 @@ restates it.
    had, which `ingest` promises never to do; and `changes` would
    replay bytes that were not new. Reading every line costs one parse
    of the other copy, which is what `scan` costs anyway.
-2. **Blobs**, after the events: a block absent here — a damaged one is
-   absent (§5.1), so a source that has it sound repairs it — and
-   present there is copied iff a root held over the merged event set
-   (`vault-events.md` §8.3) reaches it, walking the blocks either copy
-   holds, and iff it passes the block check (§5.1) — one that does not
-   is damage in the source, reported, not copied. An erased blob never
-   comes back. The rule is the events'; the order — events first — is
-   what makes it answerable.
 3. **Files**, each by its own policy (`vault-folder.md` §6); the format
    and anchor, checked in preflight, are not touched.
 
-Then, for each extension store the source holds (§8): its events and
-then its blobs, by rules 1 and 2, into the store of the same `ext`
-here, which comes into being with the first line written if this copy
-had none. The completeness check of rule 1 is asked of the merged
-*vault* set, since an extension store has no `device.minted` of its
-own. A store that the fold over the merged vault set says is purged
-(`vault-events.md` §7.3) is not read, as an erased blob never comes
-back; the rule is the events', asked as the blob rule is, and the
-store applies it without reading a type. One no `extension.installed`
-accounts for is read and reported.
+Then, for each extension store the source holds (§8): its blobs and
+then its events, by rules 1 and 2, into the store of the same `ext`
+here, which comes into being with the first block or line written if
+this copy had none. The completeness check of rule 2 is asked of the
+merged *vault* set, since an extension store has no `device.minted`
+of its own. A store that the fold over the merged vault set says is
+purged (`vault-events.md` §7.3) is not read, as an erased blob never
+comes back; the rule is the events', asked as the blob rule is, and
+the store applies it without reading a type. One no
+`extension.installed` accounts for is read and reported.
 
 **Restore** is the same steps into an empty store — there is no anchor
 here to check the source's against — with the format and anchor

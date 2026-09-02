@@ -408,8 +408,8 @@ export unions by `eid` and assumes no order (§5, `event-store.md`
 
 ### 9.3 Import
 
-The algorithm is `event-store.md` §10.3 — preflight, then events,
-blobs, files, then each extension store — and is not restated here;
+The algorithm is `event-store.md` §10.3 — preflight, then blobs,
+events, files, then each extension store — and is not restated here;
 this is what each step is on a folder.
 
 - **Preflight** reads `config.json` first: not version 3 (§10), or a
@@ -418,25 +418,25 @@ this is what each step is on a folder.
   under `devices/*/` and `extensions/*/devices/*/` is decoded (§4) —
   the whole source, so that the forked-self check runs over every set
   the import will write before anything is written.
-- **Events** are `ingest` (§8.3), `self`'s lines included. A device
-  directory that arrives without its `device.minted` is read and
-  reported as incomplete.
 - **Blobs** are the files under `blobs/`. One absent here — a file
   here that fails the block check (`event-store.md` §5.1) is moved
   aside and is absent, so a source that has it sound repairs it — is
   copied when `event-store.md` §10.3 says so, and only when it passes
   the check (§7); one that does not is damage in the source, reported,
-  not copied.
+  not copied. They go in before a line does (§7).
+- **Events** are `ingest` (§8.3), `self`'s lines included. A device
+  directory that arrives without its `device.minted` is read and
+  reported as incomplete.
 - **Files**: `config.json` is not touched, having been checked;
   `state/` and any other path copied when absent, never overwritten
   (§6.2, §6.3).
 - **Extension stores** are the directories under `extensions/` named
   like an `ext` (§3.1), each into the store of the same `ext` here,
-  which comes into being with the first line written if this copy had
-  none. One the fold over the merged vault set says is purged is not
-  read, and the application then disposes of any such store still on
-  disk (§3.1); one no `extension.installed` accounts for is read and
-  reported.
+  which comes into being with the first block or line written if this
+  copy had none. One the fold over the merged vault set says is purged
+  is not read, and the application then disposes of any such store
+  still on disk (§3.1); one no `extension.installed` accounts for is
+  read and reported.
 
 ### 9.4 Restore
 
