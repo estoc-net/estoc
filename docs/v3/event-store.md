@@ -458,10 +458,10 @@ folder's rules (`vault-folder.md` §2), and the cache is stale until
 deleted.
 
 What `changes` is not: a device-to-device sync. "What do you have that
-I do not" between two vaults is anti-entropy over `eid` sets and is
-designed on its own when it is designed (§12); it does not reuse this
-token, which is local, and a per-device high-water mark would be wrong
-for the reason in §4.2.
+I do not" between two vaults is a reconciliation over `eid` sets
+(`devices.md` §5.3, provisionally); it does not use this token, which
+is local, and a per-device high-water mark would be wrong for the
+reason in §4.2.
 
 ### 4.5 Damage and conflict
 
@@ -565,9 +565,9 @@ state unreachable, since a crash between the writes leaves only
 orphan blocks, harmless (§5.3). A store that can make the writes one
 transaction (§11) may; a folder cannot and orders them. The one path
 on which a line lawfully precedes its blocks is a sync that could not
-carry them (`devices.md` §5.3): the line arrives, the blocks follow in
-a later push, and until they do the vault reads the gap as
-`vault-events.md` §8.2 says.
+carry them (`devices.md` §5.3): the line arrives, the blocks follow by
+`want`, and until they do the vault reads the gap as `vault-events.md`
+§8.2 says.
 
 ### 5.3 Collection
 
@@ -1083,10 +1083,10 @@ is a question for when a fold is too slow to run at open, not before.
   expose `changes(since)` and push events rather than records, and the
   app's cache could be an IndexedDB store fed by it. Not this
   document's call.
-- **Device-to-device sync** (§4.4). `devices.md` §5.3 pushes deltas
-  against a local token, provisionally; anti-entropy over `eid` sets
-  is what would replace it, and nothing here should have to change for
-  either beyond what `vault-folder.md` §10 already says.
+- **Device-to-device sync** (§4.4). `devices.md` §5.3 reconciles `eid`
+  sets by range and pushes each append beside it, provisionally;
+  nothing here should have to change for it beyond what
+  `vault-folder.md` §10 already says.
 - **Third-party extensions.** This version's extensions are
   first-party: the application ships them, the vault carries no code.
   Deferred with them: what `extension.installed` names — a hash of the

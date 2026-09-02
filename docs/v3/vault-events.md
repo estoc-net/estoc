@@ -819,7 +819,7 @@ where it says "delete".
   `config.json`, `state/`, the key cache — and travel only by backup
   for now. And a signature says who wrote, not who is ours: a
   `device.minted` that arrives by sync is one of ours because a
-  sibling pushed it, and recording which sibling — the introducer,
+  sibling sent it, and recording which sibling — the introducer,
   which a `since` on a revoke would need (`devices.md` §8) — is not in
   this version.
 - **The contacts' side of devices** — several devices with a key
