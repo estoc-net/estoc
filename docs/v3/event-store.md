@@ -8,7 +8,7 @@ and two beside them:
 | document | defines |
 |----------|---------|
 | `event-store.md` (this one) | what a vault is to a program: the event (§2), ids and order (§3), the store (§4), blobs and files (§5, §6), local state (§7), extension stores (§8), the vault (§9), interchange (§10) |
-| `vault-folder.md` | how a `.estoc/` folder serializes that store, in both directions — the interchange format every store must read and write |
+| `vault-folder.md` | how a vault folder serializes that store, in both directions — the interchange format every store must read and write |
 | `vault-events.md` | what the events *mean*: the types a vault records, what each carries, and the folds that turn them into contacts, threads and addresses |
 | `device.md` | not a vault document: the device that opens a vault — which author it is, the keys it holds, what it keeps for itself. Nothing of it is in the vault |
 | `devices.md` | an identity's devices toward its contacts and toward each other: vouching, revoking, challenging, fan-out, pairing, sync — a few events and folds on top of `vault-events.md`, and two DIDComm protocols |

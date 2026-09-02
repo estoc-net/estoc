@@ -500,14 +500,14 @@ knows what it is taking and shows no contact-adding UI. The fold of
 invitations (`vault-events.md` §7.4) treats it as any one-use
 invitation.
 
-The new device is born (`device.md` §7) with a vault of its own that is
-a **restore of the identity's**: the first version bootstraps by
-snapshot — export on the old device, restore on the new
-(`vault-folder.md` §9.4) — so that the new device opens knowing the
-anchor, the contacts, the siblings' keys; its first open appends its
-`device.minted`. It then takes the invitation: mints a key for the
-purpose, writes its first message to the invitation's DID, and attaches
-the channel:
+The new device is born (`device.md` §7) and takes as its vault a
+**restore of the identity's**: the first version bootstraps by
+snapshot — export on the old device, restore into the new one's
+`vault/` (`vault-folder.md` §9.4) — so that the new device opens
+knowing the anchor, the contacts, the siblings' keys; its first open
+appends its `device.minted`. It then takes the invitation: mints a key
+for the purpose, writes its first message to the invitation's DID, and
+attaches the channel:
 
 ```jsonc
 { "type": "contact.created",  "data": { "cid": "0199…" } }

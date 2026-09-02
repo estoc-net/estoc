@@ -13,8 +13,8 @@ the keys that author can use, and what that copy keeps for itself and
 shows nobody. None of it is in the vault. A vault holds no secret and
 no local state, so its whole folder is a snapshot and an export has no
 exceptions; everything that would have been an exception is here. The
-vault does not know a device directory exists; a device points at a
-vault.
+vault does not know a device directory exists; it is `vault/` inside
+one, and the device holds it.
 
 ## 1. What a device is
 
@@ -27,7 +27,7 @@ fault (§7). It is the pair (agent, vault) as it rests: the agent is the
 program that runs, and this directory is everything the agent needs
 beyond the vault to be device `dev` of that vault.
 
-Three things, and a pointer:
+Three things, and the record:
 
 - **Which author it is** — `dev` and `instance` (§3). Minted when the
   device is born, never changed, never copied.
@@ -38,16 +38,19 @@ Three things, and a pointer:
   which device minted each, never a secret.
 - **What it keeps for itself** — local state (§5): options, cache,
   trace, per owner, the three kinds `event-store.md` §7 defines.
-- **The vault** — a path (§3). One device, one vault; a vault does not
-  know its devices except as authors in its logs.
+- **The vault** — `vault/`, the folder `vault-folder.md` defines,
+  inside this directory (§2). One device, one vault; the device holds
+  it, and the vault does not know its devices except as authors in its
+  logs.
 
-**What a backup is.** A backup is the record — every event, every
-blob, every file — and the keys stay with the devices. Carrying the
-folder to a new machine is copying it, and opening the copy there is
-a **new device joining** (§7) — the copy is that device's vault from
-then on — which the identity's other devices and its contacts
-learn of by the events and protocol of `devices.md`; "all devices
-lost" is answered by a pre-commitment kept cold, not by the zip. That
+**What a backup is.** A backup is the record — `vault/`: every event,
+every blob, every file — and the keys stay with the device around it.
+Carrying the record to a new machine is copying that subtree, and a
+device born there takes it as its own (§7) — a **new device joining**;
+the copy is that device's vault from then on — which the identity's
+other devices and its contacts learn of by the events and protocol of
+`devices.md`; "all devices lost" is answered by a pre-commitment kept
+cold, not by the zip. That
 is the reason for the split: a seed that never leaves a device cannot
 be lost with a backup, leaked by a sync, or shared by two copies that
 both went on writing.
@@ -56,8 +59,9 @@ both went on writing.
 
 ```
 <device>/
-  device.json              singleton — which author, which instance, which vault; §3
+  device.json              singleton — which author, which instance; §3
   keystore.json            @estoc/keystore v4 — the keys this device holds; §4
+  vault/                   the vault — vault-folder.md; the one subtree a backup carries
   agent/                   the agent's local state; §5
     options.json
     cache/
@@ -76,32 +80,45 @@ JSONL is compact, one record per line.
 
 Where the root is, is the host's:
 
-- **Browser.** The origin's OPFS holds two roots side by side:
-  `.estoc/` is the vault, `device/` is this. The unlocked seed cached
-  in IndexedDB (§4.4) is the device's too, kept out of OPFS only
-  because a non-extractable `CryptoKey` cannot be a file.
-- **Daemon and CLI.** The vault is `<folder>/.estoc/`, wherever the
-  person keeps the folder — the git model, the person's files around
-  the machinery. The device is under the platform's state directory
+- **Browser.** The origin's OPFS root is the device, and `vault/` in
+  it the vault. The unlocked seed cached in IndexedDB (§4.4) is the
+  device's too, kept out of OPFS only because a non-extractable
+  `CryptoKey` cannot be a file. One origin is one device, the
+  platform's Web Lock (§6) keeps it one process, and nothing in an
+  origin is copied by habit, so the rule below costs nothing there.
+- **Daemon and CLI.** The device is a directory the host names. Under
+  the platform's state directory by default
   (`$XDG_STATE_HOME/estoc/devices/<dev>/` on Linux, the equivalent
-  elsewhere), never inside the folder: the folder is what the person
-  carries, and the device is what must not travel with it. A daemon's
-  pid file and access token are the agent's local state (§5) and live
-  here, not in the vault.
-- **One vault, one device.** The folder is this device's copy of the
+  elsewhere), where nothing is copied by habit; or, for the person who
+  wants the git model — the record among their own files —
+  `<folder>/.estoc/`, the folder theirs and the machinery a
+  dot-directory in it. Either way `vault/` is inside, and the
+  placement changes nothing but what a careless copy carries. A
+  daemon's pid file and access token are the agent's local state (§5)
+  and live here, not in the vault.
+- **Copy and clone.** Copying `vault/` is a backup: the record, no
+  key, and whoever opens it is a device of their own (§7). Copying the
+  device directory is cloning the device: the seed goes with it, and
+  two copies that both write are a forked self (§7), which sync or
+  import catches and the person resolves by discarding one. A program
+  cannot tell a move from a copy, so on disk the rule is the person's
+  to keep, as it is theirs to run one process on the directory (§6);
+  the state directory keeps it out of the way of habit, and a person
+  who puts it among their files takes the rule with it.
+- **One vault, one device.** `vault/` is this device's copy of the
   record; the other authors in its logs got there by sync and import
   (union), not by opening it. A second device on the same machine is a
-  second folder — a copy, brought level by import or sync — and two
-  `device.json` naming one `vault` path is a misconfiguration, not a
-  shared vault: nothing here serialises two devices over one folder,
-  and blob collection and extension disposal (`event-store.md` §5,
+  second directory with a `vault/` of its own — a copy, brought level
+  by import or sync — and nothing here serialises two devices over one
+  vault: blob collection and extension disposal (`event-store.md` §5,
   §8) assume there is nothing to serialise. What the lock (§6)
   prevents is two *processes* of one device.
 
-The directory is never in a snapshot, never exported, never merged,
-never read by another device; nothing in it is a file in the
-`FileStore` sense (`event-store.md` §6). It is not a vault and does not
-look like one: no `config.json`, no `devices/`, no `blobs/`.
+Outside `vault/`, the directory is never in a snapshot, never
+exported, never merged, never read by another device; nothing in it is
+a file in the `FileStore` sense (`event-store.md` §6). It is not a
+vault and does not look like one: no `config.json`, no `devices/`, no
+`blobs/` at its root.
 
 ## 3. `device.json`
 
@@ -109,18 +126,16 @@ look like one: no `config.json`, no `devices/`, no `blobs/`.
 {
   "version": 1,
   "dev": "z6MkhaXg…",             // the author this device writes as: its device key's public half
-  "instance": "01991c2e-…",       // what this device's change tokens name
-  "vault": "/home/alice/Estoc"    // the vault's root, as the host resolves it; in the browser, the OPFS root
+  "instance": "01991c2e-…"        // what this device's change tokens name
 }
 ```
 
 Written once, when the device is born (§7), and never rewritten: `dev`
-is fixed for the device's life, and so is `instance`. `vault` is a
-pointer the host understands — an absolute path on disk; in the
-browser the field is present and names the origin's OPFS root, since
-there is nowhere else the vault could be. Pointing runs one way only:
-nothing in the vault names a device directory, and a vault opened by a
-device it has never met simply gains an author (§6).
+is fixed for the device's life, and so is `instance`. Nothing here
+names the vault: it is `vault/` (§2), held rather than pointed at, and
+the relation runs one way — nothing in the vault names the device
+directory, and a record restored into a device it has never met simply
+gains an author (§6, §7).
 
 - **`dev`** is the device key of `event-store.md` §3 — the public half
   of the keystore's `device` key (§4.1), as a did:key id, `z6Mk…`,
@@ -265,8 +280,8 @@ package has always refused them.
 
 `event-store.md` §7 defines the three kinds — options, cache, trace —
 and what may be done to each; this section is where a device keeps
-them: in its own directory, outside the folder a backup zips, so that
-no rule of the vault needs an exception for them.
+them: in its own directory, outside `vault/`, which is what a backup
+zips, so that no rule of the vault needs an exception for them.
 
 Every piece of local state belongs to an **owner**, in a directory of
 its own at the device root:
@@ -282,7 +297,8 @@ its own at the device root:
   directory, and so that disposing of an extension is one rule applied
   in two roots (§6).
 - `<app>/` — an application's, by a name of its own (`[a-z][a-z0-9-]*`,
-  and not `agent`, `extensions`, `damaged`, `device` or `keystore`):
+  and not `agent`, `extensions`, `damaged`, `vault`, `device` or
+  `keystore`):
   its fold caches, its view state. The three kinds apply; the shapes
   inside are the owner's.
 
@@ -303,14 +319,19 @@ in the vault, never a line in this directory.
 A device opens a vault; nothing else does. In order:
 
 1. Read `device.json` (§3). Absent, the device is born first (§7).
-2. Open the vault at `vault`: `config.json` must be version 3
-   (`vault-folder.md` §10). Its stores get `dev` as `self` and a
-   signer for the `device` key that answers once the device is
-   unlocked (`event-store.md` §9, §2.5).
+2. Open `vault/`: `config.json` must be version 3 (`vault-folder.md`
+   §10). Absent, the device holds no record yet and creates or
+   restores one (§7) before anything else. Its stores get `dev` as
+   `self` and a signer for the `device` key that answers once the
+   device is unlocked (`event-store.md` §9, §2.5).
 3. Take the device's lock: one process per device. In the browser a
-   Web Lock named for the device; on disk a lock file in the device
-   directory. One device, one vault (§2), so this also serialises the
-   vault's only writer.
+   Web Lock named for the device, which the platform enforces; on disk
+   a lock file in the device directory, which is advisory — it stops
+   the second process of a person who forgot the first, and a stale
+   one after a crash is the person's to clear — and two daemons on one
+   directory are the person's to prevent, since the format does not
+   survive them (`vault-folder.md` §10). One device, one vault (§2), so
+   this also serialises the vault's only writer.
 4. Fold the extension lifecycle (`vault-events.md` §7.3) and apply
    every `dispose` owed — the application's first act on any open,
    before any extension is handed its store — so that a purged store a
@@ -332,7 +353,7 @@ A device opens a vault; nothing else does. In order:
 interface Device {
   readonly self: string;                 // dev — the device key's public half (§3)
   readonly instance: string;
-  readonly vault: Vault;                 // event-store.md §9, opened at device.json's `vault`
+  readonly vault: Vault;                 // event-store.md §9, the store over vault/ (§2)
   readonly keys: Keystore;               // §4: signers by name, never bytes
   local(owner: string): LocalOwner;      // §5: options, cache, trace
   dispose(ext: string): Promise<void>;   // §6: the store in the vault and the local state here
@@ -353,33 +374,37 @@ dead from the call on. One decision, two roots, one rule.
 
 ## 7. Birth, restore, loss
 
-**Birth.** A device is born when a program with no `device.json` is
-asked to open or create a vault: it makes a seed and seals it under
-the passphrase given, derives the `device` key from it — its public
-half is `dev` (§3) — mints `instance`, and writes `keystore.json` and
-then `device.json`. The three are one act and die together; there is
-no device with a `dev` and no seed, since `dev` is the seed's, and no
-seed that is not a device's. Creating a vault at the same time — `config.json`
-with the anchor, the anchor minted from this seed under the name
-`anchor` — is the identity's birth; the device that did it is the one
-that can sign as the anchor, and the vault records which by the
-`author` of the anchor's events.
+**Birth.** A device is born empty, and first: a program with no
+`device.json` makes a seed and seals it under the passphrase given,
+derives the `device` key from it — its public half is `dev` (§3) —
+mints `instance`, and writes `keystore.json` and then `device.json`;
+`vault/` does not exist yet. The three are one act and die together;
+there is no device with a `dev` and no seed, since `dev` is the seed's,
+and no seed that is not a device's. Then, once, the device gets its
+record, and `vault/` comes into being with it: **created** —
+`config.json` with the anchor, the anchor minted from this seed under
+the name `anchor` — which is the identity's birth; the device that did
+it is the one that can sign as the anchor, and the vault records which
+by the `author` of the anchor's events; or **restored**, below. There
+is no record without a device around it, and no device with two.
 
-**Restore** is placing a snapshot somewhere and pointing a device at
-it (`vault-folder.md` §9.4): a new device, or an existing one that has
-lost its folder. The device's first unlock appends its `device.minted`
-(§6), and the imported devices' events are history — visible, their
-mediations listed, their outbound not `sent` held as imported
-(`vault-events.md` §10) — until the person retires them. There is no
-restore *of a device*: a device that is gone is gone with its keys
-(below), and the folder does not bring it back.
+**Restore** is a device taking a snapshot as its `vault/`
+(`vault-folder.md` §9.4): one just born, or one whose `vault/` is gone.
+A folder store takes it whole into the empty `vault/` before the first
+open; any store imports it (`vault-folder.md` §9.3). The device's first
+unlock appends its `device.minted` (§6), and the imported devices'
+events are history — visible, their mediations listed, their outbound
+not `sent` held as imported (`vault-events.md` §10) — until the person
+retires them. There is no restore *of a device*: a device that is gone
+is gone with its keys (below), and the record does not bring it back.
 
-**Carrying the folder** to another machine and opening it there is
-therefore a new device, every time, and never an ambiguous "same
-device on a new machine": `dev` did not travel, because the device
-directory does not. The forked-self check (`event-store.md` §4.2)
-catches the one thing that must not happen — a device *directory*
-copied, and both copies writing.
+**Carrying the record** to another machine — `vault/`, or the zip of
+it — and opening it there is therefore a new device, every time, and
+never an ambiguous "same device on a new machine": `dev` did not
+travel, because the directory around `vault/` did not. Carrying that
+directory is the one thing that must not be done twice (§2), and the
+forked-self check (`event-store.md` §4.2) is what catches it — a
+device directory copied, and both copies writing.
 
 **Loss.** A device lost, wiped or stolen is retired by a decision from
 any other device (`device.retired`, `vault-events.md` §5): its events
@@ -408,16 +433,16 @@ them like this: the seed is `seedJwe`, under the passphrase; every
 `stored` key is under the KEK, hence under the passphrase; the unlocked
 `SeedKey` a client caches is non-extractable and, in the browser, out
 of script's reach. Everything else here — `dev`, key names, DIDs,
-options, caches, trace — is plaintext, as the vault is. Whether the
-directory as a whole is encrypted at rest is the platform's (full-disk
-encryption, the origin's isolation) and no client claims more than it
-does.
+options, caches, trace — is plaintext, as the vault in it is. Whether
+the directory as a whole is encrypted at rest is the platform's
+(full-disk encryption, the origin's isolation) and no client claims
+more than it does.
 
 The seed is never backed up, exported, synced, displayed, or derived
 from a phrase a person could write down. That is the premise the rest
 of the multi-device design rests on, and the reason binding `stored`
 keys to it costs nothing (§4.2): the only way a seed leaves is with the
-device, and a device that has left is retired.
+device directory (§2), and a device that has left is retired.
 
 ## 9. Versioning, open
 
@@ -444,12 +469,9 @@ device, and a device that has left is retired.
   and a device is retired whole (§7) rather than re-keyed; a chain of
   device keys, KERI-shaped, is what would change that
   (`event-store.md` §12), and nothing in this version asks for it.
-- **`vault` as a pointer.** A path on disk is a poor name for
-  something the person may move. Whether `device.json` should also
-  record the vault's identity — `config.json`'s anchor — so that a
-  device pointed at the wrong folder refuses rather than joins it, is
-  worth deciding before implementation: the refusal costs nothing and
-  the join is the mistake that is hard to undo.
-- **Several devices in one state directory.** Where the host keeps
-  more than one (`devices/<dev>/`), it names them by `dev`; whether it
-  keeps a list or reads the directories is the host's.
+- **Placement.** Nothing in the format records where a device
+  directory is: the host knows. Where it keeps more than one
+  (`devices/<dev>/`), it names them by `dev`; whether it keeps a list,
+  reads the directories, or lets the person name a folder is the
+  host's, and so is offering to move one — a move is not a copy, and
+  only the person knows which they did (§2).

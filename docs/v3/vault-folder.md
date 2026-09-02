@@ -1,4 +1,4 @@
-# The `.estoc` folder, version 3 — draft
+# The vault folder, version 3 — draft
 
 Status: **draft**, 2026-09-02; not implemented.
 
@@ -19,14 +19,15 @@ asks a fold and applies the answer.
 A vault is a directory. The directory **is** the format: a backup is
 the directory zipped, a restore is the zip unpacked, and any client
 that can read files can read a vault. Nothing about an identity's
-*record* lives anywhere else. Its keys are not here: they are in its
-devices (`device.md`), and the vault holds no secret.
+*record* lives anywhere else. Its keys are not here: they are in the
+device that holds it (`device.md`), and the vault holds no secret.
 
-The directory has two halves. `.estoc/` is the machine's: identity,
-events, blobs. Whatever surrounds it is the person's — documents to
-publish, one day — and is not specified here. In the browser the vault
-root is the origin's OPFS root, where `.estoc/` sits beside the
-device's own directory (`device.md` §2).
+The directory is `vault/` in a device directory (`device.md` §2): on
+disk wherever the host keeps that, in the browser under the origin's
+OPFS root, which is the device. Around it is the device's — keys,
+local state — and around that the person's, and neither is specified
+here: this document is the subtree, which is the whole record and the
+one thing a backup carries.
 
 Paths are `/`-separated, relative to the vault root, ASCII with no
 backslash, with no `.` or `..` segments. Text files are UTF-8; JSON files are
@@ -62,7 +63,7 @@ The principles of `event-store.md` §1 as they land on a file system.
 ## 3. Layout
 
 ```
-.estoc/
+vault/
   config.json                    singleton — format/version, anchor; immutable
   blobs/<cid>                    content-addressed blocks — message bodies, attachments, received objects; the one place anything is unlinked
   devices/<dev>/<seg>.jsonl      everything device <dev> wrote: one log, every event a line
@@ -73,8 +74,8 @@ The principles of `event-store.md` §1 as they land on a file system.
 ```
 
 Nothing here is a secret and nothing here is one copy's own: the keys
-and the local state are the device's (`device.md`), in a directory of
-its own that points at this one.
+and the local state are the device's (`device.md`), in the directory
+around this one.
 
 There is no per-device file — a device announces itself with an event
 (`vault-events.md` §5) — and no directory per contact or per channel:
@@ -387,7 +388,7 @@ written by a store, and an import (§9.3) refuses it before writing.
 
 ### 9.1 Snapshot
 
-Everything under `.estoc/`: the folder is the snapshot — every file,
+Everything under `vault/`: the folder is the snapshot — every file,
 `extensions/` included, so an `extensions/<ext>/` with nothing in it
 is not in it (§3.1). A folder store's snapshot is a copy; the zip a
 backup carries is this tree, and carries no key of the identity: it is
@@ -445,9 +446,9 @@ Into an empty backend, a folder store copies the snapshot as it is,
 it is a conforming folder — the one whole-file copy that survives
 §8.3, safe because there is nothing here for it to double. A store
 that is not a folder ingests it (§9.3). Empty means nothing at
-`.estoc`. The device that opens the copy is whichever device was
-pointed at it (`device.md` §7) — one just born for it, or one whose
-folder was lost — and its first unlock appends its `device.minted`
+`vault/` in the device that restores (`device.md` §7) — one just born
+for it, or one whose `vault/` was lost; the copy is that device's
+vault from then on, and its first unlock appends its `device.minted`
 (`device.md` §6);
 the imported directories stay as history, the old devices' mediations
 included, visible until the person retires them (`vault-events.md`
@@ -480,13 +481,14 @@ old devices' outbound not `sent` — is `vault-events.md` §10.
 - **Writers.** One writer per device directory is the format-level
   rule (rule 2); the device serialises its own processes (`device.md`
   §6: a Web Lock in the browser, a lock file on disk), and a folder is
-  one device's (`device.md` §2): two devices are two folders, each a
-  copy, and their union is an import (§9.3) or a sync, never a shared
-  folder. Two processes sharing one `dev` is a bug, not a merge: it
-  shows up when either imports the other — events of `self` it never
-  wrote (§8.3) — as one `eid` with two contents (§8.5), or as a second
-  `device.minted` under one `dev` (`vault-events.md` §5), and the
-  remedy is for one of them to mint its own.
+  one device's, inside its directory (`device.md` §2): two devices are
+  two folders, each a copy, and their union is an import (§9.3) or a
+  sync, never a shared folder. Two processes sharing one `dev` is a
+  bug, not a merge: it shows up when either imports the other — events
+  of `self` it never wrote (§8.3) — as one `eid` with two contents
+  (§8.5), or as a second `device.minted` under one `dev`
+  (`vault-events.md` §5), and the remedy is for one of them to mint its
+  own.
 - **Crashes.** A log is appended; a crash may leave a cut-short last
   line, which readers report and skip, and the next append terminates
   first (§5). Durability past a process crash is the backend's to
