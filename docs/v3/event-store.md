@@ -1,14 +1,16 @@
 # The vault as an event store — draft
 
-Status: **implemented** as of 2026-09-01 (`@estoc/event-store`); drafted 2026-08-30.
+Status: **draft**, 2026-09-02; not implemented.
 
-The first of three documents that together define a version-2 vault:
+The first of three documents that together define a version-3 vault,
+and a fourth beside them:
 
 | document | defines |
 |----------|---------|
 | `event-store.md` (this one) | what a vault is to a program: the event (§2), ids and order (§3), the store (§4), blobs and files (§5, §6), local state (§7), extension stores (§8), the vault (§9), interchange (§10) |
 | `vault-folder.md` | how a `.estoc/` folder serializes that store, in both directions — the interchange format every store must read and write |
 | `vault-events.md` | what the events *mean*: the types a vault records, what each carries, and the folds that turn them into contacts, threads and addresses |
+| `device.md` | not a vault document: the device that opens a vault — which author it is, the keys it holds, what it keeps for itself. Nothing of it is in the vault |
 
 Dependency runs one way. The folder implements this document; the
 events are written on top of it; folder and events know each other
@@ -167,20 +169,20 @@ event at all are a *damaged* line (§4.5), reported, not stored.
 ## 3. Identity, time, order
 
 - **`author`** — a device id: 6 characters of lowercase RFC 4648
-  base32, minted by a store the first time it opens (or creates) a
-  vault and finds no record of which device it is. The store keeps
-  that record locally (`vault-folder.md` §7) and exposes it as `self`
-  (§4); it is not part of the event set and does not travel in a
-  backup, so a restore mints a fresh one and keeps the old device's
-  events as history. Not secret. A device announces itself with its
-  first event, `device.minted` (`vault-events.md` §5), so a device's
-  existence travels with its events and needs no side channel.
-- **instance** — a random id a store mints together with `self` and
-  keeps beside it (`vault-folder.md` §7). Not an event field, not in a
-  backup. It names this copy of the store to the tokens it issues
-  (§4.4): a fold takes `self` as a parameter, so a cache folded under
-  one device must never be applied under another, and a restore that
-  mints a fresh `self` mints a fresh instance with it.
+  base32, minted by the device when it is born (`device.md` §3, §7)
+  and given to the store when the device opens the vault; the store
+  exposes it as `self` (§4). It is not part of the event set and does
+  not travel in a backup: whoever opens a restored folder is a device
+  of their own, and the old devices' events stay as history. Not
+  secret. A device announces itself with its first event,
+  `device.minted` (`vault-events.md` §5), so a device's existence
+  travels with its events and needs no side channel.
+- **instance** — a random id the device mints together with `self`
+  and keeps beside it (`device.md` §3). Not an event field, not in a
+  backup. It names this device's store to the tokens it issues (§4.4):
+  a fold takes `self` as a parameter, so a cache folded under one
+  device must never be applied under another; a device is born with
+  both and is never copied.
 - **`eid`** — every event's id: a bare uuidv7, trusted to be unique
   across devices, the dedup key for everything. Minted at the instant
   the event is appended, so it and the event's `at` agree within a
@@ -300,7 +302,7 @@ written — one bad draft and nothing lands — then each event is minted
 in input order at one reading of the clock: one `at` for the batch,
 eids monotone within it. The batch lands whole or not at all across a
 crash of the process — the folder store writes it as a fresh segment,
-whole, rather than appending (`vault-folder.md` §9.2). Past a crash of
+whole, rather than appending (`vault-folder.md` §8.2). Past a crash of
 the process, the claim is the backend's, as above.
 
 Appends from one store instance are ordered; two instances over one
@@ -316,7 +318,7 @@ already present. An `eid` already present with the same content is a
 the store keeps what it had, stores nothing, and reports it. Never
 rewrites, never drops, never reorders what was there. This is the
 whole of merge, at every level: the folder store does it in one pass
-over the other copy (`vault-folder.md` §9.3), and there is no
+over the other copy (`vault-folder.md` §8.3), and there is no
 file-level shortcut that produces the same set (§10.3).
 
 `ingest` reads its whole input before it writes anything (a vault's
@@ -325,13 +327,13 @@ copy whole anyway), because of `self`. Events authored by `self` can
 legitimately arrive — a backup of this very device, merged back — and
 each is a duplicate, counted and skipped. One that is *not* already
 here, or is here with other content, means two writers have shared
-one device: this copy was cloned with its local state and both went
+one device: this device's directory was cloned and both copies went
 on writing, or this copy lost events it once wrote. Either way the
 store does not know which history is its own, so it stops before
 writing — throws `ForkedSelf`, naming the events — and the person
-decides: usually, this copy mints a fresh device (§3,
-`vault-folder.md` §7) and imports again, after which the old device's
-events are history on both sides. Silently skipping them would hide
+decides: usually, one copy becomes a fresh device (`device.md` §7)
+and imports again, after which the old device's events are history on
+both sides. Silently skipping them would hide
 exactly the fault the `author` field exists to expose.
 
 Nothing about the authoring device's order survives ingest. A backup
@@ -429,12 +431,12 @@ edit.
 against what it holds and reports them (§4.2). A reader can also meet
 them, because a serialization may come to hold one `eid` twice through
 a copy made by hand — a segment dropped in with a file manager, never
-through a store (`vault-folder.md` §9.5): the store then keeps one by
+through a store (`vault-folder.md` §8.5): the store then keeps one by
 a fixed rule of its own, stated where the store is, yields that one
 from `scan` and `changes`, and reports the others in `conflicting()`.
 The rule exists so that every reader of one store agrees; it is not a
 judgement about which is right. A conflict is evidence of two writers
-sharing one `author` (`vault-folder.md` §11), and what the application
+sharing one `author` (`vault-folder.md` §10), and what the application
 shows.
 
 ## 5. Blobs
@@ -523,7 +525,7 @@ abandoned by a crash or about to be named, and the store cannot tell
 which. What it can tell is age. It keeps, for each block, when it last
 wrote it — a fact of this copy alone, kept however the store keeps
 such things (the folder reads its file's modification time,
-`vault-folder.md` §8), never exported; a block whose write time it
+`vault-folder.md` §7), never exported; a block whose write time it
 does not know it takes as written now — and **a `put` or `putBlock`
 of a block already held renews that time**: the write is a no-op for
 the bytes and not for the clock, because the caller is about to name
@@ -567,13 +569,13 @@ Files are named by path, and the paths are the folder's
 (`vault-folder.md` §6): the format and anchor, the key cache, reserved
 state, and any path a reader does not understand and carries along —
 including a path under `devices/` or `blobs/` that is not shaped like
-a segment or a blob (`vault-folder.md` §9.6), so that it survives a
+a segment or a blob (`vault-folder.md` §8.6), so that it survives a
 trip through a store that is not a folder. There is no per-device
 file: everything about a device is an event.
 
 `write` takes a file's path and no other: not one shaped like a
-segment's or a block's, not one under `local/`, not one at a
-directory the layout owns (`vault-folder.md` §9.6), and not one that,
+segment's or a block's, not one at a directory the layout owns
+(`vault-folder.md` §8.6), and not one that,
 with the paths the store holds, would make a file and a directory of
 one name. So the tree a store's files make is one a folder holds, and
 an export (§10.2) is one an import (§10.3) takes: the round trip
@@ -587,13 +589,13 @@ store applies none of them (§10.3).
 ## 7. Local state
 
 Everything so far is the vault: what a backup carries, what two copies
-merge, what a text editor reads. A copy also keeps things that are
+merge, what a text editor reads. A device also keeps things that are
 true of it alone and travel nowhere — which device it is (§3), the
 folds it has cached, the retention it was told to apply, the envelopes
 it observed. None of it is an event of the set, and none of it is a
 file in the `FileStore` sense: a snapshot has none, an import touches
-none, and no other device reads any. `vault-folder.md` §7 says where
-the folder keeps it.
+none, and no other device reads any. It is kept in the device's own
+directory, never in the vault (`device.md` §5).
 
 ### 7.1 Owners and kinds
 
@@ -783,11 +785,12 @@ What follows from it:
   purged is a fold over the vault's set (`vault-events.md` §7.3); a
   store does not read `extension.purged`, or any type. The application
   applies the fold by calling `dispose(ext)` (§9), the one operation
-  besides `BlobStore.collect` that removes bytes: it removes the
-  extension's store and the extension's local state (§7) together, so
-  that options, cache and trace do not outlive what they were about.
+  besides `BlobStore.collect` that removes bytes: called on the device
+  (`device.md` §6) it removes the extension's store and the
+  extension's local state (§7) together, so that options, cache and
+  trace do not outlive what they were about.
   Import (§10.3) asks the same fold, as it asks the blob rule; a
-  snapshot copies what is on disk (`vault-folder.md` §10.1), and a
+  snapshot copies what is on disk (`vault-folder.md` §9.1), and a
   purged store it still carries is dropped by whoever imports it. On
   open, before any extension is handed its store or run, the
   application folds the lifecycle and applies every `dispose` the fold
@@ -817,11 +820,13 @@ interface Vault {
   events: EventStore; blobs: BlobStore; files: FileStore;
   extension(ext: string): { events: EventStore; blobs: BlobStore };   // a handle; bytes exist from the first write; rejects an `ext` this instance disposed of
   extensions(): Promise<string[]>;                                     // every `ext` with bytes on disk
-  dispose(ext: string): Promise<void>;                                 // store and local state, whole; every handle dead
+  dispose(ext: string): Promise<void>;                                 // the store, whole; every handle dead. The device's dispose (device.md §6) calls it and removes the local state too
 }
 ```
 
-What a copy keeps for itself (§7) is none of these. The folder is
+What a device keeps for itself (§7), and the keys it holds, are none
+of these: they are the device's (`device.md`), which opens the vault
+and hands the store its `self`. The folder is
 `vault-folder.md` §3; export and import loop over the map (§10.2,
 §10.3).
 
@@ -829,7 +834,7 @@ What a copy keeps for itself (§7) is none of these. The folder is
 
 ### 10.1 The interchange format
 
-Every store must be able to render its whole vault as a version-2
+Every store must be able to render its whole vault as a version-3
 folder and read one back. The folder is the interchange format and the
 sovereignty contract: a backup is a folder in a zip, a merge is a
 folder read into a store, and a reader with a text editor is a
@@ -842,7 +847,7 @@ store, rendering *S* as a folder and reading that folder back yields
 *S*: same events, same content in the sense of §2.3, with `eid` as
 identity. Blobs and files round-trip byte for byte. This is the
 conformance test every store passes, and the definition of "a
-version-2 vault" that is independent of the medium.
+version-3 vault" that is independent of the medium.
 
 ### 10.2 Export
 
@@ -868,7 +873,7 @@ has applied the fold (`dispose`), and dropped on import if not.
 
 Nothing is written until everything is checked; then three kinds of
 thing, three rules, in this order. This is the one statement of the
-algorithm: `vault-folder.md` §10.3 says what each step is on a folder,
+algorithm: `vault-folder.md` §9.3 says what each step is on a folder,
 `vault-events.md` §10 what the events require of it, and neither
 restates it.
 
@@ -877,7 +882,7 @@ restates it.
    an import in memory stages it, which is that store's problem and
    not a change to the rule — and three things are checked against it,
    any failure refusing the import with nothing written: that the
-   source is a version-2 vault (`vault-folder.md` §11); that its format
+   source is a version-3 vault (`vault-folder.md` §10); that its format
    and anchor are identical to this one's (`vault-folder.md` §6.1) —
    the check that makes this a merge rather than a restore, made above
    the store; and that no set the import will write is a forked self
@@ -925,9 +930,10 @@ accounts for is read and reported.
 here to check the source's against — with the format and anchor
 written last. A folder store restoring into an empty backend may copy
 the snapshot as it is, since the snapshot is the interchange format
-and a copy of it is a conforming folder (`vault-folder.md` §10.4).
-There is no `self`, so the first open mints a device and an instance
-(§3); the imported devices stay as history.
+and a copy of it is a conforming folder (`vault-folder.md` §9.4).
+The device that opens it appends its own `device.minted`
+(`vault-folder.md` §8); the imported devices stay as history, and
+their keys stayed with them (`device.md` §7).
 
 ## 11. A database store
 
@@ -989,8 +995,8 @@ is a question for when a fold is too slow to run at open, not before.
 - **Indexing** (§4.3). Equality on `author`, `type` and a top-level
   field of `data` lets a store index what it likes; whether the folder
   store should keep a local index under its owner's cache
-  (`vault-folder.md` §7), or leave all of that to folds, is for when
-  open is slow.
+  (`device.md` §5), or leave all of that to folds, is for when open
+  is slow.
 - **`fsync` on Node** (§4.1). A per-append `fsync` would let the
   daemon claim power-loss durability. Cheap; not decided.
 - **The profile's hasher in the store** (§5.1). `put` chunks and roots
@@ -1008,7 +1014,7 @@ is a question for when a fold is too slow to run at open, not before.
   document's call.
 - **Device-to-device sync** (§4.4). Anti-entropy over `eid` sets, its
   own design; nothing here should have to change for it beyond what
-  `vault-folder.md` §11 already says.
+  `vault-folder.md` §10 already says.
 - **Third-party extensions.** This version's extensions are
   first-party: the application ships them, the vault carries no code.
   Deferred with them: what `extension.installed` names — a hash of the

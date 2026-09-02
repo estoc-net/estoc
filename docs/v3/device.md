@@ -1,8 +1,8 @@
 # The device — draft
 
-Status: **draft**, 2026-09-02; nothing implemented. Version 1 of the
+Status: **draft**, 2026-09-02; not implemented. Version 1 of the
 device, which goes with version 3 of the folder (`vault-folder.md`
-§11).
+§10).
 
 The fourth document, and the first that is not about the vault. The
 three before it define a version-3 vault: an event set
@@ -41,17 +41,15 @@ Three things, and a pointer:
 - **The vault** — a path (§3). One device, one vault; a vault does not
   know its devices except as authors in its logs.
 
-**Sovereignty, restated.** Under version 2 the vault carried the one
-seed, so a backup was the identity: unzip it anywhere and be that
-person. Under this document a backup is the record — every event,
-every blob, every file — and the keys stay with the devices. Carrying
-the folder to a new machine and opening it there is a **new device
+**What a backup is.** A backup is the record — every event, every
+blob, every file — and the keys stay with the devices. Carrying the
+folder to a new machine and opening it there is a **new device
 joining** (§7), which the identity's other devices and its contacts
 learn of by events and protocols above this document; "all devices
-lost" is answered by a pre-commitment kept cold, not by the zip. The
-trade is the reason for the split: a seed that never leaves a device
-cannot be lost with a backup, leaked by a sync, or shared by two
-copies that both went on writing.
+lost" is answered by a pre-commitment kept cold, not by the zip. That
+is the reason for the split: a seed that never leaves a device cannot
+be lost with a backup, leaked by a sync, or shared by two copies that
+both went on writing.
 
 ## 2. Layout
 
@@ -68,7 +66,7 @@ copies that both went on writing.
     cache/
     trace/<seg>.jsonl
   <app>/                   an application's own local state, by its name, beside the agent's; §5
-  damaged/                 what the vault store moved aside (vault-folder.md §8); the store's, delete at will
+  damaged/                 what the vault store moved aside (vault-folder.md §7); the store's, delete at will
 ```
 
 Paths as `vault-folder.md` §1: `/`-separated, relative to the device
@@ -123,7 +121,7 @@ device it has never met simply gains an author (§6).
   vault is named for, and what every event this device appends carries
   as `author`. Not secret.
 - **`instance`** names this device to the change tokens it issues
-  (`event-store.md` §4.4, `vault-folder.md` §9.4), so that a fold cache
+  (`event-store.md` §4.4, `vault-folder.md` §8.4), so that a fold cache
   (§5) folded under another device is rejected rather than applied. A
   device internal; nothing outside the device reads it.
 - **Missing** means the device is not born yet; §7 says what happens.
@@ -173,14 +171,16 @@ keys *this* device may use: those whose `did.minted` this device
 authored — and every such key is in this keystore by construction,
 since the device wrote the event as it minted the key.
 
-- **`seed`** is version 3's one source, unchanged: HKDF-SHA256 over the
-  seed, salt `estoc-keystore`, info `estoc/v3/<ed25519|x25519>/<name>`.
-  The label `estoc/v3` names the derivation scheme and does not move
-  with the document version — a v3 document read as v4 (§4.5) must
-  derive the same keys. The name is the path *on this device*: the same
-  name under another device's seed is a different key, which is why a
-  name is minted with a random id and is never reused, across devices
-  as within one (`vault-events.md` §2).
+- **`seed`**: HKDF-SHA256 over the seed, salt `estoc-keystore`, info
+  `estoc/v3/<ed25519|x25519>/<name>`. The label `estoc/v3` names the
+  derivation scheme and does not move with the document version — a
+  version-3 document read as version 4 (§4.5) derives the same keys.
+  The name is the path *on this device*: the same name under another
+  device's seed is a different key, which is why a name is minted with
+  a random id and is never reused, across devices as within one
+  (`vault-events.md` §2). The Ed25519 and X25519 halves are derived
+  independently — no Ed→X conversion — so that a hardware signer can
+  one day hold one while software holds the other.
 - **`stored`** is a key that was not derived here: brought in from
   elsewhere, or made at random for a purpose the seed should not be
   able to reproduce. Its entry carries `jwe`, the private OKP JWK
@@ -190,9 +190,9 @@ since the device wrote the event as it minted the key.
   and not the vault's: `keys[]` is rebuildable from the logs only for
   `seed`.
 
-Names, DIDs and `createdAt` are as version 3: a name matches
-`[A-Za-z0-9._/-]+`, appears once, is never renamed; `did` is the
-did:key of the Ed25519 half; readers keep fields they do not know.
+A name matches `[A-Za-z0-9._/-]+`, appears once, and is never renamed;
+`did` is the did:key of the Ed25519 half; `createdAt` is when the
+entry was made; readers keep fields they do not know.
 
 ### 4.2 The key-encryption key
 
@@ -216,44 +216,40 @@ a device that is compromised, and the `stored` keys were on it anyway.
 
 ### 4.3 What the keystore hands out
 
-As version 3: a `Signer` (sign, public key, DID) and, for keys of this
-store, a `DidKeySigner` that adds X25519 agreement. `privateJwks()`
-remains the escape hatch for a library that runs its own crypto —
-today, the DIDComm envelope layer — and is what keeps `external` out
-of this version: a key that cannot yield its bytes cannot yet open an
-envelope (§9). A `stored` key goes through every path a `seed` key
-does, since its bytes are here.
+A `Signer` (sign, public key, DID) and, for keys of this store, a
+`DidKeySigner` that adds X25519 agreement. `privateJwks()` is the
+escape hatch for a library that runs its own crypto — today, the
+DIDComm envelope layer — and is what keeps `external` out of this
+version: a key that cannot yield its bytes cannot yet open an envelope
+(§9). A `stored` key goes through every path a `seed` key does, since
+its bytes are here.
 
 ### 4.4 Unlocking
 
-The seed is sealed as version 3 seals it — compact JWE,
-`PBES2-HS512+A256KW` / `A256GCM` — and unlocked once per session into
-a `SeedKey`, a non-extractable WebCrypto HKDF key that can `deriveBits`
-and nothing else. Where a client keeps that key between sessions is
-the client's: the app keeps it in IndexedDB, where a `CryptoKey`
-survives structured clone and the seed bytes are never within reach of
-script; a daemon keeps it in process memory and starts locked; a
-platform keychain is a fine place for the passphrase. None of these is
-in this directory and none is part of the format. The seed itself is
-never handed out, and never appears in any form but `seedJwe`.
+The seed is sealed as a compact JWE, `PBES2-HS512+A256KW` / `A256GCM`,
+and unlocked once per session into a `SeedKey`, a non-extractable
+WebCrypto HKDF key that can `deriveBits` and nothing else. Where a
+client keeps that key between sessions is the client's: the app keeps
+it in IndexedDB, where a `CryptoKey` survives structured clone and the
+seed bytes are never within reach of script; a daemon keeps it in
+process memory and starts locked; a platform keychain is a fine place
+for the passphrase. None of these is in this directory and none is
+part of the format. The seed itself is never handed out, and never
+appears in any form but `seedJwe`.
 
-### 4.5 Reading version 3
+### 4.5 Earlier documents
 
-A version-3 document — what version 2 of the folder kept at
-`keystore.json` — is read as if every entry said `source: seed`, and
-written back as version 4. There is no other migration and no other
-earlier version read (v1 and v2 stay refused). Where such a document is
-found, inside a version-2 vault folder, and whether anything moves it
-here, is `vault-folder.md` §12.
+`@estoc/keystore`'s version-3 document — the same `seedJwe` and
+`keys[]`, no `source` — is read as if every entry said `source: seed`,
+and written back as version 4. Versions 1 and 2 are refused, as the
+package has always refused them.
 
 ## 5. Local state
 
 `event-store.md` §7 defines the three kinds — options, cache, trace —
 and what may be done to each; this section is where a device keeps
-them, and is what `vault-folder.md` §7 was under version 2, lifted out
-of the vault whole. Nothing changes in the kinds; what changes is that
-the directory that holds them is not inside the folder a backup zips,
-so no rule of the vault needs an exception for it.
+them: in its own directory, outside the folder a backup zips, so that
+no rule of the vault needs an exception for them.
 
 Every piece of local state belongs to an **owner**, in a directory of
 its own at the device root:
@@ -281,9 +277,9 @@ restarts (`event-store.md` §7.3). Options are kept until changed. A
 reader that finds one kind where another belongs treats the directory
 as damaged, not as the other kind.
 
-What was true under version 2 is truer here: an option is what would
-be wrong to replicate, and a setting that should follow the identity
-is an event in the vault, never a line in this directory.
+As `event-store.md` §7.1 has it: an option is what would be wrong to
+replicate, and a setting that should follow the identity is an event
+in the vault, never a line in this directory.
 
 ## 6. Opening
 
@@ -291,9 +287,7 @@ A device opens a vault; nothing else does. In order:
 
 1. Read `device.json` (§3). Absent, the device is born first (§7).
 2. Open the vault at `vault`: `config.json` must be version 3
-   (`vault-folder.md` §11), and the folder must hold no `keystore.json`
-   and no `local/` (`vault-folder.md` §6.2, §7) — a version-2 folder's
-   leftovers, and the one thing this document refuses to carry along.
+   (`vault-folder.md` §10).
 3. Take the device's lock: one process per device. In the browser a
    Web Lock named for the device; on disk a lock file in the device
    directory. The lock is the device's, not the vault's, which is what
@@ -325,9 +319,7 @@ The keys the agent then brings up are the fold's answer intersected
 with the keystore: every key whose `did.minted` this device authored
 must be here (§4.1); one that is not is a device whose keystore was
 lost or edited — reported, never silently re-minted. A key another
-device minted is not this device's and is not looked for; under
-version 2 this was the exceptional case (the keyring's `Skipped`) and
-is now the ordinary one.
+device minted is not this device's and is not looked for.
 
 `dispose(ext)` is the device's operation, decided by the application
 from the fold: it removes the extension's store in the vault
@@ -349,21 +341,20 @@ that can sign as the anchor, and the vault records which by the
 `author` of the anchor's events.
 
 **Restore** is placing a snapshot somewhere and pointing a device at
-it (`vault-folder.md` §10.4): a new device, or an existing one that has
+it (`vault-folder.md` §9.4): a new device, or an existing one that has
 lost its folder. The device's first open appends its `device.minted`
 (§6), and the imported devices' events are history — visible, their
 mediations listed, their outbound not `sent` held as imported
 (`vault-events.md` §10) — until the person retires them. There is no
 restore *of a device*: a device that is gone is gone with its keys
-(below), and the folder does not bring it back. Version 2's rule that
-a restore mints a fresh device was this, seen from inside the folder.
+(below), and the folder does not bring it back.
 
 **Carrying the folder** to another machine and opening it there is
-therefore a new device, every time, and never the ambiguous "same
+therefore a new device, every time, and never an ambiguous "same
 device on a new machine": `dev` did not travel, because the device
-directory does not. The forked-self check (`event-store.md` §4.2) is
-unchanged and catches the one thing that must not happen — a device
-*directory* copied, and both copies writing.
+directory does not. The forked-self check (`event-store.md` §4.2)
+catches the one thing that must not happen — a device *directory*
+copied, and both copies writing.
 
 **Loss.** A device lost, wiped or stolen is retired by a decision from
 any other device (`device.retired`, `vault-events.md` §5): its events
@@ -406,7 +397,7 @@ device, and a device that has left is retired.
 - **Version.** `device.json` carries `version` 1, and a reader refuses
   any other; `keystore.json` carries its own (4), which the package
   refuses at any other value but 3, read once and rewritten (§4.5). The
-  folder's version is the vault's (`vault-folder.md` §11); version 1 of
+  folder's version is the vault's (`vault-folder.md` §10); version 1 of
   the device goes with version 3 of the folder, and neither reads the
   other's number.
 - **`external`.** The third source is named (§4.1) and not read: an
