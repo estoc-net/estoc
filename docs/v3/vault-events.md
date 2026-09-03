@@ -223,7 +223,7 @@ shows them once.
 { "type": "peer.resolved", "data": { "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" } }
 { "type": "peer.rotated",  "data": { "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" } }
 { "type": "peer.vouched",  "data": { "by": "did:peer:4…B", "for": "did:peer:4…C", "mid": "0198…" } }
-{ "type": "peer.revoked",  "data": { "by": "did:peer:4…A", "dids": ["did:peer:4…B1", "did:peer:4…B2"], "mid": "0198…" } }
+{ "type": "peer.revoked",  "data": { "by": "did:peer:4…A", "dids": ["did:peer:4…B1", "did:peer:4…B2"], "since": "…", "mid": "0198…" } }
 { "type": "message.erased", "data": { "mid": "0198…", "drop": ["<body>"], "because": "user" } }
 ```
 
@@ -301,14 +301,16 @@ shows them once.
   revoking one — lifted from `devices/1.0` messages
   (`devices-protocol.md` §3, §4). Observations on the channel that
   carried them: `by` is the DID the sealing key wore, `for` the
-  vouch's `body.did`, `dids` the revoke's `body.dids`, `mid` the
-  message each came from. In the identity graph (§7.1) a vouch is an
-  edge from `by` to `for`, so a channel later opened by a key of
-  `for`'s document is attributed to the contact the moment
-  `peer.resolved` joins it — or before any such channel exists, since
-  the contact may now write to `for` and `peer.resolved` before
-  sending fixes the pair. A revoke's effect is the fold's (§7.2): the
-  named chains are dead from the moment it is folded, and a DID named
+  vouch's `body.did`, `dids` the revoke's `body.dids` and `since` its
+  `body.since` when it had one, `mid` the message each came from. In
+  the identity graph (§7.1) a vouch is an edge from `by` to `for`, so
+  a channel later opened by a key of `for`'s document is attributed
+  to the contact the moment `peer.resolved` joins it — or before any
+  such channel exists, since the contact may now write to `for` and
+  `peer.resolved` before sending fixes the pair. A revoke's effect is
+  the fold's (§7.2): the named chains are dead from the moment it is
+  folded, the vouches they made that this device saw after `since` —
+  the `at` of its own `peer.vouched` — are withdrawn, and a DID named
   that is not in this contact's component is ignored — recorded,
   shown, without effect. *Provisional:* written on receipt, as
   `peer.rotated` is, rather than derived from the message on fold. On
@@ -444,11 +446,13 @@ devices, and what its mediator answered.
   is the device the decision is about — `data`, not authorship; the
   author is the event's `author`.
 - `device.retired`: a decision about another device (lost, replaced),
-  counted from a device that is ours and live (`devices.md` §3).
-  Its events stay — history is history — but a fold stops treating
-  its mediation as a live address and shows any later events from it
-  as suspect — exactly the events it signed, since it can sign as no
-  other device (`event-store.md` §2.5). Its keys went with it
+  counted from a device that is ours and live (`devices.md` §3); it
+  carries the person's `since` when they set one, for the revokes the
+  siblings owe (`devices.md` §5.2), and the vault's fold does not
+  read it. Its events stay — history is history — but a fold stops
+  treating its mediation as a live address and shows any later events
+  from it as suspect — exactly the events it signed, since it can sign
+  as no other device (`event-store.md` §2.5). Its keys went with it
   (`device.md` §7): no `did/<id>` it minted signs or decrypts for the
   identity again, which the identity's contacts have to be told —
   `devices.md` §5.2, by a revoke
@@ -604,8 +608,8 @@ component every member of which is deleted is deleted:
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
   end, and its current keys are the latest `peer.resolved` for it.
   Several chains are several devices of the contact's, each live,
-  dead or in conflict — `ends[]`, below; a fork within one chain is
-  the conflict shown.
+  dead, orphaned, disputed or in conflict — `ends[]`, below; a fork
+  within one chain is the conflict shown.
 - `ends[]`: the fold of `devices-protocol.md` §7, run over the
   contact's events in canonical order (`event-store.md` §3), one `End`
   per chain. The identity graph gains one edge — a counted
@@ -613,10 +617,15 @@ component every member of which is deleted is deleted:
   under `peer.rotated` edges alone. The protocol's rules read here as:
   a chain appears through a live `contact.attached` channel under one
   of its DIDs, or through a counted `peer.vouched`; a `peer.revoked`,
-  `peer.vouched` or `peer.rotated` on a live chain is counted; any
-  observation on a dead chain — a `message.in`, a response, an edge
-  not applied — is a word from a dead end, its `mid` in `words`; a
-  `contact.verdict` sets the state. `challenged` is a `message.out`
+  `peer.vouched` or `peer.rotated` on a live chain is counted; a
+  counted `peer.revoked` with `since` withdraws every counted
+  `peer.vouched` by a named chain whose own `at` — the observing
+  device's — is after `since`, and a chain left with none is
+  orphaned; any observation on a dead chain — a `message.in`, a
+  response, an edge not applied — is a word from a dead end, its
+  `mid` in `words`, and puts the live chains in its `revokedBy` in
+  dispute; a `contact.verdict` sets the state. `challenged` is a
+  `message.out`
   with the challenge's `msgType` on a channel under the end's key,
   from any device of ours; `challenges[]` is every end that is `dead`
   by a counted revoke that was not its own, has no verdict, and is not
@@ -636,7 +645,8 @@ component every member of which is deleted is deleted:
   current keys, the rule above picking one when there are several —
   and a message goes to all of them (`devices-protocol.md` §8). Empty
   for a contact with no live end: the person is told, and the
-  conflicts, if any, are where the answer is.
+  incidents, if any, are where the answer is (`devices-protocol.md`
+  §7).
 - `thread`: the union of `message.*` across attributed channels and
   devices, in canonical order. Cross-channel and cross-device order
   relies on `at` alone. **It folds by wire id**: skeleton lines that

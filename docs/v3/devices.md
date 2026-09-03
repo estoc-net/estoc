@@ -95,7 +95,7 @@ vouching, by a device that is already ours.
 { "eid": "…", "author": "z6MkhaXg…", "at": "…", "type": "device.minted", "data": {} }
 { "type": "device.vouched", "data": { "dev": "z6MkhaXg…", "proof": "eyJ…" } }   // the root: by the anchor, for the creating device itself
 { "type": "device.vouched", "data": { "dev": "z6MkrJVn…" } }                     // by a device that is ours, at pairing
-{ "type": "device.retired", "data": { "dev": "z6MkrJVn…", "because": "lost" } }
+{ "type": "device.retired", "data": { "dev": "z6MkrJVn…", "because": "lost", "since": "2026-09-01T18:40:00Z" } }
 { "type": "device.verdict", "data": { "dev": "z6MkrJVn…", "verdict": "live" } }
 ```
 
@@ -114,9 +114,12 @@ vouching, by a device that is already ours.
   at pairing (§6), naming the newcomer, with no proof: the author's
   signature and the author's own membership are the grounds, and the
   author is, by construction, the device that introduced `dev`.
-- `device.retired { dev, because }`: as `vault-events.md` §5, counted
-  iff its `author` is ours and live at that point. A device may name
-  itself (§5.3).
+- `device.retired { dev, because, since? }`: as `vault-events.md` §5,
+  counted iff its `author` is ours and live at that point. A device
+  may name itself (§5.3). `since` is the person's answer to "when did
+  you last have it" — the moment from which the device's word is no
+  longer ours toward the contacts; the revokes owed for it carry it
+  (§5.2). The vault's own fold does not read it (§9).
 - `device.verdict { dev, verdict }`: the person's ruling on a device
   whose state the vault cannot settle — two devices that retired each
   other, below — `live` or `dead`. Counted from any device that is
@@ -174,9 +177,12 @@ backup is for; it admits no second member until the anchor, or the
 successor the rotation design pre-commits, is on some device to sign a
 root again — the same case, inside the vault, that "all devices lost"
 is toward every contact (§8). What a compromised device vouched for
-before it was retired stands, as a contact's counted vouch does
-(`devices-protocol.md` §10): each such device is listed, and is
-retired by hand.
+in the vault before it was retired stands — the fold reads a
+retirement at its canonical position, not at `since` (§9) — and is
+visible for it: each such device is listed with its introducer, and
+is retired by hand. Toward the contacts the same vouches are
+withdrawn by `since` (`devices-protocol.md` §4), because there the
+identity cannot see them.
 
 **Two devices, each retiring the other**, in the vault: whichever
 retirement is first in canonical order is counted and the second is a
@@ -271,6 +277,20 @@ only one of our devices is told by that one. Siblings are not sent
 revokes: `device.retired` reaches them by sync, and a retired device's
 keys are dead to them by the fold (§3, `vault-events.md` §7.3).
 
+**`since`.** The revoke carries the moment from which the retired
+device's word was no longer ours (`devices-protocol.md` §4): the
+`since` of the `device.retired`, when the person set one, so that
+every sibling sends the same; otherwise the last moment `self` heard
+from the retired device, on `self`'s own clock — the `at` of the
+latest `message.in` of `self`'s on a channel to that device
+(`sync.md` §2), or of the sync that last brought an event of that
+device's, whichever is later. Never an `at` the retired device wrote:
+a thief sets those, and forward. The person is asked when they last
+had the device and may set `since` earlier; earlier withdraws more of
+its vouches at the contacts, which the siblings' own vouches replace
+(§5.1), and later leaves what a thief planted in the gap. A device
+retiring itself (§5.3) sends no `since`: it is leaving, not lost.
+
 ### 5.3 Challenges
 
 **Answering.** A device answers every `devices/1.0` challenge it can
@@ -283,7 +303,9 @@ no revoking, no sync outward, no handler side effects) and it **keeps
 answering challenges**. It does not wipe itself: if the device that
 retired it was the stolen one, this is the honest device, and its
 answering the challenges is what tells every contact something is
-wrong (§8). The person, on this device, either confirms — the
+wrong, and stops them writing to the device that retired it until
+they rule (`devices-protocol.md` §6; §8 here). The person, on this
+device, either confirms — the
 directory is deleted, `device.md` §7 — or rules the other way
 (`device.verdict`, §3) and retires the other device from here, which
 is a mutual revocation the contacts will show (`devices-protocol.md`
@@ -450,32 +472,39 @@ revoke from the chain it names: dead, no challenge. Then A's directory
 is deleted. The new phone pairs with B as above.
 
 **A stolen device that talks.** Phone A is stolen unlocked. B retires
-it; contacts revoke it and challenge it. The thief's A, unlocked,
-answers — the agent answers challenges without asking. Each contact's
-fold puts A in conflict; each application shows "a device this contact
-retired says it is still theirs"; each person asks their contact, off
-the wire, and rules: `contact.verdict { did: A, verdict: dead }`, or
-nothing, which is the same. Noisy, and right: the thief gained the
-window between theft and retirement and nothing after it — a device
-the thief vouched for in that window is one more to retire by hand
-(§3) — and every contact learnt that something happened. The thief's
-other move — to retire B *from A* first — is the next paragraph.
+it, `since` the last time B heard from it; contacts revoke it and
+challenge it. The thief's A, unlocked, answers — the agent answers
+challenges without asking. Each contact's fold puts A in conflict and
+B in dispute; each application shows "a device this contact retired
+says it is still theirs"; each person asks their contact, off the
+wire, and rules: `contact.verdict { did: A, verdict: dead }`, which
+frees B — or nothing, and that contact writes to neither until they
+do, the cost of a thief that talks (`devices-protocol.md` §10).
+Noisy, and right: the thief gained the window between theft and
+retirement and nothing after it — a key the thief vouched for in that
+window is orphaned at every contact that saw the vouch after `since`,
+and one more to retire by hand (§3) at any that saw it before — and
+every contact learnt that something happened. The thief's other move
+— to retire B *from A* first — is the next paragraph.
 
 **Two devices, each retiring the other.** A and B each append
 `device.retired` for the other and each revoke the other toward every
 contact. In the vault, whichever is first in canonical order counts
 and the other is a conflict (§3); the person, on the honest device,
 rules it live and the other dead, and the two records part. The
-contact folds whichever revoke arrived first as counted and the other
-as a word from a dead chain: a conflict on the second end, and a
-challenge to the first, which answers, since it is live and unlocked —
-a conflict on it too. Two ends in conflict, no live end, nothing
-sealed to either until the person rules, and the application says so:
-"this contact's devices disagree about which of them is theirs; ask
-them". The person rules one live, the other dead. Which end is honest,
-the wire cannot say; that is what the phone call is for, and the only
-silent path for the thief is the honest device never speaking again —
-in which case it is, in every sense that matters, lost.
+contact folds whichever revoke arrived first as counted: the end it
+named is dead and is challenged, and the other revoke, from that end,
+is a word from a dead chain — a conflict on it, and a dispute on the
+end that revoked it (`devices-protocol.md` §6); the challenge's
+answer, if it comes first, does the same. Two ends, neither live,
+nothing sealed to either until the person rules, in whichever order
+the two revokes arrived, and the application says so: "this contact's
+devices disagree about which of them is theirs; ask them". The person
+rules one live, the other dead — one incident, two verdicts. Which
+end is honest, the wire cannot say; that is what the phone call is
+for, and the only silent path for the thief is the honest device
+never speaking again — in which case it is, in every sense that
+matters, lost.
 
 **A backup tampered with.** The person's backup, where it was kept,
 gains a device: a key someone minted, a `device.minted` and a
@@ -517,10 +546,16 @@ knows what they said.
   retired device's pushes are not ingested (`sync.md` §2), so its
   verdicts travel only by a copy the person carries; the fold shows
   every verdict with its author.
-- **Vouches by a compromised device**, the identity's side. The
-  introducer is now recorded — the `author` of the `device.vouched` —
-  so a `since` on a revoke (`devices-protocol.md` §10) has what it
-  needs of us; the contact's side of it is still open there.
+- **Vouches by a compromised device.** Toward the contacts, `since`
+  on the revoke withdraws them (`devices-protocol.md` §4), and this
+  side supplies it (§5.2). Inside the vault they stand: the fold reads
+  a retirement at its canonical position (§3), and a `since` matched
+  against `at` would be matched against the thief's own clock. The
+  two sides differ because the vault can see what the contact cannot:
+  a `device.vouched` the thief wrote is in the record on every
+  sibling, listed with its `author`, and is retired by hand; the
+  contact's copy of the same vouch is invisible to us, which is what
+  `since` is for.
 - **A root without the anchor.** A restored record with no device that
   holds the anchor admits no second device (§3). The successor the
   rotation design pre-commits is the answer; until then a person who

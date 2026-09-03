@@ -15,13 +15,15 @@ sees **ends** — the current DIDs of the keys that write to it — and
 each end is one device of the counterpart, because every key is one
 device's. An identity adds a device by having a device the contact
 already knows **vouch** for the new one's key; it drops a device by
-having any other device **revoke** its keys, which the contact answers
-with a **challenge** to the revoked end; anything a revoked end says
+having any other device **revoke** its keys, naming the moment they
+stopped being the identity's, which the contact answers with a
+**challenge** to the revoked end; anything a revoked end says
 afterwards, the challenge's answer included, is a **conflict** the
-contact's person rules on, and nothing else is. A sender writes once
-and seals to every live end. The identity's anchor takes no part: no
-key of it seals a message here, and a contact is never asked to
-resolve one.
+contact's person rules on, and nothing else is — and while it stands,
+the end that revoked it is **disputed** and written to no more than
+the end it revoked. A sender writes once and seals to every live end.
+The identity's anchor takes no part: no key of it seals a message
+here, and a contact is never asked to resolve one.
 
 ## 1. Principles
 
@@ -35,8 +37,12 @@ resolve one.
    and find they are talking to one identity.
 2. **Adding is vouching; removing is revoking; both are said by a key
    the contact already trusts.** A vouch is a fact about the moment it
-   was made and is not undone by what its maker later becomes. A revoke
-   kills the chains it names, and only those.
+   was made, and stands for as long as that moment was its maker's
+   own: a revoke names the chains it kills and the moment, `since`,
+   from which their word was no longer the identity's, and a vouch
+   the contact saw after that moment counts for nothing. A revoke
+   kills the chains it names, and only those; what it undoes is what
+   the named chains added, never what they killed.
 3. **A revoked end has no second chance under that name.** Nothing a
    revoked chain says is acted on; every word from it is shown as a
    conflict; a device that comes back comes back with a new key,
@@ -46,8 +52,11 @@ resolve one.
 4. **The contact's person is the arbiter, locally.** A conflict — a
    revoked end that speaks, two ends revoking each other — is a
    projection and is resolved by a decision in the contact's own
-   record, never reported back. Timeouts are for showing, not for
-   deciding: an end that answers late is a conflict, not a corpse.
+   record, never reported back. A revoked end that speaks contradicts
+   the end that revoked it, and the contact does not pick a side:
+   neither is written to until the person rules. Timeouts are for
+   showing, not for deciding: an end that answers late is a conflict,
+   not a corpse.
 5. **Send once, seal to every end.** Fan-out is the sender's, at the
    envelope; there is one message, with one id, and a copy per end
    (§8). Mediators do not know and need not.
@@ -58,13 +67,19 @@ resolve one.
   joined by `from_prior` rotations. Every DID is in exactly one chain.
   A chain with two latest DIDs is a fork, a conflict of its own.
 - **end** — a chain's latest DID; where a message to that device goes.
-- **live / dead / conflict** — a chain's state in the contact's fold
-  (§7). Live: written to, its words acted on. Dead: revoked, or ruled
-  so; nothing goes to it but a challenge. Conflict: dead, and it
-  spoke; shown until ruled.
+- **live / dead / orphaned / disputed / conflict** — a chain's state
+  in the contact's fold (§7). Live: written to, its words acted on.
+  Dead: revoked, or ruled so; nothing goes to it but a challenge.
+  Orphaned: every vouch that brought it in was withdrawn (§4);
+  nothing goes to it, its words are shown, and a fresh vouch brings
+  it back. Disputed: it revoked an end that then spoke; nothing goes
+  to it until the person rules (§6). Conflict: dead, and it spoke;
+  shown until ruled.
 - **counted** — a vouch or revoke that arrived from a live chain, and
-  so took effect (§7). One from a dead chain is a word from a dead
-  chain and counts for nothing.
+  so took effect (§7). One from a chain in any other state is a word
+  from that chain and counts for nothing. A counted vouch is
+  **withdrawn** when a later revoke says its maker was already gone
+  when it was made (§4).
 
 ## 3. Vouch
 
@@ -97,13 +112,13 @@ Which devices vouch, and when, is the identity's own affair
 (`devices.md` §5.1); what the contact has to allow for is that every
 device of the counterpart may vouch for the same key, so that the
 introduction does not wait on the one device that happens to be
-offline, and that a key vouched for by several is not orphaned when
-one of them is lost. Two vouches for one key are two counted edges
-and harmless. A key minted toward the contact that it has no channel
-under and no vouch for yet is a stranger's until the vouch lands; the
-fold unions, so the order in which the new device's first message and
-the vouch arrive does not matter beyond what the application shows
-meanwhile.
+offline, and that a key vouched for by several is not orphaned (§4)
+when one of them is lost and its last vouches withdrawn. Two vouches
+for one key are two counted edges and harmless. A key minted toward
+the contact that it has no channel under and no vouch for yet is a
+stranger's until the vouch lands; the fold unions, so the order in
+which the new device's first message and the vouch arrive does not
+matter beyond what the application shows meanwhile.
 
 ## 4. Revoke
 
@@ -114,7 +129,10 @@ by a message from every device that can reach them:
 {
   "type": "https://estoc.dev/devices/1.0/revoke",
   "id": "<uuid>",
-  "body": { "dids": ["did:peer:4…B1", "did:peer:4…B2"] }
+  "body": {
+    "dids": ["did:peer:4…B1", "did:peer:4…B2"],
+    "since": "2026-09-01T18:40:00Z"
+  }
 }
 ```
 
@@ -122,22 +140,42 @@ by a message from every device that can reach them:
   contact may know. Naming any DID of a chain kills the whole chain
   (§7); the sender names all it knows so that the contact need not
   have seen the same ones. Never a device id.
+- `body.since` — optional; the moment, on the sender's wall clock,
+  from which the named chains' word was no longer the identity's:
+  when the device was lost, and at the latest the last time a sibling
+  heard from it (`devices.md` §5.2). Absent, it is the moment the
+  contact folds the revoke — a device leaving names its own chains
+  and says nothing more.
 - Sealed from the revoking device's key toward the contact; fanned out
   to every live end of the contact (§8). A device may name its own
   DIDs: that is a device leaving, and needs no challenge.
 
 The contact records the edge — the DID the sealing key wore, the DIDs
-named, the message — and the effect is §7's: the named chains are
-dead, from the moment the observation is folded, and a **challenge**
-(§5) is owed to each. A DID named that is not in this counterpart's
-chains is ignored — recorded, shown, without effect: a revoke reaches
-only the identity it came from.
+named, `since`, the message — and the effect is §7's: the named
+chains are dead, from the moment the observation is folded, and a
+**challenge** (§5) is owed to each; and every counted vouch by a named
+chain that the contact observed after `since` — by its own clock, in
+its own record — is **withdrawn**. The chain it was for loses that
+voucher, and a chain left with no counted voucher, that the person
+did not accept and did not rule live, is **orphaned**: nothing goes
+to it, its words are shown and not acted on, its own vouches are
+withdrawn in turn, and a fresh counted vouch brings it back. A
+revoke by a named chain is not withdrawn: what killed stays killed,
+and the person rules on what it killed if they mean to (§6). A
+`since` later than the contact's observation of the revoke is that
+observation's moment. One earlier than a vouch the named chains made
+withdraws it, honest or not, and a sibling's own vouch replaces the
+honest one (`devices.md` §5.1): earlier is the safe error. A DID
+named that is not in this counterpart's chains is ignored — recorded,
+shown, without effect: a revoke reaches only the identity it came
+from.
 
 Every device of the counterpart sends its own revoke, so the contact
 is told even if the device that made the decision never comes back
 online, and a contact with a channel to only one of the counterpart's
 devices is told by that one. Two revokes naming one chain are one
-death.
+death, and each withdraws by its own `since`: the earlier reaches
+further, and nothing the later one left is put back.
 
 ## 5. Challenge and response
 
@@ -160,7 +198,8 @@ it is still there:
   can tell whether that sibling is still theirs.
 - Not sent when the revoke named the revoker's own chain (a device
   leaving), nor for a chain the person ruled dead (§6): there is
-  nothing to ask.
+  nothing to ask. Nor to an orphaned chain (§4): nothing was said of
+  it, only of the end that introduced it.
 
 ```json
 {
@@ -177,7 +216,8 @@ it is unlocked — one that its own identity has dropped included
 The answer carries nothing: the envelope is the whole claim, "the key
 you were told is dead just sealed this". On the contact's side it is
 an inbound message on a dead chain and needs no type of its own in the
-fold: it is a word from a dead end (§6), and the chain is in conflict.
+fold: it is a word from a dead end (§6), the chain is in conflict,
+and the end that revoked it is disputed.
 
 **Who challenges.** At least one device of the contact's sends a
 challenge for every counted revoke that did not name the revoker's own
@@ -193,34 +233,63 @@ closed, locked, or offline while the challenge waits loses nothing:
 whenever it wakes it answers, and whenever it answers the conflict is
 shown.
 
-## 6. A word from a dead end, and the verdict
+## 6. A word from a dead end, the dispute, and the verdict
 
 Every observation on a channel whose chain is dead — a message, a
 vouch, a revoke, a rotation, a response — is recorded as it is (an
-observation is never refused a home) and does three things and
+observation is never refused a home) and does four things and
 nothing else: it puts the chain in **conflict**; it is shown, marked;
 it is not acted on — no handler runs on it, no reply is sent, no vouch
 or revoke or rotation it carries takes effect, and the chain it
-extends stays dead. What the person then does is a decision, the
-**verdict**, on one chain, named by any DID in it: `live` or `dead`.
+extends stays dead; and it puts every end whose counted revoke killed
+the chain in **dispute**. A disputed end is written to no more than a
+dead one, its decisions are not counted, and its words are shown,
+marked, and not acted on: the contact holds two ends that each say
+the other is not the counterpart's, and it does not choose. Between a
+revoke and the first word from the end it named there is no dispute:
+a device that is lost, wiped or locked says nothing, and the end that
+revoked it stays live and alone — the common case, and silent. A
+chain the person ruled dead has no revoker to dispute; its words are
+conflicts and nothing more.
+
+What the person then does is a decision, the **verdict**, on one
+chain, named by any DID in it: `live` or `dead`.
 
 - `live` — the person has satisfied themself, off the wire, that this
   is their contact's device: the chain is live again, written to, its
   words acted on from here on. It says nothing about the end that
-  revoked it; the person rules on that one too if they mean to, and
-  usually does (`devices.md` §8: if the old phone is honest, the one
-  that revoked it is not).
-- `dead` — the person has decided it is gone: no challenge is sent, its
-  words are conflicts. A revoke need not have come first; a person told
-  by their contact over the phone that a device is lost may rule it so
-  before the counterpart's other devices have said anything.
+  revoked it, which stays disputed until ruled in turn: if the old
+  phone is honest the one that revoked it usually is not
+  (`devices.md` §8), but a phone that was found is a phone whose
+  siblings were honest too, so nothing is inferred and the person
+  rules on both.
+- `dead` — the person has decided it is gone: no challenge is sent,
+  its words are conflicts, and every end that was disputed for
+  revoking it is disputed no longer — its word was upheld — and is
+  live again unless another chain it revoked still stands in
+  conflict. A revoke need not have come first; a person told by their
+  contact over the phone that a device is lost may rule it so before
+  the counterpart's other devices have said anything.
 - A verdict is one more event in the contact's own order: a later
   counted revoke kills a chain ruled live, a later word from a chain
   ruled dead is a conflict again, and a `live` verdict for a chain that
   a sibling later re-vouches changes nothing it did not already say.
+  A verdict on an orphaned chain is the same ruling: `live` makes it
+  the counterpart's on the person's word, `dead` makes it dead. A
+  verdict on a disputed chain ends its dispute either way.
 - Never sent. The other side is told nothing; what it did with its
   devices is its own business, and what the contact believes is the
   contact's.
+
+An **incident** is what the person is asked about: a chain in
+conflict together with every end its death put in dispute, and every
+chain those ends revoked, joined until nothing more joins. The fold
+reports them (§7) so that the application asks once — "this
+contact's devices disagree about which of them is theirs; ask them" —
+and the answers are verdicts, one per chain: the fold has no ruling
+on an incident, only on chains. The thief's case takes one: the end
+the thief holds answered its challenge, the person rules it `dead`,
+and the end that revoked it is live again.
 
 An Estoc device records it as `contact.verdict` (`vault-events.md`
 §6).
@@ -229,30 +298,47 @@ An Estoc device records it as `contact.verdict` (`vault-events.md`
 
 The contact holds, per counterpart, a set of chains. Walk what it
 observed of the counterpart in its own order, keeping a state per
-chain and a set of **named-dead** DIDs:
+chain, its vouchers and revokers, and a set of **named-dead** DIDs:
 
 1. **A chain appears** when the person accepts a channel under one of
    its DIDs — it is **live**; or when a counted vouch names one of its
    DIDs — it joins the counterpart, **live** unless one of its DIDs is
-   named-dead, then **dead**; through nothing else. A channel a
-   stranger opened belongs to no counterpart until a vouch or an
-   accept brings it in.
+   named-dead, then **dead**, its `revokedBy` the chains that named
+   it; through nothing else. A channel a stranger opened belongs to no
+   counterpart until a vouch or an accept brings it in.
 2. **A revoke from a live chain** is counted. Every chain that
-   contains a named DID is **dead**, its `revokedBy` the revoking
-   chain; a named DID no chain contains yet is added to named-dead,
-   so the chain that later contains it is dead on arrival. Named DIDs
-   outside the counterpart are ignored. A revoke that names its own
-   chain is that chain's own leaving: dead, and no challenge is owed.
+   contains a named DID is **dead**, the revoking chain added to its
+   `revokedBy`; a named DID no chain contains yet is added to
+   named-dead, with the revoking chain, so the chain that later
+   contains it is dead on arrival. Named DIDs outside the counterpart
+   are ignored. A revoke that names its own chain is that chain's own
+   leaving: dead, and no challenge is owed. Then `since` (§4): every
+   counted vouch by a named chain that was observed after `since` is
+   **withdrawn** from the `vouchedBy` of the chain it was for; a
+   chain whose `vouchedBy` is thereby empty, that was not accepted
+   and has no `live` verdict, is **orphaned**, and its own counted
+   vouches are withdrawn in turn, until nothing more is. A chain that
+   is dead or in conflict stays so when its vouches are withdrawn;
+   a revoke is never withdrawn.
 3. **A vouch from a live chain** is counted: the edge stands, and
-   stands after the vouching chain's death. The chain vouched for is
-   live or dead by rule 1.
+   stands after the vouching chain's death, unless rule 2 withdraws
+   it. The chain vouched for is live or dead by rule 1; an orphaned
+   chain a counted vouch names is **live** again, the vouch in its
+   `vouchedBy`.
 4. **A rotation from a live chain** extends it.
 5. **Any observation on a dead chain** — rules 2 to 4 not applied, a
-   message, a response — sets the chain to **conflict**, and is
-   recorded with it. Nothing it carries is an edge or a kill.
+   message, a response — sets the chain to **conflict**, is recorded
+   with it, and sets every live chain in its `revokedBy` to
+   **disputed**, the conflict chain added to each's `disputedBy`; one
+   that is not live stays as it is. Any observation on an orphaned or
+   a disputed chain is recorded with it and applies nothing. Nothing
+   any of them carries is an edge or a kill.
 6. **A verdict** sets the chain it names to **live** or **dead**,
-   clearing `revokedBy` and the conflict; later events apply to the
-   new state.
+   clearing its `revokedBy`, its `disputedBy` and the conflict; later
+   events apply to the new state. `dead` also removes the chain from
+   every `disputedBy` it is in, and a disputed chain whose
+   `disputedBy` is thereby empty is **live**; `live` removes it from
+   none — the ends that revoked it are ruled on their own.
 
 What the fold reports, per chain:
 
@@ -260,11 +346,12 @@ What the fold reports, per chain:
 type End = {
   did: string;                            // the chain's end
   chain: string[];                        // its DIDs, oldest first
-  state: "live" | "dead" | "conflict";
-  vouchedBy: string[];                    // the `by` of every counted vouch for it; [] for an accepted chain
-  revokedBy: string | null;               // the end of the chain that revoked it, when a revoke did
+  state: "live" | "dead" | "orphaned" | "disputed" | "conflict";
+  vouchedBy: string[];                    // the `by` of every counted vouch for it not withdrawn; [] for an accepted chain
+  revokedBy: string[];                    // the ends of the chains whose counted revokes killed it; [] when a verdict did
+  disputedBy: string[];                   // the chains in conflict that it revoked
   challenged: boolean;                    // some device of the contact's sent a challenge to it
-  words: string[];                        // what it said while dead, in order
+  words: string[];                        // what it said while dead, orphaned or disputed, in order
 };
 ```
 
@@ -273,10 +360,16 @@ type End = {
   a conflict within one end.
 - The **write set** is every live end: a message to the counterpart
   goes to all of them (§8). Empty for a counterpart with no live end —
-  the person is told, and the conflicts (if any) are where the answer
-  is.
+  dead, orphaned or disputed — the person is told, and the incidents
+  (if any) are where the answer is.
 - **Challenges owed**: every end that is `dead` by a counted revoke
-  that was not its own, has no verdict, and is not `challenged`.
+  that was not its own, has no verdict, and is not `challenged`. An
+  orphaned end is owed none.
+- **Incidents**: the components of the ends in conflict, the ends in
+  their `revokedBy`, and the chains in those ends' `disputedBy`,
+  joined until nothing more joins (§6) — each a set of ends the
+  application puts before the person together, and the person rules
+  on one at a time.
 - Every inbound message says which end sent it — the DID the sealing
   key wore — so the application can show the counterpart's devices,
   and beside each message which one, without a name for any of them.
@@ -284,8 +377,11 @@ type End = {
 A contact that itself has several devices folds this on each from its
 own observations and unions them: both may see the same vouch, arrived
 on each's own channel, as two counted edges; both may challenge; the
-last verdict wins. None of it needs a rule beyond the contact's own
-order.
+last verdict wins. Each observation keeps its observer's own moment,
+so a `since` may withdraw the copy of a vouch one device saw late and
+leave the copy its sibling saw in time — the earlier sighting is the
+proof that the vouch predates `since`, and the chain is not orphaned.
+None of it needs a rule beyond the contact's own order.
 
 ## 8. Sending to many ends
 
@@ -307,15 +403,15 @@ A message to a counterpart is written once and goes to every live end:
   sibling's copy, which is what the receiver's own sync is for.
 - **A message from an end the receiver does not know** — a device of
   the counterpart's that the counterpart has not yet had vouched for —
-  is a stranger's until the vouch lands (§3). A message from a dead
-  end is §6.
+  is a stranger's until the vouch lands (§3). A message from a dead,
+  an orphaned or a disputed end is §6.
 - **Side effects, once.** A handler that answers a message — a profile
   asked back, a challenge's response — would answer from every device
   of the receiver's that got a copy. This protocol accepts that: two
   answers with one id are one message to the party that folds them,
   and which of its devices answers is the receiver's own arrangement
-  (`devices.md` §5.4). What no device acts on is a word from a dead
-  end (§6).
+  (`devices.md` §5.4). What no device acts on is a word from a dead,
+  an orphaned or a disputed end (§6).
 
 The counterpart's mediators are told nothing new: each copy is a
 forward to the routing of the end it goes to, as a single-device
@@ -326,7 +422,8 @@ keys, as it would from N different senders.
 ## 9. What a contact can see
 
 Each contact sees how many ends of a counterpart it holds, when each
-appeared and was vouched for, and when one was revoked and by which;
+appeared and was vouched for, and when one was revoked, by which, and
+from when;
 it sees which end each message came from. It sees no device id, no
 label, no key name and no sibling's DID toward anyone else, and two
 contacts comparing what they see find only that each holds N chains of
@@ -355,17 +452,41 @@ its own device, each forwarded to on its own.
   that never seals an envelope (a pre-committed successor to a lost
   identity, `devices.md` §8) will need. Add it then, as an optional
   `proof` on `vouch` and `revoke`.
-- **Vouches by a compromised device.** A vouch is a fact (§1
-  principle 2): a device that was stolen and, before it was dropped,
-  vouched a stranger's key toward a contact has planted an end the
-  revoke does not name, unless the identity's other devices learnt of
-  it and dropped it too. Bounding the damage — a `since` on the revoke
-  after which the named chains' vouches do not count, matched against
-  the contact's own observation times; or the contact's application
-  marking an end whose every voucher has since been revoked — is not
-  in this version, and neither is a primary device that alone may
-  vouch, which is how the services that share this model close the
-  hole. What a `since` needs of the identity's side is `devices.md`
-  §9.
+- **Vouches by a compromised device** are bounded by `since` (§4): a
+  device that was stolen and, before it was dropped, vouched a
+  stranger's key toward a contact has planted an end that the revoke
+  orphans, provided `since` is before the vouch reached the contact —
+  which is why `since` is the last moment a sibling heard from the
+  device, not the moment the person noticed (`devices.md` §5.2). A
+  vouch that reached the contact before that moment stands, and the
+  end is one more to retire by hand, listed under its introducer.
+  Not in this version: a primary device that alone may vouch, which
+  is how the services that share this model close the hole entirely.
+  Not in any version: a rule that reads the *structure* of the
+  vouches — "live iff some voucher is live" — which the contact
+  cannot use. Every end an identity has was introduced by the device
+  it had first, so structure alone cannot tell the sibling from the
+  stranger once that device is dead; a one-hop reading is passed by a
+  thief with two keys vouching each other, and a rooted reading
+  darkens every honest identity that loses its first device. What
+  the thief cannot forge is when the contact saw the vouch, and that
+  is what `since` reads.
+- **Two clocks.** `since` is the sender's wall clock and is matched
+  against the contact's. A skew larger than the gap between the last
+  honest word and the theft lets a vouch through or withdraws one it
+  should not; a sibling's re-vouch mends the second, nothing mends the
+  first, and a `since` set earlier than needed is the safe error.
+- **A dispute is a freeze.** An end that is dead and speaks puts the
+  ends that revoked it in dispute (§6), so a thief holding a revoked
+  device that answers its challenge stops every contact writing to
+  the honest devices until each contact rules. Availability is traded
+  for confidentiality on purpose: the contact holds two ends that each
+  say the other is not the counterpart's, and to go on sealing to
+  either is to pick the side the evidence does not; the ruling is one
+  question, and the call it takes is the one the conflict asks for
+  anyway. Without the freeze, the honest device that was revoked
+  first has no counted word left — its own revoke of the thief's
+  device arrives as a word from a dead end — and the thief's end
+  stays the only one written to.
 - **Timeouts** are the application's throughout (§5): nothing in the
   fold expires.
