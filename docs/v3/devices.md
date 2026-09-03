@@ -317,21 +317,23 @@ answers nothing after.
 contact (`devices-protocol.md` §7) and finds no challenge sent yet by
 any of its siblings — a `message.out` with the challenge's `msgType`
 on a channel under the end's key, visible after sync — sends one; two
-devices sending two, apart, is two answers folded to one
-(`devices-protocol.md` §8). Whether a device sends challenges at all,
-or leaves it to a sibling, is that device's option
-(`agent/options.json`, `device.md` §5), the same option that governs
-the other automatic replies (§5.4).
+devices sending two, apart, get two answers, each a word from the
+dead end, and there is one `spoke` to set (`devices-protocol.md` §5).
+Whether a device sends challenges at all, or leaves it to a sibling,
+is that device's option (`agent/options.json`, `device.md` §5), the
+same option that governs the other automatic replies (§5.4).
 
 ### 5.4 Acting once
 
 A handler that answers a message — the profile a `user-profile` asks
 back, a challenge's response — would answer from every device of ours
-that received a copy (`devices-protocol.md` §8). Whether this device
-acts on inbound at all is an option of the agent (`agent/options.json`,
-`device.md` §5): `act`, default on. The first version accepts that two
-devices with it on may answer twice, which the other side folds to one
-message; a fold that lets a device see the sibling's answer first is a
+that received a copy (`devices-protocol.md` §8), each from its own
+key: two answers are two messages to the other side, not one. Whether
+this device acts on inbound at all is an option of the agent
+(`agent/options.json`, `device.md` §5): `act`, default on. The first
+version accepts that two devices with it on may answer twice, and
+that a handler is at least once; the protocol's own answers bear it,
+and a fold that lets a device see the sibling's answer first is a
 sync away and is not relied on. What no device acts on is a word from
 a dead end (`devices-protocol.md` §6).
 
@@ -569,6 +571,13 @@ knows what they said.
   whole answer to two devices answering twice. A device that waits one
   sync before acting, or a fold that assigns the answer to one device,
   is the next.
+- **Which DID signs `from_prior`.** Today the prior is the DID the
+  contact last wrote to (agent-core's `priorOf`), so a device that
+  changes mediator twice before the contact answers signs both
+  rotations from one DID, and the contact holds a fork
+  (`devices-protocol.md` §7, §10). Signing from the last DID of ours
+  that reached the contact's mediator — the outbox's `sent` — would
+  leave honest forks to lost messages. Not in this version.
 - **The self contact's channels** carry sync and nothing else; whether
   a person's note to themself across devices is a message in it, or
   an event of its own, is not decided.

@@ -17,9 +17,9 @@ device's. An identity adds a device by having a device the contact
 already knows **vouch** for the new one's key; it drops a device by
 having any other device **revoke** its keys, naming the moment they
 stopped being the identity's, which the contact answers with a
-**challenge** to the revoked end; anything a revoked end says
-afterwards, the challenge's answer included, is a **conflict** the
-contact's person rules on, and nothing else is — and while it stands,
+**challenge** to the revoked end; anything the contact then hears
+from a revoked end, the challenge's answer included, is a **conflict**
+its person rules on, and nothing else is — and while it stands,
 the end that revoked it is **disputed** and written to no more than
 the end it revoked. A sender writes once and seals to every live end.
 The identity's anchor takes no part: no key of it seals a message
@@ -43,12 +43,12 @@ here, and a contact is never asked to resolve one.
    the contact saw after that moment counts for nothing. A revoke
    kills the chains it names, and only those; what it undoes is what
    the named chains added, never what they killed.
-3. **A revoked end has no second chance under that name.** Nothing a
-   revoked chain says is acted on; every word from it is shown as a
-   conflict; a device that comes back comes back with a new key,
-   vouched afresh. Revocation is therefore sticky by construction and
-   needs no ordering between vouch and revoke: whichever arrives first,
-   the chain is dead.
+3. **A revoked end has no second chance under that name.** Nothing
+   heard from a revoked chain after its revoke is acted on; every word
+   from it is shown as a conflict; a device that comes back comes back
+   with a new key, vouched afresh. Revocation is therefore sticky by
+   construction and needs no ordering between vouch and revoke:
+   whichever arrives first, the chain is dead.
 4. **The contact's person is the arbiter, locally.** A conflict — a
    revoked end that speaks, two ends revoking each other — is a
    projection and is resolved by a decision in the contact's own
@@ -65,8 +65,10 @@ here, and a contact is never asked to resolve one.
 
 - **chain** — the DIDs one key of a counterpart's wore in succession,
   joined by `from_prior` rotations. Every DID is in exactly one chain.
-  A chain with two latest DIDs is a fork, a conflict of its own.
-- **end** — a chain's latest DID; where a message to that device goes.
+  A DID rotated from twice gives the chain two **heads**, a fork:
+  both stay in the chain, and it is shown (§7).
+- **end** — a chain's latest DID, where a message to that device goes;
+  of a fork's heads, the one the contact saw last.
 - **conflict / dead / disputed / orphaned / live** — a chain's state,
   read off its record in the contact's fold (§7), the first that
   holds. Conflict: dead, and it spoke since; shown until ruled. Dead:
@@ -171,9 +173,11 @@ and the person rules on what it killed if they mean to (§6). A
 observation's moment. One earlier than a vouch the named chains made
 withdraws it, honest or not, and a sibling's own vouch replaces the
 honest one (`devices.md` §5.1): earlier is the safe error. A DID
-named that is not in this counterpart's chains is ignored — recorded,
+named that is in another counterpart's chains is ignored — recorded,
 shown, without effect: a revoke reaches only the identity it came
-from.
+from. One the contact does not know is held as named-dead: it is a
+name the revoker says was its own identity's, and a chain a vouch or
+an accept later brings in under it is dead on arrival (§7).
 
 Every device of the counterpart sends its own revoke, so the contact
 is told even if the device that made the decision never comes back
@@ -229,8 +233,9 @@ and the end that revoked it is disputed.
 challenge for every death by a counted revoke that did not name the
 revoker's own chain — one per death, so a chain ruled live and
 revoked again is asked again (§7); which of several does is the
-contact's own arrangement, and two sending two, apart, is two answers
-the answerer's identity folds to one (§8).
+contact's own arrangement, and two sending two, apart, get two
+answers, each a word from the dead end, and there is one `spoke` to
+set (§7, §8).
 
 **Timeout.** How long the application shows "checking" before it
 shows "gone" is the application's; nothing in the fold changes when it
@@ -247,12 +252,13 @@ vouch, a revoke, a rotation, a response — is recorded as it is (an
 observation is never refused a home) and does four things and
 nothing else: it puts the chain in **conflict**; it is shown, marked;
 it is not acted on — no handler runs on it, no reply is sent, no vouch
-or revoke or rotation it carries takes effect, and the chain it
-extends stays dead; and it puts every end whose counted revoke killed
-the chain in **dispute**. A disputed end is written to no more than a
-dead one, its decisions are not counted, and its words are shown,
-marked, and not acted on: the contact holds two ends that each say
-the other is not the counterpart's, and it does not choose. Between a
+or revoke it carries takes effect, and a rotation it carries moves
+the chain's end and nothing more, the new name as dead as the old
+(§7); and it puts every end whose counted revoke killed the chain in
+**dispute**. A disputed end is written to no more than a dead one,
+its decisions are not counted, and its words are shown, marked, and
+not acted on: the contact holds two ends that each say the other is
+not the counterpart's, and it does not choose. Between a
 revoke and the first word from the end it named there is no dispute:
 a device that is lost, wiped or locked says nothing, and the end that
 revoked it stays live and alone — the common case, and silent. A
@@ -260,6 +266,18 @@ chain the person ruled dead has no revoker to dispute; its words are
 conflicts and nothing more. A copy of a word the chain said while it
 was live, delivered again after its death, is no word from a dead
 end: it was folded once, then (§7).
+
+A word from a dead end is what the contact heard after it folded the
+revoke, in its own order, not what the end said after it: a message
+the end sent while it was still its identity's, delayed on the way,
+arrives as one. The fold does not tell the two apart, and must not:
+`created_time` is the sender's claim, and a rule that spared a word
+older than `since` is beaten by a thief that sets `since` late. The
+application shows them apart: a response whose `thid` is a challenge
+of this death could only have been made after the challenge, and is
+proof the key lived after its revoke (`answered`, §7); any other word
+may be late traffic, and is shown with the moment its sender claims
+for it, against `since`.
 
 What the person then does is a decision, the **verdict**, on one
 chain, named by any DID in it: `live` or `dead`.
@@ -311,10 +329,11 @@ An Estoc device records it as `contact.verdict` (`vault-events.md`
 
 The contact holds, per counterpart, a set of chains. Walk what it
 observed of the counterpart in its own order, keeping per chain the
-record below — `accepted`, `vouchedBy`, `revokedBy`, `ruled`,
-`disputedBy`, `challenged`, `spoke`, `words` — and a set of
-**named-dead** DIDs. The record is the truth and the rules edit only
-it; a chain's **state** is read off the record, the first that holds:
+record below — its DIDs and `heads`, `accepted`, `vouchedBy`,
+`revokedBy`, `ruled`, `disputedBy`, `challenged`, `spoke`,
+`answered`, `words` — and a set of **named-dead** DIDs. The record is
+the truth and the rules edit only it; a chain's **state** is read off
+the record, the first that holds:
 **conflict** if `spoke`; **dead** if `revokedBy` is not empty or
 `ruled` is `dead`; **disputed** if `disputedBy` is not empty;
 **orphaned** if it was not accepted, `vouchedBy` is empty and `ruled`
@@ -342,8 +361,8 @@ folded as a message of its own, and the reused id is shown.
    — except a chain the person ruled `dead`, which is dead on their
    word already and gets nothing; a named DID no chain contains yet
    is added to named-dead, with the revoking chain, so the chain that
-   later contains it is dead on arrival. Named DIDs outside the
-   counterpart are ignored. A revoke that names its own chain is that
+   later contains it is dead on arrival. A named DID of another
+   counterpart's is ignored. A revoke that names its own chain is that
    chain's own leaving, and no challenge is owed. Then `since` (§4):
    every counted vouch by a named chain that was observed after
    `since` is **withdrawn** from the `vouchedBy` of the chain it was
@@ -355,16 +374,29 @@ folded as a message of its own, and the reused id is shown.
    the `vouchedBy` of the chain it names, which appears by rule 1 if
    it is new, and stays there after the voucher's death unless rule 2
    withdraws it.
-4. **A rotation from a live chain** extends it.
-5. **Any observation on a chain that is not live** — rules 2 to 4 not
-   applied, a message, a response — goes in its `words`; nothing it
-   carries is an edge or a kill. On a dead chain it is a word from a
-   dead end (§6): `spoke` is set, and the chain is added to the
-   `disputedBy` of every chain other than itself in its `revokedBy`.
+4. **A rotation** — a `from_prior` signed by a DID of a chain, in an
+   envelope sealed by the DID it names — puts the new DID in that
+   chain whatever the chain's state: it is the key's own word about
+   its next name, and the state is the chain's, not the name's. From
+   the chain's end it moves the end; from a DID rotated from already
+   it is a **fork**: the new DID is one more of the chain's `heads`,
+   the end is the head observed last, and only the end is written
+   to. To a DID that is in another chain — one a sibling vouched for
+   before its rotation arrived (`devices.md` §5.1) — it is the key's
+   word that the two were one, and they are joined: every list of
+   the two records unioned, each flag set if either's, `ruled` the
+   later verdict.
+5. **Any observation on a chain that is not live** — rules 2 and 3
+   not applied, a message, a response — goes in its `words`; nothing
+   it carries is an edge or a kill, and a rotation it carries is rule
+   4's. On a dead chain it is a word from a dead end (§6): `spoke` is
+   set, `answered` too if it is a response to a challenge of this
+   death, and the chain is added to the `disputedBy` of every chain
+   other than itself in its `revokedBy`.
 6. **A verdict** sets `ruled` on the chain it names and ends its death
-   and its dispute: `revokedBy`, `challenged`, `spoke` and
-   `disputedBy` are cleared, and later events apply to the record as
-   it now is — the next counted revoke starts the next death, owed
+   and its dispute: `revokedBy`, `challenged`, `spoke`, `answered`
+   and `disputedBy` are cleared, and later events apply to the record
+   as it now is — the next counted revoke starts the next death, owed
    its own challenge. `dead` also removes the chain from every
    `disputedBy` it is in, its revokers' word upheld; `live` removes
    it from none — the ends that revoked it are ruled on their own.
@@ -373,8 +405,9 @@ What the fold reports, per chain:
 
 ```ts
 type End = {
-  did: string;                            // the chain's end
-  chain: string[];                        // its DIDs, oldest first
+  did: string;                            // the chain's end: its head, or of several the one observed last
+  chain: string[];                        // its DIDs, in rotation order
+  heads: string[];                        // its DIDs not rotated from; more than one is a fork
   state: "conflict" | "dead" | "disputed" | "orphaned" | "live";  // read off the fields below
   accepted: boolean;                      // the person accepted a channel under one of its DIDs
   vouchedBy: string[];                    // the `by` of every counted vouch for it not withdrawn
@@ -383,13 +416,18 @@ type End = {
   disputedBy: string[];                   // the chains in conflict that it revoked
   challenged: boolean;                    // some device of the contact's sent it a challenge, this death
   spoke: boolean;                         // it spoke while dead, this death
+  answered: boolean;                      // it answered a challenge of this death
   words: string[];                        // what it said while not live, in order
 };
 ```
 
 - `ends[]`: one per chain, in order of first appearance. Several ends
-  are several devices; a *fork* — one chain with two latest DIDs — is
-  a conflict within one end.
+  are several devices; a *fork* — one chain with two `heads` — is one
+  end, shown: a key that named two successors, which is a device that
+  rotated twice before the contact answered (`devices.md` §9) as
+  often as a key that was copied, and the fold does not guess. A
+  copied key is retired the one way there is: a sibling revokes the
+  chain, and the device comes back with a new key (§1).
 - The **write set** is every live end: a message to the counterpart
   goes to all of them (§8). Empty for a counterpart with no live end —
   dead, orphaned or disputed — the person is told, and the incidents
@@ -446,13 +484,16 @@ A message to a counterpart is written once and goes to every live end:
   the counterpart's that the counterpart has not yet had vouched for —
   is a stranger's until the vouch lands (§3). A message from a dead,
   an orphaned or a disputed end is §6.
-- **Side effects, once.** A handler that answers a message — a profile
-  asked back, a challenge's response — would answer from every device
-  of the receiver's that got a copy. This protocol accepts that: two
-  answers with one id are one message to the party that folds them,
-  and which of its devices answers is the receiver's own arrangement
-  (`devices.md` §5.4). What no device acts on is a word from a dead,
-  an orphaned or a disputed end (§6).
+- **Side effects, once per device.** A handler that answers a message
+  — a profile asked back, a challenge's response — runs on every
+  device of the receiver's that got a copy, and each answers from its
+  own end, with an id of its own: two devices answering is two
+  messages to the party that folds them, not one, and a handler is at
+  least once. This protocol's own answers bear it — a second response
+  is a second word from a dead end, and there is one `spoke` to set
+  (§7) — and which of the receiver's devices answers anything else
+  is its own arrangement (`devices.md` §5.4). What no device acts on
+  is a word from a dead, an orphaned or a disputed end (§6).
 
 The counterpart's mediators are told nothing new: each copy is a
 forward to the routing of the end it goes to, as a single-device
@@ -538,5 +579,13 @@ its own device, each forwarded to on its own.
   replay can do is deliver a message for the first time late, and a
   vouch that arrives late is what `since`, matched against the
   contact's own clock, is for.
+- **A fork.** Two heads of one chain are two successors one key
+  named, and the fold keeps both and writes to the later (§7): it
+  cannot tell a device that rotated twice unanswered from a key that
+  was copied, and a copied key can do already what a fork does. A
+  verdict that picks a head is not in this version; a sender that
+  signs `from_prior` from the last of its DIDs that reached the
+  contact's mediator, not the last the contact wrote to, leaves
+  honest forks to lost messages (`devices.md` §9).
 - **Timeouts** are the application's throughout (§5): nothing in the
   fold expires.
