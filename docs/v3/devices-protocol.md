@@ -152,35 +152,41 @@ by a message from every device that can reach them:
 - `body.since` — optional; the moment, on the sender's wall clock,
   from which the named chains' word was no longer the identity's:
   when the device was lost, and at the latest the last time a sibling
-  heard from it (`devices.md` §5.2). Absent, it is the moment the
-  contact folds the revoke — a device leaving names its own chains
-  and says nothing more.
+  heard from it (`devices.md` §5.2). Absent, and no `withdraw`, it is
+  the moment the contact folds the revoke — a device leaving names
+  its own chains and says nothing more.
+- `body.withdraw` — optional, `"all"`: every vouch the named chains
+  ever made is withdrawn, whenever the contact saw it, and no clock
+  is asked; `since` is then not sent, and not read if it is. What a
+  sender sends when its other devices stand behind every key the
+  dropped one vouched for (`devices.md` §5.2).
 - Sealed from the revoking device's key toward the contact; fanned out
   to every live end of the contact (§8). A device may name its own
   DIDs: that is a device leaving, and needs no challenge.
 
 The contact records the edge — the DID the sealing key wore, the DIDs
-named, `since`, the message — and the effect is §7's: the named
-chains are dead, from the moment the observation is folded, and a
-**challenge** (§5) is owed to each; and every counted vouch by a named
-chain that the contact observed after `since` — by its own clock, in
-its own record — is **withdrawn**. The chain it was for loses that
-voucher, and a chain left with no counted voucher, that the person
-did not accept and did not rule live, is **orphaned**: nothing goes
-to it, its words are shown and not acted on, its own vouches are
-withdrawn in turn, and a fresh counted vouch brings it back. A
-revoke by a named chain is not withdrawn: what killed stays killed,
-and the person rules on what it killed if they mean to (§6). A
-`since` later than the contact's observation of the revoke is that
-observation's moment. One earlier than a vouch the named chains made
-withdraws it, honest or not, and a sibling's own vouch replaces the
-honest one (`devices.md` §5.1): earlier is the safe error, and one
-before every vouch they made, withdrawing them all, is the safe
-choice for a sender whose other devices stand behind every key of
-its own (`devices.md` §5.2). A DID named that is in another
-counterpart's chains is ignored — recorded, shown, without effect: a
-revoke reaches only the identity it came from. One the contact does
-not know is held as named-dead: it is a name the revoker says was its
+named, `since` or `withdraw`, the message — and the effect is §7's:
+the named chains are dead, from the moment the observation is folded,
+and a **challenge** (§5) is owed to each; and every counted vouch by
+a named chain that the contact observed after `since` — by its own
+clock, in its own record — or every one, under `withdraw`, is
+**withdrawn**. The chain it was for loses that voucher, and a chain
+left with no counted voucher, that the person did not accept and did
+not rule live, is **orphaned**: nothing goes to it, its words are
+shown and not acted on, its own vouches are withdrawn in turn, and a
+fresh counted vouch brings it back. A revoke by a named chain is not
+withdrawn: what killed stays killed, and the person rules on what it
+killed if they mean to (§6). A `since` later than the contact's
+observation of the revoke is that observation's moment. One earlier
+than a vouch the named chains made withdraws it, honest or not, and
+a sibling's own vouch replaces the honest one (`devices.md` §5.1):
+earlier is the safe error, and `withdraw: "all"`, which withdraws
+every vouch they made and asks no clock, is the safe choice for a
+sender whose other devices stand behind every key of its own
+(`devices.md` §5.2). A DID named that is in another counterpart's
+chains is ignored — recorded, shown, without effect: a revoke
+reaches only the identity it came from. One the contact does not
+know is held as named-dead: it is a name the revoker says was its
 own identity's, and a chain a vouch or an accept later brings in
 under it is dead on arrival (§7).
 
@@ -188,9 +194,10 @@ Every device of the counterpart sends its own revoke, so the contact
 is told even if the device that made the decision never comes back
 online, and a contact with a channel to only one of the counterpart's
 devices is told by that one. Two revokes naming one chain are one
-death, and each withdraws by its own `since`: the earlier reaches
-further, and nothing the later one left is put back. Two copies of
-one revoke are one revoke, folded once (§7).
+death, and each withdraws by its own `since`, or all by its own
+`withdraw`: the one that reaches further does, and nothing the other
+left is put back. Two copies of one revoke are one revoke, folded
+once (§7).
 
 ## 5. Challenge and response
 
@@ -201,7 +208,11 @@ it is still there:
 {
   "type": "https://estoc.dev/devices/1.0/challenge",
   "id": "<uuid>",
-  "body": { "by": "did:peer:4…A", "revoke_id": "<the revoke's id>" }
+  "body": {
+    "by": "did:peer:4…A",
+    "revoke_id": "<the revoke's id>",
+    "revoke_hash": "<SHA-256 of the revoke's plaintext, base64url>"
+  }
 }
 ```
 
@@ -211,13 +222,17 @@ it is still there:
 - `body.by` — the DID whose revoke this is, so that an honest device
   that answers knows which of its siblings retired it, and its person
   can tell whether that sibling is still theirs.
-- `body.revoke_id` — the `id` of the counted revoke that began the
-  death this challenge is for, as the challenger folded it: what ties
-  a challenge to one death (§7), so that a challenge for an earlier
-  death, however it sorts among the contact's devices, answers for no
-  later one. Several revokers in one death are one challenge, naming
-  whichever the challenger counted first; a sibling that counted
-  another first sees the challenge answer for the death all the same.
+- `body.revoke_id`, `body.revoke_hash` — the `id` of the counted
+  revoke that began the death this challenge is for, as the
+  challenger folded it, and the SHA-256 of its plaintext as the
+  challenger received it, base64url without padding: with `by`, the
+  revoke's identity (§7, §8), which ties a challenge to one death, so
+  that a challenge for an earlier death, however it sorts among the
+  contact's devices, answers for no later one — not even one the
+  same revoker began by reusing the id. Several revokers in one death
+  are one challenge, naming whichever the challenger counted first; a
+  sibling that counted another first sees the challenge answer for
+  the death all the same.
 - Not sent when the revoke named the revoker's own chain (a device
   leaving), nor for a chain the person ruled dead (§6): there is
   nothing to ask. Nor to an orphaned chain (§4): nothing was said of
@@ -323,11 +338,12 @@ chain, named by any DID in it: `live` or `dead`; on a forked chain,
   verdict on a disputed chain ends its dispute either way.
 - On a forked chain, `live` names a head: the person has satisfied
   themself which successor is their contact's device. That head is
-  the chain's end again, and every other branch — the DIDs from the
-  fork on that end in another head — is split off as a chain of its
-  own, ruled `dead`: its words conflicts, no revoker to dispute. A
-  thief who rotated the copied key twice is two dead chains. `dead`
-  names the chain and kills every head.
+  the chain's end again, and what is off its path — every rotation
+  from the path to a DID not on it is cut (§7) — is split off as
+  chains of their own, ruled `dead`: their DIDs the counterpart's
+  still, their words conflicts, no revoker to dispute. A thief who
+  rotated the copied key twice is two dead chains. `dead` names the
+  chain and kills every head.
 - Never sent. The other side is told nothing; what it did with its
   devices is its own business, and what the contact believes is the
   contact's.
@@ -380,7 +396,7 @@ folded as a message of its own, and the reused id is shown.
 2. **A revoke from a live chain** is counted. Every chain that
    contains a named DID gets the revoking chain in its `revokedBy` —
    the start of its death if that was empty, one more revoker if
-   not, and if the chain `spoke` already the revoker joins its
+   not, and if the chain `spoke` already it joins the revoker's
    `disputedBy` at once, one more end its word contradicts — except
    a chain the person ruled `dead`, which is dead on their word
    already and gets nothing; a named DID no chain contains yet is
@@ -390,11 +406,12 @@ folded as a message of its own, and the reused id is shown.
    ignored. A revoke that names its own chain is that chain's own
    leaving, and no challenge is owed. Then `since` (§4): every
    counted vouch by a named chain that was observed after `since` is
-   **withdrawn** from the `vouchedBy` of the chain it was for — a
-   `since` before them all withdraws them all — and a chain thereby
-   left with none, that was not accepted and is not ruled `live`,
-   has nothing behind it: its own counted vouches are withdrawn in
-   turn, until nothing more is. A revoke is never withdrawn.
+   **withdrawn** from the `vouchedBy` of the chain it was for —
+   every one, whenever observed, when the revoke says `withdraw:
+   "all"` — and a chain thereby left with none, that was not
+   accepted and is not ruled `live`, has nothing behind it: its own
+   counted vouches are withdrawn in turn, until nothing more is. A
+   revoke is never withdrawn.
 3. **A vouch from a live chain** is counted: the vouching chain joins
    the `vouchedBy` of the chain it names, which appears by rule 1 if
    it is new, and stays there after the voucher's death unless rule 2
@@ -428,9 +445,12 @@ folded as a message of its own, and the reused id is shown.
    `disputedBy` it is in, its revokers' word upheld; `live` removes
    it from none — the ends that revoked it are ruled on their own.
    On a forked chain `live` names a head and keeps it: it is the end
-   again, and every other branch — the DIDs from the fork on that
-   end in another head — is split off as a chain of its own, its
-   record empty but `ruled: dead`; `dead` kills the chain whole.
+   again, and every rotation from a DID on its path — the chain's
+   first DID to the kept head — to a DID off it is cut from the
+   chain, not from the counterpart: what the cuts leave off the path
+   is split off, each piece under the rotations it keeps a chain of
+   its own, its DIDs the counterpart's still, its record empty but
+   `ruled: dead`; `dead` kills the chain whole.
 
 What the fold reports, per chain:
 
@@ -466,12 +486,13 @@ type End = {
   incidents (if any) are where the answer is.
 - **Challenges owed**: every end whose `revokedBy` holds a chain
   other than itself and that is not `challenged` — a challenge sent
-  by any device of the contact's whose `revoke_id` is a revoke of
-  this death (§5): tied by id, not by order, so a challenge for an
-  earlier death answers for no later one however the two sort. An
-  orphaned end is owed none, nor a chain ruled dead, whose
-  `revokedBy` a later revoke leaves alone (rule 2); a chain ruled
-  live and revoked again is owed one again.
+  by any device of the contact's whose `by`, `revoke_id` and
+  `revoke_hash` name a revoke of this death (§5): tied by the
+  revoke's identity, not by order, so a challenge for an earlier
+  death answers for no later one however the two sort, nor for one
+  begun under a reused id. An orphaned end is owed none, nor a chain
+  ruled dead, whose `revokedBy` a later revoke leaves alone (rule
+  2); a chain ruled live and revoked again is owed one again.
 - **Incidents**: the components of the ends in conflict, the ends in
   their `revokedBy`, and the chains in those ends' `disputedBy`,
   joined until nothing more joins, and every forked chain, one of
@@ -579,8 +600,8 @@ its own device, each forwarded to on its own.
   §5.2), and why the residue is the skew between the two clocks
   (below). A vouch that reached the contact before that moment
   stands, and the end is one more to retire by hand, listed under
-  its introducer. The bound is a `since` before every vouch the
-  device made, which withdraws them all and asks nothing of any
+  its introducer. The bound is `withdraw: "all"` (§4), which
+  withdraws every vouch the device made and asks nothing of any
   clock; it costs the keys only that device vouched for, which is
   why an identity whose other devices stand behind every key sends
   it, and one that has lost the device behind its only other key
@@ -601,7 +622,9 @@ its own device, each forwarded to on its own.
   honest word and the theft lets a vouch through or withdraws one it
   should not; a sibling's re-vouch mends the second, nothing mends
   the first, a `since` set earlier than needed is the safe error,
-  and one set before every vouch is out of the skew's reach.
+  and `withdraw: "all"` is out of the skew's reach, which a `since`
+  meant to precede every vouch is not: the contact reads it against
+  its own clock.
 - **A dispute is a freeze.** An end that is dead and speaks puts the
   ends that revoked it in dispute (§6), so a thief holding a revoked
   device that answers its challenge stops every contact writing to

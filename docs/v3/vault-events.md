@@ -301,27 +301,30 @@ shows them once.
   revoking one — lifted from `devices/1.0` messages
   (`devices-protocol.md` §3, §4). Observations on the channel that
   carried them: `by` is the DID the sealing key wore, `for` the
-  vouch's `body.did`, `dids` the revoke's `body.dids` and `since` its
-  `body.since` when it had one, `mid` the message each came from and
-  `wireId` its wire id, as on the `message.in`. A vouch or a revoke
-  is one per `(cid, the chain of by, wireId)`: the copies of one —
-  arrived on several of our devices, or delivered twice — fold to the
-  first in canonical order, and the rest apply nothing, whatever a
-  verdict did between (`devices-protocol.md` §7); two under one
-  `wireId` with different content are two, shown as such. In the
-  identity graph (§7.1) a vouch is an edge from `by` to `for`, so
-  a channel later opened by a key of `for`'s document is attributed
-  to the contact the moment `peer.resolved` joins it — or before any
-  such channel exists, since the contact may now write to `for` and
-  `peer.resolved` before sending fixes the pair. A revoke's effect is
+  vouch's `body.did`, `dids` the revoke's `body.dids`, `since` and
+  `withdraw` its `body.since` and `body.withdraw`, each when it had
+  one, `mid` the message each came from and `wireId` its wire id, as
+  on the `message.in`. A vouch or a revoke is one per `(cid, the
+  chain of by, wireId, the body root of its message)`: the copies of
+  one — arrived on several of our devices, or delivered twice — fold
+  to the first in canonical order, and the rest apply nothing,
+  whatever a verdict did between (`devices-protocol.md` §7); two
+  under one `wireId` with different content are two roots, two
+  messages, shown as such. In the identity graph (§7.1) a vouch is
+  an edge from `by` to `for`, so a channel later opened by a key of
+  `for`'s document is attributed to the contact the moment
+  `peer.resolved` joins it — or before any such channel exists, since
+  the contact may now write to `for` and `peer.resolved` before
+  sending fixes the pair. A revoke's effect is
   the fold's (§7.2): the named chains are dead from the moment it is
   folded, the vouches they made that this device saw after `since` —
-  the `at` of its own `peer.vouched` — are withdrawn, and a DID named
-  that is not in this contact's component is ignored — recorded,
-  shown, without effect. *Provisional:* written on receipt, as
-  `peer.rotated` is, rather than derived from the message on fold. On
-  the sending side `did.vouched` / `did.revoked`, that one went, are
-  `devices.md` §5.1 and §5.2; all four carry a pair.
+  the `at` of its own `peer.vouched` — or every one, under
+  `withdraw`, are withdrawn, and a DID named that is not in this
+  contact's component is ignored — recorded, shown, without effect.
+  *Provisional:* written on receipt, as `peer.rotated` is, rather
+  than derived from the message on fold. On the sending side
+  `did.vouched` / `did.revoked`, that one went, are `devices.md` §5.1
+  and §5.2; all four carry a pair.
 - Nothing about which contact the peer is goes on any of these.
 
 ### 3.2 Frozen channels
@@ -546,10 +549,10 @@ it.
   the contact's devices, live or dead, when the wire could not say
   (`devices-protocol.md` §6). `did` names a chain, by any DID in it;
   `verdict` is `live` or `dead`; latest wins per chain by canonical
-  order. On a forked chain `live` names the head to keep, and the
-  other branches split off as chains ruled dead (§7.2). Never sent:
-  what the contact did with its devices is its own
-  vault's business, and what we believe is ours.
+  order. On a forked chain `live` names the head to keep, and what
+  is off its path is split off as chains ruled dead (§7.2). Never
+  sent: what the contact did with its devices is its own vault's
+  business, and what we believe is ours.
 - `contact.deleted` is a tombstone (§9).
 - Latest-wins fields (`petname`, each `flag`) resolve by canonical
   order (`event-store.md` §3).
@@ -623,37 +626,46 @@ component every member of which is deleted is deleted:
   contact's events in canonical order (`event-store.md` §3), one `End`
   per chain, its `state` read off its record. The identity graph
   gains one edge — a counted `peer.vouched` joins `by` to `for` — and
-  chains are the components under `peer.rotated` edges alone. The
-  protocol's rules read here as: a vouch, a revoke, a rotation or a
-  message is one per `(cid, the chain of its sender, wireId)`, the
-  first in canonical order, the rest copies that apply nothing
-  (§3.1); a chain appears through a live `contact.attached` channel
-  under one of its DIDs (`accepted`), or through a counted
-  `peer.vouched`; a `peer.revoked` or `peer.vouched` on a live chain
-  is counted, and a `peer.revoked` naming a chain that `spoke`
-  already puts its revoker in that chain's `disputedBy` at once; a
-  `peer.rotated` joins its `to` to its `from`'s chain whatever the
-  chain's state, joining two chains when `to` is in one already,
-  carrying the chain into its death when `to` is named-dead, and a
-  `from` rotated from twice gives the chain two `heads` and no end,
-  until a `contact.verdict` naming a head keeps it and splits the
-  other branches off as chains ruled dead (`devices-protocol.md` §7
-  rules 4 and 6); a counted `peer.revoked` with `since` withdraws
-  every counted `peer.vouched` by a named chain whose own `at` — the
-  observing device's — is after `since`, all of them when `since` is
-  before them all, and a chain left with none has its own withdrawn
-  in turn; any observation on a chain that is not live — a
-  `message.in`, a response, an edge not applied — has its `mid` in
-  `words`, and on a dead chain sets `spoke`, and `answered` when it
-  is a response whose `thid` is the `wireId` of a challenge of this
-  death, and puts the chain in the `disputedBy` of its `revokedBy`; a
-  `contact.verdict` sets `ruled` and ends the chain's death and
-  dispute. `challenged` is a `message.out` with the challenge's
-  `msgType`, from any device of ours, whose body's `revoke_id` is the
-  `wireId` of a `peer.revoked` of this death — tied by id, not by
-  canonical order, which a clock could misplace; `challenges[]` is
-  every end whose `revokedBy` holds a chain other than itself and
-  that is not `challenged` (`devices.md` §5.3).
+  chains are the components under `peer.rotated` edges alone, less
+  the edges a `contact.verdict` on a fork cut: every rotation off
+  the kept head's path (rule 6 below). A cut edge still attributes —
+  the DIDs past it are the contact's, in `theirDids`, a chain of
+  their own ruled dead — it only no longer joins them to the chain
+  that kept the head. The protocol's rules read here as: a vouch, a
+  revoke, a rotation or a message is one per `(cid, the chain of its
+  sender, wireId, body root)`, the first in canonical order, the rest
+  copies that apply nothing, and another root under the same
+  `wireId` another message (§3.1); a chain appears through a live
+  `contact.attached` channel under one of its DIDs (`accepted`), or
+  through a counted `peer.vouched`; a `peer.revoked` or
+  `peer.vouched` on a live chain is counted, and a `peer.revoked`
+  naming a chain that `spoke` already puts that chain in its
+  revoker's `disputedBy` at once; a `peer.rotated` joins its `to` to
+  its `from`'s chain whatever the chain's state, joining two chains
+  when `to` is in one already, carrying the chain into its death when
+  `to` is named-dead, and a `from` rotated from twice gives the chain
+  two `heads` and no end, until a `contact.verdict` naming a head
+  keeps it and cuts every rotation off its path, what comes off a
+  chain of its own ruled dead (`devices-protocol.md` §7 rules 4 and
+  6); a counted `peer.revoked` with `since` withdraws every counted
+  `peer.vouched` by a named chain whose own `at` — the observing
+  device's — is after `since`, every one when it says `withdraw:
+  "all"`, and a chain left with none has its own withdrawn in turn;
+  any observation on a chain that is not live — a `message.in`, a
+  response, an edge not applied — has its `mid` in `words`, and on a
+  dead chain sets `spoke`, and `answered` when it is a response whose
+  `thid` is the `wireId` of a challenge of this death, and puts the
+  chain in the `disputedBy` of its `revokedBy`; a `contact.verdict`
+  sets `ruled` and ends the chain's death and dispute. `challenged`
+  is a `message.out` with the challenge's `msgType`, from any device
+  of ours, whose body's `by`, `revoke_id` and `revoke_hash` name a
+  `peer.revoked` of this death — its chain, its `wireId`, and the
+  digest in the body root of its `message.in`, which for a plaintext
+  of one raw block is the SHA-256 of the bytes (`event-store.md` §5)
+  — tied by the revoke's identity, not by canonical order, which a
+  clock could misplace; `challenges[]` is every end whose `revokedBy`
+  holds a chain other than itself and that is not `challenged`
+  (`devices.md` §5.3).
   A message's `did` (§3.1) says which end sent it. Two devices of
   ours fold this each from their own observations and union by sync:
   the same vouch, arrived on each's own channel, is one counted edge,
@@ -674,27 +686,31 @@ component every member of which is deleted is deleted:
   §7).
 - `thread`: the union of `message.*` across attributed channels and
   devices, in canonical order. Cross-channel and cross-device order
-  relies on `at` alone. **It folds by wire id**: skeleton lines that
-  share a `wireId` and a direction are one message — the copies of one
-  outbound to several ends, or the copies of one inbound that the
-  contact sealed to several keys of ours and that reached us on
-  several devices (`devices-protocol.md` §8). A message to a contact
-  with several live ends is one plaintext, one `id`, its `to` naming
-  every end, and one **copy per end**: a `message.out` in the channel
-  from `self`'s key to that end's key, all sharing the `wireId` and
-  the same body root (the plaintext is one blob; the skeletons name
-  it), each sealed to its end, each delivered on its own with its own
-  `delivery.attempted`s — the channel model gains no shape, fan-out is
-  N skeleton lines over one blob. Inbound, each of our devices
-  receives its own copy, in its own channel, and appends its own
-  `message.in`; after sync every device holds every copy, folded to
-  one line; a device the contact never reached reads the message from
-  its sibling's copy. The message's deliveries are the union of its
-  copies'; erasing it erases every copy (`message.erased` per `mid`,
-  §8.1, the roots going when the last copy drops them). Dedup is by
-  `(cid, direction, wireId)`; a wire id is the sender's claim and is
-  never a storage identity (`event-store.md` §3), which is exactly why
-  the copies keep their own `mid`s.
+  relies on `at` alone. **It folds by wire id and root**: skeleton
+  lines that share a `wireId`, a direction and a body root are one
+  message — the copies of one outbound to several ends, or the copies
+  of one inbound that the contact sealed to several keys of ours and
+  that reached us on several devices (`devices-protocol.md` §8). A
+  message to a contact with several live ends is one plaintext, one
+  `id`, its `to` naming every end, and one **copy per end**: a
+  `message.out` in the channel from `self`'s key to that end's key,
+  all sharing the `wireId` and the same body root (the plaintext is
+  one blob; the skeletons name it), each sealed to its end, each
+  delivered on its own with its own `delivery.attempted`s — the
+  channel model gains no shape, fan-out is N skeleton lines over one
+  blob. Inbound, each of our devices receives its own copy, in its
+  own channel, and appends its own `message.in`; after sync every
+  device holds every copy, folded to one line; a device the contact
+  never reached reads the message from its sibling's copy. The
+  message's deliveries are the union of its copies'; erasing it
+  erases every copy (`message.erased` per `mid`, §8.1, the roots
+  going when the last copy drops them). Dedup is by `(cid, direction,
+  wireId, body root)`: one plaintext is one blob, so copies share the
+  root, and a line under the same `wireId` with another root is a
+  message of its own, the reused id shown (`devices-protocol.md`
+  §8); a wire id is the sender's claim and is never a storage
+  identity (`event-store.md` §3), which is exactly why the copies
+  keep their own `mid`s.
 
 ### 7.3 My DIDs and devices
 

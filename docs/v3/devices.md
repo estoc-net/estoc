@@ -297,23 +297,24 @@ sender chooses it per contact. **All of it**, when every key of ours
 toward that contact that the retired device vouched for has a
 `did.vouched` from another live device of ours as well (§5.1) —
 `self` reads its own and its siblings' vouches in the contact's
-channels — then `since` is before every vouch the device made, they
-are all withdrawn, nothing of ours is orphaned, and no clock is
-asked: the fail-safe choice, and the usual one for an identity of
-three devices or more. **A moment**, otherwise — a key of ours that
-only the retired device vouched for, the survivor of a pair among
-them — the `since` of the `device.retired`, when the person set one,
-so that every sibling sends the same; else the last moment `self`
-heard from the retired device, on `self`'s own clock — the `at` of
-the latest `message.in` of `self`'s on a channel to that device
-(`sync.md` §2), or of the sync that last brought an event of that
-device's, whichever is later. Never an `at` the retired device wrote:
-a thief sets those, and forward. The person is asked when they last
-had the device and may set `since` earlier; earlier withdraws more of
-its vouches at the contacts, which the siblings' own vouches replace
-(§5.1), and later leaves what a thief planted in the gap
-(`devices-protocol.md` §10). A device retiring itself (§5.3) sends no
-`since`: it is leaving, not lost.
+channels — then the revoke says `withdraw: "all"` and no `since`:
+every vouch the device made is withdrawn, nothing of ours is
+orphaned, and no clock is asked: the fail-safe choice, and the usual
+one for an identity of three devices or more. **A moment**,
+otherwise — a key of ours that only the retired device vouched for,
+the survivor of a pair among them — the `since` of the
+`device.retired`, when the person set one, so that every sibling
+sends the same; else the last moment `self` heard from the retired
+device, on `self`'s own clock — the `at` of the latest `message.in`
+of `self`'s on a channel to that device (`sync.md` §2), or of the
+sync that last brought an event of that device's, whichever is
+later. Never an `at` the retired device wrote: a thief sets those,
+and forward. The person is asked when they last had the device and
+may set `since` earlier; earlier withdraws more of its vouches at
+the contacts, which the siblings' own vouches replace (§5.1), and
+later leaves what a thief planted in the gap
+(`devices-protocol.md` §10). A device retiring itself (§5.3) sends
+neither: it is leaving, not lost.
 
 ### 5.3 Challenges
 
@@ -340,11 +341,12 @@ answers nothing after.
 **Sending.** Every device of ours that folds a counted revoke from a
 contact (`devices-protocol.md` §7) and finds no challenge sent yet by
 any of its siblings for this death — a `message.out` with the
-challenge's `msgType` whose `revoke_id` is a revoke of this death,
-visible after sync — sends one, naming the revoke that began the
-death as `self` folded it (`devices-protocol.md` §5); two
-devices sending two, apart, get two answers, each a word from the
-dead end, and there is one `spoke` to set (`devices-protocol.md` §5).
+challenge's `msgType` whose `by`, `revoke_id` and `revoke_hash` name
+a revoke of this death, visible after sync — sends one, naming the
+revoke that began the death as `self` folded it, by id and by the
+digest of its plaintext (`devices-protocol.md` §5); two devices
+sending two, apart, get two answers, each a word from the dead end,
+and there is one `spoke` to set (`devices-protocol.md` §5).
 Whether a device sends challenges at all, or leaves it to a sibling,
 is that device's option (`agent/options.json`, `device.md` §5), the
 same option that governs the other automatic replies (§5.4).
