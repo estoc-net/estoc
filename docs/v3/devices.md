@@ -216,6 +216,20 @@ The key is registered with the device's own mediator and carries that
 device's routing DID: each end of ours tells the contact which mediator
 that device uses, no more than a single device did.
 
+A device that changes mediator mints a new key toward each contact
+and moves the contact to it by `from_prior`, as a single device did.
+The prior it signs from is the last DID of ours toward that contact
+that reached the contact's mediator — a `message.out` from it with a
+`delivery.attempted` whose outcome is `sent` (`vault-events.md` §3.1)
+— not the last DID the contact wrote to, which is what agent-core's
+`priorOf` uses today: a device that changed mediator twice before
+the contact answered would otherwise sign both rotations from one
+DID, and the contact would hold a fork and write to neither
+(`devices-protocol.md` §7, §10). A prior the contact never saw,
+because the message that carried it was lost, leaves the new key a
+stranger's to that contact until a sibling's vouch (§5.1) brings it
+in.
+
 ## 5. What a device owes its contacts
 
 ### 5.1 Vouches owed
@@ -278,18 +292,28 @@ revokes: `device.retired` reaches them by sync, and a retired device's
 keys are dead to them by the fold (§3, `vault-events.md` §7.3).
 
 **`since`.** The revoke carries the moment from which the retired
-device's word was no longer ours (`devices-protocol.md` §4): the
-`since` of the `device.retired`, when the person set one, so that
-every sibling sends the same; otherwise the last moment `self` heard
-from the retired device, on `self`'s own clock — the `at` of the
-latest `message.in` of `self`'s on a channel to that device
+device's word was no longer ours (`devices-protocol.md` §4), and the
+sender chooses it per contact. **All of it**, when every key of ours
+toward that contact that the retired device vouched for has a
+`did.vouched` from another live device of ours as well (§5.1) —
+`self` reads its own and its siblings' vouches in the contact's
+channels — then `since` is before every vouch the device made, they
+are all withdrawn, nothing of ours is orphaned, and no clock is
+asked: the fail-safe choice, and the usual one for an identity of
+three devices or more. **A moment**, otherwise — a key of ours that
+only the retired device vouched for, the survivor of a pair among
+them — the `since` of the `device.retired`, when the person set one,
+so that every sibling sends the same; else the last moment `self`
+heard from the retired device, on `self`'s own clock — the `at` of
+the latest `message.in` of `self`'s on a channel to that device
 (`sync.md` §2), or of the sync that last brought an event of that
 device's, whichever is later. Never an `at` the retired device wrote:
 a thief sets those, and forward. The person is asked when they last
 had the device and may set `since` earlier; earlier withdraws more of
 its vouches at the contacts, which the siblings' own vouches replace
-(§5.1), and later leaves what a thief planted in the gap. A device
-retiring itself (§5.3) sends no `since`: it is leaving, not lost.
+(§5.1), and later leaves what a thief planted in the gap
+(`devices-protocol.md` §10). A device retiring itself (§5.3) sends no
+`since`: it is leaving, not lost.
 
 ### 5.3 Challenges
 
@@ -315,8 +339,10 @@ answers nothing after.
 
 **Sending.** Every device of ours that folds a counted revoke from a
 contact (`devices-protocol.md` §7) and finds no challenge sent yet by
-any of its siblings — a `message.out` with the challenge's `msgType`
-on a channel under the end's key, visible after sync — sends one; two
+any of its siblings for this death — a `message.out` with the
+challenge's `msgType` whose `revoke_id` is a revoke of this death,
+visible after sync — sends one, naming the revoke that began the
+death as `self` folded it (`devices-protocol.md` §5); two
 devices sending two, apart, get two answers, each a word from the
 dead end, and there is one `spoke` to set (`devices-protocol.md` §5).
 Whether a device sends challenges at all, or leaves it to a sibling,
@@ -571,13 +597,6 @@ knows what they said.
   whole answer to two devices answering twice. A device that waits one
   sync before acting, or a fold that assigns the answer to one device,
   is the next.
-- **Which DID signs `from_prior`.** Today the prior is the DID the
-  contact last wrote to (agent-core's `priorOf`), so a device that
-  changes mediator twice before the contact answers signs both
-  rotations from one DID, and the contact holds a fork
-  (`devices-protocol.md` §7, §10). Signing from the last DID of ours
-  that reached the contact's mediator — the outbox's `sent` — would
-  leave honest forks to lost messages. Not in this version.
 - **The self contact's channels** carry sync and nothing else; whether
   a person's note to themself across devices is a message in it, or
   an event of its own, is not decided.

@@ -546,7 +546,9 @@ it.
   the contact's devices, live or dead, when the wire could not say
   (`devices-protocol.md` §6). `did` names a chain, by any DID in it;
   `verdict` is `live` or `dead`; latest wins per chain by canonical
-  order. Never sent: what the contact did with its devices is its own
+  order. On a forked chain `live` names the head to keep, and the
+  other branches split off as chains ruled dead (§7.2). Never sent:
+  what the contact did with its devices is its own
   vault's business, and what we believe is ours.
 - `contact.deleted` is a tombstone (§9).
 - Latest-wins fields (`petname`, each `flag`) resolve by canonical
@@ -614,8 +616,9 @@ component every member of which is deleted is deleted:
   graph, ordered by `peer.rotated`; the **current** DID is a chain's
   end, and its current keys are the latest `peer.resolved` for it.
   Several chains are several devices of the contact's, each live,
-  dead, orphaned, disputed or in conflict — `ends[]`, below; a fork
-  within one chain is two `heads`, shown on its end.
+  dead, forked, orphaned, disputed or in conflict — `ends[]`, below;
+  a fork within one chain is two `heads` and no current DID until
+  the person keeps one.
 - `ends[]`: the fold of `devices-protocol.md` §7, run over the
   contact's events in canonical order (`event-store.md` §3), one `End`
   per chain, its `state` read off its record. The identity graph
@@ -627,25 +630,30 @@ component every member of which is deleted is deleted:
   (§3.1); a chain appears through a live `contact.attached` channel
   under one of its DIDs (`accepted`), or through a counted
   `peer.vouched`; a `peer.revoked` or `peer.vouched` on a live chain
-  is counted; a `peer.rotated` joins its `to` to its `from`'s chain
-  whatever the chain's state, joining two chains when `to` is in one
-  already, and a `from` rotated from twice gives the chain two
-  `heads`, its end the one whose rotation is latest in canonical
-  order (`devices-protocol.md` §7 rule 4); a counted `peer.revoked`
-  with `since` withdraws every counted `peer.vouched` by a named chain
-  whose own `at` — the observing device's — is after `since`, and a
-  chain left with none has its own withdrawn in turn; any observation
-  on a chain that is not live — a `message.in`, a response, an edge
-  not applied — has its `mid` in `words`, and on a dead chain sets
-  `spoke`, and `answered` when it is a response whose `thid` is the
-  `wireId` of a challenge of this death, and puts the chain in the
-  `disputedBy` of its `revokedBy`; a `contact.verdict` sets `ruled`
-  and ends the chain's death and dispute. `challenged` is a
-  `message.out` with the challenge's `msgType` on a channel under the
-  end's key, from any device of ours, later in canonical order than
-  the revoke that began the death; `challenges[]` is every end whose
-  `revokedBy` holds a chain other than itself and that is not
-  `challenged` (`devices.md` §5.3).
+  is counted, and a `peer.revoked` naming a chain that `spoke`
+  already puts its revoker in that chain's `disputedBy` at once; a
+  `peer.rotated` joins its `to` to its `from`'s chain whatever the
+  chain's state, joining two chains when `to` is in one already,
+  carrying the chain into its death when `to` is named-dead, and a
+  `from` rotated from twice gives the chain two `heads` and no end,
+  until a `contact.verdict` naming a head keeps it and splits the
+  other branches off as chains ruled dead (`devices-protocol.md` §7
+  rules 4 and 6); a counted `peer.revoked` with `since` withdraws
+  every counted `peer.vouched` by a named chain whose own `at` — the
+  observing device's — is after `since`, all of them when `since` is
+  before them all, and a chain left with none has its own withdrawn
+  in turn; any observation on a chain that is not live — a
+  `message.in`, a response, an edge not applied — has its `mid` in
+  `words`, and on a dead chain sets `spoke`, and `answered` when it
+  is a response whose `thid` is the `wireId` of a challenge of this
+  death, and puts the chain in the `disputedBy` of its `revokedBy`; a
+  `contact.verdict` sets `ruled` and ends the chain's death and
+  dispute. `challenged` is a `message.out` with the challenge's
+  `msgType`, from any device of ours, whose body's `revoke_id` is the
+  `wireId` of a `peer.revoked` of this death — tied by id, not by
+  canonical order, which a clock could misplace; `challenges[]` is
+  every end whose `revokedBy` holds a chain other than itself and
+  that is not `challenged` (`devices.md` §5.3).
   A message's `did` (§3.1) says which end sent it. Two devices of
   ours fold this each from their own observations and union by sync:
   the same vouch, arrived on each's own channel, is one counted edge,
