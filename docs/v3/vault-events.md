@@ -222,8 +222,8 @@ shows them once.
 { "type": "profile.shared",      "data": { "mid": "0198…" } }
 { "type": "peer.resolved", "data": { "did": "did:peer:4…", "keys": ["did:key:z6LS…", "did:key:z6Mk…"], "service": "did:peer:2…" } }
 { "type": "peer.rotated",  "data": { "from": "did:peer:4…old", "to": "did:peer:4…new", "fromPrior": "eyJ…", "mid": "0198…" } }
-{ "type": "peer.vouched",  "data": { "by": "did:peer:4…B", "for": "did:peer:4…C", "mid": "0198…" } }
-{ "type": "peer.revoked",  "data": { "by": "did:peer:4…A", "dids": ["did:peer:4…B1", "did:peer:4…B2"], "since": "…", "mid": "0198…" } }
+{ "type": "peer.vouched",  "data": { "by": "did:peer:4…B", "for": "did:peer:4…C", "mid": "0198…", "wireId": "…" } }
+{ "type": "peer.revoked",  "data": { "by": "did:peer:4…A", "dids": ["did:peer:4…B1", "did:peer:4…B2"], "since": "…", "mid": "0198…", "wireId": "…" } }
 { "type": "message.erased", "data": { "mid": "0198…", "drop": ["<body>"], "because": "user" } }
 ```
 
@@ -302,8 +302,14 @@ shows them once.
   (`devices-protocol.md` §3, §4). Observations on the channel that
   carried them: `by` is the DID the sealing key wore, `for` the
   vouch's `body.did`, `dids` the revoke's `body.dids` and `since` its
-  `body.since` when it had one, `mid` the message each came from. In
-  the identity graph (§7.1) a vouch is an edge from `by` to `for`, so
+  `body.since` when it had one, `mid` the message each came from and
+  `wireId` its wire id, as on the `message.in`. A vouch or a revoke
+  is one per `(cid, the chain of by, wireId)`: the copies of one —
+  arrived on several of our devices, or delivered twice — fold to the
+  first in canonical order, and the rest apply nothing, whatever a
+  verdict did between (`devices-protocol.md` §7); two under one
+  `wireId` with different content are two, shown as such. In the
+  identity graph (§7.1) a vouch is an edge from `by` to `for`, so
   a channel later opened by a key of `for`'s document is attributed
   to the contact the moment `peer.resolved` joins it — or before any
   such channel exists, since the contact may now write to `for` and
@@ -612,28 +618,33 @@ component every member of which is deleted is deleted:
   within one chain is the conflict shown.
 - `ends[]`: the fold of `devices-protocol.md` §7, run over the
   contact's events in canonical order (`event-store.md` §3), one `End`
-  per chain. The identity graph gains one edge — a counted
-  `peer.vouched` joins `by` to `for` — and chains are the components
-  under `peer.rotated` edges alone. The protocol's rules read here as:
-  a chain appears through a live `contact.attached` channel under one
-  of its DIDs, or through a counted `peer.vouched`; a `peer.revoked`,
-  `peer.vouched` or `peer.rotated` on a live chain is counted; a
-  counted `peer.revoked` with `since` withdraws every counted
-  `peer.vouched` by a named chain whose own `at` — the observing
-  device's — is after `since`, and a chain left with none is
-  orphaned; any observation on a dead chain — a `message.in`, a
-  response, an edge not applied — is a word from a dead end, its
-  `mid` in `words`, and puts the live chains in its `revokedBy` in
-  dispute; a `contact.verdict` sets the state. `challenged` is a
-  `message.out`
-  with the challenge's `msgType` on a channel under the end's key,
-  from any device of ours; `challenges[]` is every end that is `dead`
-  by a counted revoke that was not its own, has no verdict, and is not
-  `challenged` (`devices.md` §5.3). A message's `did` (§3.1) says
-  which end sent it. Two devices of ours fold this each from their own
-  observations and union by sync: both may see the same vouch,
-  arrived on each's own channel, as two counted edges; both may
-  challenge; the last verdict wins.
+  per chain, its `state` read off its record. The identity graph
+  gains one edge — a counted `peer.vouched` joins `by` to `for` — and
+  chains are the components under `peer.rotated` edges alone. The
+  protocol's rules read here as: a vouch, a revoke, a rotation or a
+  message is one per `(cid, the chain of its sender, wireId)`, the
+  first in canonical order, the rest copies that apply nothing
+  (§3.1); a chain appears through a live `contact.attached` channel
+  under one of its DIDs (`accepted`), or through a counted
+  `peer.vouched`; a `peer.revoked`, `peer.vouched` or `peer.rotated`
+  on a live chain is counted; a counted `peer.revoked` with `since`
+  withdraws every counted `peer.vouched` by a named chain whose own
+  `at` — the observing device's — is after `since`, and a chain left
+  with none has its own withdrawn in turn; any observation on a chain
+  that is not live — a `message.in`, a response, an edge not applied
+  — has its `mid` in `words`, and on a dead chain sets `spoke` and
+  puts the chain in the `disputedBy` of its `revokedBy`; a
+  `contact.verdict` sets `ruled` and ends the chain's death and
+  dispute. `challenged` is a `message.out` with the challenge's
+  `msgType` on a channel under the end's key, from any device of
+  ours, later in canonical order than the revoke that began the
+  death; `challenges[]` is every end whose `revokedBy` holds a chain
+  other than itself and that is not `challenged` (`devices.md` §5.3).
+  A message's `did` (§3.1) says which end sent it. Two devices of
+  ours fold this each from their own observations and union by sync:
+  the same vouch, arrived on each's own channel, is one counted edge,
+  from the earlier of the two sightings; both may challenge; the last
+  verdict wins.
 - `addressedAs`: the `myKey` of the latest `message.in` across
   attributed channels.
 - `writeTo`: the unfrozen channels (§3.2). There may be several — more
