@@ -1,41 +1,60 @@
 # Changelog
 
-## Unreleased — the DASL encoding, on a subpath
+## 0.7.0 — Unreleased — the tree is DASL
 
-An experiment on the `dasl` branch, beside the UnixFS tree, not instead
-of it (folder-object spec, `dasl` branch, §2.1): the tree hashed as
-[DASL](https://dasl.ing/) — files as whole raw blocks, the tree as one
-DRISL document in the shape of a MASL bundle, the root its drisl CID.
+The hash encoding is [DASL](https://dasl.ing/) (folder-object spec, `dasl`
+branch, §2.1) instead of UnixFS, and nothing else: files as whole raw
+blocks, the tree as one DRISL document in the shape of a MASL bundle
+(`{resources: {"/path": {src, size}}}`), the root its drisl CID. Every
+root changes (`bafyrei…` where it was `bafybei…`); a card over a UnixFS
+root is malformed here; `ipfs add` no longer reproduces the root; every
+block remains an IPLD block. There is no migration: nothing produced under
+the UnixFS draft is read.
 
-- `@estoc/folder-object/dasl`: `hashTree` / `verifyTree` / `resolvePath`
-  over a manifest (`{resources: {"/path": {src, size}}}`), a strict DRISL
-  codec (`encodeDrisl` / `decodeDrisl`: one byte string per value, every
-  other refused), DASL CIDs (`rawCid` / `drislCid` / `parseCid`, 36
-  bytes, base32 lower, the canonical spelling only), `encodeManifest` /
-  `decodeManifest` (closed shape; the decoded value must re-encode to the
-  block's bytes; one `src` one `size`; at most `MAX_MANIFEST_BYTES`,
-  1 MiB), and the object and card layers over that root (`hashObject`,
-  `signObject`, `verifyCard` — the root must be a manifest CID —
-  `verifyObjectCard`, and `verifyObject`: the object read out of a root,
-  refusing a manifest that names anything but a canonical tree instead
-  of filtering it). `verifyTree` takes `maxLeafBytes`: a leaf stated
-  larger is never fetched and is reported in `declined` — unverifiable
-  by this reader, not missing, not malformed. No dependency: sha-256 is
-  WebCrypto's, base32 and CBOR are here. Bundled for the browser the
-  subpath is 15 kB minified (6 kB gzip) against 155 kB (49 kB) for the
-  UnixFS entry.
-- The card's payload is one text: `verifyCard` (main entry) now requires
-  the payload to be exactly `{"did":…,"root":…}` — the two members, each
-  once, in that order, no whitespace, as `signRoot` and the Ledger signer
-  write it — so no two JSON parsers can disagree about what one signature
-  attests (a duplicated `root` member used to pass the member count).
+- Removed: the UnixFS tree (`ipfs-unixfs-importer` / `-exporter`,
+  `@ipld/dag-pb`, `multiformats` — 4 MB of dependencies, 155 kB bundled —
+  are gone; the package is 15 kB bundled), `HashOptions.dirs` (an empty
+  directory is not a thing a tree holds), `HashedTree.nodes` (there are no
+  nodes), `VerifiedTree.dirs`, `fileCid` / `isRawCid` / `isDagPbCid` /
+  `compareNames` / `dagPbCode`, and `encodeCar` / `decodeCar` (now
+  `@estoc/dasl`'s, over DASL CIDs only). The `/dasl` subpath of the
+  experiment is the main entry now.
+- The tree: `hashTree` returns `{root, manifest, entries, files}`;
+  `verifyTree` / `walkTree` return `{root, files, sizes, missing, partial,
+  declined}`; `resolvePath` is two fetches; `encodeManifest` /
+  `decodeManifest` / `fetchManifest` / `walkLeaves` expose the manifest
+  (closed shape; the decoded value must re-encode to the block's bytes;
+  one `src` one `size`; at most `MAX_MANIFEST_BYTES`, 1 MiB); a manifest
+  defect is a `ManifestError`.
+- `verifyObject(root, blocks, options)`: the object read out of a root,
+  judged a layer at a time — the manifest must be canonical and name
+  exactly a canonical tree with `index.json` (format), decided before any
+  leaf is asked for; then the leaves; then `index.json` well-formed
+  (format) and `content.path` in the manifest (closure). With `leaves:
+  "optional"` an absent leaf is a partial object, `index.json`'s own
+  bytes included: `object` is then null, `tree` still says every path and
+  size.
+- A manifest is untrusted input. Laying out its paths is linear in their
+  bytes whatever their depth (a trie of segments; a path of fifty thousand
+  segments used to take seconds). `maxLeafBytes` is enforced on what
+  arrives, not on what the manifest states: a block longer than the bound
+  is declined unhashed (`declined` then holds its length), the block
+  source is told the bound (`GetBlock`'s second argument, `limit`), and
+  the manifest itself is never read past 1 MiB + 1.
+- The card: `signRoot` and `verifyCard` refuse a `root` that is not the
+  canonical spelling of a drisl DASL CID — this format defines no
+  signature over bare bytes or over a UnixFS-era root; the payload is
+  decoded as UTF-8 fatally (a byte that is not UTF-8 was replaced by
+  U+FFFD and could pass the one-text check); the payload is the one text
+  `{"did":…,"root":…}`, as before.
+- `writeTree` places every path before it touches the directory: each
+  segment must be one entry name on this platform (on Windows, `a\..` or
+  `a\b` is not, though a mapping may hold it) and the result inside the
+  directory given; `placeUnder` is exported for other projections.
 - Golden vectors: the sea-day fixture roots at
   `bafyreicdsejj526l225wrfl5cpxcgehq4pzbpxphocvmiuvy6dpwi467aa`, its
   manifest pinned byte for byte, cross-checked against an independent
-  Python encoder, `@ipld/dag-cbor` + `multiformats`, and `@atcute/cbor`
-  (dev dependencies, for the tests only).
-- The main entry, `estoc object …`, object-share and the vault's block
-  store are unchanged: they still speak UnixFS.
+  Python encoder and `@ipld/dag-cbor` + `multiformats`.
 
 ## 0.6.0 — 2026-08-26
 

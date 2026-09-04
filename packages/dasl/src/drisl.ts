@@ -24,7 +24,13 @@ export class Link {
   }
 }
 
-/** The DRISL data model. Integers beyond 2^53 come back as bigint. */
+/**
+ * The DRISL data model. Integers beyond 2^53 come back as bigint. A map
+ * decodes to an object with no prototype (`Object.create(null)`), so
+ * every key — `__proto__`, `constructor`, any string DRISL allows — is a
+ * plain own property and nothing more; the encoder takes any object's
+ * own enumerable string keys.
+ */
 export type Drisl = null | boolean | number | bigint | string | Uint8Array | Link | Drisl[] | { [key: string]: Drisl };
 
 /** Nesting deeper than this is refused, whatever the bytes claim. */
@@ -231,7 +237,7 @@ class Reader {
       case 5: {
         const n = length(arg);
         if (n > this.remaining() / 2) throw new Error("map longer than the input");
-        const out: { [key: string]: Drisl } = {};
+        const out: { [key: string]: Drisl } = Object.create(null) as { [key: string]: Drisl };
         let previous: Uint8Array | null = null;
         for (let i = 0; i < n; i++) {
           const start = this.at;
@@ -249,7 +255,6 @@ class Reader {
           } catch {
             throw new Error("map key is not valid UTF-8");
           }
-          if (key === "__proto__") throw new Error("map key __proto__ is refused");
           out[key] = this.value(depth + 1);
         }
         return out;

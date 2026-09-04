@@ -1,90 +1,23 @@
 /**
  * Shared shapes of @estoc/folder-object.
  *
- * Three layers, one package: the UnixFS tree (a fact hashed into a merkle
- * DAG), the object (a tree with an `index.json` that says what it is),
- * and the card (a DID standing behind an object). The card is the one
- * signature in the system and it means one thing — "this DID stands
- * behind this object, as the object's own format defines it". Every other
- * intent lives elsewhere: who *sent* it is the transport envelope's
- * business, and endorsing, replying or quoting is a new object that
- * refers to this one.
+ * Three layers, one package: the tree (a fact hashed into a manifest and
+ * its raw leaves — `tree.ts`), the object (a tree with an `index.json`
+ * that says what it is), and the card (a DID standing behind an object).
+ * The card is the one signature in the system and it means one thing —
+ * "this DID stands behind this object, as the object's own format
+ * defines it". Every other intent lives elsewhere: who *sent* it is the
+ * transport envelope's business, and endorsing, replying or quoting is
+ * a new object that refers to this one.
  */
 
 /**
  * A flat snapshot of a directory: `/`-separated relative path → bytes.
  * The same shape agent-core's `snapshotVault` produces. Directories are
- * implied by the paths; an empty directory has no path here, so it is
- * declared through `HashOptions.dirs` instead.
+ * implied by the paths; an empty directory has no path here and is not
+ * a thing a tree can hold (spec §1).
  */
 export type TreeFiles = Record<string, Uint8Array>;
-
-/** Options for `hashTree`. */
-export interface HashOptions {
-  /**
-   * Directories to create whether or not any file lives under them —
-   * the way to put an empty directory into the tree. Ancestors are
-   * created too; listing a directory that files already imply is a
-   * no-op; naming a path that is also a file is a conflict.
-   */
-  dirs?: Iterable<string>;
-}
-
-/** The result of verifying a tree: every path the root reaches. */
-export interface VerifiedTree {
-  /**
-   * File path → the file's root CID (raw for a single-block file,
-   * dag-pb for a chunked one).
-   */
-  files: Map<string, string>;
-  /**
-   * Directory path → its dag-pb CID, the root included under `""`. An
-   * empty directory shows up only here.
-   */
-  dirs: Map<string, string>;
-  /**
-   * Raw blocks the tree links but the object set does not hold: CID →
-   * the size the link claims (`Tsize`). Empty unless the tree was
-   * verified with `leaves: "optional"` — otherwise a missing leaf
-   * throws.
-   */
-  missing: Map<string, number>;
-  /** File path → the CIDs of its blocks in `missing`, for every file with at least one. */
-  partial: Map<string, string[]>;
-}
-
-/** How `verifyTree` treats a raw block the object set does not hold. */
-export interface VerifyOptions {
-  /**
-   * `"required"` (default): every block of the tree must be present.
-   * `"optional"`: the skeleton (every dag-pb block) must be present;
-   * raw leaves may be absent and are reported, not thrown.
-   */
-  leaves?: "required" | "optional";
-}
-
-/** The result of hashing a tree (UnixFS, profile unixfs-v1-2025). */
-export interface HashedTree {
-  /** CID of the root directory node (dag-pb) — the card's `root`. */
-  root: string;
-  /**
-   * Every block this hash run produced except single-block file roots:
-   * directory nodes, HAMT shards, big-file roots, and raw leaf chunks.
-   * CID → bytes.
-   */
-  nodes: Map<string, Uint8Array>;
-  /**
-   * The file listing: file root CID → path in the input snapshot. For a
-   * single-block file (≤ 1 MiB) the CID is raw and the bytes are the
-   * input bytes at that path — they are not copied into `nodes`. For a
-   * chunked file the CID is dag-pb and its blocks are all in `nodes`.
-   * The complete object set is therefore `nodes` plus the input bytes of
-   * every `files` entry whose CID `nodes` does not already hold. When
-   * several paths hold identical bytes they share one CID and one
-   * (arbitrary) path here — any of them yields the same bytes.
-   */
-  files: Map<string, string>;
-}
 
 /** The structural members of index.json (spec §3.1); vocabulary members ride along untyped. */
 export interface IndexJson {
@@ -109,7 +42,7 @@ export interface FolderObject {
 export interface ObjectCard {
   /** The signer: a did:key; its one verification method is the JWS `kid`. */
   did: string;
-  /** UnixFS root CID of the object's canonical tree. */
+  /** The manifest CID of the object's canonical tree (spec §2.1): a drisl DASL CID in canonical spelling. */
   root: string;
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "@estoc/folder-object",
-  "version": "0.6.0",
-  "description": "An object is a folder: UnixFS merkle hashing (IPIP-499 unixfs-v1-2025), the folder-object format (read, validate, hash), did:key object cards (sign, verify), and the signed-object layout. Pure functions, no IO; runs in Node, workerd, and the browser.",
+  "version": "0.7.0",
+  "description": "An object is a folder: the folder-object format over DASL \u2014 a MASL manifest hashed as one DRISL block, files as whole raw blocks (read, validate, hash, verify), did:key object cards (sign, verify), and the signed-object layout. Pure functions, no IO; runs in Node, workerd, and the browser.",
   "license": "Apache-2.0",
   "author": "merely",
   "repository": {
@@ -22,10 +22,6 @@
     "./zip": {
       "types": "./dist/zip.d.ts",
       "default": "./dist/zip.js"
-    },
-    "./dasl": {
-      "types": "./dist/dasl/index.d.ts",
-      "default": "./dist/dasl/index.js"
     }
   },
   "files": [
@@ -42,27 +38,22 @@
     "dev": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
+    "@estoc/dasl": "workspace:^",
     "@estoc/keystore": "workspace:^",
-    "@ipld/dag-pb": "^4.1.7",
-    "fflate": "^0.8.2",
-    "ipfs-unixfs": "^13.0.0",
-    "ipfs-unixfs-exporter": "^16.0.2",
-    "ipfs-unixfs-importer": "^17.0.1",
-    "multiformats": "^14.0.5"
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
-    "@atcute/cbor": "^2.3.6",
-    "@atcute/cid": "^2.4.2",
-    "@ipld/dag-cbor": "10.0.2",
     "@types/node": "^22.13.5",
     "typescript": "~5.8.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "multiformats": "^14.0.5",
+    "@ipld/dag-cbor": "10.0.2"
   },
   "keywords": [
     "folder-object",
-    "unixfs",
+    "dasl",
+    "drisl",
     "cid",
-    "merkle",
     "content-addressing",
     "did"
   ]

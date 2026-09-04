@@ -1,548 +1,410 @@
 import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import * as dagCbor from "@ipld/dag-cbor";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
-import * as dagPb from "@ipld/dag-pb";
-import { UnixFS } from "ipfs-unixfs";
+import { readTree } from "../src/fs.js";
+import { decodeCar, drislCid, encodeCar, encodeDrisl, Link, parseCid, rawCid } from "@estoc/dasl";
 import {
-  fileCid,
+  decodeManifest,
+  encodeManifest,
   hashTree,
-  isDagPbCid,
-  isRawCid,
+  ManifestError,
+  readObject,
   resolvePath,
   verifyTree,
+  type HashedTree,
+  type TreeFiles,
 } from "../src/index.js";
-import type { HashedTree, TreeFiles } from "../src/index.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
+const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+const seaDay = fileURLToPath(new URL("./fixtures/sea-day/", import.meta.url));
+const minimal = fileURLToPath(new URL("./fixtures/minimal/", import.meta.url));
 
-/** `toEqual` for bytes: vitest walks a typed array element by element — seconds for a MiB — where a byte compare is instant. */
-function expectBytes(actual: Uint8Array, expected: Uint8Array): void {
-  expect(actual.length, "byte length").toBe(expected.length);
-  let at = 0;
-  while (at < actual.length && actual[at] === expected[at]) {
-    at += 1;
-  }
-  expect(at, `bytes differ at offset ${at}`).toBe(actual.length);
-}
-
-/** The UnixFS empty directory — the CID every tool on earth agrees on. */
-const EMPTY_DIR = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354";
+/** Independently computed (scratch Python: hand-rolled CBOR, hashlib, base32) over the same fixtures. */
+const GOLDEN = {
+  seaDay: "bafyreicdsejj526l225wrfl5cpxcgehq4pzbpxphocvmiuvy6dpwi467aa",
+  seaDayManifestHex:
+    "a1697265736f7572636573a36b2f696e6465782e6a736f6ea263737263d82a58250001551220c81eba2bf1cb3be0f9a3135a1acef3425b1d05e34168e8b93f37cbac37cfbe516473697a651901106e2f66696c65732f626f64792e6d64a263737263d82a5825000155122011103f04ce4e6f1deb531f9b0cb3990effb13e6d7fec80f77c1cf05a3f0e41c36473697a65185878182f66696c65732f696d616765732f73756e7365742e706e67a263737263d82a58250001551220c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce776473697a651846",
+  minimal: "bafyreighoyuo2t5ymwyezn2uuzuxyamaqzgmdneypefczqchzibnfzt3v4",
+  empty: "bafyreiarjrxb4yyyuxufubktb6de267lxmqvipdyk5dffbqjnvidwncvau",
+};
 
 function snapshot(): TreeFiles {
   return {
-    "profile.json": utf8('{"name":"merely"}'),
-    "posts/2026/first.html": utf8("<h1>hi</h1>"),
-    "posts/2026/second.html": utf8("<h1>again</h1>"),
-    "_redirects": utf8("/old/* /posts/:splat 303"),
+    "index.json": utf8('{"format":"x"}'),
+    "files/body.md": utf8("hello"),
+    "files/images/a.png": utf8("png-a"),
+    "files/images/b.png": utf8("png-b"),
   };
 }
 
-/** A file big enough to chunk under the profile (1 MiB chunks). */
+/** The object set as a store holds it: the manifest block plus every leaf. */
+function objectSet(files: TreeFiles, hashed: HashedTree): Map<string, Uint8Array> {
+  const objects = new Map<string, Uint8Array>([[hashed.root, hashed.manifest]]);
+  for (const [cid, path] of hashed.files) objects.set(cid, files[path] as Uint8Array);
+  return objects;
+}
+
 function bigFile(mib: number): Uint8Array {
   const bytes = new Uint8Array(mib * 1024 * 1024 + 7);
   for (let i = 0; i < bytes.length; i++) bytes[i] = i % 251;
   return bytes;
 }
 
-/**
- * Object set as a relay would hold it: `nodes` plus, for each file root
- * CID `nodes` doesn't already hold (single-block files), the input bytes.
- */
-function objectSet(files: TreeFiles, tree: HashedTree) {
-  const objects = new Map<string, Uint8Array>(tree.nodes);
-  for (const [cid, path] of tree.files) {
-    if (!objects.has(cid)) objects.set(cid, files[path] as Uint8Array);
-  }
-  return objects;
-}
+describe("golden vectors", () => {
+  it("the sea-day example roots as independently computed, manifest byte for byte", async () => {
+    const object = readObject(await readTree(seaDay));
+    const hashed = await hashTree(object.tree);
+    expect(hashed.root).toBe(GOLDEN.seaDay);
+    expect(hex(hashed.manifest)).toBe(GOLDEN.seaDayManifestHex);
+    expect(hashed.entries.map((e) => e.path)).toEqual(["index.json", "files/body.md", "files/images/sunset.png"]);
+    expect(hashed.entries.map((e) => e.size)).toEqual([272, 88, 70]);
+  });
 
-/** dag-pb bytes + CID of a hand-built UnixFS directory node. */
-async function dirNode(links: dagPb.PBLink[]) {
-  const bytes = dagPb.encode(
-    dagPb.prepare({
-      Data: new UnixFS({ type: "directory" }).marshal(),
-      Links: links,
-    }),
-  );
-  const digest = await sha256.digest(bytes);
-  const cid = CID.create(1, dagPb.code, digest).toString();
-  return { cid, bytes };
-}
+  it("the minimal example (a lone index.json) and the empty mapping", async () => {
+    expect((await hashTree(readObject(await readTree(minimal)).tree)).root).toBe(GOLDEN.minimal);
+    expect((await hashTree({})).root).toBe(GOLDEN.empty);
+    expect(hex((await hashTree({})).manifest)).toBe("a1697265736f7572636573a0");
+  });
+
+  it("agrees with @ipld/dag-cbor + multiformats building the same manifest", async () => {
+    const object = readObject(await readTree(seaDay));
+    const hashed = await hashTree(object.tree);
+    const resources: Record<string, { src: CID; size: number }> = {};
+    for (const [path, bytes] of Object.entries(object.tree)) {
+      resources[`/${path}`] = { src: CID.create(1, 0x55, await sha256.digest(bytes)), size: bytes.length };
+    }
+    const theirs = dagCbor.encode({ resources });
+    expect(hex(theirs)).toBe(hex(hashed.manifest));
+    expect(CID.create(1, dagCbor.code, await sha256.digest(theirs)).toString()).toBe(hashed.root);
+  });
+});
 
 describe("hashTree", () => {
   it("is deterministic and independent of insertion order", async () => {
     const a = await hashTree(snapshot());
-    const reversed = Object.fromEntries(Object.entries(snapshot()).reverse());
-    const b = await hashTree(reversed);
+    const b = await hashTree(Object.fromEntries(Object.entries(snapshot()).reverse()));
     expect(a.root).toBe(b.root);
+    expect(hex(a.manifest)).toBe(hex(b.manifest));
   });
 
-  it("root is a dag-pb CID, small files keep their raw CIDs", async () => {
-    const tree = await hashTree(snapshot());
-    expect(isDagPbCid(tree.root)).toBe(true);
-    for (const cid of tree.files.keys()) {
-      expect(isRawCid(cid)).toBe(true);
+  it("root is a drisl CID; every file is one raw block, whatever its size", async () => {
+    const files: TreeFiles = { ...snapshot(), "files/big.bin": bigFile(2) };
+    const hashed = await hashTree(files);
+    expect(parseCid(hashed.root).code).toBe(0x71);
+    for (const cid of hashed.files.keys()) expect(parseCid(cid).code).toBe(0x55);
+    const big = hashed.entries.find((e) => e.path === "files/big.bin");
+    expect(big?.size).toBe(2 * 1024 * 1024 + 7);
+    expect(big?.cid).toBe(await rawCid(files["files/big.bin"] as Uint8Array));
+  });
+
+  it("changing one byte changes the root; the other files keep their CIDs", async () => {
+    const files = snapshot();
+    const before = await hashTree(files);
+    files["files/body.md"] = utf8("hellO");
+    const after = await hashTree(files);
+    expect(after.root).not.toBe(before.root);
+    const a = await rawCid(utf8("png-a"));
+    expect(before.files.get(a)).toBe("files/images/a.png");
+    expect(after.files.get(a)).toBe("files/images/a.png");
+  });
+
+  it("identical bytes at two paths share one CID, listed once in files and twice in entries", async () => {
+    const hashed = await hashTree({ "a.txt": utf8("same"), "b/c.txt": utf8("same") });
+    expect(hashed.files.size).toBe(1);
+    expect(hashed.entries.length).toBe(2);
+  });
+
+  it("refuses a mapping no file tree can hold", async () => {
+    await expect(hashTree({ posts: utf8("x"), "posts/a.txt": utf8("y") })).rejects.toThrow(/both a file and a directory/);
+    await expect(hashTree({ "../evil": utf8("x") })).rejects.toThrow(/unsafe/);
+    await expect(hashTree({ "a/./b": utf8("x") })).rejects.toThrow(/unsafe/);
+    await expect(hashTree({ "a//b": utf8("x") })).rejects.toThrow(/empty segment/);
+    await expect(hashTree({ "/a": utf8("x") })).rejects.toThrow(/empty segment/);
+    await expect(hashTree({ "a/": utf8("x") })).rejects.toThrow(/empty segment/);
+    await expect(hashTree({ "": utf8("x") })).rejects.toThrow(/empty path/);
+    await expect(hashTree({ "a\0b": utf8("x") })).rejects.toThrow(/NUL/);
+  });
+});
+
+describe("the manifest block", () => {
+  it("decodes back to its entries, in DRISL key order", async () => {
+    const hashed = await hashTree(snapshot());
+    expect(decodeManifest(hashed.manifest)).toEqual(hashed.entries);
+    expect(hashed.entries.map((e) => e.path)).toEqual(["index.json", "files/body.md", "files/images/a.png", "files/images/b.png"]);
+  });
+
+  it("encodeManifest takes entries in any order and checks them", async () => {
+    const cid = await rawCid(utf8("x"));
+    const a = encodeManifest([{ path: "b", cid, size: 1 }, { path: "a", cid, size: 1 }]);
+    const b = encodeManifest([{ path: "a", cid, size: 1 }, { path: "b", cid, size: 1 }]);
+    expect(hex(a)).toBe(hex(b));
+    const drisl = await drislCid(utf8("x"));
+    expect(() => encodeManifest([{ path: "a", cid: drisl, size: 1 }])).toThrow(/raw CID/);
+    expect(() => encodeManifest([{ path: "a", cid, size: -1 }])).toThrow(/non-negative/);
+    expect(() => encodeManifest([{ path: "a", cid, size: 1.5 }])).toThrow(/non-negative integer/);
+    expect(() => encodeManifest([{ path: "a", cid, size: 1 }, { path: "a/b", cid, size: 1 }])).toThrow(/both a file and a directory/);
+    expect(() => encodeManifest([{ path: "a", cid, size: 1 }, { path: "a", cid, size: 2 }])).toThrow(/duplicate/);
+  });
+
+  it("refuses every shape that is not exactly a manifest", async () => {
+    const link = new Link(parseCid(await rawCid(utf8("x"))));
+    const drislLink = new Link(parseCid(await drislCid(utf8("x"))));
+    const bad: [string, unknown, RegExp][] = [
+      ["not a map", [1], /not a map/],
+      ["no resources", {}, /exactly one member/],
+      ["an extra top-level member (name)", { resources: {}, name: "x" }, /exactly one member/],
+      ["version/roots (CAR header shape)", { resources: {}, version: 1, roots: [] }, /exactly one member/],
+      ["resources not a map", { resources: [] }, /resources is not a map/],
+      ["a key without the leading slash", { resources: { "a": { src: link, size: 1 } } }, /start with \//],
+      ["a key with an empty segment", { resources: { "/a//b": { src: link, size: 1 } } }, /empty segment/],
+      ["a key with a trailing slash", { resources: { "/a/": { src: link, size: 1 } } }, /empty segment/],
+      ["the root key /", { resources: { "/": { src: link, size: 1 } } }, /empty path/],
+      ["a dot segment", { resources: { "/a/../b": { src: link, size: 1 } } }, /unsafe/],
+      ["a NUL", { resources: { "/a\0": { src: link, size: 1 } } }, /NUL/],
+      ["a file that is also a directory", { resources: { "/files": { src: link, size: 1 }, "/files/x": { src: link, size: 1 } } }, /both a file and a directory/],
+      ["an entry that is not a map", { resources: { "/a": link } }, /not a map/],
+      ["an entry with content-type", { resources: { "/a": { src: link, size: 1, "content-type": "text/plain" } } }, /exactly src and size/],
+      ["an entry without size", { resources: { "/a": { src: link } } }, /exactly src and size/],
+      ["an entry without src", { resources: { "/a": { size: 1 } } }, /exactly src and size/],
+      ["src that is a drisl CID (nesting)", { resources: { "/a": { src: drislLink, size: 1 } } }, /raw CID/],
+      ["src that is a string", { resources: { "/a": { src: link.toString(), size: 1 } } }, /raw CID/],
+      ["negative size", { resources: { "/a": { src: link, size: -1 } } }, /non-negative/],
+      ["float size", { resources: { "/a": { src: link, size: 1.5 } } }, /non-negative/],
+      ["bigint size", { resources: { "/a": { src: link, size: 1n << 60n } } }, /non-negative/],
+      ["string size", { resources: { "/a": { src: link, size: "1" } } }, /non-negative/],
+    ];
+    for (const [name, doc, pattern] of bad) {
+      expect(() => decodeManifest(encodeDrisl(doc as never)), name).toThrow(pattern);
     }
   });
 
-  it("a single-block file's CID equals the raw CID of its bytes — unchanged from the dag-json branch", async () => {
-    const tree = await hashTree(snapshot());
-    const profileCid = await fileCid(utf8('{"name":"merely"}'));
-    expect(tree.files.get(profileCid)).toBe("profile.json");
-    // and its bytes are not duplicated into nodes
-    expect(tree.nodes.has(profileCid)).toBe(false);
+  it("refuses a float size even though it decodes to an integer (the re-encode backstop)", async () => {
+    // size 1 as float64: valid DRISL, decodes to the number 1, but not the bytes a hasher writes
+    const hashed = await hashTree({ a: utf8("x") });
+    const canonical = hex(hashed.manifest);
+    const floated = canonical.replace(/6473697a6501$/, "6473697a65fb3ff0000000000000");
+    expect(floated).not.toBe(canonical);
+    const bytes = new Uint8Array((floated.match(/../g) ?? []).map((x) => parseInt(x, 16)));
+    expect(() => decodeManifest(bytes)).toThrow(/not the encoding of their value/);
   });
 
-  it("changing one byte changes the root, unrelated files keep their CIDs", async () => {
-    const files = snapshot();
-    const before = await hashTree(files);
-    files["posts/2026/first.html"] = utf8("<h1>edited</h1>");
-    const after = await hashTree(files);
-    expect(after.root).not.toBe(before.root);
-    const profileCid = await fileCid(utf8('{"name":"merely"}'));
-    expect(before.files.get(profileCid)).toBe("profile.json");
-    expect(after.files.get(profileCid)).toBe("profile.json");
+  it("refuses one src under two sizes, and a manifest past the bound", async () => {
+    const cid = await rawCid(utf8("x"));
+    expect(() => encodeManifest([{ path: "a", cid, size: 1 }, { path: "b", cid, size: 2 }])).toThrow(/another entry sizes/);
+    const link = new Link(parseCid(cid));
+    expect(() => decodeManifest(encodeDrisl({ resources: { "/a": { src: link, size: 1 }, "/b": { src: link, size: 2 } } }))).toThrow(/another entry sizes/);
+    const many: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 13000; i++) many[`f/${"n".repeat(40)}${i}`] = utf8("x");
+    await expect(hashTree(many)).rejects.toThrow(/the most is 1048576/);
   });
 
-  it("identical bytes at two paths share one CID", async () => {
-    const files: TreeFiles = { "a.txt": utf8("same"), "b/c.txt": utf8("same") };
-    const tree = await hashTree(files);
-    expect(tree.files.size).toBe(1);
-  });
-
-  it("hashes the empty snapshot to the empty directory", async () => {
-    const tree = await hashTree({});
-    expect(tree.root).toBe(EMPTY_DIR);
-    expect(tree.files.size).toBe(0);
-    expect(tree.nodes.has(EMPTY_DIR)).toBe(true);
-    const verified = await verifyTree(tree.root, tree.nodes);
-    expect(verified.files.size).toBe(0);
-    expect([...verified.dirs]).toEqual([["", EMPTY_DIR]]);
-  });
-
-  it("puts empty directories in the tree through options.dirs", async () => {
-    const files: TreeFiles = { "deep/x.txt": utf8("x") };
-    const tree = await hashTree(files, { dirs: ["hollow", "deep/er/"] });
-    expect(tree.nodes.has(EMPTY_DIR)).toBe(true);
-    const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.files.keys()]).toEqual(["deep/x.txt"]);
-    expect([...verified.dirs.keys()].sort()).toEqual([
-      "",
-      "deep",
-      "deep/er",
-      "hollow",
-    ]);
-    expect(verified.dirs.get("hollow")).toBe(EMPTY_DIR);
-    expect(verified.dirs.get("deep/er")).toBe(EMPTY_DIR);
-  });
-
-  it("options.dirs: implied and repeated directories are no-ops, a file path is a conflict", async () => {
-    const files: TreeFiles = { "posts/a.txt": utf8("a") };
-    const plain = await hashTree(files);
-    const listed = await hashTree(files, { dirs: ["posts", "posts/"] });
-    expect(listed.root).toBe(plain.root);
-    await expect(
-      hashTree(files, { dirs: ["posts/a.txt"] }),
-    ).rejects.toThrow(/both a file and a directory/);
-    await expect(hashTree(files, { dirs: [".."] })).rejects.toThrow(/unsafe/);
-  });
-
-  it("hashes the empty file", async () => {
-    const files: TreeFiles = { "empty.bin": new Uint8Array(0) };
-    const tree = await hashTree(files);
-    const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.files.keys()]).toEqual(["empty.bin"]);
-  });
-
-  it("rejects a path that is both file and directory", async () => {
-    await expect(
-      hashTree({ posts: utf8("x"), "posts/a.txt": utf8("y") }),
-    ).rejects.toThrow(/both a file and a directory/);
-  });
-
-  it("rejects unsafe paths", async () => {
-    await expect(hashTree({ "../evil": utf8("x") })).rejects.toThrow(/unsafe/);
-  });
-
-  it("rejects two spellings of one path", async () => {
-    await expect(
-      hashTree({ "a/b": utf8("x"), "a//b": utf8("y") }),
-    ).rejects.toThrow(/duplicate path/);
-  });
-
-  it("a chunked file roots in dag-pb with its blocks in nodes", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(2) };
-    const tree = await hashTree(files);
-    const [cid, path] = [...tree.files.entries()][0] as [string, string];
-    expect(path).toBe("big.bin");
-    expect(isDagPbCid(cid)).toBe(true);
-    // file root node + 3 raw leaves (1 MiB, 1 MiB, 7 B) + root dir
-    expect(tree.nodes.has(cid)).toBe(true);
-    expect(tree.nodes.size).toBe(5);
+  it("refuses non-canonical DRISL bytes, so one tree has one root", async () => {
+    const hashed = await hashTree({ a: utf8("x") });
+    // same value, longer int encoding for size: 18 01 instead of 01
+    const canonical = hex(hashed.manifest);
+    const padded = canonical.replace(/6473697a6501$/, "6473697a651801");
+    expect(padded).not.toBe(canonical);
+    const bytes = new Uint8Array((padded.match(/../g) ?? []).map((x) => parseInt(x, 16)));
+    expect(() => decodeManifest(bytes)).toThrow(/not canonical DRISL.*shortest/);
   });
 });
 
 describe("verifyTree", () => {
-  it("accepts a complete object set and lists every file", async () => {
+  it("accepts a complete object set and lists every file with its size", async () => {
     const files = snapshot();
-    const tree = await hashTree(files);
-    const verified = await verifyTree(tree.root, objectSet(files, tree));
+    const hashed = await hashTree(files);
+    const verified = await verifyTree(hashed.root, objectSet(files, hashed));
     expect([...verified.files.keys()].sort()).toEqual(Object.keys(files).sort());
-    expect([...verified.dirs.keys()].sort()).toEqual(["", "posts", "posts/2026"]);
-    expect(verified.dirs.get("")).toBe(tree.root);
+    expect(verified.sizes.get("files/body.md")).toBe(5);
+    expect(verified.missing.size).toBe(0);
+    expect(verified.partial.size).toBe(0);
   });
 
-  it("round-trips a chunked file", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(2), "small.txt": utf8("s") };
-    const tree = await hashTree(files);
-    const verified = await verifyTree(tree.root, objectSet(files, tree));
-    expect([...verified.files.keys()].sort()).toEqual(["big.bin", "small.txt"]);
-  });
-
-  it("rejects a missing leaf chunk of a chunked file", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(2) };
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const someLeaf = [...tree.nodes.keys()].find((c) => isRawCid(c)) as string;
-    objects.delete(someLeaf);
-    await expect(verifyTree(tree.root, objects)).rejects.toThrow(
-      /missing object/,
-    );
-  });
-
-  it("rejects a missing object", async () => {
+  it("rejects a missing leaf, a missing manifest, tampered bytes, a raw root", async () => {
     const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const someFileCid = [...tree.files.keys()][0] as string;
-    objects.delete(someFileCid);
-    await expect(verifyTree(tree.root, objects)).rejects.toThrow(
-      /missing object/,
-    );
-  });
-
-  it("rejects tampered bytes", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const someFileCid = [...tree.files.keys()][0] as string;
-    objects.set(someFileCid, utf8("tampered"));
-    await expect(verifyTree(tree.root, objects)).rejects.toThrow(
-      /do not hash/,
-    );
-  });
-
-  it("ignores extra unrelated objects", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    objects.set(await fileCid(utf8("noise")), utf8("noise"));
-    await expect(verifyTree(tree.root, objects)).resolves.toBeTruthy();
-  });
-
-  it("accepts a hand-built empty directory node, nested or as root", async () => {
-    const empty = await dirNode([]);
-    expect(empty.cid).toBe(EMPTY_DIR);
-    const alone = await verifyTree(
-      empty.cid,
-      new Map([[empty.cid, empty.bytes]]),
-    );
-    expect([...alone.dirs]).toEqual([["", EMPTY_DIR]]);
-    const parent = await dirNode([
-      { Name: "hollow", Hash: CID.parse(empty.cid), Tsize: empty.bytes.length },
-    ]);
-    const objects = new Map([
-      [empty.cid, empty.bytes],
-      [parent.cid, parent.bytes],
-    ]);
-    const nested = await verifyTree(parent.cid, objects);
-    expect(nested.dirs.get("hollow")).toBe(EMPTY_DIR);
-    expect(nested.files.size).toBe(0);
-  });
-
-  it("still requires the empty directory's block to be present", async () => {
-    const empty = await dirNode([]);
-    const parent = await dirNode([
-      { Name: "hollow", Hash: CID.parse(empty.cid), Tsize: empty.bytes.length },
-    ]);
-    await expect(
-      verifyTree(parent.cid, new Map([[parent.cid, parent.bytes]])),
-    ).rejects.toThrow(/missing object/);
-  });
-
-  it("rejects links out of canonical order", async () => {
-    // @ipld/dag-pb's encode enforces sorted links, so craft the
-    // protobuf by hand: PBLink{Hash=1,Name=2,Tsize=3}, PBNode with
-    // Links (field 2) before Data (field 1). Lengths stay < 128 so
-    // every varint is one byte.
-    const link = (cid: string, name: string): number[] => {
-      const hash = CID.parse(cid).bytes;
-      const nameBytes = utf8(name);
-      const body = [
-        0x0a, hash.length, ...hash,
-        0x12, nameBytes.length, ...nameBytes,
-        0x18, 1,
-      ];
-      return [0x12, body.length, ...body];
-    };
-    const a = await fileCid(utf8("a"));
-    const b = await fileCid(utf8("b"));
-    const data = new UnixFS({ type: "directory" }).marshal();
-    const bytes = new Uint8Array([
-      ...link(a, "zebra"),
-      ...link(b, "apple"),
-      0x0a, data.length, ...data,
-    ]);
-    const digest = await sha256.digest(bytes);
-    const cid = CID.create(1, dagPb.code, digest).toString();
-    const objects = new Map([
-      [cid, bytes],
-      [a, utf8("a")],
-      [b, utf8("b")],
-    ]);
-    await expect(verifyTree(cid, objects)).rejects.toThrow(/canonical order/);
-  });
-
-  it("rejects a raw root — the root must be a directory", async () => {
-    const cid = await fileCid(utf8("just a file"));
-    await expect(
-      verifyTree(cid, new Map([[cid, utf8("just a file")]])),
-    ).rejects.toThrow(/not a UnixFS directory/);
-  });
-});
-
-describe("verifyTree with optional leaves", () => {
-  it("records an absent single-block file instead of throwing", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const [cid, path] = [...tree.files].find(([, p]) => p === "profile.json") as [string, string];
-    objects.delete(cid);
-    const verified = await verifyTree(tree.root, objects, { leaves: "optional" });
-    expect([...verified.files.keys()].sort()).toEqual(Object.keys(files).sort());
-    expect(verified.missing).toEqual(new Map([[cid, (files[path] as Uint8Array).length]]));
-    expect(verified.partial).toEqual(new Map([[path, [cid]]]));
-  });
-
-  it("records an absent chunk with its size, and the chunked file as partial", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(2), "small.txt": utf8("s") };
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const leaves = [...tree.nodes.keys()].filter((c) => isRawCid(c));
-    objects.delete(leaves[0] as string);
-    const verified = await verifyTree(tree.root, objects, { leaves: "optional" });
-    expect(verified.missing.size).toBe(1);
-    expect(verified.missing.get(leaves[0] as string)).toBe(1024 * 1024);
-    expect(verified.partial).toEqual(new Map([["big.bin", [leaves[0]]]]));
-  });
-
-  it("verifies a bare skeleton: every file listed, every leaf missing", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(1), ...snapshot() };
-    const tree = await hashTree(files);
-    const skeleton = new Map([...tree.nodes].filter(([c]) => !isRawCid(c)));
-    const verified = await verifyTree(tree.root, skeleton, { leaves: "optional" });
-    expect(verified.files.size).toBe(5);
-    expect(verified.partial.size).toBe(5);
-    let total = 0;
-    for (const size of verified.missing.values()) total += size;
-    let expected = 0;
-    for (const bytes of Object.values(files)) expected += bytes.length;
-    expect(total).toBe(expected);
-  });
-
-  it("still throws on a missing dag-pb block, and on a tampered present leaf", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(1), ...snapshot() };
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const chunkIndex = [...tree.files].find(([c]) => !isRawCid(c))?.[0] as string;
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const leaf = await rawCid(utf8("hello"));
     const without = new Map(objects);
-    without.delete(chunkIndex);
-    await expect(verifyTree(tree.root, without, { leaves: "optional" })).rejects.toThrow(/missing object/);
+    without.delete(leaf);
+    await expect(verifyTree(hashed.root, without)).rejects.toThrow(/missing object/);
+    await expect(verifyTree(hashed.root, new Map())).rejects.toThrow(/missing object/);
     const tampered = new Map(objects);
-    const someFileCid = [...tree.files].find(([c]) => isRawCid(c))?.[0] as string;
-    tampered.set(someFileCid, utf8("tampered"));
-    await expect(verifyTree(tree.root, tampered, { leaves: "optional" })).rejects.toThrow(/do not hash/);
+    tampered.set(leaf, utf8("hellp"));
+    await expect(verifyTree(hashed.root, tampered)).rejects.toThrow(/do not hash/);
+    await expect(verifyTree(leaf, objects)).rejects.toThrow(/not a manifest/);
+    const forged = new Map(objects);
+    forged.set(hashed.root, utf8("a0"));
+    await expect(verifyTree(hashed.root, forged)).rejects.toThrow(/do not hash/);
   });
 
-  it("takes a lookup function as the object set", async () => {
+  it("rejects a leaf whose length is not the size the manifest states", async () => {
+    // hand-build a manifest lying about size; its own bytes are canonical so only the size check can catch it
+    const bytes = utf8("hello");
+    const cid = await rawCid(bytes);
+    const manifest = encodeManifest([{ path: "a", cid, size: 4 }]);
+    const root = await drislCid(manifest);
+    await expect(verifyTree(root, new Map([[root, manifest], [cid, bytes]]))).rejects.toThrow(/says 4 bytes, the block holds 5/);
+    // with optional leaves the lie is still caught when the leaf is present…
+    await expect(verifyTree(root, new Map([[root, manifest], [cid, bytes]]), { leaves: "optional" })).rejects.toThrow(/says 4 bytes/);
+    // …and reported as the manifest states when it is absent
+    const partial = await verifyTree(root, new Map([[root, manifest]]), { leaves: "optional" });
+    expect(partial.missing.get(cid)).toBe(4);
+  });
+
+  it("ignores unrelated objects and takes a lookup function", async () => {
     const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    objects.set(await rawCid(utf8("noise")), utf8("noise"));
     const asked: string[] = [];
-    const verified = await verifyTree(tree.root, async (cid) => {
+    const verified = await verifyTree(hashed.root, async (cid) => {
       asked.push(cid);
       return objects.get(cid) ?? null;
     });
     expect(verified.files.size).toBe(4);
-    expect(new Set(asked)).toEqual(new Set(objects.keys()));
-  });
-});
-
-describe("HAMT sharding", () => {
-  // Enough long-named entries that the flat node's serialized size
-  // crosses the profile's 256 KiB block-bytes threshold and the
-  // importer shards on its own — no injected knob.
-  const wideName = (i: number) =>
-    `entry-${String(i).padStart(4, "0")}-${"x".repeat(80)}`;
-  const wideDir = (): TreeFiles =>
-    Object.fromEntries(
-      Array.from({ length: 2200 }, (_, i) => [wideName(i), utf8("x")]),
-    );
-
-  it("a naturally sharded directory round-trips verify and resolve", async () => {
-    const files = wideDir();
-    const tree = await hashTree(files);
-    const rootData = dagPb.decode(
-      tree.nodes.get(tree.root) as Uint8Array,
-    ).Data as Uint8Array;
-    expect(UnixFS.unmarshal(rootData).type).toBe("hamt-sharded-directory");
-    // Cross-checked against kubo 0.43.0 (unixfs-v1-2025 profile applied,
-    // same 2200 files): ipfs add -r -Q --offline hamt-fixture/
-    expect(tree.root).toBe(
-      "bafybeigjbieb3arzjkcyfyggx2xvl6p7bdattx3bl77jmifshwxa3jr5oy",
-    );
-    const objects = objectSet(files, tree);
-    const verified = await verifyTree(tree.root, objects);
-    expect(verified.files.size).toBe(2200);
-    const hit = await resolvePath(
-      tree.root,
-      wideName(1234),
-      async (c) => objects.get(c) ?? null,
-    );
-    expect(new TextDecoder().decode(hit.bytes)).toBe("x");
+    expect(new Set(asked)).toEqual(new Set([hashed.root, ...hashed.files.keys()]));
   });
 
-  it("walks the shards with leaves optional", async () => {
-    const files = wideDir();
-    const tree = await hashTree(files);
-    const skeleton = new Map([...tree.nodes].filter(([c]) => !isRawCid(c)));
-    const verified = await verifyTree(tree.root, skeleton, { leaves: "optional" });
-    expect(verified.files.size).toBe(2200);
-    expect(verified.files.get(wideName(7))).toBe(await fileCid(utf8("x")));
-    // every entry holds the same byte, so one missing leaf serves all
-    expect(verified.missing.size).toBe(1);
-    expect(verified.partial.size).toBe(2200);
+  it("with optional leaves records what is absent, by CID and by path, with sizes", async () => {
+    const files = snapshot();
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const a = await rawCid(utf8("png-a"));
+    objects.delete(a);
+    const verified = await verifyTree(hashed.root, objects, { leaves: "optional" });
+    expect(verified.files.size).toBe(4);
+    expect(verified.missing).toEqual(new Map([[a, 5]]));
+    expect(verified.partial).toEqual(new Map([["files/images/a.png", [a]]]));
+    // the skeleton alone: every path and size known, every leaf missing
+    const skeleton = await verifyTree(hashed.root, new Map([[hashed.root, hashed.manifest]]), { leaves: "optional" });
+    expect(skeleton.partial.size).toBe(4);
+    let total = 0;
+    for (const size of skeleton.missing.values()) total += size;
+    expect(total).toBe(Object.values(files).reduce((n, b) => n + b.length, 0));
+  });
+
+  it("declines a leaf past maxLeafBytes without fetching it: unverifiable, not missing", async () => {
+    const files = snapshot();
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const asked: string[] = [];
+    const verified = await verifyTree(hashed.root, async (cid) => {
+      asked.push(cid);
+      return objects.get(cid) ?? null;
+    }, { maxLeafBytes: 13 });
+    expect(verified.declined).toEqual(new Map([["index.json", 14]]));
+    expect(verified.missing.size).toBe(0);
+    expect(asked).not.toContain(await rawCid(files["index.json"] as Uint8Array));
+    expect(verified.files.size).toBe(4);
+  });
+
+  it("a shared leaf is fetched once", async () => {
+    const files: TreeFiles = { "a.txt": utf8("same"), "b/c.txt": utf8("same") };
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const asked: string[] = [];
+    await verifyTree(hashed.root, async (cid) => {
+      asked.push(cid);
+      return objects.get(cid) ?? null;
+    });
+    expect(asked.length).toBe(2);
   });
 });
 
 describe("resolvePath", () => {
-  it("walks to a file, verifying each hop", async () => {
+  it("walks to a file in two fetches, whatever the depth", async () => {
     const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
     const fetched: string[] = [];
     const get = async (cid: string) => {
       fetched.push(cid);
       return objects.get(cid) ?? null;
     };
-    const hit = await resolvePath(tree.root, "posts/2026/first.html", get);
-    expect(hit.kind).toBe("file");
-    expect(new TextDecoder().decode(hit.bytes)).toBe("<h1>hi</h1>");
-    // O(depth) for a single-block file: root + posts + 2026 + file
-    expect(new Set(fetched).size).toBe(4);
+    const hit = await resolvePath(hashed.root, "files/images/b.png", get);
+    expect(new TextDecoder().decode(hit.bytes)).toBe("png-b");
+    expect(hit.size).toBe(5);
+    expect(fetched.length).toBe(2);
   });
 
-  it("reassembles a chunked file", async () => {
-    const files: TreeFiles = { "big.bin": bigFile(2) };
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    const hit = await resolvePath(
-      tree.root,
-      "big.bin",
-      async (c) => objects.get(c) ?? null,
-    );
-    expect(hit.kind).toBe("file");
-    expect(hit.bytes.length).toBe((files["big.bin"] as Uint8Array).length);
-    expectBytes(hit.bytes, files["big.bin"] as Uint8Array);
-  });
-
-  it("resolves the empty path to the root directory node", async () => {
+  it("errors on a path that is not there, a directory, unsafe paths, lies", async () => {
     const files = snapshot();
-    const tree = await hashTree(files);
-    const hit = await resolvePath(tree.root, "", async (cid) =>
-      tree.nodes.get(cid) ?? null,
-    );
-    expect(hit.kind).toBe("dir");
-    expect(hit.cid).toBe(tree.root);
-    expect(hit.bytes).toEqual(tree.nodes.get(tree.root));
-  });
-
-  it("resolves an empty directory", async () => {
-    const tree = await hashTree({ "a.txt": utf8("a") }, { dirs: ["hollow"] });
-    const hit = await resolvePath(tree.root, "hollow", async (cid) =>
-      tree.nodes.get(cid) ?? null,
-    );
-    expect(hit.kind).toBe("dir");
-    expect(hit.cid).toBe(EMPTY_DIR);
-  });
-
-  it("rejects a served object whose bytes do not match", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files);
-    await expect(
-      resolvePath(tree.root, "profile.json", async () => utf8("lies")),
-    ).rejects.toThrow(/do not hash/);
-  });
-
-  it("errors on a path that is not there", async () => {
-    const files = snapshot();
-    const tree = await hashTree(files);
-    const objects = objectSet(files, tree);
-    await expect(
-      resolvePath(tree.root, "posts/2027/x", async (c) => objects.get(c) ?? null),
-    ).rejects.toThrow();
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const get = async (cid: string) => objects.get(cid) ?? null;
+    await expect(resolvePath(hashed.root, "files/nope", get)).rejects.toThrow(/no such path/);
+    await expect(resolvePath(hashed.root, "files/images", get)).rejects.toThrow(/no such path/);
+    await expect(resolvePath(hashed.root, "", get)).rejects.toThrow(/empty path/);
+    await expect(resolvePath(hashed.root, "../x", get)).rejects.toThrow(/unsafe/);
+    await expect(resolvePath(hashed.root, "files/body.md", async () => utf8("lies"))).rejects.toThrow(/do not hash/);
   });
 });
 
-describe("golden vectors", () => {
-  // Pinned outputs: if a dependency upgrade ever changes the encoding,
-  // these fail loudly instead of silently re-rooting every tree.
-  it("root CID of a fixed snapshot — cross-checked against kubo", async () => {
-    // Independently reproduced with kubo 0.43.0:
-    //   ipfs config profile apply unixfs-v1-2025
-    //   ipfs add -r -Q --offline fixture/     (same two files)
-    // → bafybeic47ugcluinaquemujs7s63cfo7og2ucuqnl56zawlsikwcbmavle
-    const tree = await hashTree({
-      "profile.json": utf8('{"name":"merely"}'),
-      "posts/2026/first.html": utf8("<h1>hi</h1>"),
-    });
-    expect(tree.root).toBe(
-      "bafybeic47ugcluinaquemujs7s63cfo7og2ucuqnl56zawlsikwcbmavle",
-    );
+describe("CAR", () => {
+  it("the closure travels as a DASL CAR: 36-byte CIDs, the manifest as root", async () => {
+    const files = snapshot();
+    const hashed = await hashTree(files);
+    const car = encodeCar([hashed.root], objectSet(files, hashed));
+    const back = await decodeCar(car);
+    expect(back.roots).toEqual([hashed.root]);
+    expect(back.bad).toEqual([]);
+    const verified = await verifyTree(hashed.root, back.blocks);
+    expect(verified.files.size).toBe(4);
+  });
+});
+
+describe("a manifest is untrusted input", () => {
+  it("a path of fifty thousand segments is laid out in linear time", async () => {
+    const deep = `${"a/".repeat(50_000)}b`;
+    const started = performance.now();
+    const hashed = await hashTree({ [deep]: utf8("x") });
+    expect(decodeManifest(hashed.manifest)[0]?.path).toBe(deep);
+    const many: TreeFiles = {};
+    for (let i = 0; i < 2000; i++) many[`${"d/".repeat(200)}${i}`] = utf8("x");
+    await hashTree(many);
+    expect(performance.now() - started).toBeLessThan(3000);
   });
 
-  it("empty directories — cross-checked against kubo", async () => {
-    // kubo 0.43.0, unixfs-v1-2025 profile applied, ipfs add -r -Q --offline:
-    //   empty/                            → bafybeiczss…f354 (EMPTY_DIR)
-    //   h/hollow/                         → bafybeifqql…2p4q
-    //   t/{deep/x.txt="x", deep/er/, hollow/} → bafybeiheom…5g2e
-    expect((await hashTree({})).root).toBe(EMPTY_DIR);
-    expect((await hashTree({}, { dirs: ["hollow"] })).root).toBe(
-      "bafybeifqqlbzfmduqfpdkog6kgw2obvr4lu3pjwtl63k2ccpdjmljj2p4q",
-    );
-    expect(
-      (
-        await hashTree(
-          { "deep/x.txt": utf8("x") },
-          { dirs: ["deep/er", "hollow"] },
-        )
-      ).root,
-    ).toBe("bafybeiheomt3ohnbhxepizovx2txgbsvgd6hdfimwxfkatiobqznug5g2e");
+  it("a stated size is a claim: a block that arrives past maxLeafBytes is declined unhashed, and the source is told the bound", async () => {
+    const big = new Uint8Array(5000).fill(3);
+    const cid = await rawCid(big);
+    const manifest = encodeManifest([{ path: "a", cid, size: 1 }]);
+    const root = await drislCid(manifest);
+    const limits: (number | undefined)[] = [];
+    const get = async (name: string, limit?: number) => {
+      limits.push(limit);
+      return name === root ? manifest : name === cid ? big : null;
+    };
+    const verified = await verifyTree(root, get, { maxLeafBytes: 100 });
+    expect(verified.declined).toEqual(new Map([["a", 5000]]));
+    expect(verified.missing.size).toBe(0);
+    expect(limits).toEqual([1024 * 1024, 100]);
+    // without a bound the block is hashed, proven, and the manifest's lie is a format defect
+    await expect(verifyTree(root, get)).rejects.toThrow(ManifestError);
+    await expect(verifyTree(root, get)).rejects.toThrow(/says 1 bytes, the block holds 5000/);
+    // a block that is neither the bytes named nor the size stated is a bad block, not a bad manifest
+    const err = await verifyTree(root, async (name) => (name === root ? manifest : utf8("??"))).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(ManifestError);
+    expect((err as Error).message).toMatch(/do not hash/);
+    // resolvePath under the same bound
+    await expect(resolvePath(root, "a", get, { maxLeafBytes: 100 })).rejects.toThrow(/5000 bytes, past this reader's maxLeafBytes/);
+    await expect(resolvePath(root, "a", get, { maxLeafBytes: 0 })).rejects.toThrow(/is 1 bytes, past this reader's maxLeafBytes/);
   });
 
-  it("chunked file root CID — cross-checked against kubo", async () => {
-    // Same 2 MiB + 7 B pattern file through kubo 0.43.0 with the
-    // unixfs-v1-2025 profile applied: ipfs add -Q --offline big.bin
-    const tree = await hashTree({ "big.bin": bigFile(2) });
-    expect([...tree.files.keys()][0]).toBe(
-      "bafybeici7b6wgforprflfnhxce7smeicrydora5wkmqfef53nrnbj5ji7y",
-    );
-  });
-
-  it("raw file CID matches an independently computed sha-256", async () => {
-    // bafkrei… = CIDv1, raw codec, sha2-256 of the bare bytes
-    expect(await fileCid(utf8("<h1>hi</h1>"))).toBe(
-      "bafkreihh7o3pxp2m4kkjcpvwfnj76a5hkrtett64bwbe3hr2fncucubpp4",
-    );
+  it("a manifest past the bound is refused before it is hashed", async () => {
+    const hashed = await hashTree({ a: utf8("x") });
+    const huge = new Uint8Array(1024 * 1024 + 1);
+    let hashedHuge = false;
+    const get = async (name: string) => {
+      if (name === hashed.root) return huge;
+      hashedHuge = true;
+      return null;
+    };
+    await expect(verifyTree(hashed.root, get)).rejects.toThrow(/the most is 1048576/);
+    expect(hashedHuge).toBe(false);
   });
 });

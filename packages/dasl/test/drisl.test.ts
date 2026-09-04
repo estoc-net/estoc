@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as dagCbor from "@ipld/dag-cbor";
 import { CID } from "multiformats/cid";
-import { decodeDrisl, encodeDrisl, Link, parseCid, MAX_DEPTH } from "../src/dasl/index.js";
+import { decodeDrisl, encodeDrisl, Link, parseCid, MAX_DEPTH } from "../src/index.js";
 
 const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 const bytes = (h: string) => new Uint8Array((h.match(/../g) ?? []).map((x) => parseInt(x, 16)));
@@ -109,7 +109,6 @@ describe("DRISL decode — strict: exactly one byte string per value", () => {
     ["invalid UTF-8 text", "61ff", /UTF-8/],
     ["invalid UTF-8 key", "a161ff01", /UTF-8/],
     ["CESU-encoded surrogate in text", "63eda080", /UTF-8/],
-    ["__proto__ key", "a1" + "69" + hex(new TextEncoder().encode("__proto__")) + "a0", /__proto__/],
     ["nesting past the limit", "81".repeat(MAX_DEPTH + 1) + "80", /deeper/],
     ["empty input", "", /truncated/],
   ];
@@ -163,5 +162,24 @@ describe("DRISL agrees with @atcute/cbor (the AT Protocol's DASL codec)", () => 
     expect(back.resources["/files/a.png"]?.size).toBe(5);
     expect(atcid.toString(atcid.fromCidLink(back.resources["/files/a.png"]!.src as never))).toBe(RAW);
     expect(decodeDrisl(theirs)).toEqual(decodeDrisl(ours));
+  });
+});
+
+describe("DRISL maps have no prototype", () => {
+  it("a __proto__ key is a plain own property, round-trips, and pollutes nothing", () => {
+    const doc = decodeDrisl(bytes("a1" + "69" + hex(new TextEncoder().encode("__proto__")) + "a1" + "61" + "61" + "01"));
+    expect(Object.getPrototypeOf(doc)).toBeNull();
+    expect(Object.keys(doc as object)).toEqual(["__proto__"]);
+    expect(({} as { a?: number }).a).toBeUndefined();
+    expect(hex(encodeDrisl(doc))).toBe("a1" + "69" + hex(new TextEncoder().encode("__proto__")) + "a1" + "61" + "61" + "01");
+    const own = Object.defineProperty({}, "__proto__", { value: { a: 1 }, enumerable: true }) as never;
+    expect(hex(encodeDrisl(own))).toBe(hex(encodeDrisl(doc)));
+  });
+
+  it("constructor and hasOwnProperty are keys like any other", () => {
+    const doc = decodeDrisl(encodeDrisl({ constructor: 1, hasOwnProperty: 2 })) as { [key: string]: unknown };
+    expect(doc["constructor"]).toBe(1);
+    expect(doc["hasOwnProperty"]).toBe(2);
+    expect("toString" in doc).toBe(false);
   });
 });

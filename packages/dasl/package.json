@@ -1,0 +1,49 @@
+{
+  "name": "@estoc/dasl",
+  "version": "0.1.0",
+  "description": "DASL (dasl.ing) with no dependency: DASL CIDs (CIDv1, sha-256, raw or drisl, base32 lower, 36 bytes), a DRISL codec (deterministic CBOR with tag-42 links — one byte string per value, every other form refused on decode), and DASL CAR (CARv1 over DASL CIDs). Pure functions; runs in Node, workerd, and the browser.",
+  "license": "Apache-2.0",
+  "author": "merely",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/estoc-net/estoc.git",
+    "directory": "packages/dasl"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepublishOnly": "pnpm test && pnpm build",
+    "dev": "tsc --watch --preserveWatchOutput"
+  },
+  "devDependencies": {
+    "@atcute/cbor": "^2.3.6",
+    "@atcute/cid": "^2.4.2",
+    "@ipld/dag-cbor": "10.0.2",
+    "@types/node": "^22.13.5",
+    "multiformats": "^14.0.5",
+    "typescript": "~5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "keywords": [
+    "dasl",
+    "drisl",
+    "cid",
+    "cbor",
+    "car",
+    "content-addressing"
+  ]
+}

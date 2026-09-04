@@ -2,9 +2,23 @@ import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { createSeedKeystore, addDerivedKey } from "@estoc/keystore";
 import { readTree } from "../src/fs.js";
-import { MalformedObjectError, readObject, readSignedObject, signedTree, signRoot, verifyCard as verifyAnyCard } from "../src/index.js";
-import { drislCid, encodeManifest, hashObject, hashTree, signObject, verifyCard, verifyObject, verifyObjectCard, parseCid, rawCid } from "../src/dasl/index.js";
+import { drislCid, parseCid, rawCid } from "@estoc/dasl";
+import {
+  encodeManifest,
+  hashObject,
+  hashTree,
+  MalformedObjectError,
+  readObject,
+  readSignedObject,
+  signedTree,
+  signObject,
+  signRoot,
+  verifyCard,
+  verifyObject,
+  verifyObjectCard,
+} from "../src/index.js";
 import { zipTree, unzipTree } from "../src/zip.js";
+import type { FolderObject } from "../src/index.js";
 
 const seaDay = fileURLToPath(new URL("./fixtures/sea-day/", import.meta.url));
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -14,7 +28,7 @@ async function signer() {
   return (await addDerivedKey(doc, seedKey, "org/test")).identity.signer;
 }
 
-describe("object over DASL", () => {
+describe("object", () => {
   it("hashes the canonical tree to a drisl root; litter and hidden entries never enter", async () => {
     const mapping = await readTree(seaDay);
     const root = await hashObject(readObject(mapping));
@@ -37,14 +51,10 @@ describe("object over DASL", () => {
     expect((await verifyObjectCard(jws, tampered)).matches).toBe(false);
   });
 
-  it("a card whose root is not a manifest CID is malformed here, however good its signature", async () => {
+  it("a card is over a manifest CID and nothing else: signing refuses a raw CID or a UnixFS-era root", async () => {
     const s = await signer();
-    const object = readObject(await readTree(seaDay));
-    const overRaw = await signRoot(s.did(), await rawCid(enc("bytes")), s);
-    const overUnixfs = await signRoot(s.did(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354", s);
-    await expect(verifyAnyCard(overRaw)).resolves.toBeTruthy(); // the generic card layer does not know encodings
-    await expect(verifyCard(overRaw)).rejects.toThrow(/not a manifest CID/);
-    await expect(verifyObjectCard(overUnixfs, object)).rejects.toThrow(/not a manifest CID/);
+    await expect(signRoot(s.did(), await rawCid(enc("bytes")), s)).rejects.toThrow(/drisl CID of a manifest/);
+    await expect(signRoot(s.did(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354", s)).rejects.toThrow(/drisl CID of a manifest/);
   });
 });
 
@@ -61,12 +71,12 @@ describe("verifyObject: an object read out of a root", () => {
     const { root, blocks } = await blocksOf(object.tree);
     const got = await verifyObject(root, blocks);
     expect(got.complete).toBe(true);
-    expect(got.object.meta).toEqual(object.meta);
-    expect(Object.keys(got.object.tree).sort()).toEqual(Object.keys(object.tree).sort());
-    expect(await hashObject(got.object)).toBe(root);
+    expect(got.object?.meta).toEqual(object.meta);
+    expect(Object.keys(got.object?.tree ?? {}).sort()).toEqual(Object.keys(object.tree).sort());
+    expect(await hashObject(got.object as FolderObject)).toBe(root);
   });
 
-  it("a partial object: every path and size known, absent bytes absent, index.json required", async () => {
+  it("a partial object: every path and size known, absent bytes absent; without index.json's bytes there is no object yet", async () => {
     const object = readObject(await readTree(seaDay));
     const { root, blocks } = await blocksOf(object.tree);
     const png = await rawCid(object.tree["files/images/sunset.png"]!);
@@ -76,22 +86,28 @@ describe("verifyObject: an object read out of a root", () => {
     expect(got.complete).toBe(false);
     expect(got.tree.partial.has("files/images/sunset.png")).toBe(true);
     expect(got.tree.sizes.get("files/images/sunset.png")).toBe(70);
-    expect(Object.keys(got.object.tree).sort()).toEqual(["files/body.md", "index.json"]);
+    expect(Object.keys(got.object?.tree ?? {}).sort()).toEqual(["files/body.md", "index.json"]);
     const index = await rawCid(object.tree["index.json"]!);
     blocks.delete(index);
-    await expect(verifyObject(root, blocks, { leaves: "optional" })).rejects.toThrow(/index.json's bytes are absent/);
+    await expect(verifyObject(root, blocks)).rejects.toThrow(/missing object/);
+    const skeleton = await verifyObject(root, blocks, { leaves: "optional" });
+    expect(skeleton.object).toBeNull();
+    expect(skeleton.complete).toBe(false);
+    expect(skeleton.tree.partial.has("index.json")).toBe(true);
+    expect(skeleton.tree.sizes.size).toBe(3);
   });
 
-  it("a declined leaf makes the object incomplete, not malformed; a declined index.json cannot be read", async () => {
+  it("a declined leaf makes the object incomplete, not malformed; a declined index.json leaves no object to read", async () => {
     const index = enc(JSON.stringify({ format: "x", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "application/octet-stream", path: "files/big.bin" } }));
     const { root, blocks } = await blocksOf({ "index.json": index, "files/big.bin": new Uint8Array(1000).fill(1) });
     const got = await verifyObject(root, blocks, { maxLeafBytes: 500 });
     expect(got.complete).toBe(false);
     expect([...got.tree.declined.keys()]).toEqual(["files/big.bin"]);
-    expect(Object.keys(got.object.tree)).toEqual(["index.json"]);
-    const err = await verifyObject(root, blocks, { maxLeafBytes: 100 }).catch((e: unknown) => e);
-    expect(err).not.toBeInstanceOf(MalformedObjectError);
-    expect((err as Error).message).toMatch(/maxLeafBytes/);
+    expect(Object.keys(got.object?.tree ?? {})).toEqual(["index.json"]);
+    const declined = await verifyObject(root, blocks, { maxLeafBytes: 100 });
+    expect(declined.object).toBeNull();
+    expect(declined.complete).toBe(false);
+    expect([...declined.tree.declined.keys()].sort()).toEqual(["files/big.bin", "index.json"]);
   });
 
   it("a root that reaches litter, a card, or a hidden file is not an object's — format layer, not filtered", async () => {
@@ -105,6 +121,22 @@ describe("verifyObject: an object read out of a root", () => {
     }
     const { root, blocks } = await blocksOf({ "files/body.md": enc("no index") });
     await expect(verifyObject(root, blocks)).rejects.toThrow(/no index.json in the manifest/);
+  });
+
+  it("the manifest is judged before a leaf is asked for: litter is a format defect even when leaves are missing", async () => {
+    const object = readObject(await readTree(seaDay));
+    const { root, blocks } = await blocksOf({ ...object.tree, "draft.txt": enc("stray") });
+    const asked: string[] = [];
+    const manifestOnly = async (cid: string) => {
+      asked.push(cid);
+      return cid === root ? (blocks.get(cid) ?? null) : null;
+    };
+    const err = await verifyObject(root, manifestOnly).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MalformedObjectError);
+    expect((err as Error).message).toMatch(/draft.txt/);
+    expect(asked).toEqual([root]);
+    const noIndex = await blocksOf({ "files/body.md": enc("x") });
+    await expect(verifyObject(noIndex.root, async (cid) => (cid === noIndex.root ? (noIndex.blocks.get(cid) ?? null) : null))).rejects.toThrow(/no index.json in the manifest/);
   });
 
   it("index.json malformed is format; content.path not in the manifest is closure", async () => {

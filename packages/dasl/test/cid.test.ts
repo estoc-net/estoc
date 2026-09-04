@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
-import { base32Decode, base32Encode, checkCid, cidOf, codecOf, drislCid, isDaslCid, parseCid, rawCid, DRISL_CODE, RAW_CODE } from "../src/dasl/index.js";
-import { fileCid } from "../src/index.js";
+import { base32Decode, base32Encode, checkCid, cidOf, codecOf, drislCid, isDaslCid, parseCid, rawCid, DRISL_CODE, RAW_CODE } from "../src/index.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
@@ -22,10 +21,9 @@ describe("base32 lower (RFC 4648, no padding)", () => {
 });
 
 describe("DASL CID", () => {
-  it("raw CID equals the UnixFS branch's single-block file CID, and multiformats'", async () => {
+  it("raw CID is the one multiformats computes, byte for byte", async () => {
     const b = utf8("<h1>hi</h1>");
     expect(await rawCid(b)).toBe("bafkreihh7o3pxp2m4kkjcpvwfnj76a5hkrtett64bwbe3hr2fncucubpp4");
-    expect(await rawCid(b)).toBe(await fileCid(b));
     expect(await rawCid(b)).toBe(CID.create(1, 0x55, await sha256.digest(b)).toString());
   });
 

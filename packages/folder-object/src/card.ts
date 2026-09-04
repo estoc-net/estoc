@@ -1,7 +1,8 @@
 /**
  * The card — the one signature in the system. Compact JWS, EdDSA over
  * Ed25519, `typ: estoc/object-card`, `kid` naming the did:key's one
- * verification method, payload `{did, root}`.
+ * verification method, payload `{did, root}` where `root` is a manifest
+ * CID (spec §6).
  *
  * The `typ` header pins what this signature is: a signature made here
  * cannot be read as some other protocol's statement, and vice versa. The
@@ -10,6 +11,7 @@
  * format the tree declares in its own `index.json` (spec §6).
  */
 
+import { codecOf, DRISL_CODE } from "@estoc/dasl";
 import { publicKeyFromDidKey } from "@estoc/keystore";
 import { base64urlToBytes, base64urlToUtf8, bytesToBase64url, utf8ToBase64url } from "./base64url.js";
 import { hashObject } from "./object.js";
@@ -24,8 +26,16 @@ export function didKeyKid(did: string): string {
   return `${did}#${did.slice("did:key:".length)}`;
 }
 
-/** Sign a card over a root as `did`. Two cards over the same (did, root) are equivalent. */
+/** Throw unless `root` is what a card may be about: the canonical string of a drisl DASL CID — a manifest's. */
+function checkRoot(root: string): void {
+  if (codecOf(root) !== DRISL_CODE) {
+    throw new Error("a card's root is the drisl CID of a manifest, in canonical spelling: this format defines no signature over anything else");
+  }
+}
+
+/** Sign a card over a manifest root as `did`. Two cards over the same (did, root) are equivalent. */
 export async function signRoot(did: string, root: string, signer: Pick<CardSigner, "sign">): Promise<string> {
+  checkRoot(root);
   const header = utf8ToBase64url(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(did) }));
   const payload = utf8ToBase64url(JSON.stringify({ did, root } satisfies ObjectCard));
   const signature = await signer.sign(new TextEncoder().encode(`${header}.${payload}`));
@@ -40,9 +50,10 @@ export async function signObject(object: FolderObject, signer: CardSigner): Prom
 
 /**
  * Verify a card on its own terms: an `estoc/object-card` JWS whose
- * signature checks out under the did:key its payload names. Throws on
- * anything else. Whether the root is the tree you hold is
- * `verifyObjectCard`'s question.
+ * payload is the one text `{"did":…,"root":…}`, whose `root` is a
+ * manifest CID, and whose signature checks out under the did:key its
+ * payload names. Throws on anything else. Whether the root is the tree
+ * you hold is `verifyObjectCard`'s question.
  */
 export async function verifyCard(jws: string): Promise<ObjectCard> {
   const parts = jws.split(".");
@@ -56,9 +67,11 @@ export async function verifyCard(jws: string): Promise<ObjectCard> {
   }
   if (header.typ !== CARD_TYP) throw new Error(`not an object card (typ ${String(header.typ)})`);
   if (header.alg !== "EdDSA" || typeof header.kid !== "string") throw new Error("expected an EdDSA JWS with a kid");
+  let text: string;
   let payload: unknown;
   try {
-    payload = JSON.parse(base64urlToUtf8(p));
+    text = base64urlToUtf8(p); // fatal: a byte that is not UTF-8 is not a text, whatever it decodes to
+    payload = JSON.parse(text);
   } catch {
     throw new Error("malformed card payload");
   }
@@ -68,7 +81,8 @@ export async function verifyCard(jws: string): Promise<ObjectCard> {
   // Closed testimony has one text: the two members, each once, in this
   // order, no whitespace — what `signRoot` writes. Two JSON parsers can
   // disagree about a duplicated member; none can about this.
-  if (base64urlToUtf8(p) !== JSON.stringify({ did, root })) throw new Error("a card's payload is exactly the text {\"did\":…,\"root\":…}");
+  if (text !== JSON.stringify({ did, root })) throw new Error("a card's payload is exactly the text {\"did\":…,\"root\":…}");
+  checkRoot(root);
   if (!did.startsWith("did:key:") || didKeyKid(did) !== header.kid) {
     throw new Error("the card's kid does not belong to the card's did");
   }

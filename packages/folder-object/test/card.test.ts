@@ -8,7 +8,7 @@ async function signer(seedByte = 7) {
 }
 
 const b64 = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const ROOT = "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354";
+const ROOT = "bafyreicdsejj526l225wrfl5cpxcgehq4pzbpxphocvmiuvy6dpwi467aa";
 
 describe("object card", () => {
   it("round-trips: sign then verify, typ and kid pinned", async () => {
@@ -26,7 +26,7 @@ describe("object card", () => {
   it("rejects a tampered payload", async () => {
     const s = await signer();
     const [h, , sig] = (await signRoot(s.did(), ROOT, s)).split(".") as [string, string, string];
-    const forged = b64(JSON.stringify({ did: s.did(), root: "bafyforged" }));
+    const forged = b64(JSON.stringify({ did: s.did(), root: "bafyreighoyuo2t5ymwyezn2uuzuxyamaqzgmdneypefczqchzibnfzt3v4" }));
     await expect(verifyCard(`${h}.${forged}.${sig}`)).rejects.toThrow(/does not verify/);
   });
 
@@ -62,6 +62,37 @@ describe("object card", () => {
   it("refuses to sign as anything but a did:key", async () => {
     const s = await signer();
     await expect(signRoot("did:web:example.com", ROOT, s)).rejects.toThrow(/did:key/);
+  });
+
+  it("a root that is not a manifest CID in canonical spelling makes the card malformed, signing and verifying alike", async () => {
+    const s = await signer();
+    const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) }));
+    const roots = [
+      "bafkreihh7o3pxp2m4kkjcpvwfnj76a5hkrtett64bwbe3hr2fncucubpp4", // raw: bytes, not a tree
+      "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354", // dag-pb: a UnixFS-era root
+      ROOT.toUpperCase(), // another spelling of the right CID
+      `z${ROOT.slice(1)}`,
+      "bafyforged",
+    ];
+    for (const root of roots) {
+      await expect(signRoot(s.did(), root, s), root).rejects.toThrow(/drisl CID of a manifest/);
+      const p = b64(JSON.stringify({ did: s.did(), root }));
+      const sig = await s.sign(new TextEncoder().encode(`${h}.${p}`));
+      const jws = `${h}.${p}.${btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+      await expect(verifyCard(jws), root).rejects.toThrow(/drisl CID of a manifest/);
+    }
+  });
+
+  it("a payload that is not UTF-8 is not a card, however good the signature", async () => {
+    const s = await signer();
+    const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) }));
+    const text = new TextEncoder().encode(JSON.stringify({ did: s.did(), root: ROOT }));
+    const broken = new Uint8Array(text);
+    broken[text.length - 3] = 0xff; // inside the root string: a byte no UTF-8 text has
+    const p = btoa(String.fromCharCode(...broken)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const sig = await s.sign(new TextEncoder().encode(`${h}.${p}`));
+    const jws = `${h}.${p}.${btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+    await expect(verifyCard(jws)).rejects.toThrow(/malformed card payload/);
   });
 });
 
