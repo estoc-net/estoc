@@ -183,6 +183,26 @@ describe("the manifest block", () => {
     }
   });
 
+  it("refuses a float size even though it decodes to an integer (the re-encode backstop)", async () => {
+    // size 1 as float64: valid DRISL, decodes to the number 1, but not the bytes a hasher writes
+    const hashed = await hashTree({ a: utf8("x") });
+    const canonical = hex(hashed.manifest);
+    const floated = canonical.replace(/6473697a6501$/, "6473697a65fb3ff0000000000000");
+    expect(floated).not.toBe(canonical);
+    const bytes = new Uint8Array((floated.match(/../g) ?? []).map((x) => parseInt(x, 16)));
+    expect(() => decodeManifest(bytes)).toThrow(/not the encoding of their value/);
+  });
+
+  it("refuses one src under two sizes, and a manifest past the bound", async () => {
+    const cid = await rawCid(utf8("x"));
+    expect(() => encodeManifest([{ path: "a", cid, size: 1 }, { path: "b", cid, size: 2 }])).toThrow(/another entry sizes/);
+    const link = new Link(parseCid(cid));
+    expect(() => decodeManifest(encodeDrisl({ resources: { "/a": { src: link, size: 1 }, "/b": { src: link, size: 2 } } }))).toThrow(/another entry sizes/);
+    const many: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 13000; i++) many[`f/${"n".repeat(40)}${i}`] = utf8("x");
+    await expect(hashTree(many)).rejects.toThrow(/the most is 1048576/);
+  });
+
   it("refuses non-canonical DRISL bytes, so one tree has one root", async () => {
     const hashed = await hashTree({ a: utf8("x") });
     // same value, longer int encoding for size: 18 01 instead of 01
@@ -267,6 +287,21 @@ describe("verifyTree", () => {
     let total = 0;
     for (const size of skeleton.missing.values()) total += size;
     expect(total).toBe(Object.values(files).reduce((n, b) => n + b.length, 0));
+  });
+
+  it("declines a leaf past maxLeafBytes without fetching it: unverifiable, not missing", async () => {
+    const files = snapshot();
+    const hashed = await hashTree(files);
+    const objects = objectSet(files, hashed);
+    const asked: string[] = [];
+    const verified = await verifyTree(hashed.root, async (cid) => {
+      asked.push(cid);
+      return objects.get(cid) ?? null;
+    }, { maxLeafBytes: 13 });
+    expect(verified.declined).toEqual(new Map([["index.json", 14]]));
+    expect(verified.missing.size).toBe(0);
+    expect(asked).not.toContain(await rawCid(files["index.json"] as Uint8Array));
+    expect(verified.files.size).toBe(4);
   });
 
   it("a shared leaf is fetched once", async () => {

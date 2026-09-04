@@ -28,12 +28,15 @@ export {
 } from "./cid.js";
 export { Link, encodeDrisl, decodeDrisl, MAX_DEPTH, type Drisl } from "./drisl.js";
 export {
+  MAX_MANIFEST_BYTES,
   segmentsOf,
   encodeManifest,
   decodeManifest,
   hashTree,
   fetchManifest,
   verifyTree,
+  walkTree,
+  getterOf,
   resolvePath,
   type ManifestEntry,
   type HashedManifest,
@@ -42,4 +45,4 @@ export {
   type GetBlock,
   type Resolved,
 } from "./tree.js";
-export { hashObject, signObject, verifyCard, verifyObjectCard } from "./object.js";
+export { hashObject, signObject, verifyCard, verifyObjectCard, verifyObject, checkObjectPaths, type VerifiedObject } from "./object.js";

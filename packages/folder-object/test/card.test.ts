@@ -64,3 +64,21 @@ describe("object card", () => {
     await expect(signRoot("did:web:example.com", ROOT, s)).rejects.toThrow(/did:key/);
   });
 });
+
+describe("the card's payload is one text", () => {
+  it("rejects a duplicated member, a reordered one, and whitespace, however good the signature", async () => {
+    const s = await signer();
+    const h = b64(JSON.stringify({ alg: "EdDSA", typ: CARD_TYP, kid: didKeyKid(s.did()) }));
+    const texts = [
+      `{"did":"${s.did()}","root":"${ROOT}","root":"bafyother"}`,
+      `{"root":"${ROOT}","did":"${s.did()}"}`,
+      `{"did": "${s.did()}", "root": "${ROOT}"}`,
+    ];
+    for (const text of texts) {
+      const p = b64(text);
+      const sig = await s.sign(new TextEncoder().encode(`${h}.${p}`));
+      const jws = `${h}.${p}.${btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+      await expect(verifyCard(jws), text).rejects.toThrow(/exactly/);
+    }
+  });
+});

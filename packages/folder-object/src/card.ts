@@ -65,6 +65,10 @@ export async function verifyCard(jws: string): Promise<ObjectCard> {
   const { did, root } = (payload ?? {}) as Record<string, unknown>;
   if (typeof did !== "string" || typeof root !== "string") throw new Error("malformed card");
   if (Object.keys(payload as object).length !== 2) throw new Error("a card says exactly {did, root}");
+  // Closed testimony has one text: the two members, each once, in this
+  // order, no whitespace — what `signRoot` writes. Two JSON parsers can
+  // disagree about a duplicated member; none can about this.
+  if (base64urlToUtf8(p) !== JSON.stringify({ did, root })) throw new Error("a card's payload is exactly the text {\"did\":…,\"root\":…}");
   if (!did.startsWith("did:key:") || didKeyKid(did) !== header.kid) {
     throw new Error("the card's kid does not belong to the card's did");
   }

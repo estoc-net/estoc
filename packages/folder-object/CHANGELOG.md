@@ -11,12 +11,24 @@ DRISL document in the shape of a MASL bundle, the root its drisl CID.
   over a manifest (`{resources: {"/path": {src, size}}}`), a strict DRISL
   codec (`encodeDrisl` / `decodeDrisl`: one byte string per value, every
   other refused), DASL CIDs (`rawCid` / `drislCid` / `parseCid`, 36
-  bytes, base32 lower), `encodeManifest` / `decodeManifest`, and the
-  object and card layers over that root (`hashObject`, `signObject`,
-  `verifyCard` — the root must be a manifest CID — `verifyObjectCard`).
-  No dependency: sha-256 is WebCrypto's, base32 and CBOR are here.
-  Bundled for the browser the subpath is 15 kB minified (6 kB gzip)
-  against 155 kB (49 kB) for the UnixFS entry.
+  bytes, base32 lower, the canonical spelling only), `encodeManifest` /
+  `decodeManifest` (closed shape; the decoded value must re-encode to the
+  block's bytes; one `src` one `size`; at most `MAX_MANIFEST_BYTES`,
+  1 MiB), and the object and card layers over that root (`hashObject`,
+  `signObject`, `verifyCard` — the root must be a manifest CID —
+  `verifyObjectCard`, and `verifyObject`: the object read out of a root,
+  refusing a manifest that names anything but a canonical tree instead
+  of filtering it). `verifyTree` takes `maxLeafBytes`: a leaf stated
+  larger is never fetched and is reported in `declined` — unverifiable
+  by this reader, not missing, not malformed. No dependency: sha-256 is
+  WebCrypto's, base32 and CBOR are here. Bundled for the browser the
+  subpath is 15 kB minified (6 kB gzip) against 155 kB (49 kB) for the
+  UnixFS entry.
+- The card's payload is one text: `verifyCard` (main entry) now requires
+  the payload to be exactly `{"did":…,"root":…}` — the two members, each
+  once, in that order, no whitespace, as `signRoot` and the Ledger signer
+  write it — so no two JSON parsers can disagree about what one signature
+  attests (a duplicated `root` member used to pass the member count).
 - Golden vectors: the sea-day fixture roots at
   `bafyreicdsejj526l225wrfl5cpxcgehq4pzbpxphocvmiuvy6dpwi467aa`, its
   manifest pinned byte for byte, cross-checked against an independent

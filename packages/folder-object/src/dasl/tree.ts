@@ -20,9 +20,16 @@
  * so that one mapping has one root, and a root reaches one mapping.
  */
 
-import { checkCid, DRISL_CODE, drislCid, parseCid, RAW_CODE, rawCid } from "./cid.js";
+import { checkCid, compareBytes, DRISL_CODE, drislCid, parseCid, RAW_CODE, rawCid } from "./cid.js";
 import { decodeDrisl, encodeDrisl, Link, type Drisl } from "./drisl.js";
 import type { TreeFiles } from "../types.js";
+
+/**
+ * The most bytes a manifest block may have (spec §2.1): it must fit the
+ * skeleton's inline budget anyway, and the bound is what a reader
+ * decodes before it trusts anything — about ten thousand entries.
+ */
+export const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 /** One line of the manifest: a path of the mapping, the raw CID of its bytes, their length. */
 export interface ManifestEntry {
@@ -58,11 +65,24 @@ export interface VerifiedManifest {
   missing: Map<string, number>;
   /** Path → its absent CID (one per file: a file is one block), for every file with one. */
   partial: Map<string, string[]>;
+  /**
+   * Path → size, for every leaf this reader declined to fetch because its
+   * stated size exceeds `maxLeafBytes` — unverifiable by this reader, not
+   * missing and not malformed (spec §2.1).
+   */
+  declined: Map<string, number>;
 }
 
 export interface VerifyOptions {
   /** `"required"` (default): every leaf must be present. `"optional"`: an absent leaf is recorded, not thrown. */
   leaves?: "required" | "optional";
+  /**
+   * The largest leaf this reader will fetch and hash; a leaf whose stated
+   * `size` is larger is never asked for and lands in `declined`. Absent,
+   * every leaf is fetched — the block source must then bound its own reads,
+   * since `size` is a claim.
+   */
+  maxLeafBytes?: number;
 }
 
 /** A block source: CID string → bytes, or null when not held. */
@@ -104,19 +124,35 @@ function checkLayout(paths: Iterable<string>): void {
 
 /* --------------------------------------------------------------- manifest */
 
+/** One `src`, one `size`: two entries that share bytes and disagree about their length were not computed over a mapping. */
+function checkSizes(entries: Iterable<ManifestEntry>): void {
+  const sizes = new Map<string, number>();
+  for (const { path, cid, size } of entries) {
+    const seen = sizes.get(cid);
+    if (seen !== undefined && seen !== size) throw new Error(`${path}: size ${size} for a CID another entry sizes ${seen}`);
+    sizes.set(cid, size);
+  }
+}
+
 /** Encode entries as the manifest block. Paths are checked; order does not matter. */
 export function encodeManifest(entries: Iterable<ManifestEntry>): Uint8Array {
   const resources: { [key: string]: Drisl } = {};
   const paths: string[] = [];
-  for (const { path, cid, size } of entries) {
+  const list: ManifestEntry[] = [];
+  for (const entry of entries) {
+    const { path, cid, size } = entry;
     const parsed = parseCid(cid);
     if (parsed.code !== RAW_CODE) throw new Error(`${path}: src must be a raw CID`);
     if (!Number.isSafeInteger(size) || size < 0) throw new Error(`${path}: size must be a non-negative integer`);
     paths.push(path);
+    list.push(entry);
     resources[`/${path}`] = { src: new Link(parsed), size };
   }
   checkLayout(paths);
-  return encodeDrisl({ resources });
+  checkSizes(list);
+  const bytes = encodeDrisl({ resources });
+  if (bytes.length > MAX_MANIFEST_BYTES) throw new Error(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
+  return bytes;
 }
 
 function isMap(v: Drisl | undefined): v is { [key: string]: Drisl } {
@@ -130,11 +166,19 @@ function isMap(v: Drisl | undefined): v is { [key: string]: Drisl } {
  * no two keys the same path and none a directory of another.
  */
 export function decodeManifest(bytes: Uint8Array): ManifestEntry[] {
+  if (bytes.length > MAX_MANIFEST_BYTES) throw new Error(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
   let doc: Drisl;
   try {
     doc = decodeDrisl(bytes);
   } catch (err) {
     throw new Error(`manifest is not canonical DRISL: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // The decoder refuses every non-canonical form it can tell apart; the
+  // one it cannot — a float whose value is an integer — and anything a
+  // future edit might let through are caught by the backstop: the value
+  // must re-encode to exactly these bytes.
+  if (compareBytes(encodeDrisl(doc), bytes) !== 0) {
+    throw new Error("manifest is not canonical DRISL: its bytes are not the encoding of their value");
   }
   if (!isMap(doc)) throw new Error("manifest is not a map");
   const keys = Object.keys(doc);
@@ -160,6 +204,7 @@ export function decodeManifest(bytes: Uint8Array): ManifestEntry[] {
     entries.push({ path, cid: src.cid.text, size });
   }
   checkLayout(entries.map((e) => e.path));
+  checkSizes(entries);
   return entries;
 }
 
@@ -194,6 +239,7 @@ export async function fetchManifest(root: string, get: GetBlock): Promise<{ byte
   if (cid.code !== DRISL_CODE) throw new Error("root is not a drisl CID: not a manifest");
   const bytes = await get(root);
   if (bytes === null) throw new Error(`missing object ${root}`);
+  if (bytes.length > MAX_MANIFEST_BYTES) throw new Error(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
   await checkCid(cid, bytes);
   return { bytes, entries: decodeManifest(bytes) };
 }
@@ -210,13 +256,43 @@ export async function verifyTree(
   objects: Map<string, Uint8Array> | GetBlock,
   options: VerifyOptions = {},
 ): Promise<VerifiedManifest> {
-  const get: GetBlock = typeof objects === "function" ? objects : async (cid) => objects.get(cid) ?? null;
+  return (await walkTree(root, objects, options)).tree;
+}
+
+/** A block source as a function, whichever form the caller gave. */
+export function getterOf(objects: Map<string, Uint8Array> | GetBlock): GetBlock {
+  return typeof objects === "function" ? objects : async (cid) => objects.get(cid) ?? null;
+}
+
+/**
+ * The walk behind `verifyTree`, keeping the leaves it proved: path → bytes
+ * for every file whose block was present (the object layer reads the
+ * object out of these).
+ */
+export async function walkTree(
+  root: string,
+  objects: Map<string, Uint8Array> | GetBlock,
+  options: VerifyOptions = {},
+): Promise<{ tree: VerifiedManifest; leaves: Map<string, Uint8Array> }> {
+  const get = getterOf(objects);
   const { entries } = await fetchManifest(root, get);
-  const out: VerifiedManifest = { root, files: new Map(), sizes: new Map(), missing: new Map(), partial: new Map() };
+  const tree: VerifiedManifest = {
+    root,
+    files: new Map(),
+    sizes: new Map(),
+    missing: new Map(),
+    partial: new Map(),
+    declined: new Map(),
+  };
+  const leaves = new Map<string, Uint8Array>();
   const checked = new Map<string, Promise<Uint8Array | null>>();
   for (const { path, cid, size } of entries) {
-    out.files.set(path, cid);
-    out.sizes.set(path, size);
+    tree.files.set(path, cid);
+    tree.sizes.set(path, size);
+    if (options.maxLeafBytes !== undefined && size > options.maxLeafBytes) {
+      tree.declined.set(path, size);
+      continue;
+    }
     let leaf = checked.get(cid);
     if (leaf === undefined) {
       leaf = (async () => {
@@ -230,13 +306,14 @@ export async function verifyTree(
     const bytes = await leaf;
     if (bytes === null) {
       if (options.leaves !== "optional") throw new Error(`missing object ${cid}`);
-      out.missing.set(cid, size);
-      out.partial.set(path, [cid]);
+      tree.missing.set(cid, size);
+      tree.partial.set(path, [cid]);
       continue;
     }
     if (bytes.length !== size) throw new Error(`${path}: manifest says ${size} bytes, the block holds ${bytes.length}`);
+    leaves.set(path, bytes);
   }
-  return out;
+  return { tree, leaves };
 }
 
 /** What `resolvePath` found. */
