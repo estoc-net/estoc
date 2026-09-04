@@ -278,6 +278,15 @@ importers:
         specifier: ^14.0.5
         version: 14.0.5
     devDependencies:
+      '@atcute/cbor':
+        specifier: ^2.3.6
+        version: 2.3.6(@atcute/cid@2.4.2)
+      '@atcute/cid':
+        specifier: ^2.4.2
+        version: 2.4.2
+      '@ipld/dag-cbor':
+        specifier: 10.0.2
+        version: 10.0.2
       '@types/node':
         specifier: ^22.13.5
         version: 22.20.1
@@ -367,6 +376,20 @@ packages:
 
   '@assemblyscript/loader@0.9.4':
     resolution: {integrity: sha512-HazVq9zwTVwGmqdwYzu7WyQ6FQVZ7SwET0KKQuKm55jD0IfUpZgN0OPIiZG3zV1iSrVYcN0bdwLRXI/VNCYsUA==}
+
+  '@atcute/cbor@2.3.6':
+    resolution: {integrity: sha512-Ml/G8i6KK5UWSx1kxgm41eTYm1EQ6O2fNWSXMJ5DxoQv/lmZ0Hmk7dmHda2seRE+Cj2X3HJKAuD9cQRh3m2P7A==}
+    peerDependencies:
+      '@atcute/cid': ^2.0.0
+
+  '@atcute/cid@2.4.2':
+    resolution: {integrity: sha512-Uy48yfyo/hPQXF+XMXWIGomF6v8IvX5ErjozXMV7rlfU3EV7PSVX3J7plJXV6MRC3iI1z3PgTZTS7V0drCQVVw==}
+
+  '@atcute/multibase@1.2.5':
+    resolution: {integrity: sha512-cReTONgYpQo/VHD3ZmzPNoyBKJgSk1J4h//cvvdVVJBMar+SjlQ/sUXeTjQfuyfmDKv+TLKhmutLcvbMcQ9Rvw==}
+
+  '@atcute/uint8array@1.1.5':
+    resolution: {integrity: sha512-1SFCXOtjE3ismP92CqzbOfYSwJmPPPFbj798wLXSpLv2hSd5OIaUrTh6EqRVR1VZ3ZhR+vaBmd3kxAN0wkw+gQ==}
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -3155,6 +3178,23 @@ snapshots:
       leven: 3.1.0
 
   '@assemblyscript/loader@0.9.4': {}
+
+  '@atcute/cbor@2.3.6(@atcute/cid@2.4.2)':
+    dependencies:
+      '@atcute/cid': 2.4.2
+      '@atcute/multibase': 1.2.5
+      '@atcute/uint8array': 1.1.5
+
+  '@atcute/cid@2.4.2':
+    dependencies:
+      '@atcute/multibase': 1.2.5
+      '@atcute/uint8array': 1.1.5
+
+  '@atcute/multibase@1.2.5':
+    dependencies:
+      '@atcute/uint8array': 1.1.5
+
+  '@atcute/uint8array@1.1.5': {}
 
   '@babel/code-frame@7.29.7':
     dependencies:

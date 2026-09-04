@@ -22,6 +22,10 @@
     "./zip": {
       "types": "./dist/zip.d.ts",
       "default": "./dist/zip.js"
+    },
+    "./dasl": {
+      "types": "./dist/dasl/index.d.ts",
+      "default": "./dist/dasl/index.js"
     }
   },
   "files": [
@@ -47,6 +51,9 @@
     "multiformats": "^14.0.5"
   },
   "devDependencies": {
+    "@atcute/cbor": "^2.3.6",
+    "@atcute/cid": "^2.4.2",
+    "@ipld/dag-cbor": "10.0.2",
     "@types/node": "^22.13.5",
     "typescript": "~5.8.0",
     "vitest": "^3.0.0"

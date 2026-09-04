@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — the DASL encoding, on a subpath
+
+An experiment on the `dasl` branch, beside the UnixFS tree, not instead
+of it (folder-object spec, `dasl` branch, §2.1): the tree hashed as
+[DASL](https://dasl.ing/) — files as whole raw blocks, the tree as one
+DRISL document in the shape of a MASL bundle, the root its drisl CID.
+
+- `@estoc/folder-object/dasl`: `hashTree` / `verifyTree` / `resolvePath`
+  over a manifest (`{resources: {"/path": {src, size}}}`), a strict DRISL
+  codec (`encodeDrisl` / `decodeDrisl`: one byte string per value, every
+  other refused), DASL CIDs (`rawCid` / `drislCid` / `parseCid`, 36
+  bytes, base32 lower), `encodeManifest` / `decodeManifest`, and the
+  object and card layers over that root (`hashObject`, `signObject`,
+  `verifyCard` — the root must be a manifest CID — `verifyObjectCard`).
+  No dependency: sha-256 is WebCrypto's, base32 and CBOR are here.
+  Bundled for the browser the subpath is 15 kB minified (6 kB gzip)
+  against 155 kB (49 kB) for the UnixFS entry.
+- Golden vectors: the sea-day fixture roots at
+  `bafyreicdsejj526l225wrfl5cpxcgehq4pzbpxphocvmiuvy6dpwi467aa`, its
+  manifest pinned byte for byte, cross-checked against an independent
+  Python encoder, `@ipld/dag-cbor` + `multiformats`, and `@atcute/cbor`
+  (dev dependencies, for the tests only).
+- The main entry, `estoc object …`, object-share and the vault's block
+  store are unchanged: they still speak UnixFS.
+
 ## 0.6.0 — 2026-08-26
 
 The closure as one file, for the package road (`estoc/docs/object-share.md`
