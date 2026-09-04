@@ -137,9 +137,16 @@ A replica is either `active` or `retired`:
 A retired replica ID MUST NOT become active again. A returning or newly created independently writable local incarnation
 mints a fresh replica ID.
 
-Replica registration has no inactivity lease in version 1.0. A replica
-remains active until an authenticated `retire` request. Message expiry,
-not replica liveness, bounds mediator storage.
+The default version-1.0 policy has no inactivity lease: a replica remains
+active until an authenticated `retire` request. A mediator MAY instead
+advertise a non-null `inactivity_retirement_seconds` service policy. When it
+does, the value MUST be at least `message_retention_seconds`, the server MUST
+base it only on its own authenticated `last_seen_time`, and crossing the limit
+atomically retires the replica before later fan-out. The retirement reason is
+`inactivity-policy`, the old ID remains terminal, and a returning local copy
+mints a new replica ID and obtains retained replay. Clients MUST surface this
+loss-of-long-offline-delivery tradeoff before using such a mediator. Message
+expiry, not an indefinitely stale delivery row, still bounds mailbox storage.
 
 One independently writable local vault copy MUST have exactly one active
 replica ID. Creating a second independently writable copy MUST mint a
@@ -216,7 +223,8 @@ Example:
       "max_retained_messages": 100000,
       "max_pending_deliveries_per_replica": 100000,
       "max_deliveries_per_request": 100,
-      "max_recipient_updates_per_request": 100
+      "max_recipient_updates_per_request": 100,
+      "inactivity_retirement_seconds": null
     }
   }
 }
@@ -228,6 +236,10 @@ Example:
   this request. It MAY be zero.
 - `limits` is REQUIRED. A mediator MAY choose account-specific values,
   but MUST apply the values it reports.
+- `inactivity_retirement_seconds` is either null, meaning no automatic
+  retirement, or the finite service policy defined in section 5. It MUST NOT
+  change for an existing active replica without being returned on a later
+  authenticated registration response before enforcement.
 
 ### 5.3 `list`
 
@@ -282,13 +294,26 @@ https://estoc.dev/replica-mediation/1.0/replicas
 }
 ```
 
-`last_seen_time` is advisory and MAY be absent. Its absence or age MUST
-NOT retire a replica.
+`last_seen_time` is the mediator's UTC Epoch Seconds observation of the most
+recent successful authenticated `register`, replica-scoped pickup request,
+`messages-received`, or live-delivery operation for that ID. It MAY be absent
+when the server cannot provide it. Its age is advisory unless the server has
+explicitly advertised a finite `inactivity_retirement_seconds`; without that
+policy, age alone MUST NOT change state.
 
 Human-readable names, hardware identifiers, operating-system identifiers
-and user labels MUST NOT be sent in this protocol. A client that wants
-to display a name for a replica stores it as encrypted vault metadata
-and joins it locally with the opaque `replica_id`.
+and user labels MUST NOT be sent in this protocol. A client that wants to
+display a name for a replica stores it as encrypted vault metadata and joins
+it locally with the opaque `replica_id`.
+
+A conforming client MUST periodically reconcile `list`, and MUST do so after a
+restore that minted a new replica ID. It SHOULD identify old active entries by
+locally encrypted labels and `last_seen_time`, and offer explicit retirement
+after the new replica has completed bootstrap, sync and registration. On
+`too-many-replicas`, the client MUST list current replicas and ask the user to
+retire one or more explicit IDs rather than silently reusing or evicting an
+ID. An operator MAY recommend a review interval, but that recommendation is
+not a retirement authority.
 
 ### 5.5 `retire`
 
@@ -419,14 +444,21 @@ form, `resolution_material` MUST contain the corresponding long form.
 
 The mediator locally:
 
-1. decodes the long-form input document;
-2. recomputes and compares the short form;
-3. resolves the protected proof `kid` in that document; and
-4. verifies the JWS.
+1. decodes and validates the long-form input document;
+2. recomputes the canonical short form from the encoded-document hash;
+3. requires that recomputed value to equal `recipient_did` byte-for-byte;
+4. contextualizes relative verification methods under that canonical short
+   DID;
+5. requires the proof payload `recipient` to equal the same short form;
+6. resolves the protected proof `kid` to an authentication method from the
+   supplied document, accepting a long-form DID URL only after normalizing its
+   DID portion to the verified short form; and
+7. verifies the JWS.
 
-No network request is permitted for Peer DID resolution. A mismatched short
-form, invalid input document or unresolved authentication key fails the
-entry.
+The long form is resolution material, never the stored recipient key. No
+network request is permitted for Peer DID resolution. A mismatched short form,
+invalid input document, key fragment mismatch or unresolved authentication key
+fails the entire update entry.
 
 #### `did:web`
 
@@ -579,7 +611,13 @@ bodies MUST contain `replica_id`:
 
 A request omitting `replica_id` MUST fail with
 `e.estoc.replica-mediation.replica-required`. There is no account-global
-fallback.
+fallback and version 1.0 does not support a legacy Pickup-3.0 client on the
+same mediation account.
+
+An account with zero active replicas may still retain accepted mailbox
+messages with zero delivery rows. It cannot perform pickup. The first later
+`register(replay=retained)` atomically creates that replica's deliveries for
+every unexpired message before pickup becomes possible.
 
 The replica MUST exist under the authenticated account and be active.
 Unknown or retired IDs fail and MUST NOT reveal another account's
@@ -816,7 +854,7 @@ Errors on authenticated request-response interactions use Problem Report
 | `e.estoc.replica-mediation.replica-required` | pickup request omitted `replica_id` |
 | `e.estoc.replica-mediation.unknown-replica` | no such replica under this account |
 | `e.estoc.replica-mediation.replica-retired` | replica ID is terminal |
-| `e.estoc.replica-mediation.too-many-replicas` | active replica limit reached |
+| `e.estoc.replica-mediation.too-many-replicas` | active replica limit reached; client must list and explicitly retire IDs |
 | `e.estoc.replica-mediation.too-many-recipients` | registered recipient limit reached |
 | `e.estoc.replica-mediation.too-many-deliveries` | fan-out or replay delivery limit reached |
 | `e.estoc.replica-mediation.registration-rate` | recipient registration rate exceeded |
@@ -879,3 +917,15 @@ A conforming implementation demonstrates at least these cases:
     uses a replica ID as the peer-visible recipient.
 22. Adding or removing a server full replica changes only delivery rows and
     does not change registered recipient DIDs.
+23. With zero active replicas, a mailbox message is retained with no delivery;
+    account-global Pickup 3.0 is rejected, and first later registration creates
+    retained deliveries before pickup.
+24. A default-policy mediator never retires solely from `last_seen_time`. A
+    mediator advertising finite inactivity retirement applies the disclosed
+    bound deterministically, returns `replica-retired` to the old ID, and lets a
+    fresh ID replay every still-retained message.
+25. A restored client lists active replicas, can explicitly retire a selected
+    stale ID, and never silently reuses that event author.
+26. Peer DID long-form resolution material is decoded, hashed and normalized;
+    the recomputed canonical short form must equal both stored `recipient_did`
+    and the proof payload before registration succeeds.

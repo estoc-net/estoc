@@ -1,7 +1,7 @@
 # vault-sync/1.0
 
-Status: **draft** — encrypted, append-only synchronization of an Estoc
-vault through an untrusted sync store.
+Status: **draft** — encrypted synchronization of an Estoc vault through an
+untrusted sync store using immutable objects between explicit account resets.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
@@ -29,8 +29,12 @@ process locks, fold caches, traces, local options or other local
 state. Correctness-critical state must be an event or referenced blob,
 not an unsynchronized local file.
 
-Version 1.0 is append-only. It has no per-object remote deletion,
-compaction or distributed garbage collection.
+Within one `store_id`, version 1.0 is append-only. It has no selective
+per-object retraction, compaction or distributed garbage collection. A
+portable `message.erased` event synchronizes like any other event and changes
+what conforming clients expose, but it does not remove older ciphertext from
+the sync store. Section 12 defines the only version-1.0 physical purge: an
+authenticated reset of the entire remote account object set.
 
 ## 2. Roles and dependencies
 
@@ -62,20 +66,21 @@ retention rules, key derivation domains and APIs.
 ## 3. Shared account and keys
 
 Every full replica derives the same sync account and object keys from the
-vault seed. The following reserved names are fixed:
+vault seed. There is exactly one `@estoc/keystore` v3 asymmetric key name:
 
 ```text
 sync/account
-sync/index
-sync/data
 ```
 
-`sync/account` is represented as the DIDComm-capable `did:key` used by
-Estoc's existing key-derivation implementation. Its authenticated sender
-DID names the server-side sync account. The first valid `hello` MAY
-create that account lazily.
+`sync/account` is represented as the DIDComm-capable `did:key` produced by
+the normal keystore-v3 named-key derivation. Its authenticated sender DID
+names the server-side sync account. Control of this key authenticates a
+caller, but does not by itself grant service admission.
 
-The client derives 32-byte keys with HKDF-SHA-256:
+`K_index` and `K_data` are not keystore key names and MUST NOT be obtained by
+calling the named asymmetric-key derivation with `sync/index` or `sync/data`.
+They are the following two 32-byte symmetric keys, derived only by the
+explicit HKDF-SHA-256 profile below:
 
 ```text
 K_index = HKDF-SHA-256(
@@ -284,8 +289,87 @@ https://estoc.dev/vault-sync/1.0/hello
 }
 ```
 
-The request creates no vault object. It MAY lazily create the empty
-server account.
+The request creates no vault object. For an already admitted account, an
+empty body is sufficient. For an absent account, the request MUST satisfy
+section 6.1 before the server may create any account row.
+
+### 6.1 Admission and lazy account creation
+
+Successful DIDComm authcrypt proves control of the sync-account key; it does
+not prove entitlement to consume storage. A sync store MUST NOT implement open
+registration by creating an account solely because a syntactically valid
+`hello` arrives from a new DID.
+
+For an absent account, a deployment MUST use at least one of these admission
+methods and MUST document or advertise the methods it accepts:
+
+- **provisioned** — the exact sync-account DID was provisioned out of band;
+- **capability** — `hello.body.admission` carries an opaque, single-use,
+  account-bound capability issued by the sync-store operator; or
+- **mediation-grant** — a co-operated sync store accepts an active mediation
+  grant plus proof that the grant's mediation account authorizes this sync
+  account.
+
+A capability form is:
+
+```json
+{
+  "admission": {
+    "method": "capability",
+    "token": "g3Q...opaque-single-use-capability"
+  }
+}
+```
+
+The token format and issuance ceremony are deployment-specific, but the
+server MUST bind it to the authenticated sync-account DID and its own service
+DID, enforce an expiry and single use, and never log the token.
+
+A mediation-grant form is:
+
+```json
+{
+  "admission": {
+    "method": "mediation-grant",
+    "mediation_account": "did:peer:4zQm...mediation-account",
+    "grant_id": "019b1b6f-36c5-7f27-95ea-f94042e88298",
+    "proof": "eyJhbGciOiJFZERTQSIsImtpZCI6Ii4uLiJ9.eyJzeW5jX2FjY291bnQiOiIuLi4ifQ.signature"
+  }
+}
+```
+
+The compact JWS protected header is exactly:
+
+```json
+{
+  "alg": "EdDSA",
+  "kid": "<mediation-account authentication method>",
+  "typ": "estoc/vault-sync-admission+jws"
+}
+```
+
+and its RFC 8785 canonical payload is exactly:
+
+```json
+{
+  "aud": "did:web:sync.example",
+  "expires_time": 1788443400,
+  "grant_id": "019b1b6f-36c5-7f27-95ea-f94042e88298",
+  "mediation_account": "did:peer:4zQm...mediation-account",
+  "request_id": "019b1b70-d29e-7a6f-b0a2-734173aa706a",
+  "sync_account": "did:key:z6LS...sync-account"
+}
+```
+
+The server verifies the signature, exact request and account bindings, a
+currently active local mediation grant, and an expiry no more than five
+minutes in the future. The admission proof does not make the mediation
+account a sync encryption key.
+
+Account creation, quota reservation and single-use capability consumption
+MUST be one transaction. Failure creates no empty account. An existing,
+non-disabled account does not need to resupply admission on later `hello`
+requests.
 
 ## 7. `hello-result`
 
@@ -627,9 +711,81 @@ length ends short, or whose bytes fail `hash`.
 
 The HTTP URL reveals no logical object ID in its path.
 
-## 12. Client synchronization algorithm
+## 12. Remote account reset
 
-### 12.1 Publishing local objects
+Version 1.0 deliberately has no selective `retract` message. Selective
+removal would require durable remote tombstones, reference tracing and rules
+that prevent an offline replica from immediately re-uploading the removed
+object. Logical erasure remains a vault event; physical remote purge is an
+all-object account reset.
+
+Message type:
+
+```text
+https://estoc.dev/vault-sync/1.0/reset
+```
+
+```json
+{
+  "id": "019b1b7d-368c-75b6-8724-1598205178d4",
+  "type": "https://estoc.dev/vault-sync/1.0/reset",
+  "from": "did:key:z6LS...sync-account",
+  "to": ["did:web:sync.example"],
+  "body": {
+    "store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
+    "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
+    "confirm": "delete-all-remote-objects"
+  }
+}
+```
+
+The request MUST be authcrypted by the admitted sync account. `store_id` MUST
+equal the current store ID, `reset_id` MUST be a canonical UUIDv7 never used
+for another reset, and `confirm` MUST equal the literal string shown above.
+A stale `store_id` fails without deleting anything.
+
+On first acceptance the server MUST atomically:
+
+1. make every object, inventory entry, sequence entry and outstanding transfer
+   ticket in the current object set inaccessible;
+2. delete those values from active storage according to the service's
+   disclosed deletion policy;
+3. preserve the admitted account identity and quota policy;
+4. mint a new random `store_id`;
+5. reset the visible sequence to `"0"`; and
+6. retain enough `(old_store_id, reset_id, new_store_id)` receipt state to make
+   an exact retry idempotent.
+
+The response type is:
+
+```text
+https://estoc.dev/vault-sync/1.0/reset-result
+```
+
+```json
+{
+  "id": "019b1b7d-5eb2-7caf-a405-eb189b8fc12f",
+  "thid": "019b1b7d-368c-75b6-8724-1598205178d4",
+  "type": "https://estoc.dev/vault-sync/1.0/reset-result",
+  "body": {
+    "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
+    "old_store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
+    "store_id": "019b1b7d-4bcc-7807-a609-8004542c76a4",
+    "sequence": "0"
+  }
+}
+```
+
+Every other client observing the changed store ID discards its remote cursor,
+runs full inventory, and may republish whatever objects its current local
+vault still retains. Reset therefore erases the remote mirror; it does not
+create a selective durable deletion policy and does not delete any local
+replica. Services MUST disclose how long deleted ciphertext may remain in
+offline backups or disaster-recovery media.
+
+## 13. Client synchronization algorithm
+
+### 13.1 Publishing local objects
 
 A client SHOULD publish in this order:
 
@@ -645,7 +801,7 @@ The client uses its local event store's `changes()` only to discover what
 this local store gained efficiently. A local `ChangeToken` is never sent
 to the sync store and is meaningless on another replica.
 
-### 12.2 Applying remote objects
+### 13.2 Applying remote objects
 
 For every unknown opaque object descriptor, a client:
 
@@ -666,7 +822,7 @@ An unknown extension store is not opened merely because an opaque object
 exists; after decryption, the client applies the vault's extension
 lifecycle policy before writing an extension event or block.
 
-### 12.3 Missing blocks
+### 13.3 Missing blocks
 
 A client may learn of an event before every referenced block is locally
 present because another uploader crashed or account quota prevented a
@@ -677,7 +833,7 @@ erasure.
 A client MUST NOT fabricate a block object ID from a server descriptor;
 it computes the ID from the expected CID under `K_index` and asks for it.
 
-### 12.4 Event conflicts
+### 13.4 Event conflicts
 
 Two decrypted event objects with the same `eid` and different event
 content are an integrity conflict, not an ordinary concurrent decision.
@@ -685,7 +841,7 @@ A client MUST surface the conflict and MUST NOT claim full convergence.
 It MAY quarantine the incoming object. Automatic first-wins resolution
 across replicas is forbidden because arrival order differs.
 
-## 13. Bootstrap and recovery
+## 14. Bootstrap and recovery
 
 A new local replica needs:
 
@@ -717,7 +873,7 @@ reconcile a selected `did:web` document if it separately holds publication
 authority. Loss of that publisher does not alter synchronized pairwise DID
 state.
 
-## 14. Quota and availability
+## 15. Quota and availability
 
 The server MAY cap:
 
@@ -728,14 +884,15 @@ The server MAY cap:
 - upload/download ticket lifetime.
 
 Quota refusal creates no partial object. Because version 1.0 has no
-remote garbage collection, clients MUST surface approaching quota and
-allow the user to export, move to another sync store, or reset the remote
-account deliberately.
+selective remote garbage collection, clients MUST surface approaching quota
+and allow the user to export, move to another sync store, or invoke the formal
+whole-account reset in section 12 deliberately. A UI MUST describe reset as a
+remote-mirror purge, not as selective message erasure.
 
 A local write never waits for sync availability. Sync failures change
 replication lag, not local commit success or mailbox pickup.
 
-## 15. Privacy and security
+## 16. Privacy and security
 
 The sync store can observe:
 
@@ -762,14 +919,19 @@ All full replicas share `K_index`, `K_data` and the sync-account key. A
 malicious full replica can read, add or withhold vault data and is outside
 version 1.0's threat model.
 
-## 16. Problem reports
+## 17. Problem reports
 
 Authenticated control errors use Problem Report 2.0:
 
 | code | meaning |
 |---|---|
 | `e.estoc.vault-sync.invalid-request` | malformed body, ID, hash or limit |
+| `e.estoc.vault-sync.admission-required` | absent account needs an accepted admission method |
+| `e.estoc.vault-sync.admission-invalid` | admission proof, capability, grant, binding or expiry failed |
+| `e.estoc.vault-sync.admission-denied` | operator policy refuses account creation |
+| `e.estoc.vault-sync.account-disabled` | admitted account is administratively disabled |
 | `e.estoc.vault-sync.store-reset` | supplied `store_id` is no longer current |
+| `e.estoc.vault-sync.reset-confirmation` | reset ID, expected store ID or literal confirmation is invalid |
 | `e.estoc.vault-sync.object-too-large` | object exceeds the account limit |
 | `e.estoc.vault-sync.quota` | account cannot accept another object |
 | `e.estoc.vault-sync.upload-expired` | upload ticket is no longer valid |
@@ -780,7 +942,7 @@ Authenticated control errors use Problem Report 2.0:
 HTTP upload and download endpoints return generic transport errors and
 MUST NOT disclose another account's object existence.
 
-## 17. Required conformance cases
+## 18. Required conformance cases
 
 1. Two replicas independently offer the same logical object with
    different random ciphertext; exactly one immutable server object
@@ -815,3 +977,18 @@ MUST NOT disclose another account's object existence.
     local append, sending intent or mailbox pickup.
 16. No sync request carries a replica ID, and the sync store keeps no
     replica registry or per-replica cursor.
+17. Authcrypt from a previously unseen sync account without valid admission
+    creates no account, object, quota reservation or observable inventory.
+18. A valid provisioned, capability or mediation-grant admission creates one
+    empty account atomically; exact admission replay creates no second account.
+19. `K_index` and `K_data` match the explicit HKDF vectors and are not derived
+    as keystore names `sync/index` or `sync/data`.
+20. An authenticated reset with the current `store_id` atomically makes all
+    old objects unavailable, rotates `store_id`, sets sequence to zero and is
+    idempotent by `reset_id`.
+21. A stale or malformed reset deletes nothing. After a successful reset, a
+    second replica detects `store-reset`, inventories the empty object set and
+    can republish retained local objects.
+22. No version-1.0 selective object retract operation exists; a logical
+    `message.erased` event syncs, while physical remote deletion requires the
+    whole-account reset.

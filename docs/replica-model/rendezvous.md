@@ -200,17 +200,34 @@ stored locally as both:
 - its corresponding long form.
 
 The long form MUST be used whenever that DID is first disclosed to a peer.
-This includes:
+This requirement applies at both DIDComm layers:
 
-- `request.from` for the initiator's relationship DID; and
-- `accept.from` for the responder's relationship DID.
+- `request.from` and the authcrypt sender identifier for the initiator;
+- `accept.from` and the authcrypt sender identifier for the responder; and
+- any other first package that discloses a relationship DID.
 
-After decoding and validating the long form, the receiver stores its short
-form and treats later use of that short form as the same relationship DID.
+For an authcrypted first-disclosure package:
+
+1. the JWE protected `skid`, when present, MUST be a DID URL rooted in the
+   exact long-form `did:peer:4` presented by plaintext `from`;
+2. protected `apu` MUST be unpadded base64url of the UTF-8 bytes of that same
+   long-form `skid`;
+3. when `skid` is omitted, decoding `apu` MUST still recover that long-form
+   sender DID URL; and
+4. the key fragment MUST resolve to a key-agreement method in the decoded
+   long-form input document.
+
+After decoding, validating and durably storing the long form, the receiver
+stores its short form and treats later long-form and canonical-short-form
+sender DID URLs as equivalent presentations of the same relationship DID.
+Later authcrypt packages MAY therefore use either form in `skid`/decoded
+`apu`, provided the receiver already knows the exact mapping and plaintext
+`from` is consistent with the same DID identity.
+
 The short form is used for mediator recipient registration and ordinary
 post-bootstrap traffic. A short form received before its corresponding long
 form or decoded input document is known is unresolved and MUST NOT be used to
-create an authenticated relationship.
+decrypt, authenticate or create a relationship.
 
 ## 6. Out-of-band discovery
 
@@ -236,7 +253,7 @@ exists. The invitation ID is parent-thread metadata, not a relationship ID.
 
 ## 7. Initiator preparation
 
-Before network submission, the initiator MUST durably:
+Before any network effect, the initiator MUST durably:
 
 1. create or select a contact containing the responder rendezvous DID;
 2. create one local `did:peer:4` relationship DID dedicated to this
@@ -247,13 +264,26 @@ Before network submission, the initiator MUST durably:
 5. keep the same local relationship DID and key for retries and replacement
    request messages belonging to the same intended relationship.
 
-The initiator may perform steps 1–4 offline because the logical request body
+The initiator may perform these steps offline because the logical request body
 contains no resolution-dependent document hash or `kid`. The exact public
 snapshot and recipient key are package evidence recorded by
 `message.prepared`, not logical application content. A retry of one wire ID
 reuses the same request intent. If the user creates a replacement request
 after expiry, it uses a new wire ID but SHOULD reuse the same initiator
 relationship DID unless the prior contact was deleted.
+
+Before the first request submission, but only after `message.out` exists, a
+replica MUST make the initiator relationship DID reachable:
+
+1. for every selected mediated route, reconcile registration of the canonical
+   short-form initiator relationship DID and append `did.routeRegistered`
+   after success; and
+2. for a selected direct route, verify that the advertised endpoint can route
+   the canonical short-form DID to the same vault runtime.
+
+This registration is a retryable pre-submission effect. Failure leaves the
+offline request intent pending; it never causes the intent to be lost or
+recreated.
 
 Before preparing the first package, a replica resolves the rendezvous DID and
 MUST durably append, preferably in one batch:
@@ -305,6 +335,9 @@ Requirements:
 - the message is authcrypted to the key-agreement `kid` from the initiator's
   durable request-bound resolution snapshot, with exactly one ultimate JWE
   recipient entry;
+- first disclosure at the authcrypt layer follows section 5.2: protected
+  `skid`, when present, is rooted in the exact long-form initiator DID and
+  protected `apu` encodes that same long-form sender DID URL;
 - the protected recipient `kid` maps to exactly one configured rendezvous
   generation at the responder;
 - the initiator's `message.prepared.peerResolution` names the exact snapshot
@@ -330,73 +363,138 @@ another attempt.
 
 ## 9. Admission, deferral and request decisions
 
-Receiving a mediator delivery is not sufficient to accept it.
+Receiving a mediator delivery is not sufficient to admit it to the portable
+vault.
 
-### 9.1 Undecryptable or not-yet-known generation
+### 9.1 Undecryptable, unknown or not-yet-live generation
 
 If the ultimate JWE recipient `kid` does not map to locally available secret
-material and one configured rendezvous generation, the replica MUST:
+material and exactly one configured rendezvous generation, the replica MUST:
 
 - retain the mediator delivery unacknowledged;
-- record only local diagnostic/deferred state;
+- record only bounded local diagnostic/deferred state;
 - run vault-sync and fold reconciliation; and
 - retry decryption after relevant events or key material become available.
 
+The same rule applies when the key maps to a configured generation that is
+not yet **live**, but may still become live after document publication or
+route-registration observations arrive. The replica MUST re-evaluate the
+delivery whenever the relevant fold changes.
+
 It MUST NOT append `message.in`, create a contact, create a relationship or
-send a pickup ACK for ciphertext it cannot decrypt and validate.
+send a pickup ACK for ciphertext it cannot decrypt and validate, or for a
+generation whose eligibility is still deferred.
 
-### 9.2 Generation state
-
-All generations of one public DID whose request-acceptance windows overlap
-MUST use the same `relationshipRoute`. Changing that route is activated only
-after older generations can no longer yield an accepted first relationship.
-An already established relationship always reuses its existing pairwise DID,
-bound route and recorded origin generation regardless of the generation that
-decrypts a replacement request. The replacement request does not rewrite
-`relationship.established`.
-
-A configured generation is eligible for new requests only when:
+A generation is live only when:
 
 - its selected document revision is durably present;
 - the exact revision is published and verified;
 - every selected mediated ingress route is registered;
-- current time has not passed its retirement `acceptUntil`; and
+- current time has not passed its `acceptUntil`; and
 - the protected request recipient `kid` exactly equals the generation's
-  normative key-agreement fragment. The generation's document hash and
-  authentication fragment remain responder state and initiator-pinned local
-  evidence rather than request-body fields.
+  normative key-agreement fragment.
 
-`rendezvous.generationConfigured` is therefore written before publication,
-but does not by itself make the generation live.
+A generation that is terminally retired, whose `acceptUntil` has passed, or
+whose selected publication can no longer become valid is not deferred. After
+safe decryption and validation, the implementation applies the pre-vault
+discard/decline rules below.
 
-### 9.3 Admission policy
+All generations of one public DID whose request-acceptance windows overlap
+MUST use the same `relationshipRoute`. Changing that route is activated only
+after older generations can no longer yield an accepted first relationship.
+An already established relationship reuses its existing responder pairwise
+DID and bound route. Which request/generation supplied its canonical origin is
+derived by the fold in section 10; it is not an immutable field that one
+replica may race to choose.
+
+### 9.2 Pre-vault admission
+
+After authenticated decryption and closed-profile validation, but before
+writing `message.in`, the receiver MUST run a bounded admission gate.
+
+A public rendezvous recipient accepts only:
+
+```text
+https://estoc.dev/rendezvous/1.0/request
+```
+
+as durable application input. An ordinary application message, pure ACK,
+unrelated protocol message, malformed request, wrong `to`, invalid first
+disclosure, request for a terminal generation, or request exceeding a hard
+per-source/per-account admission bound MUST be discarded before
+`message.in`. The receiver MAY retain a bounded local diagnostic. It MUST ACK
+the mediator delivery after it has safely classified the bytes so a poison
+message cannot block the replica queue. It MUST NOT honor application
+`please_ack`, create a contact or produce an automatic relationship effect for
+such discarded input.
+
+The same pre-vault discard is permitted for `silent` policy and for load
+shedding when a configured hard bound is already exhausted. This exception is
+deliberate: public rendezvous input does not gain permanent vault-storage
+rights merely by being validly encrypted to a public key.
+
+Requests that may be shown to a user, automatically accepted, or explicitly
+declined are admitted only after all of these checks pass:
+
+- the generation is live;
+- the request is currently unexpired and its lifetime is within the maximum;
+- the authcrypt sender DID/key and long-form evidence satisfy section 5.2;
+- the public recipient DID and generation match exactly;
+- pending-request, active-relationship, recipient-registration and portable
+  storage limits have available capacity; and
+- no tombstone or stable-relationship sender-DID conflict already makes the
+  request ineligible.
+
+For an admitted request the receiver durably appends `message.in` before
+pickup ACK. The `ask` UI and all later decisions operate on that durable
+message.
+
+### 9.3 Admission policy and decision time
 
 Every generation has one immutable request policy:
 
-- `ask` — expose an eligible request to a user; do not create relationship
+- `ask` — expose an admitted request to a user; do not create relationship
   state until an explicit durable decision exists;
-- `auto` — accept eligible requests automatically, subject to configured
-  rate, relationship and storage limits; or
-- `silent` — create no response or relationship state for unknown requests.
+- `auto` — accept admitted requests automatically, subject to configured
+  rate, relationship, recipient and storage limits; or
+- `silent` — persist no unknown request and emit no liveness response.
 
 Implementations MUST default public rendezvous generations to `ask`.
 `auto` is explicit opt-in and MUST have bounded rate and resource policy.
 
 An accept, decline or explicit ignore is recorded by
-`rendezvous.requestDecided`. No contact, relationship DID, recipient
-registration or response is created before an `accept` decision.
-Conflicting decisions for one request suppress automatic effects.
+`rendezvous.requestDecided`. The event records whether the decision came from
+`user` or `policy`. A user decision outranks conflicting policy decisions;
+two conflicting user decisions remain a visible decision conflict.
+
+An `accept` decision is valid only when committed while:
+
+```text
+decision_time < request.expires_time
+```
+
+After request expiry the only valid new decisions are:
+
+- `decline` with stable code `expired`, when its deterministic response is
+  still unexpired and policy permits a response; or
+- `ignore`.
+
+A late user choice MUST NOT create a relationship or an `accept` intent.
+No contact, relationship DID, recipient registration or response is created
+before the applicable durable decision.
 
 ## 10. Deterministic relationship and response materialization
 
 Let:
 
-- `request_mid` be the deterministic inbound MID;
+- `request_mid` be the deterministic inbound observation MID;
 - `request_wire_id` be the request's DIDComm `id`;
 - `public_did` be the exact rendezvous DID in `to`;
 - `peer_key` be the canonical fingerprint of the authenticated initiator
-  sender key; and
-- `generation_id` be the matching eligible rendezvous generation.
+  sender key;
+- `initiator_did` be the canonical short form obtained from the validated
+  long-form sender DID; and
+- `generation_id` be the matching live rendezvous generation.
 
 For these example inputs:
 
@@ -454,11 +552,9 @@ response.created_time = request.created_time
 response.expires_time = request.expires_time + 604800
 ```
 
-The addition MUST fail closed on integer overflow. A deployment MAY impose a
-shorter response-retention policy only by choosing and durably recording it as
-part of a later protocol version; version 1.0 uses the fixed seven-day
-response window. These values make independently prepared accept/decline
-intents produce equal intent hashes.
+The addition MUST fail closed on integer overflow. Version 1.0 uses the fixed
+seven-day response window so independently prepared accept/decline intents
+produce equal intent hashes.
 
 Exact test-vector outputs are:
 
@@ -477,7 +573,30 @@ decline_wire_id = f6b3570e-158a-53b9-812a-009dce492306
 
 Repeated eligible requests from the same `(public_did, peer_key)` reuse the
 same relationship, contact and responder pairwise DID, but each request gets
-an acceptance whose `thid` and `ack` name that request wire ID.
+a response whose `thid` and `ack` name that request wire ID.
+
+The canonical initiator DID for the stable relationship is not chosen by
+whichever replica writes first. Every accepted `rendezvous.requestDecided`
+records the validated canonical initiator DID, long form, request time,
+generation and wire ID. The fold orders valid accepted requests by:
+
+```text
+(request.created_time, request.wire_id, generation_id)
+```
+
+and derives `originRequest`, `originGeneration` and `theirDid` from the
+earliest entry after user-decision precedence is applied. These are fold
+outputs, not immutable fields of `relationship.established`.
+
+Reuse of one authenticated `peer_key` under another canonical Peer DID is a
+sender-DID conflict, even though it would derive the same relationship ID.
+Once one canonical initiator DID exists, a request presenting another DID
+MUST NOT change it or be accepted automatically. Except under `silent`
+policy, the responder declines that request with code
+`sender-did-conflict`. If concurrent replicas already emitted conflicting
+accept decisions before synchronization, the relationship fold becomes
+conflicted, ordinary traffic is suspended, and a user decision must select
+one request and decline the others.
 
 If `contact_id` has a live `contact.deleted` tombstone, the responder MUST NOT
 recreate or accept it. The request may be declined or ignored according to
@@ -485,11 +604,11 @@ policy. A later genuine reconnection MUST use a fresh initiator relationship
 DID and sender key, producing another `peer_key` and relationship ID.
 
 The responder creates `relationship.established` and the deterministic
-contact once for the stable relationship. Stable contact creation MUST NOT
-carry a request-specific response effect ID. It creates
+contact once for the stable relationship. The stable event contains no
+request-specific generation or initiator-DID winner. It creates
 `rendezvous.requestDecided` once per request. Equal deterministic event
-payloads from several replicas are duplicates; conflicting values suppress
-automatic responses.
+payloads from several replicas are duplicates; unresolved conflicting values
+suppress automatic responses and ordinary relationship traffic.
 
 ## 11. `accept`
 
@@ -545,10 +664,15 @@ permitted in version 1.0.
 
 Requirements:
 
+- the accept decision was durably committed before the request's
+  `expires_time`;
 - `from` is the responder relationship DID in long form on first disclosure;
+- the authcrypt `skid`/decoded `apu` first-disclosure values are rooted in that
+  same exact long-form DID under section 5.2;
 - `body.relationship_did` is its canonical short form;
-- `to` contains the canonical initiator relationship DID learned from the
-  request long form;
+- `to` contains the canonical initiator relationship DID learned from this
+  request, and that DID equals the current non-conflicted `theirDid` derived
+  for the stable relationship;
 - `thid` equals the request wire ID;
 - `ack` contains the request wire ID;
 - `please_ack` contains the empty string;
@@ -568,30 +692,61 @@ encoded as RFC 8785 canonical JSON, then as unpadded base64url and signed with
 deterministic EdDSA. Every replica therefore derives the same `from_prior`
 bytes.
 
+The responder MUST append the deterministic `message.out` for `accept` before
+performing recipient registration, DID resolution, encryption or submission.
+After intent commit, any replica may reconcile the responder pairwise DID's
+canonical short form on its selected mediated route. `message.prepared` and
+network submission are allowed only after that registration succeeds. This
+preserves the rule that durable intent precedes every external effect while
+still making the responder reachable for the initiator's ACK.
+
 The `ack` header explicitly completes the initiator's durable request
 outbound. Estoc does not rely on an implicit threaded-response ACK for
 `delivery.acknowledged`.
 
 ## 12. Initiator transition and handoff confirmation
 
-After durably receiving `accept`, the initiator:
+After durably storing an `accept` observation, the initiator MUST process it
+in this order:
 
-1. records the request wire ID acknowledged by `accept.ack`;
-2. verifies `from_prior` against the request-bound resolution snapshot;
-3. decodes and validates the responder's long-form `did:peer:4`, records its
-   canonical short form and document;
-4. attaches the new authenticated pairwise channel to the requesting contact;
-5. records contact-scoped `peer.transitioned` from the public DID to the
+1. locate the exact outbound request and its request-bound resolution
+   snapshot;
+2. verify the complete package addressing, the responder's long-form
+   `did:peer:4`, and `from_prior` against that snapshot;
+3. verify that `to`, `thid`, response expiry and canonical initiator DID are
+   consistent with the original request;
+4. only after steps 1–3 succeed, apply `accept.ack` to the request's delivery
+   state;
+5. attach the new authenticated pairwise channel to the requesting contact;
+6. append contact-scoped `peer.transitioned` from the public DID to the
    canonical responder relationship DID; and
-6. sends a pure ACK or next natural message whose `ack` includes the accept
-   wire ID.
+7. submit the deterministic pure ACK or a natural relationship message whose
+   `ack` includes the accept wire ID.
 
-If step 2 cannot run because the exact resolution snapshot is temporarily
-unavailable, the acceptance remains durably stored in a **deferred** state.
-It is not treated as invalid, no `peer.transitioned` is appended, and no
-ultimate ACK of `accept` is sent. The replica retries after sync or snapshot
-recovery. Its mediator delivery may already be pickup-ACKed because the
-message bytes are durable; the responder's end-to-end retry remains active.
+The order is normative. An `ack` array in an acceptance whose `from_prior`,
+long-form DID or addressing has not validated MUST NOT acknowledge the
+request.
+
+If exact historical resolution evidence is temporarily unavailable, the
+acceptance remains durably stored in a **deferred** state. It is not treated
+as invalid, no request acknowledgment or `peer.transitioned` is appended, and
+no ultimate ACK of `accept` is sent. The replica retries after sync or
+snapshot recovery. Its mediator delivery may already be pickup-ACKed because
+the message bytes are durable; the responder's end-to-end retry remains
+active.
+
+Request expiry ends initiator retry and forbids the responder from creating a
+new accept decision, but it does not prove that an already-created accept was
+not delayed in transit. Therefore a cryptographically valid accept whose own
+`expires_time` is still in the future MAY be processed after the original
+request expiry. The request becomes `acknowledged` with a derived `late`
+indicator, retry remains stopped, and the contact transition proceeds. An
+accept whose own expiry has passed has no transition or ACK side effect.
+
+For one request thread, a valid accept with valid `from_prior` takes
+precedence over every decline, regardless of arrival order. A decline ends
+only that request attempt while no valid accept is known; it does not
+tombstone the contact, pairwise DID or stable relationship.
 
 The transition affects only the named contact. The public DID stays active
 for unrelated initiators.
@@ -603,16 +758,21 @@ request-specific `accept` packages, each carrying their own byte-stable
 `writeTo` reports the relationship as pending and the outbox defers package
 preparation.
 
-Handoff is confirmed when an authenticated ultimate message acknowledges any
-`accept` effect for this stable relationship. After confirmation, ordinary
-traffic may use the relationship DID and does not carry the bootstrap
-`from_prior`. This gate prevents an unproven pairwise message from overtaking
-`accept` while avoiding any need to choose one global `from_prior` among
-several replacement requests.
+Handoff is confirmed only by an authenticated message from the initiator
+relationship DID that both names an accept wire ID in `ack` and is either:
+
+- the conforming `empty/1.0` pure ACK; or
+- an ordinary relationship message that is valid on the newly attached
+  channel.
+
+A decline, problem report, public-DID message or message from another channel
+may acknowledge transport delivery but MUST NOT confirm the pairwise
+handoff. After confirmation, ordinary traffic may use the relationship DID
+without bootstrap `from_prior`.
 
 ## 13. `decline` and problem handling
 
-A responder that explicitly declines an eligible request uses:
+A responder that explicitly declines an admitted request uses:
 
 ```text
 https://estoc.dev/rendezvous/1.0/decline
@@ -630,7 +790,6 @@ Example:
   "expires_time": 1789652400,
   "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
   "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
-  "please_ack": [""],
   "body": {
     "code": "not-accepted"
   }
@@ -640,19 +799,38 @@ Example:
 The decline:
 
 - uses the deterministic decline effect for this request;
-- contains `ack` for the request and `please_ack` for itself;
+- contains `ack` for the request and has no `please_ack`;
 - creates no relationship DID and has no `from_prior`;
-- uses a stable code that reveals no sensitive policy detail; and
-- is retried only until its ACK, its own expiry or an explicit hold.
+- uses one of the stable coarse codes `not-accepted`, `expired`,
+  `sender-did-conflict` or `capacity`;
+- is appended as `message.out` before any resolution, registration,
+  encryption or submission effect; and
+- is submission-terminal: ordinary retry continues only until the first
+  successful submission, its own expiry or an explicit hold. A duplicate
+  request may trigger re-submission of the same exact decline package.
 
-The initiator durably records the terminal decline before acknowledging it.
-A responder MAY instead choose `ignore` and remain silent to reduce oracle and
-amplification risk.
+A request that expires before an accept decision may be declined with code
+`expired` while the deterministic decline itself remains unexpired; otherwise
+the responder ignores it. A responder MAY always choose `ignore` and remain
+silent to reduce oracle and amplification risk.
+
+The initiator durably stores and acknowledges a valid decline. It treats the
+request as declined only while no valid accept for the same `thid` exists.
+A later valid accept wins and may establish the relationship; the decline
+does not delete or tombstone anything.
+
+If different replicas produced both accept and decline decisions for one
+request, the responder fold exposes a decision conflict and suspends further
+automatic response and ordinary relationship traffic. A subsequent durable
+user decision outranks policy decisions and selects the intended outcome.
+Already transmitted messages remain immutable observations; the initiator
+still applies the valid-accept precedence rule above.
 
 An authenticated problem report directly triggered by a request MUST include
 `ack` naming the request wire ID. Whether it requests acknowledgment for
-itself is defined by the error policy. Unauthenticated input is dropped
-without state-changing automatic effects.
+itself is defined by the error policy. A problem report without
+`please_ack` is submission-terminal under `distributed-delivery/1.0`.
+Unauthenticated input is dropped without portable state-changing effects.
 
 ## 14. Retries, rollover and expiry
 
@@ -663,11 +841,17 @@ without state-changing automatic effects.
   generation may use another package ID.
 - A replacement request with a new wire ID but the same initiator sender key
   reuses the same relationship/contact and receives its own threaded response.
+- A replacement request presenting a different canonical initiator DID under
+  the same sender key is a sender-DID conflict, not a route variation.
 - `accept` and `decline` responses preserve their deterministic wire IDs and
-  required ACK headers. Exact package bytes are immutable per package ID.
-- Expired requests remain retained message history but create no relationship.
+  request-acknowledgment headers. `accept` requests its own ACK; `decline` is
+  submission-terminal. Exact package bytes are immutable per package ID.
+- Expired requests remain retained history. They cannot receive a new accept
+  decision, but an accept validly created earlier and delayed in transit may
+  still be processed under section 12 while its own response expiry is live.
 - A non-retryable `expired` delivery failure ends automatic retry of that
-  request wire ID.
+  request wire ID. A later valid ACK or accept may update the observed outcome
+  to acknowledged/accepted, but never restarts transmission.
 
 Before a public generation becomes discoverable, its configuration, selected
 DID document blob and route events MUST be durably committed and uploaded to
@@ -743,38 +927,76 @@ document. Estoc preserves exact request-bound evidence but does not turn
 ## 17. Required conformance cases
 
 1. A public OOB invitation contains a rendezvous DID and no relationship DID.
-2. A request uses the initiator `did:peer:4` long form on first disclosure,
-   carries `please_ack`, and is authcrypted to the request-bound web key.
-3. Preparing a request stores and attaches its bootstrap channel before or
+2. A request uses the initiator `did:peer:4` long form on first disclosure.
+   Its plaintext `from`, protected authcrypt `skid` and decoded `apu` all name
+   that same long-form DID/key.
+3. After the long/short mapping is stored, either form is accepted in later
+   authcrypt sender identifiers only when plaintext `from` is the same DID
+   identity.
+4. `message.out` for a request is committed before initiator recipient
+   registration, DID resolution, encryption or submission.
+5. The initiator canonical short DID is made reachable before first request
+   submission.
+6. Preparing a request stores and attaches its bootstrap channel before or
    atomically with `message.prepared`.
-4. An `accept`, `decline` or request-triggered problem report explicitly
-   acknowledges the request wire ID.
-5. Two requests with different wire IDs but the same `(public DID, peer key)`
+7. An `accept`, `decline` or request-triggered problem report explicitly
+   acknowledges the request wire ID. `accept` requests handoff confirmation;
+   `decline` itself is submission-terminal.
+8. Two requests with different wire IDs but the same `(public DID, peer key)`
    derive one relationship/contact/pairwise DID and two correctly threaded
    response effects.
-6. A tombstoned deterministic contact is not resurrected; a fresh initiator
+9. A tombstoned deterministic contact is not resurrected; a fresh initiator
    key creates a different relationship ID.
-7. Two replicas accepting one request derive equal relationship, contact,
-   pairwise DID, decision and response IDs.
-8. A request is not rejected merely because its `created_time` is old while
-   its `expires_time` remains valid and lifetime is within the maximum.
-9. A sender that discovers request expiry before preparation or retry records
-   non-retryable failure and submits no package.
-10. An unknown JWE `kid` remains unacknowledged at the mediator and is retried
-    after replica sync.
-11. A generation is configured and sync-published before public discovery,
+10. Two replicas accepting one request derive equal relationship, contact,
+    pairwise DID, decision and response IDs.
+11. A request is not rejected merely because its `created_time` is old while
+    its `expires_time` remains valid and lifetime is within the maximum.
+12. A sender that discovers request expiry before preparation or retry records
+    non-retryable failure and submits no package.
+13. An unknown JWE `kid`, or a configured generation that may become live but
+    is not live yet, remains unacknowledged at the mediator and is retried
+    after replica sync/fold changes.
+14. Wrong-protocol, malformed, silent-policy and hard-admission-limit public
+    input may be safely pickup-ACKed and discarded before `message.in`, with
+    only bounded local diagnostics.
+15. A generation is configured and sync-published before public discovery,
     but is not live until document publication and route registration verify.
-12. `from_prior` is validated against the exact request-bound DID document,
+16. An admitted `ask` request is durably stored before it is shown to the
+    user; an `accept` decision after request expiry is invalid.
+17. `from_prior` is validated against the exact request-bound DID document,
     not an unrelated later revision.
-13. Missing historical resolution evidence defers acceptance processing and
-    does not classify the proof as invalid.
-14. The responder uses its `did:peer:4` long form in `accept`; the initiator
+18. Missing historical resolution evidence defers acceptance processing and
+    does not classify the proof as invalid or process `accept.ack`.
+19. The initiator validates long-form DID, addressing and `from_prior` before
+    applying the request acknowledgment or appending `peer.transitioned`.
+20. The responder appends accept `message.out` before registering its
+    canonical pairwise recipient DID; registration is completed before
+    accept submission.
+21. The responder uses its `did:peer:4` long form in plaintext `from`,
+    protected `skid` and decoded `apu` in the first accept; the initiator
     records and later uses the canonical short form.
-15. Ordinary responder packages are deferred until one request-specific
-    `accept` for the stable relationship is ultimately acknowledged.
-16. A rendezvous and relationship DID may reuse one mediated route and still
+22. Ordinary responder packages are deferred until one request-specific
+    accept receives a qualifying pairwise-channel handoff confirmation.
+23. An ACK carried only by a problem report, decline, public-DID message or
+    another channel does not confirm handoff.
+24. A valid, unexpired accept takes precedence over a decline for the same
+    request regardless of arrival order. A valid accept delayed beyond the
+    request expiry may still transition while the accept's own expiry is live
+    and is recorded as late.
+25. Concurrent responder policy decisions of accept and decline are surfaced;
+    one user decision overrides policy decisions rather than an LWW rule.
+26. Reuse of one initiator key under another canonical Peer DID is a
+    sender-DID conflict and cannot rewrite the relationship's remote DID.
+27. Overlapping generations do not write conflicting `originGeneration`;
+    origin request, generation and remote DID derive from the canonical
+    earliest effective accepted request.
+28. The public rendezvous DID never appears in ordinary `writeTo`; non-request
+    traffic to its key is discarded by the bounded pre-vault gate.
+29. Duplicate delivery of a request or accept causes re-submission of the same
+    deterministic response/ACK package, not another logical response.
+30. A rendezvous and relationship DID may reuse one mediated route and still
     receive independent per-replica delivery.
-17. Public policy defaults to `ask`; `auto` is bounded and explicit; `silent`
-    emits no liveness response.
-18. Adding a server replica changes only delivery and sync state, not the
+31. Public policy defaults to `ask`; `auto` is bounded and explicit; `silent`
+    emits no liveness response or permanent vault message.
+32. Adding a server replica changes only delivery and sync state, not the
     public DID or established pairwise DIDs.

@@ -280,6 +280,33 @@ does not require byte-equal `seedJwe`.
 sync store supplies the vault seed by another trusted means and creates a
 new local passphrase wrapping. The key cache is then rebuilt.
 
+### 5.3 Recovery material and product requirement
+
+The vault seed is the only cryptographic root from which the anchor,
+communication keys, mediation accounts and sync-account credentials can be
+recovered. Replica synchronization is not a seed backup. Loss of every usable
+seed copy makes encrypted sync objects and identity keys unrecoverable.
+
+A user-facing implementation MUST NOT describe a vault as recoverable until
+it has offered and verified at least one recovery path independent of the
+active runtime. A conforming path is either:
+
+- an offline export of the seed using a documented, integrity-protected
+  representation; or
+- a complete portable snapshot containing `seedJwe`, together with a
+  passphrase or recovery credential that is not available only from the same
+  runtime or storage failure domain.
+
+The product MUST perform a verification step that unwraps or imports the
+recovery material in an isolated check and derives the exact anchor DID. Merely
+confirming that a file was downloaded or that vault-sync contains objects is
+insufficient. The UI MUST explain that every holder of the seed has full vault
+authority and that replica retirement does not revoke a copied seed.
+
+This document does not mandate one mnemonic, paper-backup or hardware-token
+encoding. It mandates the recovery capability and verification UX as a release
+requirement for products built on the single-seed model.
+
 ## 6. Event paths
 
 The mapping is:
@@ -784,3 +811,7 @@ The following require a new folder/vault version:
     and event, not as an authoritative mutable `did.json` path in the vault.
 22. A thin-client cache is not accepted as a complete vault folder.
 23. A retired replica's historical author directory remains readable.
+24. Vault-sync alone is not presented as recovery material because it does not
+    contain `seedJwe` or the seed.
+25. Before recovery is marked complete, an independent seed or complete
+    snapshot path is tested by deriving the exact anchor DID.
