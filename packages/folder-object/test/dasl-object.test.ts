@@ -122,3 +122,24 @@ describe("verifyObject: an object read out of a root", () => {
     expect(got.tree.partial.has("files/b")).toBe(true);
   });
 });
+
+describe("verifyObject: which layer says no", () => {
+  it("a manifest that is not the canonical form is format-layer; a missing block or a bad leaf is not malformed", async () => {
+    const bytes = enc("hello");
+    const cid = await rawCid(bytes);
+    const index = enc(JSON.stringify({ format: "x", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "t", text: "hi" } }));
+    const manifest = encodeManifest([{ path: "index.json", cid: await rawCid(index), size: index.length }, { path: "files/a", cid, size: 4 }]);
+    const root = await drislCid(manifest);
+    const lying = await verifyObject(root, new Map([[root, manifest], [await rawCid(index), index], [cid, bytes]])).catch((e: unknown) => e);
+    expect(lying).toBeInstanceOf(MalformedObjectError);
+    expect((lying as { layer: string }).layer).toBe("format");
+    expect((lying as Error).message).toMatch(/says 4 bytes/);
+    const absent = await verifyObject(root, new Map([[root, manifest]])).catch((e: unknown) => e);
+    expect(absent).not.toBeInstanceOf(MalformedObjectError);
+    expect((absent as Error).message).toMatch(/missing object/);
+    const forged = new Uint8Array(manifest);
+    forged[forged.length - 1] = 0x18; // no longer canonical, and no longer hashing to root either
+    const bad = await verifyObject(root, new Map([[root, forged]])).catch((e: unknown) => e);
+    expect((bad as Error).message).toMatch(/do not hash/);
+  });
+});

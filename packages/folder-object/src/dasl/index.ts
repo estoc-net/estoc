@@ -29,6 +29,7 @@ export {
 export { Link, encodeDrisl, decodeDrisl, MAX_DEPTH, type Drisl } from "./drisl.js";
 export {
   MAX_MANIFEST_BYTES,
+  ManifestError,
   segmentsOf,
   encodeManifest,
   decodeManifest,

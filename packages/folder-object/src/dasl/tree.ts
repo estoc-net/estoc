@@ -31,6 +31,19 @@ import type { TreeFiles } from "../types.js";
  */
 export const MAX_MANIFEST_BYTES = 1024 * 1024;
 
+/**
+ * A manifest block that is not the canonical form (spec §2.1, §8 format
+ * layer): no conforming hasher computed its root over any fact. Told
+ * apart from a missing block or a leaf that fails its hash, which are
+ * states of the object set, not of the tree.
+ */
+export class ManifestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManifestError";
+  }
+}
+
 /** One line of the manifest: a path of the mapping, the raw CID of its bytes, their length. */
 export interface ManifestEntry {
   path: string;
@@ -166,6 +179,14 @@ function isMap(v: Drisl | undefined): v is { [key: string]: Drisl } {
  * no two keys the same path and none a directory of another.
  */
 export function decodeManifest(bytes: Uint8Array): ManifestEntry[] {
+  try {
+    return decodeManifestOrThrow(bytes);
+  } catch (err) {
+    throw err instanceof ManifestError ? err : new ManifestError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+function decodeManifestOrThrow(bytes: Uint8Array): ManifestEntry[] {
   if (bytes.length > MAX_MANIFEST_BYTES) throw new Error(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
   let doc: Drisl;
   try {
@@ -239,7 +260,7 @@ export async function fetchManifest(root: string, get: GetBlock): Promise<{ byte
   if (cid.code !== DRISL_CODE) throw new Error("root is not a drisl CID: not a manifest");
   const bytes = await get(root);
   if (bytes === null) throw new Error(`missing object ${root}`);
-  if (bytes.length > MAX_MANIFEST_BYTES) throw new Error(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
+  if (bytes.length > MAX_MANIFEST_BYTES) throw new ManifestError(`manifest is ${bytes.length} bytes; the most is ${MAX_MANIFEST_BYTES}`);
   await checkCid(cid, bytes);
   return { bytes, entries: decodeManifest(bytes) };
 }
@@ -310,7 +331,7 @@ export async function walkTree(
       tree.partial.set(path, [cid]);
       continue;
     }
-    if (bytes.length !== size) throw new Error(`${path}: manifest says ${size} bytes, the block holds ${bytes.length}`);
+    if (bytes.length !== size) throw new ManifestError(`${path}: manifest says ${size} bytes, the block holds ${bytes.length}`);
     leaves.set(path, bytes);
   }
   return { tree, leaves };
@@ -336,6 +357,6 @@ export async function resolvePath(root: string, path: string, get: GetBlock): Pr
   const bytes = await get(entry.cid);
   if (bytes === null) throw new Error(`missing object ${entry.cid}`);
   await checkCid(entry.cid, bytes);
-  if (bytes.length !== entry.size) throw new Error(`${normalized}: manifest says ${entry.size} bytes, the block holds ${bytes.length}`);
+  if (bytes.length !== entry.size) throw new ManifestError(`${normalized}: manifest says ${entry.size} bytes, the block holds ${bytes.length}`);
   return { cid: entry.cid, size: entry.size, bytes };
 }

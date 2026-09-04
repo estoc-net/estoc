@@ -10,7 +10,7 @@ import { signRoot, verifyCard as verifyAnyCard, type CardVerdict } from "../card
 import { isInsideFiles, parseIndex } from "../object.js";
 import { MalformedObjectError, type CardSigner, type FolderObject, type ObjectCard, type TreeFiles } from "../types.js";
 import { codecOf, DRISL_CODE } from "./cid.js";
-import { hashTree, walkTree, type GetBlock, type VerifiedManifest, type VerifyOptions } from "./tree.js";
+import { hashTree, ManifestError, walkTree, type GetBlock, type VerifiedManifest, type VerifyOptions } from "./tree.js";
 
 /**
  * Is this listing an object's? The manifest of an object names exactly
@@ -55,7 +55,16 @@ export async function verifyObject(
   objects: Map<string, Uint8Array> | GetBlock,
   options: VerifyOptions = {},
 ): Promise<VerifiedObject> {
-  const { tree, leaves } = await walkTree(root, objects, options);
+  let walked: Awaited<ReturnType<typeof walkTree>>;
+  try {
+    walked = await walkTree(root, objects, options);
+  } catch (err) {
+    // A manifest that is not the canonical form is a format-layer defect
+    // (spec §8); a missing block or a leaf that fails its hash is not.
+    if (err instanceof ManifestError) throw new MalformedObjectError("format", err.message);
+    throw err;
+  }
+  const { tree, leaves } = walked;
   checkObjectPaths(tree.files.keys());
   const indexBytes = leaves.get("index.json");
   if (indexBytes === undefined) {
