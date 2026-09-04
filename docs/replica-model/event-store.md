@@ -16,7 +16,7 @@ This is one of seven documents that define the distributed vault:
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
-| `rendezvous.md` | public `did:web` discovery and contact-scoped handoff to pairwise `did:peer` |
+| `rendezvous.md` | public `did:web` discovery and contact-scoped handoff to pairwise `did:peer:4` |
 | `replica-mediation.md` | method-neutral mediator fan-out and per-replica pickup acknowledgment |
 | `vault-sync.md` | encrypted anti-entropy through an untrusted sync store |
 

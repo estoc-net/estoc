@@ -21,7 +21,7 @@ The recipient DID may be:
 
 - a public rendezvous DID, normally `did:web`, used for the first encrypted
   relationship request; or
-- a pairwise relationship DID, normally `did:peer`, used after handoff.
+- a pairwise relationship DID, normally `did:peer:4`, used after handoff.
 
 The mediator applies identical storage, fan-out and pickup semantics to both.
 It does not need to know the vault role of a recipient DID.
@@ -211,8 +211,12 @@ Example:
     "limits": {
       "message_retention_seconds": 604800,
       "max_replicas": 16,
+      "max_recipients": 4096,
       "max_message_bytes": 1048576,
-      "max_deliveries_per_request": 100
+      "max_retained_messages": 100000,
+      "max_pending_deliveries_per_replica": 100000,
+      "max_deliveries_per_request": 100,
+      "max_recipient_updates_per_request": 100
     }
   }
 }
@@ -339,21 +343,19 @@ https://estoc.dev/replica-mediation/1.0/retired
 ## 6. Coordinate Mediation profile
 
 The mediation account remains the one `recipient` in Coordinate Mediation
-3.0. All full replicas derive and use that same account key. Recipient DIDs
-are therefore registered once per mediation arrangement, not once per
-replica.
+3.0. All full replicas derive and use that account key. Recipient DIDs are
+registered once per mediation arrangement, not once per replica.
 
-Registration is method-neutral. A `did:web` rendezvous DID and a `did:peer`
-relationship DID may both be registered under the same account. The
-recipient-control proof is verified against an authentication method of the
-specific recipient DID and does not grant the mediator application-level
-knowledge of its role.
+Registration is method-neutral. A `did:web` rendezvous DID and canonical
+short-form `did:peer:4` relationship DID may be registered under the same
+account. The recipient-control proof is verified against an authentication
+method of the exact recipient DID.
 
 ### 6.1 Recipient-control proof
 
 A conforming Estoc mediator MUST require control proof for every
-`recipient-update` entry. The normal Coordinate Mediation fields remain;
-Estoc adds `registration_id` and `proof`:
+`recipient-update` entry. Estoc adds `registration_id`, `proof` and optional
+`resolution_material`:
 
 ```json
 {
@@ -362,9 +364,13 @@ Estoc adds `registration_id` and `proof`:
   "body": {
     "updates": [
       {
-        "recipient_did": "did:peer:4zQm...recipient",
+        "recipient_did": "did:peer:4zQm...recipient-short",
         "action": "add",
         "registration_id": "019b1b50-42bf-71b7-a8d8-70543a158ffd",
+        "resolution_material": {
+          "kind": "did-peer-4-long-form",
+          "value": "did:peer:4zQm...recipient-short:z...input-document"
+        },
         "proof": "eyJhbGciOiJFZERTQSIsImtpZCI6Ii4uLiIsInR5cCI6ImVzdG9jL3JlY2lwaWVudC1yZWdpc3RyYXRpb24randzIn0.eyJhY2NvdW50IjoiLi4uIn0.signature"
       }
     ]
@@ -373,14 +379,12 @@ Estoc adds `registration_id` and `proof`:
 }
 ```
 
-`proof` is a compact JWS:
+`proof` is compact JWS:
 
-- protected `alg` MUST be `EdDSA`;
-- protected `typ` MUST be
-  `estoc/recipient-registration+jws`;
-- protected `kid` MUST identify an authentication verification method of
-  `recipient_did`;
-- the payload MUST be the UTF-8 RFC 8785 canonical form of:
+- protected `alg` is `EdDSA`;
+- protected `typ` is `estoc/recipient-registration+jws`;
+- protected `kid` identifies an authentication method of `recipient_did`;
+- payload is UTF-8 RFC 8785 canonical JSON:
 
 ```json
 {
@@ -390,39 +394,92 @@ Estoc adds `registration_id` and `proof`:
   "expires_time": 1788443400,
   "registration_id": "019b1b50-42bf-71b7-a8d8-70543a158ffd",
   "request_id": "019b1b50-b403-7940-abaf-f59b92d2231b",
-  "recipient": "did:peer:4zQm...recipient"
+  "recipient": "did:peer:4zQm...recipient-short"
 }
 ```
 
-The mediator MUST verify every duplicated value against the surrounding
-request. `expires_time` MUST be in the future and MUST NOT be more than
-five minutes after the mediator's current time.
+The mediator verifies every duplicated value against the request.
+`expires_time` is in the future and no more than five minutes after mediator
+current time. A remove proof uses `"action":"remove"` and names the active
+registration ID.
 
-For `remove`, the JWS payload uses `"action":"remove"` and MUST name the
-currently active `registration_id`.
+A single request MUST NOT contain more updates than the mediator's advertised
+`max_recipient_updates_per_request`. The whole request is atomic: quota,
+proof or resolution failure in one entry prevents applying every entry unless
+the surrounding Coordinate Mediation response explicitly reports per-entry
+atomic groups. Version 1.0 RECOMMENDS one atomic request.
 
-### 6.2 Registration state
+### 6.2 Method-specific resolution
+
+#### Peer DID numalgo 4
+
+Mediator storage and `recipient_did` use canonical short form. When the
+mediator does not already retain verified resolution material for that short
+form, `resolution_material` MUST contain the corresponding long form.
+
+The mediator locally:
+
+1. decodes the long-form input document;
+2. recomputes and compares the short form;
+3. resolves the protected proof `kid` in that document; and
+4. verifies the JWS.
+
+No network request is permitted for Peer DID resolution. A mismatched short
+form, invalid input document or unresolved authentication key fails the
+entry.
+
+#### `did:web`
+
+A client does not choose an arbitrary fetch URL. The mediator derives the one
+standard `did:web` resolution URL from `recipient_did` and uses either an
+operator-configured trusted DID resolver or a constrained resolver satisfying
+all of these rules:
+
+- HTTPS only; no IP-literal DID authority;
+- no userinfo, fragment or query component;
+- no redirects;
+- DNS results are resolved before connection and every selected address is
+  globally routable, excluding loopback, private, link-local, multicast,
+  documentation, carrier-grade NAT, metadata-service and other reserved
+  ranges for both IPv4 and IPv6;
+- the connected address is pinned to the validated DNS result to prevent DNS
+  rebinding;
+- strict connect, total-time, response-size and decompression limits;
+- only the derived `did.json` path is fetched;
+- the returned document `id` exactly equals `recipient_did`; and
+- the proof `kid` is an authorized authentication method in that document.
+
+A deployment unable to enforce those constraints MUST reject or defer the
+registration with `did-resolution-unavailable`; it MUST NOT fall back to an
+unrestricted server-side URL fetch. Cache entries are keyed by DID, canonical
+document hash and bounded freshness policy. Resolution failure never grants
+registration.
+
+`resolution_material` is null for ordinary `did:web` registration. Supplying
+client-provided document bytes MAY be used as a cache hint, but does not
+replace secure publication resolution.
+
+### 6.3 Registration state
 
 A recipient DID has at most one active mediation account at a mediator.
 
 For `add`:
 
-- absent recipient: add it;
+- absent recipient and available quota: add it;
 - same account and same `registration_id`: `no_change`;
-- same account and a new valid `registration_id`: atomically replace the
-  registration ID;
-- another account already owns the recipient: `client_error`.
+- same account and a new valid `registration_id`: atomically replace the ID;
+- another account already owns it: `client_error`;
+- recipient or registration-rate quota exceeded: reject without mutation.
 
 For `remove`:
 
-- same account and matching active `registration_id`: remove it;
-- absent, another account, or stale registration ID: `no_change`.
+- same account and matching active registration ID: remove it;
+- absent, another account or stale registration ID: `no_change`.
 
-Removing a recipient affects future `forward` messages only. Retained
-mailbox messages and their deliveries remain until expiry.
+Removing a recipient affects future `forward` only. Retained mailbox messages
+and deliveries remain until expiry. A conforming `recipient-query` response
+SHOULD include active `registration_id` beside each recipient DID.
 
-A conforming `recipient-query` response SHOULD include the active
-`registration_id` beside every recipient DID as an Estoc extension.
 
 ## 7. Routing and mailbox storage profile
 
@@ -498,7 +555,7 @@ recipient DID -> mediation account -> active replica deliveries
 
 A sender resolving a public `did:web` may discover this mediator through its
 `DIDCommMessaging` service and send a `rendezvous/1.0/request`. Later traffic
-to the resulting `did:peer` relationship DID may use the same mediation
+to the resulting `did:peer:4` relationship DID may use the same mediation
 account and storage path. It may instead use another vault-scoped mediation
 account at the same or another mediator; the replica lifecycle and delivery
 rules are identical per account.
@@ -674,21 +731,35 @@ A sender that needs stronger reliability keeps its own durable outbox
 and retries until it receives an ultimate authenticated ACK. This
 protocol does not turn the mediator into a permanent archive.
 
-## 10. Quotas
+## 10. Quotas and abuse bounds
 
 A mediator MUST publish and enforce at least:
 
 - maximum active replicas per account;
+- maximum registered recipient DIDs per account;
+- maximum recipient updates per request and a bounded registration rate;
 - maximum normalized encrypted-envelope bytes per mailbox message;
-- maximum retained ciphertext bytes or retained messages per account;
+- maximum retained ciphertext bytes and/or retained messages per account;
+- maximum pending deliveries per replica and/or account;
 - maximum delivery IDs per pickup acknowledgment; and
 - message retention seconds.
 
-Ciphertext quota SHOULD count the one stored envelope once, not once per
-replica delivery. Delivery-row quota MAY be separate.
+Ciphertext quota SHOULD count one stored envelope once rather than once per
+replica. Delivery-row quota is separate. Replica fan-out and late replay MUST
+check delivery quota transactionally.
 
-When quota prevents storage, the mediator MUST NOT partially create a
-mailbox message or only some replica deliveries.
+When any limit prevents accepting a forward, registering a recipient,
+registering a replica or creating replay deliveries, the mediator MUST NOT
+leave partial state. In particular it MUST NOT store one mailbox message while
+creating deliveries for only some active replicas.
+
+Public rendezvous DIDs amplify unauthenticated initiator traffic into
+recipient storage, user prompts and potential relationship registrations.
+Operators SHOULD support per-account and per-recipient rate limits in addition
+to hard storage caps. An authenticated administration or discovery response
+MAY expose current usage, but anonymous routing behavior SHOULD remain
+uniform enough not to become a precise account-existence oracle.
+
 
 ## 11. Privacy and security
 
@@ -745,11 +816,16 @@ Errors on authenticated request-response interactions use Problem Report
 | `e.estoc.replica-mediation.replica-required` | pickup request omitted `replica_id` |
 | `e.estoc.replica-mediation.unknown-replica` | no such replica under this account |
 | `e.estoc.replica-mediation.replica-retired` | replica ID is terminal |
-| `e.estoc.replica-mediation.too-many-replicas` | account limit reached |
+| `e.estoc.replica-mediation.too-many-replicas` | active replica limit reached |
+| `e.estoc.replica-mediation.too-many-recipients` | registered recipient limit reached |
+| `e.estoc.replica-mediation.too-many-deliveries` | fan-out or replay delivery limit reached |
+| `e.estoc.replica-mediation.registration-rate` | recipient registration rate exceeded |
 | `e.estoc.replica-mediation.recipient-proof` | recipient-control proof failed |
 | `e.estoc.replica-mediation.recipient-conflict` | another account owns the recipient |
+| `e.estoc.replica-mediation.did-resolution-unavailable` | recipient DID could not be safely resolved now |
+| `e.estoc.replica-mediation.unsafe-did-resolution` | requested resolution would violate resolver policy |
 | `e.estoc.replica-mediation.message-too-large` | normalized envelope exceeds the limit |
-| `e.estoc.replica-mediation.quota` | account retention quota is exhausted |
+| `e.estoc.replica-mediation.quota` | another advertised storage limit is exhausted |
 
 A mediator MAY intentionally give no DIDComm problem report for an
 anonymous Routing 2.0 `forward`, so as not to create a route oracle.
@@ -785,10 +861,21 @@ A conforming implementation demonstrates at least these cases:
     application content key.
 14. Replica registration and listing reveal no hardware identifier,
     operating-system identifier or human-readable local label.
-15. A `did:web` rendezvous recipient and a `did:peer` relationship recipient
+15. A `did:web` rendezvous recipient and a `did:peer:4` relationship recipient
     selecting the same mediated route receive identical fan-out and ACK
     isolation.
-16. No public DID document, relationship DID document or application message
+16. Registering more than the advertised recipient limit fails atomically
+    with `too-many-recipients` and leaves the active set unchanged.
+17. Fan-out or retained replay that would exceed delivery quota creates
+    neither a partial message nor a partial replica set.
+18. A canonical Peer DID numalgo-4 short form is verified from supplied long
+    form without network access.
+19. A `did:web` recipient is resolved only through the constrained resolver;
+    private, loopback, rebinding, redirect and oversized-response cases fail
+    without outbound access to the prohibited target.
+20. Temporary safe-resolution failure grants no registration and returns the
+    defined retryable problem code on authenticated interactions.
+21. No public DID document, relationship DID document or application message
     uses a replica ID as the peer-visible recipient.
-17. Adding or removing a server full replica changes only delivery rows and
+22. Adding or removing a server full replica changes only delivery rows and
     does not change registered recipient DIDs.
