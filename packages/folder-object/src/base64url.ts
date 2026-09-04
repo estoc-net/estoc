@@ -18,8 +18,9 @@ export function base64urlToBytes(encoded: string): Uint8Array {
   return bytes;
 }
 
+/** The text the bytes are; throws on a byte sequence that is not UTF-8 (nothing is replaced by U+FFFD). */
 export function base64urlToUtf8(encoded: string): string {
-  return new TextDecoder().decode(base64urlToBytes(encoded));
+  return new TextDecoder("utf-8", { fatal: true }).decode(base64urlToBytes(encoded));
 }
 
 export function utf8ToBase64url(text: string): string {

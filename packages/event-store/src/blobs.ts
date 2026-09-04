@@ -1,6 +1,6 @@
 /**
- * The blob store (event-store.md §5): a block store of the profile, and
- * its in-memory form.
+ * The blob store (event-store.md §5): a store of DASL blocks — raw, a
+ * file; drisl, a document — and its in-memory form.
  */
 
 import { checkBlock, hashFile, readFile, reachable } from "./blocks.js";
@@ -8,12 +8,12 @@ import type { Cid } from "./event.js";
 
 export interface BlobStore {
   // files — what an event's `body` and `attachments` name
-  /** Hashes by the profile; returns the file's root. A caller cannot misname bytes. */
+  /** Hashes the bytes to their raw CID, one block whatever the size; returns it, the file's root. A caller cannot misname bytes. */
   put(bytes: Uint8Array): Promise<Cid>;
-  /** The file's bytes, chunks rejoined; null if the root or any chunk is absent; throws on a node that is not a file. */
+  /** The file's bytes, its one raw block; null if the block is absent; throws `NotAFile` on a drisl root, which names a document. */
   get(root: Cid): Promise<Uint8Array | null>;
-  // blocks — what the profile's trees are made of
-  /** Checked against `cid` (§5.1); the only way in for a block minted elsewhere. */
+  // blocks — what a received object is made of: its manifest, a drisl block, and its leaves, raw blocks
+  /** Checked against `cid` (§5.1: a DASL CID, the hash, and for drisl one canonical DRISL document); the only way in for a block minted elsewhere. */
   putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;
   getBlock(cid: Cid): Promise<Uint8Array | null>;
   has(cid: Cid): Promise<boolean>;
@@ -74,8 +74,8 @@ export class MemoryBlobStore implements BlobStore {
   }
 
   async put(bytes: Uint8Array): Promise<string> {
-    // Copy before the first await: the chunks the hasher yields are views
-    // of its input, and a caller may reuse the buffer once the call returns.
+    // Copy before the first await: the block kept is the input itself,
+    // and a caller may reuse the buffer once the call returns.
     const { root, blocks } = await hashFile(bytes.slice());
     return this.serialise(() => {
       for (const [cid, block] of blocks) {
@@ -86,7 +86,7 @@ export class MemoryBlobStore implements BlobStore {
   }
 
   get(root: string): Promise<Uint8Array | null> {
-    return this.serialise(() => readFile(root, async (cid) => this.blocks.get(cid)?.bytes ?? null));
+    return this.serialise(() => readFile(root, async (cid) => this.blocks.get(cid)?.bytes.slice() ?? null));
   }
 
   async putBlock(cid: string, bytes: Uint8Array): Promise<void> {

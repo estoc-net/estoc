@@ -287,9 +287,8 @@ question only arises for attributed ones.
 ## 4. Bodies
 
 A message's plaintext is a blob (`event-store.md` §5) — `put` as a
-file, one raw block for the usual few kilobytes, chunks and a dag-pb
-root past 1 MiB — written **before** its skeleton is appended; the
-skeleton names it by root. The same blob store holds attachments
+file, one raw block whatever the size — written **before** its
+skeleton is appended; the skeleton names it by root. The same blob store holds attachments
 lifted out of a plaintext and any other blocks an event lists in its
 `blobs`, by root; a block no root reaches is an orphan (§8.3). A crash
 between the writes leaves orphans, harmless, swept by a collection
@@ -613,7 +612,7 @@ hold only by luck. A block the store has found to be damaged
 
 ### 8.3 Collection
 
-A root `r` **reaches** itself and, when it is a dag-pb node, every
+A root `r` **reaches** itself and, when it is a drisl block, every
 block its links reach; a block that is absent ends the walk there. The
 walk needs no type: the codec is in the name and the links are in the
 block (`event-store.md` §5.1). A block `b` is **referenced** by every

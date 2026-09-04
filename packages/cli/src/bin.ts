@@ -40,7 +40,8 @@ const USAGE = `usage: estoc <command>
   key list                       list keys as JSON (no passphrase needed)
   key new <name>                 derive a key by name and record it
 
-  object hash   [<dir>]          root CID of a folder-object (default: .)
+  object hash   [<dir>]          root CID of a folder-object (default: .):
+                                 the drisl CID of its manifest, bafyrei…
   object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
                                  sign the object with a vault key (default:
                                  anchor); prints the card, or lays the signed

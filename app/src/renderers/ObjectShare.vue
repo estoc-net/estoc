@@ -206,7 +206,7 @@ function show(share: VerifiedShare): void {
         unusable: share.packageProblem,
       };
   if (!isPost(object.meta) || validatePost(object.meta).length > 0) {
-    // every file the tree names, sized by the skeleton when its bytes are not here
+    // every file the tree names, sized by the manifest when its bytes are not here
     const listing = [...tree.files.keys()]
       .filter((path) => path === "index.json" || path.startsWith("files/"))
       .map((path) => {

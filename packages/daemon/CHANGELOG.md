@@ -6,9 +6,13 @@
   the app's object-share renderer hands `verifyShare` as `held`. It read
   `blob(cid)` before, which is a *file* read: since a recorded share's
   blocks are in `blobs/` and its body names them by id (agent-core
-  0.18 unreleased), the renderer read the share's directory nodes that
-  way and every stored share failed to show, "not a file". `blob(root)`
-  stays a file read, chunks rejoined, and is documented as one.
+  0.18 unreleased), the renderer read the share's manifest that way and
+  every stored share failed to show, "not a file". `blob(root)` stays a
+  file read — one raw block, whole — and is documented as one.
+- Over the DASL tree (`@estoc/folder-object` 0.7.0, `@estoc/event-store`
+  and `@estoc/agent-core` unreleased): a root is the drisl CID of an
+  object's manifest (`bafyrei…`) and a file one raw block (`bafkrei…`),
+  whatever its size; `block(cid)` reads either, `blob(root)` a file only.
 
 ## 0.2.0 — 2026-09-01
 

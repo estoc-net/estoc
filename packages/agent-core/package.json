@@ -37,6 +37,7 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/dasl": "workspace:^",
     "@estoc/did-peer": "workspace:^",
     "@estoc/event-store": "workspace:^",
     "@estoc/folder-object": "workspace:^",

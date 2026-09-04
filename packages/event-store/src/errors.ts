@@ -42,7 +42,7 @@ export class BadBlock extends Error {
   }
 }
 
-/** `BlobStore.get` was asked for a root that names a directory or shard, not a file. */
+/** `BlobStore.get` was asked for a drisl root — a document, a manifest say — not a file. */
 export class NotAFile extends Error {
   constructor(readonly cid: string) {
     super(`${cid} is not a file`);

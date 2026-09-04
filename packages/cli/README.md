@@ -24,7 +24,7 @@ Folder-objects ([`@estoc/folder-object`](../folder-object)) are signed
 with vault keys:
 
 ```sh
-estoc object hash   posts/hello/object                       # root CID of the canonical tree
+estoc object hash   posts/hello/object                       # root CID: the drisl CID of the object's manifest, bafyrei…
 estoc object sign   posts/hello/object --key org/estoc        # prints the card
 estoc object sign   posts/hello/object --key org/estoc --out posts/hello --zip hello.zip
                                                              # posts/hello/{object/, card.jws} + a zip of the same
@@ -32,7 +32,10 @@ estoc object verify posts/hello                              # or hello.zip, or 
 ```
 
 A signed object is `{object/, card.jws}`; anything else in the directory
-(a rendered page, the zip) is not part of it and is left alone.
+(a rendered page, the zip) is not part of it and is left alone. The root
+is the object's DASL tree ([folder-object §2.1](https://github.com/estoc-net/folder-object)):
+one manifest over the raw block of each file, the root the drisl CID of
+the manifest; the card signs that root.
 
 `sign` defaults to the vault's `anchor` key. Every command that unlocks the
 seed first re-derives the anchor and compares it with `config.json` — a
@@ -70,9 +73,10 @@ estoc init [--label <label>]               create a vault here (refuses if .esto
 estoc status                               show the enclosing vault and its keys
 estoc key list                             list keys as JSON (no passphrase needed)
 estoc key new <name>                       derive a key by name and record it
-estoc object hash   [<dir>]                root CID
+estoc object hash   [<dir>]                root CID: the drisl CID of the manifest (bafyrei…)
 estoc object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
 estoc object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
+estoc object render [<signedDir | signed.zip | objectDir>] [--template <html>] [--out <file>] [--asset-base <prefix>]
 estoc serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
 ```
 

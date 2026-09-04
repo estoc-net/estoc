@@ -33,7 +33,7 @@ describe("object", () => {
     const object = readObject(mapping);
     expect(Object.keys(object.tree).sort()).toEqual(["files/body.md", "files/images/sunset.png", "index.json"]);
     const root = await hashObject(object);
-    expect(root).toMatch(/^bafybei/);
+    expect(root).toMatch(/^bafyrei/);
     expect(await hashObject(readObject(await readTree(seaDay)))).toBe(root);
   });
 

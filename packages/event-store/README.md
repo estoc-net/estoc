@@ -10,13 +10,16 @@ What is here is the **model**, the **seam**, and the **folder**:
   `eid`, then `author`), structural equality, and the equality
   `Filter`;
 - the three interfaces every vault store implements: `EventStore`
-  (`append`, `ingest`, `scan`, `changes`), `BlobStore` (a block store
-  of the `unixfs-v1-2025` profile with `collect` by age) and
+  (`append`, `ingest`, `scan`, `changes`), `BlobStore` (a store of
+  DASL blocks — a file one raw block whatever its size, a received
+  object its manifest and leaves — with `collect` by age) and
   `FileStore`;
 - `MemoryEventStore`, `MemoryBlobStore`, `MemoryFileStore` — the
   reference semantics, and what folds are tested on;
 - the block functions a store's blob side is made of: `hashFile`,
-  `checkBlock`, `readFile`, `reachable`;
+  `checkBlock` (a DASL CID, the hash, and for drisl one canonical DRISL
+  document — `@estoc/dasl`'s strict decoder), `linksOf`, `readFile`,
+  `reachable`;
 - the `LocalEvent` shape a trace uses;
 - the folder ([`docs/vault-folder.md`](../../docs/vault-folder.md)):
   `VaultBackend` — the bytes interface, with `MemoryBackend`,

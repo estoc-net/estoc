@@ -1,30 +1,41 @@
 import { describe, expect, it } from "vitest";
 
-import { blobHash, encodeCar, isDagPbCid, readObject, signRoot, verifyTree } from "@estoc/folder-object";
+import { compareBytes, decodeCar, decodeDrisl, encodeCar, rawCid, type Link } from "@estoc/dasl";
+import { MalformedObjectError, blobHash, readObject, signRoot, verifyTree } from "@estoc/folder-object";
 
 import { MemoryBackend } from "@estoc/event-store";
 import { eraseMessage } from "@estoc/vault";
 
 import {
+  AES256_GCM_HKDF_1MB,
   BLOB_PUT_RESULT,
+  DEFAULT_MAX_SHARE_BYTES,
+  DRISL_MEDIA_TYPE,
   OBJECT_SHARE,
   PROBLEM_REPORT,
   RAW_MEDIA_TYPE,
   attachmentsOf,
+  buildShare,
   closureOf,
   closureSize,
   encryptStream,
+  freshKey,
+  keepShare,
   missingBytes,
+  openPackage,
   placePackage,
   verifyShare,
+  type Closure,
   type MediatorLink,
   type MessageRecord,
   type Placing,
   type PlainMessage,
+  type SharePackage,
   type WireNote,
 } from "../src/index.js";
+import { packageCar } from "../src/protocol/object-share.js";
 import { BLOB_MAX, MEDIATOR_HTTP, network, type FakeMediator } from "./fake-mediator.js";
-import { newMediator, newParty, recordsOf, until, withTimeout, type Party } from "./fixture.js";
+import { newMediator, newParty, newVault, recordsOf, until, withTimeout, type Party } from "./fixture.js";
 
 describe("v2 agent sharing objects", () => {
   const enc = (s: string) => new TextEncoder().encode(s);
@@ -55,9 +66,14 @@ describe("v2 agent sharing objects", () => {
     return { mediator, alice, bob };
   }
 
-  /** The one object-share record in `party`'s log. */
+  /** The one object-share record in `party`'s log, once it is there: a share's blocks land in `blobs/` before its message is recorded (`keepShare`), so `blobs.has(root)` is not yet the record. */
   async function shareRecordOf(party: Party): Promise<MessageRecord> {
-    return (await recordsOf(party)).find((r) => r.msg?.type === OBJECT_SHARE) as MessageRecord;
+    let found: MessageRecord | undefined;
+    await eventually(async () => {
+      found = (await recordsOf(party)).find((r) => r.msg?.type === OBJECT_SHARE);
+      return found !== undefined;
+    }, "the share's record");
+    return found as MessageRecord;
   }
 
   /** `party`'s `blobs/`, for `verifyShare`: a recorded share names its blocks by id and verifies over them */
@@ -69,7 +85,7 @@ describe("v2 agent sharing objects", () => {
   it("hands a contact a whole tree in one message, signed by the anchor, kept block by block", async () => {
     const { alice, bob } = await connected();
     const { root, blocks } = await closureOf(files);
-    expect(blocks.size).toBe(6); // three directory nodes, three raw files
+    expect(blocks.size).toBe(4); // the manifest, three raw files
     const sent = await alice.agent.shareObject(bob.agent.did as string, object, { sign: true });
     expect(sent.msg?.type).toBe(OBJECT_SHARE);
     expect((sent.msg?.body as { root: string }).root).toBe(root);
@@ -206,12 +222,49 @@ describe("v2 agent sharing objects", () => {
     const notAnObject = { "readme.txt": enc("just a folder") };
     const { root, blocks } = await closureOf(notAnObject);
     await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root }, { attachments: attachmentsOf(blocks) });
-    await eventually(async () => bob.log.some((l) => /does not verify.*malformed object/.test(l)), "bob's refusal");
+    await eventually(async () => bob.log.some((l) => /does not verify.*malformed object \(format layer\)/.test(l)), "bob's refusal");
     for (const cid of blocks.keys()) {
       expect(await bob.v.vault.blobs.has(cid)).toBe(false);
     }
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  it("refuses a manifest that names litter, or one whose index.json is not an object's, as malformed — the format layer, before any leaf", async () => {
+    const shareOf = (closure: Closure): PlainMessage => ({ id: "m", type: OBJECT_SHARE, body: { root: closure.root }, attachments: attachmentsOf(closure.blocks) });
+    const refusal = async (closure: Closure): Promise<MalformedObjectError> => {
+      const err = await verifyShare(shareOf(closure)).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MalformedObjectError);
+      return err as MalformedObjectError;
+    };
+    // a card, a hidden file, a folder beside files/: no canonical tree holds the path, so no object hashes to this root
+    for (const path of ["card.jws", "files/.DS_Store", "notes/todo.txt", ".git/HEAD"]) {
+      const strewn = await closureOf({ ...files, [path]: enc("litter") });
+      const err = await refusal(strewn);
+      expect(err.layer).toBe("format");
+      expect(err.message).toContain(`the manifest names ${JSON.stringify(path)}`);
+    }
+    // a manifest with no index.json at all: not an object, whatever it lists
+    const nameless = await closureOf({ "files/body.dj": files["files/body.dj"] });
+    expect((await refusal(nameless)).message).toMatch(/no index.json in the manifest/);
+    // index.json present but not well-formed: format; content.path the manifest does not name: closure
+    const garbled = await closureOf({ ...files, "index.json": enc("{not json") });
+    expect((await refusal(garbled)).layer).toBe("format");
+    const dangling = await closureOf({
+      ...files,
+      "index.json": enc(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000", content: { mediaType: "text/plain", path: "files/nope.txt" } })),
+    });
+    const closure = await refusal(dangling);
+    expect(closure.layer).toBe("closure");
+    expect(closure.message).toContain("content.path files/nope.txt is not in the manifest");
+    // a leaf whose bytes are not the size the manifest states: the manifest's lie, malformed — not a partial object
+    const { root, blocks } = await closureOf(files);
+    const bodyCid = await rawCid(files["files/body.dj"]);
+    const lying = new Map(blocks);
+    lying.set(bodyCid, enc("# Forged\n"));
+    const forged = await verifyShare({ id: "m", type: OBJECT_SHARE, body: { root }, attachments: attachmentsOf(lying) }).catch((e: unknown) => e);
+    expect(forged).toBeInstanceOf(Error);
+    expect((forged as Error).message).toMatch(/do not hash to/);
   });
 
   it("refuses to share more than one message should carry", async () => {
@@ -512,16 +565,19 @@ describe("v2 agent sharing objects", () => {
     }
   });
 
-  it("takes the package road when the closure does not fit: skeleton and index.json inline, the closure as an encrypted CAR at the mediator", async () => {
+  it("takes the package road when the closure does not fit: the manifest and index.json inline, the closure as an encrypted CAR at the mediator", async () => {
     const mediator = await newMediator({ blobs: true });
     const { root, blocks, minimal } = await closureOf(files);
-    expect(minimal.size).toBe(4); // three directory nodes and index.json
+    // the minimal share is exactly two blocks: the manifest, under the root, and index.json's raw block
+    expect([...minimal.keys()].sort()).toEqual([root, await rawCid(files["index.json"])].sort());
+    expect(minimal.get(root)).toBe(blocks.get(root));
     const { alice, bob } = await squeezedOver(mediator, [1, 2]);
     const sent = await alice.agent.shareObject(bob.agent.did as string, object, { sign: true });
     const attachments = (sent.msg as PlainMessage).attachments as { id: string; media_type: string; byte_count: number; data: Record<string, unknown> }[];
-    expect(attachments).toHaveLength(5);
-    expect(attachments.slice(0, 4).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
-    const pkg = attachments[4] as (typeof attachments)[number];
+    expect(attachments).toHaveLength(3);
+    expect(attachments.slice(0, 2).map((a) => a.id).sort()).toEqual([...minimal.keys()].sort());
+    expect(attachments.slice(0, 2).map((a) => a.media_type)).toEqual([RAW_MEDIA_TYPE, DRISL_MEDIA_TYPE]); // in CID order: bafk… before bafy…
+    const pkg = attachments[2] as (typeof attachments)[number];
     expect(pkg.media_type).toBe("application/vnd.ipld.car");
     // the store holds the ciphertext, whole, checked against its hash, served at an id that is not the hash
     const stored = mediator.blobs?.get(pkg.id);
@@ -535,8 +591,8 @@ describe("v2 agent sharing objects", () => {
     // the sender keeps every block regardless
     for (const cid of blocks.keys()) expect(await alice.v.vault.blobs.has(cid)).toBe(true);
 
-    // Bob has the skeleton; the leaves are named, sized and packaged, not here
-    await eventually(() => bob.v.vault.blobs.has(root), "bob's skeleton");
+    // Bob has the manifest and index.json; the leaves are named, sized and packaged, not here
+    await eventually(() => bob.v.vault.blobs.has(root), "bob's manifest");
     const bodyCid = [...blocks.keys()].find((c) => !minimal.has(c)) as string;
     expect(await bob.v.vault.blobs.has(bodyCid)).toBe(false);
     const record = await shareRecordOf(bob);
@@ -558,8 +614,8 @@ describe("v2 agent sharing objects", () => {
     expect(whole.complete).toBe(true);
     expect(Object.keys(whole.object.tree).sort()).toEqual(["files/body.dj", "files/images/dot.png", "index.json"]);
     expect(await bob.v.vault.blobs.has(bodyCid)).toBe(true);
-    // the record is what it was — the skeleton's blocks by id, the package named — and blobs/ is what filled in
-    expect((record.msg?.attachments as { data?: unknown }[]).slice(0, 4).every((a) => a.data === undefined)).toBe(true);
+    // the record is what it was — the minimal share's blocks by id, the package named — and blobs/ is what filled in
+    expect((record.msg?.attachments as { data?: unknown }[]).slice(0, 2).every((a) => a.data === undefined)).toBe(true);
     expect((await verifyShare(record.msg as PlainMessage, heldBy(bob))).complete).toBe(true);
     expect(await bob.agent.fetchPackage(record)).toMatchObject({ complete: true }); // already whole: nothing fetched
 
@@ -569,7 +625,7 @@ describe("v2 agent sharing objects", () => {
     await withTimeout(carol.live, 8000, "carol live");
     await alice.agent.addContact(carol.agent.did as string, "Carol");
     const again = await alice.agent.shareObject(carol.agent.did as string, object);
-    expect(((again.msg as PlainMessage).attachments as { id: string }[])[4]?.id).toBe(pkg.id);
+    expect(((again.msg as PlainMessage).attachments as { id: string }[])[2]?.id).toBe(pkg.id);
     expect(mediator.blobs?.size).toBe(1);
     alice.agent.destroy();
     bob.agent.destroy();
@@ -583,7 +639,7 @@ describe("v2 agent sharing objects", () => {
     await eventually(async () => (await recordsOf(bob)).some((r) => r.msg?.type === OBJECT_SHARE), "bob's share");
     const record = await shareRecordOf(bob);
     type Pkg = { id: string; media_type: string; byte_count: number; data: { links: string[]; hash: string } };
-    const pkgOf = (msg: PlainMessage): Pkg => (msg.attachments as Pkg[])[4] as Pkg;
+    const pkgOf = (msg: PlainMessage): Pkg => (msg.attachments as Pkg[])[2] as Pkg;
     const url = pkgOf(record.msg as PlainMessage).data.links[0];
     const variant = (edit: (pkg: Pkg) => void): MessageRecord => {
       const msg = structuredClone(record.msg) as PlainMessage;
@@ -714,7 +770,7 @@ describe("v2 agent sharing objects", () => {
     const mediator = await newMediator({ blobs: true });
     const { alice, bob } = await squeezedOver(mediator, [1, 2]);
     const sent = await alice.agent.shareObject(bob.agent.did as string, object);
-    const hash = ((sent.msg as PlainMessage).attachments as { id: string }[])[4]?.id as string;
+    const hash = ((sent.msg as PlainMessage).attachments as { id: string }[])[2]?.id as string;
     await eventually(async () => (await recordsOf(bob)).some((r) => r.msg?.type === OBJECT_SHARE), "bob's share");
     const record = await shareRecordOf(bob);
 
@@ -736,14 +792,130 @@ describe("v2 agent sharing objects", () => {
   it("does not keep a share without index.json's bytes: not the minimal share", async () => {
     const { alice, bob } = await connected();
     const { root, blocks } = await closureOf(files);
-    const skeleton = new Map([...blocks].filter(([cid]) => isDagPbCid(cid)));
+    const skeleton = new Map([[root, blocks.get(root) as Uint8Array]]); // the manifest alone
     await alice.agent.send(bob.agent.did as string, OBJECT_SHARE, { root }, { attachments: attachmentsOf(skeleton) });
-    await eventually(async () => bob.log.some((l) => /does not verify; recorded as it came: .*no index.json/.test(l)), "bob's refusal");
+    await eventually(async () => bob.log.some((l) => /does not verify; recorded as it came: .*carries no index.json: not the minimal share/.test(l)), "bob's refusal");
     // none of the share's blocks are kept (the record's own body lives in blobs/ regardless)
     for (const cid of blocks.keys()) {
       expect(await bob.v.vault.blobs.has(cid)).toBe(false);
     }
+    // and without the manifest nothing of the tree can be told: malformed, not partial
+    const leaves = new Map([...blocks].filter(([cid]) => cid !== root));
+    await expect(verifyShare({ id: "m", type: OBJECT_SHARE, body: { root }, attachments: attachmentsOf(leaves) })).rejects.toThrow(`missing object ${root}`);
     alice.agent.destroy();
     bob.agent.destroy();
+  });
+
+  it("a share missing a leaf verifies partial: the leaf named and sized by the manifest, the rest of the object read", async () => {
+    const { root, blocks } = await closureOf(files);
+    const bodyCid = await rawCid(files["files/body.dj"]);
+    const without = new Map([...blocks].filter(([cid]) => cid !== bodyCid));
+    const msg: PlainMessage = { id: "m", type: OBJECT_SHARE, body: { root }, attachments: attachmentsOf(without) };
+    const share = await verifyShare(msg);
+    expect(share.complete).toBe(false);
+    expect(share.tree.partial).toEqual(new Map([["files/body.dj", [bodyCid]]]));
+    expect(share.tree.missing).toEqual(new Map([[bodyCid, files["files/body.dj"].length]]));
+    expect(share.tree.sizes.get("files/body.dj")).toBe(files["files/body.dj"].length);
+    expect(missingBytes(share.tree)).toBe(files["files/body.dj"].length);
+    expect(Object.keys(share.object.tree).sort()).toEqual(["files/images/dot.png", "index.json"]);
+    expect(share.object.meta.title).toBe("Sea day");
+    // what the walk reached: everything carried, nothing more
+    expect([...share.blocks.keys()].sort()).toEqual([...without.keys()].sort());
+    // the same leaf held from another road counts as present
+    const filled = await verifyShare(msg, async (cid) => blocks.get(cid) ?? null);
+    expect(filled.complete).toBe(true);
+    expect(filled.blocks.has(bodyCid)).toBe(true);
+  });
+
+  it("a 2 MiB file is one leaf: one attachment when it fits, the package road when it does not, and verifies whole", async () => {
+    const big = new Uint8Array(2 * 1024 * 1024);
+    for (let i = 0; i < big.length; i += 251) big[i] = i & 0xff;
+    const large = readObject({ "index.json": files["index.json"], "files/big.bin": big });
+    const closure = await closureOf(large.tree);
+    const bigCid = await rawCid(big);
+    expect(closure.blocks.size).toBe(3); // the manifest, index.json, and the file as one block
+    expect(closure.blocks.get(bigCid)).toBe(big);
+    const attachments = attachmentsOf(closure.blocks);
+    expect(attachments.find((a) => a.id === bigCid)).toMatchObject({ media_type: RAW_MEDIA_TYPE, byte_count: big.length });
+    expect(attachments.find((a) => a.id === closure.root)?.media_type).toBe(DRISL_MEDIA_TYPE);
+    const inline: PlainMessage = { id: "m", type: OBJECT_SHARE, body: { root: closure.root }, attachments };
+    const whole = await verifyShare(inline);
+    expect(whole.complete).toBe(true);
+    expect(whole.tree.sizes.get("files/big.bin")).toBe(big.length);
+    expect(compareBytes(whole.object.tree["files/big.bin"] as Uint8Array, big)).toBe(0);
+
+    // kept by the handler: a 2 MiB raw block goes into blobs/ whole — the store has no bound on a leaf
+    const { v } = await newVault("Keeper", 9, null);
+    const log: string[] = [];
+    const lifted = await keepShare(inline, v.vault.blobs, (line) => log.push(line));
+    expect(lifted.attachments).toEqual([closure.root]);
+    expect(await v.vault.blobs.has(bigCid)).toBe(true);
+    expect(compareBytes((await v.vault.blobs.getBlock(bigCid)) as Uint8Array, big)).toBe(0);
+    expect(log).toEqual([`https://estoc.dev/post/1.0 ${closure.root} (unsigned): 2 files kept`]);
+
+    // past the default inline limit it goes by package: the manifest and index.json inline, the whole closure placed
+    let placed: Closure | null = null;
+    const hash = await blobHash(enc("the ciphertext"));
+    const parts = await buildShare(v, large, {}, DEFAULT_MAX_SHARE_BYTES, async (whole) => {
+      placed = whole;
+      return { hash, url: "https://store/b/x", byteCount: 14, key: new Uint8Array(32), retainUntil: "2027-01-01T00:00:00.000Z" };
+    });
+    expect((placed as Closure | null)?.root).toBe(closure.root);
+    expect((placed as Closure | null)?.blocks.get(bigCid)).toBe(big);
+    expect((parts.attachments as { id: string }[]).map((a) => a.id)).toEqual([...[...closure.minimal.keys()].sort(), hash]);
+    expect(parts.body.package?.attachment_id).toBe(hash);
+    // and inline whole under a limit it fits
+    const roomy = await buildShare(v, large, {}, closureSize(closure.blocks), async () => {
+      throw new Error("not to be placed");
+    });
+    expect((roomy.attachments as { id: string }[]).map((a) => a.id)).toEqual([...closure.blocks.keys()].sort());
+    expect(roomy.body.package).toBeUndefined();
+  });
+
+  it("a package is a DASL CAR: it opens back to the closure, a block named by no DASL CID is dropped, and one rooted elsewhere is refused", async () => {
+    const closure = await closureOf(files);
+    const car = packageCar(closure);
+    // the header: a varint length, then the DRISL map {roots: [root], version: 1}
+    const varint = (bytes: Uint8Array, at: number): [number, number] => {
+      let value = 0;
+      let shift = 0;
+      for (;;) {
+        const b = bytes[at++] as number;
+        value |= (b & 0x7f) << shift;
+        if (b < 0x80) return [value, at];
+        shift += 7;
+      }
+    };
+    const [length, start] = varint(car, 0);
+    const header = decodeDrisl(car.subarray(start, start + length)) as { roots: Link[]; version: number };
+    expect(Object.keys(header).sort()).toEqual(["roots", "version"]);
+    expect(header.version).toBe(1);
+    expect(header.roots.map((link) => link.cid.text)).toEqual([closure.root]);
+    const read = await decodeCar(car);
+    expect(read.roots).toEqual([closure.root]);
+    expect(read.bad).toEqual([]);
+    expect([...read.blocks.keys()].sort()).toEqual([...closure.blocks.keys()].sort());
+
+    // a section named by 36 bytes that are not a DASL CID (a dag-pb CID, say) is dropped like one failing its hash
+    const notDasl = new Uint8Array([0x01, 0x70, 0x12, 0x20, ...new Uint8Array(32).fill(7)]);
+    const data = enc("a dag-pb node");
+    const section = new Uint8Array([notDasl.length + data.length, ...notDasl, ...data]);
+    const tainted = await decodeCar(new Uint8Array([...car, ...section]));
+    expect(tainted.bad).toHaveLength(1);
+    expect([...tainted.blocks.keys()].sort()).toEqual([...closure.blocks.keys()].sort());
+
+    // through the share's road: encrypted, named by its hash, opened under the key
+    const key = freshKey();
+    const ciphertext = await encryptStream(key, car);
+    const pkg: SharePackage = { hash: await blobHash(ciphertext), byteCount: ciphertext.length, url: "https://store/b/x", availableUntil: "2027-01-01T00:00:00.000Z", algorithm: AES256_GCM_HKDF_1MB, key };
+    const opened = await openPackage(pkg, ciphertext, closure.root);
+    expect([...opened.keys()].sort()).toEqual([...closure.blocks.keys()].sort());
+    for (const [cid, bytes] of opened) {
+      expect(compareBytes(bytes, closure.blocks.get(cid) as Uint8Array)).toBe(0);
+    }
+    // rooted elsewhere: some other object's package, refused whole; bytes that are not the package: refused before the key is used
+    const other = await closureOf({ ...files, "files/body.dj": enc("edited") });
+    await expect(openPackage(pkg, ciphertext, other.root)).rejects.toThrow(/rooted at \[.*\], not the object shared/);
+    await expect(openPackage({ ...pkg, hash: await blobHash(enc("x")) }, ciphertext, closure.root)).rejects.toThrow(/do not hash to the package/);
   });
 });

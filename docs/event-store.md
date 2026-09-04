@@ -212,7 +212,7 @@ event at all are a *damaged* line (§4.5), reported, not stored.
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
-type Cid = string;                    // CIDv1, sha-256, codec raw or dag-pb, base32 lower (§5)
+type Cid = string;                    // a DASL CID: CIDv1, sha-256, codec raw or drisl, base32 lower (§5)
 
 type Event<D extends JsonObject = JsonObject> = {
   eid: string;                        // a bare uuidv7
@@ -440,12 +440,12 @@ shows.
 ## 5. Blobs
 
 ```ts
-interface BlobStore {                 // a block store of the `unixfs-v1-2025` profile
+interface BlobStore {                 // a store of DASL blocks (§5.1)
   // files — what an event's `body` and `attachments` name
-  put(bytes: Uint8Array): Promise<Cid>;          // hashes by the profile; returns the file's root. A caller cannot misname bytes.
-  get(root: Cid): Promise<Uint8Array | null>;    // the file's bytes, chunks rejoined; null if the root or any chunk is absent; throws on a node that is not a file
-  // blocks — what the profile's trees are made of
-  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (profile name, hash, and for dag-pb that the bytes decode as a profile node); the only way in for a block minted elsewhere
+  put(bytes: Uint8Array): Promise<Cid>;          // hashes the bytes to their raw CID, one block whatever the size; returns it, the file's root. A caller cannot misname bytes.
+  get(root: Cid): Promise<Uint8Array | null>;    // the file's bytes, its one raw block; null if the block is absent; throws on a drisl root, which names a document, not a file
+  // blocks — what a received object is made of: its manifest and its leaves
+  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;   // checked against `cid` (a DASL CID, the hash, and for drisl one canonical DRISL document); the only way in for a block minted elsewhere
   getBlock(cid: Cid): Promise<Uint8Array | null>;
   has(cid: Cid): Promise<boolean>;
   list(): Promise<Cid[]>;
@@ -458,37 +458,40 @@ interface Collected { unlinked: Cid[]; young: Cid[] }   // `young`: unreferenced
 
 ### 5.1 Blocks and names
 
-A blob is one block of the UnixFS hashing profile `unixfs-v1-2025`
-(`@estoc/folder-object`, `object-share.md` §2): a CIDv1 over sha-256,
-base32 lower, whose codec is **`raw`** — bare bytes, at most 1 MiB —
-or **`dag-pb`** — a UnixFS node: a directory, a HAMT shard, or the
-chunk index of a file over 1 MiB, whose links are further blocks. A
-**file** is a raw block or a dag-pb root over raw 1 MiB chunks in the
-profile's balanced layout; `put` hashes bytes into exactly that and
-returns the root, so the same bytes have the same name in a vault, in
-an `object-share/1.0` share, and in a signed object, and a
-single-block file's name *is* its bytes' raw CID. A received object —
-blocks already named — comes in by `putBlock`, one per block, and is
-read back by `@estoc/folder-object` over `getBlock`; nothing is
-re-hashed and nothing is stored twice. A CID names a block inside a
-tree; a bare multihash (`blob-store.md`) names bytes outside one — a
-package as uploaded — and the two are never confused.
+A blob is one DASL block (`@estoc/folder-object`, `object-share.md`
+§2): a CIDv1 over sha-256, base32 lower, in its one canonical
+spelling, whose codec is **`raw`** — bare bytes, of any size — or
+**`drisl`** — one canonical DRISL document whose links are DASL CIDs:
+a manifest, `{resources: {"/path": {src, size}}}`, whose links are
+its leaves. A **file** is one raw block, whatever its size; `put`
+hashes bytes into exactly that and returns the raw CID, so the same
+bytes have the same name in a vault, in an `object-share/1.0` share,
+and as a leaf of a signed object, and a file's name *is* its bytes'
+raw CID. A received object — the manifest and its leaves, blocks
+already named — comes in by `putBlock`, one per block, and is read
+back by `@estoc/folder-object` over `getBlock`; nothing is re-hashed
+and nothing is stored twice. A CID names a block inside an object; a
+bare multihash (`blob-store.md`) names bytes outside one — a package
+as uploaded — and the two are never confused.
 
 Blobs are immutable, merged by union, deduplicated by construction
-(two attachments sharing a chunk share a block), and the one thing in
-a vault that is ever unlinked (`vault-events.md` §8). A name is
+(two objects sharing a leaf share a block), and the one thing in a
+vault that is ever unlinked (`vault-events.md` §8). A name is
 computed by the store on `put`, checked by `putBlock` and on import
 (§10.3), and may be checked on read. The check is three things: that
-the name is a profile name (CIDv1, sha-256, `raw` or `dag-pb`); that
-the bytes hash to it, and a raw block is at most 1 MiB; and, for
-`dag-pb`, that the bytes decode as a node the profile makes — a
-UnixFS file, directory, or HAMT shard, its links well formed — since a
-hash proves only that the bytes are the ones named, and the empty
-node, or any dag-pb without UnixFS data, has a perfectly good CID that
-no conforming `put` ever minted. It is not a closure check: blocks
-arrive one at a time, leaves before root, and a root whose kind admits
-a partial tree may lack leaves for good (`vault-events.md` §4); what a
-root reaches is read when it is read.
+the name is a DASL CID (CIDv1, sha-256, `raw` or `drisl`, base32
+lower, one spelling); that the bytes hash to it; and, for `drisl`,
+that the bytes are one canonical DRISL document — the strict decoder
+takes them and the encoder gives the same bytes back, `@estoc/dasl`'s
+both, the one codec every reader of a block shares — whose links
+are DASL CIDs, since a hash proves only that the bytes are the ones
+named, and a document in any other form has a perfectly good CID that
+is not a function of its content. It is not the manifest's shape:
+whether a document is a manifest is `@estoc/folder-object`'s
+judgment, made when the object is read, so a DRISL block that is not
+a manifest is not damage. It is not a closure check either: blocks
+arrive one at a time, and a manifest may lack leaves for good
+(`vault-events.md` §4); what a root reaches is read when it is read.
 
 A block that fails the check is **damage**: never served, never
 copied, and **absent** to everyone — to a reader (`vault-events.md`
@@ -499,8 +502,8 @@ every name a vault holds is one a conforming `put` could have minted,
 and a name found otherwise is not held.
 
 Which events reference which roots is on the events (`blobs`, §2.2);
-which blocks a root reaches is in the blocks: raw has no links,
-dag-pb's are in the node, and the codec is in the name. A collector
+which blocks a root reaches is in the blocks: raw has no links, a
+drisl block's are in the document, and the codec is in the name. A collector
 therefore needs no type; when a block may go is the events' business
 (`vault-events.md` §8.3); the store only promises that a CID it holds
 returns the bytes it was given.
@@ -953,7 +956,7 @@ CREATE INDEX events_order ON events (at, eid, author);
 --   peer_key TEXT GENERATED ALWAYS AS (json_extract(data, '$.peerKey')),
 -- with an index on (my_key, peer_key, at, eid). The model does not say.
 CREATE TABLE blobs (cid TEXT PRIMARY KEY, bytes BLOB NOT NULL, written TEXT NOT NULL);   -- `written`: renewed by a repeated put (§5.3)
-CREATE TABLE links (parent TEXT NOT NULL, child TEXT NOT NULL);   -- a dag-pb block's links, filled on put; derived, rebuildable from `blobs`
+CREATE TABLE links (parent TEXT NOT NULL, child TEXT NOT NULL);   -- a drisl block's links, filled as a block comes in; derived, rebuildable from `blobs`
 CREATE TABLE files (path TEXT PRIMARY KEY, bytes BLOB NOT NULL);
 ```
 
@@ -993,11 +996,6 @@ is a question for when a fold is too slow to run at open, not before.
   open is slow.
 - **`fsync` on Node** (§4.1). A per-append `fsync` would let the
   daemon claim power-loss durability. Cheap; not decided.
-- **The profile's hasher in the store** (§5.1). `put` chunks and roots
-  by `unixfs-v1-2025`, and collection decodes dag-pb links; both live
-  in `@estoc/folder-object`. Whether `@estoc/vault` depends on that
-  package or on a smaller one split out of it is an implementation
-  matter; the profile and the names are fixed either way.
 - **A logical clock** (§3). Latest-wins is by `at`, a wall clock. If a
   field ever needs "the person's last decision" rather than "the
   latest timestamp", the change is a hybrid logical clock in the

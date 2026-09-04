@@ -38,16 +38,13 @@
     "vault",
     "event-store",
     "event-sourcing",
-    "unixfs",
     "opfs",
-    "decentralized-identity"
+    "decentralized-identity",
+    "dasl"
   ],
   "dependencies": {
-    "@ipld/dag-pb": "^4.1.7",
+    "@estoc/dasl": "workspace:^",
     "fflate": "^0.8.2",
-    "ipfs-unixfs": "^13.0.0",
-    "ipfs-unixfs-importer": "^17.0.1",
-    "multiformats": "^14.0.5",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
@@ -56,6 +53,7 @@
     "typescript": "~5.8.0",
     "vitest": "^3.2.7",
     "esbuild": "^0.25.12",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "^1.62.1",
+    "multiformats": "^14.0.5"
   }
 }
