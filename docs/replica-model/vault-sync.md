@@ -10,7 +10,7 @@ appear in all capitals.
 ## 1. What it is for
 
 Full Estoc replicas write while disconnected and later converge by set
-union. The sync store is a rendezvous and encrypted backup mirror: it
+union. The sync store is an anti-entropy meeting point and encrypted backup mirror: it
 keeps opaque immutable objects, tells clients which opaque object IDs
 exist, and serves their ciphertext. It never receives vault event JSON,
 blob CIDs, message bodies, event types or contact data in plaintext.
@@ -18,9 +18,11 @@ blob CIDs, message bodies, event types or contact data in plaintext.
 The protocol synchronizes:
 
 - the immutable vault configuration needed for bootstrap;
-- vault events;
+- vault events, including rendezvous, relationship, route and selected
+  `did:web` publication state;
 - extension-store events; and
-- content-addressed blob blocks referenced by those events.
+- content-addressed blob blocks referenced by those events, including exact
+  prepared DID document revisions.
 
 It does not synchronize `local/`, sockets, pickup acknowledgments,
 process locks, fold caches, traces, local options or other local
@@ -32,9 +34,14 @@ compaction or distributed garbage collection.
 
 ## 2. Roles and dependencies
 
-- **Sync client** — an unlocked full replica.
-- **Sync store** — an untrusted server that authenticates one shared
-  vault account, stores immutable ciphertext and provides inventory.
+- **Sync client** — an unlocked full replica. It may run in a local
+  application or on a server holding the same vault seed.
+- **Sync store** — an untrusted server that authenticates one shared vault
+  account, stores immutable ciphertext and provides inventory.
+
+A remote thin client that does not hold the seed is not a sync client. The
+sync protocol does not establish a preferred or authoritative host and does
+not reveal which replica publishes a public DID document.
 
 Control messages are DIDComm Messaging 2.1 messages in the family:
 
@@ -703,6 +710,12 @@ does not match the anchor derived from the supplied seed is fatal.
 
 A sync store is not the sole sovereign representation. A normal Estoc
 folder snapshot remains a complete readable interchange format.
+
+A full replica bootstrapped on a web server has no special sync identity. It
+uses the same account and anti-entropy as any other full replica, then may
+reconcile a selected `did:web` document if it separately holds publication
+authority. Loss of that publisher does not alter synchronized pairwise DID
+state.
 
 ## 14. Quota and availability
 

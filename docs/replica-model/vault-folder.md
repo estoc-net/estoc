@@ -43,6 +43,19 @@ not encrypt message history or attachments.
 A `.estoc/` folder MUST NOT be uploaded as a mediator message or treated
 as the `vault-sync/1.0` server representation.
 
+A full vault runtime may use this format on an end-user machine or render it
+from a server-side backend. A hosted implementation that holds the seed MUST
+be able to export the complete portable vault in this format; its internal
+database MUST NOT be the only recoverable representation.
+
+Selected `did:web` document revisions are ordinary referenced blobs and
+vault events. The published `did.json` resource is a deployment projection,
+not a new authoritative file inside `.estoc/`.
+
+A remote thin client that does not hold the seed and full portable state is
+not a vault folder backend. Its command queue and projection cache belong to
+client-local storage outside this format.
+
 ## 2. Path and byte rules
 
 All paths in this document are relative to the vault root and use `/` as
@@ -220,8 +233,13 @@ A representative shape is:
       "createdAt": "2026-09-03T15:04:05.123Z"
     },
     {
-      "name": "did/019b2a45-8381-793f-943c-f5d806fd5ca2",
+      "name": "did/019b2a45-8381-793f-943c-f5d806fd5ca2/authentication/0",
       "did": "did:key:z6Mk...",
+      "createdAt": "2026-09-03T15:05:00.000Z"
+    },
+    {
+      "name": "did/019b2a45-8381-793f-943c-f5d806fd5ca2/key-agreement/0",
+      "did": "did:key:z6LS...",
       "createdAt": "2026-09-03T15:05:00.000Z"
     }
   ]
@@ -238,7 +256,8 @@ client MAY rebuild `keys` from:
 
 - `anchor`;
 - every `mediation.created.data.me.key`;
-- every `did.minted.data.key`; and
+- every key name in `did.created`, `did.keyGenerationAdded` and the
+  currently supported DID key-generation profile; and
 - protocol-reserved key names such as the vault-sync account.
 
 ### 5.1 Import policy
@@ -447,7 +466,7 @@ Both values are canonical lowercase UUIDv7.
 Neither value is a hardware or operating-system identifier. Neither is
 an authorization secret.
 
-When the whole file is absent on first writable open, the host MUST mint
+When the whole file is absent on first writable open, the runtime MUST mint
 both values and durably write the file before exposing append or pickup
 operations. A partially present, malformed or internally inconsistent
 file is damage and MUST NOT be silently repaired by retaining one field.
@@ -759,4 +778,9 @@ The following require a new folder/vault version:
 18. At-rest plaintext message content is not described as protected by
     the vault passphrase.
 19. No mediator or sync operation consumes the folder as plaintext.
-20. A retired replica's historical author directory remains readable.
+20. A hosted full runtime can export an equivalent complete portable folder;
+    server-local database state is not the sole recoverable copy.
+21. A selected `did:web` document revision is retained as a referenced blob
+    and event, not as an authoritative mutable `did.json` path in the vault.
+22. A thin-client cache is not accepted as a complete vault folder.
+23. A retired replica's historical author directory remains readable.

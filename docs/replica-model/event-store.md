@@ -8,21 +8,21 @@ This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14
 when, and only when, they appear in all capitals.
 
-This is one of six documents that define the distributed vault:
+This is one of seven documents that define the distributed vault:
 
 | document | defines |
 | --- | --- |
 | `event-store.md` | the medium-independent event, blob and vault-store interfaces |
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
-| `distributed-delivery.md` | local-first send, packaging, retry and end-to-end acknowledgment |
-| `replica-mediation.md` | mediator fan-out and per-replica pickup acknowledgment |
+| `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
+| `rendezvous.md` | public `did:web` discovery and contact-scoped handoff to pairwise `did:peer` |
+| `replica-mediation.md` | method-neutral mediator fan-out and per-replica pickup acknowledgment |
 | `vault-sync.md` | encrypted anti-entropy through an untrusted sync store |
 
 Dependency runs downward. `vault-folder.md` serializes the model here.
-`vault-events.md` defines payloads above it. The delivery, mediation and
-sync protocols use the event and blob primitives but do not change their
-meaning.
+`vault-events.md` defines payloads above it. The delivery, rendezvous, mediation and sync protocols use the event and
+blob primitives but do not change their meaning.
 
 ## 1. Scope
 
@@ -42,9 +42,14 @@ The portable sets define the identity's recoverable state. Local state is
 not part of the vault, is never synchronized, and is omitted from every
 portable snapshot.
 
-The store does not know contacts, messages, mediators or replicas as
-domain objects. It knows only event authors. The vault layer requires the
-author used for local appends to equal the current local `replica_id`.
+The store does not know contacts, messages, public DIDs, mediators or
+replicas as domain objects. It knows only event authors. The vault layer
+requires the author used for local appends to equal the current local
+`replica_id`.
+
+A writable vault runtime may execute in an end-user application or on a
+server. The event store assigns no authority based on process location and
+has no special web-host author type.
 
 ## 2. Invariants
 

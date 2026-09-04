@@ -10,25 +10,36 @@ when, and only when, they appear in all capitals.
 
 ## 1. What it is for
 
-One Estoc vault may have several independently writable local replicas.
-Every full replica holds the same vault seed and can therefore derive the same communication DIDs, recipient keys and mediation account keys. A sender
-must still address one DID and send one encrypted application message.
-The mediator fans that one opaque message out to the vault's active
-replicas, and each replica acknowledges independently.
+One Estoc vault may have several independently writable full replicas. Every
+full replica holds the same vault seed and can derive the same communication
+DIDs, recipient keys and mediation account keys. A sender still addresses
+one vault-scoped DID and sends one encrypted application message. The
+mediator fans that opaque message out to the vault's active replicas, and
+each replica acknowledges independently.
+
+The recipient DID may be:
+
+- a public rendezvous DID, normally `did:web`, used for the first encrypted
+  relationship request; or
+- a pairwise relationship DID, normally `did:peer`, used after handoff.
+
+The mediator applies identical storage, fan-out and pickup semantics to both.
+It does not need to know the vault role of a recipient DID.
 
 The protocol adds two things to ordinary DIDComm mediation:
 
 1. a lifecycle for **replicas** under one mediation account; and
 2. a replica-scoped profile of Message Pickup 3.0.
 
-It also fixes the storage and privacy rules that make this fan-out safe:
-the mediator stores one encrypted inner DIDComm envelope, creates one
+It also fixes the storage and privacy rules that make this fan-out safe: the
+mediator stores one encrypted inner DIDComm envelope, creates one
 **delivery** per active replica, and never treats one replica's
 acknowledgment as another replica's.
 
 This protocol does not synchronize the vault event set. That is
-`vault-sync/1.0`. It does not make one full replica less trusted than
-another, and it does not make a lost copy of the shared seed revocable.
+`vault-sync/1.0`. It does not define public-to-pairwise handoff; that is
+`rendezvous/1.0`. It does not make one full replica less trusted than another,
+and it does not make a lost copy of the shared seed revocable.
 
 ## 2. Dependencies
 
@@ -39,7 +50,8 @@ A conforming implementation uses:
 - Coordinate Mediation 3.0
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
-- Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`); and
+- Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
+- `rendezvous/1.0` for the optional public-to-pairwise handoff; and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -50,19 +62,21 @@ advisory; successful `register` is the authoritative capability check.
 ## 3. Terms and trust model
 
 - **Vault** — one Estoc identity and its event, blob and key material.
-- **Full replica** — one independently writable local incarnation of a
+- **Full replica** — one independently writable incarnation of a
   vault, holding the seed and enough vault data to derive and use the
   vault's communication identities. It is not a hardware identity.
 - **Mediation account** — the DIDComm identity that established one
   Coordinate Mediation arrangement with a mediator. It is shared by all
   full replicas of the vault.
-- **Recipient DID** — a DID registered under the mediation account and
-  accepted as `body.next` of a Routing 2.0 `forward` message.
+- **Recipient DID** — any DID registered under the mediation account and
+  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a
+  public rendezvous DID or a pairwise relationship DID. The mediator does
+  not assign semantics based on its method or role.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
   incarnation for event provenance, delivery and acknowledgment. It is
   stored as `local/replica.json.replica_id`, is also used as the author of
   events produced by that incarnation, and is not a key or authorization
-  boundary. There is no second identity for the host hardware or operating system.
+  boundary. There is no second identity for the execution host or operating system.
 - **Mailbox message** — one retained encrypted inner DIDComm envelope,
   stored once under a mediation account.
 - **Delivery** — one replica's pending right to obtain a mailbox message.
@@ -104,6 +118,10 @@ A conforming mediator MUST preserve all of the following:
    being returned or pushed more than once before acknowledgment.
 8. A transport acceptance response from a mediator is not proof that an
    ultimate recipient durably received the application message.
+9. A sender addresses a recipient DID, never a replica ID. Replica fan-out is
+   an internal mailbox operation.
+10. Public rendezvous and pairwise relationship DIDs receive the same
+    per-replica delivery semantics.
 
 ## 5. Replica lifecycle
 
@@ -320,10 +338,16 @@ https://estoc.dev/replica-mediation/1.0/retired
 
 ## 6. Coordinate Mediation profile
 
-The mediation account remains the one `recipient` in Coordinate
-Mediation 3.0. All full replicas derive and use that same account key.
-Recipient DIDs are therefore registered once per mediation arrangement,
-not once per replica.
+The mediation account remains the one `recipient` in Coordinate Mediation
+3.0. All full replicas derive and use that same account key. Recipient DIDs
+are therefore registered once per mediation arrangement, not once per
+replica.
+
+Registration is method-neutral. A `did:web` rendezvous DID and a `did:peer`
+relationship DID may both be registered under the same account. The
+recipient-control proof is verified against an authentication method of the
+specific recipient DID and does not grant the mediator application-level
+knowledge of its role.
 
 ### 6.1 Recipient-control proof
 
@@ -462,6 +486,27 @@ Consequently, the sender MUST treat mediator or HTTP acceptance only as
 `submitted`. Ultimate delivery is established by an authenticated
 application-level ACK, as described in `distributed-delivery/1.0`.
 
+### 7.4 Recipient-role neutrality
+
+The mediator MUST NOT require a recipient to be classified as public,
+rendezvous, pairwise, relationship or server-owned. For routing purposes,
+all registered recipient DIDs have the same shape:
+
+```text
+recipient DID -> mediation account -> active replica deliveries
+```
+
+A sender resolving a public `did:web` may discover this mediator through its
+`DIDCommMessaging` service and send a `rendezvous/1.0/request`. Later traffic
+to the resulting `did:peer` relationship DID may use the same mediation
+account and storage path. It may instead use another vault-scoped mediation
+account at the same or another mediator; the replica lifecycle and delivery
+rules are identical per account.
+
+Changing the active replica set, adding a full replica on a server or moving
+the web publisher MUST NOT require changing either recipient DID. Thin
+clients that do not hold the seed do not register here.
+
 ## 8. Message Pickup 3.0 replica profile
 
 All pickup messages MUST be authcrypted from the mediation account to the
@@ -594,6 +639,12 @@ Several simultaneous connections MAY identify the same replica and MAY
 receive the same delivery. They share that replica's acknowledgment
 domain. Disconnecting or failing a push MUST NOT acknowledge a delivery.
 
+This live connection is the permitted form of direct-to-replica transport in
+version 1.0. It is an internal mailbox delivery channel authenticated under
+the mediation account; the external sender still addresses the recipient
+DID and never learns the replica ID. A live push never replaces the durable
+delivery row before `messages-received`.
+
 ## 9. Retention and replay
 
 For an accepted mailbox message, the mediator computes:
@@ -641,19 +692,30 @@ mailbox message or only some replica deliveries.
 
 ## 11. Privacy and security
 
-The mediator is permitted to observe and retain routing metadata needed
-for operation, including:
+The mediator is permitted to observe and retain routing metadata needed for
+operation, including:
 
 - mediation account DID;
-- recipient DID (`body.next`);
+- recipient DID (`body.next`) and therefore its method syntax;
 - replica IDs;
 - ciphertext size and hash;
 - arrival, delivery, acknowledgment and expiry times; and
 - transport metadata such as IP address and connection timing.
 
-Because every full replica uses the same mediation-account key, the
-mediator cannot cryptographically prove that a caller supplied its own
-local `replica_id`. Per-replica scoping prevents conforming clients from
+The mediator MUST NOT be sent an explicit rendezvous role, relationship ID,
+contact ID, human-readable label or web-publication state. A replica ID MUST
+NOT appear in a public DID document or in an innermost application `to`
+header as a delivery target.
+
+Recipient DIDs registered under the same mediation account are linkable to
+that mediator. Pairwise DIDs prevent public correlation by unrelated peers;
+they do not by themselves hide account membership from the mediator. A vault
+that needs that property uses separate mediation arrangements and accepts the
+additional registration, pickup and availability cost.
+
+Because every full replica uses the same mediation-account key, the mediator
+cannot cryptographically prove that a caller supplied its own local
+`replica_id`. Per-replica scoping prevents conforming clients from
 accidentally acknowledging one another's deliveries; it is not isolation
 from a malicious holder of the vault seed.
 
@@ -663,14 +725,14 @@ The mediator MUST NOT:
 - persist an unpacked application plaintext;
 - possess or log application content keys;
 - fetch attachment links supplied by an anonymous sender;
-- log request bodies, decrypted `forward` bodies, inner ciphertext bytes
-  or pickup attachment bytes by default; or
+- log request bodies, decrypted `forward` bodies, inner ciphertext bytes or
+  pickup attachment bytes by default; or
 - present replica retirement as cryptographic seed revocation.
 
-An encrypted envelope can contain sender-chosen bytes. The enforceable
-claim is therefore that the mediator stores only a syntactically valid
-DIDComm encrypted-message envelope and never opens it, not that every
-byte of ciphertext was honestly produced from human-unreadable input.
+An encrypted envelope can contain sender-chosen bytes. The enforceable claim
+is therefore that the mediator stores only a syntactically valid DIDComm
+encrypted-message envelope and never opens it, not that every byte of
+ciphertext was honestly produced from human-unreadable input.
 
 ## 12. Problem reports
 
@@ -723,3 +785,10 @@ A conforming implementation demonstrates at least these cases:
     application content key.
 14. Replica registration and listing reveal no hardware identifier,
     operating-system identifier or human-readable local label.
+15. A `did:web` rendezvous recipient and a `did:peer` relationship recipient
+    selecting the same mediated route receive identical fan-out and ACK
+    isolation.
+16. No public DID document, relationship DID document or application message
+    uses a replica ID as the peer-visible recipient.
+17. Adding or removing a server full replica changes only delivery rows and
+    does not change registered recipient DIDs.
