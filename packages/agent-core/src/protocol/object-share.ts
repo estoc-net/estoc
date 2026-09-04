@@ -1,16 +1,10 @@
+import { codecOf, decodeCar, DRISL_CODE, encodeCar } from "@estoc/dasl";
 import {
   blobHash,
-  decodeCar,
-  encodeCar,
   hashTree,
   isBlobHash,
-  isDagPbCid,
-  isInsideFiles,
-  MalformedObjectError,
-  parseIndex,
-  resolvePath,
   verifyCard,
-  verifyTree,
+  verifyObject,
   type FolderObject,
   type GetBlock,
   type ObjectCard,
@@ -23,19 +17,22 @@ import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
 
 /**
  * object-share/1.0 (`docs/object-share.md`): hand a contact a whole
- * object — a folder-object hashed into a UnixFS tree. One message
+ * object — a folder-object hashed as DASL, a manifest over raw leaves
+ * (`@estoc/folder-object`, folder-object spec §2.1). One message
  * carries the root in the body and blocks as attachments named by their
- * CID: always the tree's **skeleton** (every dag-pb block) and
- * `index.json`, and every leaf when the whole closure fits. When it does
- * not, the leaves go by the other road: the whole closure as one
- * encrypted CAR at a URL — a **package** (§8) — named in the share with
- * its hash and key, fetched by the receiver whenever it likes. Nothing
- * is asked back over DIDComm; a package that is gone leaves a partial
- * object whose files are all named and sized by the skeleton.
+ * CID: always the tree's **skeleton** — the manifest, its one drisl
+ * block — and the raw block of `index.json`, and every leaf when the
+ * whole closure fits. When it does not, the leaves go by the other
+ * road: the whole closure as one encrypted CAR at a URL — a **package**
+ * (§8) — named in the share with its hash and key, fetched by the
+ * receiver whenever it likes. Nothing is asked back over DIDComm; a
+ * package that is gone leaves a partial object whose files are all
+ * named and sized by the manifest.
  *
- * What is shared is an object — a tree that declares what it is
- * (`index.json`); a well-hashed tree that is not one does not verify,
- * however good its hashes. A share may carry a card, and then it is a
+ * What is shared is an object — a tree whose manifest names exactly a
+ * canonical tree and that declares what it is (`index.json`); a
+ * well-hashed tree that is not one does not verify, however good its
+ * hashes. A share may carry a card, and then it is a
  * signed object: the card is testimony about the object, not about the
  * message. Its `did` is whoever signed — the sender's own anchor for
  * something they stand behind, or the original author's when the sender
@@ -46,17 +43,21 @@ import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
  */
 export const OBJECT_SHARE = "https://estoc.dev/object-share/1.0/share";
 
-/** IPLD block media types, as the IPFS ecosystem names them. */
-export const DAG_PB_MEDIA_TYPE = "application/vnd.ipld.dag-pb";
+/**
+ * Block media types, as the IPLD ecosystem names them — informative
+ * only (§2): the manifest is a drisl block, a file a raw one, and the
+ * CID's codec says which; the media type is never consulted.
+ */
+export const DRISL_MEDIA_TYPE = "application/vnd.ipld.dag-cbor";
 export const RAW_MEDIA_TYPE = "application/vnd.ipld.raw";
-/** The package's plaintext: a CARv1 of the closure. */
+/** The package's plaintext: a DASL CAR of the closure. */
 export const CAR_MEDIA_TYPE = "application/vnd.ipld.car";
 
 /** The raw block bytes one share may carry by default: what a mediator queue comfortably holds. */
 export const DEFAULT_MAX_SHARE_BYTES = 1024 * 1024;
 
 export interface ObjectShareBody {
-  /** CID of the object's root directory node: the name of the tree the attachments make */
+  /** the drisl CID of the object's manifest: the name of the tree the attachments make */
   root: string;
   /** compact JWS over `{did, root}` — folder-object's card; present, the share is a signed object */
   card?: string;
@@ -121,11 +122,12 @@ export interface BlockAttachment {
 /** The closure of a tree: its root, every block the root reaches, and the blocks a share must carry. */
 export interface Closure {
   root: string;
-  /** every block, CID → bytes */
+  /** every block, CID → bytes: the manifest, and one raw block per file */
   blocks: Map<string, Uint8Array>;
   /**
-   * The minimal share (`docs/object-share.md` §2): every dag-pb block —
-   * the skeleton — plus the blocks of `index.json`. A subset of `blocks`.
+   * The minimal share (`docs/object-share.md` §2): the manifest — the
+   * skeleton — plus the raw block of `index.json`. Exactly two blocks, a
+   * subset of `blocks`.
    */
   minimal: Map<string, Uint8Array>;
 }
@@ -142,8 +144,8 @@ export interface VerifiedShare {
   tree: VerifiedTree;
   /**
    * The object read out of the tree: `index.json` (always here) and every
-   * file under `files/` whose bytes are all here. A partial file is not in
-   * `object.tree` at all — it is in `tree.partial`.
+   * file under `files/` whose bytes are here. A file whose block is
+   * absent is not in `object.tree` at all — it is in `tree.partial`.
    */
   object: FolderObject;
   /** true when no leaf is missing: the object is whole */
@@ -162,35 +164,22 @@ export interface VerifiedShare {
 }
 
 /**
- * Hash a tree and gather the complete object set: `hashTree`'s `nodes`
- * plus the input bytes of every single-block file (which it
- * deliberately does not copy) — and, apart, the minimal share.
+ * Hash a tree and gather the complete object set: `hashTree`'s manifest
+ * under its root, plus the input bytes of every file (which it
+ * deliberately does not copy) under the file's raw CID — a file is one
+ * block whatever its size, and two paths with the same bytes are one
+ * block. Apart, the minimal share: the manifest and `index.json`.
  */
 export async function closureOf(files: TreeFiles): Promise<Closure> {
   const hashed = await hashTree(files);
-  const blocks = new Map(hashed.nodes);
+  const blocks = new Map<string, Uint8Array>([[hashed.root, hashed.manifest]]);
   for (const [cid, path] of hashed.files) {
-    if (!blocks.has(cid)) {
-      blocks.set(cid, files[path] as Uint8Array);
-    }
+    blocks.set(cid, files[path] as Uint8Array);
   }
-  const minimal = new Map<string, Uint8Array>();
-  for (const [cid, bytes] of blocks) {
-    if (isDagPbCid(cid)) {
-      minimal.set(cid, bytes);
-    }
-  }
-  // index.json's blocks: its raw CID, or the chunks of a chunked one —
-  // which a walk over the skeleton alone names, as that file's gaps
-  const index = [...hashed.files].find(([, path]) => path === "index.json");
+  const minimal = new Map<string, Uint8Array>([[hashed.root, hashed.manifest]]);
+  const index = hashed.entries.find((entry) => entry.path === "index.json");
   if (index !== undefined) {
-    const [cid] = index;
-    const chunks = isDagPbCid(cid)
-      ? ((await verifyTree(hashed.root, minimal, { leaves: "optional" })).partial.get("index.json") ?? [])
-      : [cid];
-    for (const chunk of chunks) {
-      minimal.set(chunk, blocks.get(chunk) as Uint8Array);
-    }
+    minimal.set(index.cid, blocks.get(index.cid) as Uint8Array);
   }
   return { root: hashed.root, blocks, minimal };
 }
@@ -210,7 +199,7 @@ export function attachmentsOf(blocks: Map<string, Uint8Array>): BlockAttachment[
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([cid, bytes]) => ({
       id: cid,
-      media_type: isDagPbCid(cid) ? DAG_PB_MEDIA_TYPE : RAW_MEDIA_TYPE,
+      media_type: codecOf(cid) === DRISL_CODE ? DRISL_MEDIA_TYPE : RAW_MEDIA_TYPE,
       byte_count: bytes.length,
       data: { base64: bytesToBase64url(bytes) },
     }));
@@ -320,16 +309,18 @@ export function packageParts(
   };
 }
 
-/** The package's plaintext for a closure: a CARv1 rooted at `root` holding every block. */
+/** The package's plaintext for a closure: a DASL CAR (CARv1, `{version: 1, roots: [root]}`) holding every block, named by its CID. */
 export function packageCar(closure: Closure): Uint8Array {
   return encodeCar([closure.root], closure.blocks);
 }
 
 /**
  * Open a fetched package: the ciphertext must hash to the name the share
- * gave it, then decrypt under the share's key and read the CAR. Every
- * block returned hashes to its CID; whether it belongs to the closure is
- * for `verifyShare` to decide, block by block, as it walks. Throws when
+ * gave it, then decrypt under the share's key and read the CAR — a DASL
+ * CAR, every block named by the 36 bytes of a DASL CID. Every block
+ * returned hashes to its CID; one named otherwise, or that does not
+ * hash to its name, is dropped; whether a block belongs to the closure
+ * is for `verifyShare` to decide, block by block, as it walks. Throws when
  * the bytes are not the package, do not open, or open to a CAR rooted
  * elsewhere than `root` (§8): a package of some other object is not
  * this share's, however well it decrypts. What is missing from it is
@@ -385,17 +376,24 @@ export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {
 }
 
 /**
- * Check a share message end to end: the skeleton carried reaches every
- * path under `body.root` with matching hashes, `index.json` is here and
- * well-formed, every leaf present hashes to its CID, and the card, if
- * there is one, verifies under its own did:key and is about this very
- * root. Leaves under `files/` may be absent: the result says which
- * (`tree.missing`, `tree.partial`, `complete`). Blocks the message does
- * not carry are looked up through `held` when given — the vault's
- * `blobs/`, so leaves that arrived by another road count as present,
- * and a recorded share, whose body names its blocks by id alone
- * (`lift.ts`), verifies over them. `blocks` is what the walk reached.
- * Throws naming the first thing wrong.
+ * Check a share message end to end: the card, if there is one, verifies
+ * under its own did:key and is about this very root; then the object
+ * from `body.root` (`verifyObject`) — the manifest is here, hashes to
+ * the root, is canonical DRISL and names exactly a canonical tree with
+ * `index.json`, every leaf present hashes to its CID and has the size
+ * the manifest states, `index.json` is here and well-formed, and its
+ * `content.path`, if any, is a path the manifest names. What the
+ * manifest fails at is a `MalformedObjectError` (format or closure
+ * layer, folder-object spec §8), thrown as it is: the share is
+ * malformed. Leaves under `files/` may be absent — a partial object,
+ * never a defect — and the result says which (`tree.missing`,
+ * `tree.partial`, `complete`); `index.json`'s own bytes absent is not
+ * the minimal share, and throws. Blocks the message does not carry are
+ * looked up through `held` when given — the vault's `blobs/`, so leaves
+ * that arrived by another road count as present, and a recorded share,
+ * whose body names its blocks by id alone (`lift.ts`), verifies over
+ * them. `blocks` is what the walk reached. Throws naming the first
+ * thing wrong.
  */
 export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<VerifiedShare> {
   const body = msg.body as Partial<ObjectShareBody>;
@@ -426,36 +424,25 @@ export async function verifyShare(msg: PlainMessage, held?: GetBlock): Promise<V
     }
     return found;
   };
-  const tree = await verifyTree(root, getBlock, { leaves: "optional" });
-  if (!tree.files.has("index.json")) {
-    throw new MalformedObjectError("format", "no index.json at the root");
-  }
-  if (tree.partial.has("index.json")) {
+  const verified = await verifyObject(root, getBlock, { leaves: "optional" });
+  if (verified.object === null) {
     throw new Error("object-share message carries no index.json: not the minimal share");
   }
-  const files: TreeFiles = {};
-  for (const path of tree.files.keys()) {
-    if (path === "index.json" || (isInsideFiles(path) && !tree.partial.has(path))) {
-      files[path] = (await resolvePath(root, path, getBlock)).bytes;
-    }
-  }
-  const meta = parseIndex(files["index.json"] as Uint8Array);
-  const object: FolderObject = { meta, tree: files };
   const named = packageOf(msg);
   const problem = named !== null && "problem" in named ? named : null;
   return {
     root,
     card,
-    tree,
-    object,
-    complete: tree.missing.size === 0,
+    tree: verified.tree,
+    object: verified.object,
+    complete: verified.complete,
     package: problem === null ? (named as SharePackage | null) : null,
     packageProblem: problem?.problem ?? null,
     blocks,
   };
 }
 
-/** The bytes a partial share still lacks, as the skeleton sizes them. */
+/** The bytes a partial share still lacks, as the manifest sizes them. */
 export function missingBytes(tree: VerifiedTree): number {
   let total = 0;
   for (const size of tree.missing.values()) {

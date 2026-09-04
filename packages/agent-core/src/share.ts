@@ -53,9 +53,9 @@ export interface ShareParts {
 /**
  * Build a share of `object` (§7): hash its canonical tree, and choose
  * the road — the whole closure as attachments when it fits
- * `maxShareBytes`, else the skeleton and `index.json` inline and the
+ * `maxShareBytes`, else the manifest and `index.json` inline and the
  * closure placed as a package (`place`, §8), named in the body. An
- * object whose skeleton and `index.json` alone do not fit cannot be
+ * object whose manifest and `index.json` alone do not fit cannot be
  * shared this way. Plain, the share says only that we handed the
  * object over; with `sign` the anchor signs a card, with `card` the
  * card given must verify and name this very root — one card per share,
@@ -92,7 +92,7 @@ export async function buildShare(
     carried = closure.minimal;
     const size = closureSize(carried);
     if (size > maxShareBytes) {
-      throw new Error(`object's skeleton and index.json are ${size} bytes; one share carries at most ${maxShareBytes}`);
+      throw new Error(`the manifest and index.json are ${size} bytes; one share carries at most ${maxShareBytes}`);
     }
     const { attachment, named } = packageParts(await place(closure));
     body.package = named;

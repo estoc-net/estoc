@@ -11,7 +11,7 @@ describe("lifting a message's blocks (vault-events.md §4)", () => {
 
   it("strips the blocks kept, leaves the rest as it came, and fills them back from the store", async () => {
     const { blocks } = await closureOf(files);
-    expect(blocks.size).toBe(4); // two directory nodes, two raw files
+    expect(blocks.size).toBe(3); // the manifest, two raw files
     const [first] = [...blocks.keys()].sort() as [string];
     const link = { id: "pkg", media_type: "application/vnd.ipld.car", byte_count: 3, data: { links: ["https://store/b/x"], hash: "bciq" } };
     const msg: PlainMessage = { id: "m", type: "t", body: { root: "r" }, attachments: [...attachmentsOf(blocks), link, "not an attachment"] };

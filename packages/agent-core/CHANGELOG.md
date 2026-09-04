@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **object-share/1.0 over the DASL encoding** (`docs/object-share.md`;
+  `@estoc/folder-object` 0.7.0, `@estoc/dasl`). An object is hashed as
+  a **manifest** — one `drisl` block listing every path with the raw
+  CID and the size of its bytes — over raw leaves, one whole block per
+  file whatever its size: no directory nodes, no chunks, no shards, and
+  nothing here reads a UnixFS root or a dag-pb block. The skeleton a
+  share always carries is that one block, and the minimal share is
+  exactly two — the manifest and `index.json`'s raw block
+  (`Closure.minimal`); `closureOf` is `hashTree`'s manifest plus the
+  bytes of every file. `attachmentsOf` names the manifest
+  `application/vnd.ipld.dag-cbor` and a leaf `application/vnd.ipld.raw`
+  by the CID's codec — `DRISL_MEDIA_TYPE` replaces `DAG_PB_MEDIA_TYPE`;
+  media types stay informative and are never consulted. `verifyShare`
+  is `verifyObject` from the root: the manifest must be there, hash to
+  the root, be canonical DRISL and name exactly a canonical tree with
+  `index.json`, judged before any leaf; what it fails at is a
+  `MalformedObjectError` thrown as it is (format: litter or a hidden
+  path named, no `index.json`, a size a present leaf does not have, an
+  `index.json` not well-formed; closure: a `content.path` the manifest
+  lacks). A leaf absent is a partial object with every path and size
+  known; `index.json`'s bytes absent is "not the minimal share". A
+  package is a DASL CAR (`@estoc/dasl`'s `encodeCar` / `decodeCar`):
+  CARv1, header `{version: 1, roots: [root]}`, every block named by the
+  36 bytes of a DASL CID, a block named otherwise dropped like one
+  failing its hash. `buildShare` refuses an object whose manifest and
+  `index.json` alone exceed `maxShareBytes`, saying so in those words.
 - **A share's blocks are in the vault once.** A recorded object-share —
   received (`keepShare`) or sent (`Agent.shareObject`, any `send` naming
   `roots`) — keeps its block attachments by id alone: the `data` is gone

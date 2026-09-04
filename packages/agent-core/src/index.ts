@@ -41,7 +41,7 @@ export {
 export { resolveDid } from "./protocol/resolver.js";
 export {
   OBJECT_SHARE,
-  DAG_PB_MEDIA_TYPE,
+  DRISL_MEDIA_TYPE,
   RAW_MEDIA_TYPE,
   CAR_MEDIA_TYPE,
   DEFAULT_MAX_SHARE_BYTES,

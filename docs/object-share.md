@@ -2,7 +2,8 @@
 
 Status: implemented — §1–6 in `@estoc/agent-core` 0.15.0
 (`@estoc/folder-object` 0.5.0), §7–8 in 0.16.0 (folder-object 0.6.0),
-2026-08-26. The store a package lives in is `blob-store/1.0`
+2026-08-26; over the DASL encoding (folder-object 0.7.0, `@estoc/dasl`)
+since 2026-09-04. The store a package lives in is `blob-store/1.0`
 (`docs/blob-store.md`).
 Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`,
 `research/notes/2026-08-26-want-and-blob-road.md`.
@@ -10,9 +11,9 @@ Design history: `research/notes/2026-08-24-object-share-over-didcomm.md`,
 ## 1. What it is for
 
 Handing a contact a whole **object** — a [folder-object](https://github.com/estoc-net/folder-object)
-hashed into a UnixFS tree (`@estoc/folder-object`, profile
-`unixfs-v1-2025`) — over DIDComm, in one message, with nothing to ask
-back.
+hashed as DASL: a **manifest** over raw leaves (`@estoc/folder-object`,
+folder-object spec §2.1) — over DIDComm, in one message, with nothing to
+ask back.
 
 The unit is an object or a signed object, the two forms
 `@estoc/folder-object` has. The protocol reads exactly one thing inside
@@ -23,12 +24,13 @@ not say what it is has no interpretation and is not this protocol's unit
 is a flat item named by an arbitrary id: ours is a tree named by content,
 whose structure the receiver verifies.
 
-One message carries the card, if any; the tree's **skeleton**, always;
-and its **leaves**, inline when they fit and otherwise as one
-**package** (§8) — the closure as an encrypted CAR at a URL, the key in
-the message. Either way the receiver can verify the card, read what the
-object says it is, and walk every path and size before, or without, a
-content byte moving. There is no ask in the protocol (§7).
+One message carries the card, if any; the tree's **skeleton** — the
+manifest, one block — always; and its **leaves**, inline when they fit
+and otherwise as one **package** (§8) — the closure as an encrypted CAR
+at a URL, the key in the message. Either way the receiver can verify the
+card, read what the object says it is, and walk every path and size
+before, or without, a content byte moving. There is no ask in the
+protocol (§7).
 
 ## 2. Message
 
@@ -36,21 +38,24 @@ content byte moving. There is no ask in the protocol (§7).
 {
   "type": "https://estoc.dev/object-share/1.0/share",
   "id": "<uuid>",
-  "body": { "root": "bafybei…", "card": "<compact JWS>" },
+  "body": { "root": "bafyrei…", "card": "<compact JWS>" },
   "attachments": [
-    { "id": "bafybei…", "media_type": "application/vnd.ipld.dag-pb", "byte_count": 108, "data": { "base64": "…" } },
-    { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",    "byte_count": 100, "data": { "base64": "…" } }
+    { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",      "byte_count": 100, "data": { "base64": "…" } },
+    { "id": "bafyrei…", "media_type": "application/vnd.ipld.dag-cbor", "byte_count": 176, "data": { "base64": "…" } }
   ]
 }
 ```
 
-- **`body.root`** — the CID of the object's root directory node: the name
-  of the tree the attachments make. Required.
+- **`body.root`** — the CID of the object's manifest (`drisl`,
+  `bafyrei…`): the name of the tree the attachments make, and the
+  object's version identity. Required.
 - **`body.card`** — optional; present, the share is a signed object. The
   object's card as `@estoc/folder-object` defines it: a compact JWS
   (`typ: estoc/object-card`, EdDSA) over exactly `{did, root}`, `did` a
   `did:key` and `kid` its one verification method. Its `root` must equal
-  `body.root`; a card about another tree is a share that does not verify.
+  `body.root`; a card about another tree is a share that does not
+  verify, and one whose `root` is not a manifest CID is not a card
+  (folder-object spec §6).
   The body carries nothing else about the object: whatever the object
   says about itself is in the tree (`index.json`), and saying it twice
   makes two truths. (`body.package`, §8, is about transport, not the
@@ -58,8 +63,9 @@ content byte moving. There is no ask in the protocol (§7).
 - **`attachments`** — the tree's blocks, one attachment each, in CID
   order. `id` **is** the CID and is the block's only name; `data.base64`
   is base64url (DIDComm v2); `media_type` is
-  `application/vnd.ipld.dag-pb` or `application/vnd.ipld.raw`;
-  `byte_count` is the decoded length. `data.hash` is not used on blocks:
+  `application/vnd.ipld.dag-cbor` for the manifest and
+  `application/vnd.ipld.raw` for a leaf; `byte_count` is the decoded
+  length. `data.hash` is not used on blocks:
   DIDComm defines it beside `links`, and didcomm-rust drops it from an
   inline attachment. Attachments of any other shape are ignored, not
   errors (the package attachment, §8, is one).
@@ -72,30 +78,31 @@ content byte moving. There is no ask in the protocol (§7).
   the codec and the bytes say their length. A block is what it is when
   its bytes hash to its `id`.
 
-  The blocks fall in two classes, told apart by codec:
+  The blocks fall in two classes, told apart by the CID's codec — never
+  by `media_type`:
 
-  - **skeleton** — every `dag-pb` block the root reaches: directory
-    nodes (plain and HAMT shards) and the chunk-index nodes of files
-    over 1 MiB. **Always complete**; a share missing one is malformed,
-    since the tree cannot be walked. The skeleton is the whole listing —
-    every path's name, size (`Tsize`) and CID — so a receiver holding
-    only it already sees what the object contains and how big each part
-    is.
-  - **leaves** — every `raw` block: single-block files and the chunks of
-    larger ones. **May be absent**, except the leaves of `index.json`,
-    which is what makes the tree an object (§1). No field says whether a
-    leaf is present; its CID among the attachments (or already held, §4)
-    is the signal.
+  - **skeleton** — the one `drisl` block, the manifest `body.root`
+    names. **Always present**; a share without it is malformed, since
+    nothing of the tree can be told. The manifest is the whole listing —
+    every path with the raw CID and the size of its bytes — so a
+    receiver holding only it already sees what the object contains and
+    how big each part is.
+  - **leaves** — every `raw` block: the bytes of one file each, whole.
+    **May be absent**, except the leaf of `index.json`, which is what
+    makes the tree an object (§1). No field says whether a leaf is
+    present; its CID among the attachments (or already held, §4) is the
+    signal.
 
-  The **minimal share** is the skeleton plus `index.json`'s blocks; a
-  share missing any of them is malformed. Everything under `files/` is
-  what may travel as a package.
+  The **minimal share** is the manifest plus `index.json`'s block — two
+  blocks; a share missing either is malformed. Everything under `files/`
+  is what may travel as a package.
 
-  There is no manifest beside the tree: the UnixFS nodes are the
-  skeleton, and a second listing would be a second truth. Chunking is the
-  hashing profile's (`unixfs-v1-2025`: 1 MiB chunks, balanced layout, raw
-  leaves), not this protocol's: a chunk is a leaf, a chunk index is
-  skeleton.
+  The manifest is the tree's one listing, and the only block that is
+  not a file: a second listing beside it would be a second truth. There
+  are no chunks — a leaf is a whole file, and a large file is one large
+  block, however large (folder-object spec §2.1: files are whole). What
+  a file is called, how big it is and what names its bytes, the manifest
+  says; the bytes themselves are the leaf.
 - No `thid`: a share starts nothing and answers nothing. An application
   that answers (a comment, a reply post) threads on the share's `id` like
   any message.
@@ -103,16 +110,16 @@ content byte moving. There is no ask in the protocol (§7).
 ## 3. Sending
 
 1. Read the folder as an object (`readObject`: `index.json` + `files/…`,
-   litter dropped) and hash it; the closure is `hashTree`'s `nodes` plus
-   every raw block (`closureOf`).
+   litter dropped) and hash it; the closure is `hashTree`'s manifest plus
+   the raw block of every file (`closureOf`).
 2. Choose the road by the sender's inline limit (`maxShareBytes`, default
-   1 MiB). The minimal share always goes inline; if it alone exceeds the
-   limit, refuse — the object cannot be shared by this message. If the
-   whole closure fits, every leaf goes inline. Otherwise **no leaf goes
-   inline** and the whole closure goes as one package (§8) — never "the
-   leaves that fit": a leaf set chosen by size is a partial object with
-   no meaning the receiver can act on, while skeleton-plus-package is one
-   definite thing.
+   1 MiB). The minimal share — the manifest and `index.json` — always
+   goes inline; if it alone exceeds the limit, refuse — the object cannot
+   be shared by this message. If the whole closure fits, every leaf goes
+   inline. Otherwise **no leaf goes inline** and the whole closure goes
+   as one package (§8) — never "the leaves that fit": a leaf set chosen
+   by size is a partial object with no meaning the receiver can act on,
+   while manifest-plus-package is one definite thing.
 3. The card, if any. Plain, nobody stands behind the object and the
    message says only what the envelope says. To stand behind it, sign
    `{did: anchor, root}` with the vault's anchor key. To pass on a signed
@@ -131,16 +138,24 @@ envelope proves. The handler (`verifyShare`) then:
 
 1. if there is a card, verifies it under the `did:key` in its own payload
    and requires its `root` to be `body.root`;
-2. decodes the block attachments and verifies the skeleton from
-   `body.root` over them and over blocks already in `blobs/`
-   (`verifyTree`): every `dag-pb` node reachable and hashing to its CID,
-   every link resolved to a present block or an absent `raw` CID. A
-   missing `dag-pb` block is malformed; a missing `raw` block is a
-   missing leaf, recorded;
-3. verifies each present leaf against its CID;
-4. reads the tree as an object (`readObject`). `index.json` absent or
-   malformed is malformed, not a missing leaf: a well-hashed tree that is
-   not an object does not verify, however good its hashes;
+2. decodes the block attachments and verifies the tree from `body.root`
+   over them and over blocks already in `blobs/` (`verifyObject`): the
+   manifest must be there, hash to the root, be canonical DRISL, and
+   name exactly a canonical tree with `index.json` — `index.json` and
+   paths under `files/`, none hidden, nothing else (the format layer,
+   folder-object spec §8) — and that is judged before a leaf is looked
+   at. A manifest that is missing, or fails any of it, is malformed,
+   whatever the leaves. A `raw` block missing is a missing leaf,
+   recorded: a partial object, every path and size of which the
+   manifest states;
+3. verifies each present leaf against its CID and against the size the
+   manifest states for it — a size a present leaf does not have is the
+   manifest's lie, and malformed (format);
+4. reads the tree as an object. `index.json` absent is not the minimal
+   share — malformed, not a missing leaf; `index.json` not well-formed
+   is malformed (format), and a `content.path` the manifest does not
+   name is malformed (closure): a well-hashed tree that is not an object
+   does not verify, however good its hashes;
 5. on success puts every block the tree reaches in `blobs/<cid>`
    (put-if-absent) and records the message with those attachments by id
    alone, their bytes in `blobs/`; a block carried beside the tree is no
@@ -154,6 +169,10 @@ envelope proves. The handler (`verifyShare`) then:
    the application may fetch it whenever it chooses
    (`Agent.fetchPackage`): the package's blocks are imported and steps
    2–5 run again.
+
+How a block is read is the CID's codec — `drisl`, the manifest; `raw`, a
+file — and nothing else: `media_type` is never consulted, and a block
+under the wrong one is read as its CID says.
 
 The application shows the record either way and runs the same check to
 decide how: a share that does not verify is shown as that, not hidden; a
@@ -242,8 +261,9 @@ partial object rather than nothing.
 
 ## 8. Package
 
-A **package** is the tree's closure as a CARv1, encrypted under a fresh
-key, put at a URL, and named in the share. The bytes travel over HTTP
+A **package** is the tree's closure as a DASL CAR — a CARv1 whose blocks
+are named by DASL CIDs — encrypted under a fresh key, put at a URL, and
+named in the share. The bytes travel over HTTP
 whenever the receiver chooses; the share carries the URL, the hash and
 the key; the mediator's queue never holds the bytes. A package is a
 **blob** in `blob-store/1.0`'s sense (§8.1) whose plaintext is a CAR.
@@ -253,7 +273,7 @@ the key; the mediator's queue never holds the bytes. A package is a
   "type": "https://estoc.dev/object-share/1.0/share",
   "id": "<uuid>",
   "body": {
-    "root": "bafybei…",
+    "root": "bafyrei…",
     "card": "<compact JWS>",
     "package": {
       "attachment_id": "bciqk…",
@@ -262,8 +282,8 @@ the key; the mediator's queue never holds the bytes. A package is a
     }
   },
   "attachments": [
-    { "id": "bafybei…", "media_type": "application/vnd.ipld.dag-pb", "byte_count": 108, "data": { "base64": "…" } },
-    { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",    "byte_count": 100, "data": { "base64": "…" } },
+    { "id": "bafkrei…", "media_type": "application/vnd.ipld.raw",      "byte_count": 100, "data": { "base64": "…" } },
+    { "id": "bafyrei…", "media_type": "application/vnd.ipld.dag-cbor", "byte_count": 176, "data": { "base64": "…" } },
     { "id": "bciqk…", "media_type": "application/vnd.ipld.car", "byte_count": 734003200,
       "data": { "links": ["https://…/b/m3q7xk…"], "hash": "bciqk…" } }
   ]
@@ -354,8 +374,10 @@ media-sharing's whole-file `aes-256-cbc` with `iv` and `tag` in the
 message: one tag over a file means the whole file before a byte is
 trusted, and a range can never be checked.)
 
-**The plaintext** is a CARv1 whose `roots` is exactly `[root]` and whose
-blocks the sender **must** make the tree's whole closure — skeleton,
+**The plaintext** is a DASL CAR: a CARv1 whose header is the DRISL map
+`{version: 1, roots: [root]}` — `roots` exactly `[root]` — and whose
+every block is named by exactly the 36 bytes of a DASL CID. Its blocks
+the sender **must** make the tree's whole closure — the manifest,
 `index.json`, every leaf. It repeats what the message carries so that it
 is a whole object on its own, verifiable by anyone with the URL and key,
 without the message; it neither replaces nor loosens the minimal share,
@@ -365,10 +387,10 @@ which is always inline (§2).
 `GET` the URL, check the length, verify the hash, decrypt, read the CAR.
 `roots` is checked first — a CAR rooted anywhere else is not this
 object's package and is discarded whole, like bytes that fail the hash.
-Then block by block: bytes that do not hash to the CID they are filed
-under are dropped, blocks outside the closure of `root` are dropped, and
-what remains goes to `blobs/` put-if-absent, after which the share is
-checked again (§4). A package that opens but lacks blocks of the closure
+Then block by block: a block named by anything but a DASL CID is dropped
+like one whose bytes do not hash to the CID it is filed under, blocks
+outside the closure of `root` are dropped, and what remains goes to
+`blobs/` put-if-absent, after which the share is checked again (§4). A package that opens but lacks blocks of the closure
 is **not** discarded: what walks is kept and the object is partial, as it
 would be had those bytes never been offered — whole is the sender's duty,
 salvage is the receiver's. Bytes that are gone, or that fail the hash,
