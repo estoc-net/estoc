@@ -310,9 +310,10 @@ describe("folder: blobs on disk", () => {
     const { backend, blobs } = open();
     expect(await blobs.put(enc.encode("hello"))).toBe(HELLO_CID);
     expect(fileText(backend, `.estoc/blobs/${HELLO_CID}`)).toBe("hello");
-    const root = await blobs.put(bigBytes());
+    const root = await blobs.put(bigBytes()); // 3 MiB: one raw block, one file
     const files = [...backend.files.keys()].filter((p) => p.startsWith(".estoc/blobs/"));
-    expect(files).toHaveLength(4);
+    expect(files).toHaveLength(2);
+    expect(files).toContain(`.estoc/blobs/${root}`);
     expect(files.every((p) => kindOf(p.slice(".estoc/".length)) === "blob")).toBe(true);
     expectBytes(await blobs.get(root), bigBytes());
   });

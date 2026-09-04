@@ -300,22 +300,21 @@ that finds one kind where another belongs — a segment under `cache/`
 
 ## 8. Blobs — `blobs/<cid>`
 
-One file per block of the `unixfs-v1-2025` profile (`event-store.md`
-§5.1), named by its CID: CIDv1, sha-256, codec `raw` or `dag-pb`,
-base32 lower — fifty-nine characters, `bafkrei…` for a raw block and
-`bafybei…` for a dag-pb node. The file's bytes are the block's, as
-they hash: a raw block is the bare bytes, a dag-pb node its encoded
-form. A file of at most 1 MiB is one raw block; a larger one is its
-raw 1 MiB chunks and a dag-pb root, each a file here; a received
-object is every block of its tree, each a file here. One flat
-directory, always: the interchange format has one layout, so a zip is
-readable without probing. A backend that wants sharding does it below
+One file per DASL block (`event-store.md` §5.1), named by its CID:
+CIDv1, sha-256, codec `raw` or `drisl`, base32 lower — fifty-nine
+characters, `bafkrei…` for a raw block and `bafyrei…` for a drisl
+block. The file's bytes are the block's, as they hash: a raw block is
+the bare bytes, a drisl block its one canonical encoding. A file is
+one raw block whatever its size, one file here; a received object is
+its manifest and its leaves, each a file here. One flat directory,
+always: the interchange format has one layout, so a zip is readable
+without probing. A backend that wants sharding does it below
 `VaultBackend` and renders flat. Immutable, merged by union,
 deduplicated by construction, and the one directory outside `devices/`
 that every device writes to — safely, because a content address has
 no author. The store names a block by hashing its bytes; a block's
 name is checked against its bytes on import (§10.3), and a mismatch,
-or a name that is not a profile block's, is damage, not copied.
+or a name that is not a DASL CID, is damage, not copied.
 
 A blob is written **before** the line that names it, leaves before
 root (`event-store.md` §5.2); a crash between the writes leaves

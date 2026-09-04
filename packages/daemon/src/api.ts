@@ -105,9 +105,9 @@ export interface Daemon {
   block(cid: string): Promise<Uint8Array | null>;
   /**
    * A file held in the vault's `blobs/`, by root — an attachment lifted
-   * out of a message (`lift.ts`), its chunks rejoined. Null when the
-   * root or a chunk is absent; throws on a root that names a directory,
-   * which is a block to read, not a file.
+   * out of a message (`lift.ts`): one raw block, whole, whatever its
+   * size. Null when the root is not held; throws on a root that names a
+   * drisl document — a manifest — which is a block to read, not a file.
    */
   blob(root: string): Promise<Uint8Array | null>;
   retry(mid: string): Promise<void>;

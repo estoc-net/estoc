@@ -410,8 +410,8 @@ function forksIn(self: string, held: Map<string, Event>, incoming: Event[]): Eve
  * the blocks either copy holds, and iff it passes the check; one that
  * does not is damage in the source, reported. Damage is absent on the
  * walk too: bytes that fail the check are not a block, so what they
- * link is not reached through them — else a name over another node's
- * bytes would let that node's tree in under no held root.
+ * link is not reached through them — else a name over another block's
+ * bytes would let everything that block links in under no held root.
  */
 async function copyBlocks(store: string, blobs: BlobStore, blocks: Map<string, Uint8Array>, events: Event[], policy: ImportPolicy, report: Imported): Promise<void> {
   if (blocks.size === 0) {

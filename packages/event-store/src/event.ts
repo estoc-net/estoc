@@ -9,7 +9,7 @@ import { isCid } from "./cid.js";
 import { InvalidEvent } from "./errors.js";
 import { isJsonObject, isJsonPrimitive, jsonClean, type JsonObject, type JsonPrimitive } from "./json.js";
 
-/** A CIDv1, sha-256, codec raw or dag-pb, base32 lower (§5). */
+/** A DASL CID: CIDv1, sha-256, codec raw or drisl, base32 lower (§5). */
 export type Cid = string;
 
 export type Event<D extends JsonObject = JsonObject> = {
@@ -267,7 +267,7 @@ function checkBlobs(blobs: unknown): asserts blobs is Cid[] {
   }
   for (const root of blobs) {
     if (!isCid(root)) {
-      throw new InvalidEvent(`blobs holds ${JSON.stringify(root)}, which is not a profile CID`);
+      throw new InvalidEvent(`blobs holds ${JSON.stringify(root)}, which is not a DASL CID`);
     }
   }
 }

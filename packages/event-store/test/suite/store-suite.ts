@@ -251,7 +251,7 @@ export function storeSuite(name: string, open: OpenStore): void {
           return rest;
         })(),
         { ...good, blobs: [null] },
-        { ...good, blobs: ["bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".toUpperCase()] },
+        { ...good, blobs: ["bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq".toUpperCase()] },
         { ...good, data: [] },
         { ...good, data: "x" },
         (() => {

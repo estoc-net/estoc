@@ -43,12 +43,10 @@ export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.
 export type { Stores, VaultStores, Vault } from "./vault.js";
 export { MemoryVault, type MemoryVaultOptions } from "./memory-vault.js";
 
-export { RAW_CODE, DAG_PB_CODE, parseCid, isCid, nameOf } from "./cid.js";
+export { RAW_CODE, DRISL_CODE, parseCid, isCid, nameOf, type DaslCid } from "./cid.js";
 export {
-  PROFILE,
-  MAX_RAW_BYTES,
   checkBlock,
-  decodeNode,
+  decodeDocument,
   linksOf,
   hashFile,
   readFile,
@@ -56,7 +54,6 @@ export {
   reachable,
   type Reach,
   type GetBlock,
-  type Node,
   type HashedFile,
 } from "./blocks.js";
 export { DEFAULT_GRACE_MS, MemoryBlobStore, type BlobStore, type Collected, type MemoryBlobStoreOptions } from "./blobs.js";

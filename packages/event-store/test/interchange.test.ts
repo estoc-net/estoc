@@ -19,7 +19,7 @@ import {
   type VaultFiles,
   type VaultStores,
 } from "../src/index.js";
-import { HELLO_CID, bigBytes } from "./suite/blob-suite.js";
+import { HELLO_CID, bigBytes, manifestBlock } from "./suite/blob-suite.js";
 import { all, clock, expectBytes } from "./suite/helpers.js";
 
 const enc = new TextEncoder();
@@ -52,20 +52,23 @@ async function foreign(self: string, now: () => Date, drafts: { type: string; da
   return all(other.events.scan());
 }
 
-/** A vault with something of everything: two authors, a small and a chunked blob, files, an extension store with a blob. */
-async function populated(now: () => Date): Promise<{ vault: MemoryVault; big: string; tag: string }> {
+/** A vault with something of everything: two authors, a small and a large blob, a received object (a manifest over both, a drisl block), files, an extension store with a blob. */
+async function populated(now: () => Date): Promise<{ vault: MemoryVault; big: string; object: string; tag: string }> {
   const vault = await memoryVault("aaaaaa", now);
   await vault.files.write("keystore.json", keystore("sealed-a", ["anchor", "k1"]));
   await vault.files.write("state/read.json", enc.encode("{}"));
   const hello = await vault.blobs.put(enc.encode("hello"));
   const big = await vault.blobs.put(bigBytes());
   await vault.events.append({ type: "message.in", blobs: [hello, big], data: { mid: "m1" } });
+  const manifest = await manifestBlock({ "/index.json": [hello, 5], "/files/big": [big, bigBytes().length] });
+  await vault.blobs.putBlock(manifest.cid, manifest.bytes);
+  await vault.events.append({ type: "message.in", blobs: [manifest.cid], data: { mid: "m2" } });
   await vault.events.ingest(await foreign("bbbbbb", now, [{ type: "t", data: { n: 1 } }, { type: "t", data: { n: 2 } }]));
   const ext = vault.extension(EXT_A);
   await ext.events.append({ type: "tag.added", data: { mid: "m1", tag: "x" } });
   const tag = await ext.blobs.put(enc.encode("tag"));
   await ext.events.append({ type: "tag.note", blobs: [tag], data: {} });
-  return { vault, big, tag };
+  return { vault, big, object: manifest.cid, tag };
 }
 
 interface Contents {
@@ -164,8 +167,8 @@ describe("export", () => {
     expect(aaaaaa).toEqual(await all(vault.events.scan({ author: "aaaaaa" })));
     const blobs = paths(files).filter((p) => p.startsWith(".estoc/blobs/"));
     expect(blobs).toEqual((await vault.blobs.list()).map((cid) => `.estoc/blobs/${cid}`));
-    expect(blobs.length).toBeGreaterThan(3); // hello, and big's root and two chunks
-    expect(files[`.estoc/blobs/${big}`]).toEqual(await vault.blobs.getBlock(big));
+    expect(blobs).toHaveLength(3); // hello, big — one raw block each — and the object's manifest
+    expectBytes(files[`.estoc/blobs/${big}`], (await vault.blobs.getBlock(big)) as Uint8Array); // 3 MiB, one block, as it is
     expect(files[`.estoc/extensions/${EXT_A}/blobs/${tag}`]).toEqual(enc.encode("tag"));
     expect(paths(files).filter((p) => !p.includes("/devices/") && !p.includes("/blobs/"))).toEqual([
       ".estoc/config.json",
@@ -407,7 +410,7 @@ describe("import: events (rule 1)", () => {
     );
     const report = await importVault(target, files);
     expect(report.kind).toBe("merged");
-    expect(report.events["vault"]).toMatchObject({ added: 4, duplicates: 2, conflicts: [], rejected: [] }); // 5 of the source's, 2 here already, and the orphan's
+    expect(report.events["vault"]).toMatchObject({ added: 5, duplicates: 2, conflicts: [], rejected: [] }); // 6 of the source's, 2 here already, and the orphan's
     expect(report.events[EXT_A]).toMatchObject({ added: 2, duplicates: 0 });
     expect(report.incomplete).toEqual(["zzzzzz"]);
     expect(report.damaged.map((d) => [d.where, d.error])).toEqual([
@@ -445,25 +448,24 @@ describe("import: blobs (rule 2)", () => {
     expect(await target.blobs.get(HELLO_CID)).toEqual(enc.encode("hello"));
     expect(backend.files.get(`.estoc/local/damaged/blobs/${HELLO_CID}`)).toEqual(enc.encode("damaged here"));
     expectBytes(await target.blobs.get(big), bigBytes());
-    expect(report.blobs.copied).toBe(5); // hello, big's root and two chunks, and the extension's
+    expect(report.blobs.copied).toBe(4); // hello, big, the manifest, and the extension's
     expect(report.blobs.damaged).toEqual([{ store: "vault", cid: "bafkreigl3o5l6rnjuinwyorjwbdl6xr6njkrcbe6qkhhc2ejo6cmgdvuse", error: expect.stringMatching(/hash/) as string }]);
     expect(await target.extension(EXT_A).blobs.list()).toHaveLength(1);
     // the same again copies nothing: every block a held root reaches is here and sound
     expect((await importVault(target, files)).blobs.copied).toBe(0);
   });
 
-  it("does not walk damage: a name over another node's bytes reaches nothing through them", async () => {
+  it("does not walk damage: a name over another block's bytes reaches nothing through them", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
-    const { vault: source, big } = await populated(c.now);
-    const twin = bigBytes();
-    twin[0] = (twin[0] as number) ^ 1;
-    const other = await source.blobs.put(twin); // a dag-pb name that is not big's
+    const { vault: source, object } = await populated(c.now);
+    const twin = await manifestBlock({ "/index.json": [await source.blobs.put(enc.encode("twin")), 4] });
+    await source.blobs.putBlock(twin.cid, twin.bytes); // a drisl name that is not the object's
     const files = await exportVault(source, { clock: c.now });
-    files[`.estoc/blobs/${other}`] = files[`.estoc/blobs/${big}`] as Uint8Array; // big's root node under other's name
+    files[`.estoc/blobs/${twin.cid}`] = files[`.estoc/blobs/${object}`] as Uint8Array; // the object's manifest under twin's name
     const target = await memoryVault("cccccc", c.now);
-    const report = await importVault(target, files, { held: (store) => (store === "vault" ? [other] : []) });
-    expect(report.blobs.damaged).toEqual([{ store: "vault", cid: other, error: expect.stringMatching(/hash/) as string }]);
-    expect(report.blobs.copied).toBe(0); // not big's root, and not the chunks its node links
+    const report = await importVault(target, files, { held: (store) => (store === "vault" ? [twin.cid] : []) });
+    expect(report.blobs.damaged).toEqual([{ store: "vault", cid: twin.cid, error: expect.stringMatching(/hash/) as string }]);
+    expect(report.blobs.copied).toBe(0); // not the manifest, and not the leaves it links
     expect(await target.blobs.list()).toEqual([]);
   });
 
