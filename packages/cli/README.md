@@ -29,6 +29,7 @@ estoc object sign   posts/hello/object --key org/estoc        # prints the card
 estoc object sign   posts/hello/object --key org/estoc --out posts/hello --zip hello.zip
                                                              # posts/hello/{object/, card.jws} + a zip of the same
 estoc object verify posts/hello                              # or hello.zip, or a bare object dir
+estoc object hash   posts/hello/object --dasl                # experimental: the DASL manifest root (also on sign/verify)
 ```
 
 A signed object is `{object/, card.jws}`; anything else in the directory
@@ -70,7 +71,7 @@ estoc init [--label <label>]               create a vault here (refuses if .esto
 estoc status                               show the enclosing vault and its keys
 estoc key list                             list keys as JSON (no passphrase needed)
 estoc key new <name>                       derive a key by name and record it
-estoc object hash   [<dir>]                root CID
+estoc object hash   [<dir>] [--dasl]       root CID (--dasl: the DASL manifest root, experimental; also on sign/verify)
 estoc object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
 estoc object verify [<signedDir | signed.zip | objectDir>] [--card card.jws]
 estoc serve [--port <n>] [--bind <addr>] [--app <url>] [--token <t>]
