@@ -2,9 +2,9 @@
 
 ## 0.1.0 — Unreleased
 
-First release: what `@estoc/folder-object/dasl` carried on the `dasl`
-branch, moved into a package of its own so that every reader of a block
-— the folder-object format, the vault's block store, the object-share
+First release: the primitives the folder-object format is encoded in,
+in a package of their own so that every reader of a block — the
+folder-object format, the vault's block store, the object-share
 protocol — decodes with one codec and roots the same document the same
 way.
 

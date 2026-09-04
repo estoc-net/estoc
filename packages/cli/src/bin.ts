@@ -13,7 +13,6 @@ import {
   verifyObjectCard,
   type FolderObject,
 } from "@estoc/folder-object";
-import * as dasl from "@estoc/folder-object/dasl";
 import { readTree, writeTree } from "@estoc/folder-object/fs";
 import { isPost, renderPost, validatePost } from "@estoc/post";
 import { unzipTree, zipTree } from "@estoc/folder-object/zip";
@@ -41,9 +40,8 @@ const USAGE = `usage: estoc <command>
   key list                       list keys as JSON (no passphrase needed)
   key new <name>                 derive a key by name and record it
 
-  object hash   [<dir>] [--dasl] root CID of a folder-object (default: .);
-                                 --dasl hashes it as a DASL manifest instead
-                                 of UnixFS (experimental; also on sign/verify)
+  object hash   [<dir>]          root CID of a folder-object (default: .):
+                                 the drisl CID of its manifest, bafyrei…
   object sign   [<dir>] [--key <name>] [--out <signedDir>] [--zip <file>]
                                  sign the object with a vault key (default:
                                  anchor); prints the card, or lays the signed
@@ -170,12 +168,6 @@ interface ObjectFlags {
   zip?: string;
   template?: string;
   "asset-base"?: string;
-  dasl?: boolean;
-}
-
-/** The hash encoding the flags choose: UnixFS (the format's), or the DASL manifest (experimental). */
-function encodingOf(flags: ObjectFlags) {
-  return flags.dasl ? dasl : { hashObject, signObject, verifyObjectCard };
 }
 
 /** Every part a host page could want, in one view: the projection plus the fact it projects. */
@@ -203,7 +195,6 @@ async function renderView(target: string, flags: ObjectFlags) {
 }
 
 async function cmdObject(sub: string | undefined, target: string, flags: ObjectFlags) {
-  const { hashObject, signObject, verifyObjectCard } = encodingOf(flags);
   switch (sub) {
     case "hash": {
       process.stdout.write((await hashObject(await loadObject(target))) + "\n");
@@ -262,7 +253,6 @@ async function main() {
       zip: { type: "string" },
       template: { type: "string" },
       "asset-base": { type: "string" },
-      dasl: { type: "boolean" },
       port: { type: "string" },
       bind: { type: "string" },
       app: { type: "string" },

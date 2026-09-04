@@ -10,10 +10,11 @@ The Estoc web app and the libraries it is made of, in one pnpm workspace:
 | `packages/event-store/` | `@estoc/event-store` | the vault as an event store ([`docs/event-store.md`](docs/event-store.md)): envelope and canonical order, the `EventStore` / `BlobStore` / `FileStore` interfaces, the folder store, interchange (snapshot, import, restore, zip) |
 | `packages/keystore/` | [`@estoc/keystore`](https://www.npmjs.com/package/@estoc/keystore) | encrypted keystore — one sealed seed, HKDF-derived identities, non-extractable Signer handles |
 | `packages/did-peer/` | [`@estoc/did-peer`](https://www.npmjs.com/package/@estoc/did-peer) | did:peer:2 / did:peer:4 codec + didcomm-rust DIDDoc conversion |
-| `packages/folder-object/` | [`@estoc/folder-object`](https://www.npmjs.com/package/@estoc/folder-object) | an object is a folder — UnixFS merkle hashing, the folder-object format, did:key cards, signed objects |
+| `packages/dasl/` | `@estoc/dasl` | [DASL](https://dasl.ing/) with no dependency — CIDs, the DRISL codec, DASL CAR; the one codec every reader of a block decodes with |
+| `packages/folder-object/` | [`@estoc/folder-object`](https://www.npmjs.com/package/@estoc/folder-object) | an object is a folder — the DASL tree (a manifest over raw leaves), the folder-object format, did:key cards, signed objects |
 | `packages/post/` | [`@estoc/post`](https://www.npmjs.com/package/@estoc/post) | the post/1.0 format for folder-objects: recognise, validate, read, and the reference renderer |
 | `packages/daemon/` | `@estoc/daemon` | the daemon: agent + vault behind one RPC interface; a browser-worker host (the app) and a Node host (`estoc-daemon`, a folder on disk, the app served on the same origin) |
-| `packages/cli/` | [`@estoc/cli`](https://www.npmjs.com/package/@estoc/cli) | `estoc` — vaults on disk, `estoc object hash\|sign\|verify`, `estoc serve` |
+| `packages/cli/` | [`@estoc/cli`](https://www.npmjs.com/package/@estoc/cli) | `estoc` — vaults on disk, `estoc object hash\|sign\|verify\|render`, `estoc serve` |
 
 Inside the workspace every `@estoc/*` dependency is `workspace:^`: the app
 builds against the libraries in this tree, so a change to `agent-core` is in

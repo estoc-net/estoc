@@ -17,8 +17,7 @@ the UnixFS draft is read.
   directory is not a thing a tree holds), `HashedTree.nodes` (there are no
   nodes), `VerifiedTree.dirs`, `fileCid` / `isRawCid` / `isDagPbCid` /
   `compareNames` / `dagPbCode`, and `encodeCar` / `decodeCar` (now
-  `@estoc/dasl`'s, over DASL CIDs only). The `/dasl` subpath of the
-  experiment is the main entry now.
+  `@estoc/dasl`'s, over DASL CIDs only).
 - The tree: `hashTree` returns `{root, manifest, entries, files}`;
   `verifyTree` / `walkTree` return `{root, files, sizes, missing, partial,
   declined}`; `resolvePath` is two fetches; `encodeManifest` /

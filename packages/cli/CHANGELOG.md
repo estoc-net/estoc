@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `estoc object hash|sign|verify|render` speak DASL (`@estoc/folder-object`
+  0.7.0): the root is the drisl CID of the object's manifest (`bafyrei…`),
+  one raw block per file, no UnixFS. There is one encoding, so the
+  experimental `--dasl` flag is gone; `render` reports the same root
+  `hash` prints (it was pinned to the UnixFS functions before).
+
 ## 0.5.0 — 2026-09-01
 
 - The vault `estoc init` writes and `estoc serve` opens is version 2
