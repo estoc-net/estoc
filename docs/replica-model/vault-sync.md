@@ -1,19 +1,28 @@
 # vault-sync/1.0
 
-Status: **draft** — encrypted synchronization of an Estoc vault through an
-untrusted sync store using immutable objects between explicit account resets.
+Status: **deferred draft** — future encrypted synchronization of an Estoc
+vault through an untrusted sync store using immutable objects between explicit
+account resets. It is not required or implemented by Estoc phase 1.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
 appear in all capitals.
 
+`event-store.md` defines events and local stores. `dasl-objects.md` defines
+portable object identity and verification. This protocol encrypts and moves
+those exact bytes; it does not redefine either layer.
+
+> **Phase-1 boundary.** The first implementation recovers and transfers a
+> vault through the readable folder and independently backed-up seed/recovery
+> material. No phase-1 operation may silently depend on this protocol.
+
 ## 1. What it is for
 
 Full Estoc replicas write while disconnected and later converge by set
-union. The sync store is an anti-entropy meeting point and encrypted backup mirror: it
-keeps opaque immutable objects, tells clients which opaque object IDs
+union. The sync store is an anti-entropy meeting point and encrypted backup
+mirror: it keeps opaque immutable objects, tells clients which opaque object IDs
 exist, and serves their ciphertext. It never receives vault event JSON,
-blob CIDs, message bodies, event types or contact data in plaintext.
+DASL CIDs, message bodies, event types or contact data in plaintext.
 
 The protocol synchronizes:
 
@@ -21,12 +30,12 @@ The protocol synchronizes:
 - vault events, including rendezvous, relationship, route and any selected
   optional `did:web` publication state;
 - extension-store events; and
-- content-addressed blob blocks referenced by those events, including exact
+- content-addressed DASL objects referenced by those events, including exact
   prepared DID document revisions.
 
 It does not synchronize `local/`, sockets, pickup acknowledgments,
 process locks, fold caches, traces, local options or other local
-state. Correctness-critical state must be an event or referenced blob,
+state. Correctness-critical state must be an event or referenced object,
 not an unsynchronized local file.
 
 Within one `store_id`, version 1.0 is append-only. It has no selective
@@ -54,7 +63,7 @@ https://estoc.dev/vault-sync/1.0
 ```
 
 They MUST be authcrypted from the vault's sync account DID to the sync
-store DID. Object bytes move over single-use HTTP URLs carried inside
+store DID. Encrypted containers move over scoped HTTP URLs carried inside
 those authcrypted control messages. Those URLs MUST use HTTPS, except
 that an implementation MAY allow HTTP for an explicitly configured
 loopback development endpoint.
@@ -62,6 +71,11 @@ loopback development endpoint.
 A deployment MAY serve sync and mediation from the same process and DID,
 but mailbox and sync data MUST use separate storage tables, quotas,
 retention rules, key derivation domains and APIs.
+
+In this document, **sync object** means one server record containing an
+encrypted root, event or DASL-object frame. **DASL object** means the portable
+content-addressed object defined by `dasl-objects.md`. The two terms are not
+interchangeable.
 
 ## 3. Shared account and keys
 
@@ -112,18 +126,21 @@ A server stores only:
 
 ```text
 opaque object ID
-ciphertext byte length
-ciphertext sha2-256 multihash
-opaque ciphertext bytes
+encrypted-container byte length
+encrypted-container sha2-256 multihash
+opaque encrypted-container bytes
 account-local insertion sequence
 server timestamps
 ```
 
-It MUST NOT be told the object kind, event ID, extension ID or CID.
+It MUST NOT be told the plaintext object kind, event ID, extension ID or DASL
+CID. The fixed encrypted-container framing reveals a protocol version and
+approximately the same length information already revealed by ciphertext
+size; it does not reveal the plaintext frame header.
 
 ### 4.1 Plaintext frame
 
-Before encryption, every object is one binary frame:
+Before encryption, every sync object is one binary frame:
 
 ```text
 offset  length  value
@@ -133,7 +150,8 @@ offset  length  value
 12+N    rest    payload bytes
 ```
 
-Unknown header fields are rejected in version 1.0.
+`N` MUST be at most 65536. Unknown header fields are rejected in version 1.0.
+The header is fully contained in the first encrypted plaintext segment.
 
 #### Root object
 
@@ -143,7 +161,7 @@ Header:
 { "kind": "root", "version": 1 }
 ```
 
-Payload: RFC 8785 canonical UTF-8 of the immutable vault configuration:
+Payload is RFC 8785 canonical UTF-8 of the immutable vault configuration:
 
 ```json
 {
@@ -158,9 +176,10 @@ Payload: RFC 8785 canonical UTF-8 of the immutable vault configuration:
 }
 ```
 
-The root object allows a replica holding the seed and sync-store locator
-to reconstruct `config.json`. It does not contain `seedJwe`; a new local vault copy wraps the supplied seed under its own local passphrase and derives requested named keys on demand from fixed protocol names and
-portable events.
+The root object allows a replica holding the seed and sync-store locator to
+reconstruct `config.json`. It does not contain `seedJwe`; a new local vault
+copy wraps the supplied seed under its own local passphrase and derives named
+keys on demand.
 
 #### Event object
 
@@ -175,32 +194,40 @@ Header:
 }
 ```
 
-`store` is either `vault` or `extension:<uuidv7>`. Payload is the exact
-RFC 8785 canonical UTF-8 event JSON. `sha256` is the unpadded base64url
-SHA-256 of that payload.
+`store` is either `vault` or `extension:<uuidv7>`. Payload is the exact RFC
+8785 canonical UTF-8 event JSON. `sha256` is the unpadded base64url SHA-256 of
+that payload.
 
-The client MUST validate the event envelope, require its `eid` to equal
-the header, and require the payload hash to match before ingest.
+The client MUST validate the event envelope, require its `eid` to equal the
+header, and require the payload hash to match before ingest.
 
-#### Block object
+#### DASL object
 
 Header:
 
 ```json
 {
-  "kind": "block",
-  "cid": "bafkrei..."
+  "kind": "object",
+  "cid": "bafkreifn5yxi7nkftsn46b6x26grda57ict7md2xuvfbsgkiahe2e7vnq4"
 }
 ```
 
-Payload is the raw block bytes. The client MUST verify the bytes against
-the CID before storing them. Blocks are account-wide and MAY satisfy
-references from the vault or any extension store.
+Payload is the exact complete portable object bytes defined by
+`dasl-objects.md`. The CID MUST be canonical. The client MUST call the local
+object verifier before acceptance:
 
-### 4.2 Object IDs
+- a raw CID verifies SHA-256 over all payload bytes; and
+- a DRISL CID additionally verifies one complete canonical DRISL object.
 
-Object IDs are unpadded base64url encodings of 32-byte HMAC-SHA-256
-values:
+DASL objects are account-wide and MAY satisfy roots from the main vault or any
+extension store. On download, one verified payload may be accepted into every
+local `ObjectStore` whose held-root fold requires that CID; a backend MAY share
+physical bytes internally. Sync transport segmentation never creates another
+portable CID.
+
+### 4.2 Opaque object IDs
+
+Object IDs are unpadded base64url encodings of 32-byte HMAC-SHA-256 values:
 
 ```text
 root:
@@ -210,46 +237,157 @@ event:
   HMAC(K_index,
        UTF8("event\0" + store + "\0" + eid + "\0") || SHA256(payload))
 
-block:
-  HMAC(K_index, UTF8("block\0" + cid))
+DASL object:
+  HMAC(K_index, UTF8("object\0") || binary_dasl_cid)
 ```
 
-The `\0` values are one zero byte. `store`, `eid` and `cid` are encoded
-as UTF-8 exactly as serialized in the header.
+Each `\0` is one zero byte. `store` and `eid` are encoded as UTF-8 exactly as
+serialized in the frame header. `binary_dasl_cid` is the exact 36-byte decoded
+DASL CID, not its string form.
 
-Including the event payload hash permits two corrupt contents under one
-`eid` to coexist as different opaque server objects so that clients can
-detect the event-store conflict rather than have the server choose one.
-A block's CID already commits to its payload.
+Including the event payload hash permits two conflicting contents under one
+`eid` to coexist as different opaque server objects so clients can report the
+event-store conflict instead of having the server choose one. A DASL CID
+already commits to its object payload.
 
-The server treats object IDs as opaque strings and MUST enforce the
-canonical unpadded base64url form.
+The server treats object IDs as opaque strings and MUST enforce canonical
+unpadded base64url.
 
-### 4.3 Encryption
+### 4.3 Segmented encrypted container
 
-Each plaintext frame is encrypted independently with AES-256-GCM under
-`K_data`:
+Every plaintext frame, including a large DASL object, is encrypted as one
+version-1 segmented container. The server stores that complete container as
+one immutable object.
+
+Constants:
 
 ```text
-version byte     0x01
-nonce            12 random bytes
-ciphertext+tag   AES-256-GCM output, 16-byte tag
+SEGMENT_PLAINTEXT_BYTES = 1048576
+GCM_TAG_BYTES            = 16
 ```
 
-Associated data is:
+Container header:
 
 ```text
-UTF8("estoc/vault-sync/1.0\0") || raw_32_byte_object_id
+offset  length  value
+0       8       ASCII "ESTOCE1\n"
+8       8       unsigned big-endian plaintext-frame length L
+16      32      random object salt
+48      rest    encrypted segment records in index order
 ```
 
-The nonce MUST be generated from a cryptographically secure random
-source and MUST NOT be reused with `K_data`. The ciphertext multihash
-used by the server is sha2-256 over the entire version-byte, nonce and
-ciphertext/tag sequence.
+`L` MUST be positive and within the client's and server's negotiated resource
+limits. The number of segments is:
 
-After download, a client MUST verify the announced ciphertext hash,
-decrypt with the object ID as associated data, parse the frame, validate
-its semantic contents, and recompute its object ID before accepting it.
+```text
+segment_count = ceil(L / SEGMENT_PLAINTEXT_BYTES)
+```
+
+For segment index `i`, starting at zero:
+
+```text
+segment_plaintext_length =
+  min(SEGMENT_PLAINTEXT_BYTES,
+      L - i * SEGMENT_PLAINTEXT_BYTES)
+
+segment_record_length = segment_plaintext_length + GCM_TAG_BYTES
+```
+
+There is no per-record length prefix; a reader derives every boundary from the
+container header. Truncation, extra bytes, missing segments or reordered
+segments are errors.
+
+The 32-byte per-container key is:
+
+```text
+K_object = HKDF-SHA-256(
+  IKM  = K_data,
+  salt = object_salt,
+  info = UTF8("estoc/vault-sync/1.0/segments\0") || raw_32_byte_object_id,
+  L    = 32
+)
+```
+
+The object salt MUST be generated by a cryptographically secure random source
+for each independent encryption attempt. It is not a nonce and need not be
+secret.
+
+For segment `i`:
+
+```text
+nonce = 0x00000000 || uint64be(i)
+
+associated_data =
+  UTF8("estoc/vault-sync/1.0/segment\0")
+  || raw_32_byte_object_id
+  || SHA256(the exact 48-byte container header)
+  || uint64be(i)
+  || uint32be(segment_plaintext_length)
+
+record = AES-256-GCM(
+  key = K_object,
+  nonce = nonce,
+  plaintext = this plaintext-frame segment,
+  associated_data = associated_data,
+  tag_length = 16
+)
+```
+
+Because every container uses an independently derived `K_object`, the fixed
+index nonce is unique within that key. Segment authentication binds the opaque
+object ID, full container header, order, index and expected plaintext length.
+
+The server descriptor's ciphertext multihash is SHA-256 over the complete
+48-byte header plus every segment record. `byte_count` is the exact length of
+that complete encrypted container.
+
+A client accepting a downloaded container MUST:
+
+1. enforce the announced total byte count;
+2. verify the complete ciphertext multihash when the full container is read;
+3. validate the header and segment count;
+4. derive `K_object` from the expected opaque ID;
+5. authenticate every segment before releasing that segment to the plaintext
+   frame parser;
+6. reject truncation, reordering, extra bytes or any failed tag;
+7. validate the plaintext frame and its semantic payload; and
+8. recompute the opaque object ID before local acceptance.
+
+For a DASL object frame, the client streams the payload into
+`ObjectStore.putObject(expectedCid, source)`. The local store MUST expose no
+accepted object until the complete DASL hash and codec checks succeed.
+
+### 4.4 Prefix classification
+
+A download endpoint MUST support byte ranges over the encrypted container.
+A client first requests bytes `0-47` to obtain the complete container header.
+Let:
+
+```text
+p0 = min(1048576, L)
+```
+
+The exact inclusive range containing the header and complete segment-zero
+record is then:
+
+```text
+bytes=0-(63+p0)
+```
+
+That response has exactly `48 + p0 + 16` bytes. After authenticating segment
+zero, the client can parse the bounded plaintext-frame header. This reveals
+the plaintext kind and, for a DASL object, its CID to the authorized client
+without downloading a potentially large payload.
+
+Prefix classification is an optimization, not acceptance:
+
+- the client MUST authenticate segment zero before trusting the frame header;
+- a root or event object is not accepted until its complete container and
+  payload are verified;
+- a DASL object is fetched completely only when policy requires its exact CID;
+  and
+- advancing a durable remote cursor still requires either complete local
+  application or a durable pending descriptor sufficient to resume.
 
 ## 5. Server storage semantics
 
@@ -270,6 +408,23 @@ Objects are immutable and put-if-absent.
 
 The store MUST make a committed object visible atomically to `changes`,
 `inventory` and `want`.
+
+Before committing an upload, the server MUST validate the public container
+framing without attempting decryption:
+
+1. the first eight bytes equal `ESTOCE1\n`;
+2. `L` is positive and does not exceed `max_plaintext_frame_bytes`;
+3. the exact expected encrypted length is
+   `48 + L + 16 * ceil(L / 1048576)`;
+4. the expected length equals both the offered `byte_count` and HTTP
+   `Content-Length`;
+5. the complete upload does not exceed `max_ciphertext_bytes`; and
+6. the complete ciphertext multihash equals the offered `hash`.
+
+Failure creates no object and consumes no insertion sequence. These checks
+reveal only the framing version and exact plaintext-frame length already
+acknowledged by section 4; the server still cannot determine the frame kind or
+DASL CID.
 
 ## 6. `hello`
 
@@ -389,11 +544,12 @@ https://estoc.dev/vault-sync/1.0/hello-result
     "state": "ready",
     "sequence": "1842",
     "limits": {
-      "max_object_bytes": 16777216,
+      "max_plaintext_frame_bytes": 1073741824,
+      "max_ciphertext_bytes": 1073758256,
       "max_offer_objects": 256,
       "max_want_objects": 256,
       "max_page_objects": 512,
-      "max_account_bytes": 10737418240,
+      "max_account_bytes": 107374182400,
       "upload_ttl_seconds": 900,
       "download_ttl_seconds": 900
     }
@@ -408,6 +564,12 @@ MUST produce a new `store_id` and enters `rebuilding` until section 12's
 baseline is committed. A client whose cached `store_id` differs MUST discard
 its remote sequence cursor and execute the pull-before-push reset recovery
 algorithm in section 13.
+
+`max_plaintext_frame_bytes` bounds `L` in the public encrypted-container
+header. `max_ciphertext_bytes` bounds the complete container and MUST be at
+least `48 + L + 16 * ceil(L / 1048576)` for every accepted `L`. A service MAY
+advertise smaller limits than the example; clients MUST fail explicitly rather
+than split one portable DASL object into visible chunk objects.
 
 ## 8. Offering and uploading objects
 
@@ -438,8 +600,8 @@ https://estoc.dev/vault-sync/1.0/offer
 
 The list MUST contain no duplicate object ID and MUST not exceed the
 advertised limit. `hash` is a sha2-256 multihash in multibase base32
-lower. `byte_count` counts encrypted bytes, including the version byte,
-nonce and tag.
+lower. `byte_count` counts encrypted bytes, including the 48-byte container
+header and every encrypted segment record.
 
 During normal `ready` operation, no extra field is present. While the account
 is `rebuilding`, only the reset owner may offer objects, and the body MUST also
@@ -508,15 +670,18 @@ An upload URL is single-use, unguessable, time-limited and bound to the
 authenticated account, object ID, offered hash and byte count. The client
 performs an HTTP `PUT` of exactly the ciphertext bytes:
 
-- no request compression;
+- no request compression or transfer transformation;
+- `Content-Encoding` absent or exactly `identity`;
 - exact `Content-Length`;
 - no redirect following;
 - `Content-Type: application/octet-stream`.
 
-The server streams through the advertised byte limit and sha2-256 hash.
-Only a complete match is committed. Successful first creation returns
-HTTP 201. If another upload committed the same object ID first, the
-server returns HTTP 204 and leaves the existing object unchanged.
+The server first validates the version-1 public framing and exact length
+formula in section 5, then streams through the advertised byte limit and
+sha2-256 hash. Only a complete framing, length and hash match is committed.
+Successful first creation returns HTTP 201. If another upload committed the
+same object ID first, the server returns HTTP 204 and leaves the existing
+object unchanged.
 
 Upload transport status is not itself a sync cursor. A client confirms
 visibility with `changes`, `inventory`, `want`, or a later `offer`.
@@ -727,9 +892,21 @@ https://estoc.dev/vault-sync/1.0/objects
 ```
 
 A download URL is unguessable, time-limited, account-bound and valid only
-for HTTP `GET`. Clients MUST NOT follow redirects. They MUST abandon a
-response whose announced or received length exceeds `byte_count`, whose
-length ends short, or whose bytes fail `hash`.
+for HTTP `GET` and byte-range `GET`. Clients MUST NOT follow redirects. The
+endpoint MUST advertise and implement `Accept-Ranges: bytes`, return standard
+206 responses for satisfiable ranges, and bind every range to the same exact
+immutable encrypted container. It MUST return `Content-Type: application/octet-stream` and MUST apply no
+content coding or transfer transformation; `Content-Encoding` is absent or exactly `identity`. A client
+SHOULD send `Accept-Encoding: identity`.
+
+A client may first obtain bytes `0-47`, calculate `p0 = min(1048576, L)`, and
+then obtain the exact inclusive range `bytes=0-(63+p0)` to authenticate and
+classify the plaintext frame under section 4.4. The `Content-Range`, response
+length, header bytes and any strong entity validator MUST identify the same
+immutable container across both requests. A full acceptance MUST still obtain
+the complete container, enforce `byte_count` and verify `hash`. The client MUST
+abandon a response that is short, overlong, transformed, range-inconsistent or
+hash-invalid.
 
 The HTTP URL reveals no logical object ID in its path.
 
@@ -751,11 +928,11 @@ Before requesting reset, the initiating full replica MUST:
    in `vault-events.md`;
 3. compute the current held-root set from the converged fold; and
 4. be able to supply the immutable root object, every accepted event object
-   and every currently held block it intends to preserve.
+   and every currently held object it intends to preserve.
 
 Reset is not a selective event retraction. Another trusted full replica may
 later republish immutable event objects that it still has. It MUST NOT
-republish content blocks released by the converged erasure fold.
+republish DASL objects released by the converged erasure fold.
 
 ### 12.2 `reset`
 
@@ -822,9 +999,9 @@ While rebuilding, the reset owner uploads, in this order:
 1. the immutable root object;
 2. every locally accepted event object, including `message.erased` and any
    newly generated erasure-closure events; and
-3. only blob blocks that are roots held by the current post-erasure fold.
+3. only DASL objects that are roots held by the current post-erasure fold.
 
-It MUST NOT offer a block merely because bytes remain in a local blob store.
+It MUST NOT offer a DASL object merely because bytes remain in a local object store.
 The event set is append-only; the held-root fold, not byte presence, determines
 whether content is republished.
 
@@ -893,15 +1070,16 @@ During ordinary `ready` operation a client publishes in this order:
    objects;
 2. generate and publish any erasure-closure events required by that union;
 3. publish the immutable root object if it is absent;
-4. for each new event that currently retains blob blocks, publish those blocks
-   first, but only when their CIDs are in the **current held-root set**; and
-5. publish the event object after its currently held referenced blocks are
-   available remotely.
+4. for each new event that currently retains DASL objects, publish those
+   exact objects first, but only when their CIDs are in the **current held-root
+   set**; and
+5. publish the event object after its currently held referenced DASL objects
+   are available remotely.
 
-Blocks-before-event preserves availability for normal messages, while the
-held-root test preserves erasure safety. A block not currently held MUST NOT be
-offered even when its bytes remain locally available. An event with no held
-blocks, including an erasure or closure event, may be offered immediately.
+Objects-before-event preserves availability for normal messages, while the
+held-root test preserves erasure safety. An object not currently held MUST NOT be offered even when its bytes remain
+locally available. An event with no held objects, including an erasure or
+closure event, may be offered immediately.
 
 The local event store's `changes()` only discovers what this local store gained
 efficiently. A local `ChangeToken` is never sent to the sync store and is
@@ -916,7 +1094,7 @@ A client that observes a different `store_id` MUST enter **pull-before-push**:
    local object;
 5. run erasure closure against the union and recompute held roots;
 6. publish newly required closure events first, then missing immutable events,
-   then only currently held blocks; and
+   then only currently held DASL objects; and
 7. resume incremental changes only after that publication pass.
 
 This ordering prevents a stale replica that missed `message.erased` from
@@ -926,42 +1104,73 @@ replica may reappear.
 
 ### 13.2 Applying remote objects
 
-For every unknown opaque descriptor, a client obtains/verifies ciphertext,
-decrypts and validates the frame, and recomputes the object ID. During normal
-incremental sync it may then apply blocks and events idempotently subject to
-the held-root rules.
+A server descriptor is opaque until an authorized client authenticates the
+container prefix. For every previously unknown descriptor, the client:
 
-For a reset baseline or lost-cursor full reconciliation, the client MUST first
-download enough objects to classify them after decryption, then:
+1. retrieves and validates the 48-byte container header;
+2. derives `p0 = min(1048576, L)` and the exact inclusive segment-zero range
+   `bytes=0-(63+p0)`;
+3. retrieves and authenticates segment zero using the descriptor's opaque
+   object ID;
+4. parses the complete plaintext-frame header, which MUST fit in segment zero;
+5. validates the closed header schema; and
+6. recomputes the expected opaque object ID from the authenticated header.
 
-1. verify and accept the immutable root;
-2. validate and ingest all event objects in their named stores, independently
-   of server sequence;
-3. fold the complete learned event union and append equivalent erasure-closure
-   events for newly discovered roots of already erased logical messages;
-4. recompute the held-root set;
-5. retain/fetch a block only when its CID is currently held, verify it against
-   its CID, and put it idempotently; and
-6. advance the remote cursor only after all corresponding durable local writes.
+An ID mismatch is an integrity failure. Prefix classification does not accept
+the root, event or DASL object and does not replace verification of the full
+container when the object is needed.
+
+During ordinary incremental synchronization:
+
+- root and event frames are downloaded completely, verified and applied;
+- a DASL-object descriptor may be kept as a durable pending descriptor after
+  authenticated prefix classification;
+- the complete DASL object is downloaded only when its CID belongs to the
+  current held-root set; and
+- after every newly ingested event batch, the client recomputes held roots and
+  schedules any newly required object IDs.
+
+For a reset baseline or a lost-cursor full reconciliation, the client MUST:
+
+1. prefix-classify every descriptor in the fixed inventory snapshot;
+2. completely verify and accept the immutable root;
+3. completely verify, validate and ingest every event object in its named
+   event store, independently of server sequence;
+4. fold the complete learned event union and append equivalent
+   erasure-closure events for newly discovered roots of already erased logical
+   messages;
+5. recompute the held-root set;
+6. for each held CID, derive its opaque object ID, require a matching
+   authenticated descriptor, download the complete container, verify the exact
+   DASL object and call `ObjectStore.putObject`; and
+7. advance the remote cursor only after all required durable local writes or
+   durable pending-download records are complete.
+
+A classified DASL object whose CID is not held MAY be skipped without reading
+its remaining ciphertext. The client MUST NOT expose it, retain it merely
+because a DRISL object links to it, or call `putObject`. The authenticated
+classification record is sufficient to mark that descriptor as processed for
+this inventory snapshot.
 
 Events may arrive in any order. Server sequence is a delivery cursor, not
-vault meaning. An erased block descriptor may be ignored after frame/object-ID
-verification; absence of released bytes is not `not fetched`.
+vault meaning. Absence of released object bytes is not `not fetched`.
 
 An unknown extension store is not opened merely because an opaque object
-exists. After decryption, the client applies the vault's extension lifecycle
-policy before writing an extension event or held block.
+exists. After classification, the client applies the vault's extension
+lifecycle policy before writing an extension event or fetching any object held
+only by that extension.
 
-### 13.3 Missing blocks
+### 13.3 Missing DASL objects
 
-A client may learn of an event before every referenced block is locally
-present because another uploader crashed or account quota prevented a
-block. It MUST retain the event ciphertext descriptor and retry missing
-object discovery. It MUST distinguish `not fetched` from a logical vault
-erasure.
+A client may learn of an event before every referenced object is locally
+present because another uploader crashed or account quota prevented an object
+upload. For each currently held CID it computes the expected opaque object ID
+and looks for that ID in `changes`, inventory or `want`.
 
-A client MUST NOT fabricate a block object ID from a server descriptor;
-it computes the ID from the expected CID under `K_index` and asks for it.
+If the expected object is absent, the client MUST retain the event, surface or
+record `not fetched`, and retry discovery. It MUST distinguish temporary
+absence from logical vault erasure. It MUST NOT fabricate a DASL CID from a
+server descriptor or accept bytes without `ObjectStore.putObject` verification.
 
 ### 13.4 Event conflicts
 
@@ -985,7 +1194,8 @@ only the seed must obtain the first locator from an external trusted source.
 
 It derives the sync account and object keys, fetches the fixed root object
 ID, verifies the immutable configuration, inventories every opaque object,
-downloads and validates events and blocks, builds a fresh local core vault,
+downloads and validates events and currently held DASL objects, builds a fresh
+local core vault,
 and finally mints a new local `replica_id` and private `store_generation`.
 Unknown portable folder paths that have no versioned sync-object profile are
 not reconstructed by this protocol.
@@ -1007,7 +1217,7 @@ state.
 
 The server MAY cap:
 
-- object size;
+- encrypted-container size;
 - account ciphertext bytes;
 - objects per account;
 - request batch sizes; and
@@ -1018,6 +1228,13 @@ selective remote garbage collection, clients MUST surface approaching quota
 and allow the user to export, move to another sync store, or invoke the formal
 whole-account reset in section 12 deliberately. A UI MUST describe reset as a
 remote-mirror purge, not as selective message erasure.
+
+If a whole-resource DASL object exceeds a selected store's advertised frame or
+container limit, the client MUST NOT split it into portable chunk objects. It
+marks that sync target incomplete for the referencing event, withholds normal
+objects-before-event publication to that target, and surfaces the specific
+unsynchronized root. Another sync store or an explicit future large-object
+profile is required.
 
 A local write never waits for sync availability. Sync failures change
 replication lag, not local commit success or mailbox pickup.
@@ -1030,6 +1247,8 @@ The sync store can observe:
 - opaque object IDs;
 - ciphertext hashes and sizes;
 - object creation and download times;
+- requested byte ranges and whether a client fetched only a prefix or the
+  complete encrypted container;
 - account totals; and
 - network metadata.
 
@@ -1065,7 +1284,8 @@ Authenticated control errors use Problem Report 2.0:
 | `e.estoc.vault-sync.reset-not-owner` | rebuild capability is absent, invalid or bound to another reset epoch |
 | `e.estoc.vault-sync.reset-baseline` | root, object count or baseline hash does not match the rebuilding set |
 | `e.estoc.vault-sync.reset-confirmation` | reset ID, expected store ID or literal confirmation is invalid |
-| `e.estoc.vault-sync.object-too-large` | object exceeds the account limit |
+| `e.estoc.vault-sync.object-too-large` | plaintext frame or encrypted container exceeds the account limit |
+| `e.estoc.vault-sync.container` | public container magic, length formula or segment framing is invalid |
 | `e.estoc.vault-sync.quota` | account cannot accept another object |
 | `e.estoc.vault-sync.upload-expired` | upload ticket is no longer valid |
 | `e.estoc.vault-sync.hash-mismatch` | uploaded ciphertext failed hash or length |
@@ -1077,49 +1297,69 @@ MUST NOT disclose another account's object existence.
 
 ## 18. Required conformance cases
 
-1. Two replicas independently offer the same logical object with different
-   randomized ciphertext; exactly one immutable server object remains and both
-   clients can decrypt and verify it.
+1. Two replicas independently encrypt and offer the same logical object with
+   different random salts; exactly one immutable server object remains and
+   both clients can decrypt and verify the stored winner.
 2. Re-offering an existing ID allocates no overwrite upload; incomplete,
-   oversized or hash-mismatched uploads create no object or sequence.
-3. `changes` and a fixed-through paged inventory cannot permanently skip a
+   oversized, malformed-framing or hash-mismatched uploads create no object or
+   insertion sequence.
+3. The server rejects a container whose magic, `L`, segment-derived total
+   length, offered `byte_count` or HTTP `Content-Length` disagree.
+4. Modifying, deleting, duplicating, truncating or reordering any encrypted
+   segment causes authentication or framing failure before semantic
+   acceptance.
+5. One-shot and streaming encryption of the same plaintext frame may produce
+   different ciphertext but decrypt to the exact same frame and opaque ID.
+6. A client fetches bytes `0-47`, derives `p0`, fetches exactly
+   `bytes=0-(63+p0)`, and authenticates segment zero before trusting a frame
+   header; transformed or inconsistent range responses are rejected, and
+   prefix classification alone never accepts a root, event or DASL object.
+7. `changes` and a fixed-through paged inventory cannot permanently skip a
    committed object.
-4. Losing all local cursor state and running inventory discovers the same
+8. Losing all local cursor state and running inventory discovers the same
    ready object set.
-5. Download hash, AEAD tag, frame validation, semantic validation and object-ID
-   recomputation all precede local acceptance.
-6. Blob bytes are verified against CID before `put`.
-7. Concurrent offline event sets converge after exchange; same `eid` with
-   different RFC 8785 canonical event bytes is an integrity conflict.
-8. A fresh full replica with seed and locator reconstructs root, events and
-   held blobs, then mints new local replica/store-generation IDs.
-9. No sync message exposes replica ID, event type, CID, contact or application
-   plaintext to the server.
-10. A previously unseen sync account without accepted admission creates no
+9. Download framing, ciphertext hash, every AEAD tag, frame validation,
+   semantic validation and opaque-ID recomputation all precede local
+   acceptance.
+10. Exact DASL object bytes are verified against their CID and codec profile
+    before `ObjectStore.putObject` commits them.
+11. A large whole-resource raw object is uploaded, range-classified,
+    downloaded, decrypted and verified with bounded memory and without any
+    portable chunk CID.
+12. Concurrent offline event sets converge after exchange; the same `eid`
+    with different RFC 8785 canonical event bytes is an integrity conflict.
+13. A fresh full replica with seed and locator reconstructs root, events and
+    held objects, then mints new local replica and store-generation IDs.
+14. No sync message or server row exposes replica ID, event type, DASL CID,
+    contact or application plaintext. Public framing reveals only version and
+    exact frame length.
+15. A previously unseen sync account without accepted admission creates no
     account, object or quota reservation.
-11. `sync/account` is the sole named asymmetric key; `K_index` and `K_data`
+16. `sync/account` is the sole named asymmetric key; `K_index` and `K_data`
     match only the explicit HKDF profile.
-12. Version 1.0 exposes no selective retract and documents reset as a whole
+17. Version 1.0 exposes no selective retract and documents reset as a whole
     remote-mirror purge, not logical message erasure.
-13. Reset with stale precondition or malformed confirmation deletes nothing.
-14. Successful reset rotates `store_id`, invalidates old objects/tickets and
-    enters `rebuilding`; ordinary clients cannot offer, inventory or download a
-    partial baseline.
-15. Only a valid reset-owner capability may upload during rebuilding.
-16. `reset-commit` verifies root presence, exact object count and RFC
+18. Reset with stale precondition or malformed confirmation deletes nothing.
+19. Successful reset rotates `store_id`, invalidates old objects and tickets,
+    and enters `rebuilding`; ordinary clients cannot offer, inventory or
+    download a partial baseline.
+20. Only a valid reset-owner capability may upload during rebuilding.
+21. `reset-commit` verifies root presence, exact object count and RFC
     8785-derived baseline hash before atomically entering `ready`.
-17. Repeating one accepted `reset_id` is idempotent; a fresh reset against the
+22. Repeating one accepted `reset_id` is idempotent; a fresh reset against the
     rebuilding store can supersede an abandoned rebuild and invalidates its
     capability.
-18. The reset owner publishes every accepted event, including erase/closure
-    events, but only blocks in its current held-root set.
-19. A stale replica observing changed `store_id` performs full pull-before-push,
-    ingests baseline events, applies erasure closure and recomputes held roots
-    before offering anything.
-20. A stale replica that still physically stores erased bytes does not offer
-    those block objects after baseline reconciliation.
-21. A late immutable event may reappear after reset, but any newly learned root
-    of an already erased logical message receives closure before its content
-    block can be offered.
-22. Sync unavailability never blocks local event commit, send intent or mailbox
-    pickup.
+23. The reset owner publishes every accepted event, including erase and
+    closure events, but only DASL objects in its current held-root set.
+24. A stale replica observing changed `store_id` performs full
+    pull-before-push, ingests baseline events, applies erasure closure and
+    recomputes held roots before offering anything.
+25. A stale replica that still physically stores erased bytes does not offer
+    those DASL objects after baseline reconciliation.
+26. A late immutable event may reappear after reset, but any newly learned
+    root of an already erased logical message receives closure before its
+    content object can be offered.
+27. A DRISL Tag 42 link never causes sync fetch or publication unless the
+    linked CID is also in the current held-root set.
+28. Sync unavailability never blocks local event commit, send intent or
+    mailbox pickup.

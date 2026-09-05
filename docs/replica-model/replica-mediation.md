@@ -1,12 +1,20 @@
 # replica-mediation/1.0
 
-Status: **draft** — proposed Estoc profile for DIDComm Messaging 2.1,
-Routing 2.0, Coordinate Mediation 3.0 and Message Pickup 3.0.
+Status: **deferred draft** — future multi-replica extension for DIDComm
+Messaging 2.1, Routing 2.0, Coordinate Mediation 3.0 and Message Pickup 3.0.
+It is not required or implemented by Estoc phase 1, which uses one active full
+runtime and ordinary account-scoped Message Pickup.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14
 when, and only when, they appear in all capitals.
+
+> **Phase-1 boundary.** A mediation account that has not explicitly enabled
+> this extension behaves as an ordinary Coordinate Mediation / Message Pickup
+> account and carries no `replica_id`. Once this extension is enabled for an
+> account, its replica-scoped rules are a clean break and account-global pickup
+> MUST NOT be mixed with them.
 
 ## 1. What it is for
 
@@ -63,7 +71,7 @@ advisory; successful `register` is the authoritative capability check.
 
 ## 3. Terms and trust model
 
-- **Vault** — one Estoc identity and its event, blob and key material.
+- **Vault** — one Estoc identity and its event, object and key material.
 - **Full replica** — one independently writable incarnation of a
   vault, holding the seed and enough vault data to derive and use the
   vault's communication identities. It is not a hardware identity.
@@ -546,67 +554,41 @@ and deliveries remain until expiry. A conforming `recipient-query` response
 SHOULD include active `registration_id` beside each recipient DID.
 
 
-## 7. Routing and mailbox storage profile
+## 7. Routing and mailbox storage extension
 
-### 7.1 Accepted forward
+### 7.1 Inherited phase-1 envelope profile
 
-A mediator implementing this profile MUST apply all of these checks to a
-Routing 2.0 `forward` before storage:
+This deferred extension inherits `distributed-delivery/1.0` section 3.1
+unchanged. In particular, outer `forward` validation, inner encrypted-envelope
+normalization, package idempotency, quota atomicity, sender-visible `submitted`
+semantics and the no-application-plaintext storage boundary are phase-1 rules,
+not replica features.
 
-1. the outer DIDComm message was encrypted to the mediator;
-2. `body.next` is a valid DID and resolves to a local mediation account
-   or a currently registered recipient DID;
-3. there is exactly one attachment;
-4. the attachment's `media_type` is
-   `application/didcomm-encrypted+json`;
-5. the attachment uses `data.json` or `data.base64`, but not both and not
-   `data.links`;
-6. after decoding, the value is one DIDComm encrypted-message JSON
-   serialization with non-empty `protected`, `recipients`, `iv`,
-   `ciphertext`, and `tag` fields; and
-7. the normalized UTF-8 JSON is within the mediator's message-size limit.
-
-Validation is syntactic. The mediator cannot and MUST NOT decrypt the
-inner envelope.
-
-The mediator normalizes an accepted inner envelope with RFC 8785 and
-stores those UTF-8 bytes. The mailbox message's deduplication key is:
-
-```text
-(mediation account DID, body.next, forward.id)
-```
-
-`forward.id` therefore identifies one exact encrypted package. Repeating
-that key with identical normalized bytes is an idempotent retry. Reusing
-it with different bytes is a package conflict; the first value remains
-and the second MUST NOT replace it.
+Enabling replica mediation MUST NOT weaken those rules. The extension changes
+only how one already accepted mailbox package is associated with delivery
+state. A local DASL CID remains absent from Routing 2.0 and is not disclosed to
+the mediator merely to deliver a package.
 
 ### 7.2 Atomic fan-out
 
 For a new accepted package, one database transaction MUST:
 
 1. insert the mailbox message and its retention deadline; and
-2. create one delivery for every active replica of the mediation
-   account.
+2. create one delivery for every active replica of the mediation account.
 
-The message MUST still be retained when the account currently has no
-active replicas. A later `register` with `replay: retained` creates the
-missing delivery.
+The message MUST still be retained when the account currently has no active
+replicas. A later `register` with `replay: retained` creates the missing
+delivery.
 
-Live delivery happens only after the transaction commits. A failed or
-lost live push changes no durable state.
+Live delivery happens only after the transaction commits. A failed or lost live
+push changes no durable state.
 
 ### 7.3 Sender-visible behavior
 
-Routing is one-way and may be anonymous. A mediator SHOULD avoid making
-HTTP status, latency or response bodies into a recipient-existence
-oracle. It MAY return the same transport acceptance for a stored
-forward, an unknown route, a quota refusal and an invalid anonymous
-forward.
-
-Consequently, the sender MUST treat mediator or HTTP acceptance only as
-`submitted`. Ultimate delivery is established by an authenticated
-application-level ACK, as described in `distributed-delivery/1.0`.
+The sender-visible behavior remains the phase-1 behavior: mediator or HTTP
+acceptance is only `submitted`, and ultimate delivery requires an authenticated
+application-level ACK. Replica fan-out is deliberately invisible to the
+sender.
 
 ### 7.4 Recipient-role neutrality
 
@@ -618,15 +600,12 @@ registered recipients have the same shape:
 recipient DID -> mediation account -> active replica deliveries
 ```
 
-The default discovery path gives a peer the long form of a Peer rendezvous
-DID, then registers/routes its canonical short form. An optional `did:web`
-facade may expose the same mediator through `DIDCommMessaging`. Later traffic
-to a pairwise `did:peer:4` may use the same account and storage path or a
-separate vault-scoped arrangement for metadata unlinkability.
+The default discovery path gives a peer the long form of a Peer rendezvous DID,
+then registers/routes its canonical short form. An optional `did:web` facade
+may expose the same mediator through `DIDCommMessaging`. Later traffic to a
+pairwise `did:peer:4` may use the same account and storage path or a separate
+vault-scoped arrangement for metadata unlinkability.
 
-Changing the active replica set, adding a server full replica or moving an
-optional Web publisher MUST NOT require changing any recipient DID. Thin
-clients without the seed do not register here.
 
 ## 8. Message Pickup 3.0 replica profile
 
@@ -642,10 +621,10 @@ bodies MUST contain `replica_id`:
 - `live-delivery-change`.
 
 A request omitting `replica_id` MUST fail with
-`e.estoc.replica-mediation.replica-required`. This is a deliberate clean-break
-choice: version 1.0 has **no** account-global Pickup 3.0 fallback, including
-before the first replica is registered. A legacy Pickup client cannot share
-this mediation account.
+`e.estoc.replica-mediation.replica-required` **after this extension has been
+enabled for the account**. Before enablement, a phase-1 account uses ordinary
+account-global Message Pickup 3.0. Account-global and replica-scoped pickup
+MUST NOT operate concurrently on one enabled mediation account.
 
 An account with zero active replicas may still retain accepted mailbox
 messages with zero delivery rows. It cannot perform pickup. The first later

@@ -1,7 +1,8 @@
 # distributed-delivery/1.0
 
-Status: **draft** — Estoc delivery profile for application messages sent by
-trusted full replicas of one vault.
+Status: **draft, phase 1** — phase-1 delivery profile for one active full vault
+runtime. The identifiers and folds are future-safe for replication, but
+`replica-mediation/1.0` and multi-writer execution are deferred.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
@@ -10,10 +11,10 @@ appear in all capitals.
 ## 1. What it is for
 
 An Estoc message begins as a durable vault decision. Resolution, address
-selection, encryption, mediation and retry are effects that may happen later
-on any full replica. Several replicas may race to send or receive the same
-logical message; the observable conversation still contains one message, not
-one per replica, package or route.
+selection, encryption, mediation and retry are effects that happen later in a
+full vault runtime. Phase 1 has exactly one active full runtime. Stable logical,
+package and wire identifiers are nevertheless defined so a later replicated
+runtime can converge without changing peer-visible messages.
 
 This profile defines:
 
@@ -25,13 +26,13 @@ This profile defines:
 - package preparation and valid repackaging;
 - submitted, acknowledged, expired and held states;
 - end-to-end durable receipt with DIDComm `please_ack` and `ack`;
-- duplicate and conflict handling across replicas;
+- duplicate and conflict handling across process restarts and future replicas;
 - the rendezvous bootstrap delivery profile; and
 - idempotency requirements for automatic handlers.
 
-It does not define mailbox fan-out (`replica-mediation/1.0`), the rendezvous
-admission profile (`rendezvous.md`) or event/blob replication
-(`vault-sync/1.0`).
+It does not define the DASL object profile (`dasl-objects.md`), mailbox
+fan-out (`replica-mediation/1.0`), the rendezvous admission profile
+(`rendezvous.md`) or event/object replication (`vault-sync/1.0`).
 
 ## 2. Terms
 
@@ -54,15 +55,17 @@ admission profile (`rendezvous.md`) or event/blob replication
   plaintext, including package addressing and security headers.
 - **Package ID** — Routing 2.0 `forward.id` for one exact encrypted inner
   envelope.
-- **Delivery ID** — a mediator-generated, per-replica opaque attachment ID
-  used by Message Pickup.
+- **Delivery ID** — a mediator-generated opaque attachment ID used by Message
+  Pickup. In the phase-1 single-replica profile it belongs to the mediation
+  account queue; the deferred replica profile scopes it to a replica.
 - **Submitted** — a transport endpoint accepted one package attempt.
 - **Acknowledged** — the ultimate peer sent an authenticated explicit `ack`
   naming the wire ID after durable receipt.
-- **Receipt-required** — `message.out.pleaseAck` is present, including an
-  empty array.
-- **Submission-terminal** — `message.out.pleaseAck` is null and the first
-  successful submission ends normal background retry.
+- **Receipt-required** — the exact `message.out.pleaseAck` array requests an
+  explicit ACK of this message by containing `""` or this message's wire ID.
+- **Submission-terminal** — this message is not receipt-required; its first
+  successful submission ends normal background retry. The message may still
+  carry a `please_ack` request for older message IDs.
 - **Logical channel** — a local recipient key and authenticated peer key,
   interpreted through contact-scoped DID transitions.
 
@@ -100,20 +103,69 @@ relationship DID
     ordinary traffic after admission
 ```
 
-Both are vault-scoped. Every full replica can derive their private keys and
-receive messages addressed to them. A server holding the seed is an ordinary
-full replica; it does not own the DIDs.
+Both are vault-scoped. The phase-1 active full runtime derives their private
+keys and receives messages addressed to them. A later server or additional
+full replica does not own the DIDs merely because it executes the vault.
 
 A DID may advertise mediated or direct routes. Route choice changes transport,
 not application recipient. A direct endpoint MUST NOT expose a replica ID as
 the peer-visible recipient.
 
-A mediator may use `replica_id` internally to fan out an already encrypted
-package. It cannot alter the innermost recipient or acknowledge another
-replica's delivery.
+The phase-1 mediator uses ordinary account-scoped Message Pickup with one
+active pickup client. The deferred `replica-mediation/1.0` extension may later
+fan out an already encrypted package without changing the innermost recipient.
 
 A valid `from_prior` handoff replaces a rendezvous DID only inside the named
 contact relationship. The rendezvous DID remains usable for other parties.
+
+### 3.1 Phase-1 mediator envelope and storage profile
+
+The no-plaintext mediator boundary is a phase-1 requirement and is independent
+of replica fan-out. Before storing a Routing 2.0 `forward`, the mediator MUST
+require:
+
+1. an outer DIDComm encrypted message addressed to the mediator;
+2. a valid `body.next` that maps to the mediation account itself or a recipient
+   currently registered to that account;
+3. exactly one attachment;
+4. attachment `media_type == "application/didcomm-encrypted+json"`;
+5. exactly one of `data.json` or `data.base64`, and no `data.links`;
+6. after decoding, one DIDComm encrypted-message JSON serialization with
+   non-empty `protected`, `recipients`, `iv`, `ciphertext`, and `tag`; and
+7. normalized bytes within the advertised account and message limits.
+
+Validation is syntactic. The mediator MUST NOT decrypt the inner application
+envelope or possess an application content-decryption key. It RFC-8785-
+canonicalizes the accepted encrypted-message JSON and stores only those exact
+UTF-8 bytes plus the minimum account, recipient, package, retention, pickup and
+transport metadata required for operation. It MUST NOT persist or log unpacked
+application plaintext, content keys, attachment content, decrypted `forward`
+bodies or request bodies by default.
+
+The sender's local DASL CID for the normalized envelope is never part of
+Routing 2.0 and MUST NOT be sent merely to deliver the package.
+
+For the phase-1 account-scoped queue, the package idempotency key is:
+
+```text
+(mediation account DID, body.next, forward.id)
+```
+
+Repeating that key with byte-identical normalized inner-envelope bytes is an
+idempotent retry. Reusing it with different bytes is a package conflict; the
+first accepted value remains and the later value MUST NOT replace it.
+
+The mediator treats rendezvous and relationship DIDs as recipient-role-neutral.
+It does not need to know which role a registered recipient plays. HTTP or
+mediator acceptance means only `submitted`; ultimate acknowledgment still
+requires an authenticated application plaintext whose explicit `ack` names the
+wire ID.
+
+The mediator MUST bound normalized envelope size, retained ciphertext bytes,
+retained message count, registered recipients, recipient-update rate, pickup
+batch size and retention time. A quota or validation failure MUST NOT leave a
+partially stored package. Anonymous routing responses SHOULD avoid becoming a
+precise account- or recipient-existence oracle.
 
 ## 4. Vault-first sending
 
@@ -141,8 +193,8 @@ because `created_time` lies outside a local clock-skew window. A protocol may
 constrain `expiresTime - createdTime`.
 
 A successful vault commit does not imply resolution, encryption or
-submission. Any full replica may complete those effects later. Correctness
-MUST NOT depend on one replica remaining online or on mutable `local/` state.
+submission. The active full runtime may complete those effects later. Correctness MUST
+NOT depend on an uninterrupted process lifetime or on rebuildable cache state.
 
 A remote thin client without the seed may stage a command while offline, but
 that is not a vault commit. It becomes authoritative only when a full vault
@@ -197,30 +249,60 @@ The intent projection is:
   },
   "created_time": 1788442800,
   "expires_time": null,
-  "please_ack": [],
+  "please_ack": [""],
   "ack": [],
   "headers": {}
 }
 ```
 
-`please_ack` is either null, meaning the header is absent, or an array,
-meaning the header is present. An empty array requests acknowledgment of the
-current message. Non-empty elements name older messages to acknowledge in
-addition to the current one. Version 1.0 forbids empty-string sentinels and
-forbids placing the current wire ID in the array.
+`please_ack` is either null, meaning the wire header is absent, or the exact
+ordered array carried by the wire header. Each array element names a message
+whose explicit acknowledgment is requested. The empty string means the current
+message. The current wire ID MAY be used instead of the empty string.
+
+Define:
+
+```text
+expandPleaseAck(currentWireId, values):
+    replace every "" with currentWireId
+    remove later duplicates without reordering the first occurrence
+```
+
+A message is receipt-required exactly when:
+
+```text
+pleaseAck != null
+and currentWireId is in expandPleaseAck(currentWireId, pleaseAck)
+```
+
+Therefore:
+
+```text
+pleaseAck == null       header absent; current message not receipt-required
+pleaseAck == []         header present but requests no explicit message ID
+pleaseAck == [""]       requests explicit ACK of the current message
+pleaseAck == [wireId]   requests explicit ACK of the current message
+pleaseAck == [olderId]  requests ACK of the older message only
+```
+
+Estoc writers SHOULD omit `please_ack` rather than emit `[]`. Receivers MUST
+accept and preserve all standard forms, including `[]`, `[""]` and an array
+containing the current message ID.
 
 For inbound normalization:
 
 - absent `please_ack` becomes null;
-- present empty `please_ack` remains `[]`;
+- a present array remains byte-for-byte equal as a JSON string sequence;
 - absent `ack` becomes `[]`;
 - absent time becomes null; and
 - no additional header becomes `{}`.
 
-`please_ack` and `ack` values are unique strings. Their wire order is
-preserved. `ack` follows oldest-to-newest receive order and is never sorted
-lexicographically. A preparer MUST NOT substitute its clock, alter receipt
-policy, reorder arrays or opportunistically add unrelated acknowledgments.
+`please_ack` and `ack` values are strings. Implementations MUST reject duplicate
+non-empty IDs in one array. At most one empty-string current-message sentinel is
+allowed. Wire order is preserved. `ack` follows oldest-to-newest receive order
+and is never sorted lexicographically. A preparer MUST NOT substitute its clock,
+alter receipt policy, reorder arrays or opportunistically add unrelated
+acknowledgments.
 
 `headers` contains every permitted top-level DIDComm field not represented by
 a dedicated field. A difference in any such field is an intent difference.
@@ -272,10 +354,13 @@ preserve an additional supported header MUST reject preparation rather than
 dropping it.
 
 The preparer RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
-encrypts, stores exact normalized encrypted-message bytes and appends
-`message.prepared` before submission.
+encrypts, parses the encrypted-message JSON with duplicate-member and I-JSON
+validation, and stores `UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL
+object before appending `message.prepared`. Submission uses those exact stored
+bytes.
 
-Retrying a package reuses identical plaintext, ciphertext and package ID.
+Retrying a package reuses identical plaintext, normalized ciphertext bytes and
+package ID.
 
 A new package for the same logical message may change `from`, `to`, selected
 keys, peer resolution or `from_prior` only when a selected key generation,
@@ -292,12 +377,22 @@ Before preparation or retry, a worker checks durable expiry. When
 failure and submits no package. A later user attempt requires a new
 `message.out` and wire ID.
 
-Completion mode is determined only by `message.out.pleaseAck`:
+Completion mode is derived from the current message's wire ID and exact
+`message.out.pleaseAck` value:
 
-- **receipt-required** — not null, including `[]`. Submission is not terminal;
-  retry continues until ultimate ACK, expiry, hold or terminal failure.
-- **submission-terminal** — null. First successful submission ends normal
+```text
+requested = expandPleaseAck(wireId, pleaseAck or [])
+receiptRequired = wireId is in requested
+```
+
+- **receipt-required** — retry continues until an authenticated explicit ACK
+  names the wire ID, or until expiry, hold or terminal failure.
+- **submission-terminal** — the first successful submission ends normal
   background retry, while display remains `submitted`, not `acknowledged`.
+
+A message can be submission-terminal while requesting acknowledgments of older
+messages. A present empty array by itself does not make the current message
+receipt-required.
 
 HTTP success, WebSocket acceptance or mediator acceptance only records
 `delivery.submitted`.
@@ -306,28 +401,32 @@ Work eligibility and displayed outcome are separate. Expiry permanently ends
 new work. A later valid ACK may improve display to acknowledged-late but never
 reactivates preparation or retry.
 
-A user or policy hold stops automatic work vault-wide. Synchronizing a message
-from another author never creates a hold.
+A user or policy hold stops automatic work vault-wide. In the phase-1 profile
+there is one active writer. Future synchronization MUST NOT create a hold merely
+because another author produced the intent.
 
 ## 8. Durable end-to-end acknowledgment
 
 ### 8.1 Honoring `please_ack`
 
-A receiver honors a present `please_ack` only after it has:
+A receiver expands a present `please_ack` array by replacing `""` with the
+current incoming wire ID. If the resulting target set is empty, the header asks
+for no explicit ACK and creates no response obligation in this profile.
+
+A conforming Estoc receiver honors requested IDs only after it has:
 
 1. authenticated, decrypted and validated the complete message;
-2. stored retained body and attachment blocks;
+2. stored retained body and attachment objects;
 3. durably appended `message.in`; and
 4. committed any non-controversial channel evidence required to address the
    response.
 
-The current message ID is acknowledged because the header is present. IDs in
-its array request acknowledgment of older messages too. The outgoing `ack`
-array contains only messages actually durably known by the receiver and is
-ordered oldest-to-newest by the receiver's convergent logical receive order.
+It includes in outgoing `ack` only requested message IDs that are durably known
+to it. Values are ordered oldest-to-newest by the receiver's convergent logical
+receive order. The empty string never appears in an `ack` array.
 
-The receiver uses the next natural protocol message when one exists. If no
-natural response is available, it uses:
+The receiver uses an existing deterministic protocol response when the
+application protocol defines one. If no such response is available, it uses:
 
 ```text
 https://didcomm.org/empty/1.0/empty
@@ -335,8 +434,10 @@ https://didcomm.org/empty/1.0/empty
 
 with an explicit `ack` header.
 
-A pure ACK contains no `please_ack` and is submission-terminal. It never asks
-for another ACK.
+A natural DIDComm response may be an implicit protocol acknowledgment, but
+Estoc records `delivery.acknowledged` only from an authenticated explicit
+`ack` value. A pure ACK contains no `please_ack` and is submission-terminal. It
+never asks for another ACK.
 
 ### 8.2 Deterministic pure ACK
 
@@ -373,8 +474,8 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 `ack` array names that outbound wire ID and every package-level addressing,
 transition and protocol-specific proof gate has passed.
 
-Threading, a natural response, transport acceptance or a mediator receipt is
-insufficient without the explicit `ack` value.
+Threading, a natural response, transport acceptance, `please_ack` presence or a
+mediator receipt is insufficient without the explicit `ack` value.
 
 One valid ACK stops automatic retry of every package for the logical
 receipt-required outbound. Duplicate ACKs are harmless. Acknowledged means
@@ -383,13 +484,15 @@ business workflow.
 
 ### 8.4 Duplicate receipt handling
 
-When a conflict-free message with present `please_ack` is delivered again,
-the receiver MUST re-submit the same already-existing natural response or
-pure-ACK package. It MUST NOT mint a new effect, message, wire ID, package or
-`from_prior`.
+When a conflict-free message is delivered again and at least one expanded
+`please_ack` target was previously honored, the receiver MUST re-submit the
+same already-existing deterministic protocol response or pure-ACK package. It
+MUST NOT mint a new effect, message, wire ID, package or `from_prior`.
 
 This repairs response or ACK loss without duplicate application side effects.
-A bounded debounce may reduce repeated submission.
+A bounded debounce may reduce repeated submission. A receiver that did not
+honor an optional ACK request is not required to invent a response merely
+because the request was duplicated.
 
 ## 9. Receiving identity and duplicate folding
 
@@ -450,17 +553,23 @@ When no other content is available, the initiator sends:
 https://didcomm.org/trust-ping/2.0/ping
 ```
 
-with `response_requested == true`, `please_ack: []`, finite expiry and OOB
+with `response_requested == true`, `please_ack: [""]`, finite expiry and OOB
 invitation ID as `pthid` when applicable.
 
 An allowlisted application protocol may instead send its real first message
 with the same receipt and expiry requirements.
 
-After local relationship admission, the responder selects:
+After local relationship admission, the responder selects a deterministic
+handoff response:
 
-1. Trust Ping `ping-response` for a Trust Ping;
-2. an already-due and safe natural application response; or
-3. Empty Message ACK when business-protocol processing is not yet complete.
+1. Trust Ping `ping-response` for a Trust Ping whose response is requested;
+2. a deterministic protocol response whose bytes are fully determined by the
+   admitted message and portable state; or
+3. Empty Message ACK otherwise.
+
+Human-authored content is never used as the handoff response. It is an ordinary
+later message and carries the frozen relationship `from_prior` until the
+handoff is confirmed.
 
 Relationship admission does not imply business-protocol acceptance.
 
@@ -470,12 +579,13 @@ The first responder message:
 - uses long-form Peer DID sender evidence on first disclosure;
 - contains `from_prior` proving rendezvous DID to relationship DID;
 - explicitly ACKs the initial wire ID;
-- has present `please_ack: []` to request handoff confirmation;
+- has `please_ack: [""]` to request handoff confirmation;
 - preserves protocol threading and OOB `pthid`; and
 - uses the deterministic handoff timing from `rendezvous.md`: its
-  `created_time` equals the initial message's `created_time`, its
-  `expires_time` is the initial expiry plus 604800 seconds, and
-  `from_prior.iat` equals that response `created_time`.
+  `created_time` equals the triggering initial message's `created_time`, its
+  `expires_time` is the triggering initial expiry plus 604800 seconds, and
+  `from_prior.iat` equals the relationship-level rotation instant frozen by
+  `relationship.established`.
 
 The initiator validates `from_prior` against the pinned resolution snapshot
 before applying the response ACK or appending `peer.transitioned`. It then
@@ -492,8 +602,9 @@ protocol-specific error or Report Problem 2.0 message from the rendezvous DID.
 
 ## 11. Automatic effects
 
-Delivery is at least once and replicas may process one logical message
-concurrently. Every automatic effect has an idempotency key:
+Delivery is at least once. Phase 1 may process one logical message more than
+once after redelivery or a crash boundary. A future multi-replica profile may
+also process it concurrently. Every automatic effect has an idempotency key:
 
 ```text
 effectId = base64url(
@@ -543,9 +654,11 @@ relationship.admissionDecided     local bootstrap admission decision
 relationship.established          stable pairwise relationship
 ```
 
-For `pleaseAck != null`, submission does not remove the outbound from the set
-awaiting ultimate acknowledgment. For `pleaseAck == null`, first successful
-submission ends normal background retry.
+When `expandPleaseAck(wireId, pleaseAck or [])` contains `wireId`, submission
+does not remove the outbound from the set awaiting ultimate acknowledgment.
+Otherwise, first successful submission ends normal background retry for this
+message, even when its `pleaseAck` array asks for acknowledgment of older
+messages.
 
 A recommended inbound observation records all hashes and durable headers:
 
@@ -558,7 +671,7 @@ A recommended inbound observation records all hashes and durable headers:
   "plaintextHash": "<base64url sha-256>",
   "createdTime": 1788442800,
   "expiresTime": null,
-  "pleaseAck": [],
+  "pleaseAck": [""],
   "ack": [],
   "myKey": "did/019b.../key-agreement/0",
   "peerKey": "k3j9...",
@@ -572,7 +685,9 @@ A recommended inbound observation records all hashes and durable headers:
 ## 13. Failure rules
 
 - Before intent commit, no vault message exists.
-- After intent commit but before preparation, any replica may prepare later.
+- After intent commit but before preparation, the active full runtime may
+  prepare later; a future replicated profile may allow any full replica to do
+  so.
 - After package storage but before submission observation, the exact package
   may be submitted again.
 - After mediator acceptance but before `delivery.submitted`, retry is
@@ -581,10 +696,11 @@ A recommended inbound observation records all hashes and durable headers:
   recorded and no package is submitted.
 - After inbound commit but before pickup ACK, redelivery converges as another
   observation.
-- After pickup ACK but before ultimate ACK submission, another replica may
-  send or re-send the deterministic response.
-- Loss of every recipient replica beyond mediator retention may lose an
-  in-flight package. Receipt-required sender retry is the recovery boundary.
+- After pickup ACK but before ultimate ACK submission, the active runtime may
+  send or re-send the deterministic response; a future replicated profile may
+  do so from another full replica.
+- Loss or unavailability of the recipient runtime beyond mediator retention
+  may lose an in-flight package. Receipt-required sender retry is the recovery boundary.
 - Submission-terminal messages deliberately accept best-effort completion
   after transport acceptance.
 - Loss of an optional Web publisher prevents Web-facade discovery but does not
@@ -593,9 +709,9 @@ A recommended inbound observation records all hashes and durable headers:
 ## 14. Privacy
 
 Wire IDs, message types and content are visible only inside end-to-end
-encrypted application messages. Package IDs and recipient routing DIDs are
-visible to the mediator. Delivery IDs and replica IDs are visible to the
-recipient mediator.
+encrypted application messages. Package IDs and recipient routing DIDs are visible to the mediator. Delivery
+IDs are visible to the recipient mediator. A future replica-mediation profile
+would additionally expose opaque replica IDs to that mediator.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
 Relationship DIDs SHOULD be disclosed only in encrypted channels and use
@@ -609,53 +725,66 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 1. `message.out` commits with all networking disabled.
 2. A peer addresses a rendezvous or relationship DID, never a replica ID.
-3. `pleaseAck` distinguishes null from `[]`; the latter emits
-   `"please_ack":[]` and requests acknowledgment of the current message.
-4. Empty-string `please_ack` sentinels and the current wire ID inside
-   `please_ack` are rejected by this profile.
-5. Intent freezes `createdTime`, `expiresTime`, `pleaseAck`, `ack` and all
-   supported additional headers.
-6. `return_route` in vault application headers or innermost plaintext is
+3. `pleaseAck == null` omits the wire header; an array is preserved exactly on
+   the wire.
+4. `pleaseAck == []` requests no explicit acknowledgment.
+5. `pleaseAck` containing `""` or the current wire ID makes the current
+   message receipt-required; an array naming only older IDs does not.
+6. A receiver accepts the standard empty-string sentinel and current-message
+   ID form and expands them to the current wire ID for processing.
+7. Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
+   and every supported additional header.
+8. `return_route` in vault application headers or innermost plaintext is
    rejected.
-7. Two replicas prepare one intent with equal semantic and intent hashes.
-8. Retrying one package uses identical plaintext, ciphertext and package ID.
-9. A permitted address/key transition creates a new package/plaintext hash
-   while preserving wire ID, semantic hash and intent hash.
-10. Body, type, thread or attachment changes under one wire ID produce a
+9. Two valid preparations of one intent agree on semantic and intent hashes.
+10. Retrying one package uses identical plaintext, ciphertext and package ID.
+11. A permitted address/key transition creates a new package/plaintext hash
+    while preserving wire ID, semantic hash and intent hash.
+12. Body, type, thread or attachment changes under one wire ID produce a
     semantic conflict.
-11. Timing, ACK policy or additional-header changes under one wire ID produce
+13. Timing, ACK policy or additional-header changes under one wire ID produce
     an intent conflict.
-12. HTTP or mediator acceptance records submitted, never acknowledged.
-13. `pleaseAck == null` stops normal retry after first submission;
-    `pleaseAck != null` waits for ultimate ACK or another terminal state.
-14. A natural response acknowledges a message only when explicit `ack` names
-    its wire ID.
-15. ACK is emitted only after durable inbound commit.
-16. Pure ACK uses `pleaseAck == null`, creates no ACK loop and is
+14. HTTP or mediator acceptance records submitted, never acknowledged.
+15. A submission-terminal message stops normal retry after first successful
+    submission; a receipt-required message waits for explicit ACK or another
+    terminal state.
+16. A deterministic response acknowledges a message only when explicit `ack`
+    names its wire ID.
+17. ACK is emitted only after durable inbound commit.
+18. Pure ACK uses `pleaseAck == null`, creates no ACK loop and is
     submission-terminal.
-17. The fixed pure-ACK vector derives effect ID
+19. The fixed pure-ACK vector derives effect ID
     `Pq2QwoCogLZIy8AtxGjbmtwAKdQyJoCatxh8IjL3o7o`, MID
     `db2107e1-e230-5efb-808e-7fa065054f73` and wire ID
     `5627527e-2820-5935-9d91-7e0181838aa9`.
-18. Duplicate receipt of a message with present `please_ack` re-submits the
-    same response/ACK package rather than creating another effect.
-19. Valid address variants converge; invalid variants conflict.
-20. Equal wire IDs under transition-verified peer keys in one contact merge;
+20. Duplicate receipt of a message whose requested IDs were already honored
+    re-submits the same response/ACK package rather than creating another
+    effect.
+21. Valid address variants converge; invalid variants conflict.
+22. Equal wire IDs under transition-verified peer keys in one contact merge;
     unrelated key reuse does not.
-21. Pure Empty ACK is retained for control/audit but absent from threads,
+23. Pure Empty ACK is retained for control/audit but absent from threads,
     unread counts and application handlers.
-22. Invalid `from_prior` prevents ACK processing and transition.
-23. Duplicate explicit ACKs are harmless and one valid ACK stops all
+24. Invalid `from_prior` prevents ACK processing and transition.
+25. Duplicate explicit ACKs are harmless and one valid ACK stops all
     receipt-required package retry.
-24. Expiry stops work permanently; a later valid ACK may display
+26. Expiry stops work permanently; a later valid ACK may display
     acknowledged-late without restarting work.
-25. The default initial rendezvous message may be Trust Ping; an allowlisted
+27. The default initial rendezvous message may be Trust Ping; an admitted
     application message may be first without a custom wrapper.
-26. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
-27. A handoff response carries pairwise long-form sender evidence,
-    `from_prior`, explicit ACK and present `please_ack: []`.
-28. Until handoff confirmation, every responder message from the new pairwise
-    DID carries the same `from_prior`.
-29. Direct and mediated delivery enter the same inbound fold.
-30. Crash injection at every section-13 boundary loses neither committed
+28. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
+29. A deterministic handoff response carries pairwise long-form sender
+    evidence, one frozen relationship-level `from_prior`, explicit ACK and
+    `please_ack: [""]`.
+30. `from_prior.sub` equals plaintext `from` byte-for-byte; `from_prior.kid`
+    belongs to the exact `iss` spelling pinned from discovery.
+31. Until handoff confirmation, every responder message from the new pairwise
+    DID carries the same `from_prior` and long-form sender spelling.
+32. Direct and mediated delivery enter the same inbound fold.
+33. Crash injection at every section-13 boundary loses neither committed
     outbound intent nor unacknowledged inbound delivery.
+34. Phase 1 works with one active full runtime and ordinary account-scoped
+    Message Pickup; replica fan-out is not required.
+35. A non-Estoc peer that does not provide explicit ACK or `from_prior`
+    confirmation remains visibly unconfirmed and is outside reliable-bootstrap
+    conformance.

@@ -1,37 +1,43 @@
 # The Estoc event store, version 3
 
-Status: **draft** — clean-break event, blob and interchange model for a
-replicated Estoc vault.
+Status: **draft, phase 1** — clean-break event, object and interchange model
+for one active writable Estoc vault runtime. The author model remains
+replication-ready, while network replica synchronization is deferred.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14
 when, and only when, they appear in all capitals.
 
-This is one of seven documents that define the distributed vault:
+This is one of eight documents in the protocol suite. Six define the phase-1
+vault and delivery system; `replica-mediation.md` and `vault-sync.md` are
+deferred extensions:
 
 | document | defines |
 | --- | --- |
-| `event-store.md` | the medium-independent event, blob and vault-store interfaces |
+| `event-store.md` | the medium-independent event and vault-store interfaces |
+| `dasl-objects.md` | the pinned DASL CID, object, retention and CAR profile |
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
 | `rendezvous.md` | method-neutral rendezvous, default `did:peer:4`, optional `did:web`, and contact-scoped pairwise handoff |
-| `replica-mediation.md` | method-neutral mediator fan-out and per-replica pickup acknowledgment |
-| `vault-sync.md` | encrypted anti-entropy through an untrusted sync store |
+| `replica-mediation.md` | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
+| `vault-sync.md` | **deferred:** encrypted anti-entropy through an untrusted sync store |
 
-Dependency runs downward. `vault-folder.md` serializes the model here.
-`vault-events.md` defines payloads above it. The delivery, rendezvous, mediation and sync protocols use the event and
-blob primitives but do not change their meaning.
+Dependency runs downward. `dasl-objects.md` defines the object layer used
+here. `vault-folder.md` serializes this model. `vault-events.md` defines
+payloads above it. The delivery, rendezvous, mediation and sync protocols use
+the event and object primitives but do not change their meaning.
 
 ## 1. Scope
 
-A vault is three portable sets and one local execution environment:
+A phase-1 vault is three portable sets and one active local execution
+environment:
 
 ```text
 portable vault
     events       immutable facts, merged by `eid`
-    blob blocks  immutable content-addressed bytes
+    DASL objects  immutable content-addressed bytes
     files        singleton and opaque portable files
 
 local copy
@@ -57,8 +63,9 @@ Every conforming implementation preserves the following rules.
 
 1. **Events are immutable.** An event is appended or ingested whole. No
    operation edits or deletes one.
-2. **Merge is set union by event ID.** The same `eid` and identical RFC 8785 canonical event bytes is a duplicate. The same `eid` and different content is a
-   conflict and MUST NOT overwrite either store's accepted value.
+2. **Merge is set union by event ID.** The same `eid` with identical RFC 8785
+   canonical event bytes is a duplicate. The same `eid` with different content
+   is a conflict and MUST NOT overwrite either store's accepted value.
 3. **Folds are functions of the event set.** Ingest order, segment order,
    replica order and transport order MUST NOT change a fold's result.
 4. **Authorship is explicit.** The event's `author` identifies the
@@ -66,23 +73,27 @@ Every conforming implementation preserves the following rules.
    envelope MUST NOT supply or replace authorship.
 5. **One active writer per author.** Two concurrent writable copies MUST
    NOT share one author ID. The store detects this condition when it can.
-6. **Blob references are explicit.** The event envelope lists every blob
+6. **Object references are explicit.** The event envelope lists every object
    root the event retains. A CID elsewhere in `data` is not a reference.
-7. **Blocks precede references.** A producer writes and validates blob
-   blocks before appending an event that makes them recoverable state.
-8. **Only blob blocks are collected.** Events and portable files are not
-   garbage-collected through the blob API.
+7. **Objects precede references.** A producer writes and validates every
+   referenced DASL object before appending an event that makes it recoverable
+   state.
+8. **Only DASL objects are collected.** Events and portable files are not
+   garbage-collected through the object API.
 9. **Local state is not correctness state.** Losing `local/` may require
-   rebuilding caches and registering a new replica, but MUST NOT lose a
-   committed user decision or message body.
+   minting a new local author and rebuilding caches, but MUST NOT lose a
+   committed user decision or message body. Future replica-mediation may add
+   network registration, but phase 1 does not.
 10. **The folder is the interchange format.** Every backend MUST be able
     to export and import the version-3 folder without changing the event
     set or portable bytes.
-11. **Local change tokens are not synchronization cursors.** Replica
-    synchronization is `vault-sync/1.0`, not `changes()`.
-12. **A complete full replica is fully trusted.** Event authorship
-    distinguishes writers and detects accidental forks. It is not a
-    security boundary against another holder of the shared vault seed.
+11. **Local change tokens are not synchronization cursors.** Phase 1 uses
+    them only inside one store generation. Deferred `vault-sync/1.0` defines a
+    separate network cursor model.
+12. **One active writer in phase 1.** Event authorship distinguishes writable
+    incarnations and detects accidental forks. A future full replica holding
+    the same seed would be equally trusted; author IDs are not a security
+    boundary.
 
 ## 3. The event
 
@@ -95,13 +106,14 @@ type JsonValue =
   | JsonValue[]
   | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
+type Cid = string;
 
 type Event<D extends JsonObject = JsonObject> = {
   eid: string;
   at: string;
   author: string;
   type: string;
-  blobs: string[];
+  roots: Cid[];
   data: D;
 };
 ```
@@ -112,7 +124,7 @@ type Event<D extends JsonObject = JsonObject> = {
 | `at` | RFC 3339 UTC timestamp obtained with the `eid` |
 | `author` | canonical UUIDv7 identifying the local replica that appended the event |
 | `type` | non-empty event-type string |
-| `blobs` | complete list of retained blob roots, always present, `[]` when none |
+| `roots` | complete list of retained object roots, always present, `[]` when none |
 | `data` | type-specific JSON object, always present, `{}` when empty |
 
 Example:
@@ -123,7 +135,7 @@ Example:
   "at": "2026-09-03T15:04:05.123Z",
   "author": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
   "type": "contact.petname",
-  "blobs": [],
+  "roots": [],
   "data": {
     "cid": "019b2a45-8381-793f-943c-f5d806fd5ca2",
     "name": "Alice"
@@ -145,23 +157,23 @@ a vault-format version change.
 Everything needed to understand an event apart from storage location is
 on the event. A folder path confirms an author but never supplies one.
 
-### 3.2 `blobs`
+### 3.2 `roots`
 
-`blobs` contains every root retained by that event. The list:
+`roots` contains every root retained by that event. The list:
 
 - MUST be present even when empty;
-- MUST contain canonical CIDs accepted by the blob profile in section 7;
+- MUST contain canonical CIDs accepted by the object profile in section 7;
 - SHOULD contain no duplicate root;
 - MUST be sufficient for a collector that does not understand `type`;
 - MUST NOT include a CID that is merely mentioned as a name or evidence;
   and
-- MUST be written only after the referenced blocks have been accepted by
-  the local blob store.
+- MUST be written only after the referenced objects have been accepted by
+  the local object store.
 
 A type may repeat the roots in `data` under semantic names such as
 `body`, `attachments` or `envelope`. Repetition does not create another
 reference. A type such as `message.erased` may name roots to release in
-`data.drop`; those roots MUST NOT appear in that event's `blobs`.
+`data.drop`; those roots MUST NOT appear in that event's `roots`.
 
 ### 3.3 RFC 8785 canonical JSON and equality
 
@@ -208,12 +220,12 @@ On append and ingest, the store MUST reject an event unless:
 
 - the value is a JSON object;
 - the top-level member set is exactly
-  `eid`, `at`, `author`, `type`, `blobs`, `data`;
+  `eid`, `at`, `author`, `type`, `roots`, `data`;
 - `eid` is a canonical lowercase UUIDv7;
 - `at` is a valid RFC 3339 UTC timestamp using `Z`;
 - `author` is a canonical lowercase UUIDv7;
 - `type` is a non-empty string;
-- `blobs` is an array of canonical profile CIDs;
+- `roots` is an array of canonical profile CIDs;
 - `data` is a JSON object; and
 - the complete event is valid I-JSON and can be serialized by RFC 8785.
 
@@ -264,8 +276,8 @@ ascending by:
 (at, eid, author)
 ```
 
-String comparison uses the literal field values; event equality and persistence use RFC 8785 canonical bytes. Since `eid` is
-expected to be unique, `author` is normally only a defensive final
+String comparison uses the literal field values; event equality and persistence
+use RFC 8785 canonical bytes. Since `eid` is expected to be unique, `author` is normally only a defensive final
 component.
 
 Canonical order is for presentation and explicitly declared
@@ -287,11 +299,9 @@ and mediator delivery ID are distinct namespaces.
 ## 5. EventStore
 
 ```ts
-type Cid = string;
-
 type Draft<D extends JsonObject = JsonObject> = {
   type: string;
-  blobs?: Cid[];
+  roots?: Cid[];
   data: D;
 };
 
@@ -357,12 +367,12 @@ indexes. Portable code MUST depend only on the interface above.
 
 `append(draft)`:
 
-1. validates that `draft.type`, `draft.blobs` and `draft.data` can form a
+1. validates that `draft.type`, `draft.roots` and `draft.data` can form a
    valid event;
 2. obtains one clock reading;
 3. mints a UUIDv7 `eid` and RFC 3339 UTC `at` from it;
 4. sets `author` to the store's current author;
-5. treats omitted `blobs` as `[]`; and
+5. treats omitted `roots` as `[]`; and
 6. writes and returns the complete event.
 
 When the returned promise resolves, a process restart MUST observe the
@@ -462,9 +472,9 @@ send it to another replica or to the sync store.
 ### 5.6 Damage and conflicts
 
 **Damage** is storage material that cannot be decoded as a valid event or
-block. It is reported with its location and excluded from normal reads.
+DASL object. It is reported with its location and excluded from normal reads.
 A backend MAY quarantine damaged bytes but MUST NOT present them as a
-valid event or missing-by-policy blob.
+valid event or missing-by-policy object.
 
 **Conflict** is more than one JSON content for one `eid`. The store never
 creates one through `append` or `ingest`; a folder can contain one after
@@ -490,83 +500,115 @@ and refolds.
 Caches belong under local state. They do not appear in snapshots,
 exports or vault sync.
 
-## 7. BlobStore
+## 7. ObjectStore
 
-The vault's blob store is a block store for the `unixfs-v1-2025`
-profile used by `@estoc/folder-object`.
+The vault object store implements `dasl-objects.md`. It accepts only canonical
+DASL CIDs using CIDv1, lowercase base32, SHA-256 and either the `raw` or DRISL
+codec. UnixFS, DAG-PB, CIDv0 and BDASL are not part of version 3.
 
 ```ts
-interface BlobStore {
-  put(bytes: Uint8Array): Promise<Cid>;
-  get(root: Cid): Promise<Uint8Array | null>;
+type Cid = string;
 
-  putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;
-  getBlock(cid: Cid): Promise<Uint8Array | null>;
+declare const drislLinkBrand: unique symbol;
+
+type DrislLink = {
+  readonly [drislLinkBrand]: true;
+  readonly cid: Cid;
+};
+
+type DrislValue =
+  | null
+  | boolean
+  | bigint
+  | number
+  | string
+  | Uint8Array
+  | DrislLink
+  | readonly DrislValue[]
+  | ReadonlyMap<string, DrislValue>;
+
+type ByteSource =
+  | Uint8Array
+  | AsyncIterable<Uint8Array>
+  | ReadableStream<Uint8Array>;
+
+type ObjectInfo = {
+  cid: Cid;
+  codec: "raw" | "drisl";
+  size: number;
+};
+
+interface ObjectStore {
+  putRaw(source: ByteSource): Promise<ObjectInfo>;
+  putDrisl(value: DrislValue): Promise<ObjectInfo>;
+  putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
+
+  open(cid: Cid): Promise<ReadableStream<Uint8Array> | null>;
+  read(cid: Cid, maxBytes: number): Promise<Uint8Array | null>;
+  readDrisl(cid: Cid, maxBytes: number): Promise<DrislValue | null>;
+
+  stat(cid: Cid): Promise<ObjectInfo | null>;
   has(cid: Cid): Promise<boolean>;
-  list(): Promise<Cid[]>;
+  list(): AsyncIterable<Cid>;
 
-  collect(keep: Cid[]): Promise<{
+  collect(keep: Iterable<Cid>): Promise<{
     unlinked: Cid[];
     young: Cid[];
   }>;
 }
 ```
 
-### 7.1 Profile and names
+### 7.1 Whole-resource identity
 
-A block name is a canonical lowercase base32 CIDv1 using sha2-256 and
-one of:
+A raw object CID identifies the complete exact byte sequence, regardless of
+size. A DRISL CID identifies one complete canonical DRISL object. Portable
+large objects are not represented as chunk DAGs.
 
-- `raw`, for bare blocks no larger than 1 MiB; or
-- `dag-pb`, for nodes in the fixed UnixFS profile.
+A backend MAY store one portable object in private extents, and a transport MAY
+send it in private segments, but those pieces have no portable CID. Changing
+extent or segment size MUST NOT change the object CID or exported bytes.
 
-A file no larger than 1 MiB is one raw block. Larger files use raw 1 MiB
-chunks and the profile's deterministic balanced dag-pb layout. A
-received object may be a directory or HAMT tree within the same profile.
-
-`put(bytes)` computes the profile representation and returns its root.
-`putBlock(cid, bytes)` MUST verify both the hash and, for dag-pb, the
-profile shape before accepting the block. A caller cannot assign an
-arbitrary CID to bytes.
-
-`get(root)` returns reconstructed file bytes, returns `null` when the
-root or a required child is absent, and rejects a root that is not a
-file. Object-tree traversal uses `getBlock` through the object layer.
+`putRaw` computes a raw DASL CID while consuming a finite stream.
+`putDrisl` canonicalizes and validates one bounded DRISL value.
+`putObject` verifies exact encoded bytes against an expected CID and publishes
+nothing until all hash and codec checks succeed.
 
 ### 7.2 Write ordering
 
-A producer writes leaves before parents and every required block before
-the event whose `blobs` retains the root. A process crash can therefore
-leave unreferenced blocks, but a successful event append does not depend
-on bytes that were never accepted locally.
+A producer accepts every object in an event's `roots` before appending that
+event. A process crash can therefore leave an unreferenced object, but a
+successful event append does not depend on bytes that were never accepted
+locally.
 
-A transactional backend MAY commit blocks and event together.
+A transactional backend MAY commit objects and the event together when the
+externally visible result preserves the same invariant.
 
-### 7.3 Missing and damaged blocks
+### 7.3 Missing and damaged objects
 
-The blob store reports only presence and damage. The semantic layer
-decides whether an absent block means:
+The object store reports presence, validated codec/size and damage. The
+semantic layer decides whether an absent object means:
 
 - globally erased by a vault event;
 - missing or corrupt local data; or
-- not yet fetched for a type that explicitly permits a partial tree.
+- not yet fetched under an explicitly partial local view.
 
-A damaged block is treated as absent after being reported or
-quarantined.
+A CID/content mismatch or non-conforming DRISL encoding is damage. A damaged
+object is treated as absent after being reported or quarantined.
 
-### 7.4 Collection
+### 7.4 Explicit roots and collection
 
-`collect(keep)` walks every root in `keep`, retains every reachable block,
-and may unlink an unreachable block only after the backend's orphan
-grace period.
+Only exact CIDs in the semantic layer's held-root set are retained.
+`collect(keep)` MUST NOT recursively follow DRISL Tag 42 links. A linked object
+that must remain available is listed explicitly in an event's `roots`.
 
-The grace protects a block written shortly before the event that will
-reference it. Repeating `put` or `putBlock` for an existing valid block
-MUST renew its local age.
+The store may unlink an unkept object only after its orphan grace period. The
+grace protects an object accepted shortly before its referencing event.
+Repeating a successful `putRaw`, `putDrisl` or `putObject` for an existing
+valid object MAY renew its local orphan age.
 
-Collection is serialized with block reads and writes. It MUST NOT race a
-`put` in the same store generation. Only the application computes
-`keep`, using `vault-events.md`; the blob store reads no event type.
+Collection is serialized with object reads and writes. It MUST NOT race an
+acceptance in the same store generation. Only the application computes `keep`,
+using `vault-events.md`; the object store reads no event type.
 
 ## 8. Portable files and local state
 
@@ -581,18 +623,18 @@ interface FileStore {
 ```
 
 Portable files are everything in the interchange format that is neither
-an event segment nor a blob block. `vault-folder.md` defines reserved
+an event segment nor a DASL object. `vault-folder.md` defines reserved
 paths and singleton merge policies.
 
 A `FileStore` path MUST NOT address:
 
 - an event segment;
-- a blob block;
+- a DASL object;
 - `local/`;
 - an owned structural directory; or
 - a path that would make one name both a file and a directory.
 
-Version-3 correctness-critical mutable state MUST be an event or blob,
+Version-3 correctness-critical mutable state MUST be an event or object,
 not an arbitrary portable file. Unknown portable files are carried for
 forward compatibility but are not interpreted or synchronized by
 `vault-sync/1.0` unless another protocol defines them.
@@ -622,14 +664,14 @@ An installed extension may keep portable identity state in its own:
 ```ts
 interface ExtensionStore {
   events: EventStore;
-  blobs: BlobStore;
+  objects: ObjectStore;
 }
 ```
 
 The extension store:
 
 - uses the same current local author as the main vault store;
-- has a separate event-ID set and separate blob-retention fold;
+- has a separate event-ID set and separate object-retention fold;
 - is exported and synchronized under its extension ID;
 - has no nested extensions, independent seed or independent identity;
 - keeps its non-portable state under local extension state; and
@@ -640,7 +682,7 @@ An extension event ID may equal a main-vault event ID without conflict
 because they belong to different sets. Within one extension store, the
 normal `eid` rules apply.
 
-Disposal deletes the extension's event/blob store and its local state,
+Disposal deletes the extension's event/object store and its local state,
 invalidates every outstanding handle, and prevents the same process from
 silently recreating it. The vault event that requested purge remains in
 the main event set.
@@ -650,7 +692,7 @@ the main event set.
 ```ts
 interface Vault {
   readonly events: EventStore;
-  readonly blobs: BlobStore;
+  readonly objects: ObjectStore;
   readonly files: FileStore;
 
   extension(ext: string): ExtensionStore;
@@ -675,7 +717,7 @@ Every backend MUST export a version-3 `.estoc/` folder and import one.
 For any conforming vault:
 
 - every event returns with identical RFC 8785 canonical bytes and `eid`;
-- every retained blob block returns byte-for-byte under the same CID;
+- every retained DASL object returns byte-for-byte under the same CID;
 - every portable file returns byte-for-byte unless its documented
   singleton merge policy applies; and
 - local state does not travel.
@@ -688,9 +730,9 @@ separate encrypted wire representation and is not a folder export.
 Export writes the complete portable vault:
 
 - all main events;
-- all retained main blob blocks;
+- all retained main DASL objects;
 - all portable files;
-- every non-disposed extension event and blob store; and
+- every non-disposed extension event and object store; and
 - no local state.
 
 Every complete event record in a segment is exactly
@@ -709,7 +751,7 @@ first semantic write:
 2. decode and validate every source event envelope;
 3. compute fork checks for the main store and every extension store that
    may be imported;
-4. verify every source block that may be copied; and
+4. verify every source object that may be copied; and
 5. determine extension stores already purged by the merged main event
    set.
 
@@ -718,10 +760,10 @@ A preflight failure writes nothing.
 After preflight, import:
 
 1. ingests main events by `eid`;
-2. copies valid source blocks required by the merged held-root fold and
+2. copies valid source objects required by the merged held-root fold and
    absent from the target;
 3. applies singleton and opaque-file policies;
-4. imports each allowed extension's events and blocks; and
+4. imports each allowed extension's events and objects; and
 5. applies pending extension disposal.
 
 The operation is idempotent. It never copies an event segment as an
@@ -742,7 +784,7 @@ writer no longer exists.
 
 `vault-sync/1.0` additionally supports bootstrap of the version-3 core
 vault from the vault seed and sync-store locator. That protocol reconstructs
-the immutable root, event and block objects; the new local copy then creates
+the immutable root, event and DASL objects; the new local copy then creates
 its own passphrase wrapping and local replica context. Opaque portable files
 not represented by a versioned sync object remain folder-interchange data
 and are not reconstructed by this bootstrap.
@@ -752,7 +794,7 @@ and are not reconstructed by this bootstrap.
 Replica synchronization is immutable anti-entropy:
 
 ```text
-remote block absent locally  -> verify and putBlock
+remote object absent locally -> verify and putObject
 remote event absent locally  -> validate and ingest
 same eid, same content        -> duplicate
 same eid, different content   -> conflict
@@ -762,9 +804,9 @@ same eid, different content   -> conflict
 them. It uses opaque object IDs and full inventory as the correctness
 fallback.
 
-A sync client SHOULD publish referenced blocks before publishing an
-event and SHOULD fetch required blocks before ingesting an event. A
-temporary missing block is surfaced as incomplete local data, never as an
+A sync client SHOULD publish referenced objects before publishing an
+event and SHOULD fetch required objects before ingesting an event. A
+temporary missing object is surfaced as incomplete local data, never as an
 erase.
 
 No synchronization correctness depends on `changes()`, a server push,
@@ -786,7 +828,7 @@ CREATE TABLE events (
   at       TEXT NOT NULL,
   author   TEXT NOT NULL,
   type     TEXT NOT NULL,
-  blobs    TEXT NOT NULL,
+  roots     TEXT NOT NULL,
   data     TEXT NOT NULL,
   canonical BLOB NOT NULL
 );
@@ -806,8 +848,8 @@ A backend MUST document:
 
 - process-crash durability;
 - power-loss durability;
-- orphan grace for blob collection;
-- maximum event, batch and blob sizes; and
+- orphan grace for object collection;
+- maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
 ## 14. Versioning
@@ -855,10 +897,11 @@ A conforming implementation MUST pass at least these cases:
 10. `changes()` returns a complete local delta and rejects another store
     generation's token.
 11. A token is never required for successful full reconciliation.
-12. `putBlock` rejects a CID/content mismatch.
-13. A crash after block write but before event append leaves only a
+12. `putObject` rejects a CID/content mismatch and non-canonical DRISL.
+13. A crash after object acceptance but before event append leaves only a
     collectable orphan.
-14. Collection never removes a block reachable from a held root.
+14. Collection never removes an exact object in the held-root set and never
+    follows an unlisted DRISL link.
 15. Export and re-import preserve every portable byte.
 16. Restore omits local state and mints a fresh replica ID.
 17. Main and extension stores with the same event ID do not conflict.

@@ -1,17 +1,18 @@
 # The `.estoc` folder, version 3
 
-Status: **draft** — clean-break readable interchange format and reference
-folder backend for the distributed Estoc vault.
+Status: **draft, phase 1** — clean-break readable interchange format and
+reference folder backend for one active writable Estoc vault runtime. Deferred
+replication does not change this portable format.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14
 when, and only when, they appear in all capitals.
 
-`event-store.md` defines the medium-independent event, blob and vault
-interfaces. This document maps those interfaces to files. It defines no
-event payload and never interprets `data`; event meanings and held-root
-rules are `vault-events.md`'s.
+`event-store.md` defines the medium-independent event and vault interfaces.
+`dasl-objects.md` defines the portable object profile. This document maps
+those interfaces to files. It defines no event payload and never interprets
+`data`; event meanings and held-root rules are `vault-events.md`'s.
 
 The folder is both:
 
@@ -19,7 +20,7 @@ The folder is both:
 - the human-readable interchange and backup format every other backend
   must render and read.
 
-It is not the encrypted sync wire format. `vault-sync/1.0` deliberately
+It is not a network sync wire format. Deferred `vault-sync/1.0` deliberately
 uses opaque encrypted objects instead.
 
 ## 1. Trust and portability
@@ -30,7 +31,7 @@ changing its internal paths.
 
 The folder is designed for sovereignty rather than secrecy:
 
-- events and ordinary blob blocks are readable plaintext;
+- events and ordinary DASL objects are readable plaintext;
 - key names and identity metadata are readable;
 - the vault seed is encrypted as `seedJwe`; and
 - an encrypted backup wrapper, filesystem encryption or encrypted volume
@@ -40,15 +41,16 @@ A conforming application MUST state this boundary to the user. The
 passphrase protects the ability to use the identity; by itself it does
 not encrypt message history or attachments.
 
-A `.estoc/` folder MUST NOT be uploaded as a mediator message or treated
-as the `vault-sync/1.0` server representation.
+A `.estoc/` folder MUST NOT be uploaded as a mediator message or treated as a
+network-server representation. Deferred `vault-sync/1.0` uses another,
+client-encrypted representation.
 
 A full vault runtime may use this format on an end-user machine or render it
 from a server-side backend. A hosted implementation that holds the seed MUST
 be able to export the complete portable vault in this format; its internal
 database MUST NOT be the only recoverable representation.
 
-Selected `did:web` document revisions are ordinary referenced blobs and
+Selected `did:web` document revisions are ordinary referenced objects and
 vault events. The published `did.json` resource is a deployment projection,
 not a new authoritative file inside `.estoc/`.
 
@@ -79,7 +81,7 @@ Text conventions:
 - JSONL segments use one RFC 8785 canonical UTF-8 event object per line;
 - every complete JSONL record is exactly `canonicalEventBytes(event)` followed
   by `\n`; and
-- blob files contain exact block bytes and have no text encoding.
+- object files contain exact portable object bytes and have no text encoding.
 
 A reader MUST reject a tree in which one path is both a file and a
 directory.
@@ -95,7 +97,7 @@ directory.
     <author>/
       <segment>.jsonl
 
-  blobs/
+  objects/
     <cid>
 
   extensions/
@@ -103,7 +105,7 @@ directory.
       events/
         <author>/
           <segment>.jsonl
-      blobs/
+      objects/
         <cid>
 
   local/
@@ -132,12 +134,12 @@ The structural roots are:
 config.json
 keystore.json
 events/
-blobs/
+objects/
 extensions/
 local/
 ```
 
-A malformed entry inside `events/`, `blobs/`, `extensions/` or `local/`
+A malformed entry inside `events/`, `objects/`, `extensions/` or `local/`
 is damage, not an opaque portable file. Unknown top-level paths outside
 these roots are portable opaque files as described in section 7.3.
 
@@ -152,21 +154,21 @@ snapshot, export or folder import.
 - imported into another copy;
 - synchronized;
 - exposed through `FileStore`; or
-- used to decide whether a portable event or blob exists.
+- used to decide whether a portable event or object exists.
 
 Deleting all of `local/` converts a folder into a portable copy. The next
 writable open creates a new replica ID and store generation.
 
 ### 3.2 Extension stores
 
-`extensions/<ext>/` serializes one extension event/blob store. `<ext>` is
+`extensions/<ext>/` serializes one extension event/object store. `<ext>` is
 a canonical UUIDv7 minted by `extension.installed`.
 
 An extension directory contains only:
 
 ```text
 events/<author>/<segment>.jsonl
-blobs/<cid>
+objects/<cid>
 ```
 
 It has no independent `config.json`, `keystore.json`, `local/` or nested
@@ -254,18 +256,18 @@ For import into an existing unlocked vault:
 The local passphrase or platform wrapping may differ between replicas. Equal
 vault identity does not require byte-equal `seedJwe`.
 
-### 5.2 Sync bootstrap
+### 5.2 Sync bootstrap (deferred)
 
-`vault-sync/1.0` does not upload `seedJwe`. A user bootstrapping from a sync
-store supplies the vault seed by another trusted means and writes a new local
-passphrase or platform wrapping. Keys are subsequently derived on demand from
-portable event key names.
+Deferred `vault-sync/1.0` does not upload `seedJwe`. A future user
+bootstrapping from a sync store would supply the vault seed by another trusted
+means and write a new local passphrase or platform wrapping. Phase-1 recovery
+uses the readable folder or snapshot plus independent recovery material.
 
 ### 5.3 Recovery material and product requirement
 
 The vault seed is the only cryptographic root from which the anchor,
-communication keys, mediation accounts and sync-account credentials can be
-recovered. Replica synchronization is not a seed backup. Loss of every usable
+communication keys, mediation accounts and any future sync-account credentials
+can be recovered. Network synchronization is not a seed backup. Loss of every usable
 seed copy makes encrypted sync objects and identity keys unrecoverable.
 
 A user-facing implementation MUST NOT describe a vault as recoverable until
@@ -322,7 +324,7 @@ The folder backend owns all paths matching:
 config.json
 keystore.json
 events/**
-blobs/**
+objects/**
 extensions/**
 local/**
 ```
@@ -336,7 +338,7 @@ Version 3 has no generic `state/` directory and no timestamp-based
 file-level merge rule.
 
 Correctness-critical state that must converge across replicas is an
-event or referenced blob. High-churn state that belongs only to one
+event or referenced object. High-churn state that belongs only to one
 local copy goes under `local/`. A future portable mutable file type must
 have its own versioned merge law; there is no fallback latest-wins rule.
 
@@ -352,7 +354,7 @@ which one side has a file and the other a directory is a preflight error.
 
 `vault-sync/1.0` version 1.0 does not synchronize these paths. A feature
 that requires them on every replica must define an encrypted sync object
-or, preferably, use events and blobs.
+or, preferably, use events and objects.
 
 ## 8. Segments
 
@@ -414,42 +416,49 @@ Segments are not sorted streams:
 reader MUST NOT infer order from segment name, directory order or line
 position.
 
-## 9. Blob paths
+## 9. DASL object paths
 
-Each block is one file:
+Each accepted portable object is one file:
 
 ```text
-blobs/<cid>
+objects/<canonical-dasl-cid>
 ```
 
 or, for an extension:
 
 ```text
-extensions/<ext>/blobs/<cid>
+extensions/<ext>/objects/<canonical-dasl-cid>
 ```
 
-The filename is the canonical CIDv1 of the exact file bytes under the
-`unixfs-v1-2025` profile:
+The filename MUST be the canonical DASL CID of the exact complete file bytes
+under `dasl-objects.md`:
 
-- lowercase base32;
-- sha2-256;
-- codec `raw` or `dag-pb`.
+- CIDv1;
+- lowercase base32 without padding;
+- SHA-256;
+- codec `raw` or DRISL; and
+- no CIDv0, DAG-PB, UnixFS or BDASL.
 
-The directory is flat. A backend may shard internally but MUST export
-flat paths.
+The directory is flat. A backend may shard or split an object into private
+extents internally, but export MUST reconstruct one complete file at the flat
+portable path. No portable chunk or extent directory exists.
 
-A block file is immutable by content. Repeating `put` for an existing
-valid block MAY rewrite the same bytes solely to renew the local orphan
-age used by collection.
+For a raw CID, the file contains the exact resource bytes. For a DRISL CID, the
+file contains one exact canonical DRISL object. A reader MUST verify filename,
+digest and codec-specific conformance before accepting the object.
 
-A reader MUST verify filename against bytes before accepting a block. A
-mismatch, invalid CID or invalid dag-pb profile node is damage. The
-backend SHOULD move it out of the owned `blobs/` namespace before
-continuing, so ordinary presence checks treat it as absent.
+A filename/content mismatch, malformed CID, non-canonical DRISL encoding,
+truncation or trailing DRISL bytes is damage. The backend SHOULD move damaged
+material out of the owned `objects/` namespace before continuing, so ordinary
+presence checks treat it as absent.
 
-Writers store leaves before parents and blocks before an event reference.
-A crash may leave unreferenced blocks. Collection later removes only
-unreachable blocks older than the configured grace.
+A portable object is immutable by content. Repeating a successful acceptance
+for an existing valid CID is idempotent and MAY renew the local orphan age used
+by collection.
+
+Writers accept complete objects before an event reference. A crash may leave a
+valid unreferenced object. Collection later removes only exact unheld objects
+older than the configured grace; it does not traverse DRISL links.
 
 ## 10. `local/`
 
@@ -466,7 +475,8 @@ unreachable blocks older than the configured grace.
 
 Both values are canonical lowercase UUIDv7.
 
-- `replica_id` is the event author and mediator pickup/ACK scope.
+- `replica_id` is the event author. Deferred replica mediation may later reuse
+  it as a pickup/ACK scope, but phase 1 never sends it to a mediator.
 - `store_generation` names this local physical event-store generation in
   change tokens and cache metadata.
 
@@ -484,24 +494,10 @@ an exact move with no concurrent old writer.
 
 No `replica.created` event is appended.
 
-If the local `replica_id` is the target of a converged
-`replica.retired` event **or an authenticated required mediator reports that
-ID terminally retired**, the runtime MUST re-incarnate before another append,
-pickup ACK or outbound submission:
-
-1. pause writers and network workers;
-2. durably finish or checkpoint already accepted local work;
-3. atomically replace both fields in this file with fresh UUIDv7 values;
-4. reopen every local event store under the new author;
-5. invalidate every change token and rebuildable cache bound to the old
-   `store_generation`; and
-6. register the fresh ID on every required mediation before resuming pickup.
-
-Events already authored by the old ID are never rewritten and remain valid
-sync objects. A server inactivity retirement is recorded in portable state as
-`replica.retired.because == "inactivity-policy"` after the new author is
-active. One required mediator's terminal result rotates the local ID for all
-mediators; the runtime MUST NOT keep different replica IDs per arrangement.
+Phase 1 has no mediator-side replica registry, so a mediator never retires
+this ID. `replica.retired` and network-driven re-incarnation are reserved for
+the deferred replica-mediation profile. Local restore and exact-move behavior
+are defined below. Events already authored by an old ID are never rewritten.
 
 ### 10.2 Owner directories
 
@@ -626,7 +622,7 @@ resolution at the vault level.
 ### 11.6 Portable FileStore
 
 `FileStore.list()` returns `config.json`, `keystore.json` and opaque
-portable paths, but MUST NOT return event segments, blob blocks or
+portable paths, but MUST NOT return event segments, DASL objects or
 anything under `local/`.
 
 `FileStore.write()` obeys singleton and unknown-file rules and refuses
@@ -650,7 +646,7 @@ A non-folder backend renders:
 
 - `config.json` and `keystore.json`;
 - one complete line per main event under `events/<author>/`;
-- every retained main block under `blobs/<cid>`;
+- every retained main DASL object under `objects/<cid>`;
 - each extension store under `extensions/<ext>/`; and
 - opaque portable files in their paths.
 
@@ -672,14 +668,14 @@ Before writing, the importer MUST:
 4. validate every event and path-author relation;
 5. preflight forked-current-author conditions in the main and all
    applicable extension stores;
-6. validate every source block considered for copying; and
+6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
 Then it:
 
 1. ingests main events;
 2. computes held roots over the merged event set;
-3. copies valid absent source blocks reachable from those roots;
+3. copies valid absent source objects whose exact CIDs are in those roots;
 4. keeps the target `config.json` and target seed wrapping;
 5. copies unknown portable paths only when absent;
 6. imports allowed extension stores by the same rules; and
@@ -696,10 +692,10 @@ does not revive the erased message.
 A restore accepts one valid version-3 snapshot and creates the portable
 folder. It does not restore `local/`.
 
-On first writable open, a new `replica_id` and `store_generation` are
-minted. All historical event authors remain as written. Because mediation
-and communication keys are vault-scoped, the new replica can derive and
-resume them after unlock.
+On first writable open, a new `replica_id` and `store_generation` are minted.
+All historical event authors remain as written. Because mediation and
+communication keys are vault-scoped, the new active runtime can derive and
+resume them after unlock using ordinary account-scoped mediation and pickup.
 
 ### 13.3 Exact local move
 
@@ -709,20 +705,20 @@ copy is no longer writable. Copying it and leaving both sides active is a
 fork; later ingest detects previously unseen events under the shared
 author.
 
-## 14. Synchronization boundary
+## 14. Transfer and deferred synchronization boundary
 
-The folder is not synchronized path-by-path. In particular, clients MUST
-NOT:
+The folder is never merged path-by-path between writable copies. In
+particular, tools MUST NOT:
 
-- copy event segments as files between active replicas;
+- copy event segments as opaque conflict resolution;
 - use segment modification time as a cursor;
 - merge `local/`;
-- upload plaintext folders to a sync store; or
-- overwrite a block without verifying its CID.
+- upload plaintext folders to an untrusted server; or
+- overwrite an object without verifying its CID and profile.
 
-`vault-sync/1.0` exchanges encrypted immutable root, event and block
-objects. A local sync client decodes them and calls the store interfaces.
-Its correctness does not depend on segment layout.
+Phase 1 transfers a vault by verified snapshot/export/import or an exact local
+move. Deferred `vault-sync/1.0` may later exchange encrypted immutable root,
+event and DASL objects without changing this folder format.
 
 ## 15. Concurrency and crash behavior
 
@@ -739,8 +735,8 @@ Expected crash residue:
 
 | crash point | permitted result |
 | --- | --- |
-| during blob write | invalid temporary file is ignored or quarantined |
-| after block, before event | valid unreferenced orphan, later collectible |
+| during object write | invalid temporary file is ignored or quarantined |
+| after object, before event | valid unreferenced object orphan, later collectible |
 | during one appended line | damaged final fragment, skipped and reported |
 | during `appendAll` fresh-segment write | temporary or absent segment, never a partial accepted batch |
 | after inbound event, before mediator ACK | redelivery; semantic duplicate after fold |
@@ -790,7 +786,7 @@ The following require a new folder/vault version:
    append.
 11. An ingest writes only decoded events, never copied source segments.
 12. Physical segment order does not affect `scan()`.
-13. A blob filename/content mismatch is damage.
+13. An object filename/content mismatch or non-canonical DRISL encoding is damage.
 14. Export from a database and re-import to a folder preserves the event
     set and portable bytes.
 15. Unknown top-level portable files round-trip and are absent-only on
@@ -805,16 +801,22 @@ The following require a new folder/vault version:
 20. No mediator or sync operation consumes the folder as plaintext.
 21. A hosted full runtime can export an equivalent complete portable folder;
     server-local database state is not the sole recoverable copy.
-22. A selected `did:web` document revision is retained as a referenced blob
+22. A selected `did:web` document revision is retained as a referenced object
     and event, not as an authoritative mutable `did.json` path in the vault.
 23. A thin-client cache is not accepted as a complete vault folder.
-24. A retired replica's historical author directory remains readable.
-25. A mediator-retired current ID causes atomic replacement of local replica
-    and store-generation IDs; old-author events remain unchanged.
-26. No persistent derived-key registry or key cache exists in `keystore.json`,
+24. Historical author directories remain readable after restore or exact
+    move; phase 1 defines no mediator-driven author retirement.
+25. No persistent derived-key registry or key cache exists in `keystore.json`,
     `local/` or another vault path; an unlocked runtime derives keys by exact
     name from the seed.
-27. Vault-sync alone is not presented as recovery material because it does not
-    contain `seedJwe` or the seed.
-28. Before recovery is marked complete, an independent seed or complete
+26. Deferred vault sync is not presented as recovery material because it does
+    not contain `seedJwe` or the seed.
+27. Before recovery is marked complete, an independent seed or complete
     snapshot path is tested by deriving the exact anchor DID.
+28. A large raw object is exported as one exact `objects/<cid>` byte stream
+    even when the backend stores private extents.
+29. No folder path exposes UnixFS nodes, portable chunks or transport segments.
+30. Collection does not retain or fetch a DRISL-linked object unless its CID is
+    explicitly in the held-root set.
+31. Phase 1 never sends `replica_id` to a mediator and does not require
+    `vault-sync/1.0`.
