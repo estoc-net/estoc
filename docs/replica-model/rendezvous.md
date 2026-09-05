@@ -458,7 +458,7 @@ rendezvous wrapper. `pleaseAck == []` is legal DIDComm but requests nothing and
 is not used by the conforming phase-1 writer for bootstrap.
 
 If current time reaches expiry before preparation or retry, append
-message-scoped non-retryable `delivery.failed(code="expired")` and submit
+message-scoped terminal `delivery.failed(code="expired")` and submit
 nothing. A replacement initial message uses a new wire ID but normally reuses
 the same initiator relationship key unless the contact was deleted.
 

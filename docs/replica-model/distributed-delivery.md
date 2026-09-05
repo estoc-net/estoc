@@ -225,7 +225,7 @@ The following table is normative. "Committed" means process-durable success.
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
 | Stable execution binding | `message.executionBound`, plus `relationship.initiatorBound` when initiator handoff requires it | Apply peer-scoped ACKs, freeze ACK targets, or run an eligible automatic effect |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Stop normal retry |
-| Replay submission paused | Unresolved hold or ordinary non-retryable delivery failure | Retain exact replay material but submit nothing automatically |
+| Replay submission paused | Unresolved hold or ordinary terminal delivery failure | Retain exact replay material but submit nothing automatically |
 | Replay closure | Process-durable `message.replayClosed` after deadline or erasure | Release replay-only exact envelope roots |
 
 The terminal pre-vault path creates no `message.in`, peer ACK, contact or
@@ -272,7 +272,8 @@ The active phase-1 runtime may later:
 6. compute plaintext hash, encrypt, store exact envelope and append
    `message.prepared`;
 7. submit directly or through Routing 2.0 with `packageId == forward.id`;
-8. append submitted or failed observation; and
+8. append `delivery.submitted` on acceptance or `delivery.failed` on terminal
+   failure; record retryable failures only in local trace; and
 9. retry according to completion mode.
 
 A new package may change address/security evidence only under validated repack
@@ -475,7 +476,7 @@ resolution snapshot and recipient key.
 
 Before preparation or any normal retry, a worker checks durable expiry. When
 `expiresTime != null` and `now >= expiresTime`, it appends a message-scoped,
-non-retryable `expired` failure and submits no new package. A later user attempt
+terminal `expired` failure and submits no new package. A later user attempt
 requires a new `message.out` and wire ID.
 
 Normal retry mode is derived from the current wire ID and exact
@@ -534,14 +535,14 @@ true:
 - replay material is still open;
 - the current wall-clock sample is strictly before `replayUntil`;
 - no unresolved `delivery.held` applies to the message;
-- there is no message-scoped non-retryable `delivery.failed`;
-- the selected package has no package-scoped non-retryable failure;
+- there is no message-scoped terminal `delivery.failed`;
+- the selected package has no package-scoped terminal failure;
 - the selected package itself has not expired; and
 - its exact envelope is still retained and validates.
 
 A hold therefore pauses duplicate replay without shortening retention. After a
 matching `delivery.released`, duplicate replay may resume only if every other
-predicate above still holds. A non-retryable delivery failure blocks replay
+predicate above still holds. A terminal delivery failure blocks replay
 submission but retains material until monotonic replay closure or explicit
 erasure. Package retirement
 stops normal retry but does not, by itself, close replay.
@@ -1006,7 +1007,7 @@ message.prepared                  exact plaintext and encrypted package
 message.packageRetired            package no longer retried
 message.replayClosed              monotonic end of duplicate replay retention
 delivery.submitted                transport accepted a package
-delivery.failed                   retryable or terminal failure
+delivery.failed                   terminal package or message failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
 delivery.held                     user or policy hold
 delivery.released                 release of one exact hold
@@ -1182,7 +1183,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 45. Reaching `replayUntil` does not release exact replay material until a
     durable `message.replayClosed` is committed; restart or clock rollback
     cannot reopen a closed replay obligation.
-46. An unresolved hold or ordinary non-retryable delivery failure blocks
+46. An unresolved hold or ordinary terminal delivery failure blocks
     duplicate replay submission without releasing replay material. After
     release, replay resumes only if every other eligibility condition still
     holds.

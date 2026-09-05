@@ -1076,10 +1076,7 @@ only for duplicate replay.
   "roots": [],
   "data": {
     "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "transport": "https",
-    "endpoint": "https://mediator.example/didcomm",
-    "status": 202
+    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c"
   }
 }
 ```
@@ -1087,6 +1084,9 @@ only for duplicate replay.
 This says only that one transport endpoint accepted the attempt. It does not
 mean route existence, mediator retention, pickup or ultimate durable receipt.
 Concurrent observations through different routes are expected.
+
+Transport, endpoint and response status are local trace data. They are not
+fields of this portable event and do not participate in the delivery fold.
 
 ### 9.7 `delivery.failed`
 
@@ -1098,23 +1098,24 @@ Concurrent observations through different routes are expected.
     "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "scope": "message",
     "packageId": null,
-    "phase": "prepare",
-    "code": "expired",
-    "retryable": false
+    "code": "expired"
   }
 }
 ```
 
-`scope` is `package` or `message`; `phase` is `resolve`, `prepare` or
-`submit`. `packageId` is REQUIRED for package scope and null when no package
-exists.
+This event records only a terminal failure. `scope` is `package` or `message`.
+`packageId` is REQUIRED for package scope and null when no package exists.
 
-- `retryable == true` is diagnostic state used by retry policy.
-- package-scoped `retryable == false` makes that package terminal but permits
+- package scope makes that package terminal but permits
   another valid package for the same message.
-- message-scoped `retryable == false` stops all automatic preparation and
+- message scope stops all automatic preparation and
   submission for the intent.
-- `code == "expired"` MUST be message-scoped and non-retryable.
+- `code == "expired"` MUST be message-scoped.
+
+Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
+belong only to local trace and retry policy. They MUST NOT append
+`delivery.failed`. Losing that local state does not terminate the intent or
+change its portable delivery state.
 
 A worker that observes `now >= expiresTime` before prepare or retry appends
 that expired failure and submits nothing. A later user attempt requires a new
@@ -2288,7 +2289,7 @@ For a valid outbound:
 - packages may differ in plaintext hash, sender/recipient DID, keys and
   `fromPrior` only under validated repack rules;
 - one package is inactive for normal retry after `message.packageRetired` or a
-  package-scoped non-retryable failure, but its exact envelope may remain held
+  package-scoped terminal failure, but its exact envelope may remain held
   for duplicate replay;
 - unresolved holds are exact `delivery.held` events not named by
   `delivery.released`;
@@ -2298,7 +2299,7 @@ For a valid outbound:
   ID on a validated peer-scoped continuation under the membership rules above,
   the carrier has its required execution binding, and all proof gates pass;
 - `submitted` is true if any package has `delivery.submitted`;
-- a message-scoped non-retryable failure, including expiry, permanently ends
+- a message-scoped terminal failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
 - for `receiptRequired == false`, the first successful submission also ends
   automatic background retry for the current message;
@@ -2307,10 +2308,9 @@ For a valid outbound:
 - `replayMaterialOpen` is true only when `replayUntil != null` and no valid
   `message.replayClosed` exists;
 - `replaySubmissionEligible` additionally requires an unresolved hold to be
-  absent, no message- or selected-package-scoped non-retryable failure, package
+  absent, no message- or selected-package-scoped terminal failure, package
   expiry not to have passed, fold time to be before `replayUntil`, and an exact
-  valid package to remain; and
-- retryable failures remain diagnostic attempts.
+  valid package to remain.
 
 Work eligibility and displayed outcome are separate. The displayed precedence
 is:
@@ -2324,6 +2324,11 @@ submitted
 prepared
 queued
 ```
+
+After restore or local trace loss, the fold uses only this portable evidence.
+An outbound with only `message.out` is `queued`, even if a previous runtime
+recorded retryable failures in its trace. Existing prepared, submitted, held,
+terminal or acknowledged evidence keeps its normal precedence.
 
 Expiry is an irreversible no-more-work boundary; later authenticated evidence
 may improve display to acknowledged-late without restarting work.
@@ -2432,7 +2437,7 @@ retainEnvelopeForMessage(M, P) =
     and (normalMaterialNeeded(M, P) or replayMaterialOpen(M))
 ```
 
-Terminal failure means valid committed non-retryable `delivery.failed` at the
+Terminal failure means valid committed `delivery.failed` at the
 specified scope; a committed expired failure is message-terminal. Sampling wall
 time beyond expiry blocks work but MUST NOT release normal-only material until
 that durable termination is committed. A valid ACK completes normal delivery
@@ -2947,3 +2952,7 @@ There is no migration requirement from an earlier event vocabulary.
 86. A matching `pthid` without a valid accept for the disclosed local recipient
     DID does not consume an invitation. `contact.attached` alone does not
     consume it, including when following a remote invitation.
+
+87. Retryable transport failures and attempt phase/status remain local trace.
+    Restoring an outbound with only `message.out` projects `queued` and permits
+    eligible retry; durable prepared/submitted/terminal evidence still applies.
