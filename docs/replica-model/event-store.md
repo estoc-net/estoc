@@ -16,7 +16,7 @@ This is one of seven documents that define the distributed vault:
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
-| `rendezvous.md` | public `did:web` discovery and contact-scoped handoff to pairwise `did:peer:4` |
+| `rendezvous.md` | method-neutral rendezvous, default `did:peer:4`, optional `did:web`, and contact-scoped pairwise handoff |
 | `replica-mediation.md` | method-neutral mediator fan-out and per-replica pickup acknowledgment |
 | `vault-sync.md` | encrypted anti-entropy through an untrusted sync store |
 
@@ -57,8 +57,7 @@ Every conforming implementation preserves the following rules.
 
 1. **Events are immutable.** An event is appended or ingested whole. No
    operation edits or deletes one.
-2. **Merge is set union by event ID.** The same `eid` and same JSON
-   content is a duplicate. The same `eid` and different content is a
+2. **Merge is set union by event ID.** The same `eid` and identical RFC 8785 canonical event bytes is a duplicate. The same `eid` and different content is a
    conflict and MUST NOT overwrite either store's accepted value.
 3. **Folds are functions of the event set.** Ingest order, segment order,
    replica order and transport order MUST NOT change a fold's result.
@@ -164,23 +163,44 @@ A type may repeat the roots in `data` under semantic names such as
 reference. A type such as `message.erased` may name roots to release in
 `data.drop`; those roots MUST NOT appear in that event's `blobs`.
 
-### 3.3 JSON and equality
+### 3.3 RFC 8785 canonical JSON and equality
 
-An event must survive JSON serialization without semantic change. It
-MUST contain no `undefined`, bigint, non-finite number, cycle, host
-object or implementation-specific value.
+Every event MUST be valid input to the JSON Canonicalization Scheme (JCS) in
+RFC 8785. In particular, event JSON is restricted to I-JSON:
 
-Two events have the same content when they are structurally equal as
-JSON:
+- an object MUST NOT contain duplicate member names;
+- strings MUST contain valid Unicode and MUST NOT contain an unpaired
+  surrogate;
+- numbers MUST be finite IEEE-754 binary64 values; values requiring greater
+  integer or decimal precision MUST be encoded as strings;
+- `undefined`, bigint, cycles, host objects and implementation-specific values
+  are forbidden; and
+- parsed string data is preserved exactly; Unicode normalization is not
+  performed.
 
-- object member order and insignificant whitespace do not matter;
-- arrays are ordered;
-- strings are compared by Unicode scalar value sequence;
-- numbers are compared by their JSON numeric value; and
-- all six top-level fields participate.
+Define the canonical event bytes as:
 
-A backend MAY compare canonical RFC 8785 encodings to implement this
-rule.
+```text
+canonicalEventBytes(event) = UTF8(RFC8785(event))
+```
+
+The RFC 8785 serialization recursively sorts object member names, preserves
+array order, emits the specified ECMAScript number representation and emits no
+insignificant whitespace. These bytes are the sole content-equality
+representation for events.
+
+Two events have the same content exactly when their
+`canonicalEventBytes` are byte-for-byte equal. The comparison includes all six
+top-level fields. A backend MUST NOT substitute parser-specific structural
+equality, source-text equality, locale sorting or a non-JCS stable-stringify
+algorithm.
+
+`append`, `appendAll` and `ingest` MUST validate JCS eligibility before an
+event becomes accepted. `ingest` MAY receive non-canonical source JSON, but it
+MUST parse with duplicate-name detection, reject invalid I-JSON and store or
+compare the RFC 8785 canonical bytes. Folder serialization is stricter:
+section 11 and `vault-folder.md` require each JSONL event record itself to be
+the canonical bytes followed by one LF.
 
 ### 3.4 Envelope validation
 
@@ -193,8 +213,9 @@ On append and ingest, the store MUST reject an event unless:
 - `at` is a valid RFC 3339 UTC timestamp using `Z`;
 - `author` is a canonical lowercase UUIDv7;
 - `type` is a non-empty string;
-- `blobs` is an array of canonical profile CIDs; and
-- `data` is a JSON object.
+- `blobs` is an array of canonical profile CIDs;
+- `data` is a JSON object; and
+- the complete event is valid I-JSON and can be serialized by RFC 8785.
 
 The store validates no payload field. A known-type validator above the
 store MUST quarantine or surface an invalid payload; it MUST NOT silently
@@ -243,7 +264,7 @@ ascending by:
 (at, eid, author)
 ```
 
-String comparison uses the canonical serialized forms. Since `eid` is
+String comparison uses the literal field values; event equality and persistence use RFC 8785 canonical bytes. Since `eid` is
 expected to be unique, `author` is normally only a defensive final
 component.
 
@@ -405,12 +426,13 @@ against a malicious holder of the shared seed.
 ### 5.4 `scan`
 
 `scan(filter)` yields one accepted event per `eid`, in canonical order.
+Returned objects MUST parse from the accepted RFC 8785 canonical event bytes.
 The filter is equality only:
 
 - `author` equals the requested author;
 - `type` equals the requested type; and
-- every specified top-level field of `data` equals the requested JSON
-  primitive.
+- every specified top-level field of `data` has the same RFC 8785 canonical
+  JSON value as the requested JSON primitive.
 
 `undefined` means no constraint. `null` matches a present JSON null.
 There are no range, join, full-text or nested-field semantics in this
@@ -652,7 +674,7 @@ obtains stores already configured with that author.
 Every backend MUST export a version-3 `.estoc/` folder and import one.
 For any conforming vault:
 
-- every event returns with identical JSON content and `eid`;
+- every event returns with identical RFC 8785 canonical bytes and `eid`;
 - every retained blob block returns byte-for-byte under the same CID;
 - every portable file returns byte-for-byte unless its documented
   singleton merge policy applies; and
@@ -671,8 +693,11 @@ Export writes the complete portable vault:
 - every non-disposed extension event and blob store; and
 - no local state.
 
-Segment boundaries and names are serialization details. Two exports of
-the same event set need not have the same segment files.
+Every complete event record in a segment is exactly
+`canonicalEventBytes(event)` followed by byte `0x0A`. A writer MUST NOT pretty
+print an event or preserve non-canonical imported member order. Segment
+boundaries and names are serialization details. Two exports of the same event
+set need not have the same segment files.
 
 ### 11.3 Import into an existing vault
 
@@ -762,7 +787,8 @@ CREATE TABLE events (
   author   TEXT NOT NULL,
   type     TEXT NOT NULL,
   blobs    TEXT NOT NULL,
-  data     TEXT NOT NULL
+  data     TEXT NOT NULL,
+  canonical BLOB NOT NULL
 );
 
 CREATE INDEX events_canonical ON events (at, eid, author);
@@ -770,7 +796,10 @@ CREATE INDEX events_author ON events (author);
 CREATE INDEX events_type ON events (type);
 ```
 
-`seq` is local insertion order used by a local change token. It is not
+`canonical` is the RFC 8785 UTF-8 event representation used for equality,
+conflict checks and export. A backend MAY instead reconstruct it from validated
+columns, but the result MUST be byte-identical. `seq` is local insertion order
+used by a local change token. It is not
 part of the event and MUST NOT affect a fold or export.
 
 A backend MUST document:
@@ -811,24 +840,29 @@ A conforming implementation MUST pass at least these cases:
 1. `append` returns a six-field event with `author` equal to the current
    replica ID.
 2. `appendAll` is all-or-nothing and gives every event one timestamp.
-3. Ingesting the same event twice produces one stored event.
-4. Ingesting a different content under an existing `eid` reports a
-   conflict and does not overwrite.
-5. Ingesting a previously unseen event authored by the current local
-   author fails with `ForkedAuthor` before adding anything.
-6. Shuffling and repartitioning one event set does not change a fold.
-7. `scan()` returns canonical order independently of physical order.
-8. `changes()` returns a complete local delta and rejects another store
-   generation's token.
-9. A token is never required for successful full reconciliation.
-10. `putBlock` rejects a CID/content mismatch.
-11. A crash after block write but before event append leaves only a
+3. A JCS-ineligible event, including duplicate member names, an unpaired
+   surrogate or a non-I-JSON number, is rejected before acceptance.
+4. Two source serializations with different member order or whitespace but
+   equal RFC 8785 output ingest as one event.
+5. The same `eid` with different RFC 8785 canonical bytes reports a conflict
+   and does not overwrite either value.
+6. Ingesting a previously unseen event authored by the current local author
+   fails with `ForkedAuthor` before adding anything.
+7. Shuffling and repartitioning one event set does not change a fold.
+8. `scan()` returns canonical event order independently of physical order.
+9. A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
+   one LF; re-import preserves those canonical bytes.
+10. `changes()` returns a complete local delta and rejects another store
+    generation's token.
+11. A token is never required for successful full reconciliation.
+12. `putBlock` rejects a CID/content mismatch.
+13. A crash after block write but before event append leaves only a
     collectable orphan.
-12. Collection never removes a block reachable from a held root.
-13. Export and re-import preserve every event and portable byte.
-14. Restore omits local state and mints a fresh replica ID.
-15. Main and extension stores with the same event ID do not conflict.
-16. Disposing an extension invalidates all handles and does not remove
-    the main-vault purge event.
-17. No API interprets a hardware or operating-system identifier.
-18. Events produced by a retired replica remain valid immutable history.
+14. Collection never removes a block reachable from a held root.
+15. Export and re-import preserve every portable byte.
+16. Restore omits local state and mints a fresh replica ID.
+17. Main and extension stores with the same event ID do not conflict.
+18. Disposing an extension invalidates all handles and does not remove the
+    main-vault purge event.
+19. No API interprets a hardware or operating-system identifier.
+20. Events produced by a retired replica remain valid immutable history.

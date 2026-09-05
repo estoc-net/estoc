@@ -86,10 +86,10 @@ The vault identity is the anchor DID in `config.json`. Two vaults are the
 same identity exactly when their anchor DIDs are equal.
 
 On unlock, the runtime derives the `anchor` key from the seed and MUST verify
-the DID before using the vault. The anchor remains independent of public or
-relationship communication DIDs. In particular, a `did:web` rendezvous DID
-MUST NOT replace the anchor merely because a web service hosts a full
-replica.
+the DID before using the vault. The anchor remains independent of rendezvous and relationship communication
+DIDs. In particular, neither a default Peer rendezvous DID nor an optional
+`did:web` facade replaces the anchor merely because it is disclosed publicly
+or served by a web-hosted full replica.
 
 ### 3.2 Single seed
 
@@ -114,10 +114,10 @@ arrays reserve compatible growth without changing key-name syntax. Key names
 are never renamed or reused. They do not encode a contact, replica, domain
 owner or process location.
 
-A version-3 `did:peer:4` relationship DID has generation `0`; changing its
-keys or embedded service creates another DID and a scoped transition. A
-`did:web` rendezvous DID may add later key generations while its DID string
-remains unchanged.
+A version-3 `did:peer:4` rendezvous or relationship DID has generation `0`;
+changing its keys or embedded service creates another DID and an explicit
+scoped transition. An optional `did:web` rendezvous DID may add later key
+generations while its DID string remains unchanged.
 
 TLS private keys, DNS credentials, ACME account keys and web deployment
 credentials are not vault communication keys and MUST NOT be derived from
@@ -147,26 +147,46 @@ A remote client that does not hold the seed is not a full replica, has no
 event author and cannot turn a staged command into portable vault state by
 itself.
 
-### 3.4 Entity IDs
+### 3.4 Entity IDs and reproducible UUIDv5 namespaces
 
 Unless a rule below says deterministic, locally created entity IDs are
 canonical UUIDv7.
 
-The following fixed UUIDv5 namespaces are used for cross-replica
-idempotency:
+No Estoc UUIDv5 namespace is an unexplained random constant. Every namespace
+is reproducibly derived from the RFC 4122/9562 URL namespace:
 
 ```text
-inbound message:       689dff5c-d975-5725-898f-267e97e909c1
-automatic contact:     b1942994-48f8-58ff-9117-0df20f60c150
-automatic MID:         3e4f042b-9cb7-568c-a065-59c7c0d2f5ba
-automatic wire ID:     1bbea408-beff-5583-b67b-5b51393b7e51
-rendezvous relationship: cfb3704a-cae5-56f9-a3e6-d73cf8246646
-rendezvous local DID:    50386028-0062-554d-9f0a-a5a21d300b56
-rendezvous contact:      da33b3a9-0360-5acf-a089-3ceb1fd2ee6b
+UUID_URL = 6ba7b811-9dad-11d1-80b4-00c04fd430c8
+
+estocNamespace(purpose) = UUIDv5(
+  UUID_URL,
+  UTF8("https://estoc.dev/uuid/v1/" + purpose)
+)
 ```
 
-A UUIDv5 name is the UTF-8 RFC 8785 canonical encoding of the JSON array
-specified by the rule. This gives unambiguous nulls and field boundaries.
+The version-3 purposes and resulting namespace UUIDs are:
+
+| purpose | namespace UUID |
+| --- | --- |
+| `inbound-message` | `4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6` |
+| `automatic-contact` | `bc4ed155-49e2-58d4-93da-a4ec78ff2f58` |
+| `automatic-mid` | `8847bd57-5907-5bcd-9a71-d1e97cee3199` |
+| `automatic-wire-id` | `236a6e18-9271-59c8-9a0c-f940a0f8dc6f` |
+| `rendezvous-relationship` | `0c579b86-4002-5a4a-a2b6-df3c13d27e48` |
+| `rendezvous-local-did` | `58972857-beaf-5df0-af7b-f1d0ebfcbbb5` |
+| `rendezvous-contact` | `dec849c7-4961-5f33-94e7-702684d5a95c` |
+
+A deterministic entity rule then computes:
+
+```text
+UUIDv5(estocNamespace(purpose), UTF8(RFC8785(name_array)))
+```
+
+`name_array` is the exact JSON array specified by that rule. RFC 8785
+canonical UTF-8 gives unambiguous nulls, strings and field boundaries. A
+runtime MUST derive and verify the namespace UUID from the URI above rather
+than trusting a copied table constant. The table is a test vector, not a
+second source of truth.
 
 ## 4. Channels and peer evidence
 
@@ -258,8 +278,8 @@ that happens to publish a web document.
 A communication DID has one of two roles in version 3:
 
 ```text
-rendezvous    public reusable discovery, profiled as did:web
-relationship  pairwise ongoing communication, profiled as did:peer:4
+rendezvous    bootstrap discovery; default did:peer:4, optional did:web facade
+relationship  pairwise ongoing communication; did:peer:4
 ```
 
 The role is application meaning. Delivery routes are reusable vault-scoped
@@ -352,15 +372,17 @@ conflict rather than silently changing a DID.
 
 #### `did.created`
 
+The default rendezvous form is a Peer DID:
+
 ```json
 {
   "type": "did.created",
   "blobs": [],
   "data": {
     "id": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "did": "did:web:alice.example",
-    "longForm": null,
-    "method": "web",
+    "did": "did:peer:4zQm...rendezvous-short",
+    "longForm": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
+    "method": "peer",
     "role": "rendezvous",
     "generation": 0,
     "authenticationKeys": [
@@ -369,47 +391,57 @@ conflict rather than silently changing a DID.
     "keyAgreementKeys": [
       "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement/0"
     ],
-    "boundRoute": null
+    "boundRoute": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
   }
 }
 ```
 
-`method` is `web` or `peer`; `role` is `rendezvous` or `relationship`.
-Version 3 permits the pairs `(web, rendezvous)` and `(peer, relationship)`.
-Other pairs require a compatible extension or a later vault version.
+`method` is `peer` or `web`; `role` is `rendezvous` or `relationship`.
+Version 3 permits:
+
+```text
+(peer, rendezvous)      default local-first discovery
+(peer, relationship)    pairwise ongoing relationship
+(web, rendezvous)       optional public Web facade
+```
 
 Generation `0` is created with the DID. `authenticationKeys` and
-`keyAgreementKeys` each contain exactly one name in version 3. Every key name
-MUST use the event's DID entity ID and generation. The seed-derived public
-keys MUST match the DID or the prepared DID document.
+`keyAgreementKeys` each contain exactly one version-3 key name under the DID
+entity ID and generation.
 
-For a relationship `did:peer:4`, `did` is the canonical short form,
-`longForm` is the corresponding self-resolving long form and `boundRoute` is
-REQUIRED and names the route encoded into the input document. The long form
-MUST be used on first disclosure; the short form is used for subsequent
-vault references and mediator registration. For a rendezvous `did:web`,
-`longForm` is null and `boundRoute` is null because selected document
-revisions may advertise one or more routes.
+For every `did:peer:4`, whether rendezvous or relationship:
 
-A deterministic rendezvous handler may use a UUIDv5 `id`; ordinary creation
-uses UUIDv7. Repeating one ID with different identity fields is an integrity
-conflict.
+- `did` is the canonical short form;
+- `longForm` is the validated self-resolving long form;
+- `boundRoute` is REQUIRED and equals the route encoded in the input document;
+- seed-derived public keys and route MUST match that document; and
+- changing keys or route creates another DID entity and an explicit scoped
+  transition.
 
-A relationship variant has this shape:
+The long form is disclosed before the short form is relied upon by a peer.
+The short form is canonical for vault references and mediator recipient
+registration after the mapping is known.
+
+An optional Web rendezvous variant is:
 
 ```jsonc
 {
-  "id": "4275e88e-2a9d-5b5f-8346-f17ef35b71c5",
-  "did": "did:peer:4zQm...short",
-  "longForm": "did:peer:4zQm...short:z...input-document",
-  "method": "peer",
-  "role": "relationship",
+  "id": "019b2a55-22b4-7fd3-9c77-70cd01fb3fb6",
+  "did": "did:web:alice.example",
+  "longForm": null,
+  "method": "web",
+  "role": "rendezvous",
   "generation": 0,
-  "authenticationKeys": ["did/4275e88e-2a9d-5b5f-8346-f17ef35b71c5/authentication/0"],
-  "keyAgreementKeys": ["did/4275e88e-2a9d-5b5f-8346-f17ef35b71c5/key-agreement/0"],
-  "boundRoute": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
+  "authenticationKeys": ["did/019b2a55-22b4-7fd3-9c77-70cd01fb3fb6/authentication/0"],
+  "keyAgreementKeys": ["did/019b2a55-22b4-7fd3-9c77-70cd01fb3fb6/key-agreement/0"],
+  "boundRoute": null
 }
 ```
+
+Its selected DID document, rather than the DID string, binds keys and routes.
+A deterministic rendezvous handler may use a UUIDv5 entity ID; ordinary
+creation uses UUIDv7. Same ID with different identity fields is an integrity
+conflict.
 
 #### `did.keyGenerationAdded`
 
@@ -418,24 +450,21 @@ A relationship variant has this shape:
   "type": "did.keyGenerationAdded",
   "blobs": [],
   "data": {
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "did": "019b2a55-22b4-7fd3-9c77-70cd01fb3fb6",
     "generation": 1,
     "authenticationKeys": [
-      "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/authentication/1"
+      "did/019b2a55-22b4-7fd3-9c77-70cd01fb3fb6/authentication/1"
     ],
     "keyAgreementKeys": [
-      "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement/1"
+      "did/019b2a55-22b4-7fd3-9c77-70cd01fb3fb6/key-agreement/1"
     ]
   }
 }
 ```
 
-Only a non-retired `did:web` may add generations in version 3. A generation
-number and every key name are immutable. The fold reports conflicting values
-rather than choosing one.
-
-Adding a generation does not publish or select it and does not remove older
-keys from a document.
+Only a non-retired Web rendezvous DID may add generations in version 3. Peer
+DIDs rotate by creating another DID. A generation number and every key name
+are immutable; conflicts are surfaced rather than selected by arrival order.
 
 #### `did.keyGenerationSelected`
 
@@ -444,24 +473,21 @@ keys from a document.
   "type": "did.keyGenerationSelected",
   "blobs": [],
   "data": {
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "did": "019b2a55-22b4-7fd3-9c77-70cd01fb3fb6",
     "generation": 1
   }
 }
 ```
 
-The latest valid selection by canonical order is preferred for new outbound
-cryptographic use and newly prepared web document revisions. Generation `0`
-is selected when no explicit selection exists.
-
-Selection does not delete the private keys or invalidate a previously
-published revision. Receive and verification eligibility is determined by
-selected documents, routes and rendezvous-generation policy.
+The latest valid selection by canonical event order is preferred for new Web
+rendezvous cryptographic use and document preparation. Generation `0` is the
+default. Selection does not delete private keys or invalidate historical
+initial-message-bound evidence.
 
 ### 5.3 Delivery routes
 
 A route is a reusable, vault-scoped transport configuration. It does not
-belong to a replica or a single communication DID. One public DID and many
+belong to a replica or a single communication DID. One rendezvous DID and many
 pairwise DIDs may select the same route, which is how they reuse a mediator
 or direct ingress without sharing an application identity.
 
@@ -515,10 +541,11 @@ Order expresses publication or sending preference, not application fan-out.
 A sender normally delivers one package through one route and tries another
 only after failure.
 
-For a relationship `did:peer:4`, the list MUST contain exactly its
-`boundRoute`; changing that route creates another relationship DID and a
-contact-scoped transition. A rendezvous `did:web` may publish several routes
-while its DID string remains unchanged.
+For every `did:peer:4`, whether its role is `rendezvous` or `relationship`,
+the list MUST contain exactly its `boundRoute`; changing that route creates a
+new Peer DID entity and the applicable disclosure or contact-scoped
+transition. An optional rendezvous `did:web` may publish several routes while
+its DID string remains unchanged.
 
 #### `did.routeRegistered`
 
@@ -604,8 +631,10 @@ This is the permanent record that a DID was revealed for a purpose. It is
 not the publication of a `did:web` document.
 
 Before disclosure, every selected mediated route MUST have a currently
-verified recipient registration. A reusable public invitation SHOULD expose
-a rendezvous DID and MUST NOT expose a relationship DID.
+verified recipient registration. A reusable invitation SHOULD expose a
+rendezvous DID and MUST NOT expose a relationship DID. The default Peer
+profile discloses the validated `did:peer:4` long form; the optional Web
+profile discloses its `did:web` value.
 
 #### `did.documentPrepared`
 
@@ -651,7 +680,7 @@ revision. Selection does not prove that the remote HTTPS resource changed.
 
 A selected revision may retain verification methods from several key
 generations during a graceful rollover, but a version-3 rendezvous profile
-selects exactly one key-agreement generation for new requests. Older
+selects exactly one key-agreement generation for new initial messages. Older
 authentication methods may remain authorized for delayed `from_prior`
 verification. Every mediated route in the selected document must be
 registered before the revision is advertised as successfully published.
@@ -745,22 +774,35 @@ canonical order wins. It is never sent to the mediator.
   "blobs": [],
   "data": {
     "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
-    "because": "lost"
+    "because": "inactivity-policy"
   }
 }
 ```
 
-Retirement is a terminal desired-delivery policy:
+`because` is REQUIRED and is one of:
 
-- active replicas reconcile it to each shared mediation account;
-- the mediator stops creating future deliveries for the replica;
-- events already authored by it remain valid; and
-- it does not revoke the seed or prevent a holder from registering a new
+```text
+user
+replaced
+lost
+inactivity-policy
+fork-recovery
+other
+```
+
+Retirement is a terminal desired-delivery policy for that replica ID:
+
+- active replicas reconcile it to every shared mediation account;
+- a mediator stops creating future deliveries for the retired ID;
+- events already authored by it remain valid and synchronizable; and
+- it does not revoke the seed or prevent a holder from registering a fresh
   replica ID.
 
-A local client that discovers its current replica ID retired MUST stop
-using that ID and mint a new local replica context before further writes
-or pickup.
+A local runtime that learns from a converged event set **or an authenticated
+mediator response** that its current ID is terminally retired MUST perform the
+local re-incarnation procedure in section 16.10 before any further append,
+pickup acknowledgment, live-delivery registration or outbound submission.
+The old author is not rewritten and pending old-author events remain valid.
 
 ### 6.4 Sync-store events
 
@@ -874,7 +916,7 @@ code distribution is outside this document.
 ## 7. Contacts
 
 A contact is a set of decisions identified by `cid` and connected through
-`contact.merged` edges. It may hold an unverified public DID before any
+`contact.merged` edges. It may hold an unverified rendezvous DID before any
 authenticated channel exists and later move to a pairwise DID within the same
 relationship context.
 
@@ -886,25 +928,25 @@ An automatic handler adopting an ordinary authenticated channel uses:
 
 ```text
 cid = UUIDv5(
-  b1942994-48f8-58ff-9117-0df20f60c150,
+  bc4ed155-49e2-58d4-93da-a4ec78ff2f58,
   RFC8785(["v1", myKey, peerKey])
 )
 ```
 
-A responder accepting one `rendezvous/1.0` request instead uses:
+A responder admitting an initial message at a rendezvous DID instead uses:
 
 ```text
 cid = UUIDv5(
-  da33b3a9-0360-5acf-a089-3ceb1fd2ee6b,
+  dec849c7-4961-5f33-94e7-702684d5a95c,
   RFC8785(["v1", relationship_id])
 )
 ```
 
-`relationship_id` is the deterministic value from `rendezvous/1.0` over the
-exact public DID and authenticated initiator key. It deliberately excludes
-request wire ID. Retries and replacement requests from the same initiator key
-therefore reuse one contact; each request still has a separate response
-effect. A live `contact.deleted` tombstone for this deterministic ID prevents
+`relationship_id` is the deterministic value defined by the rendezvous
+processing profile over the exact rendezvous DID and authenticated initiator
+key. It deliberately excludes the initial-message wire ID. Retries and later
+initial messages from the same initiator key therefore reuse one contact; each
+initial message still has its own protocol thread and response effect. A live `contact.deleted` tombstone for this deterministic ID prevents
 automatic recreation.
 
 `peerKey == null` MUST NOT be automatically adopted without an
@@ -926,10 +968,9 @@ application-specific authenticated discriminator.
 ```
 
 `because` is `user` or `automatic`. An automatic event also SHOULD carry its
-deterministic `effectId` when the schema-producing procedure has one. For a
-stable rendezvous contact, a request-specific accept/decline effect ID MUST
-NOT be copied here: replacement requests share the contact. Such an event
-either omits `effectId` or uses a separately defined relationship-stable
+deterministic `effectId` when the schema-producing procedure has one. For a stable rendezvous contact, an initial-message-specific protocol effect
+ID MUST NOT be copied here: later initial messages share the contact. Such an
+event either omits `effectId` or uses a separately defined relationship-stable
 creation effect.
 
 #### `contact.petname`
@@ -982,7 +1023,8 @@ with the contact. `because` is `relationship`, `rendezvous`, `manual` or
 another documented policy value.
 
 A normal established contact SHOULD use a relationship DID. A rendezvous DID
-may be used only for bootstrap or explicit public communication. This event
+may be used only for bootstrap or another protocol that explicitly permits
+rendezvous-addressed communication. This event
 says nothing about an authenticated peer channel.
 
 #### `contact.peerDidAdded`
@@ -993,7 +1035,7 @@ says nothing about an authenticated peer channel.
   "blobs": [],
   "data": {
     "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "did": "did:web:alice.example",
+    "did": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
     "because": "oob"
   }
 }
@@ -1022,7 +1064,7 @@ evidence later.
 
 `add` is the `eid` of one `contact.peerDidAdded`. Explicit references make
 removal independent of wall-clock ordering. A scoped transition may make an
-older public DID non-preferred without deleting the historical add event.
+older rendezvous DID non-preferred without deleting the historical add event.
 
 #### `contact.attached`
 
@@ -1168,7 +1210,7 @@ transport-local hint and is neither a semantic nor a package variation.
 
 ### 8.2 Intent hash
 
-The intent projection contains the semantic projection plus the immutable
+The intent projection contains the semantic projection plus immutable
 message-level control headers:
 
 ```json
@@ -1183,20 +1225,32 @@ message-level control headers:
   },
   "created_time": 1788442800,
   "expires_time": null,
-  "please_ack": [""],
+  "please_ack": [],
   "ack": [],
   "headers": {}
 }
 ```
 
-`headers` contains every permitted DIDComm top-level header not represented
-by a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
+`please_ack` is either null, meaning the header is absent, or an array,
+meaning the header is present. A present empty array requests acknowledgment
+of the current message. Non-empty elements name older messages to acknowledge
+in addition to the current one. Version 3 forbids an empty-string sentinel and
+forbids placing the current wire ID in this array.
+
+For inbound normalization, absent `please_ack` is null, present empty
+`please_ack` remains `[]`, and absent `ack` is `[]`. The arrays contain unique
+strings and preserve wire order. In particular, `ack` follows oldest-to-newest
+receive order and is never sorted lexicographically.
+
+`headers` contains every permitted DIDComm top-level header not represented by
+a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
 `created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
-`from_prior`, `return_route`, `body` and `attachments` are forbidden. `intentHash` is unpadded
-base64url SHA-256 of the canonical projection. A preparer copies these values
-from `message.out`; it MUST NOT substitute its current clock, add a piggyback
-acknowledgment, change receipt policy, invent a default header or drop an
-unknown one.
+`from_prior`, `return_route`, `body` and `attachments` are forbidden.
+
+`intentHash` is unpadded base64url SHA-256 of the RFC 8785 canonical
+projection. A preparer copies all values from `message.out`; it MUST NOT
+substitute its clock, change receipt policy, reorder arrays, add an unrelated
+acknowledgment, invent a default header or drop an unknown supported header.
 
 ### 8.3 Exact plaintext hash
 
@@ -1230,12 +1284,12 @@ An automatic effect derives:
 
 ```text
 mid = UUIDv5(
-  3e4f042b-9cb7-568c-a065-59c7c0d2f5ba,
+  8847bd57-5907-5bcd-9a71-d1e97cee3199,
   RFC8785(["v1", effectId])
 )
 
 wireId = UUIDv5(
-  1bbea408-beff-5583-b67b-5b51393b7e51,
+  236a6e18-9271-59c8-9a0c-f940a0f8dc6f,
   RFC8785(["v1", effectId])
 )
 ```
@@ -1260,7 +1314,7 @@ response.
     "pthid": null,
     "createdTime": 1788442800,
     "expiresTime": null,
-    "pleaseAck": [""],
+    "pleaseAck": [],
     "ack": [],
     "headers": {},
     "body": "bafy...body",
@@ -1289,30 +1343,28 @@ or:
 }
 ```
 
-A contact target may contain a public rendezvous DID only when `msgType` is a
-rendezvous request or another protocol explicitly authorizes public-DID
-bootstrap. Ordinary application messages never select a rendezvous DID as
-their write target. A channel target is used for an unattributed
-authenticated peer or a protocol response pinned to one channel. A
+A contact target may select a rendezvous DID only when the message is an
+initial message admitted by the rendezvous profile. Ordinary relationship
+messages never select a rendezvous DID. A channel target is used for an
+unattributed authenticated peer or a response pinned to one channel. A
 peer-key-null channel cannot be used for an authenticated reply.
 
 Requirements:
 
-- `createdTime` is a durable UTC Epoch Seconds protocol timestamp; user sends
-  normally use commit time, while a deterministic effect may derive it from
-  the triggering message;
-- `expiresTime` is UTC Epoch Seconds or null;
-- when non-null, `createdTime < expiresTime`;
-- an application protocol may impose a maximum lifetime;
-- `pleaseAck` and `ack` are ordered arrays of unique strings and are immutable
-  for this intent; `ack` follows oldest-to-newest receive order, the empty
-  string may appear at most once in `pleaseAck` to mean this message, and it
-  never appears in `ack`;
-- non-empty `pleaseAck` selects receipt-required completion; empty
-  `pleaseAck` selects submission-terminal completion under
-  `distributed-delivery/1.0`;
-- `headers` is an RFC 8785 JSON object containing every additional supported
-  top-level DIDComm header;
+- `createdTime` is a durable UTC Epoch Seconds timestamp; a deterministic
+  automatic effect may derive it from the triggering message;
+- `expiresTime` is UTC Epoch Seconds or null and, when non-null, is strictly
+  greater than `createdTime`;
+- `pleaseAck` is null or an ordered array of unique non-empty message IDs;
+- null `pleaseAck` means no header and submission-terminal completion;
+- present `pleaseAck`, including `[]`, requests acknowledgment of the current
+  message and selects receipt-required completion;
+- a non-empty `pleaseAck` array names older messages in addition to the current
+  message; it MUST NOT contain this message's wire ID;
+- `ack` is an ordered array of unique non-empty message IDs in
+  oldest-to-newest receive order;
+- `headers` contains every otherwise-unmodeled supported top-level DIDComm
+  header;
 - `headers` MUST NOT contain `typ`, `id`, `type`, `from`, `to`,
   `created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
   `from_prior`, `return_route`, `body` or `attachments`;
@@ -1321,21 +1373,19 @@ Requirements:
 - `thid`, `pthid`, `expiresTime` and `effectId` are present with null when
   unused;
 - `semanticHash` and `intentHash` are computed under section 8;
-- `blobs` is the distinct ordered set of `body` followed by `attachments`;
-  and
-- appending the event requires no network, resolution, mediator or socket.
+- `blobs` is the distinct ordered set of `body` followed by `attachments`; and
+- appending this event requires no network, resolver, mediator or socket.
 
-A preparer MUST use the durable `createdTime` and exact `headers`; current code
-or local policy MUST NOT replace the time with `now`, invent defaults, or omit
-an unsupported header. Version 3 emits `typ` as
-`application/didcomm-plain+json`, always emits `id`, `type`, `from`, `to`,
-`created_time` and `body`, omits nullable fields when null, omits
-acknowledgment and attachment arrays when empty, and expands every `headers`
-entry at the plaintext top level.
+A preparer MUST use the durable timestamp and exact headers. Version 3 emits
+`typ`, `id`, `type`, `from`, `to`, `created_time` and `body`; emits `thid`,
+`pthid` and `expires_time` when non-null; emits `please_ack` whenever
+`pleaseAck` is not null, including an empty array; emits `ack` and
+`attachments` when non-empty; and expands every `headers` entry at the
+plaintext top level.
 
-More than one `message.out` under one `mid` is allowed only when every field
-is identical. Reuse of one wire ID with a different semantic or intent
-projection is an integrity conflict.
+More than one `message.out` under one `mid` is allowed only when every field is
+identical. Reuse of one wire ID with a different semantic or intent projection
+is an integrity conflict.
 
 ### 9.3 `message.prepared`
 
@@ -1389,10 +1439,10 @@ package MAY change `senderDid`, `myKey`, `recipientDid`, `peerKey`,
 `peerResolution` or `fromPrior` only when the change follows a valid selected
 DID/key generation or verified contact-scoped continuation for the same
 logical target. Every such change requires a new package ID and plaintext
-hash. A protocol may be stricter; one rendezvous request wire ID pins the
-public DID snapshot and recipient generation.
+hash. A protocol may be stricter; one initial-message wire ID pins the
+rendezvous DID snapshot and recipient generation.
 
-The package names no recipient replica. Public rendezvous and pairwise
+The package names no recipient replica. Rendezvous and pairwise
 relationship messages follow the same package rules.
 
 ### 9.4 `message.packageRetired`
@@ -1530,7 +1580,8 @@ durable receipt by the peer vault, not read or business acceptance.
 
 An ACK-bearing problem report may acknowledge delivery while still being
 excluded from a higher-level protocol success condition. In particular,
-rendezvous handoff confirmation has the stricter rule in `rendezvous/1.0`.
+rendezvous handoff confirmation has the stricter rule in the processing
+profile defined by `rendezvous.md`.
 
 ## 10. Inbound message events
 
@@ -1540,7 +1591,7 @@ For an authenticated or signed innermost message:
 
 ```text
 mid = UUIDv5(
-  689dff5c-d975-5725-898f-267e97e909c1,
+  4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6,
   RFC8785(["v1", "authenticated", peerKey, wireId])
 )
 ```
@@ -1549,7 +1600,7 @@ For a truly anonymous message:
 
 ```text
 mid = UUIDv5(
-  689dff5c-d975-5725-898f-267e97e909c1,
+  4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6,
   RFC8785(["v1", "anonymous", myKey, wireId])
 )
 ```
@@ -1570,7 +1621,7 @@ observation MIDs remain stored for audit and conflict detection.
   "type": "message.in",
   "blobs": ["bafy...body", "bafy...attachment"],
   "data": {
-    "mid": "d770e714-b7f7-5c20-9c8a-d86eeb10a254",
+    "mid": "ca6f6a41-454c-53ff-b827-1797156687cf",
     "wireId": "019b2a70-f225-721c-835f-67175be0667e",
     "semanticHash": "eC9pbQTv_pbViy0dXQBZHEFVHybyZZyAfbJbhgwNoR8",
     "intentHash": "855qiA-zQ94SVOPYj2KnooWRNJAe1GB419LMTGLMwAs",
@@ -1584,7 +1635,7 @@ observation MIDs remain stored for audit and conflict detection.
     "pthid": null,
     "createdTime": 1788442800,
     "expiresTime": null,
-    "pleaseAck": [""],
+    "pleaseAck": [],
     "ack": [],
     "headers": {},
     "fromPrior": null,
@@ -1611,8 +1662,9 @@ Requirements:
 - `did` is the canonical peer DID, using Peer DID numalgo-4 short form after
   validating the long form, or null when no peer DID is available;
 - `createdTime`, `expiresTime`, `pleaseAck`, `ack`, `headers` and `fromPrior`
-  preserve normalized wire headers, with null, empty arrays or an empty object
-  when absent;
+  preserve normalized wire headers; absent `please_ack` is null, present empty
+  `please_ack` remains `[]`, absent `ack` is `[]`, and no additional header is
+  `{}`;
 - acknowledgment arrays contain unique values and preserve exact wire order;
 - `headers` contains every otherwise-unmodeled permitted top-level member and
   MUST NOT contain any reserved field, including `return_route`;
@@ -1627,9 +1679,9 @@ may it ACK the mediator delivery. Ciphertext that cannot yet be decrypted or
 mapped to locally available key material produces no `message.in` and no
 pickup ACK; it remains a local deferred delivery and is retried after sync.
 
-The public-rendezvous pre-vault admission exception is defined in
-`rendezvous/1.0`: rejected, silently discarded or hard-rate-limited public
-input may be pickup-ACKed without a `message.in` after safe classification.
+The rendezvous pre-vault admission exception is defined in
+`rendezvous.md`: rejected, silently discarded or hard-rate-limited rendezvous
+input MUST be pickup-ACKed without a `message.in` after safe classification.
 That exception does not apply to ordinary accepted relationship traffic.
 
 ### 10.3 Duplicate, transition and conflict rules
@@ -1676,7 +1728,7 @@ type = https://didcomm.org/empty/1.0/empty
 body = {}
 attachments = []
 ack != []
-pleaseAck = []
+pleaseAck = null
 ```
 
 It remains a durable `message.in` observation and its validated ACK side
@@ -1741,8 +1793,8 @@ peer key.
   evidence that every listed key controlled the observed message; and
 - `service` is the selected DIDComm service URI or null.
 
-For a request to a rendezvous DID, this event is the request-bound resolution
-snapshot. A later `from_prior` is verified against this exact event and blob,
+For an initial message to a rendezvous DID, this event is the
+initial-message-bound resolution snapshot. A later `from_prior` is verified against this exact event and blob,
 not an unrelated current web document. If the event or blob is temporarily
 missing, processing is deferred and retried after sync; absence is not proof
 that the transition is invalid.
@@ -1842,11 +1894,14 @@ observations are harmless.
 
 ## 12. Rendezvous and relationship observations
 
-These events lift durable state defined by `rendezvous/1.0`. The public DID,
+These events lift durable state defined by the profile in `rendezvous.md`. The rendezvous DID,
 relationship DIDs and generations are vault-scoped. A web publisher or server
 replica has no special ownership.
 
 ### 12.1 `rendezvous.generationConfigured`
+
+The default profile configures one immutable generation for a Peer rendezvous
+DID:
 
 ```json
 {
@@ -1856,68 +1911,95 @@ replica has no special ownership.
     "id": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
     "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
     "keyGeneration": 0,
-    "documentRevision": "019b2a5b-5ab4-7c15-8b86-50650b78558d",
-    "documentHash": "THXDWdlKuVgSgQk5PQIThaGKGQRDxoCmBxsfVGnSLos",
-    "authenticationKid": "did:web:alice.example#authentication-0",
-    "keyAgreementKid": "did:web:alice.example#key-agreement-0",
+    "resolution": {
+      "kind": "peer-long-form",
+      "longForm": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
+      "documentHash": "THXDWdlKuVgSgQk5PQIThaGKGQRDxoCmBxsfVGnSLos"
+    },
+    "authenticationKid": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document#auth-0",
+    "keyAgreementKid": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document#agreement-0",
     "ingressRoutes": [
       "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
     ],
     "relationshipRoute": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
-    "requestPolicy": "ask",
-    "maxRequestLifetimeSeconds": 604800,
+    "initialMessageTypes": [
+      "https://didcomm.org/trust-ping/2.0/ping",
+      "https://didcomm.org/basicmessage/2.0/message"
+    ],
+    "admissionPolicy": "ask",
+    "maxInitialMessageLifetimeSeconds": 604800,
     "autoLimits": null
   }
 }
 ```
 
-The DID is a live rendezvous `did:web`. The key generation, selected document
-revision, exact document blob/hash, ingress routes and relationship route
-must already exist in local portable state when this event is appended.
+The named DID has role `rendezvous`. `resolution.kind` is:
 
-For generation integer `N`, the two selected DID URL fragments are normative:
+- `peer-long-form` for the REQUIRED default Peer DID profile; or
+- `web-revision` for the OPTIONAL `did:web` profile.
+
+For `peer-long-form`, `longForm` is the exact validated self-resolving Peer
+DID, `documentHash` is the unpadded base64url SHA-256 of its RFC 8785 canonical
+resolved DID document, and no `did.document*` event is involved. The
+configured key IDs and the single ingress/relationship route MUST match the
+long-form input document and the `did.created.boundRoute`.
+
+A Web variant changes only the resolution object, for example:
+
+```jsonc
+{
+  "kind": "web-revision",
+  "documentRevision": "019b2a5b-5ab4-7c15-8b86-50650b78558d",
+  "documentHash": "THXDWdlKuVgSgQk5PQIThaGKGQRDxoCmBxsfVGnSLos"
+}
+```
+
+For a Web generation integer `N`, the selected DID URL fragments are
+normative:
 
 ```text
 <did:web>#authentication-N
 <did:web>#key-agreement-N
 ```
 
-`authenticationKid` and `keyAgreementKid` MUST exactly use those fragments
-and resolve in the named document revision to the seed-derived keys for
+They MUST resolve in the named document revision to the seed-derived keys for
 `keyGeneration`.
 
-The generation freezes:
+Every generation freezes:
 
-- the public key-agreement key that receives new requests;
-- the public authentication key that signs request-specific `from_prior`;
-- the exact request-bound document hash;
-- the public ingress routes;
+- the key-agreement method that decrypts new initial messages;
+- the authentication method that signs initial-message-bound `from_prior`;
+- exact initial-message-bound resolution evidence;
+- non-empty ingress routes;
 - the route encoded into a responder relationship DID;
-- maximum request lifetime; and
+- an exact non-empty initial-message type allowlist;
+- maximum initial-message lifetime; and
 - admission policy.
 
-`requestPolicy` is `ask`, `auto` or `silent`. Public generations default to
-`ask`. When `auto`, `autoLimits` is REQUIRED and contains implementation-
-documented positive bounds for new relationships and pending decisions; when
-`ask` or `silent`, it is null. A runtime may enforce stricter local or service
-limits.
+`admissionPolicy` is `ask`, `auto` or `silent`. `ask` is the default. `auto`
+requires implementation-documented positive `autoLimits`; `ask` and `silent`
+use null. A runtime may enforce stricter service or local limits.
 
-This event is intentionally appended before remote publication. It does not
-make the generation live. A generation accepts new requests only after the
-exact document revision is observed published and every selected mediated
-ingress route is currently reconciled. Before exposing the document, a
-publisher MUST upload the configuration, document blob and dependencies to
-every sync store required by publication policy so another replica can learn
-the JWE `kid` and derive the private key.
+The event is appended before remote exposure and does not alone make the
+generation live:
 
-All generations for one public DID whose request-acceptance windows overlap
-MUST name the same `relationshipRoute`. A route change is activated only after
-older generations cannot establish a first relationship. An already
-established relationship retains its own DID and route when a replacement
-request arrives through another public generation.
+- a Peer generation is live when its long form, decoded document, selected
+  key IDs and bound route validate, and every selected mediated ingress route
+  is currently reconciled; and
+- a Web generation is live only when the exact selected document revision is
+  observed published and every selected mediated ingress route is currently
+  reconciled.
 
-One key generation maps to at most one rendezvous generation. Different
-values under one generation ID are an integrity conflict.
+Before a reusable invitation or Web document is exposed, the runtime MUST
+upload this event and every key/route/document dependency to each sync store
+required by publication policy. A lagging replica then defers, rather than
+ACKing, ciphertext for a configured generation it cannot yet use.
+
+All overlapping generations for one Web rendezvous DID MUST name the same
+`relationshipRoute`. A Peer rendezvous DID has one generation; changing keys
+or route creates a new Peer DID and disclosure. One key generation maps to at
+most one rendezvous generation. Different values under one generation ID are
+an integrity conflict.
 
 ### 12.2 `rendezvous.generationRetired`
 
@@ -1927,84 +2009,101 @@ values under one generation ID are an integrity conflict.
   "blobs": [],
   "data": {
     "id": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
-    "acceptUntil": 1789047600
+    "admitUntil": 1789047600
   }
 }
 ```
 
-The generation accepts no request received after `acceptUntil`. Retirement is
-terminal. A request remains eligible when it is unexpired, within the
-configured maximum lifetime and arrived no later than `acceptUntil`; an old
-`created_time` alone is not a clock-skew failure.
+The generation admits no initial message received at or after `admitUntil`.
+Retirement is terminal. A candidate remains admissible only when it is
+unexpired, within the configured maximum lifetime and arrived before
+`admitUntil`; an old `created_time` alone is not a clock-skew failure.
 
-The private keys, document blob and request-bound resolution evidence remain
+Private keys, Peer long-form/document evidence or Web revision evidence remain
 available through at least:
 
 ```text
-maximum request lifetime
+maximum initial-message lifetime
 + mediator message retention
 + configured delivery safety margin
 ```
 
-The current web document may stop selecting an old key-agreement method for
-new requests, but already pinned request packages and historical
-`from_prior` verification continue to use retained evidence. Emergency
-compromise policy may intentionally shorten this availability.
+For a Web profile, the current document may stop selecting an old
+key-agreement method for new initial messages. For either profile, pinned
+packages and historical `from_prior` verification continue to use retained
+evidence. Emergency compromise policy may intentionally shorten this
+availability.
 
-### 12.3 `rendezvous.requestDecided`
+### 12.3 `relationship.admissionDecided`
+
+This event records a local decision about one durable bootstrap candidate. It
+does not define or require a DIDComm response type.
 
 ```json
 {
-  "type": "rendezvous.requestDecided",
+  "type": "relationship.admissionDecided",
   "blobs": [],
   "data": {
-    "requestMid": "d770e714-b7f7-5c20-9c8a-d86eeb10a254",
-    "requestWireId": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
-    "requestCreatedTime": 1788442800,
-    "requestExpiresTime": 1789047600,
-    "publicDid": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "publicDidValue": "did:web:alice.example",
+    "inboundMid": "ca6f6a41-454c-53ff-b827-1797156687cf",
+    "inboundWireId": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
+    "inboundCreatedTime": 1788442800,
+    "inboundExpiresTime": 1789047600,
+    "initialMessageType": "https://didcomm.org/trust-ping/2.0/ping",
+    "rendezvousDid": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "rendezvousDidValue": "did:web:alice.example",
     "generation": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
     "peerKey": "k3j9n0m4x6q2w7c8v5p1d8s0fa",
     "initiatorDid": "did:peer:4zQm...initiator-short",
     "initiatorLongForm": "did:peer:4zQm...initiator-short:z...initiator-input-document",
     "decision": "accept",
     "because": "user",
-    "relationship": "e10fc031-4d71-5295-9504-cf50a893ff97",
-    "effectId": "RRNYwQN_gicvNmfYbFV3rGXlaJR3POmPq-NX6lFd0cc"
+    "code": null,
+    "relationship": "6ce7db61-5acf-54bd-a117-5fbc88fc3f71"
   }
 }
 ```
 
-One request may accumulate policy and user observations, but its effective
-decision is derived deterministically.
-
-- `decision` is `accept`, `decline` or `ignore`.
+- `decision` is `accept`, `reject` or `ignore`.
 - `because` is `user` or `policy`.
-- `generation` is the generation that decrypted and admitted this request.
-- `initiatorDid` is the validated canonical Peer DID numalgo-4 short form.
-- `initiatorLongForm` is the exact first-disclosure long form.
-- `requestCreatedTime` and `requestExpiresTime` equal the immutable request
-  headers.
-- event envelope `at` is the decision time used to determine whether an accept
-  was committed before request expiry.
-- An accept names the stable relationship ID and deterministic accept effect.
-- A decline has null `relationship` and the deterministic decline effect.
-- An ignore has both fields null and emits no response.
+- `generation` is the live generation that decrypted and admitted the
+  candidate.
+- `initialMessageType` exactly equals the admitted `message.in.msgType`.
+- `initiatorDid` is the canonical Peer DID numalgo-4 short form.
+- `initiatorLongForm` is its validated first-disclosure long form.
+- `inboundCreatedTime` and `inboundExpiresTime` equal immutable wire headers.
+- accept requires `code == null` and the deterministic relationship ID.
+- reject requires `relationship == null` and a stable local code such as
+  `not-accepted`, `capacity`, `policy`, `expired` or
+  `sender-did-conflict`.
+- ignore requires both `code` and `relationship` null.
 
-For one request, any user decision outranks every policy decision. Equal
-winning values are duplicates. Different winning user values are a visible
-decision conflict and suppress automatic effects.
+The event `at` is parsed as an RFC 3339 instant. An accept is timely only when:
 
-An accept whose event `at` is not earlier than `requestExpiresTime` is invalid;
-after expiry only decline-with-code-`expired` or ignore may be effective. If
-the deterministic contact has a live `contact.deleted` tombstone, acceptance
-is invalid.
+```text
+parseRFC3339(event.at) < UnixEpoch + inboundExpiresTime seconds
+```
+
+Equality is expired. A candidate reaching expiry before acceptance may only
+receive a new reject or ignore decision.
+
+Before a response intent exists, equal observations are duplicates, one valid
+user decision outranks policy observations, contradictory user decisions are
+a visible conflict, and otherwise incompatible policy decisions remain a
+visible conflict.
+
+Once a natural response, Trust Ping response or Empty ACK intent has been
+committed for this candidate, later rejection cannot retroactively undo the
+relationship. Ending it uses normal contact deletion and DID/route retirement.
+
+The decision does not prescribe a wire message. Rejection may be silent or may
+produce a protocol-specific error or Report Problem 2.0 message. Acceptance uses standard Trust Ping, an already-due and safe natural
+application response, or Empty Message as defined by `rendezvous.md`. The
+relationship decision does not decide the application protocol's business
+outcome.
 
 Reuse of one `peerKey` under another canonical `initiatorDid` for the same
-stable relationship is a sender-DID conflict. A conflicting request is not
-allowed to rewrite the relationship's remote DID and is declined or ignored
-under `rendezvous/1.0`.
+stable relationship is a sender-DID conflict and cannot rewrite the remote
+DID.
 
 ### 12.4 `relationship.established`
 
@@ -2013,53 +2112,53 @@ under `rendezvous/1.0`.
   "type": "relationship.established",
   "blobs": [],
   "data": {
-    "id": "e10fc031-4d71-5295-9504-cf50a893ff97",
-    "contact": "34fdcc08-33e7-5268-a850-995c581f7cd1",
-    "publicDid": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "publicDidValue": "did:web:alice.example",
+    "id": "6ce7db61-5acf-54bd-a117-5fbc88fc3f71",
+    "contact": "f8a38c56-25b0-54d9-8be7-669cc46b3906",
+    "rendezvousDid": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "rendezvousDidValue": "did:web:alice.example",
     "peerKey": "k3j9n0m4x6q2w7c8v5p1d8s0fa",
-    "ourDid": "4275e88e-2a9d-5b5f-8346-f17ef35b71c5",
+    "ourDid": "6ff509cd-e2b0-53ff-be69-8a35eccf4ad3",
     "route": "019b2a58-75ab-7880-a7d2-c677b6b3bfd1"
   }
 }
 ```
 
-This is request-independent responder relationship state for the pair
-`(publicDidValue, peerKey)`. Replacement requests from the same authenticated
-initiator key reuse the same event, contact, responder relationship DID and
-route while getting separate decisions and response effects.
+This is stable responder relationship state for
+`(rendezvousDidValue, peerKey)`. Different initial message IDs or protocol
+types from the same authenticated initiator key reuse the same event, contact,
+responder relationship DID and route while remaining separate application
+messages with separate automatic effects.
 
-The stable event deliberately omits `originGeneration`, `theirDid` and
-`theirLongForm`. Those values are derived from effective accepted
-`rendezvous.requestDecided` events. The canonical origin is the earliest
-valid accepted request by:
+The stable event deliberately omits an origin message, generation and remote
+DID. Those values are derived from effective accepted
+`relationship.admissionDecided` events. The canonical origin is the earliest
+valid accepted candidate by:
 
 ```text
-(requestCreatedTime, requestWireId, generation)
+(inboundCreatedTime, inboundWireId, generation)
 ```
 
-after user-over-policy precedence. This prevents overlapping generations or
-concurrent replicas from racing to write incompatible stable provenance.
+after user-over-policy precedence.
 
-The IDs MUST equal the deterministic derivations in `rendezvous/1.0`.
-`ourDid` names the deterministic responder relationship DID and `route` is
-its reusable bound route. Every overlapping public generation capable of
-creating this relationship MUST name the same relationship route.
+The IDs equal the deterministic derivations in `rendezvous.md`. `ourDid` names
+the responder relationship DID and `route` its bound route. Every overlapping
+rendezvous generation capable of creating the relationship must name the same
+relationship route.
 
-The relationship, deterministic contact, bootstrap and future relationship
-channel attachments, `contact.useDid` and `did.created` SHOULD be appended in
-one batch after a timely accept decision. Equal stable statements from several
-replicas are duplicates. Different values under one relationship ID are an
-integrity conflict.
+The relationship, deterministic contact, channel attachments,
+`contact.useDid`, responder `did.created` and selected protocol response
+`message.out` SHOULD be appended in one batch after effective acceptance.
+Equal stable statements from several replicas are duplicates. Different
+values under one relationship ID are an integrity conflict.
 
-If effective accepted requests contain more than one canonical initiator DID
-for one `peerKey`, the relationship has a sender-DID conflict. It has no
-ordinary current remote end until a non-conflicting user decision set remains.
+If effective accepted candidates contain more than one canonical initiator DID
+for one `peerKey`, the relationship has a sender-DID conflict and no ordinary
+current remote end.
 
-Ordinary outbound use of `ourDid` remains pending until a qualifying
-relationship-channel ACK confirms at least one request-specific accept under
-`rendezvous/1.0`. A delivery acknowledgment carried only by a decline,
-problem report or public-DID message does not confirm handoff.
+The responder repeats one byte-stable `from_prior` on every package from
+`ourDid` until it receives an authenticated message addressed to `ourDid`.
+Receipt-required response retry ends only after explicit ACK or another
+terminal state.
 
 ## 13. Automatic effects
 
@@ -2079,10 +2178,10 @@ effectId = base64url(
 ```
 
 The same logical input and handler action MUST produce the same
-`effectId`. A protocol MAY define a stricter scope. In particular,
-`rendezvous/1.0` derives stable relationship state from `(public DID,
-peer key)` while deriving separate accept or decline effects from that stable
-relationship and the individual request wire ID.
+`effectId`. A protocol MAY define a stricter effect scope. The rendezvous
+profile derives stable relationship state from `(rendezvous DID, peer key)`,
+while each actual application response is an ordinary effect of its triggering
+inbound message.
 
 - Automatic contacts use the deterministic contact rule in section 7.
 - Automatic outbound messages derive stable `mid` and `wireId` values in
@@ -2102,7 +2201,7 @@ createdTime = triggering message.createdTime
 expiresTime = null
 thid = triggering thid, or triggering wireId when thid is null
 pthid = triggering pthid
-pleaseAck = []
+pleaseAck = null
 ack = [triggering wireId]
 headers = {}
 body = {}
@@ -2112,8 +2211,33 @@ attachments = []
 For triggering MID
 `019b1b61-2e26-7a8f-8f29-a4d86a82dbd4`, the effect ID is
 `Pq2QwoCogLZIy8AtxGjbmtwAKdQyJoCatxh8IjL3o7o`, the outbound MID is
-`b7a605bc-8b0d-5471-acf7-e09389822f6a`, and the wire ID is
-`fc5bdb53-9075-5a3b-89c4-8e4c4100aede`.
+`db2107e1-e230-5efb-808e-7fa065054f73`, and the wire ID is
+`5627527e-2820-5935-9d91-7e0181838aa9`.
+
+A Trust Ping handoff response uses:
+
+```text
+handlerId = https://didcomm.org/trust-ping/2.0
+effectKind = ping-response
+ordinal = 0
+```
+
+For triggering inbound MID
+`ca6f6a41-454c-53ff-b827-1797156687cf`, the effect ID is
+`j0Ji1-6swFT6C0zHEv5XAE_ouM2A7p7iO707T3YcNfg`, the outbound MID is
+`93a1a0e9-383c-5106-a995-10234a729f70`, and the wire ID is
+`bfbdcb31-4ebc-5c57-bbdf-c4d82352afed`.
+
+Every rendezvous handoff response freezes:
+
+```text
+createdTime = triggering message.createdTime
+expiresTime = triggering message.expiresTime + 604800
+fromPrior.iat = createdTime
+```
+
+The addition fails closed on integer overflow. Acceptance still must be
+committed before the triggering message expires.
 
 There is no distributed exactly-once claim. A generic effect lease may
 reduce duplicate work but MUST NOT be required for correctness.
@@ -2158,7 +2282,7 @@ The **required receiving set** is every usable mediation that is either:
 - preferred; or
 - referenced by a non-retired mediated route that is bound to a live peer
   DID, appears in the selected route set of a live DID, appears in a selected
-  web document revision, or belongs to a non-expired rendezvous generation.
+  web document revision, or belongs to a non-retired rendezvous generation.
 
 Every full replica attempts replica registration and pickup on every
 reachable mediation in this set. The web publisher and a server full replica
@@ -2216,7 +2340,7 @@ The fold verifies all of the following:
   and does not add later key generations;
 - a web DID has null `longForm` and `boundRoute`, every selected revision has
   the correct DID `id`, and a rendezvous profile exposes exactly one current
-  key-agreement generation for new requests;
+  key-agreement generation for new initial messages;
 - each web generation uses the normative `#authentication-N` and
   `#key-agreement-N` fragments;
 - every selected route is configured and non-retired;
@@ -2247,78 +2371,74 @@ is an integrity conflict and prevents cryptographic use.
 
 ### 14.5 Rendezvous and relationship fold
 
-For each rendezvous generation:
+For each rendezvous generation, require one consistent
+`rendezvous.generationConfigured` and valid DID/key/route dependencies. Its
+live state is method-specific:
 
-- exactly one consistent `rendezvous.generationConfigured` names a rendezvous
-  web DID, key generation, exact document revision/hash, selected
-  authentication and key-agreement fragments, non-empty ingress route set,
-  relationship route, maximum lifetime and request policy;
-- the generation is **live** only when the exact selected revision has a
-  matching `did.documentPublished` observation and every mediated ingress
-  route is currently reconciled;
-- `rendezvous.generationRetired` supplies a terminal `acceptUntil` boundary;
-  and
-- missing, retired or inconsistent dependencies make it unusable and visible
-  as configuration conflict.
+- Peer profile: stored long form and decoded input document match configured
+  keys and bound route, and every selected mediated ingress route is currently
+  reconciled;
+- Web profile: the exact selected revision has a matching
+  `did.documentPublished` observation, and every selected mediated ingress
+  route is currently reconciled.
 
-The local key that decrypts a request must map to exactly one configured
-generation. Missing key/event state or a configured generation that may
-become live is deferred and leaves the mediator delivery unacknowledged. A
-terminally retired or permanently invalid generation is a pre-vault rejection,
-not a deferred request.
+`rendezvous.generationRetired` supplies terminal `admitUntil`. Missing key or
+event state, or a configured generation that can still become live, is
+**deferred** and leaves mediator delivery unacknowledged. A terminally retired
+or permanently invalid generation is a pre-vault rejection.
 
-Group `rendezvous.requestDecided` by request MID/wire ID:
+Group `relationship.admissionDecided` by `inboundMid`. Discard structurally
+invalid decisions and accepts whose parsed RFC 3339 event `at` is not strictly
+before the Epoch-Seconds inbound expiry.
 
-1. discard structurally invalid decisions;
-2. for accept, require event `at < requestExpiresTime`, an eligible
-   generation, valid request lifetime and non-tombstoned deterministic
-   contact;
-3. when any user decision exists, ignore policy decisions;
-4. equal winning decisions are duplicates; and
-5. different winning user decisions are a visible decision conflict.
+For one candidate before a response intent exists:
 
-A policy accept and policy decline produced by partitioned replicas therefore
-do not silently pick a winner. A subsequent single user decision may override
-those policy observations. Two conflicting user decisions remain conflicted.
+1. equal decisions are duplicates;
+2. one valid user decision outranks policy observations;
+3. contradictory user outcomes are a visible conflict;
+4. a timely policy accept outranks a later policy reject with code `expired`;
+   and
+5. otherwise incompatible policy outcomes remain visible conflicts.
+
+A committed natural response, Trust Ping response or Empty ACK intent seals
+that candidate's acceptance for protocol output. Later rejection cannot undo
+already materialized relationship state. Rejection never creates a custom rendezvous decline.
 
 Group `relationship.established` by deterministic relationship ID. Equal
-stable values are one relationship. The identity is derived from public DID
-and authenticated initiator key, not request wire ID. Different stable values
-are an integrity conflict.
+stable values are one relationship. The identity is derived from rendezvous
+DID and authenticated initiator key, not initial wire ID or protocol type.
+Different stable values are an integrity conflict.
 
-For each non-conflicted relationship, collect effective accepted requests and
-order them by:
+For each non-conflicted relationship, collect effective accepted candidates
+and order them by:
 
 ```text
-(requestCreatedTime, requestWireId, generation)
+(inboundCreatedTime, inboundWireId, generation)
 ```
 
-The earliest entry derives `originRequest`, `originGeneration`,
-`theirDid` and `theirLongForm`. These values are not selected by event arrival
-or wall-clock LWW. If effective accepted requests present more than one
-canonical initiator DID for the same peer key, the relationship has a
-sender-DID conflict and no ordinary current remote end.
+The earliest derives `originInbound`, `originGeneration`, `theirDid` and
+`theirLongForm`. If accepted candidates present more than one canonical
+initiator DID for the same peer key, the relationship has a sender-DID conflict
+and no ordinary current remote end.
 
 A valid relationship contributes:
 
 - one deterministic contact;
-- its authenticated bootstrap channel;
-- the future relationship channel;
+- authenticated bootstrap channels;
+- the pairwise relationship channel;
 - one local relationship DID and route;
-- one derived canonical remote Peer DID; and
-- zero or more request-specific accept effects.
+- one canonical remote Peer DID; and
+- zero or more ordinary protocol response effects.
 
-The responder relationship is pending for ordinary outbound use until an
-authenticated message from the initiator relationship channel explicitly
-ACKs an accept and is either a conforming pure ACK or an ordinary pairwise
-message. An ACK carried only by a decline, problem report, public-DID message
-or another channel acknowledges delivery but does not confirm handoff.
+The relationship's pairwise route is confirmed when an authenticated message
+is received at the responder relationship DID. Until then, every package from
+that DID to the contact carries the same verified `from_prior`. An explicit
+ACK naming a receipt-required handoff response controls delivery retry; a
+message merely addressed to the new DID confirms rotation but does not invent
+an ACK.
 
-On the initiator side, a valid accept with valid `from_prior` takes precedence
-over a decline for the same request thread. The `accept.ack` is processed only
-after its proof and addressing validate. A valid `peer.transitioned` changes
-only the named contact's current peer DID. The public predecessor remains
-usable for unrelated contacts and new rendezvous requests.
+A valid `peer.transitioned` changes current peer DID only inside its named
+contact. It never globally retires or aliases the rendezvous DID.
 
 ### 14.6 Peer evidence and contact-scoped attribution
 
@@ -2379,14 +2499,15 @@ For one component:
 - `thread` is the logical application-message union below.
 
 A DID whose local role is `rendezvous` is never included in ordinary
-`writeTo[]`, whether the request is pending, declined or not yet attempted.
-It may be selected only by the explicit rendezvous request procedure. This
-prevents ordinary content from being sent to a public bootstrap address.
+`writeTo[]`, whether bootstrap is pending, rejected or not yet attempted. It
+may be selected only by the explicit initial-message bootstrap procedure. This
+prevents ordinary content from being sent to a rendezvous address.
 
-A responder relationship whose accept has not received a qualifying handoff
-confirmation is visible as pending and is excluded from ordinary `writeTo[]`.
-Queued ordinary outbound content remains durable but cannot be prepared until
-confirmation.
+A responder relationship may enter ordinary `writeTo[]` after effective
+acceptance and pairwise DID creation. Until an authenticated message is
+received at that pairwise DID, every prepared outbound package carries the
+same byte-stable `from_prior`; implementations SHOULD prioritize the selected
+handoff response to minimize reordering.
 
 A fold MUST NOT select one of several current relationship ends by clock
 order. Transition ambiguity, sender-DID disagreement and conflicting user
@@ -2444,7 +2565,7 @@ For a valid outbound:
   non-retryable failure;
 - unresolved holds are exact `delivery.held` events not named by
   `delivery.released`;
-- `receiptRequired` is true exactly when `message.out.pleaseAck` is non-empty;
+- `receiptRequired` is true exactly when `message.out.pleaseAck` is not null;
 - `acknowledged` is true if a valid authenticated inbound `ack` names the
   wire ID on an allowed contact-scoped continuation and all
   protocol-specific proof gates have passed;
@@ -2489,7 +2610,7 @@ An OOB disclosure with `uses == "one"` is open when:
 
 It is taken by the resulting contact component. Concurrent valid takes are
 visible; deterministic automatic IDs prevent duplicate takes of the same
-authenticated request but cannot prevent distinct peers from using a copied
+authenticated initial message but cannot prevent distinct peers from using a copied
 one-use invitation.
 
 A `uses == "many"` rendezvous disclosure remains open until its DID is
@@ -2653,142 +2774,141 @@ mediator registration use the short form.
 Changing keys or bound route creates a new relationship DID and a
 contact-scoped transition. The existing DID entity is not edited.
 
-### 16.5 Configure and publish a rendezvous DID
+### 16.5 Configure and disclose a rendezvous DID
 
-1. choose a public `did:web` string under a controlled domain/path;
+The default Peer profile requires no domain or network resolver:
+
+1. create or choose one reusable route, usually mediated;
 2. mint a UUIDv7 DID entity ID and derive generation-0 authentication and
    key-agreement keys;
-3. append `did.created` with role `rendezvous`;
-4. create or reuse public ingress and relationship routes and append
-   `did.routesSelected`;
-5. construct exact canonical `did.json`, store it and append
-   `did.documentPrepared`;
-6. append `did.documentSelected`;
-7. append `rendezvous.generationConfigured`, including exact document hash,
-   normative key fragments, request policy, maximum request lifetime, ingress
-   routes and relationship route;
-8. upload all events and blobs from steps 1–7 to every sync store required by
-   publication policy and verify they are retrievable;
-9. publish the document provisionally through deployment-specific
-   authenticated means and fetch the standard `did:web` URL to verify exact
-   bytes, hash and DID `id`;
-10. for every mediated ingress route, reconcile recipient registration using
-    the now-resolvable authentication method and append
-    `did.routeRegistered` after success;
-11. fetch the document again and verify the selected bytes remain current;
-12. append `did.documentPublished` only after publication and all mediated
-    registrations verify; and
-13. optionally append `did.disclosed` for a reusable OOB invitation or public
-    profile.
+3. build and validate a `did:peer:4` long form whose input document embeds
+   those keys and exactly that route;
+4. append `did.created`, `did.routesSelected` and
+   `rendezvous.generationConfigured` with canonical short form, exact long
+   form, resolution hash, exact `initialMessageTypes`, admission policy and
+   limits;
+5. upload events and dependencies to every sync store required by disclosure
+   policy;
+6. register the canonical short form on every mediated ingress route and
+   append `did.routeRegistered`; and
+7. append `did.disclosed`, exposing only the rendezvous Peer DID long form in
+   an OOB invitation, QR, file or another discovery object.
 
-The generation is configured before publication but becomes live only after
-step 12 and current route reconciliation. This ordering lets another replica
-learn the new JWE `kid` and derive the same secret before public traffic can
-arrive. A lagging replica that still cannot decrypt retains its mediator
-delivery without ACK until sync completes.
+The Peer generation is live after local long-form validation and current route
+reconciliation. A lagging replica that cannot map the recipient key leaves the
+mediator delivery unacknowledged until sync/refold completes.
 
-The public DID belongs to the vault, not the process serving `did.json`.
+The optional Web facade instead:
 
-### 16.6 Initiate rendezvous
+1. chooses a `did:web` string under a controlled domain/path;
+2. derives keys and appends the Web `did.created` entity;
+3. configures/selects routes;
+4. stores exact canonical `did.json`, then appends
+   `did.documentPrepared`, `did.documentSelected` and
+   `rendezvous.generationConfigured` with `resolution.kind ==
+   "web-revision"`;
+5. sync-publishes portable dependencies;
+6. publishes and fetch-verifies the document;
+7. reconciles mediated recipient registration;
+8. appends `did.documentPublished` after verification; and
+9. optionally appends `did.disclosed` for a reusable URL, OOB invitation or
+   directory profile.
 
-1. learn the peer rendezvous DID through a URL, QR code, directory or manual
-   input;
-2. create/select a contact and append `contact.peerDidAdded` for the public
-   DID;
-3. create one local relationship `did:peer:4`, store both forms and associate
+The Web generation is live only after selected revision and all mediated
+registrations verify. In both profiles the rendezvous DID belongs to the
+vault, not the process displaying the invitation or serving `did.json`.
+
+### 16.6 Send an initial message
+
+1. learn a rendezvous DID through OOB, QR, directory, file or manual input;
+2. create/select a contact and append `contact.peerDidAdded` for that DID;
+3. create one local relationship `did:peer:4`, retain both forms and associate
    it with the contact;
-4. write `rendezvous/1.0/request` and append `message.out`, freezing
-   `createdTime`, `expiresTime`, `pleaseAck == [""]`, body and hashes; this may
-   happen offline;
-5. after the intent exists, reconcile the canonical short-form initiator
-   relationship DID on every selected mediated route and append
-   `did.routeRegistered`; failure leaves the request queued;
-6. resolve the public DID before first preparation and durably store exact
-   `peer.resolved` document bytes/hash and selected key IDs;
-7. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
-   with `because == "rendezvous"`, preferably in the same batch as
-   `message.prepared`;
-8. prepare the request with plaintext `from`, protected authcrypt `skid` and
-   decoded `apu` rooted in the initiator Peer DID long form on first
-   disclosure; and
-9. submit only against the request-bound snapshot/generation and retry until
-   explicit `ack` in accept/decline/problem response, expiry or hold.
+4. select an exact initial message type allowed by the rendezvous profile;
+   when no application content exists, use Trust Ping 2.0 `ping` with
+   `response_requested == true`;
+5. write body/attachments and append `message.out` with finite expiry,
+   `pleaseAck == []`, OOB invitation ID as `pthid` when applicable, and all
+   hashes; this may happen offline;
+6. after intent exists, register the initiator relationship DID canonical
+   short form on selected mediated routes;
+7. resolve the rendezvous DID and append exact `peer.resolved` evidence;
+8. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
+   with `because == "rendezvous"`;
+9. prepare using initiator Peer DID long form in plaintext `from`, protected
+   `skid` and decoded `apu`; and
+10. submit against the pinned generation and retry until explicit ACK, expiry
+    or hold.
 
-If current time reaches the durable expiry before preparation or retry, append
-message-scoped non-retryable `delivery.failed` with code `expired` and submit
-nothing. A replacement request uses a new wire ID but normally reuses the same
-initiator relationship key unless the contact was deleted.
+The first message is the real Trust Ping or application message. It is not
+wrapped in a custom rendezvous message.
 
-Attaching the bootstrap channel lets a decline or problem response from the
-public DID attribute to this contact before pairwise handoff. The public DID
-is never placed in ordinary `writeTo`; only this explicit procedure may use
-it as a target.
+If current time reaches expiry before preparation or retry, append
+message-scoped non-retryable `delivery.failed(code="expired")` and submit
+nothing. A replacement initial message uses a new wire ID but normally reuses
+the same initiator relationship key unless the contact was deleted.
 
-### 16.7 Decide and accept or decline rendezvous
+The rendezvous DID is never placed in ordinary `writeTo`; only this explicit
+bootstrap procedure targets it.
 
-For a mediator delivery addressed to a public rendezvous key:
+### 16.7 Admit and establish a relationship
 
-1. attempt decryption using the protected recipient `kid`;
-2. when the key/generation is absent, or configured but not yet live and may
-   become live, retain the delivery unacknowledged, record only local deferred
-   state, sync/refold and retry;
-3. after authenticated decryption, run the `rendezvous/1.0` pre-vault gate
-   before `message.in`: reject wrong message type or recipient, invalid
-   long-form/`skid`/`apu`, terminal generation, expired/malformed request,
-   silent policy and hard admission-limit overflow;
-4. for a pre-vault rejection, ACK the mediator delivery after safe
-   classification, retain at most a bounded local diagnostic, and create no
-   portable message/contact/relationship state or ultimate ACK;
-5. for an admitted ask/auto/decline candidate, store blobs and append
-   `message.in`, then ACK this replica's mediator delivery;
-6. validate tombstone and sender-DID consistency, then obtain a durable
-   `rendezvous.requestDecided` outcome.
+For a delivery addressed to a rendezvous key:
 
-An accept decision is valid only when its event time is before
-`requestExpiresTime`. After expiry the only new outcomes are decline with
-code `expired` while that response can still be sent, or ignore.
+1. attempt decryption using protected recipient `kid`;
+2. when the key/generation is absent, or configured but not live and still
+   capable of becoming live, retain the delivery unacknowledged, record only
+   bounded local deferred state, sync/refold and retry;
+3. after authenticated decryption, run `rendezvous.md`'s hard pre-vault gate
+   before `message.in`;
+4. safely classified hard rejection MUST be pickup-ACKed and leaves no
+   portable message/contact/relationship state;
+5. for an admitted candidate, store retained bytes, append `message.in`, then
+   ACK this replica's mediator delivery;
+6. append or await `relationship.admissionDecided` according to `ask`, `auto`
+   or local policy; and
+7. do not materialize a relationship while the effective decision is
+   conflicted.
 
-For `ignore`, stop without a response.
+An accept is valid only when the decision event instant is strictly before the
+candidate's Epoch-Seconds expiry. Equality is expired. After expiry, a new
+decision can only reject or ignore.
 
-For `decline`, append the effective decision and deterministic decline
-`message.out` before any resolution, encryption or submission. The intent has
-`thid == request wire ID`, `ack == [request wire ID]` and
-`pleaseAck == []`. Any replica may later prepare and retry it until its first
-successful submission, expiry or hold. Receipt of another copy of the request
-may re-submit the same exact decline package.
+For effective reject or ignore, create no relationship DID. Rejection may be
+silent or may produce a protocol-specific error or Report Problem 2.0 intent,
+which is appended before any resolution, preparation or submission.
 
-For `accept`:
+For effective accept:
 
-1. derive stable relationship, local DID and contact IDs from public DID and
-   authenticated initiator key; request wire ID is not part of those IDs;
+1. derive stable relationship, contact and local pairwise DID IDs from
+   rendezvous DID and authenticated initiator key;
 2. reject acceptance when the deterministic contact is tombstoned or the same
-   initiator key presents a conflicting canonical Peer DID;
-3. if no stable relationship exists, derive the responder relationship DID's
-   keys and both Peer DID forms using the common relationship route; otherwise
-   reuse the existing DID and route;
-4. append, preferably in one `appendAll`, the accept decision, any new
-   `contact.created`, bootstrap/future `contact.attached`, `did.created`,
-   `contact.useDid`, request-independent `relationship.established`, and the
-   deterministic accept `message.out`;
-5. only after that durable batch, reconcile recipient registration for the
-   responder pairwise DID's canonical short form;
-6. prepare `accept`, disclosing the long-form responder DID in plaintext
-   `from` and authcrypt `skid`/decoded `apu`, and sign request-specific
-   `from_prior` with the request-bound public authentication key; and
-7. submit and retry until ultimate ACK, expiry or hold.
+   key presents another canonical initiator DID;
+3. derive/reuse the responder relationship DID and common relationship route;
+4. choose the handoff response: Trust Ping `ping-response`; an already-due
+   and safe natural application response; or otherwise an Empty Message ACK;
+5. append, preferably in one batch, the admission decision, any new
+   `contact.created`, bootstrap/pairwise `contact.attached`, `did.created`,
+   `contact.useDid`, `relationship.established`, and deterministic response
+   `message.out`;
+6. response intent explicitly ACKs the initial wire ID, has
+   `pleaseAck == []`, uses the deterministic handoff timestamps in section 13,
+   and is sent from the responder relationship DID with initial-message-bound
+   `from_prior`;
+7. only after the durable batch, register the responder pairwise DID canonical
+   short form;
+8. prepare with long-form first-disclosure sender evidence; and
+9. submit and retry until explicit ACK, expiry or hold.
 
-`relationship.established` contains no race-selected `originGeneration` or
-remote-DID winner. The fold derives provenance and the canonical remote DID
-from effective accepted request decisions. Repeated request wire IDs for one
-stable initiator DID reuse the relationship but get separate threaded effects.
+Repeated initial messages for the same stable initiator key reuse the
+relationship but remain separate application messages with separate ordinary
+automatic effects.
 
-If replicas produce accept and decline policy decisions concurrently, further
-automatic response and ordinary relationship traffic are suspended. A
-durable user decision overrides policy observations. Two conflicting user
-decisions remain visible and require manual recovery.
-
-Ordinary outbound messages from the responder relationship DID remain queued
-but unprepared until a qualifying pairwise-channel ACK confirms one accept.
+Until an authenticated message arrives at the responder pairwise DID, every
+outbound package from that DID to the contact carries the same byte-stable
+`from_prior`. Ordinary messages may therefore be prepared without becoming
+unattributed even if they overtake the selected response, though the runtime
+SHOULD prioritize the response.
 
 ### 16.8 Send an ordinary message
 
@@ -2796,98 +2916,114 @@ The synchronous full-vault send operation:
 
 1. writes attachment blocks;
 2. writes the stored message document;
-3. selects durable `createdTime`, optional `expiresTime`, exact ordered
-   `pleaseAck` and `ack` values, and a complete `headers` map that excludes all
-   reserved fields including `return_route`;
+3. selects durable `createdTime`, optional `expiresTime`, exact `pleaseAck`
+   value (null or array), exact ordered `ack`, and a complete `headers` map;
 4. computes semantic and intent hashes;
-5. rejects a public rendezvous DID as an ordinary write target;
+5. rejects a rendezvous DID as an ordinary relationship target;
 6. appends `message.out`; and
 7. returns `mid` and `wireId`.
 
-It performs no network operation. A non-empty `pleaseAck` selects
-receipt-required completion; an empty array selects submission-terminal
-completion.
+It performs no network operation. `pleaseAck != null`, including `[]`, selects
+receipt-required completion. Null selects submission-terminal completion.
 
 Any replica may later:
 
-1. stop if the message is held, acknowledged, terminally failed, expired, or
+1. stop when held, acknowledged, terminally failed, expired, or
    submission-terminal and already submitted;
-2. fold the target contact/channel;
-3. defer if the selected responder relationship is awaiting handoff
-   confirmation;
-4. choose a valid sender DID, peer DID/key and exact resolution evidence;
-5. construct the complete plaintext by copying all intent-time headers rather
-   than generating a new `created_time`, injecting `return_route`, defaulting
-   an extension header or silently dropping one;
-6. compute plaintext hash, encrypt, store exact envelope bytes and append
+2. fold target contact/channel;
+3. choose valid sender DID, peer DID/key and exact resolution evidence;
+4. attach the stable contact-scoped `from_prior` while the selected pairwise
+   transition remains unconfirmed;
+5. construct complete plaintext by copying every intent-time header;
+6. compute plaintext hash, encrypt, store exact envelope and append
    `message.prepared`;
 7. submit directly or through Routing 2.0 with `packageId == forward.id`;
 8. append submitted or failed observation; and
-9. retry according to completion mode until terminal state.
+9. retry according to completion mode.
 
-A new package may change `from`, `to`, selected keys or `from_prior` only
-under the validated contact-scoped repack rules while preserving semantic and
-intent hashes. The receiving fold may join equal wire IDs across the verified
-peer-key transition in the same contact. A lease may reduce duplicate work but
-is not required for correctness.
+A new package may change address/security evidence only under validated
+repack rules while preserving semantic and intent hashes. Receiving may join
+equal wire IDs across a verified peer-key transition in one contact.
 
 ### 16.9 Receive a message
 
 For every pickup or direct delivery:
 
 1. if the ultimate key is locally unknown, or belongs to a configured
-   rendezvous generation that may become live but is not live yet, keep a
-   pickup delivery pending, sync/refold and retry without pickup ACK;
-2. authenticate, decrypt and validate the complete innermost message,
-   including Peer DID long-form and authcrypt sender evidence;
-3. when addressed to a public rendezvous DID, run section 16.7's bounded
-   pre-vault gate; a classified rejection may be pickup-ACKed and discarded
-   without `message.in`;
+   rendezvous generation that may become live but is not live, keep the
+   delivery pending, sync/refold and retry without pickup ACK;
+2. authenticate, decrypt and validate complete innermost message, including
+   Peer DID long-form and authcrypt sender evidence;
+3. when addressed to a rendezvous DID, run section 16.7's bounded pre-vault
+   gate; safely classified rejection MUST be pickup-ACKed without
+   `message.in`;
 4. for admitted or ordinary traffic, derive channel, observation MID,
    semantic hash, intent hash and exact plaintext hash;
-5. write retained body and attachment blocks and the stored message document;
-6. append `message.in` durably together with applicable `channel.firstSeen`,
-   exact `peer.resolved`, required contact attachment and non-controversial
-   lifted profile observations;
+5. write retained body and attachment blocks and stored message document;
+6. append `message.in` durably with applicable `channel.firstSeen`, exact
+   `peer.resolved`, contact attachment and non-controversial lifted
+   observations;
 7. only then ACK this replica's mediator delivery;
-8. validate every package-level continuation required by the message's
-   protocol; in particular, verify an accept's `from_prior`, long-form DID and
-   addressing before treating it as a continuation;
-9. after successful validation, append `peer.transitioned` when applicable and
-   process validated ACK values into idempotent `delivery.acknowledged`
-   events;
-10. schedule idempotent automatic effects or rendezvous admission decisions;
-11. when `pleaseAck` is requested, create or reuse the deterministic natural
-    response/pure-ACK effect; and
-12. when a duplicate observation of that request arrives, re-submit the same
-    already-prepared response package with bounded debounce rather than
-    creating a new effect or package.
+8. before processing ACK values or continuation, validate every package-level
+   proof; for an unknown DID carrying `from_prior`, validate it against exact
+   pinned historical evidence first;
+9. after successful validation, append `peer.transitioned` when applicable
+   and process explicit `ack` values into idempotent
+   `delivery.acknowledged`;
+10. schedule deterministic application effects or
+    `relationship.admissionDecided`;
+11. when `pleaseAck` is present, create or reuse the natural response or
+    pure-ACK effect; and
+12. on duplicate receipt, re-submit the same already-prepared response package
+    rather than creating another effect or package.
 
-Steps 5–6 SHOULD use one atomic batch where supported. A backend without an
-atomic batch appends `message.in` first, then derived observations; no lifted
-observation is sole evidence for an uncommitted message.
+Steps 5–6 SHOULD use one atomic batch. A backend without atomic batch appends
+`message.in` first; no lifted observation is sole evidence for an uncommitted
+message.
 
-A conforming pure ACK is retained for audit and ACK processing but excluded
-from user threads, unread counts, notifications and application handlers. It
-has no `pleaseAck`, so its first successful submission ends normal background
-retry. Duplicate delivery of the message it acknowledges may nevertheless
-trigger re-submission of that same exact ACK package.
+A conforming pure ACK is retained for audit and delivery processing but
+excluded from user threads, unread counts, notifications and application
+handlers. It has `pleaseAck == null`, so first successful submission ends
+normal retry. Duplicate delivery of the message it acknowledges may still
+trigger re-submission of that exact ACK package.
 
-A crash before durable message commit leaves the mediator delivery pending. A
+A crash before durable message commit leaves mediator delivery pending. A
 crash after commit but before pickup ACK causes redelivery and another valid
-duplicate observation. A natural response acknowledges a request only when
-its explicit `ack` array names the request wire ID.
+duplicate observation.
 
-### 16.10 Retire a replica
+### 16.10 Retire or re-incarnate a replica
 
-1. append `replica.retired` for the target;
+To retire another replica deliberately:
+
+1. append `replica.retired` for the target with a stable `because` value;
 2. synchronize the event;
 3. every active replica reconciles retirement to every shared mediation
    account; and
 4. labels and historical events remain.
 
-This procedure does not secure a stolen seed. Security recovery requires
-root or communication-key rotation outside `replica-mediation/1.0`.
+When a running local copy learns from any required mediator that its own
+current replica ID was terminally retired—for example by an advertised
+inactivity policy—it MUST perform one local re-incarnation:
+
+1. pause new appends, pickup ACKs, live delivery and outbound submission;
+2. finish or safely checkpoint local durable writes; old-author events remain
+   ordinary sync objects;
+3. atomically replace both `replica_id` and `store_generation` in
+   `local/replica.json` with fresh UUIDv7 values;
+4. reopen every local event store with the new author and invalidate all local
+   change tokens/caches tied to the old store generation;
+5. append `replica.retired` naming the old ID with
+   `because == "inactivity-policy"` unless equivalent portable state already
+   exists;
+6. register the new ID on every required mediation, requesting retained
+   replay, then reconcile the old ID as retired on the remaining mediators;
+7. resume sync, pickup and outbound work only under the new ID.
+
+A single mediator's terminal response rotates the local replica ID globally;
+a runtime MUST NOT use one author/ACK identity on some mediators and another
+on others. This procedure does not secure a stolen seed. Security recovery
+requires root or communication-key rotation outside
+`replica-mediation/1.0`.
 
 ### 16.11 Erase a message
 
@@ -2911,7 +3047,7 @@ are considered intentionally released.
 3. retire relationship DIDs exclusively associated with the deleted
    component;
 4. retire or unregister their routes;
-5. preserve a shared public rendezvous DID unless separately retired; and
+5. preserve a shared rendezvous DID unless separately retired; and
 6. collect unheld blocks after grace.
 
 A later merge cannot revive a tombstoned member. A newly discovered component
@@ -2943,7 +3079,7 @@ may be repaired from another replica or `vault-sync/1.0`.
 ### 17.3 Replica synchronization
 
 `vault-sync/1.0` exchanges encrypted immutable root, event and block
-objects. Public DID entities, selected document revisions, relationship DIDs
+objects. Rendezvous DID entities, optional selected Web document revisions, relationship DIDs
 and scoped transitions are ordinary encrypted events and blobs; the sync
 store receives no special web role metadata. It does not synchronize:
 
@@ -2963,8 +3099,8 @@ register itself with each required mediator, replay retained mailbox
 messages and continue every non-held, non-acknowledged outbound message.
 
 If the restored runtime also receives deployment authority for a selected
-`did:web`, it may reconcile and publish the same document revision. This does
-not make it the owner of the public DID in vault semantics. A restored full
+optional `did:web` rendezvous facade, it may reconcile and publish the same document revision. This does
+not make it the owner of the rendezvous DID in vault semantics. A restored full
 replica without publication authority can still use every established
 pairwise relationship and mediated route.
 
@@ -2988,12 +3124,12 @@ author remain unchanged.
 - Retiring a replica does not revoke an extracted seed.
 - The readable folder contains plaintext retained message content and
   attachments unless surrounding storage encrypts it.
-- A rendezvous DID is intentionally public, reusable and correlatable. DNS,
-  the web publisher, resolvers and the mediator may observe discovery
-  metadata.
+- A rendezvous DID is intentionally disclosed and correlatable within its
+  audience. A Peer profile avoids DNS resolution; an optional Web profile also
+  exposes DNS, publisher and resolver metadata.
 - A relationship DID SHOULD be disclosed only through encrypted interaction
-  and MUST NOT appear in a reusable public invitation or public DID document.
-- A valid public-to-pairwise `from_prior` is stored only as contact-scoped
+  and MUST NOT appear in a reusable public invitation or rendezvous DID document.
+- A valid rendezvous-to-pairwise `from_prior` is stored only as contact-scoped
   evidence. It MUST NOT globally link pairwise relationships created for
   different contacts.
 - `replica-mediation/1.0` stores only encrypted inner DIDComm envelopes and
@@ -3009,7 +3145,7 @@ author remain unchanged.
   replica received first.
 - Ordinary `did:web` publication depends on DNS, HTTPS and deployment
   authorization. Vault events preserve desired and observed revisions but do
-  not provide an append-only public DID history.
+  not provide an append-only rendezvous DID history.
 - Event authorship does not authenticate one full replica against another
   malicious holder of the seed.
 
@@ -3029,142 +3165,102 @@ There is no migration requirement from an earlier event vocabulary.
 ## 20. Required conformance cases
 
 1. Every local event has `author == local replica_id`.
-2. A full replica on a server has the same event and pickup semantics as a
-   local full replica; a thin client without seed is not an author.
+2. A server full replica has the same event and pickup semantics as a local
+   full replica; a thin client without seed is not an author.
 3. Mediation and communication keys created by one replica are derivable by
    another full replica.
 4. Replica retirement changes delivery policy but does not invalidate events
    or revoke the shared seed.
-5. A send commits body, attachments and `message.out` with all networking
-   disabled.
-6. `message.out` freezes created time, expiry, receipt request, piggyback ACK
-   array and every permitted additional header.
-7. `return_route` is rejected in vault application-message headers and cannot
-   vary by preparer.
-8. Semantic hash covers application ID/type/thread/body/ordered attachments;
-   intent hash additionally covers immutable control headers; plaintext hash
-   covers one complete DIDComm plaintext.
-9. Two packages for one outbound may differ in valid address/security
-   evidence but agree on wire ID, semantic hash and intent hash.
-10. Changing body, type, thread or attachment order under one wire ID is a
-    semantic conflict.
-11. Changing created time, expiry, `please_ack`, `ack` or an extension header
-    under one wire ID is an intent conflict and triggers no disputed effect.
-12. Retrying one package preserves identical envelope bytes and package ID.
-13. A permitted repack changes package ID and plaintext hash while preserving
-    message ID, wire ID, semantic hash and intent hash.
+5. Mediator-reported terminal retirement causes atomic replacement of local
+   `replica_id` and `store_generation`; old-author events remain valid.
+6. A send commits body, attachments and `message.out` with networking disabled.
+7. `message.out` freezes created time, expiry, nullable `pleaseAck`, ordered
+   `ack` and every permitted additional header.
+8. Null `pleaseAck` means no wire header and submission-terminal completion;
+   present `[]` emits an empty `please_ack` header and requests receipt.
+9. Empty-string `please_ack` sentinels and current wire ID inside the array are
+   rejected.
+10. `return_route` is rejected in vault application headers.
+11. Semantic hash covers application ID/type/thread/body/ordered attachments;
+    intent hash additionally covers immutable control headers; plaintext hash
+    covers one exact DIDComm plaintext.
+12. Two packages may differ in valid address/security evidence while agreeing
+    on wire ID, semantic hash and intent hash.
+13. Retrying one package preserves identical plaintext, envelope and package
+    ID.
 14. HTTP success produces `delivery.submitted`, never acknowledgment.
-15. Empty `pleaseAck` makes first successful submission the end of normal
-    background retry; non-empty `pleaseAck` waits for ultimate ACK or another
-    terminal state.
-16. A natural response acknowledges an outbound only when its explicit,
-    authenticated `ack` array names the wire ID.
-17. A message that reaches durable expiry records message-scoped
-    non-retryable failure and is no longer prepared or submitted.
-18. A valid late ACK may derive `acknowledged` with `late == true` but never
-    restarts an expired message.
-19. More than one replica receiving the same authenticated variant derives the
-    same observation MID and one logical message.
-20. Different semantic or intent hash under one inbound observation MID is a
-    conflict and suppresses automatic effects and disputed ACK processing.
-21. Equal wire IDs received under peer keys connected by a verified transition
-    in one contact merge into one logical message even though observation MIDs
-    differ.
-22. Equal wire IDs from unrelated or unverified peer keys remain separate or
-    conflicted.
-23. A conforming pure ACK is stored and processed but excluded from threads,
+15. A natural response acknowledges an outbound only when authenticated
+    explicit `ack` names its wire ID.
+16. Expiry irreversibly ends work; later valid evidence may display
+    acknowledged-late without restarting it.
+17. Equal authenticated variants derive one observation MID. Equal wire IDs
+    under transition-verified peer keys in one contact merge only at the
+    logical-message layer.
+18. Semantic/intent conflicts suppress disputed automatic effects and ACK
+    processing.
+19. Pure Empty ACK is retained and processed but excluded from threads,
     unread counts, notifications and application handlers.
-24. The pure-ACK fixed input derives effect ID
-    `Pq2QwoCogLZIy8AtxGjbmtwAKdQyJoCatxh8IjL3o7o`, MID
-    `b7a605bc-8b0d-5471-acf7-e09389822f6a`, wire ID
-    `fc5bdb53-9075-5a3b-89c4-8e4c4100aede`, and the triggering created time.
-25. Duplicate receipt of a `please_ack` message re-submits the same prepared
-    response/ACK package rather than creating another effect or package.
-26. Pickup ACK follows durable `message.in` and retained blobs for ordinary
-    accepted traffic.
-27. Ciphertext whose JWE `kid` is unavailable, or maps to a generation that
-    may become live but is not live yet, remains unacknowledged and is retried
-    after sync/fold changes.
-28. Public-rendezvous input rejected by message type, silent policy or a hard
-    admission bound may be pickup-ACKed before `message.in` and leaves only
-    bounded local diagnostics.
-29. `peer.resolved` retains exact canonical DID document bytes/hash and exact
-    presented/canonical DID forms.
-30. Peer DID numalgo 4 uses long form on first plaintext and authcrypt
-    `skid`/decoded-`apu` disclosure, and canonical short form afterward and for
-    mediator registration.
-31. `peer.transitioned` verifies `from_prior` against the exact named
-    historical resolution event; missing evidence defers rather than rejects.
-32. An accept's `ack` is ignored until its long form, addressing and
-    `from_prior` have validated.
-33. A reusable public invitation contains a rendezvous DID and no relationship
-    DID.
-34. A rendezvous generation configuration is durable and sync-published
-    before public document exposure and is not live until publication and
-    mediated-route registration verify.
-35. Public generation policy defaults to `ask`; `auto` is explicit and
-    bounded; `silent` creates no response or permanent inbound message.
-36. A rendezvous request can be queued offline and is not rejected solely for
-    old `created_time` while it remains unexpired and within maximum lifetime.
-37. The initiator commits request intent before registering its pairwise DID,
-    then makes that DID reachable before first submission.
-38. The initiator attaches the authenticated bootstrap channel before or with
-    request package preparation, allowing decline/problem attribution.
-39. Accept, decline and request-triggered problem responses explicitly ACK the
-    request wire ID; accept requests its own ACK while decline is
-    submission-terminal.
-40. Two request wire IDs from the same `(public DID, initiator key)` derive one
-    relationship/contact/responder DID and separate threaded response effects.
-41. A tombstoned deterministic contact is not resurrected; reconnect requires
-    a fresh initiator relationship key.
-42. Concurrent replicas accepting one request derive equal relationship,
-    contact, DID and response IDs.
-43. An accept decision committed after request expiry is invalid; after expiry
-    only decline-with-`expired` or ignore can be newly decided.
-44. A valid accept delayed in transit may still take precedence over decline
-    while the accept's own expiry is live and is marked late when applicable.
-45. Conflicting responder policy decisions are surfaced; one user decision
-    outranks them and two conflicting user decisions remain conflicted.
-46. Reuse of one initiator sender key under another canonical Peer DID is a
-    sender-DID conflict and cannot rewrite `theirDid`.
-47. `relationship.established` contains no race-selected origin generation or
-    remote DID; the fold derives origin and remote DID from the earliest
-    effective accepted request.
-48. The responder commits accept intent before registering its pairwise DID,
-    and registers before accept preparation/submission.
-49. The responder discloses a relationship Peer DID long form in accept
-    plaintext and authcrypt sender headers; the initiator stores and uses its
-    short form thereafter.
-50. Ordinary responder pairwise packages remain deferred until a qualifying
-    pairwise-channel message ACKs an accept.
-51. An ACK in a decline, problem report, public-DID message or another channel
-    does not confirm rendezvous handoff.
-52. A rendezvous public DID is excluded from ordinary `writeTo`; only the
-    explicit rendezvous request procedure targets it.
-53. A valid `from_prior` changes current peer DID only in the named contact;
-    the public DID remains active for unrelated initiators.
-54. Two contacts may transition from one public DID to different pairwise DIDs
-    without becoming one identity component.
-55. A public and pairwise DID may select the same reusable mediated route and
-    receive identical per-replica fan-out.
-56. `did.routeRegistered` is historical observation; reconnect still queries
-    and reconciles mediator state.
-57. A selected `did:web` revision is current only when fetched bytes/hash and
-    DID `id` match.
-58. Established pairwise traffic remains usable when the public publisher is
-    unavailable.
-59. A late replica replays unexpired mediator messages independently of other
-    replicas' ACKs.
-60. A retired or terminally failed package no longer pins its encrypted
-    envelope unless another event holds it.
-61. Erasure is checked before block presence; missing non-erased bytes are not
-    displayed as deletion.
-62. Contact merge is an order-independent undirected component and multiple
-    current relationship ends are surfaced rather than chosen by LWW.
-63. Restore without `local/` creates a new replica that resumes mediation,
+20. Pure ACK has `pleaseAck == null`; its first successful submission is
+    terminal and creates no ACK loop.
+21. Duplicate receipt of a message with present `please_ack` re-submits the
+    same prepared response/ACK package.
+22. Pickup ACK follows durable message/blob commit for admitted traffic.
+23. Ciphertext for an unknown or configured-but-not-live rendezvous generation
+    remains unacknowledged and is retried after sync/fold changes.
+24. Safely classified hard pre-vault rejection is pickup-ACKed before any
+    `message.in` and leaves only bounded local diagnostics.
+25. `peer.resolved` retains exact canonical document bytes/hash,
+    presented/canonical DID forms and selected key IDs.
+26. Peer DID first disclosure uses one identical long-form spelling in
+    plaintext `from`, protected `skid` and decoded `apu`.
+27. A reusable invitation contains a rendezvous DID and no relationship DID;
+    the default Peer path requires no DNS or Web DID.
+28. A Peer generation becomes live from validated long-form state and route
+    reconciliation; a Web generation additionally requires exact publication.
+29. `initialMessageTypes` is exact and non-empty; Trust Ping `ping` is
+    supported by every implementation.
+30. The first bootstrap message is an ordinary allowlisted protocol message,
+    not an Estoc rendezvous wrapper.
+31. `relationship.admissionDecided` records a local accept/reject/ignore
+    decision and does not prescribe a wire response type.
+32. Two initial wire IDs from the same `(rendezvous DID, initiator key)` derive
+    one relationship/contact/responder DID and remain separate messages.
+33. A deterministic contact tombstone is not resurrected; reconnect requires a
+    fresh initiator relationship key.
+34. Event `at` is parsed as RFC 3339 and compared with Epoch-Seconds expiry as
+    an instant; equality is expired.
+35. Only effective acceptance may materialize pairwise relationship state.
+36. A later rejection cannot reverse an already committed handoff response;
+    ending the relationship uses contact deletion and DID/route retirement.
+37. Reuse of one initiator key under another canonical Peer DID is a
+    sender-DID conflict.
+38. Stable `relationship.established` omits race-selected origin fields; fold
+    derives origin from the earliest effective accepted candidate.
+39. Response intent precedes pairwise recipient registration, and registration
+    precedes submission.
+40. Trust Ping is the default no-content initial message; an allowlisted
+    application message may be first without wrapping.
+41. The first response is a natural protocol response, Trust Ping
+    `ping-response`, or Empty Message ACK.
+42. A handoff response carries explicit ACK, present `pleaseAck == []`,
+    long-form responder Peer DID and verified initial-message-bound `from_prior`.
+43. `peer.transitioned` verifies `from_prior` before applying response ACK.
+44. Until an authenticated message arrives at the responder pairwise DID,
+    every package from it carries the same byte-stable `from_prior`.
+45. A rejected bootstrap emits no custom decline; optional explicit rejection
+    uses a normal protocol error or Report Problem 2.0.
+46. A rendezvous DID is excluded from ordinary `writeTo`; initial-message
+    procedure is the only ordinary sender path targeting it.
+47. Contact-scoped transition does not globally retire or union the rendezvous
+    DID with unrelated relationships.
+48. Peer/Web rendezvous and relationship DIDs may reuse one mediated route and
+    retain per-replica ACK isolation.
+49. `did.routeRegistered` and `did.documentPublished` are observations that
+    reconnect must revalidate.
+50. Established pairwise traffic remains usable when an optional Web publisher
+    is unavailable.
+51. Erasure is checked before block presence; late roots receive equivalent
+    erasure closure.
+52. Restore without `local/` creates a new replica that resumes mediation,
     pickup, sync, publication reconciliation and eligible outbox work.
-64. Extension purge removes its store but leaves lifecycle events.
-65. Shuffling all events leaves every fold result unchanged.
-66. Sync configuration survives folder export; retiring one sync store does
-    not delete remote ciphertext or block another usable store.
-67. No correctness rule depends on one replica remaining online.
+53. Shuffling the same event set leaves every fold result unchanged.

@@ -19,9 +19,9 @@ each replica acknowledges independently.
 
 The recipient DID may be:
 
-- a public rendezvous DID, normally `did:web`, used for the first encrypted
-  relationship request; or
-- a pairwise relationship DID, normally `did:peer:4`, used after handoff.
+- a rendezvous DID, by default self-resolving `did:peer:4` and optionally
+  `did:web`, used for an encrypted initial relationship message; or
+- a pairwise relationship `did:peer:4`, used after handoff.
 
 The mediator applies identical storage, fan-out and pickup semantics to both.
 It does not need to know the vault role of a recipient DID.
@@ -37,9 +37,10 @@ mediator stores one encrypted inner DIDComm envelope, creates one
 acknowledgment as another replica's.
 
 This protocol does not synchronize the vault event set. That is
-`vault-sync/1.0`. It does not define public-to-pairwise handoff; that is
-`rendezvous/1.0`. It does not make one full replica less trusted than another,
-and it does not make a lost copy of the shared seed revocable.
+`vault-sync/1.0`. It does not define rendezvous-to-pairwise handoff; that is
+the processing profile in `rendezvous.md`. It does not make one full replica
+less trusted than another, and it does not make a lost copy of the shared seed
+revocable.
 
 ## 2. Dependencies
 
@@ -51,7 +52,8 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- `rendezvous/1.0` for the optional public-to-pairwise handoff; and
+- the processing profile in `rendezvous.md` for rendezvous-to-pairwise
+  handoff; and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -69,14 +71,14 @@ advisory; successful `register` is the authoritative capability check.
   Coordinate Mediation arrangement with a mediator. It is shared by all
   full replicas of the vault.
 - **Recipient DID** — any DID registered under the mediation account and
-  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a
-  public rendezvous DID or a pairwise relationship DID. The mediator does
-  not assign semantics based on its method or role.
+  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a Peer or Web rendezvous DID or a pairwise relationship
+  DID. The mediator does not assign semantics based on method or role.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
   incarnation for event provenance, delivery and acknowledgment. It is
   stored as `local/replica.json.replica_id`, is also used as the author of
   events produced by that incarnation, and is not a key or authorization
-  boundary. There is no second identity for the execution host or operating system.
+  boundary. There is no second identity for the execution host or operating
+  system.
 - **Mailbox message** — one retained encrypted inner DIDComm envelope,
   stored once under a mediation account.
 - **Delivery** — one replica's pending right to obtain a mailbox message.
@@ -93,8 +95,7 @@ Retiring a replica changes future delivery policy. It does not erase a
 seed already copied into that local incarnation, revoke communication
 keys, or stop a holder of the seed from deriving the mediation account
 and registering a new replica ID. Recovering from a hostile or lost full
-replica requires
-rotation of the affected root secret or communication identities and is
+replica requires rotation of the affected root secret or communication identities and is
 outside this protocol.
 
 ## 4. Invariants
@@ -120,8 +121,8 @@ A conforming mediator MUST preserve all of the following:
    ultimate recipient durably received the application message.
 9. A sender addresses a recipient DID, never a replica ID. Replica fan-out is
    an internal mailbox operation.
-10. Public rendezvous and pairwise relationship DIDs receive the same
-    per-replica delivery semantics.
+10. Peer or optional Web rendezvous DIDs and pairwise relationship
+    DIDs receive the same per-replica delivery semantics.
 
 ## 5. Replica lifecycle
 
@@ -134,8 +135,9 @@ A replica is either `active` or `retired`:
                                                    └── terminal
 ```
 
-A retired replica ID MUST NOT become active again. A returning or newly created independently writable local incarnation
-mints a fresh replica ID.
+A retired replica ID MUST NOT become active again. A returning or
+newly created independently writable local incarnation mints a fresh replica
+ID.
 
 The default version-1.0 policy has no inactivity lease: a replica remains
 active until an authenticated `retire` request. A mediator MAY instead
@@ -336,8 +338,10 @@ https://estoc.dev/replica-mediation/1.0/retire
 }
 ```
 
-`reason` is OPTIONAL and is one of `user`, `replaced`, `lost`, or
-`other`. It is diagnostic only.
+`reason` is OPTIONAL and is one of `user`, `replaced`, `lost`,
+`inactivity-policy`, `fork-recovery`, or `other`. An automatic retirement uses
+`inactivity-policy`. The value is diagnostic and does not change the terminal
+state.
 
 The mediator MUST atomically mark the replica retired and remove or mark
 terminal all unacknowledged deliveries for that replica. It MUST NOT
@@ -360,10 +364,38 @@ https://estoc.dev/replica-mediation/1.0/retired
   "body": {
     "replica_id": "019b1947-a249-79e1-a297-cb5437d1494e",
     "state": "retired",
+    "reason": "inactivity-policy",
     "retired_time": 1788443100
   }
 }
 ```
+
+`reason` is the retained reason when known and null when a legacy/operator
+retirement did not preserve one.
+
+### 5.7 Client re-incarnation after terminal retirement
+
+If `register`, `list`, status, live delivery or another authenticated mediator
+response says that the client's **current** replica ID is retired, the client
+MUST treat the ID as terminal even when `local/` is otherwise intact. It MUST:
+
+1. stop new event appends, pickup ACKs, live registration and outbound
+   submission under the old ID;
+2. durably finish or checkpoint local work; events already authored by the old
+   ID remain valid sync objects;
+3. atomically mint and store a fresh `replica_id` and `store_generation` in
+   `local/replica.json`;
+4. reopen local event stores under the new author and discard change tokens or
+   caches bound to the old generation;
+5. append or reconcile `replica.retired` for the old ID with the mediator's
+   stable reason, including `inactivity-policy` when applicable;
+6. register the new ID with retained replay on **every** required mediation
+   account, and retire the old ID on remaining accounts; and
+7. resume pickup, sync and outbound work only under the fresh ID.
+
+A terminal response from one required mediator rotates the local replica ID
+for all mediators. A runtime MUST NOT split event authorship and ACK identity
+by keeping the old ID on another arrangement.
 
 ## 6. Coordinate Mediation profile
 
@@ -371,10 +403,11 @@ The mediation account remains the one `recipient` in Coordinate Mediation
 3.0. All full replicas derive and use that account key. Recipient DIDs are
 registered once per mediation arrangement, not once per replica.
 
-Registration is method-neutral. A `did:web` rendezvous DID and canonical
-short-form `did:peer:4` relationship DID may be registered under the same
-account. The recipient-control proof is verified against an authentication
-method of the exact recipient DID.
+Registration is method-neutral. A canonical short-form Peer rendezvous
+DID, an optional `did:web` rendezvous DID, and canonical short-form pairwise
+`did:peer:4` relationship DIDs may all be registered under the same account.
+The recipient-control proof is verified against an authentication method of
+the exact recipient DID.
 
 ### 6.1 Recipient-control proof
 
@@ -577,24 +610,23 @@ application-level ACK, as described in `distributed-delivery/1.0`.
 
 ### 7.4 Recipient-role neutrality
 
-The mediator MUST NOT require a recipient to be classified as public,
-rendezvous, pairwise, relationship or server-owned. For routing purposes,
-all registered recipient DIDs have the same shape:
+The mediator MUST NOT require a recipient to be classified as rendezvous,
+relationship, public, pairwise or server-owned. For routing purposes all
+registered recipients have the same shape:
 
 ```text
 recipient DID -> mediation account -> active replica deliveries
 ```
 
-A sender resolving a public `did:web` may discover this mediator through its
-`DIDCommMessaging` service and send a `rendezvous/1.0/request`. Later traffic
-to the resulting `did:peer:4` relationship DID may use the same mediation
-account and storage path. It may instead use another vault-scoped mediation
-account at the same or another mediator; the replica lifecycle and delivery
-rules are identical per account.
+The default discovery path gives a peer the long form of a Peer rendezvous
+DID, then registers/routes its canonical short form. An optional `did:web`
+facade may expose the same mediator through `DIDCommMessaging`. Later traffic
+to a pairwise `did:peer:4` may use the same account and storage path or a
+separate vault-scoped arrangement for metadata unlinkability.
 
-Changing the active replica set, adding a full replica on a server or moving
-the web publisher MUST NOT require changing either recipient DID. Thin
-clients that do not hold the seed do not register here.
+Changing the active replica set, adding a server full replica or moving an
+optional Web publisher MUST NOT require changing any recipient DID. Thin
+clients without the seed do not register here.
 
 ## 8. Message Pickup 3.0 replica profile
 
@@ -610,9 +642,10 @@ bodies MUST contain `replica_id`:
 - `live-delivery-change`.
 
 A request omitting `replica_id` MUST fail with
-`e.estoc.replica-mediation.replica-required`. There is no account-global
-fallback and version 1.0 does not support a legacy Pickup-3.0 client on the
-same mediation account.
+`e.estoc.replica-mediation.replica-required`. This is a deliberate clean-break
+choice: version 1.0 has **no** account-global Pickup 3.0 fallback, including
+before the first replica is registered. A legacy Pickup client cannot share
+this mediation account.
 
 An account with zero active replicas may still retain accepted mailbox
 messages with zero delivery rows. It cannot perform pickup. The first later
@@ -853,7 +886,7 @@ Errors on authenticated request-response interactions use Problem Report
 | `e.estoc.replica-mediation.invalid-request` | malformed or unsupported body |
 | `e.estoc.replica-mediation.replica-required` | pickup request omitted `replica_id` |
 | `e.estoc.replica-mediation.unknown-replica` | no such replica under this account |
-| `e.estoc.replica-mediation.replica-retired` | replica ID is terminal |
+| `e.estoc.replica-mediation.replica-retired` | replica ID is terminal; current client must re-incarnate under section 5.7 |
 | `e.estoc.replica-mediation.too-many-replicas` | active replica limit reached; client must list and explicitly retire IDs |
 | `e.estoc.replica-mediation.too-many-recipients` | registered recipient limit reached |
 | `e.estoc.replica-mediation.too-many-deliveries` | fan-out or replay delivery limit reached |
@@ -873,59 +906,46 @@ anonymous Routing 2.0 `forward`, so as not to create a route oracle.
 A conforming implementation demonstrates at least these cases:
 
 1. Two active replicas receive distinct delivery IDs for one stored
-   ciphertext.
-2. Replica A's acknowledgment leaves replica B's delivery pending.
-3. A late replica obtains every unexpired retained message.
-4. Concurrent replica registration and forwarding cannot omit the late
+   ciphertext; A's ACK leaves B pending.
+2. A late replica obtains every unexpired retained message, including when all
+   older replicas ACKed.
+3. Concurrent replica registration and forwarding cannot omit the new
    replica's delivery.
-5. A crash before local durable commit produces no pickup ACK and the
-   delivery is available again.
-6. A crash after local commit but before ACK may redeliver; the client
-   records one logical application message.
-7. Repeating one `forward.id` with identical normalized bytes stores no
-   second message.
-8. Reusing one `forward.id` with different bytes never overwrites the
-   first message.
-9. `recipient_did` filters status and delivery in fact, not only in the
-   response body.
-10. A retired or unknown replica cannot inspect or acknowledge another
-    replica's queue.
-11. No active replica is required for an accepted message to remain
-    replayable during its retention window.
-12. Plain, signed-only, linked or structurally invalid inner attachments
-    are not persisted as mailbox messages.
-13. Searching mediator database rows, object storage, logs and traces for
-    an application plaintext sentinel does not find the sentinel or an
-    application content key.
-14. Replica registration and listing reveal no hardware identifier,
-    operating-system identifier or human-readable local label.
-15. A `did:web` rendezvous recipient and a `did:peer:4` relationship recipient
-    selecting the same mediated route receive identical fan-out and ACK
-    isolation.
-16. Registering more than the advertised recipient limit fails atomically
-    with `too-many-recipients` and leaves the active set unchanged.
-17. Fan-out or retained replay that would exceed delivery quota creates
-    neither a partial message nor a partial replica set.
-18. A canonical Peer DID numalgo-4 short form is verified from supplied long
-    form without network access.
-19. A `did:web` recipient is resolved only through the constrained resolver;
-    private, loopback, rebinding, redirect and oversized-response cases fail
-    without outbound access to the prohibited target.
-20. Temporary safe-resolution failure grants no registration and returns the
-    defined retryable problem code on authenticated interactions.
-21. No public DID document, relationship DID document or application message
-    uses a replica ID as the peer-visible recipient.
-22. Adding or removing a server full replica changes only delivery rows and
-    does not change registered recipient DIDs.
-23. With zero active replicas, a mailbox message is retained with no delivery;
-    account-global Pickup 3.0 is rejected, and first later registration creates
-    retained deliveries before pickup.
-24. A default-policy mediator never retires solely from `last_seen_time`. A
-    mediator advertising finite inactivity retirement applies the disclosed
-    bound deterministically, returns `replica-retired` to the old ID, and lets a
-    fresh ID replay every still-retained message.
-25. A restored client lists active replicas, can explicitly retire a selected
-    stale ID, and never silently reuses that event author.
-26. Peer DID long-form resolution material is decoded, hashed and normalized;
-    the recomputed canonical short form must equal both stored `recipient_did`
-    and the proof payload before registration succeeds.
+4. Crash before durable message commit produces no pickup ACK; crash after
+   commit may redeliver and converges logically.
+5. Repeating one `forward.id` with identical normalized bytes stores no second
+   message; different bytes never overwrite the first.
+6. `recipient_did` actually filters status and delivery.
+7. A retired/unknown replica cannot inspect or ACK another replica's queue.
+8. With zero active replicas, ciphertext remains retained with zero deliveries;
+   all pickup without a registered active `replica_id` fails and there is no
+   account-global fallback.
+9. First later registration atomically creates retained deliveries before
+   pickup is possible.
+10. Plain, signed-only, linked or structurally invalid inner attachments are
+    not persisted as mailbox messages.
+11. Database, object storage, logs and traces do not contain an application
+    plaintext sentinel or content key.
+12. Replica protocol messages reveal no hardware/OS identifier or human label.
+13. A default Peer rendezvous recipient, optional Web rendezvous recipient and
+    pairwise Peer recipient receive identical fan-out/ACK isolation.
+14. Recipient, replica and delivery quotas fail atomically without partial
+    state.
+15. Peer DID long-form material is decoded locally, its canonical short form
+    exactly matches registration/proof payload, and proof key authorization
+    verifies after normalization.
+16. `did:web` proof resolution uses only the constrained resolver and never
+    unrestricted server-side URL fetching.
+17. No public document or application message uses replica ID as peer-visible
+    recipient.
+18. Adding/removing a server full replica changes delivery rows only, not
+    recipient DIDs.
+19. Without an advertised inactivity policy, age alone never retires a
+    replica. With one, the server applies the exact disclosed bound and reason
+    `inactivity-policy`.
+20. A local copy whose current ID is server-retired stops using it, atomically
+    mints new replica/store-generation IDs, preserves old-author events,
+    registers the fresh ID on every required mediation and obtains retained
+    replay.
+21. A restore lists replicas and explicitly retires selected stale IDs rather
+    than silently reusing or evicting one.

@@ -76,8 +76,9 @@ MUST NOT normalize path components before validation.
 Text conventions:
 
 - JSON files are UTF-8, pretty-printed, and end in `\n`;
-- JSONL segments use one compact UTF-8 JSON object per line;
-- every complete JSONL record ends in `\n`; and
+- JSONL segments use one RFC 8785 canonical UTF-8 event object per line;
+- every complete JSONL record is exactly `canonicalEventBytes(event)` followed
+  by `\n`; and
 - blob files contain exact block bytes and have no text encoding.
 
 A reader MUST reject a tree in which one path is both a file and a
@@ -209,11 +210,8 @@ and anchor equality.
 
 ## 5. `keystore.json`
 
-`keystore.json` is the portable representation of `@estoc/keystore` v3.
-It contains:
-
-- one passphrase-encrypted `seedJwe`; and
-- a rebuildable cache of minted asymmetric key names.
+`keystore.json` is the portable encrypted wrapper for the one vault seed. It
+contains no derived-key registry or portable key cache.
 
 A representative shape is:
 
@@ -225,60 +223,43 @@ A representative shape is:
     "iv": "...",
     "ciphertext": "...",
     "tag": "..."
-  },
-  "keys": [
-    {
-      "name": "anchor",
-      "did": "did:key:z6Mk...",
-      "createdAt": "2026-09-03T15:04:05.123Z"
-    },
-    {
-      "name": "did/019b2a45-8381-793f-943c-f5d806fd5ca2/authentication/0",
-      "did": "did:key:z6Mk...",
-      "createdAt": "2026-09-03T15:05:00.000Z"
-    },
-    {
-      "name": "did/019b2a45-8381-793f-943c-f5d806fd5ca2/key-agreement/0",
-      "did": "did:key:z6LS...",
-      "createdAt": "2026-09-03T15:05:00.000Z"
-    }
-  ]
+  }
 }
 ```
 
-The exact JWE fields and key-cache entry shape are owned by
-`@estoc/keystore` v3. The folder reader MUST validate that shape before a
-write-producing import.
+The exact JWE profile is owned by `@estoc/keystore` version 3. A folder reader
+MUST validate that shape before any write-producing open or import.
 
-The cache is not authority for whether a key belongs to the vault.
-`vault-events.md` and the fixed reserved derivations are. On unlock, a
-client MAY rebuild `keys` from:
+All asymmetric key names are determined by fixed protocol names and portable
+vault events. After unlock, a runtime derives a requested key directly from
+the seed and its exact key name. It MUST NOT depend on a portable list of keys
+that happened to be minted on another replica.
 
-- `anchor`;
-- every `mediation.created.data.me.key`;
-- every key name in `did.created`, `did.keyGenerationAdded` and the
-  currently supported DID key-generation profile; and
-- protocol-reserved key names such as the vault-sync account.
+The version-3 keystore model has no persistent derived-key cache. A runtime
+MAY retain an already derived key object only in process memory for the active
+unlocked session. It MUST release that object on lock or process exit and MUST
+NOT write derived private keys, a key registry or a derivation cache anywhere
+under `.estoc/`, including `local/`. Every later session derives requested
+keys again from the seed and exact portable key name.
 
 ### 5.1 Import policy
 
-For an import into an existing unlocked vault:
+For import into an existing unlocked vault:
 
 - the target's `seedJwe` is retained;
-- the source seed, when unlocked, MUST derive the same anchor;
-- `keys` is unioned by `name`;
-- two entries with one name and different derived public keys are a
-  fatal keystore conflict; and
-- missing cache entries MAY be rebuilt rather than copied.
+- the source seed, when unlocked, MUST derive the same anchor DID;
+- no derived-key cache is merged; and
+- an anchor mismatch is fatal before any semantic write.
 
-The local passphrase may differ between replicas. Equal vault identity
-does not require byte-equal `seedJwe`.
+The local passphrase or platform wrapping may differ between replicas. Equal
+vault identity does not require byte-equal `seedJwe`.
 
 ### 5.2 Sync bootstrap
 
-`vault-sync/1.0` does not upload `seedJwe`. A user bootstrapping from the
-sync store supplies the vault seed by another trusted means and creates a
-new local passphrase wrapping. The key cache is then rebuilt.
+`vault-sync/1.0` does not upload `seedJwe`. A user bootstrapping from a sync
+store supplies the vault seed by another trusted means and writes a new local
+passphrase or platform wrapping. Keys are subsequently derived on demand from
+portable event key names.
 
 ### 5.3 Recovery material and product requirement
 
@@ -293,19 +274,17 @@ active runtime. A conforming path is either:
 
 - an offline export of the seed using a documented, integrity-protected
   representation; or
-- a complete portable snapshot containing `seedJwe`, together with a
-  passphrase or recovery credential that is not available only from the same
-  runtime or storage failure domain.
+- a complete portable snapshot whose seed wrapper can be opened with a
+  separately retained passphrase or recovery credential.
 
-The product MUST perform a verification step that unwraps or imports the
-recovery material in an isolated check and derives the exact anchor DID. Merely
-confirming that a file was downloaded or that vault-sync contains objects is
-insufficient. The UI MUST explain that every holder of the seed has full vault
-authority and that replica retirement does not revoke a copied seed.
+Verification MUST occur in an isolated check that opens the recovery material
+and derives exactly the anchor DID in `config.json`. Merely observing that a
+file download completed is not recovery verification.
 
-This document does not mandate one mnemonic, paper-backup or hardware-token
-encoding. It mandates the recovery capability and verification UX as a release
-requirement for products built on the single-seed model.
+The product MUST make this requirement part of creation/onboarding and expose
+current recovery status. A release relying on the single-seed model MUST test
+loss of every active runtime followed by restoration from the documented
+recovery material.
 
 ## 6. Event paths
 
@@ -324,8 +303,9 @@ locate(ext, event) = extensions/<ext>/events/<event.author>/
 `<author>` MUST be the canonical lowercase UUIDv7 in the event's
 `author` field.
 
-A reader decodes each complete JSONL line and validates the full event
-envelope under `event-store.md`. It then requires the path author to
+A reader requires each complete JSONL line, excluding its final LF, to
+be exactly `canonicalEventBytes(event)` under RFC 8785, then validates the full
+event envelope under `event-store.md`. It then requires the path author to
 equal the line's `author`. The path confirms authorship; it never
 supplies it.
 
@@ -384,9 +364,9 @@ A segment is:
 
 where `<segment>` is a canonical lowercase UUIDv7.
 
-Each complete line is one entire event followed by `\n`. A segment has
-no header and no semantic metadata. Segment name, order, size and
-boundary are not part of any event's identity.
+Each complete line is exactly `canonicalEventBytes(event)` under RFC 8785
+followed by `\n`. A segment has no header and no semantic metadata. Segment
+name, order, size and boundary are not part of any event's identity.
 
 ### 8.1 Local append segments
 
@@ -415,8 +395,8 @@ After complete validation and fork preflight, one `ingest` call writes
 new events into fresh segments minted by the target store. It SHOULD use
 at most one fresh segment per incoming author for that call.
 
-It MUST NOT copy a source segment as an opaque file. Source events are
-decoded, deduplicated by `eid` and reserialized. Therefore the target may
+It MUST NOT copy a source segment as an opaque file. Source events are decoded, duplicate-member checked, deduplicated by
+`eid` using RFC 8785 canonical bytes and reserialized canonically. Therefore the target may
 contain several segments under one author, some originally appended by
 that author and some created while other stores ingested its events.
 
@@ -505,9 +485,23 @@ an exact move with no concurrent old writer.
 No `replica.created` event is appended.
 
 If the local `replica_id` is the target of a converged
-`replica.retired` event, a conforming client MUST stop using it for new
-appends and pickup, mint a new `replica_id` and `store_generation`, and
-reopen. Historical events remain unchanged.
+`replica.retired` event **or an authenticated required mediator reports that
+ID terminally retired**, the runtime MUST re-incarnate before another append,
+pickup ACK or outbound submission:
+
+1. pause writers and network workers;
+2. durably finish or checkpoint already accepted local work;
+3. atomically replace both fields in this file with fresh UUIDv7 values;
+4. reopen every local event store under the new author;
+5. invalidate every change token and rebuildable cache bound to the old
+   `store_generation`; and
+6. register the fresh ID on every required mediation before resuming pickup.
+
+Events already authored by the old ID are never rewritten and remain valid
+sync objects. A server inactivity retirement is recorded in portable state as
+`replica.retired.because == "inactivity-policy"` after the new author is
+active. One required mediator's terminal result rotates the local ID for all
+mediators; the runtime MUST NOT keep different replica IDs per arrangement.
 
 ### 10.2 Owner directories
 
@@ -522,9 +516,11 @@ trace/        local event-like diagnostic streams with explicit retention
 The application owner is `local/agent/`. Extension owners use
 `local/extensions/<ext>/`.
 
-These directories have no portable merge semantics. A trace may use the
-same six-field JSON shape for convenience, but it is not in the vault's
-event set and may be pruned according to local retention.
+These directories have no portable merge semantics. `cache/` may contain
+indexes and fold projections but MUST NOT contain derived private keys or a
+keystore registry. A trace may use the same six-field JSON shape for
+convenience, but it is not in the vault's event set and may be pruned according
+to local retention.
 
 ### 10.3 Change tokens
 
@@ -685,10 +681,9 @@ Then it:
 2. computes held roots over the merged event set;
 3. copies valid absent source blocks reachable from those roots;
 4. keeps the target `config.json` and target seed wrapping;
-5. unions the rebuildable key cache;
-6. copies unknown portable paths only when absent;
-7. imports allowed extension stores by the same rules; and
-8. disposes extension stores the merged lifecycle says are purged.
+5. copies unknown portable paths only when absent;
+6. imports allowed extension stores by the same rules; and
+7. disposes extension stores the merged lifecycle says are purged.
 
 `local/` is ignored and the target's local state is untouched.
 
@@ -788,30 +783,38 @@ The following require a new folder/vault version:
    repaired.
 7. No replica-creation event is required on open.
 8. `state/` has no reserved LWW behavior in version 3.
-9. An incomplete JSONL fragment is skipped and not fused with the next
+9. Every stored JSONL record excluding its LF is byte-equal to
+   `canonicalEventBytes(event)`; merely compact non-canonical JSON is
+   rejected or canonicalized before storage.
+10. An incomplete JSONL fragment is skipped and not fused with the next
    append.
-10. An ingest writes only decoded events, never copied source segments.
-11. Physical segment order does not affect `scan()`.
-12. A blob filename/content mismatch is damage.
-13. Export from a database and re-import to a folder preserves the event
+11. An ingest writes only decoded events, never copied source segments.
+12. Physical segment order does not affect `scan()`.
+13. A blob filename/content mismatch is damage.
+14. Export from a database and re-import to a folder preserves the event
     set and portable bytes.
-14. Unknown top-level portable files round-trip and are absent-only on
+15. Unknown top-level portable files round-trip and are absent-only on
     merge.
-15. An unknown entry inside a structural root is reported as damage.
-16. Extension stores use the same local author but separate event-ID
+16. An unknown entry inside a structural root is reported as damage.
+17. Extension stores use the same local author but separate event-ID
     sets.
-17. Import ignores source `local/` even when a nonconforming archive
+18. Import ignores source `local/` even when a nonconforming archive
     contains it.
-18. At-rest plaintext message content is not described as protected by
+19. At-rest plaintext message content is not described as protected by
     the vault passphrase.
-19. No mediator or sync operation consumes the folder as plaintext.
-20. A hosted full runtime can export an equivalent complete portable folder;
+20. No mediator or sync operation consumes the folder as plaintext.
+21. A hosted full runtime can export an equivalent complete portable folder;
     server-local database state is not the sole recoverable copy.
-21. A selected `did:web` document revision is retained as a referenced blob
+22. A selected `did:web` document revision is retained as a referenced blob
     and event, not as an authoritative mutable `did.json` path in the vault.
-22. A thin-client cache is not accepted as a complete vault folder.
-23. A retired replica's historical author directory remains readable.
-24. Vault-sync alone is not presented as recovery material because it does not
+23. A thin-client cache is not accepted as a complete vault folder.
+24. A retired replica's historical author directory remains readable.
+25. A mediator-retired current ID causes atomic replacement of local replica
+    and store-generation IDs; old-author events remain unchanged.
+26. No persistent derived-key registry or key cache exists in `keystore.json`,
+    `local/` or another vault path; an unlocked runtime derives keys by exact
+    name from the seed.
+27. Vault-sync alone is not presented as recovery material because it does not
     contain `seedJwe` or the seed.
-25. Before recovery is marked complete, an independent seed or complete
+28. Before recovery is marked complete, an independent seed or complete
     snapshot path is tested by deriving the exact anchor DID.

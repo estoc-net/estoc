@@ -18,8 +18,8 @@ blob CIDs, message bodies, event types or contact data in plaintext.
 The protocol synchronizes:
 
 - the immutable vault configuration needed for bootstrap;
-- vault events, including rendezvous, relationship, route and selected
-  `did:web` publication state;
+- vault events, including rendezvous, relationship, route and any selected
+  optional `did:web` publication state;
 - extension-store events; and
 - content-addressed blob blocks referenced by those events, including exact
   prepared DID document revisions.
@@ -159,8 +159,8 @@ Payload: RFC 8785 canonical UTF-8 of the immutable vault configuration:
 ```
 
 The root object allows a replica holding the seed and sync-store locator
-to reconstruct `config.json`. It does not contain `seedJwe`; a new local vault copy wraps the supplied seed under its own local passphrase and
-rebuilds the key-name cache from events.
+to reconstruct `config.json`. It does not contain `seedJwe`; a new local vault copy wraps the supplied seed under its own local passphrase and derives requested named keys on demand from fixed protocol names and
+portable events.
 
 #### Event object
 
@@ -386,6 +386,7 @@ https://estoc.dev/vault-sync/1.0/hello-result
   "type": "https://estoc.dev/vault-sync/1.0/hello-result",
   "body": {
     "store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
+    "state": "ready",
     "sequence": "1842",
     "limits": {
       "max_object_bytes": 16777216,
@@ -401,9 +402,12 @@ https://estoc.dev/vault-sync/1.0/hello-result
 ```
 
 `store_id` is a stable random UUID identifying this account's current
-server-side object set. A destructive server reset MUST produce a new
-`store_id`. A client whose cached `store_id` differs MUST discard its
-remote sequence cursor and perform full inventory reconciliation.
+server-side object set. `state` is `ready` or `rebuilding`. Normal offer,
+changes, inventory and want operations require `ready`. A destructive reset
+MUST produce a new `store_id` and enters `rebuilding` until section 12's
+baseline is committed. A client whose cached `store_id` differs MUST discard
+its remote sequence cursor and execute the pull-before-push reset recovery
+algorithm in section 13.
 
 ## 8. Offering and uploading objects
 
@@ -436,6 +440,24 @@ The list MUST contain no duplicate object ID and MUST not exceed the
 advertised limit. `hash` is a sha2-256 multihash in multibase base32
 lower. `byte_count` counts encrypted bytes, including the version byte,
 nonce and tag.
+
+During normal `ready` operation, no extra field is present. While the account
+is `rebuilding`, only the reset owner may offer objects, and the body MUST also
+contain:
+
+```json
+{
+  "rebuild": {
+    "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
+    "token": "k3Q...opaque-rebuild-capability"
+  }
+}
+```
+
+The capability is bound to the authenticated account, current `store_id` and
+`reset_id`. It MUST NOT be logged, accepted after commit/supersession, or used
+for another account. All ordinary clients receive `store-rebuilding` instead
+of upload tickets while this state is active.
 
 ### 8.2 `offer-result`
 
@@ -713,11 +735,29 @@ The HTTP URL reveals no logical object ID in its path.
 
 ## 12. Remote account reset
 
-Version 1.0 deliberately has no selective `retract` message. Selective
-removal would require durable remote tombstones, reference tracing and rules
-that prevent an offline replica from immediately re-uploading the removed
-object. Logical erasure remains a vault event; physical remote purge is an
-all-object account reset.
+Version 1.0 deliberately has no selective `retract` message. Logical erasure
+is expressed by portable vault events. A physical remote purge is an
+all-object reset followed by construction of a new trusted baseline. The
+baseline protocol exists to prevent a stale replica from immediately
+re-uploading erased content bytes into an empty account.
+
+### 12.1 Preconditions
+
+Before requesting reset, the initiating full replica MUST:
+
+1. fully reconcile the current `ready` store or explicitly obtain user
+   confirmation that remote-only objects will be abandoned;
+2. ingest all locally available events and run the erasure-closure procedure
+   in `vault-events.md`;
+3. compute the current held-root set from the converged fold; and
+4. be able to supply the immutable root object, every accepted event object
+   and every currently held block it intends to preserve.
+
+Reset is not a selective event retraction. Another trusted full replica may
+later republish immutable event objects that it still has. It MUST NOT
+republish content blocks released by the converged erasure fold.
+
+### 12.2 `reset`
 
 Message type:
 
@@ -740,87 +780,177 @@ https://estoc.dev/vault-sync/1.0/reset
 ```
 
 The request MUST be authcrypted by the admitted sync account. `store_id` MUST
-equal the current store ID, `reset_id` MUST be a canonical UUIDv7 never used
-for another reset, and `confirm` MUST equal the literal string shown above.
-A stale `store_id` fails without deleting anything.
+be current, `reset_id` is a fresh canonical UUIDv7, and `confirm` is the exact
+literal above. A stale precondition deletes nothing.
 
-On first acceptance the server MUST atomically:
+On first acceptance the server atomically:
 
-1. make every object, inventory entry, sequence entry and outstanding transfer
-   ticket in the current object set inaccessible;
-2. delete those values from active storage according to the service's
-   disclosed deletion policy;
-3. preserve the admitted account identity and quota policy;
-4. mint a new random `store_id`;
-5. reset the visible sequence to `"0"`; and
-6. retain enough `(old_store_id, reset_id, new_store_id)` receipt state to make
-   an exact retry idempotent.
+1. invalidates every object, inventory snapshot and transfer ticket in the old
+   object set;
+2. creates a fresh `store_id` with sequence zero and state `rebuilding`;
+3. records the accepted `reset_id`; and
+4. returns a short-lived rebuild capability to the reset owner.
 
-The response type is:
-
-```text
-https://estoc.dev/vault-sync/1.0/reset-result
-```
+The result is:
 
 ```json
 {
-  "id": "019b1b7d-5eb2-7caf-a405-eb189b8fc12f",
+  "id": "019b1b7d-4cfa-7771-ab86-d9c3fe1c9a04",
   "thid": "019b1b7d-368c-75b6-8724-1598205178d4",
   "type": "https://estoc.dev/vault-sync/1.0/reset-result",
   "body": {
     "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
     "old_store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
     "store_id": "019b1b7d-4bcc-7807-a609-8004542c76a4",
-    "sequence": "0"
+    "state": "rebuilding",
+    "sequence": "0",
+    "rebuild_token": "k3Q...opaque-rebuild-capability"
   }
 }
 ```
 
-Every other client observing the changed store ID discards its remote cursor,
-runs full inventory, and may republish whatever objects its current local
-vault still retains. Reset therefore erases the remote mirror; it does not
-create a selective durable deletion policy and does not delete any local
-replica. Services MUST disclose how long deleted ciphertext may remain in
-offline backups or disaster-recovery media.
+Repeating the same authenticated reset request is idempotent and returns the
+same rebuild epoch plus a currently usable capability. A new reset may
+supersede an abandoned rebuild only by naming its current rebuilding
+`store_id` and a new `reset_id`; that operation invalidates the previous
+capability and partial baseline.
+
+### 12.3 Building and committing the baseline
+
+While rebuilding, the reset owner uploads, in this order:
+
+1. the immutable root object;
+2. every locally accepted event object, including `message.erased` and any
+   newly generated erasure-closure events; and
+3. only blob blocks that are roots held by the current post-erasure fold.
+
+It MUST NOT offer a block merely because bytes remain in a local blob store.
+The event set is append-only; the held-root fold, not byte presence, determines
+whether content is republished.
+
+After all uploads are visible, the owner computes:
+
+```text
+baseline_ids = all opaque object IDs in the rebuilding object set,
+               sorted by UTF-8 byte order
+baseline_hash = base64url(SHA-256(UTF8(RFC8785(baseline_ids))))
+```
+
+and sends:
+
+```text
+https://estoc.dev/vault-sync/1.0/reset-commit
+```
+
+```json
+{
+  "id": "019b1b7e-ff9f-7d4d-9b3e-5280d9680a7c",
+  "type": "https://estoc.dev/vault-sync/1.0/reset-commit",
+  "from": "did:key:z6LS...sync-account",
+  "to": ["did:web:sync.example"],
+  "body": {
+    "store_id": "019b1b7d-4bcc-7807-a609-8004542c76a4",
+    "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
+    "rebuild_token": "k3Q...opaque-rebuild-capability",
+    "root_id": "QhE...opaque-root-id",
+    "object_count": 1841,
+    "baseline_hash": "V0F...base64url-sha256"
+  }
+}
+```
+
+The server verifies the capability, current state, presence of `root_id`,
+object count and hash over its exact current set. It then atomically changes
+state to `ready` and invalidates the capability. It returns:
+
+```json
+{
+  "id": "019b1b7f-1815-719e-aabb-69e064bc80f5",
+  "thid": "019b1b7e-ff9f-7d4d-9b3e-5280d9680a7c",
+  "type": "https://estoc.dev/vault-sync/1.0/reset-committed",
+  "body": {
+    "store_id": "019b1b7d-4bcc-7807-a609-8004542c76a4",
+    "reset_id": "019b1b7d-2bb6-76b5-ac2e-ac91ffb597ae",
+    "state": "ready",
+    "sequence": "1841",
+    "baseline_hash": "V0F...base64url-sha256"
+  }
+}
+```
+
+Until this commit, non-owner clients MUST NOT download a partial baseline or
+publish their local set. They receive `store-rebuilding` and retry later.
+Services MUST disclose how long invalidated ciphertext may remain in offline
+backups or disaster-recovery media.
 
 ## 13. Client synchronization algorithm
 
 ### 13.1 Publishing local objects
 
-A client SHOULD publish in this order:
+During ordinary `ready` operation a client publishes in this order:
 
-1. root object, if absent;
-2. blob blocks referenced by a new event;
-3. the event object.
+1. ingest and fold all newly learned remote events before offering local
+   objects;
+2. generate and publish any erasure-closure events required by that union;
+3. publish the immutable root object if it is absent;
+4. for each new event that currently retains blob blocks, publish those blocks
+   first, but only when their CIDs are in the **current held-root set**; and
+5. publish the event object after its currently held referenced blocks are
+   available remotely.
 
-The order prevents a well-behaved peer from discovering an event before
-its referenced bytes have been offered. It is not a transaction: a crash
-may leave harmless unreferenced blocks on the server.
+Blocks-before-event preserves availability for normal messages, while the
+held-root test preserves erasure safety. A block not currently held MUST NOT be
+offered even when its bytes remain locally available. An event with no held
+blocks, including an erasure or closure event, may be offered immediately.
 
-The client uses its local event store's `changes()` only to discover what
-this local store gained efficiently. A local `ChangeToken` is never sent
-to the sync store and is meaningless on another replica.
+The local event store's `changes()` only discovers what this local store gained
+efficiently. A local `ChangeToken` is never sent to the sync store and is
+meaningless on another replica.
+
+A client that observes a different `store_id` MUST enter **pull-before-push**:
+
+1. stop all offers and invalidate the old remote cursor;
+2. wait while `hello-result.state == "rebuilding"`;
+3. when ready, obtain and download a full inventory baseline;
+4. decrypt, validate and ingest all root/event objects before offering any
+   local object;
+5. run erasure closure against the union and recompute held roots;
+6. publish newly required closure events first, then missing immutable events,
+   then only currently held blocks; and
+7. resume incremental changes only after that publication pass.
+
+This ordering prevents a stale replica that missed `message.erased` from
+re-uploading released content bytes after reset. It does not make reset a
+selective event tombstone: immutable event objects retained by a trusted full
+replica may reappear.
 
 ### 13.2 Applying remote objects
 
-For every unknown opaque object descriptor, a client:
+For every unknown opaque descriptor, a client obtains/verifies ciphertext,
+decrypts and validates the frame, and recomputes the object ID. During normal
+incremental sync it may then apply blocks and events idempotently subject to
+the held-root rules.
 
-1. obtains and verifies the ciphertext bytes;
-2. decrypts and validates the sync frame;
-3. recomputes the opaque object ID;
-4. for a block, verifies its CID and puts it idempotently;
-5. for an event, first ensures every referenced blob root it intends to
-   make complete is available, then ingests the event into its named
-   store; and
-6. advances its remote sequence cursor only after durable local writes.
+For a reset baseline or lost-cursor full reconciliation, the client MUST first
+download enough objects to classify them after decryption, then:
 
-Events may be downloaded in any order. The event store's set union, not
-server sequence, determines vault meaning. Server sequence is a delivery
-cursor only.
+1. verify and accept the immutable root;
+2. validate and ingest all event objects in their named stores, independently
+   of server sequence;
+3. fold the complete learned event union and append equivalent erasure-closure
+   events for newly discovered roots of already erased logical messages;
+4. recompute the held-root set;
+5. retain/fetch a block only when its CID is currently held, verify it against
+   its CID, and put it idempotently; and
+6. advance the remote cursor only after all corresponding durable local writes.
+
+Events may arrive in any order. Server sequence is a delivery cursor, not
+vault meaning. An erased block descriptor may be ignored after frame/object-ID
+verification; absence of released bytes is not `not fetched`.
 
 An unknown extension store is not opened merely because an opaque object
-exists; after decryption, the client applies the vault's extension
-lifecycle policy before writing an extension event or block.
+exists. After decryption, the client applies the vault's extension lifecycle
+policy before writing an extension event or held block.
 
 ### 13.3 Missing blocks
 
@@ -930,7 +1060,10 @@ Authenticated control errors use Problem Report 2.0:
 | `e.estoc.vault-sync.admission-invalid` | admission proof, capability, grant, binding or expiry failed |
 | `e.estoc.vault-sync.admission-denied` | operator policy refuses account creation |
 | `e.estoc.vault-sync.account-disabled` | admitted account is administratively disabled |
-| `e.estoc.vault-sync.store-reset` | supplied `store_id` is no longer current |
+| `e.estoc.vault-sync.store-reset` | supplied `store_id` is no longer current; client must pull before push |
+| `e.estoc.vault-sync.store-rebuilding` | a reset baseline is not committed; non-owner operations must wait |
+| `e.estoc.vault-sync.reset-not-owner` | rebuild capability is absent, invalid or bound to another reset epoch |
+| `e.estoc.vault-sync.reset-baseline` | root, object count or baseline hash does not match the rebuilding set |
 | `e.estoc.vault-sync.reset-confirmation` | reset ID, expected store ID or literal confirmation is invalid |
 | `e.estoc.vault-sync.object-too-large` | object exceeds the account limit |
 | `e.estoc.vault-sync.quota` | account cannot accept another object |
@@ -944,51 +1077,49 @@ MUST NOT disclose another account's object existence.
 
 ## 18. Required conformance cases
 
-1. Two replicas independently offer the same logical object with
-   different random ciphertext; exactly one immutable server object
-   remains and both clients can decrypt and validate it.
-2. Re-offering an existing ID allocates no overwrite upload.
-3. An incomplete, oversized or hash-mismatched upload creates no object
-   and no sequence.
-4. `changes` returns every committed object after a cursor in increasing
-   sequence order.
-5. Losing all local cursor state and running `inventory` finds the same
-   server object set.
-6. A changed `store_id` forces full reconciliation.
-7. An object inserted while inventory pages are being read is either in
-   the fixed `through` snapshot or has a later sequence returned by
-   `changes`; it is never skipped because of object-ID sort position.
-8. Download hash, AEAD tag, frame, semantic validation and object-ID
-   recomputation are all checked before local acceptance.
-9. Blob bytes are verified against their CID before `put`.
-10. Event blobs are uploaded before the event in the normal publishing
-    path; a crash between them leaves only safe unreferenced data.
-11. Concurrent offline event sets converge after both replicas exchange
-    every opaque object.
-12. Same `eid` with different event content is surfaced as integrity
-    conflict, not silently first-wins.
-13. A fresh local replica with seed and store locator can reconstruct the
-    root configuration, events and blobs while minting a new local
-    `replica_id` and `store_generation`.
-14. Searching server database, object storage, logs and traces for an
-    event-type, contact-name or message-body sentinel finds none in
-    plaintext.
-15. Mailbox failure does not block sync, and sync failure does not block
-    local append, sending intent or mailbox pickup.
-16. No sync request carries a replica ID, and the sync store keeps no
-    replica registry or per-replica cursor.
-17. Authcrypt from a previously unseen sync account without valid admission
-    creates no account, object, quota reservation or observable inventory.
-18. A valid provisioned, capability or mediation-grant admission creates one
-    empty account atomically; exact admission replay creates no second account.
-19. `K_index` and `K_data` match the explicit HKDF vectors and are not derived
-    as keystore names `sync/index` or `sync/data`.
-20. An authenticated reset with the current `store_id` atomically makes all
-    old objects unavailable, rotates `store_id`, sets sequence to zero and is
-    idempotent by `reset_id`.
-21. A stale or malformed reset deletes nothing. After a successful reset, a
-    second replica detects `store-reset`, inventories the empty object set and
-    can republish retained local objects.
-22. No version-1.0 selective object retract operation exists; a logical
-    `message.erased` event syncs, while physical remote deletion requires the
-    whole-account reset.
+1. Two replicas independently offer the same logical object with different
+   randomized ciphertext; exactly one immutable server object remains and both
+   clients can decrypt and verify it.
+2. Re-offering an existing ID allocates no overwrite upload; incomplete,
+   oversized or hash-mismatched uploads create no object or sequence.
+3. `changes` and a fixed-through paged inventory cannot permanently skip a
+   committed object.
+4. Losing all local cursor state and running inventory discovers the same
+   ready object set.
+5. Download hash, AEAD tag, frame validation, semantic validation and object-ID
+   recomputation all precede local acceptance.
+6. Blob bytes are verified against CID before `put`.
+7. Concurrent offline event sets converge after exchange; same `eid` with
+   different RFC 8785 canonical event bytes is an integrity conflict.
+8. A fresh full replica with seed and locator reconstructs root, events and
+   held blobs, then mints new local replica/store-generation IDs.
+9. No sync message exposes replica ID, event type, CID, contact or application
+   plaintext to the server.
+10. A previously unseen sync account without accepted admission creates no
+    account, object or quota reservation.
+11. `sync/account` is the sole named asymmetric key; `K_index` and `K_data`
+    match only the explicit HKDF profile.
+12. Version 1.0 exposes no selective retract and documents reset as a whole
+    remote-mirror purge, not logical message erasure.
+13. Reset with stale precondition or malformed confirmation deletes nothing.
+14. Successful reset rotates `store_id`, invalidates old objects/tickets and
+    enters `rebuilding`; ordinary clients cannot offer, inventory or download a
+    partial baseline.
+15. Only a valid reset-owner capability may upload during rebuilding.
+16. `reset-commit` verifies root presence, exact object count and RFC
+    8785-derived baseline hash before atomically entering `ready`.
+17. Repeating one accepted `reset_id` is idempotent; a fresh reset against the
+    rebuilding store can supersede an abandoned rebuild and invalidates its
+    capability.
+18. The reset owner publishes every accepted event, including erase/closure
+    events, but only blocks in its current held-root set.
+19. A stale replica observing changed `store_id` performs full pull-before-push,
+    ingests baseline events, applies erasure closure and recomputes held roots
+    before offering anything.
+20. A stale replica that still physically stores erased bytes does not offer
+    those block objects after baseline reconciliation.
+21. A late immutable event may reappear after reset, but any newly learned root
+    of an already erased logical message receives closure before its content
+    block can be offered.
+22. Sync unavailability never blocks local event commit, send intent or mailbox
+    pickup.
