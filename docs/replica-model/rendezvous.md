@@ -993,7 +993,7 @@ Existing consistent evidence is reused; conflicting evidence blocks processing.
    section 11.2;
 7. validate and prepare `relationship.initiatorBound` for that same
    relationship, naming the exact initial outbound, snapshot, initiator identity
-   and validated handoff;
+   and validated handoff under `vault-events.md` section 12.5;
 8. append or reuse `message.executionBound` for the handoff carrier under that
    relationship scope. All missing locally produced facts in steps 6–8 MUST
    commit in one process-durable `appendAll`; the event-store contract makes
@@ -1208,8 +1208,10 @@ DID as ordinary `writeTo`.
     become accept.
 17. Stable relationship/contact/responder-DID, relationship-scoped execution
     and effect vectors recompute from the published inputs.
-18. `relationship.established` freezes one origin, long-form responder DID,
-    rotation `iat`, exact compact `fromPrior` and deterministic handoff IDs.
+18. `relationship.established` retains its selected origin, generation, contact,
+    local DID, peer, handoff MID and exact compact `fromPrior`; derived DID,
+    proof and effect values follow those immutable sources under
+    `vault-events.md` section 12.4.
 19. `from_prior.iss` and protected `kid` use the exact pinned prior-DID form.
 20. `from_prior.sub` equals plaintext `from` exactly; before confirmation both
     use responder Peer-DID long form.
