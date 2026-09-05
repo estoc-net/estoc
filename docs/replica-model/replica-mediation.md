@@ -409,6 +409,83 @@ A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
+This procedure belongs to `replica-mediation/1.0` and is not required by phase
+1. The phase-1 mediator does not know `replica_id`; local restore or exact move
+rules are defined by `vault-folder.md`. A future implementation MUST define
+terminal mediator retirement and local re-incarnation before enabling
+per-replica pickup.
+
+`replica.retired` and network-driven re-incarnation are reserved for
+the deferred replica-mediation profile.
+
+### 5.8 Portable replica events
+
+`replica.label` and `replica.retired` are reserved for the deferred
+multi-replica profile. A phase-1 implementation MAY preserve them but does not
+need to act on them.
+
+#### 5.8.1 `replica.label`
+
+This event is reserved for the deferred multi-replica profile and is not
+required by phase 1.
+
+```json
+{
+  "type": "replica.label",
+  "roots": [],
+  "data": {
+    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
+    "name": "Phone"
+  }
+}
+```
+
+A label is encrypted vault metadata used to join a mediator's opaque
+replica list with a human-readable UI. The latest label per replica by
+canonical order wins. It is never sent to the mediator.
+
+#### 5.8.2 `replica.retired`
+
+This event is reserved for the deferred multi-replica delivery profile. Phase
+1 does not register replica IDs with a mediator and does not use this event in
+normal operation.
+
+```json
+{
+  "type": "replica.retired",
+  "roots": [],
+  "data": {
+    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
+    "because": "inactivity-policy"
+  }
+}
+```
+
+`because` is REQUIRED and is one of:
+
+```text
+user
+replaced
+lost
+inactivity-policy
+fork-recovery
+other
+```
+
+Retirement is a terminal desired-delivery policy for that replica ID:
+
+- active replicas reconcile it to every shared mediation account;
+- a mediator stops creating future deliveries for the retired ID;
+- events already authored by it remain valid and synchronizable; and
+- it does not revoke the seed or prevent a holder from registering a fresh
+  replica ID.
+
+A local runtime that learns from a converged event set **or an authenticated
+mediator response** that its current ID is terminally retired MUST perform the
+local re-incarnation procedure in section 5.7 before any further append,
+pickup acknowledgment, live-delivery registration or outbound submission.
+The old author is not rewritten and pending old-author events remain valid.
+
 ## 6. Coordinate Mediation profile
 
 The mediation account remains the one `recipient` in Coordinate Mediation

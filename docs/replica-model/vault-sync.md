@@ -118,6 +118,13 @@ Possession of the shared sync-account key authorizes the account. Each
 client keeps its own cursors and diagnostics locally; the sync store does
 not need to know which writable incarnation issued a request.
 
+| name | purpose |
+| --- | --- |
+| `sync/account` | shared authenticated account used by `vault-sync/1.0` |
+
+The fixed symmetric sync keys are derived as specified by
+`vault-sync/1.0`; they are not represented as event entities.
+
 ## 4. Sync objects
 
 A server stores only:
@@ -1266,6 +1273,86 @@ folder snapshot remains a complete readable interchange format.
 A full replica bootstrapped on a server has no special sync identity. It uses
 the same account and anti-entropy as any other full replica. DID-document
 publication is not synchronized vault state or a recovery procedure.
+
+### 14.1 Portable sync-store events
+
+The following events are reserved for `vault-sync/1.0`, which is not a phase-1
+implementation requirement.
+
+#### `sync.configured`
+
+```json
+{
+  "type": "sync.configured",
+  "roots": [],
+  "data": {
+    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
+    "storeDid": "did:web:sync.example"
+  }
+}
+```
+
+This intent adds one `vault-sync/1.0` service locator to portable vault
+state. `id` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
+store; its current endpoint is resolved at runtime and may be cached only
+under `local/`.
+
+The same configuration ID with a different store DID is an integrity
+conflict. Configuring the same store DID under more than one ID is
+allowed but SHOULD be surfaced as redundant configuration.
+
+#### `sync.selected`
+
+```json
+{
+  "type": "sync.selected",
+  "roots": [],
+  "data": {
+    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870"
+  }
+}
+```
+
+The latest event by canonical order selects the preferred sync store for
+normal publication and bootstrap guidance. Selection does not remove
+another configured store; a runtime MAY mirror to every usable store.
+
+#### `sync.retired`
+
+```json
+{
+  "type": "sync.retired",
+  "roots": [],
+  "data": {
+    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
+    "because": "replaced"
+  }
+}
+```
+
+Retirement is terminal for the configuration ID. Replicas stop new
+upload, download and inventory work against it after learning the event.
+Remote ciphertext deletion, if a deployment offers an administrative
+account-reset operation, is outside `vault-sync/1.0` and is not implied by
+retirement.
+
+A readable folder therefore carries its sync-service locator in events.
+A bootstrap that starts with only the seed still needs one locator from an
+external trusted source to find the first sync store.
+
+### 14.2 Sync-store fold
+
+This fold is reserved for `vault-sync/1.0` and is not required by phase 1.
+Implementations that preserve the deferred events group them by configuration
+ID, reject conflicting `sync.configured` values and treat any
+`sync.retired` as terminal. No phase-1 local commit depends on a sync store.
+
+### 14.3 Configure a sync store
+
+`sync.configured`, `sync.selected` and `sync.retired` are reserved for the
+deferred `vault-sync/1.0` profile. Phase 1 neither needs nor performs this
+procedure. Recovery uses the readable vault folder plus independently backed
+up seed/recovery material.
 
 ## 15. Quota and availability
 

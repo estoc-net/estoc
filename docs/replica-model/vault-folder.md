@@ -469,8 +469,7 @@ an exact move with no concurrent old writer.
 No `replica.created` event is appended.
 
 Phase 1 has no mediator-side replica registry, so a mediator never retires
-this ID. `replica.retired` and network-driven re-incarnation are reserved for
-the deferred replica-mediation profile. Local restore and exact-move behavior
+this ID. Local restore and exact-move behavior
 are defined below. Events already authored by an old ID are never rewritten.
 
 ### 10.2 Owner directories

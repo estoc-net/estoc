@@ -102,7 +102,6 @@ Reserved names are:
 | `mediation/<id>/me` | DIDComm identity for one mediation arrangement |
 | `did/<id>/authentication` | signing/authentication key for one communication DID entity |
 | `did/<id>/key-agreement` | DIDComm key-agreement key for one communication DID entity |
-| `sync/account` | shared authenticated account used by `vault-sync/1.0` |
 
 In `did/...` names, `<id>` is the DID entity ID. Version 3 defines exactly
 one authentication key and one key-agreement key per communication DID
@@ -119,8 +118,8 @@ TLS private keys, DNS credentials, ACME account keys and web deployment
 credentials are not vault communication keys and MUST NOT be derived from
 these names.
 
-The fixed symmetric sync keys are derived as specified by
-`vault-sync/1.0`; they are not represented as event entities.
+The `replica.*` event-type prefix is reserved for deferred `replica-mediation.md`;
+the `sync.*` event-type and `sync/` key-name prefixes are reserved for deferred `vault-sync.md`.
 
 ### 3.3 Replica IDs and authors
 
@@ -522,7 +521,7 @@ before policy rejects further interaction; retirement is not retroactive
 erasure. Historical events, key derivation and contact-scoped transition
 evidence remain.
 
-## 6. Identity metadata and deferred replica/sync state
+## 6. Identity metadata
 
 ### 6.1 `identity.label`
 
@@ -538,134 +537,6 @@ evidence remain.
 
 The latest value by canonical order is the user-visible identity name.
 It is ordinary LWW metadata and has no key or protocol effect.
-
-### 6.2 `replica.label` (deferred)
-
-This event is reserved for the deferred multi-replica profile and is not
-required by phase 1.
-
-```json
-{
-  "type": "replica.label",
-  "roots": [],
-  "data": {
-    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
-    "name": "Phone"
-  }
-}
-```
-
-A label is encrypted vault metadata used to join a mediator's opaque
-replica list with a human-readable UI. The latest label per replica by
-canonical order wins. It is never sent to the mediator.
-
-### 6.3 `replica.retired` (deferred)
-
-This event is reserved for the deferred multi-replica delivery profile. Phase
-1 does not register replica IDs with a mediator and does not use this event in
-normal operation.
-
-```json
-{
-  "type": "replica.retired",
-  "roots": [],
-  "data": {
-    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
-    "because": "inactivity-policy"
-  }
-}
-```
-
-`because` is REQUIRED and is one of:
-
-```text
-user
-replaced
-lost
-inactivity-policy
-fork-recovery
-other
-```
-
-Retirement is a terminal desired-delivery policy for that replica ID:
-
-- active replicas reconcile it to every shared mediation account;
-- a mediator stops creating future deliveries for the retired ID;
-- events already authored by it remain valid and synchronizable; and
-- it does not revoke the seed or prevent a holder from registering a fresh
-  replica ID.
-
-A local runtime that learns from a converged event set **or an authenticated
-mediator response** that its current ID is terminally retired MUST perform the
-local re-incarnation procedure in section 16.10 before any further append,
-pickup acknowledgment, live-delivery registration or outbound submission.
-The old author is not rewritten and pending old-author events remain valid.
-
-### 6.4 Sync-store events (deferred)
-
-The following events are reserved for `vault-sync/1.0`, which is not a phase-1
-implementation requirement.
-
-#### `sync.configured`
-
-```json
-{
-  "type": "sync.configured",
-  "roots": [],
-  "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
-    "storeDid": "did:web:sync.example"
-  }
-}
-```
-
-This intent adds one `vault-sync/1.0` service locator to portable vault
-state. `id` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
-store; its current endpoint is resolved at runtime and may be cached only
-under `local/`.
-
-The same configuration ID with a different store DID is an integrity
-conflict. Configuring the same store DID under more than one ID is
-allowed but SHOULD be surfaced as redundant configuration.
-
-#### `sync.selected`
-
-```json
-{
-  "type": "sync.selected",
-  "roots": [],
-  "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870"
-  }
-}
-```
-
-The latest event by canonical order selects the preferred sync store for
-normal publication and bootstrap guidance. Selection does not remove
-another configured store; a runtime MAY mirror to every usable store.
-
-#### `sync.retired`
-
-```json
-{
-  "type": "sync.retired",
-  "roots": [],
-  "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
-    "because": "replaced"
-  }
-}
-```
-
-Retirement is terminal for the configuration ID. Replicas stop new
-upload, download and inventory work against it after learning the event.
-Remote ciphertext deletion, if a deployment offers an administrative
-account-reset operation, is outside `vault-sync/1.0` and is not implied by
-retirement.
-
-A readable folder therefore carries its sync-service locator in events.
-A bootstrap that starts with only the seed still needs one locator from an
-external trusted source to find the first sync store.
 
 ## 7. Contacts
 
@@ -2073,10 +1944,6 @@ Phase 1 expects exactly one active local `replica_id`. For each author seen in
 the event set, the fold reports `firstEventAt` and `lastEventAt`. An author
 fork is an event-store integrity condition, not a normal multi-writer merge.
 
-`replica.label` and `replica.retired` are reserved for the deferred
-multi-replica profile. A phase-1 implementation MAY preserve them but does not
-need to act on them.
-
 ### 14.2 Mediation fold
 
 For each mediation ID:
@@ -2099,13 +1966,6 @@ The **required receiving set** is every usable mediation that is either:
 The active runtime reconciles recipients and drains account-scoped pickup on
 every reachable mediation in this set. A hosted runtime receives no special
 ownership.
-
-### 14.3 Sync-store fold (deferred)
-
-This fold is reserved for `vault-sync/1.0` and is not required by phase 1.
-Implementations that preserve the deferred events group them by configuration
-ID, reject conflicting `sync.configured` values and treat any
-`sync.retired` as terminal. No phase-1 local commit depends on a sync store.
 
 ### 14.4 Route, DID and key fold
 
@@ -2672,13 +2532,6 @@ The phase-1 runtime uses ordinary account-scoped Message Pickup. It sends no
 `replica_id` to the mediator. A network failure after step 1 leaves a retryable
 intent, not a half identity.
 
-### 16.3 Configure a sync store (deferred)
-
-`sync.configured`, `sync.selected` and `sync.retired` are reserved for the
-deferred `vault-sync/1.0` profile. Phase 1 neither needs nor performs this
-procedure. Recovery uses the readable vault folder plus independently backed
-up seed/recovery material.
-
 ### 16.4 Create a relationship DID
 
 This procedure is used by an initiator before rendezvous and by protocols that
@@ -2741,14 +2594,6 @@ See `distributed-delivery.md` section 4.2.
 ### 16.9 Receive a message
 
 See `distributed-delivery.md` section 9.1.
-
-### 16.10 Replica retirement and re-incarnation (deferred)
-
-This procedure belongs to `replica-mediation/1.0` and is not required by phase
-1. The phase-1 mediator does not know `replica_id`; local restore or exact move
-rules are defined by `vault-folder.md`. A future implementation MUST define
-terminal mediator retirement and local re-incarnation before enabling
-per-replica pickup.
 
 ### 16.11 Close duplicate replay
 
