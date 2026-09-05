@@ -898,45 +898,33 @@ A conforming implementation MUST pass at least these cases:
 11. `changes()` returns a complete local delta and rejects another store
     generation's token.
 12. A token is never required for successful full reconciliation.
-13. `putObject` rejects a CID/content mismatch or any non-raw CID.
-14. A crash after object acceptance but before event append leaves only a
-    collectable orphan.
-15. Collection never removes an exact object in the held-root set and never
-    follows a link embedded in object content.
-16. Export and re-import preserve every portable byte.
-17. Restore omits local state and mints a fresh replica ID.
-18. No API interprets a hardware or operating-system identifier.
-19. Events produced by a retired replica remain valid immutable history.
-20. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
+13. Export and re-import preserve every portable byte.
+14. Restore omits local state and mints a fresh replica ID.
+15. No API interprets a hardware or operating-system identifier.
+16. Events produced by a retired replica remain valid immutable history.
+17. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
     other fractional precision and leap-second spelling are rejected, and
     lexical order matches represented millisecond order.
-21. A collector that snapshots roots before a new event commit cannot unlink
-    the newly referenced object; lock, transaction, pin or frontier
-    revalidation detects the race.
-22. Process-durable success is distinguished from the backend's separately
+18. Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
-23. More than 4096 events may be appended in one same-millisecond `appendAll`;
+19. More than 4096 events may be appended in one same-millisecond `appendAll`;
     IDs are distinct, embed the unchanged sample and sort in input order.
     Back-to-back separate appends with the same sample also sort in mint order.
-24. After clock rollback, a local writer uses the newly sampled earlier
+20. After clock rollback, a local writer uses the newly sampled earlier
     millisecond in both `eid` and `at` while avoiding collision. No mint-order
     guarantee spans rollback or restart; a batch still uses one common sample.
-25. Ingest validates UUIDv7 and `at` independently and does not reject immutable
+21. Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
-26. After restart, committed-event retention is reconstructed before abandoned
-    pending-reference guards are cleared and before collection runs. A crash
-    before event commit leaves an orphan after recovery; a crash after event
-    commit but before guard cleanup leaves a held object.
-27. Counter exhaustion fails before any event in the append or batch commits;
+22. Counter exhaustion fails before any event in the append or batch commits;
     it neither wraps the counter nor advances only the UUID timestamp.
-28. Concurrent erasure/GC cannot publish an export with a dangling held root;
+23. Concurrent erasure/GC cannot publish an export with a dangling held root;
     the selected cut remains protected or the export aborts before publication.
-29. Crash at each full-import boundary exposes either the previous usable view
+24. Crash at each full-import boundary exposes either the previous usable view
     or a recoverably incomplete import, never an apparently complete partial
     union. Deleting `local/` does not bypass that publication boundary.
-30. Full import preserves distinct-author observations sharing an ordinal and
+25. Full import preserves distinct-author observations sharing an ordinal and
     exposes same-author receipt-pair conflicts as projections, not preflight
     failures. It recomputes the high-water mark from the accepted event union.
-31. Import/export never includes backend recovery metadata as portable files.
+26. Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.

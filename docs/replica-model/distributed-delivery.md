@@ -282,10 +282,6 @@ across a verified peer-key transition in one relationship.
 
 ## 5. Canonical projections and hashes
 
-Version 3 uses two hashes: `intentHash` for immutable message intent and
-`plaintextHash` for one exact complete plaintext. The semantic projection below
-is a component of the intent projection, not a separately stored hash.
-
 ### 5.1 Semantic projection
 
 For an innermost plaintext `M`, define:
@@ -316,13 +312,6 @@ please_ack, ack, from_prior
 
 This projection is the `semantic` member of the intent projection below. It
 has no separately stored hash.
-
-`body` and `attachments` are reconstructed from the closed stored-message
-representation in `vault-events.md` section 8. Absent thread values are null. This exact value is the
-`semantic` member of the intent projection in section 5.2.
-
-`return_route` is forbidden in an Estoc vault application plaintext. It is a
-transport-local hint and is neither a semantic nor package variation.
 
 ### 5.2 Intent projection
 
@@ -372,56 +361,25 @@ normalize to `{}`. ACK values are interpreted in oldest-to-newest receive
 order, never lexicographic order.
 
 `headers` contains every permitted top-level DIDComm field not represented by
-a dedicated field. A difference in any such field is an intent difference.
+a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
+`created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
+`from_prior`, `return_route`, `body` and `attachments` are forbidden. A
+difference in any such field is an intent difference.
 `replayUntil`, local effect bookkeeping and package addressing are excluded.
 
 `intentHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON for
 this projection.
 
-`please_ack` is null when absent or the exact ordered wire array when present.
-For processing, replace `""` with the current wire ID and ignore later
-duplicate targets without rewriting the stored array. A current outbound is
-receipt-required exactly when the expanded targets contain its own wire ID.
-An array naming only older messages does not make the current message
-receipt-required.
-
-Absent `created_time` and `expires_time` normalize to null. Absent `ack`
-normalizes to `[]`; absent additional headers normalize to `{}`. Writers SHOULD
-not emit duplicate receipt targets, but readers preserve them exactly and
-ignore later semantic duplicates after expansion.
-
-`headers` contains every permitted DIDComm top-level header not represented by
-a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
-`created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
-`from_prior`, `return_route`, `body` and `attachments` are forbidden.
-
-`intentHash` is unpadded base64url SHA-256 of the RFC 8785 canonical
-projection. `replayUntil`, execution binding and package addressing are local
-portable control state and are excluded from it.
-
 ### 5.3 Exact plaintext hash
 
 `plaintextHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
 for the complete innermost DIDComm plaintext actually encrypted by one
-package. It includes `from`, `to`, `from_prior` and every emitted header.
+package or received in one observation. It includes `from`, `to`, `from_prior`
+and every present header.
 
 All packages for one outbound `mid` agree on the intent hash. They may have
 different plaintext hashes only when package-level addressing or security
 evidence changes under an expressly permitted rule.
-
-`plaintextHash` is unpadded base64url SHA-256 of the exact complete RFC 8785
-canonical innermost DIDComm plaintext encrypted by one package or received in
-one observation. It includes `from`, `to`, `from_prior` and every other present
-header.
-
-Several packages or observations of one logical message may have different
-`plaintextHash` values while keeping equal intent hashes only when
-their package-level addressing and security evidence independently validate
-under `distributed-delivery/1.0`.
-
-The stored application document does not preserve insignificant raw-wire JSON.
-The exact plaintext hash and durable normalized headers retain the distinctions
-needed for convergence and auditing.
 
 ## 6. Preparing a package
 
@@ -444,17 +402,9 @@ Version 3 emits:
 - `attachments` when non-empty; and
 - every `headers` entry at the plaintext top level.
 
-The reserved names are:
-
-```text
-typ, id, type, from, to, created_time, expires_time,
-thid, pthid, please_ack, ack, from_prior, return_route,
-body, attachments
-```
-
-They MUST NOT appear in `message.out.headers`. An implementation that cannot
-preserve a supported additional header MUST reject preparation rather than
-dropping it.
+`message.out.headers` MUST obey the reserved-name rule in section 5.2. An
+implementation that cannot preserve a supported additional header MUST reject
+preparation rather than dropping it.
 
 The plaintext `id` is the committed `message.out.mid`. The preparer
 RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
