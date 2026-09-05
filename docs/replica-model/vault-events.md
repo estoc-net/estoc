@@ -489,7 +489,7 @@ does not erase retained messages.
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
 A phase-1 one-use OOB invitation MUST disclose a rendezvous DID; its final
-acceptance consumes it under section 14.10.
+acceptance consumes it under section 14.9.
 
 This is the permanent record that a DID was revealed for a purpose.
 
@@ -520,9 +520,7 @@ before policy rejects further interaction; retirement is not retroactive
 erasure. Historical events, key derivation and contact-scoped transition
 evidence remain.
 
-## 6. Identity metadata
-
-### 6.1 `identity.label`
+## 6. `identity.label`
 
 ```json
 {
@@ -1464,7 +1462,7 @@ An ultimate ACK is an end-to-end application message. It is recorded as
 same relationship or exact non-transitioning channel scope may produce an
 idempotent `delivery.acknowledged`. A wire ID reused by another peer or
 relationship is never selected. Outbound membership is derived by section
-14.9. A threaded or natural response without an explicit `ack` array does not
+14.8. A threaded or natural response without an explicit `ack` array does not
 create that delivery observation.
 
 ## 11. Peer and profile observations
@@ -1806,7 +1804,7 @@ timely          = decisionInstant < expiryInstant
 Equality is expired. A candidate reaching expiry before acceptance may only
 receive a new reject decision.
 
-Section 14.5 is the sole normative admission reducer. In phase 1 this event is
+Section 14.4 is the sole normative admission reducer. In phase 1 this event is
 a final result, not a provisional policy suggestion. A pending user review
 leaves the candidate undecided. Finalization is serialized, and a writer MUST
 NOT append a different final result for the same candidate. An existing final
@@ -2016,13 +2014,13 @@ another before configuring a new mediated route.
 The **required receiving set** is every usable mediation that is either:
 
 - preferred; or
-- referenced by the mediated `boundRoute` of a live DID under section 14.4.
+- referenced by the mediated `boundRoute` of a live DID under section 14.3.
 
 The active runtime reconciles recipients and drains account-scoped pickup on
 every reachable mediation in this set. A hosted runtime receives no special
 ownership.
 
-### 14.4 Route, DID and key fold
+### 14.3 Route, DID and key fold
 
 For each route ID:
 
@@ -2072,7 +2070,7 @@ but a recipient fragment must still identify its exact key-agreement method.
 Ambiguous or inconsistent mapping is an integrity conflict and prevents
 cryptographic use.
 
-### 14.5 Rendezvous and relationship fold
+### 14.4 Rendezvous and relationship fold
 
 For each rendezvous generation, require one consistent
 `rendezvous.generationConfigured` and valid DID/route dependencies. It is live
@@ -2130,7 +2128,7 @@ a new initial message and wire ID. Relationship termination uses contact and
 DID lifecycle operations, never a retroactive admission rewrite.
 
 Before final accept, the writer checks the one-use invitation rule in section
-14.10, deterministic contact tombstones and sender-DID consistency. These
+14.9, deterministic contact tombstones and sender-DID consistency. These
 checks and acceptance commit share one serialized finalization operation.
 An undecided candidate introducing a new consumer of an unavailable one-use
 invitation is finalized as reject under `rendezvous.md` section 9.3.
@@ -2169,7 +2167,7 @@ A valid `peer.transitioned` changes current peer DID only inside its named
 relationship and its matching contact. It never globally retires or aliases
 the rendezvous DID.
 
-### 14.6 Peer evidence and contact-scoped attribution
+### 14.5 Peer evidence and contact-scoped attribution
 
 Build an evidence graph whose nodes are:
 
@@ -2205,7 +2203,7 @@ events naming that ID as a directed graph. A transition replaces its
 predecessor only in that relationship. Several unretired current ends are a
 visible relationship conflict.
 
-### 14.7 Contact fold
+### 14.6 Contact fold
 
 Fold each `cid` independently:
 
@@ -2239,7 +2237,7 @@ order. Transition ambiguity, sender-DID disagreement and conflicting user
 decisions are visible conflicts. A tombstoned deterministic rendezvous contact
 is never recreated by another event with the same ID.
 
-### 14.8 Inbound message and execution fold
+### 14.7 Inbound message and execution fold
 
 First group `message.in` by deterministic observation `mid`.
 
@@ -2296,7 +2294,7 @@ A user-visible thread contains each remaining logical application message once,
 positioned by the earliest canonical observation unless its application
 protocol defines another display time.
 
-### 14.9 Outbound message and delivery fold
+### 14.8 Outbound message and delivery fold
 
 Group `message.out` by `mid`. Multiple identical intent events are one logical
 outbound. Different fields under one `mid` are a conflict, including local
@@ -2398,7 +2396,7 @@ The phase-1 active runtime processes every valid queued or retryable message.
 Authorship never limits outbox ownership after an exact move or restore. When a
 durable expiry has passed, no further preparation or submission is allowed.
 
-### 14.10 Invitation fold
+### 14.9 Invitation fold
 
 An OOB disclosure with `uses == "one"` is available for a new consumer only
 when its DID is not retired and no valid final accept has consumed it.
@@ -2548,8 +2546,11 @@ absence never authorizes collection elsewhere.
 
 ## 16. Procedures
 
-These procedures define required ordering. Implementations may combine steps
-transactionally but may not reverse the durability boundaries.
+Initial send and admission are defined in `rendezvous.md` sections 8.5 and
+10.2; ordinary send and receive are defined in `distributed-delivery.md`
+sections 4.2 and 9.1. These wire procedures and the runtime procedures below
+define required ordering. Implementations may combine steps transactionally
+but may not reverse the durability boundaries.
 
 ### 16.1 Open the writable full runtime
 
@@ -2598,7 +2599,7 @@ The phase-1 runtime uses ordinary account-scoped Message Pickup. It sends no
 `replica_id` to the mediator. A network failure after step 1 leaves a retryable
 intent, not a half identity.
 
-### 16.4 Create a relationship DID
+### 16.3 Create a relationship DID
 
 This procedure is used by an initiator before rendezvous and by protocols that
 create ordinary pairwise relationships.
@@ -2622,7 +2623,7 @@ registration use the short form.
 Changing keys or bound route creates a new relationship DID and a
 contact-scoped transition. The existing DID entity is not edited.
 
-### 16.5 Configure and disclose a rendezvous DID
+### 16.4 Configure and disclose a rendezvous DID
 
 The Peer profile requires no domain or network resolver:
 
@@ -2645,23 +2646,7 @@ recipient key, it leaves the mediator delivery unacknowledged until local state
 is repaired and refolded. The rendezvous DID belongs to the vault, not the
 process displaying the invitation.
 
-### 16.6 Send an initial message
-
-See `rendezvous.md` section 8.5.
-
-### 16.7 Admit and establish a relationship
-
-See `rendezvous.md` section 10.2.
-
-### 16.8 Send an ordinary message
-
-See `distributed-delivery.md` section 4.2.
-
-### 16.9 Receive a message
-
-See `distributed-delivery.md` section 9.1.
-
-### 16.11 Close duplicate replay
+### 16.5 Close duplicate replay
 
 For every outbound whose `replayUntil` is non-null:
 
@@ -2676,7 +2661,7 @@ For every outbound whose `replayUntil` is non-null:
 
 Clock rollback after step 3 does not reopen replay.
 
-### 16.12 Erase a message
+### 16.6 Erase a message
 
 1. fold every root currently retained by the logical message and its prepared
    packages;
@@ -2693,7 +2678,7 @@ an equivalent erase for newly learned roots of that message before those roots
 are considered intentionally released. A future replicated profile applies the
 same closure rule in every full copy.
 
-### 16.13 Delete a contact
+### 16.7 Delete a contact
 
 1. append `contact.deleted` for the exact `cid`;
 2. for every message exactly attributed to that contact, append erases for

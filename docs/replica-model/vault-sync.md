@@ -111,19 +111,12 @@ K_data = HKDF-SHA-256(
 ```
 
 The literal UTF-8 strings and no terminating NUL are used in the HKDF
-inputs above.
+inputs above. These fixed symmetric keys are not represented as event entities.
 
 The sync protocol has no replica registry and carries no replica ID.
 Possession of the shared sync-account key authorizes the account. Each
 client keeps its own cursors and diagnostics locally; the sync store does
 not need to know which writable incarnation issued a request.
-
-| name | purpose |
-| --- | --- |
-| `sync/account` | shared authenticated account used by `vault-sync/1.0` |
-
-The fixed symmetric sync keys are derived as specified by
-`vault-sync/1.0`; they are not represented as event entities.
 
 ## 4. Sync objects
 
@@ -1276,8 +1269,8 @@ publication is not synchronized vault state or a recovery procedure.
 
 ### 14.1 Portable sync-store events
 
-The following events are reserved for `vault-sync/1.0`, which is not a phase-1
-implementation requirement.
+These portable events are part of this deferred profile and are not required
+by phase 1.
 
 #### `sync.configured`
 
@@ -1292,7 +1285,7 @@ implementation requirement.
 }
 ```
 
-This intent adds one `vault-sync/1.0` service locator to portable vault
+This intent adds one sync-service locator to portable vault
 state. `id` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
 store; its current endpoint is resolved at runtime and may be cached only
 under `local/`.
@@ -1332,9 +1325,8 @@ another configured store; a runtime MAY mirror to every usable store.
 
 Retirement is terminal for the configuration ID. Replicas stop new
 upload, download and inventory work against it after learning the event.
-Remote ciphertext deletion, if a deployment offers an administrative
-account-reset operation, is outside `vault-sync/1.0` and is not implied by
-retirement.
+Retirement does not imply remote ciphertext deletion. The explicit
+account-reset operation is defined in section 12.
 
 A readable folder therefore carries its sync-service locator in events.
 A bootstrap that starts with only the seed still needs one locator from an
@@ -1342,17 +1334,13 @@ external trusted source to find the first sync store.
 
 ### 14.2 Sync-store fold
 
-This fold is reserved for `vault-sync/1.0` and is not required by phase 1.
-Implementations that preserve the deferred events group them by configuration
-ID, reject conflicting `sync.configured` values and treat any
-`sync.retired` as terminal. No phase-1 local commit depends on a sync store.
+The fold groups events by configuration ID, rejects conflicting
+`sync.configured` values and treats any `sync.retired` as terminal.
 
 ### 14.3 Configure a sync store
 
-`sync.configured`, `sync.selected` and `sync.retired` are reserved for the
-deferred `vault-sync/1.0` profile. Phase 1 neither needs nor performs this
-procedure. Recovery uses the readable vault folder plus independently backed
-up seed/recovery material.
+1. append `sync.configured` with a new configuration ID and the sync-store DID;
+2. to make it the preferred store, append `sync.selected` for that ID.
 
 ## 15. Quota and availability
 

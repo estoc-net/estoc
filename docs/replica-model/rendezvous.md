@@ -258,7 +258,7 @@ Example:
 The invitation ID is the `pthid` of the initial interaction. One reusable
 invitation may start many independent protocol threads. A one-use invitation
 is permanently consumed at the final accept commit for its relationship under
-`vault-events.md` section 14.10, independently of later contact attachment or
+`vault-events.md` section 14.9, independently of later contact attachment or
 handoff materialization. Detach, contact deletion and erasure do not reopen it;
 retries for the same consumer reuse that relationship rather than creating
 another take.
@@ -435,9 +435,6 @@ concurrently use the same local author.
 
 ### 8.5 Send an initial message
 
-These procedures define required ordering. Implementations may combine steps
-transactionally but may not reverse the durability boundaries.
-
 1. learn a rendezvous DID through OOB, QR, directory, file or manual input;
 2. create/select a contact and append `contact.peerDidAdded` for that DID;
 3. create one local relationship `did:peer:4`, retain both forms and associate
@@ -559,7 +556,7 @@ current-message receipt request, stricter local size/lifetime preferences,
 relationship capacity, recipient capacity, user approval and organization
 rules.
 
-`vault-events.md` section 14.5 is the sole normative admission reducer. The
+`vault-events.md` section 14.4 is the sole normative admission reducer. The
 phase-1 writer serializes finalization and commits one final result, not a
 provisional policy suggestion. User review and policy reevaluation occur while
 the candidate is undecided. A final result cannot be replaced, even before
@@ -574,7 +571,7 @@ When an undecided candidate would introduce a new consumer but the one-use
 invitation is unavailable, the writer MUST finalize reject. An optional Report
 Problem response uses `e.p.estoc.not-accepted` under section 13; rejection may
 still be silent. Recovery of an existing final accept and permitted reuse by
-the same consumer follow `vault-events.md` section 14.10 and MUST NOT rewrite
+the same consumer follow `vault-events.md` section 14.9 and MUST NOT rewrite
 that accepted result. A timely final accept remains final during recovery even
 after the initial message expires; the response still obeys its own frozen
 expiry. Ending an accepted relationship uses normal contact deletion and
@@ -691,9 +688,6 @@ application-specific authenticated discriminator.
 
 ### 10.2 Admit and establish a relationship
 
-These procedures define required ordering. Implementations may combine steps
-transactionally but may not reverse the durability boundaries.
-
 For a delivery potentially addressed to a rendezvous key:
 
 1. while unlock/recovery is incomplete, keep the delivery pending without
@@ -712,7 +706,7 @@ For a delivery potentially addressed to a rendezvous key:
 7. for an admitted candidate, store retained bytes, append `message.in` with
    its durable receipt ordinal, then ACK account-scoped mediator delivery;
 8. reuse an existing final `relationship.admissionDecided`, or await/finalize
-   one under `vault-events.md` section 14.5; before a new accept, check sender-DID consistency,
+   one under `vault-events.md` section 14.4; before a new accept, check sender-DID consistency,
    contact tombstones and invitation availability in the same serialized
    finalization operation; and
 9. leave undecided candidates pending and suppress new materialization or
@@ -1086,7 +1080,7 @@ problem report may use that same fixed bootstrap channel only after validating
 the original local recipient and the peer key against the pinned initial
 package's resolution evidence. It does not bind or establish a relationship,
 alias peer keys, or waive any `from_prior` gate for handoff traffic. ACK lookup
-still follows `vault-events.md` section 14.9 and never uses wire ID alone.
+still follows `vault-events.md` section 14.8 and never uses wire ID alone.
 
 After final reject, candidate content is erased as specified in section 9.3.
 Hard pre-vault rejection has no portable candidate to erase.

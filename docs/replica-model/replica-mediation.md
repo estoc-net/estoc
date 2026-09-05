@@ -409,25 +409,14 @@ A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
-This procedure belongs to `replica-mediation/1.0` and is not required by phase
-1. The phase-1 mediator does not know `replica_id`; local restore or exact move
-rules are defined by `vault-folder.md`. A future implementation MUST define
-terminal mediator retirement and local re-incarnation before enabling
-per-replica pickup.
-
-`replica.retired` and network-driven re-incarnation are reserved for
-the deferred replica-mediation profile.
+Local restore and exact-move rules are defined by `vault-folder.md`.
 
 ### 5.8 Portable replica events
 
-`replica.label` and `replica.retired` are reserved for the deferred
-multi-replica profile. A phase-1 implementation MAY preserve them but does not
-need to act on them.
+These portable events are part of this deferred profile and are not required
+by phase 1.
 
 #### 5.8.1 `replica.label`
-
-This event is reserved for the deferred multi-replica profile and is not
-required by phase 1.
 
 ```json
 {
@@ -445,10 +434,6 @@ replica list with a human-readable UI. The latest label per replica by
 canonical order wins. It is never sent to the mediator.
 
 #### 5.8.2 `replica.retired`
-
-This event is reserved for the deferred multi-replica delivery profile. Phase
-1 does not register replica IDs with a mediator and does not use this event in
-normal operation.
 
 ```json
 {

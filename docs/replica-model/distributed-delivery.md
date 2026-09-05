@@ -239,9 +239,6 @@ permits collection to race a reference commit.
 
 ### 4.2 Send an ordinary message
 
-These procedures define required ordering. Implementations may combine steps
-transactionally but may not reverse the durability boundaries.
-
 The synchronous full-vault send operation:
 
 1. writes attachment objects;
@@ -629,7 +626,7 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 `ack` array names that outbound wire ID, the candidate outbound belongs to the
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
-passed. `vault-events.md` section 14.9 defines outbound membership using exact
+passed. `vault-events.md` section 14.8 defines outbound membership using exact
 initial/handoff references and validated package/DID evidence. Lookup is
 `(carrier.logicalPeerScope, acknowledgedWireId)`, never a vault-global wire-ID
 search. Threading, a natural response, transport acceptance, `please_ack`
@@ -704,7 +701,7 @@ identity and ACK lookup.
 
 A verified contact-scoped transition may cause observations with different
 authenticated `peerKey` values and therefore different MIDs to represent one
-logical message. `vault-events.md` section 14.8 defines that second-stage merge. The original
+logical message. `vault-events.md` section 14.7 defines that second-stage merge. The original
 observation MIDs remain stored for audit and conflict detection.
 
 These values are **observation identities**. Equal intent hashes under one MID
@@ -794,9 +791,6 @@ but is excluded from thread display, unread counts, notifications and
 application-content handlers.
 
 ### 9.1 Receive a message
-
-These procedures define required ordering. Implementations may combine steps
-transactionally but may not reverse the durability boundaries.
 
 For every account-scoped pickup or direct delivery:
 
