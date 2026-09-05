@@ -100,14 +100,6 @@ directory.
   objects/
     <cid>
 
-  extensions/
-    <ext>/
-      events/
-        <author>/
-          <segment>.jsonl
-      objects/
-        <cid>
-
   import/
     <backend-private staging and publication-recovery metadata>
 
@@ -118,12 +110,6 @@ directory.
       cache/
       trace/
         <segment>.jsonl
-    extensions/
-      <ext>/
-        options.json
-        cache/
-        trace/
-          <segment>.jsonl
 
   <opaque portable paths defined by this or a future version>
 ```
@@ -138,7 +124,6 @@ config.json
 keystore.json
 events/
 objects/
-extensions/
 import/
 local/
 ```
@@ -157,7 +142,7 @@ Deleting `local/` does not bypass this recovery. Read-only access may expose a
 verified complete published generation or explicit incomplete-import
 diagnostics, never a partial generation as a complete vault.
 
-A malformed entry inside `events/`, `objects/`, `extensions/`, `import/` or
+A malformed entry inside `events/`, `objects/`, `import/` or
 `local/` is damage, not an opaque portable file. Unknown top-level paths
 outside these roots are portable opaque files as described in section 7.3.
 
@@ -179,25 +164,6 @@ After import recovery is complete, deleting all of `local/` leaves the
 published portable copy. The next writable open creates a new replica ID and
 store generation. Removing `local/` alone during an incomplete import neither
 completes it nor makes its staging a portable snapshot.
-
-### 3.2 Extension stores
-
-`extensions/<ext>/` serializes one extension event/object store. `<ext>` is
-a canonical UUIDv7 minted by `extension.installed`.
-
-An extension directory contains only:
-
-```text
-events/<author>/<segment>.jsonl
-objects/<cid>
-```
-
-It has no independent `config.json`, `keystore.json`, `local/` or nested
-`extensions/`. Its local options, cache and trace are under
-`local/extensions/<ext>/`.
-
-An empty directory is not a store. It need not survive export and is not
-returned by `Vault.extensions()`.
 
 ## 4. `config.json`
 
@@ -317,12 +283,6 @@ The mapping is:
 locate(event) = events/<event.author>/
 ```
 
-For an extension store:
-
-```text
-locate(ext, event) = extensions/<ext>/events/<event.author>/
-```
-
 `<author>` MUST be the canonical lowercase UUIDv7 in the event's
 `author` field.
 
@@ -346,7 +306,6 @@ config.json
 keystore.json
 events/**
 objects/**
-extensions/**
 import/**
 local/**
 ```
@@ -401,8 +360,6 @@ A local append writes only under:
 events/<current replica_id>/
 ```
 
-or the corresponding extension path.
-
 A writer MAY append to its newest writable segment or rotate to a fresh
 one. It MUST serialize appends within one folder generation.
 
@@ -446,12 +403,6 @@ Each accepted portable object is one file:
 
 ```text
 objects/<canonical-dasl-cid>
-```
-
-or, for an extension:
-
-```text
-extensions/<ext>/objects/<canonical-dasl-cid>
 ```
 
 The filename MUST be the canonical DASL CID of the exact complete file bytes
@@ -538,8 +489,7 @@ cache/        rebuildable indexes and fold projections
 trace/        local event-like diagnostic streams with explicit retention
 ```
 
-The application owner is `local/agent/`. Extension owners use
-`local/extensions/<ext>/`.
+The application owner is `local/agent/`.
 
 These directories have no portable merge semantics. `cache/` may contain
 indexes and fold projections but MUST NOT contain derived private keys or a
@@ -552,13 +502,12 @@ to local retention.
 The folder backend's change token names at least:
 
 - `store_generation`;
-- which store issued it, main or one extension;
 - every segment path visible at the frontier; and
 - the byte length accepted from each segment.
 
 A token is rejected if:
 
-- its generation or store differs;
+- its generation differs;
 - a named segment is missing or shorter;
 - a recorded byte position is not a complete-line boundary; or
 - its shape is not recognized.
@@ -587,10 +536,7 @@ A writable open additionally:
 4. acquires the folder's single-writer lock before creating mutable local state;
 5. completes or safely rolls back any import recorded under `import/`, then
    creates or validates `local/replica.json`; and
-6. opens the main and extension stores with `author = replica_id`.
-
-Before running extensions, the application folds extension lifecycle and
-applies every pending purge.
+6. opens the event store with `author = replica_id`.
 
 ### 11.2 Scan
 
@@ -678,19 +624,13 @@ erasure is serialized or aborts the unpublished snapshot. Merely omitting
 `import/` cannot make an incomplete in-place import a complete source: recover
 it first or select a verified complete published generation.
 
-A snapshot may include an extension store that has a converged
-`extension.purged` event but has not yet been physically disposed. An
-importing or restored application applies the lifecycle fold before the
-extension can run.
-
 ### 12.2 Export from another backend
 
 A non-folder backend renders:
 
 - `config.json` and `keystore.json`;
-- one complete line per main event under `events/<author>/`;
-- every retained main DASL object under `objects/<cid>`;
-- each extension store under `extensions/<ext>/`; and
+- one complete line per event under `events/<author>/`;
+- every retained DASL object under `objects/<cid>`; and
 - opaque portable files in their paths.
 
 The exporter chooses fresh segment IDs and boundaries. One segment per
@@ -709,13 +649,12 @@ Before writing, the importer MUST:
 2. require the same anchor DID;
 3. validate `keystore.json` shape and seed identity;
 4. validate every event and path-author relation;
-5. preflight forked-current-author conditions in the main and all
-   applicable extension stores;
+5. preflight forked-current-author conditions in the event store;
 6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
-The importer also preflights the prospective merged folds, extension lifecycle
-and required non-erased held objects under `event-store.md` section 11.3.
+The importer also preflights the prospective merged folds and required
+non-erased held objects under `event-store.md` section 11.3.
 Receipt-ordinal reuse does not reject import: different authors may share an
 ordinal, while same-author receipt-pair conflicts are retained as projections
 under `vault-events.md` section 10.2. This permits recovery by event union
@@ -723,14 +662,13 @@ after independent execution; it does not authorize concurrent phase-1 writers.
 
 Then it:
 
-1. stages the prospective main event union without exposing it as complete;
-2. computes held roots over that union and the allowed extension unions;
+1. stages the prospective event union without exposing it as complete;
+2. computes held roots over that union;
 3. verifies and accepts required absent objects under temporary protection;
 4. keeps the target `config.json` and seed wrapping;
-5. copies unknown portable paths only when absent;
-6. stages allowed extension stores, verifies completeness and publishes the
-   merged portable view under `event-store.md` section 11.3; and
-7. disposes stores excluded by the published extension-purge fold.
+5. copies unknown portable paths only when absent; and
+6. verifies completeness and publishes the merged portable view under
+   `event-store.md` section 11.3.
 
 The reference backend MAY quiesce the vault and stage a complete portable view
 under `import/`. A backend using sibling generations outside `.estoc/` MUST
@@ -868,7 +806,7 @@ The following require a new folder/vault version:
    `canonicalEventBytes(event)`; merely compact non-canonical JSON is
    rejected or canonicalized before storage.
 10. An incomplete JSONL fragment is skipped and not fused with the next
-   append.
+    append.
 11. An ingest writes only decoded events, never copied source segments.
 12. Physical segment order does not affect `scan()`.
 13. An object filename/content mismatch or non-canonical DRISL encoding is damage.
@@ -877,62 +815,60 @@ The following require a new folder/vault version:
 15. Unknown top-level portable files round-trip and are absent-only on
     merge.
 16. An unknown entry inside a structural root is reported as damage.
-17. Extension stores use the same local author but separate event-ID
-    sets.
-18. Import never copies source `local/` or `import/` from a nonconforming
+17. Import never copies source `local/` or `import/` from a nonconforming
     archive and never executes a source recovery journal on the target.
-19. At-rest plaintext message content is not described as protected by
+18. At-rest plaintext message content is not described as protected by
     the vault passphrase.
-20. No mediator or sync operation consumes the folder as plaintext.
-21. A hosted full runtime can export an equivalent complete portable folder;
+19. No mediator or sync operation consumes the folder as plaintext.
+20. A hosted full runtime can export an equivalent complete portable folder;
     server-local database state is not the sole recoverable copy.
-22. A selected `did:web` document revision is retained as a referenced object
+21. A selected `did:web` document revision is retained as a referenced object
     and event, not as an authoritative mutable `did.json` path in the vault.
-23. A thin-client cache is not accepted as a complete vault folder.
-24. Historical author directories remain readable after restore or exact
+22. A thin-client cache is not accepted as a complete vault folder.
+23. Historical author directories remain readable after restore or exact
     move; phase 1 defines no mediator-driven author retirement.
-25. No persistent derived-key registry or key cache exists in `keystore.json`,
+24. No persistent derived-key registry or key cache exists in `keystore.json`,
     `local/` or another vault path; an unlocked runtime derives keys by exact
     name from the seed.
-26. Deferred vault sync is not presented as recovery material because it does
+25. Deferred vault sync is not presented as recovery material because it does
     not contain `seedJwe` or the seed.
-27. Before recovery is marked complete, an independent seed or complete
+26. Before recovery is marked complete, an independent seed or complete
     snapshot path is tested by deriving the exact anchor DID.
-28. A large raw object is exported as one exact `objects/<cid>` byte stream
+27. A large raw object is exported as one exact `objects/<cid>` byte stream
     even when the backend stores private extents.
-29. No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
+28. No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
     transport segments.
-30. Collection does not retain or fetch a DRISL-linked object unless its CID is
+29. Collection does not retain or fetch a DRISL-linked object unless its CID is
     explicitly in the held-root set.
-31. Phase 1 never sends `replica_id` to a mediator and does not require
+30. Phase 1 never sends `replica_id` to a mediator and does not require
     `vault-sync/1.0`.
-32. Filename, digest and codec-specific validation completes before import or
+31. Filename, digest and codec-specific validation completes before import or
     first entry into the owned `objects/` namespace; a later `open` follows the
     verified-stream completion rules in `dasl-objects.md` section 6.4.
-33. A successful folder append or first object acceptance survives immediate
+32. A successful folder append or first object acceptance survives immediate
     process restart; sudden-power-loss safety remains a separately documented
     flush boundary.
-34. Collection cannot unlink an object referenced by an event committed after
+33. Collection cannot unlink an object referenced by an event committed after
     the collector's initial held-root snapshot, nor one protected by a pending
     reference guard.
-35. A successful `FileStore.write` survives immediate process restart; a
+34. A successful `FileStore.write` survives immediate process restart; a
     pre-resolution crash leaves the complete portable file or no accepted
     replacement, never a partial file.
-36. A snapshot protects a consistent event/object/file cut; concurrent erasure
+35. A snapshot protects a consistent event/object/file cut; concurrent erasure
     is serialized or aborts publication rather than producing a dangling root.
-37. Crash during import exposes the previous usable view or a recoverably
+36. Crash during import exposes the previous usable view or a recoverably
     incomplete import. Deleting `local/` cannot bypass its publication barrier.
-38. Full import rejects missing non-erased held objects before publishing a
+37. Full import rejects missing non-erased held objects before publishing a
     complete view, but preserves cross-author ordinal ties and projects
     same-author receipt-pair conflicts without rejecting the event union.
-39. Restore continues receipt numbering above all historical authors and
+38. Restore continues receipt numbering above all historical authors and
     discovers unfinished pickup-ACKed inbound work without a local queue.
-40. `import/` is excluded from FileStore, snapshots, exports, restore inputs
+39. `import/` is excluded from FileStore, snapshots, exports, restore inputs
     and opaque-file copying. A half-written staged object never travels as an
     unknown portable file.
-41. Writable open recovers a target-owned import under its writer lock before
+40. Writable open recovers a target-owned import under its writer lock before
     normal operations or GC, including after `local/` deletion. Unknown or
     damaged recovery journals block writable open.
-42. A source with an incomplete import cannot be made a complete snapshot by
+41. A source with an incomplete import cannot be made a complete snapshot by
     omitting `import/`; recover it or read a verified complete published
     generation. Read-only access never labels a partial generation complete.

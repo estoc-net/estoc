@@ -627,6 +627,8 @@ messages or historical per-DID registration observations.
 
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
+A phase-1 one-use OOB invitation MUST disclose a rendezvous DID; its final
+acceptance consumes it under section 14.10.
 
 This is the permanent record that a DID was revealed for a purpose. It is
 not the publication of a `did:web` document.
@@ -733,7 +735,7 @@ before policy rejects further interaction; retirement is not retroactive
 erasure. Historical events, key derivation and contact-scoped transition
 evidence remain.
 
-## 6. Identity metadata, deferred replica/sync state and extensions
+## 6. Identity metadata and deferred replica/sync state
 
 ### 6.1 `identity.label`
 
@@ -878,59 +880,13 @@ A readable folder therefore carries its sync-service locator in events.
 A bootstrap that starts with only the seed still needs one locator from an
 external trusted source to find the first sync store.
 
-### 6.5 Extension lifecycle
-
-```json
-{
-  "type": "extension.installed",
-  "roots": [],
-  "data": {
-    "ext": "019b2a60-4f62-77af-b253-cb58278ade55",
-    "name": "onion",
-    "object": "bafkrei..."
-  }
-}
-```
-
-```json
-{
-  "type": "extension.removed",
-  "roots": [],
-  "data": {
-    "ext": "019b2a60-4f62-77af-b253-cb58278ade55"
-  }
-}
-```
-
-```json
-{
-  "type": "extension.purged",
-  "roots": [],
-  "data": {
-    "ext": "019b2a60-4f62-77af-b253-cb58278ade55"
-  }
-}
-```
-
-`installed` mints the extension-store ID. `object` is an optional name or
-signed-package root understood by the host; it is not a object reference
-and therefore is absent from event `roots`.
-
-`removed` stops ordinary execution but preserves the extension store.
-`purged` is terminal and requires the active runtime to dispose the extension
-store and extension-local state. A future replicated runtime applies the same
-rule in every full copy. The lifecycle events remain in the main
-vault event set.
-
-Version 3 treats extensions as host-shipped code. Portable third-party
-code distribution is outside this document.
-
 ## 7. Contacts
 
-A contact is a set of decisions identified by `cid` and connected through
-`contact.merged` edges. It may hold an unverified rendezvous DID before any
-authenticated channel exists and later move to a pairwise DID within the same
-relationship context.
+A contact is a set of decisions identified by one `cid`. It may hold an
+unverified rendezvous DID before any authenticated channel exists and later
+move to a pairwise DID within the same relationship context. Protocol identity
+is the relationship; contact IDs name decisions, not identity equivalence
+classes.
 
 ### 7.1 Contact IDs
 
@@ -1000,7 +956,7 @@ creation effect.
 }
 ```
 
-Latest by canonical order wins across the merged contact component.
+Latest by canonical order wins for that `cid`.
 
 #### `contact.flag`
 
@@ -1016,7 +972,7 @@ Latest by canonical order wins across the merged contact component.
 }
 ```
 
-Latest per `(contact component, flag)` wins.
+Latest per `(cid, flag)` wins.
 
 #### `contact.useDid`
 
@@ -1097,8 +1053,8 @@ older rendezvous DID non-preferred without deleting the historical add event.
 ```
 
 `because` is `invitation`, `rendezvous`, `accepted`, `automatic` or
-`manual`. `oobId` is nullable and is non-null when the attachment consumed or
-followed a particular invitation.
+`manual`. `oobId` is nullable provenance naming the invitation followed by
+this attachment. It is not invitation-consumption evidence.
 
 This is the explicit decision that an authenticated channel belongs to a
 contact. It is not inferred from a DID claim alone.
@@ -1118,8 +1074,7 @@ contact. It is not inferred from a DID claim alone.
 ```
 
 The latest attach/detach decision for the exact `(cid, channel)` by canonical
-order decides whether the edge is live. It does not undo historical invitation
-consumption under section 14.10.
+order decides whether the edge is live.
 
 #### `contact.merged`
 
@@ -1134,12 +1089,11 @@ consumption under section 14.10.
 }
 ```
 
-This is an undirected contact edge. The fold takes connected components of
-all merge edges. Direction is descriptive only. Cycles and concurrent
-opposite-direction merges are harmless.
-
-There is no unmerge in version 3. Recovery for a mistaken merge is to detach
-channels and create or attach the desired contact.
+This is a display-only grouping hint between two contact IDs. A UI MAY group
+those contact views, but every member retains its own decisions and
+relationship identity. This event MUST NOT affect attribution, DID selection,
+transitions, message or execution identity, ACK scope, admission, invitation
+consumption, deletion or erasure. It creates no protocol representative ID.
 
 #### `contact.deleted`
 
@@ -1153,9 +1107,7 @@ channels and create or attach the desired contact.
 }
 ```
 
-This is a permanent tombstone for one contact ID. Deleting a merged contact
-appends one tombstone for every currently known member of the component. A
-member learned later requires another tombstone.
+This is a permanent tombstone for exactly the named contact ID.
 
 ## 8. Stored message document and message hashes
 
@@ -1905,22 +1857,19 @@ Within one MID:
 - every conflict suppresses automatic application effects and disputed ACK
   handling until explicitly resolved.
 
-After contact attribution, two authenticated MID groups with the same
-`wireId` are merged as one logical message only when:
+Within one unique validated relationship scope, two authenticated MID groups
+with the same `wireId` are one logical message only when:
 
-1. both attribute without conflict to the same contact component;
-2. their authenticated peer DIDs/keys are joined by a verified
-   contact-scoped `peer.transitioned` chain;
-3. the semantic and intent hashes agree;
-4. every package-level address and transition proof validates;
-5. both resolve to the same unique validated relationship scope, not merely
-   the same merged contact component; and
-6. neither group is already conflicted.
+1. their authenticated peer DIDs/keys are joined by a verified
+   relationship-scoped `peer.transitioned` chain;
+2. the semantic and intent hashes agree;
+3. every package-level address and transition proof validates; and
+4. neither group is already conflicted.
 
 This transition-aware merge permits a sender to repack one logical wire
 message after an authenticated key/DID continuation without displaying it
-twice. Reuse of the same wire ID by an unrelated key, another contact or an
-unverified transition remains a separate message or conflict.
+twice. Reuse of the same wire ID by an unrelated key, another relationship or
+an unverified transition remains a separate message or conflict.
 
 When semantic and intent hashes agree, `ack` and `pleaseAck` are stable across
 valid observations because they are inside the intent projection. Valid
@@ -2034,8 +1983,8 @@ An ultimate ACK is an end-to-end application message. It is recorded as
 same relationship or exact non-transitioning channel scope may produce an
 idempotent `delivery.acknowledged`. A wire ID reused by another peer or
 relationship is never selected. Outbound membership is derived by section
-14.9, not from contact-component equality. A threaded or natural response
-without an explicit `ack` array does not create that delivery observation.
+14.9. A threaded or natural response without an explicit `ack` array does not
+create that delivery observation.
 
 ## 11. Peer and profile observations
 
@@ -2275,7 +2224,7 @@ Every generation freezes:
 
 `admissionPolicy` is `ask`, `auto` or `silent`. `ask` is the default. `auto`
 requires implementation-documented positive `autoLimits`; `ask` and `silent`
-use null.
+use null. `silent` finalizes reject without selecting a response.
 
 The event is appended before remote exposure and does not alone make the
 generation live:
@@ -2352,7 +2301,7 @@ does not define or require a DIDComm response type.
 }
 ```
 
-- `decision` is `accept`, `reject` or `ignore`.
+- `decision` is `accept` or `reject`.
 - `because` is `user` or `policy`.
 - `generation` is the live generation that decrypted and admitted the
   candidate.
@@ -2360,11 +2309,11 @@ does not define or require a DIDComm response type.
 - `initiatorDid` is the canonical Peer DID numalgo-4 short form.
 - `initiatorLongForm` is its validated first-disclosure long form.
 - `inboundCreatedTime` and `inboundExpiresTime` equal immutable wire headers.
-- accept requires `code == null` and the deterministic relationship ID.
-- reject requires `relationship == null` and one stable code:
-  `sender-did-conflict`, `unsupported-protocol`, `capacity`, `policy`,
-  `not-accepted` or `expired`.
-- ignore requires both `code` and `relationship` null.
+- accept requires the deterministic relationship ID.
+- reject requires `relationship == null`.
+- `code` is null or a non-empty, stable, non-secret diagnostic string.
+  Like `because`, it is provenance only and is excluded from final-result
+  equivalence. It does not select or change a peer-visible response.
 
 The event `at` is parsed as an RFC 3339 instant. An accept is timely only when:
 
@@ -2375,7 +2324,7 @@ timely          = decisionInstant < expiryInstant
 ```
 
 Equality is expired. A candidate reaching expiry before acceptance may only
-receive a new reject or ignore decision.
+receive a new reject decision.
 
 Section 14.5 is the sole normative admission reducer. In phase 1 this event is
 a final result, not a provisional policy suggestion. A pending user review
@@ -2773,18 +2722,17 @@ invalid decisions and accepts whose parsed RFC 3339 event `at` is not strictly
 before the Epoch-Seconds inbound expiry.
 
 This is the sole phase-1 admission reducer. The active writer serializes
-finalization and commits one final `accept`, `reject` or `ignore` result per
-candidate. Policy evaluation and user review happen before this commit; an
-`ask` candidate is undecided, not provisionally rejected.
+finalization and commits one final `accept` or `reject` result per candidate.
+Policy evaluation and user review happen before this commit; an `ask`
+candidate is undecided, not provisionally rejected.
 
 Equivalent final results are idempotent. Equivalence requires all payload
-fields except descriptive `because` to agree, including the decision,
-rejection code, relationship ID and candidate evidence. A writer MUST reject
+fields except provenance `because` and `code` to agree: the decision,
+relationship ID and candidate evidence remain semantic. A writer MUST reject
 an attempt to append a different final result. Incompatible imported results
 are a visible admission conflict: no new acceptance, rejection or application
-effect may be emitted. Neither canonical order, author, source preference nor
-`accept > reject > ignore` chooses a winner. Existing effects remain immutable
-history; a conflict does not undo them.
+effect may be emitted. Existing effects remain immutable history; a conflict
+does not undo them.
 
 An **effective admission result** is the unique valid final-result equivalence
 class for a candidate under this section. An undecided candidate or a candidate
@@ -2792,8 +2740,7 @@ with an admission conflict has no effective result. References to effective
 accept or reject mean that result, not merely the presence of a final event.
 
 An effective accept authorizes the existing materialization procedure. An
-effective reject or ignore authorizes candidate-only erasure once any selected
-rejection
+effective reject authorizes candidate-only erasure once any selected rejection
 intent has been frozen. The decision and any chosen rejection intent/binding
 commit atomically under `rendezvous.md` section 9.3. Recovery resumes committed
 response work and erasure; it neither invents an uncommitted optional response
@@ -2806,10 +2753,10 @@ Before final accept, the writer checks the one-use invitation rule in section
 14.10, deterministic contact tombstones and sender-DID consistency. These
 checks and acceptance commit share one serialized finalization operation.
 An undecided candidate introducing a new consumer of an unavailable one-use
-invitation is finalized as reject with code `not-accepted`, under
-`rendezvous.md` section 9.3. Recovery of an existing final accept and permitted
-reuse by the same consumer do not create another consumer or rewrite a result.
-Rejection never creates a custom rendezvous decline.
+invitation is finalized as reject under `rendezvous.md` section 9.3.
+Recovery of an existing final accept and permitted reuse by the same consumer
+do not create another consumer or rewrite a result. Rejection never creates a
+custom rendezvous decline.
 
 Group responder-side `relationship.established` and initiator-side
 `relationship.initiatorBound` by deterministic relationship ID. Each side must
@@ -2854,37 +2801,32 @@ The only global evidence edge is:
   snapshot.
 
 A `peer.transitioned` edge is not global. It belongs only to its named contact
-component and must name the exact historical resolution evidence used to
-verify `from_prior`. Likewise, `contact.peerDidAdded` is an outbound contact
-decision, not global control evidence.
+and must name the exact historical resolution evidence used to verify
+`from_prior`. Likewise, `contact.peerDidAdded` is an outbound contact decision,
+not global control evidence.
 
 Exclude mediation channels from contact attribution.
 
-For a channel, collect every live `contact.attached` whose channel lies in its
-evidence component, then collapse contact IDs by `contact.merged`:
+For a channel, collect the distinct contact IDs from live `contact.attached`
+edges reachable through its evidence graph:
 
 - none: unattributed;
-- one contact component: attributed to it;
+- one `cid`: attributed to it;
 - several: multi-valued attribution conflict.
 
 The fold never attributes an anonymous `peerKey == null` channel through the
 graph.
 
-Within one contact component, apply valid `peer.transitioned` events as a
+Within one contact's relationship, apply valid `peer.transitioned` events as a
 directed relationship graph. A transition replaces its predecessor only in
-that component. Several unretired current ends are a visible relationship
+that relationship. Several unretired current ends are a visible relationship
 conflict.
 
 ### 14.7 Contact fold
 
-Contact merge edges form undirected connected components. The reported
-representative is the lexicographically smallest non-deleted `cid`; if all
-are deleted, the smallest `cid` is retained as the hidden tombstoned
-representative.
+Fold each `cid` independently:
 
-For one component:
-
-- deleted when every known member has a `contact.deleted` tombstone;
+- deleted when that ID has a `contact.deleted` tombstone;
 - `petname` is latest by canonical order;
 - each flag is latest by canonical order;
 - `claimedName` is latest `profile.nameClaimed` across attributed channels;
@@ -2929,11 +2871,10 @@ For each MID group:
 - erasure is applied before object presence; and
 - conflict suppresses automatic effects and disputed ACK processing.
 
-After contact attribution, union authenticated MID groups into one logical
-message only when they have the same wire ID, resolve to the same unique
-validated relationship scope, have a verified scoped `peer.transitioned` chain
-between their sender keys/DIDs, and agree on semantic and intent hashes with
-valid package evidence. A merged contact alone supplies no alias authority.
+Union authenticated MID groups into one logical message only when they have
+the same wire ID, resolve to the same unique validated relationship scope,
+have a verified scoped `peer.transitioned` chain between their sender
+keys/DIDs, and agree on semantic and intent hashes with valid package evidence.
 This is the only cross-peer-key wire-ID merge.
 
 Resolve an execution scope before automatic handling. A final accepted
@@ -2978,9 +2919,9 @@ Group `message.out` by `mid`. Multiple identical intent events are one logical
 outbound. Different fields, semantic hash or intent hash under one `mid` are a
 conflict.
 
-ACK lookup uses `(carrier.logicalPeerScope, wireId)`. A merged contact component
-is not a logical peer scope. Before applying an ACK, derive the candidate
-outbound's membership from non-conflicted portable evidence as follows.
+ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
+derive the candidate outbound's membership from non-conflicted portable
+evidence as follows.
 
 For relationship `R`, an outbound belongs to `R` when either:
 
@@ -2989,13 +2930,12 @@ For relationship `R`, an outbound belongs to `R` when either:
    local `handoffMid` and `handoffWireId`; or
 2. its validated package sends from `R`'s local relationship DID to a DID/key
    in `R`'s verified peer chain, including only independently verified scoped
-   continuations; its target is either a contact in `R`'s component or an
-   explicit channel that exactly matches that package's channel.
+   continuations; its target is either the exact contact named by `R` or an
+   explicit channel that exactly matches that package's channel. The local DID
+   and authenticated peer-chain evidence identify that same unique `R`.
 
 Responder `originInboundMid` and `originWireId` name received input, not a local
-outbound. Wire-ID equality alone never establishes the first path. Contact
-merge alone never establishes the second path: the local DID and authenticated
-peer-chain evidence must identify the same unique relationship. A subsequent
+outbound. Wire-ID equality alone never establishes the first path. A subsequent
 initial attempt may also belong to an already bound `R` when its pinned
 rendezvous snapshot and local initiator key independently derive that same
 relationship ID; the original binding is not rewritten to name the new attempt.
@@ -3074,48 +3014,32 @@ durable expiry has passed, no further preparation or submission is allowed.
 ### 14.10 Invitation fold
 
 An OOB disclosure with `uses == "one"` is available for a new consumer only
-when its DID is not retired, no valid historical consumption exists, and no
-committed acceptance is awaiting consumption recovery.
+when its DID is not retired and no valid final accept has consumed it.
 
-A valid historical `contact.attached` that consumes this locally disclosed
-`oobId` is consumption evidence even after detach. For rendezvous, a final
-accept reserves the invitation as soon as its candidate's immutable `pthid`
-names this `oobId` and the candidate's local recipient DID matches the
-disclosure. The corresponding attachment completes consumption. A matching
-`pthid` without that recipient and acceptance evidence is not a reservation.
-An attachment merely following a remote invitation is not local consumption.
-For rendezvous, attachment evidence counts only for the final accepted
-relationship; a pre-admission attachment alone cannot consume the invitation.
-
-The consumer is the deterministic relationship ID for rendezvous, or the
-original consuming contact ID for another permitted invitation profile.
-Detach, contact deletion, merge, content erasure and clock rollback do not
-reopen an invitation or remove its original consumer. Further initial messages
-for the same already accepted relationship may reuse that relationship; they
-do not constitute a second consumer or reopen the invitation to other peers.
+A valid final accept consumes the locally disclosed invitation at the
+acceptance commit when its candidate's immutable `pthid` names this `oobId`
+and the candidate's local recipient DID matches the disclosure. The consumer
+is the accept's deterministic relationship ID. A matching `pthid` alone,
+a rejected candidate or following a remote invitation is not consumption.
+`contact.attached` records channel attribution only; no later attachment or
+relationship materialization is required to complete consumption.
 
 The single writer checks availability and commits the winning acceptance in
-one serialized finalization operation, before network work. Recovery finishes
-that consumer's missing attachment evidence before admitting another consumer.
-Incompatible or conflicted consumption evidence keeps the invitation unavailable
-and surfaces a conflict; merging the contacts does not reconcile distinct
-consumers. No new consumption or unconsumption event is needed.
+one serialized finalization operation, before network work. A crash after that
+commit leaves the invitation consumed even if no contact or pairwise DID has
+yet been materialized. Recovery may finish that relationship's missing facts,
+but does not perform another consumption step.
+
+Detach, contact deletion, content erasure and clock rollback do not reopen an
+invitation or remove its original consumer. Further initial messages for the
+same accepted relationship may reuse it without creating a second consumer.
+Incompatible accepted consumers or conflicted acceptance evidence keep the
+invitation unavailable and surface a conflict. No consumption or unconsumption
+event is needed.
 
 A `uses == "many"` rendezvous disclosure remains open until its DID is
 retired or publication policy closes it. It does not disclose a relationship
 DID.
-
-### 14.11 Extension fold
-
-For each `ext`:
-
-- installed if a consistent `extension.installed` exists;
-- removed if any `extension.removed` exists after installation;
-- purged if any `extension.purged` exists; and
-- purged is terminal.
-
-The application applies every pending purge before opening or executing
-extensions.
 
 ## 15. Erasure and collection
 
@@ -3218,10 +3142,9 @@ predicate is a retention predicate. Removing one contribution does not authorize
 collection while another event or an in-flight reference/snapshot guard retains
 the object.
 
-An extension store computes held roots from its own events. Unknown event types
-retain every exact root in their `roots` because version 3 defines no erase
-rule for them. A DRISL Tag 42 link is not a retention edge unless its CID also
-appears in an accepted event's `roots`.
+Unknown event types retain every exact root in their `roots` because version 3
+defines no erase rule for them. A DRISL Tag 42 link is not a retention edge
+unless its CID also appears in an accepted event's `roots`.
 
 An object may be collected only when its exact CID is absent from the current
 held-root set, is absent from pending-reference guards, and the backend's
@@ -3248,15 +3171,15 @@ transactionally but may not reverse the durability boundaries.
 3. acquire the exclusive writer lock before creating mutable local state;
 4. complete backend recovery and any import publication barrier, then load or
    mint local `replica_id` and `store_generation`;
-5. fold portable state and apply extension lifecycle, reconstruct committed
-   held roots, and only then release abandoned guards and permit GC;
+5. fold portable state and reconstruct committed held roots, and only then
+   release abandoned guards and permit GC;
 6. project receipt-integrity conflicts and recover the vault-wide ordinal
    high-water mark under section 10.2 before accepting a new inbound
    observation; cross-author ordinal reuse does not block open or import;
 7. enumerate committed inbound observations with unfinished admission,
    transition/binding, ACK or protocol-defined deterministic effect work;
-8. idempotently reconcile those observations and pending candidate erasures,
-   invitation consumption and replay closure from portable history;
+8. idempotently reconcile those observations, relationship materialization,
+   pending candidate erasures and replay closure from portable history;
 9. derive every required mediation account; and
 10. independently start recipient reconciliation, account-scoped pickup, live
     delivery, eligible outbox work and optional Web publication reconciliation.
@@ -3423,12 +3346,12 @@ For a delivery potentially addressed to a rendezvous key:
 
 An accept is valid only when its decision event instant is strictly before the
 candidate's Epoch-Seconds expiry. Equality is expired. An undecided candidate
-may only be finalized as reject or ignore after expiry. A previously committed
-timely accept remains final during recovery; a later clock sample does not
-replace it with rejection.
+may only be finalized as reject after expiry. A previously committed timely
+accept remains final during recovery; a later clock sample does not replace it
+with rejection.
 
-For final reject or ignore, create no relationship DID. Rejection may be
-silent or may select a deterministic protocol error or Report Problem intent.
+For final reject, create no relationship DID. Rejection may be silent or may
+select a deterministic protocol error or Report Problem intent.
 Commit the final decision and any chosen rejection intent/binding in one
 `appendAll` under `rendezvous.md` section 9.3, before network work. Recovery
 resumes that intent, or treats its absence as no selected response; it does not
@@ -3507,7 +3430,7 @@ The active phase-1 runtime may later:
 
 A new package may change address/security evidence only under validated repack
 rules while preserving semantic and intent hashes. Receiving may join equal
-wire IDs across a verified peer-key transition in one contact.
+wire IDs across a verified peer-key transition in one relationship.
 
 ### 16.9 Receive a message
 
@@ -3615,18 +3538,16 @@ same closure rule in every full copy.
 
 ### 16.13 Delete a contact
 
-1. append `contact.deleted` for every currently known member of the contact
-   component, preferably through `appendAll`;
-2. for every message exactly attributed to the component, append erases for
+1. append `contact.deleted` for the exact `cid`;
+2. for every message exactly attributed to that contact, append erases for
    body, attachment and prepared-envelope roots required by policy;
-3. retire relationship DIDs exclusively associated with the deleted
-   component;
+3. retire relationship DIDs exclusively associated with that contact;
 4. retire or unregister their routes;
 5. preserve a shared rendezvous DID unless separately retired; and
 6. collect unheld objects after grace.
 
-A later merge cannot revive a tombstoned member. A newly discovered component
-member or late message requires the same idempotent cleanup procedure.
+A late message attributed to that tombstoned contact requires the same
+idempotent cleanup procedure.
 
 ## 17. Merge, synchronization and restore
 
@@ -3766,7 +3687,7 @@ There is no migration requirement from an earlier event vocabulary.
 14. Expiry irreversibly ends work; later valid evidence may display
     acknowledged-late without restarting it.
 15. Equal authenticated variants derive one observation MID. Equal wire IDs
-    under transition-verified peer keys in one contact merge only at the
+    under transition-verified peer keys in one relationship merge only at the
     logical-message layer.
 16. Before the first automatic effect, `message.executionBound` derives its
     execution ID from the stable relationship-or-channel scope and wire ID, not
@@ -3806,9 +3727,10 @@ There is no migration requirement from an earlier event vocabulary.
     hard-gate rejection.
 31. The first bootstrap message is an ordinary application message, not an
     Estoc rendezvous wrapper.
-32. `relationship.admissionDecided` records one final accept/reject/ignore
-    result. Equivalent results are idempotent; different outcome-affecting
-    payloads, including reject codes, are conflicts rather than precedence.
+32. `relationship.admissionDecided` records one final accept/reject result.
+    Different `because` or `code` provenance leaves otherwise equal results
+    equivalent; different decisions, relationship IDs or candidate evidence
+    conflict and suppress new effects.
 33. Two initial wire IDs from the same `(rendezvous DID, initiator key)` derive
     one relationship/contact/responder DID and remain separate messages.
 34. A deterministic contact tombstone is not resurrected; reconnect requires a
@@ -3839,8 +3761,8 @@ There is no migration requirement from an earlier event vocabulary.
 45. Until an authenticated message arrives at responder pairwise DID, every
     package from it carries the same `fromPrior` and uses long-form sender
     spelling.
-46. A rejected/ignored durable candidate eventually releases its content roots
-    through `message.erased`; the skeleton remains.
+46. A rejected durable candidate eventually releases its content roots through
+    `message.erased`; the skeleton remains, including for silent rejection.
 47. A rendezvous DID is excluded from ordinary `writeTo`; the initial-message
     procedure is the only ordinary sender path targeting it.
 48. Contact-scoped transition does not globally retire or union the rendezvous
@@ -3901,11 +3823,11 @@ There is no migration requirement from an earlier event vocabulary.
 72. Restore, restart and loss of `local/` recover the ordinal high-water mark
     across all historical authors. Cross-author equal ordinals survive import
     and sort by author on a tie; allocation resumes above the union's maximum.
-73. Detach, contact deletion, merge and erasure do not reopen a consumed one-use
-    invitation. A final accept reserves it across crash before attachment;
-    another initial message for the same consumer does not consume it twice.
-74. Two relationships in a merged contact are not interchangeable ACK scopes.
-    Responder origin inbound IDs never identify a local outbound by coincidence;
+73. A final accept consumes a matching local one-use invitation before any
+    attachment or relationship materialization. Crash, detach, contact deletion,
+    erasure and clock rollback do not reopen it; same-consumer reuse is not a
+    second consumption, and another consumer is rejected.
+74. Responder origin inbound IDs never identify a local outbound by coincidence;
     local handoff and initiator initial outbounds use their exact named MIDs.
 75. An ACK-only carrier can bind with `because == "ack"` without executing a
     handler. Different descriptive binding reasons do not change identity.
@@ -3913,8 +3835,8 @@ There is no migration requirement from an earlier event vocabulary.
     recovery completes missing facts atomically before ACK or effect processing.
 77. A pickup-ACKed inbound with unfinished deterministic work is rediscovered
     from portable history on open, without redelivery or a surviving local queue.
-78. Final reject/ignore followed by erasure cannot be turned into accept for the
-    same candidate. Incompatible imported final results suppress new effects.
+78. Final reject followed by erasure cannot be turned into accept for the same
+    candidate. Incompatible imported final results suppress new effects.
 79. A no-handoff problem report may acknowledge only its validated bootstrap
     channel; it never establishes a relationship or bypasses handoff proof.
 80. Final rejection and any selected response intent/binding commit atomically.
@@ -3928,6 +3850,12 @@ There is no migration requirement from an earlier event vocabulary.
     change future order, never a previously frozen ACK array.
 83. Equivalent final admission events have one effective result; undecided or
     conflicted candidates have none, even if a final accept event is present.
-84. A new consumer of an unavailable one-use invitation gets final reject with
-    code `not-accepted`; same-consumer reuse and recovery do not reject or
-    overwrite an existing accepted result.
+84. A new consumer of an unavailable one-use invitation gets final reject;
+    same-consumer reuse and recovery do not reject or overwrite an existing
+    accepted result. Conflicting accepted consumers keep it unavailable.
+85. Adding `contact.merged` changes only display grouping. Per-`cid` decisions,
+    relationship scopes, message/execution IDs, ACK results, invitation state
+    and deletion/erasure behavior remain unchanged.
+86. A matching `pthid` without a valid accept for the disclosed local recipient
+    DID does not consume an invitation. `contact.attached` alone does not
+    consume it, including when following a remote invitation.

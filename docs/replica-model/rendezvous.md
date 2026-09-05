@@ -69,8 +69,8 @@ A conforming implementation uses:
 - Out-of-Band 2.0 (`https://didcomm.org/out-of-band/2.0`);
 - Trust Ping 2.0 (`https://didcomm.org/trust-ping/2.0`);
 - Empty Message 1.0 (`https://didcomm.org/empty/1.0`);
-- Report Problem 2.0 (`https://didcomm.org/report-problem/2.0`) when an
-  explicit rejection is emitted;
+- Report Problem 2.0 (`https://didcomm.org/report-problem/2.0`) when a
+  Report Problem response is selected;
 - Routing 2.0 (`https://didcomm.org/routing/2.0`);
 - Peer DID Method numalgo 4;
 - RFC 8785 JSON Canonicalization Scheme;
@@ -97,8 +97,8 @@ informative deferred extensions, not dependencies of this profile.
 - **Initial-message policy set** — message types a rendezvous generation
   expects or may auto-handle after durable admission. It is not a hidden
   pre-vault interoperability gate.
-- **Admission decision** — a durable local decision to `accept`, `reject` or
-  `ignore` one bootstrap candidate. It is not a wire message.
+- **Admission decision** — a durable local decision to `accept` or `reject`
+  one bootstrap candidate. It is not a wire message; rejection may be silent.
 - **Deterministic protocol response** — an automatic response whose complete
   portable intent is a pure function of the triggering inbound message and
   durable policy.
@@ -332,10 +332,11 @@ Optional Web-facade example:
 
 The invitation ID is the `pthid` of the initial interaction. One reusable
 invitation may start many independent protocol threads. A one-use invitation
-is reserved by final acceptance and permanently consumed by the resulting
-relationship under `vault-events.md` section 14.10. Detach, contact deletion
-and erasure do not reopen it; retries for the same consumer reuse that
-relationship rather than creating another take.
+is permanently consumed at the final accept commit for its relationship under
+`vault-events.md` section 14.10, independently of later contact attachment or
+handoff materialization. Detach, contact deletion and erasure do not reopen it;
+retries for the same consumer reuse that relationship rather than creating
+another take.
 
 An invitation may include one or more alternative protocol-message
 attachments. The recipient chooses at most one supported alternative and acts
@@ -581,47 +582,49 @@ relationship.admissionDecided
 with outcome:
 
 ```text
-accept | reject | ignore
+accept | reject
 ```
 
-`ask` is the default. `auto` must be explicit and bounded. `silent` maps a
-valid candidate to `ignore`; it does not bypass durable admission. Post-
-admission policy handles protocol support, current-message receipt request,
-stricter local size/lifetime preferences, relationship capacity, recipient
-capacity, user approval and organization rules.
+`ask` is the default. `auto` must be explicit and bounded. `silent` finalizes a
+valid candidate as reject without selecting a response; it does not bypass
+durable admission. Post-admission policy handles protocol support,
+current-message receipt request, stricter local size/lifetime preferences,
+relationship capacity, recipient capacity, user approval and organization
+rules.
 
 `vault-events.md` section 14.5 is the sole normative admission reducer. The
 phase-1 writer serializes finalization and commits one final result, not a
 provisional policy suggestion. User review and policy reevaluation occur while
 the candidate is undecided. A final result cannot be replaced, even before
 handoff intent exists; a later attempt requires a new initial message and wire
-ID. Equivalent results are idempotent. Incompatible results, including different
-rejection codes, are conflicts that suppress new effects rather than invoking
-an outcome, source or code precedence rule.
+ID. Equivalent results are idempotent. `because` and `code` are provenance and
+do not participate in equivalence; different decisions, relationship IDs or
+candidate evidence conflict and suppress new effects.
 
 Before final accept, the same serialized operation checks deterministic
 contact tombstones, sender-DID consistency and one-use invitation availability.
 When an undecided candidate would introduce a new consumer but the one-use
-invitation is unavailable, the writer MUST finalize reject with code
-`not-accepted`. If it chooses a Report Problem response, section 13 maps this
-to `e.p.estoc.not-accepted`; rejection may still be silent. Recovery of an
-existing final accept and permitted reuse by the same consumer follow
-`vault-events.md` section 14.10 and MUST NOT rewrite that accepted result.
-A timely final accept remains final during recovery even after the initial
-message expires; the response still obeys its own frozen expiry. Ending an
-accepted relationship uses normal contact deletion and DID/route retirement.
+invitation is unavailable, the writer MUST finalize reject. An optional Report
+Problem response uses `e.p.estoc.not-accepted` under section 13; rejection may
+still be silent. Recovery of an existing final accept and permitted reuse by
+the same consumer follow `vault-events.md` section 14.10 and MUST NOT rewrite
+that accepted result. A timely final accept remains final during recovery even
+after the initial message expires; the response still obeys its own frozen
+expiry. Ending an accepted relationship uses normal contact deletion and
+DID/route retirement.
 
 Only an effective accept materializes relationship state. Only an effective
-reject may create a protocol-specific error or Report Problem. Ignore emits no
-peer-visible response.
+reject may create a protocol-specific error or Report Problem; a reject with
+no selected response is silent.
 
-After final reject or ignore, the runtime MUST append `message.erased` for
-candidate-only body, attachment and stored-message roots once any selected
-rejection intent has been frozen. The final decision and any chosen rejection
-intent, together with its required execution binding, MUST commit in one
-`appendAll`. If no rejection intent is committed with a final reject, recovery
-MUST NOT invent one. It resumes only already committed response work and
-candidate erasure. The skeleton, resolution evidence and final decision remain.
+After final reject, the runtime MUST append `message.erased` for candidate-only
+body, attachment and stored-message roots once any selected rejection intent
+has been frozen. The final decision and any chosen rejection intent, together
+with its required execution binding, MUST commit in one `appendAll`. If no
+rejection intent is committed with a final reject, recovery MUST NOT invent
+one. It resumes only already committed response work and candidate erasure.
+Different diagnostic provenance does not select another response or change its
+frozen wire code. The skeleton, resolution evidence and final decision remain.
 A crash before erasure does not authorize later acceptance.
 A pending `ask` candidate may retain content until decision or expiry, but the
 product MUST bound that pending period. Independent references to shared CIDs
@@ -961,17 +964,24 @@ still requires an explicit `ack` naming its wire ID.
 
 There is no rendezvous `decline` message.
 
-The code of the effective reject result maps to peer-visible Report Problem
-code as follows:
+When policy selects an optional Report Problem response, it uses these coarse
+wire codes for the corresponding rejection reason:
 
 ```text
-sender-did-conflict  -> e.p.estoc.sender-did-conflict
+sender-did-conflict   -> e.p.estoc.sender-did-conflict
 unsupported-protocol -> e.p.estoc.unsupported-initial-protocol
 capacity             -> e.p.estoc.capacity
-policy                -> e.p.estoc.not-accepted
-not-accepted          -> e.p.estoc.not-accepted
-expired               -> e.p.estoc.initial-message-expired
+policy               -> e.p.estoc.not-accepted
+not-accepted         -> e.p.estoc.not-accepted
+expired              -> e.p.estoc.initial-message-expired
 ```
+
+This table serves only the optional Report Problem response. It does not define
+a closed vocabulary for admission `code` provenance or participate in admission
+equivalence. The selected wire code is frozen in the response body and intent,
+where it remains semantic under the ordinary message/effect rules. Equivalent
+admission evidence with different provenance MUST NOT change that intent or
+create another response.
 
 A reject may result in no response, a protocol-defined deterministic error, or
 `https://didcomm.org/report-problem/2.0/problem-report` from the rendezvous DID
@@ -1008,8 +1018,8 @@ package's resolution evidence. It does not bind or establish a relationship,
 alias peer keys, or waive any `from_prior` gate for handoff traffic. ACK lookup
 still follows `vault-events.md` section 14.9 and never uses wire ID alone.
 
-After final reject or ignore, candidate content is erased as specified in
-section 9.3. Hard pre-vault rejection has no portable candidate to erase.
+After final reject, candidate content is erased as specified in section 9.3.
+Hard pre-vault rejection has no portable candidate to erase.
 
 ## 14. Retry, replacement, rollover and expiry
 
@@ -1090,7 +1100,7 @@ rendezvous ingress route.
 The baseline size/lifetime floor prevents undiscoverable local preferences from
 silently dropping ordinary interoperable bootstrap. Abuse is instead bounded
 by hard source/rendezvous rate limits, a bounded pending queue, post-admission
-policy and immediate content erasure after reject/ignore.
+policy and immediate content erasure after reject, including silent rejection.
 
 Full reliable bootstrap conformance assumes the peer implements DIDComm v2.1
 DID rotation (`from_prior`) and explicit `ack`. A non-Estoc agent may process
@@ -1124,13 +1134,14 @@ DID as ordinary `writeTo`.
     candidate.
 13. Local preference, capacity and unsupported-protocol decisions occur after
     durable `message.in`.
-14. Reject and ignore erase candidate content roots while retaining skeleton
-    observations and decisions.
+14. Reject, including silent rejection, erases candidate content roots while
+    retaining skeleton observations and decisions.
 15. A final accept remains final before handoff intent exists and after restart;
     relationship termination uses contact deletion, not another admission result.
 16. A committed timely accept is not replaced by expiry or user/policy override.
-    Incompatible final results, including different reject codes, are conflicts;
-    final reject/ignore followed by erasure cannot later become accept.
+    Different `because` or `code` provenance does not conflict; incompatible
+    semantic final results do. Final reject followed by erasure cannot later
+    become accept.
 17. Stable relationship/contact/responder-DID, relationship-scoped execution
     and effect vectors recompute from the published inputs.
 18. `relationship.established` freezes one origin, long-form responder DID,
@@ -1155,8 +1166,9 @@ DID as ordinary `writeTo`.
     identity is used.
 27. Until confirmation, every responder package carries the same stored
     `fromPrior` and uses long-form sender spelling.
-28. Rejection maps local codes to deterministic coarse problem codes and emits
-    no custom decline.
+28. The coarse code table serves only an optional Report Problem response.
+    Its selected wire code stays frozen despite different admission provenance;
+    no custom decline or additional response is created.
 29. Default local retry uses a 30-second minimum, a 21600-second backoff cap
     and 32 pre-counted transport attempts per wire ID per runtime. Restart may
     reset that local budget but never extends the mandatory frozen expiry.
@@ -1185,9 +1197,9 @@ DID as ordinary `writeTo`.
     evidence without minting another relationship or provisional execution ID.
 40. Pickup-ACKed inbound work is recovered from portable history without
     mediator redelivery or local queues.
-41. A final accept reserves a one-use invitation across crash before attachment;
-    detach, deletion, merge and erasure never make it available to another
-    consumer. Further initial messages for the same relationship reuse it.
+41. A final accept consumes a one-use invitation across crash before attachment;
+    detach, deletion and erasure never make it available to another consumer.
+    Further initial messages for the same relationship reuse it.
 42. A no-handoff rejection may ACK only its validated pinned bootstrap channel;
     such a receipt is not successful handoff or relationship establishment.
 43. A final rejection and its optional response intent/binding commit atomically.
@@ -1195,8 +1207,8 @@ DID as ordinary `writeTo`.
     no response was committed, recovery erases candidate content without
     inventing a new optional response or revisiting admission.
 44. An undecided candidate introducing a new consumer of an unavailable one-use
-    invitation is finalized as reject with code `not-accepted`. An
-    optional Report Problem uses `e.p.estoc.not-accepted`; no new code is added.
+    invitation is finalized as reject. An optional Report Problem uses
+    `e.p.estoc.not-accepted`; no response is required.
 45. Same-consumer reuse and recovery of a committed accept do not become a new
     invitation take or overwrite the result. Only the unique valid final-result
     equivalence class is effective; conflicted or undecided candidates have

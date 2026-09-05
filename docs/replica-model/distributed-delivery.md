@@ -588,11 +588,10 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
 passed. `vault-events.md` section 14.9 defines outbound membership using exact
-initial/handoff references and validated package/DID evidence, not merged
-contact equality. Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`,
-never a vault-global wire-ID search. Threading, a natural response, transport
-acceptance, `please_ack` presence or a mediator receipt is insufficient without
-the explicit value.
+initial/handoff references and validated package/DID evidence. Lookup is
+`(carrier.logicalPeerScope, acknowledgedWireId)`, never a vault-global wire-ID
+search. Threading, a natural response, transport acceptance, `please_ack`
+presence or a mediator receipt is insufficient without the explicit value.
 
 One valid ACK stops normal retry of every package for the receipt-required
 outbound. It does not end replay retention for packages that answer another
@@ -994,17 +993,14 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 51. An author assigns each new observation its own ordinal, including
     duplicates. Restore and import continue above all historical authors;
     cross-author ordinal reuse is valid and sorts by author on a tie.
-52. Two relationships in a merged contact never share ACK authority merely
-    because of that merge. Exact local handoff/initial references and package
-    evidence determine outbound scope.
-53. A binding for ACK-only processing uses `ack` provenance without a handler
+52. A binding for ACK-only processing uses `ack` provenance without a handler
     effect or a different execution identity.
-54. Recovery completes handoff binding even for a known responder DID and finds
+53. Recovery completes handoff binding even for a known responder DID and finds
     pickup-ACKed unfinished work without mediator redelivery.
-55. A crash after an outcome-unknown transport call can reset the local retry
+54. A crash after an outcome-unknown transport call can reset the local retry
     budget, but never changes the wire ID, exact retry package or frozen expiry.
-56. Independently received histories with equal ordinals have the same
+55. Independently received histories with equal ordinals have the same
     scope-local ACK-target order after any permutation of their union. A
     late-imported alias may change future order, never an already frozen ACK.
-57. A same-author receipt-pair conflict excludes only affected ACK targets;
+56. A same-author receipt-pair conflict excludes only affected ACK targets;
     other peer scopes and unaffected targets remain processable.

@@ -540,7 +540,6 @@ path:
 
 ```text
 objects/<canonical-dasl-cid>
-extensions/<extension-id>/objects/<canonical-dasl-cid>
 ```
 
 The file contents are the exact portable object bytes:

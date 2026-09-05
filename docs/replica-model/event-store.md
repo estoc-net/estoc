@@ -277,9 +277,6 @@ portable snapshot omits the current local author selection, so opening a
 restored copy also mints a fresh one. An exact physical move MAY preserve
 the author only when no second writer remains.
 
-The same local author is used by the vault's main event store and every
-extension event store opened by that local copy.
-
 No author- or replica-creation event is required. The existence of an
 author is evident from its events. Optional replica labels and
 retirement policy are vault events defined in `vault-events.md`.
@@ -542,11 +539,10 @@ token. Each event appears once. No order is promised.
 A token is meaningful only to:
 
 - the store generation that issued it; and
-- the particular event set, main vault or one extension store, that
-  issued it.
+- the vault event set that issued it.
 
 A store MUST reject a token it cannot place, including a token from
-another generation, another extension, a truncated segment set or a
+another generation or vault, a truncated segment set or a
 future position. The caller then discards the related cache and refolds
 from `scan()`.
 
@@ -769,42 +765,16 @@ Local state includes:
 - mediator sockets and pickup cursors;
 - retry timers;
 - local options;
-- traces and retention configuration; and
-- extension-local caches, traces and options.
+- traces and retention configuration.
 
 It is not exposed through `FileStore`, not present in a snapshot, and not
 merged or synchronized. Anything whose loss would violate a committed
 user decision is in the wrong place.
 
-## 9. Extension stores
+## 9. Deferred extension stores
 
-An installed extension may keep portable identity state in its own:
-
-```ts
-interface ExtensionStore {
-  events: EventStore;
-  objects: ObjectStore;
-}
-```
-
-The extension store:
-
-- uses the same current local author as the main vault store;
-- has a separate event-ID set and separate object-retention fold;
-- is exported and synchronized under its extension ID;
-- has no nested extensions, independent seed or independent identity;
-- keeps its non-portable state under local extension state; and
-- is disposed as one unit after the vault's extension lifecycle fold says
-  it is purged.
-
-An extension event ID may equal a main-vault event ID without conflict
-because they belong to different sets. Within one extension store, the
-normal `eid` rules apply.
-
-Disposal deletes the extension's event/object store and its local state,
-invalidates every outstanding handle, and prevents the same process from
-silently recreating it. The vault event that requested purge remains in
-the main event set.
+Extension stores are deferred alongside replica mediation and vault sync.
+Phase 1 defines no extension-store API, lifecycle or portable layout.
 
 ## 10. Vault interface
 
@@ -813,16 +783,8 @@ interface Vault {
   readonly events: EventStore;
   readonly objects: ObjectStore;
   readonly files: FileStore;
-
-  extension(ext: string): ExtensionStore;
-  extensions(): Promise<string[]>;
-  dispose(ext: string): Promise<void>;
 }
 ```
-
-`extensions()` returns extension IDs for which portable bytes currently
-exist. Whether an ID is allowed to run or be opened is decided by the
-extension lifecycle fold above this interface.
 
 The current replica and other local state are intentionally absent from
 `Vault`. A host opens a vault backend with a local replica context and
@@ -848,10 +810,9 @@ separate encrypted wire representation and is not a folder export.
 
 Export writes the complete portable vault:
 
-- all main events;
-- all retained main DASL objects;
-- all portable files;
-- every non-disposed extension event and object store; and
+- all events;
+- all retained DASL objects;
+- all portable files; and
 - no local state or backend import staging/recovery metadata.
 
 Every complete event record in a segment is exactly
@@ -860,8 +821,8 @@ print an event or preserve non-canonical imported member order. Segment
 boundaries and names are serialization details. Two exports of the same event
 set need not have the same segment files.
 
-An export MUST select one consistent portable-state cut: the main and extension
-event sets, extension lifecycle, portable-file contents and exact held roots.
+An export MUST select one consistent portable-state cut: the event set,
+portable-file contents and exact held roots.
 An event scan and an unrelated later object listing do not establish a cut.
 The exporter MUST protect the cut's required objects from collection until
 copying and verification finish, using snapshot pins, a transaction, or a
@@ -883,10 +844,9 @@ first semantic write:
 
 1. validate the folder structure and singleton shapes;
 2. decode and validate every source event envelope;
-3. compute fork checks for the main store and every extension store that
-   may be imported;
-4. compute the prospective merged event sets and held-root folds, applying
-   erasure and extension-purge rules;
+3. compute fork checks for the event store;
+4. compute the prospective merged event set and held-root fold, applying
+   erasure rules;
 5. derive vault-level semantic projections, preserving valid conflicting
    facts rather than choosing a winner by arrival order; and
 6. verify every object to be copied and require every prospective non-erased
@@ -905,12 +865,11 @@ revalidated against the same target frontier before publication.
 
 After preflight, import:
 
-1. stages the prospective main and allowed extension event sets;
+1. stages the prospective event union;
 2. accepts the required absent objects with pending-reference protection before
    publishing their importing references;
-3. applies singleton and opaque-file policies to the staged view;
-4. excludes purged extension stores and schedules any remaining disposal; and
-5. verifies the prospective held-root requirements and publishes the complete
+3. applies singleton and opaque-file policies to the staged view; and
+4. verifies the prospective held-root requirements and publishes the complete
    merged view.
 
 The backend MUST use a staged-generation publication boundary or an equivalent
@@ -1079,41 +1038,38 @@ A conforming implementation MUST pass at least these cases:
     follows an unlisted DRISL link.
 16. Export and re-import preserve every portable byte.
 17. Restore omits local state and mints a fresh replica ID.
-18. Main and extension stores with the same event ID do not conflict.
-19. Disposing an extension invalidates all handles and does not remove the
-    main-vault purge event.
-20. No API interprets a hardware or operating-system identifier.
-21. Events produced by a retired replica remain valid immutable history.
-22. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
+18. No API interprets a hardware or operating-system identifier.
+19. Events produced by a retired replica remain valid immutable history.
+20. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
     other fractional precision and leap-second spelling are rejected, and
     lexical order matches represented millisecond order.
-23. A collector that snapshots roots before a new event commit cannot unlink
+21. A collector that snapshots roots before a new event commit cannot unlink
     the newly referenced object; lock, transaction, pin or frontier
     revalidation detects the race.
-24. Process-durable success is distinguished from the backend's separately
+22. Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
-25. More than 4096 events may be appended in one same-millisecond `appendAll`;
+23. More than 4096 events may be appended in one same-millisecond `appendAll`;
     IDs are distinct, embed the unchanged sample and sort in input order.
     Back-to-back separate appends with the same sample also sort in mint order.
-26. After clock rollback, a local writer uses the newly sampled earlier
+24. After clock rollback, a local writer uses the newly sampled earlier
     millisecond in both `eid` and `at` while avoiding collision. No mint-order
     guarantee spans rollback or restart; a batch still uses one common sample.
-27. Ingest validates UUIDv7 and `at` independently and does not reject immutable
+25. Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
-28. After restart, committed-event retention is reconstructed before abandoned
+26. After restart, committed-event retention is reconstructed before abandoned
     pending-reference guards are cleared and before collection runs. A crash
     before event commit leaves an orphan after recovery; a crash after event
     commit but before guard cleanup leaves a held object.
-29. Counter exhaustion fails before any event in the append or batch commits;
+27. Counter exhaustion fails before any event in the append or batch commits;
     it neither wraps the counter nor advances only the UUID timestamp.
-30. Concurrent erasure/GC cannot publish an export with a dangling held root;
+28. Concurrent erasure/GC cannot publish an export with a dangling held root;
     the selected cut remains protected or the export aborts before publication.
-31. Crash at each full-import boundary exposes either the previous usable view
+29. Crash at each full-import boundary exposes either the previous usable view
     or a recoverably incomplete import, never an apparently complete partial
     union. Deleting `local/` does not bypass that publication boundary.
-32. Full import preserves distinct-author observations sharing an ordinal and
+30. Full import preserves distinct-author observations sharing an ordinal and
     exposes same-author receipt-pair conflicts as projections, not preflight
     failures. It recomputes the high-water mark from the accepted event union.
-33. Import/export never includes backend recovery metadata as portable files.
+31. Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.
