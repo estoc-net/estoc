@@ -78,9 +78,8 @@ Every conforming implementation preserves the following rules.
    NOT share one author ID. The store detects this condition when it can.
 6. **Object references are explicit.** The event envelope lists every object
    root the event retains. A CID elsewhere in `data` is not a reference.
-7. **Objects precede references.** A producer writes and validates every
-   referenced DASL object before appending an event that makes it recoverable
-   state.
+7. **Objects precede references.** A local `Vault.commit` accepts new objects
+   and verifies every referenced root before appending its events (section 10).
 8. **Only DASL objects are collected.** Events and portable files are not
    garbage-collected through the object API.
 9. **Local state is not correctness state.** Losing `local/` may require
@@ -101,9 +100,8 @@ Every conforming implementation preserves the following rules.
     acceptance or portable-file write reports success, a later process restart
     over the same intact storage generation observes the complete committed
     value. Power-loss durability is a separate backend policy.
-14. **Collection is coordinated with reference commits.** An object cannot be
-    unlinked while it is retained by a committed event or while an in-flight
-    operation may still commit a reference to it.
+14. **Collection shares the vault writer lock.** Computing held roots and
+    unlinking objects cannot overlap a reference commit (section 10).
 
 ### 2.1 Commit and durability terminology
 
@@ -451,9 +449,8 @@ later process restart MUST observe the complete event. Stable-media survival
 across sudden power loss requires the backend's separately documented flush or
 `fsync` boundary.
 
-Appends through one store handle are serialized. Concurrent handles over
-one writable serialization require an external lock supplied by the
-backend or host application.
+Appends use the vault-wide writer lock in section 10, including calls from
+concurrent handles and workers in the same runtime.
 
 ### 5.2 `appendAll`
 
@@ -646,12 +643,49 @@ Phase 1 defines no extension-store API, lifecycle or portable layout.
 ## 10. Vault interface
 
 ```ts
+type CommitObject = {
+  cid: Cid;
+  source: ByteSource;
+};
+
 interface Vault {
   readonly events: EventStore;
   readonly objects: ObjectStore;
   readonly files: FileStore;
+
+  commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
 ```
+
+`ByteSource` is defined by `dasl-objects.md`. Each supplied object names its
+expected raw CID; preparing a source in private temporary storage does not
+accept it into the portable object store.
+
+`commit(objects, drafts)` holds the writer lock while validating all drafts,
+accepting supplied objects under `ObjectStore.putObject`'s rules, requiring
+every draft root (including reused objects) to identify a present accepted
+object, and appending and returning one process-durable batch under section 5.2.
+
+Object acceptance or root-check failure appends no events. Accepted objects
+may remain after failure or crash under `dasl-objects.md`'s orphan-grace policy;
+the event batch still obeys section 5.2's all-or-nothing rule.
+
+For the exposed `EventStore`, `appendAll(drafts)` is the no-new-object form
+`commit([], drafts)`; `append(draft)` is its single-event form. Both include
+the same root checks and lock.
+
+Phase 1 MUST serialize operations over one writable vault generation with one
+vault-wide writer lock, across all handles and workers. The lock covers all
+event, object and portable-file mutations and object reads through stream
+completion or cancellation. Nested store calls share the enclosing operation's
+lock. A backend MAY use a transaction that provides the same serialization.
+
+`ingest` holds this lock from its target-state fork and duplicate checks through
+event acceptance. Collection acquires it before computing the current held-root
+set and holds it through physical unlink; a keep set computed before acquiring
+the lock MUST NOT be used. Full import and export hold it across the boundaries
+defined in sections 11.2 and 11.3. Existing rules for serialized receipt
+allocation and admission finalization use this same lock.
 
 The current replica and other local state are intentionally absent from
 `Vault`. A host opens a vault backend with a local replica context and
@@ -690,18 +724,12 @@ set need not have the same segment files.
 
 An export MUST select one consistent portable-state cut: the event set,
 portable-file contents and exact held roots.
-An event scan and an unrelated later object listing do not establish a cut.
-The exporter MUST protect the cut's required objects from collection until
-copying and verification finish, using snapshot pins, a transaction, or a
-quiescence lock. Mutable portable files MUST come from the same cut.
-
-Erasure and export MUST be serialized, or a concurrent erasure MUST invalidate
-and abort the export before publication. A snapshot pin is not authority to
-revive erased content. The destination remains unpublished until every required
-object and file validates. Missing or damaged non-erased content makes the
-export incomplete; it MUST NOT be reported as a successful complete snapshot.
-Temporary protection is released on completion or abort under the normal
-recovery rules. A phase-1 backend MAY quiesce the vault for the whole operation.
+The exporter MUST hold the section-10 writer lock from selecting that cut
+through copying, verification and publication. Erasure, collection and portable
+file writes therefore wait for completion or abort. The destination remains
+unpublished until every required object and file validates. Missing or damaged
+non-erased content makes the export incomplete; it MUST NOT be reported as a
+successful complete snapshot.
 
 ### 11.3 Import into an existing vault
 
@@ -726,15 +754,15 @@ event union and limits only work affected by a projected conflict. Existing
 `ForkedAuthor`, envelope, identity and object-integrity checks still apply.
 
 These are full-vault importer duties, not payload validation by the opaque
-`EventStore.ingest` API. A preflight failure writes nothing. Preflight and
-publication MUST be serialized with competing vault mutations, or atomically
-revalidated against the same target frontier before publication.
+`EventStore.ingest` API. A preflight failure writes nothing. Import MUST hold
+the section-10 writer lock from target-state preflight through publication,
+including object acceptance and ingest.
 
 After preflight, import:
 
 1. stages the prospective event union;
-2. accepts the required absent objects with pending-reference protection before
-   publishing their importing references;
+2. accepts the required absent objects before publishing their importing
+   references;
 3. applies singleton and opaque-file policies to the staged view; and
 4. verifies the prospective held-root requirements and publishes the complete
    merged view.
@@ -756,9 +784,8 @@ or read through a verified complete published generation before full import.
 A completed full import requires all non-erased held objects. An explicitly
 requested partial-data import MAY expose missing-material diagnostics, but
 MUST NOT be described as a complete restore or enable work that needs missing
-material. Recovery reconstructs committed retention before releasing abandoned
-guards or enabling collection. This contract requires no giant transaction;
-a phase-1 backend MAY keep the vault quiescent while staging and publishing.
+material. Recovery reconstructs committed retention before enabling collection.
+The writer lock does not replace the recoverable publication boundary.
 
 The operation is idempotent. It decodes and ingests events rather than copying
 segments as opaque files. Source bytes do not revive an erased message/root
@@ -844,8 +871,7 @@ section 2.1 and document:
 
 - its stronger power-loss durability and flush policy, if any;
 - orphan grace for abandoned objects;
-- the lock, transaction, pin or frontier-revalidation mechanism used to
-  coordinate collection with event reference commits;
+- implementation of the section-10 writer lock;
 - maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
@@ -881,8 +907,9 @@ A conforming implementation MUST pass at least these cases:
    reopen still observes the complete event.
 2. A process crash before `append` resolves may leave the complete event or no
    event, never a partial accepted event.
-3. `appendAll` is all-or-nothing, gives every event one timestamp, and remains
-   complete after successful resolution and process restart.
+3. `commit` and its `appendAll` form append all events or none, give every event
+   one timestamp, and remain complete with required objects after successful
+   resolution and process restart.
 4. A JCS-ineligible event, including duplicate member names, an unpaired
    surrogate or a non-I-JSON number, is rejected before acceptance.
 5. Two source serializations with different member order or whitespace but

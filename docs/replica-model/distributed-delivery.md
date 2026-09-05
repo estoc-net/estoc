@@ -218,7 +218,7 @@ The following table is normative. "Committed" means process-durable success.
 
 | Step | Required committed evidence | Permitted next action |
 | --- | --- | --- |
-| Object acceptance | Complete verified object plus pending-reference guard | Append its referencing event |
+| Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope | Submit that exact package |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
@@ -233,22 +233,21 @@ handler effect. Stopping normal retry after an ultimate ACK does not release
 exact response material. Reaching `replayUntil` also does not release it until
 the monotonic replay-closure event has committed.
 
-Object acceptance and event commit MUST be coordinated with collection as
-specified by `dasl-objects.md`; neither the table nor an orphan grace period
-permits collection to race a reference commit.
+Object acceptance and event append use `Vault.commit` under `event-store.md`
+section 10.
 
 ### 4.2 Send an ordinary message
 
 The synchronous full-vault send operation:
 
-1. writes attachment objects;
-2. writes the stored message document;
+1. prepares attachment objects;
+2. prepares the stored message document;
 3. selects durable nullable `createdTime`, optional `expiresTime`, exact
    `pleaseAck` value (null or array), exact ordered `ack`, complete `headers`,
    and any required replay deadline;
 4. computes the intent hash;
 5. rejects a rendezvous DID as an ordinary relationship target;
-6. appends `message.out`; and
+6. commits those objects with `message.out` through `Vault.commit`; and
 7. returns `mid`.
 
 It performs no network operation. When `createdTime` is null, preparation
@@ -266,8 +265,8 @@ The active phase-1 runtime may later:
 4. attach the frozen contact-scoped `fromPrior` while pairwise handoff remains
    unconfirmed;
 5. construct complete plaintext by copying every intent-time header;
-6. compute plaintext hash, encrypt, store exact envelope and append
-   `message.prepared`;
+6. compute plaintext hash, encrypt, and use `Vault.commit` for the exact
+   envelope and `message.prepared`;
 7. submit directly or through Routing 2.0 with `packageId == forward.id`;
 8. append `delivery.submitted` on acceptance or `delivery.failed` on terminal
    failure; record retryable failures only in local trace; and
@@ -406,9 +405,9 @@ preparation rather than dropping it.
 The plaintext `id` is the committed `message.out.mid`. The preparer
 RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
 encrypts, parses the encrypted-message JSON with duplicate-member and I-JSON
-validation, and stores `UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL
-object before appending `message.prepared`. Submission uses those exact stored
-bytes.
+validation, and uses `Vault.commit` to accept
+`UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL object with
+`message.prepared`. Submission uses those exact stored bytes.
 
 Retrying a package reuses identical plaintext, normalized ciphertext bytes and
 package ID. A new package for the same logical message may change `from`, `to`,
@@ -814,10 +813,10 @@ For every account-scoped pickup or direct delivery:
    MUST be pickup-ACKed without `message.in`;
 5. for admitted or ordinary traffic, derive channel, observation MID,
    intent hash and exact plaintext hash;
-6. write retained body/attachment objects and the stored message document;
-7. process-durably append `message.in` with applicable `channel.firstSeen`,
-   exact `peer.resolved`, contact attachment and non-controversial
-   observations;
+6. prepare retained body/attachment objects and the stored message document;
+7. use `Vault.commit` for those objects and `message.in` with applicable
+   `channel.firstSeen`, exact `peer.resolved`, contact attachment and
+   non-controversial observations;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -845,10 +844,9 @@ For every account-scoped pickup or direct delivery:
 16. on duplicate receipt while replay-submission-eligible, re-submit the same
     retained response package rather than creating another effect or package.
 
-Steps 6–7 SHOULD use one atomic batch. A conforming pure ACK is retained for
-audit and delivery processing but excluded from user threads, unread counts,
-notifications and application handlers. It has `pleaseAck == null`, so first
-successful submission ends normal retry.
+A conforming pure ACK is retained for audit and delivery processing but excluded
+from user threads, unread counts, notifications and application handlers. It has
+`pleaseAck == null`, so first successful submission ends normal retry.
 
 A crash before durable message commit leaves mediator delivery pending. A
 crash after commit but before pickup ACK causes redelivery and another valid

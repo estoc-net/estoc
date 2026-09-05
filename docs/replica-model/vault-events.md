@@ -1052,8 +1052,8 @@ is `deadline` or `erased`.
 For `because == "deadline"`, the runtime MUST have observed an instant greater
 than or equal to `replayUntil`. For `because == "erased"`, corresponding
 portable `message.erased` evidence covering the replay-only roots MUST already
-be committed or be committed atomically in the same `appendAll`; this form may
-close replay before the deadline.
+be committed or be committed atomically in the same `Vault.commit`; this form
+may close replay before the deadline.
 
 Once any valid `message.replayClosed` exists for an outbound, replay material
 is closed permanently. Restart, loss of `local/`, wall-clock rollback, later
@@ -1581,12 +1581,12 @@ key under `rendezvous.md` section 10. Validate the transition and
 `relationship.initiatorBound` together against that evidence; they MUST agree
 on relationship, contact, local identity and handoff observation. The binding
 need not already exist, but all missing transition, relationship and execution
-facts commit in the same `appendAll` under `rendezvous.md` section 12 before
+facts commit in the same `Vault.commit` under `rendezvous.md` section 12 before
 ACK processing or effects. Missing evidence defers processing; ambiguous or
 incompatible attribution is a relationship conflict.
 
 The processing procedure attaches the new authenticated channel to the named
-contact, preferably in the same `appendAll`. The transition changes the
+contact, preferably in the same `Vault.commit`. The transition changes the
 current peer end only in the named relationship within that contact. It does
 not globally union the public DID with every pairwise DID and does not retire
 `from` for unrelated peers.
@@ -1995,7 +1995,7 @@ section 9 owns the executable observation-ID vectors.
 Before processing the handoff ACK or creating the confirmation effect, the
 initiator MUST complete the mutually consistent transition, relationship and
 execution evidence under `rendezvous.md` section 12. All missing locally
-produced facts in that sequence MUST commit in one `appendAll`. A known peer
+produced facts in that sequence MUST commit in one `Vault.commit`. A known peer
 DID does not prove that either binding exists. Reopen and imported-prefix
 recovery reuse consistent facts and complete missing facts before effects.
 
@@ -2489,8 +2489,8 @@ Missing bytes MUST NOT be displayed as intentional deletion.
 
 ### 15.3 Held roots
 
-The application computes the roots passed to `ObjectStore.collect` under the
-GC coordination contract in `event-store.md` and `dasl-objects.md`.
+Under the writer lock in `event-store.md` section 10, the application computes
+the held roots passed to `ObjectStore.collect` in `dasl-objects.md` section 8.3.
 
 A root is held when at least one accepted event retains it through
 `event.roots`, except that a root named by `message.erased` is no longer held
@@ -2546,18 +2546,11 @@ held until unambiguous release evidence or explicit erasure exists.
 
 Normal and replay submission eligibility additionally check current time,
 holds, addressing, proof, route and available bytes. Neither scheduling
-predicate is a retention predicate. Removing one contribution does not authorize
-collection while another event or an in-flight reference/snapshot guard retains
-the object.
+predicate is a retention predicate.
 
 Unknown event types retain every exact root in their `roots` because version 3
 defines no erase rule for them. A CID embedded in object content is not a
 retention edge unless it also appears in an accepted event's `roots`.
-
-An object may be collected only when its exact CID is absent from the current
-held-root set, is absent from pending-reference guards, and the backend's
-orphan grace has elapsed. A stale held-root snapshot never authorizes unlink
-after a new event reference commits.
 
 ### 15.4 No runtime-local eviction event
 
@@ -2582,8 +2575,8 @@ but may not reverse the durability boundaries.
 3. acquire the exclusive writer lock before creating mutable local state;
 4. complete backend recovery and any import publication barrier, then load or
    mint local `replica_id` and `store_generation`;
-5. fold portable state and reconstruct committed held roots, and only then
-   release abandoned guards and permit GC;
+5. fold portable state and reconstruct committed held roots before permitting
+   GC;
 6. project receipt-integrity conflicts and recover the vault-wide ordinal
    high-water mark under section 10.2 before accepting a new inbound
    observation; cross-author ordinal reuse does not block open or import;
@@ -2678,9 +2671,8 @@ For every outbound whose `replayUntil` is non-null:
    `message.replayClosed(because="erased")`;
 3. otherwise, when the runtime observes `now >= replayUntil`, append
    `message.replayClosed(because="deadline")`;
-4. refold held roots only after that event is process-durable; and
-5. permit GC to release exact replay-only envelope objects only after the
-   closure is visible to the held-root fold.
+4. after that event is process-durable, permit GC using the locked held-root
+   fold and collection under section 15.3.
 
 Clock rollback after step 3 does not reopen replay.
 
@@ -2690,10 +2682,9 @@ Clock rollback after step 3 does not reopen replay.
    packages;
 2. if `replayUntil` is non-null, replay is still open, and the erase covers
    its exact replay roots, include `message.replayClosed(because="erased")`;
-3. process-durably append the erase event(s) and any replay closure, preferably
-   in one `appendAll`;
-4. refold held roots; and
-5. call object collection.
+3. process-durably commit the erase event(s) and any replay closure, preferably
+   in one `Vault.commit`; and
+4. run the locked held-root fold and collection under section 15.3.
 
 Late duplicate observations may introduce another event retaining the same
 logical roots. The active runtime that observes an existing erase MUST append
@@ -2710,7 +2701,7 @@ same closure rule in every full copy.
 4. unregister their mediated bound-route pairs, retiring a reusable route only
    when no other live DID requires it;
 5. preserve a shared rendezvous DID unless separately retired; and
-6. collect unheld objects after grace.
+6. run the locked held-root fold and collection under section 15.3.
 
 A late message attributed to that tombstoned contact requires the same
 idempotent cleanup procedure.
@@ -2952,8 +2943,9 @@ There is no migration requirement from an earlier event vocabulary.
     reaching `replayUntil` does not authorize collection before
     `message.replayClosed`. Explicit erasure may close it early without minting
     a replacement package.
-58. The held-root fold and pending-reference guards prevent GC from unlinking
-    an object before or after the event that references it commits.
+58. Commit and collection share the writer lock; GC computes current held roots
+    under that lock and cannot unlink a retained object or overlap acceptance
+    and append within a commit.
 59. A successfully appended inbound event survives immediate process restart
     before the mediator pickup acknowledgment is sent.
 60. ACK-target lookup is scoped by the carrier's stable relationship/channel

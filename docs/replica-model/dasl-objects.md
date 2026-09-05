@@ -280,29 +280,14 @@ mentioned only inside the document does not retain or fetch that attachment.
 
 ### 8.1 Write-before-reference
 
-A producer MUST process-durably accept every object in a new event's `roots`
-before it appends the event. From acceptance until the referencing event
-commits or aborts, a pending-reference guard MUST protect the object from
-collection. A transactional backend MAY commit objects and the event in one
-transaction whose externally visible result obeys the same ordering.
+Locally authored events MUST use `Vault.commit` or its no-new-object forms
+under `event-store.md` section 10. New objects are accepted within the commit
+that references them; collection never runs concurrently with that commit.
 
-A pending-reference guard belongs to the writer or transaction generation that
-created it. It MUST NOT remain semantically live after that owning runtime has
-terminated. A backend MAY persist a temporary pin for crash safety, but reopen
-recovery MUST classify pins from the previous runtime as abandoned only after
-it has reconstructed every committed event and the resulting held-root set.
-Collection MUST remain disabled until that recovery step is complete.
-
-Dropping an abandoned guard does not by itself classify its object as an
-orphan. If a recovered committed event retains the object, it remains held. If
-no committed event retains it, the object is an ordinary unreferenced accepted
-object and becomes collectable only under the backend's orphan-grace policy.
-Thus a crash before event commit leaves an orphan after recovery, while a crash
-after event commit but before guard cleanup leaves a normally retained object.
-
-A crash after object acceptance but before event append may leave an orphan.
-A successful event append MUST NOT depend on an object that was never
-accepted.
+A failure or crash after object acceptance but before event commit may leave
+an orphan. Reopen MUST reconstruct every committed event and the resulting
+held-root set before enabling collection. A recovered committed reference keeps
+its object; otherwise the accepted object follows the orphan-grace policy.
 
 ### 8.2 Missing and damaged objects
 
@@ -332,25 +317,11 @@ significant. An implementation SHOULD return them in binary-CID byte order for
 deterministic diagnostics.
 
 The store MAY unlink an unkept object only after its documented orphan grace
-period. Grace protects abandoned crash residue; it does not protect a live
-writer that pauses between object acceptance and event commit.
+period. Grace covers abandoned writes after failure or crash. Live operations
+use the writer-lock boundaries in `event-store.md` section 10.
 
-The mandatory local-vault invariant is:
-
-> Collection does not delete an object retained by any committed event and does
-> not delete an object that an in-flight operation may still reference.
-
-From object acceptance until the referencing event commits or aborts, the
-producer MUST hold a temporary pin, vault-level exclusion, transaction or
-another pending-reference guard. From the held-root snapshot through physical
-unlink, collection MUST either exclude event commits and pending-reference
-changes or atomically revalidate both the committed event frontier and all
-pending guards immediately before unlink. A changed frontier or guard set makes
-the stale sweep ineligible and requires recomputation or skipping the object.
-
-Collection is also serialized with acceptance and reads. The semantic layer
-computes `keep` from `vault-events.md`; the object store MUST NOT inspect event
-types.
+The semantic layer computes `keep` from `vault-events.md`; the object store
+MUST NOT inspect event types.
 
 ## 9. Canonical JSON stored as raw DASL objects
 
@@ -452,7 +423,8 @@ A conforming implementation MUST pass at least these cases:
 6. Backend internal extent size does not affect CID or exported bytes.
 7. A large object can be put, opened, verified and exported with bounded
    memory.
-8. Event append fails before acceptance when any required root is absent.
+8. A commit appends no events when a supplied object fails verification or any
+   required root, including a reused root, is absent.
 9. A CID appearing only in event `data` creates no retention reference.
 10. A CID embedded in object content but absent from event `roots` is not
     implicitly retained or fetched.
@@ -469,12 +441,13 @@ A conforming implementation MUST pass at least these cases:
     consumer cannot treat earlier chunks as verified.
 17. A successful object put survives immediate process restart; a
     pre-resolution crash exposes either the whole object or no accepted object.
-18. A live writer paused between object acceptance and event commit remains
-    protected from collection even after orphan grace expires.
-19. A stale keep snapshot cannot unlink an object after a referencing event
-    commits; the sweep is excluded, revalidated or recomputed.
-20. Reopen recovery reconstructs committed-event retention before clearing an
-    abandoned pending-reference guard and before enabling GC.
+18. Collection waits while a commit pauses between object acceptance and event
+    append, even after orphan grace expires; on success the event retains the
+    object.
+19. Collection computes its held-root set after acquiring the writer lock and
+    holds it through unlink; a reference commit completes before that fold or
+    starts after the collection pass.
+20. Reopen recovery reconstructs committed-event retention before enabling GC.
 21. A crash before event commit makes the accepted unreferenced object an
     ordinary grace-protected orphan after recovery; a crash after event commit
-    but before guard cleanup keeps the object through the recovered event root.
+    keeps the object through the recovered event root.

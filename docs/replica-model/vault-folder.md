@@ -428,11 +428,8 @@ process-durable under `event-store.md` section 2.1. Repeating acceptance for an
 existing valid CID is idempotent and MAY renew local orphan age as an
 optimization.
 
-Writers accept complete objects before an event reference and protect them from
-collection until the reference commits or aborts. A crash may leave a valid
-unreferenced object. Collection later removes only exact unheld, unpinned
-objects older than the configured grace; it does not inspect object content or
-rely on grace in place of commit/GC coordination.
+`dasl-objects.md` section 8 defines write ordering, crash recovery and collection
+under the vault writer lock.
 
 ## 10. `local/`
 
@@ -610,10 +607,7 @@ file.
 A folder snapshot contains every portable file under `.estoc/` and omits
 `local/` and `import/` completely. It obeys `event-store.md` section 11.2's
 consistent-cut, retention and publication contract; a live recursive directory
-copy without that coordination is not a conforming snapshot. Required objects
-and portable file versions are protected until copying and verification
-complete. Concurrent
-erasure is serialized or aborts the unpublished snapshot. Merely omitting
+copy without the writer lock is not a conforming snapshot. Merely omitting
 `import/` cannot make an incomplete in-place import a complete source: recover
 it first or select a verified complete published generation.
 
@@ -653,18 +647,18 @@ ordinal, while same-author receipt-pair conflicts are retained as projections
 under `vault-events.md` section 10.2. This permits recovery by event union
 after independent execution; it does not authorize concurrent phase-1 writers.
 
-Then it:
+Under the writer lock required by `event-store.md` section 11.3, it then:
 
 1. stages the prospective event union without exposing it as complete;
 2. computes held roots over that union;
-3. verifies and accepts required absent objects under temporary protection;
+3. verifies and accepts required absent objects;
 4. keeps the target `config.json` and seed wrapping;
 5. copies unknown portable paths only when absent; and
 6. verifies completeness and publishes the merged portable view under
    `event-store.md` section 11.3.
 
-The reference backend MAY quiesce the vault and stage a complete portable view
-under `import/`. A backend using sibling generations outside `.estoc/` MUST
+The reference backend MAY stage a complete portable view under `import/`.
+A backend using sibling generations outside `.estoc/` MUST
 keep a discoverable publication journal under `import/` until recovery is
 complete; external staging is not part of the exported tree. The journal must
 remain discoverable across every publication/crash boundary and contain enough
@@ -740,12 +734,8 @@ implementations use:
 Multiple readers are allowed if the backend can provide complete-line
 visibility.
 
-The writer lock or an equivalent backend transaction also forms the reference
-commit/collection coordination domain. From object acceptance through event
-commit, a pending-reference guard protects each to-be-referenced object. A
-collector MUST hold an excluding lock through held-root snapshot and unlink, or
-revalidate the event frontier and pending guards atomically before every
-unlink. A fixed orphan grace period alone is insufficient.
+Within the active runtime, all workers MUST obey the operation serialization
+and writer-lock boundaries in `event-store.md` section 10.
 
 Expected crash residue:
 
@@ -841,14 +831,14 @@ The following require a new folder/vault version:
 32. A successful folder append or first object acceptance survives immediate
     process restart; sudden-power-loss safety remains a separately documented
     flush boundary.
-33. Collection cannot unlink an object referenced by an event committed after
-    the collector's initial held-root snapshot, nor one protected by a pending
-    reference guard.
+33. The writer lock serializes commits with the complete held-root fold and
+    collection pass, including calls from different workers in one runtime.
 34. A successful `FileStore.write` survives immediate process restart; a
     pre-resolution crash leaves the complete portable file or no accepted
     replacement, never a partial file.
-35. A snapshot protects a consistent event/object/file cut; concurrent erasure
-    is serialized or aborts publication rather than producing a dangling root.
+35. A snapshot holds the writer lock from selecting a consistent event/object/
+    file cut through copying, verification and publication; erasure and
+    collection wait until completion or abort.
 36. Crash during import exposes the previous usable view or a recoverably
     incomplete import. Deleting `local/` cannot bypass its publication barrier.
 37. Full import rejects missing non-erased held objects before publishing a

@@ -420,13 +420,15 @@ The initiator:
 1. creates or selects its pairwise relationship DID `P_B`;
 2. selects or creates the local contact and associates the disclosed
    rendezvous DID with it;
-3. writes body and attachment objects;
-4. appends `message.out` for the Trust Ping or application message;
+3. prepares body and attachment objects;
+4. uses `Vault.commit` for those objects and `message.out` for the Trust Ping
+   or application message;
 5. reconciles recipient registration for `P_B` on its bound route when
    mediated, so the response is reachable;
-6. resolves the rendezvous DID and appends exact `peer.resolved` evidence;
+6. resolves the rendezvous DID and uses `Vault.commit` for the snapshot objects
+   and exact `peer.resolved` evidence;
 7. attaches the bootstrap channel with `because == "rendezvous"`;
-8. appends one exact `message.prepared`; and
+8. uses `Vault.commit` for one exact envelope and its `message.prepared`; and
 9. submits it directly or through Routing 2.0.
 
 Steps 3–4 happen with networking disabled. Registration and resolution are
@@ -441,12 +443,13 @@ concurrently use the same local author.
    it with the contact;
 4. select a first application message; when no application content exists,
    use Trust Ping 2.0 `ping` with `response_requested == true`;
-5. write body/attachments and append `message.out` with finite expiry,
+5. use `Vault.commit` for body/attachments and `message.out` with finite expiry,
    `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and
    `intentHash`; this may happen offline;
 6. after intent exists, register the initiator relationship DID canonical
    short form on its bound route when mediated;
-7. resolve the rendezvous DID and append exact `peer.resolved` evidence;
+7. resolve the rendezvous DID and use `Vault.commit` for the snapshot objects
+   and exact `peer.resolved` evidence;
 8. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
    with `because == "rendezvous"`;
 9. prepare using initiator Peer DID long form in plaintext `from`, protected
@@ -584,7 +587,7 @@ no selected response is silent.
 After final reject, the runtime MUST append `message.erased` for candidate-only
 body, attachment and stored-message roots once any selected rejection intent
 has been frozen. The final decision and any chosen rejection intent, together
-with its required execution binding, MUST commit in one `appendAll`. If no
+with its required execution binding, MUST commit in one `Vault.commit`. If no
 rejection intent is committed with a final reject, recovery MUST NOT invent
 one. It resumes only already committed response work and candidate erasure.
 Different diagnostic provenance does not select another response or change its
@@ -655,9 +658,9 @@ Acceptance materializes or reuses:
 - one deterministic handoff-response `message.out` for the admitted initial
   message.
 
-These events SHOULD be one `appendAll` batch. A tombstoned deterministic
-contact is not recreated; a genuinely new relationship requires a fresh
-initiator relationship key. One key presented under different canonical
+These events and any new objects SHOULD be one `Vault.commit`. A tombstoned
+deterministic contact is not recreated; a genuinely new relationship requires
+a fresh initiator relationship key. One key presented under different canonical
 initiator DIDs is a sender-DID conflict.
 
 ### 10.1 Contact IDs
@@ -703,8 +706,9 @@ For a delivery potentially addressed to a rendezvous key:
    pre-vault gate before `message.in`;
 6. a safely classified hard rejection received through Message Pickup MUST be
    pickup-ACKed and leaves no portable message/contact/relationship state;
-7. for an admitted candidate, store retained bytes, append `message.in` with
-   its durable receipt ordinal, then ACK account-scoped mediator delivery;
+7. for an admitted candidate, use `Vault.commit` for retained bytes and
+   `message.in` with its durable receipt ordinal, then ACK account-scoped
+   mediator delivery;
 8. reuse an existing final `relationship.admissionDecided`, or await/finalize
    one under `vault-events.md` section 14.4; before a new accept, check sender-DID consistency,
    contact tombstones and invitation availability in the same serialized
@@ -721,7 +725,7 @@ with rejection.
 For final reject, create no relationship DID. Rejection may be silent or may
 select a deterministic protocol error or Report Problem intent.
 Commit the final decision and any chosen rejection intent/binding in one
-`appendAll` under `rendezvous.md` section 9.3, before network work. Recovery
+`Vault.commit` under `rendezvous.md` section 9.3, before network work. Recovery
 resumes that intent, or treats its absence as no selected response; it does not
 invent a new optional rejection effect. Once the selected intent no longer
 needs candidate content, append `message.erased` for candidate-only roots.
@@ -737,9 +741,9 @@ For effective accept:
    selected relationship route;
 4. select a deterministic handoff response: Trust Ping `ping-response`, a
    protocol-defined deterministic response, or Empty Message ACK;
-5. append, preferably in one process-durable batch, the admission decision,
-   inbound `message.executionBound`, any new `contact.created`,
-   bootstrap/pairwise `contact.attached`, `did.created`, `contact.useDid`,
+5. use `Vault.commit`, preferably once for all new objects and events: the
+   admission decision, inbound `message.executionBound`, any new
+   `contact.created`, bootstrap/pairwise `contact.attached`, `did.created`, `contact.useDid`,
    fully frozen `relationship.established`, and deterministic response
    `message.out` with a replay deadline;
 6. response intent explicitly ACKs the triggering initial wire ID, uses
@@ -996,7 +1000,7 @@ Existing consistent evidence is reused; conflicting evidence blocks processing.
    and validated handoff under `vault-events.md` section 12.5;
 8. append or reuse `message.executionBound` for the handoff carrier under that
    relationship scope. All missing locally produced facts in steps 6–8 MUST
-   commit in one process-durable `appendAll`; the event-store contract makes
+   commit in one process-durable `Vault.commit`; the event-store contract makes
    that batch all-or-nothing;
 9. only after the proof and portable relationship/execution binding are
    committed, process explicit `ack` values; and
