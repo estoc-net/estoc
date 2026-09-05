@@ -20,7 +20,7 @@ deferred extensions:
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
-| `rendezvous.md` | method-neutral rendezvous, Peer-DID default, optional Web facade and pairwise handoff |
+| `rendezvous.md` | Peer-DID rendezvous, pinned external resolution and pairwise handoff |
 | `replica-mediation.md` | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
 | `vault-sync.md` | **deferred:** encrypted anti-entropy through an untrusted sync store |
 

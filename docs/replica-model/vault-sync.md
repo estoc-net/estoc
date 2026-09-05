@@ -27,11 +27,10 @@ DASL CIDs, message bodies, event types or contact data in plaintext.
 The protocol synchronizes:
 
 - the immutable vault configuration needed for bootstrap;
-- vault events, including rendezvous, relationship, route and any selected
-  optional `did:web` publication state;
+- vault events, including rendezvous, relationship and route state;
 - extension-store events; and
 - content-addressed DASL objects referenced by those events, including exact
-  prepared DID document revisions.
+  resolved peer DID document snapshots.
 
 It does not synchronize `local/`, sockets, pickup acknowledgments,
 process locks, fold caches, traces, local options or other local
@@ -53,8 +52,7 @@ authenticated reset of the entire remote account object set.
   account, stores immutable ciphertext and provides inventory.
 
 A remote thin client that does not hold the seed is not a sync client. The
-sync protocol does not establish a preferred or authoritative host and does
-not reveal which replica publishes a public DID document.
+sync protocol does not establish a preferred or authoritative host.
 
 Control messages are DIDComm Messaging 2.1 messages in the family:
 
@@ -1267,11 +1265,9 @@ does not match the anchor derived from the supplied seed is fatal.
 A sync store is not the sole sovereign representation. A normal Estoc
 folder snapshot remains a complete readable interchange format.
 
-A full replica bootstrapped on a web server has no special sync identity. It
-uses the same account and anti-entropy as any other full replica, then may
-reconcile a selected `did:web` document if it separately holds publication
-authority. Loss of that publisher does not alter synchronized pairwise DID
-state.
+A full replica bootstrapped on a server has no special sync identity. It uses
+the same account and anti-entropy as any other full replica. DID-document
+publication is not synchronized vault state or a recovery procedure.
 
 ## 15. Quota and availability
 

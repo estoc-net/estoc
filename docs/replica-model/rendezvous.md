@@ -32,13 +32,13 @@ ongoing relationship. Estoc separates:
   encrypted DIDComm message; and
 - a **relationship DID**, a pairwise `did:peer:4` used after admission.
 
-The required default rendezvous path is a self-resolving long-form
+The locally controlled rendezvous path is a self-resolving long-form
 `did:peer:4`. It can be shared by QR code, OOB URL, file, NFC, local exchange
-or another invitation transport without a domain or online DID resolver. An
-implementation MAY also expose a reusable `did:web` facade for public
-directory discovery.
+or another invitation transport without a domain or online DID resolver.
+DID-document publication is outside the vault's responsibilities. Resolution
+of externally managed DIDs remains subject to section 5.1.
 
-Both forms enter the same flow:
+The bootstrap flow is:
 
 ```text
 Alice discloses rendezvous DID R_A
@@ -83,11 +83,10 @@ informative deferred extensions, not dependencies of this profile.
 
 ## 3. Terms
 
-- **Rendezvous DID** — a vault-scoped DID with role `rendezvous`. Version 1.0
-  requires the Peer DID profile and optionally supports a Web DID profile.
-- **Peer rendezvous DID** — the default self-resolving `did:peer:4` profile.
-- **Web rendezvous DID** — an optional `did:web` facade whose exact document
-  revision is pinned before the initial package is submitted.
+- **Rendezvous DID** — a bootstrap discovery DID. A locally controlled one is
+  a vault-scoped `did:peer:4` entity with role `rendezvous`; an external target
+  is represented by resolution evidence, not a local DID entity.
+- **Peer rendezvous DID** — the self-resolving `did:peer:4` rendezvous profile.
 - **Relationship DID** — a vault-scoped pairwise `did:peer:4` created for one
   relationship.
 - **Initial message** — the first ordinary DIDComm application message sent
@@ -154,14 +153,12 @@ informative deferred extensions, not dependencies of this profile.
 
 ### 5.1 Common requirements
 
-A rendezvous DID MUST:
+A locally controlled rendezvous DID MUST:
 
 - be represented by `did.created` with role `rendezvous`;
-- contain or resolve to exactly one selected key-agreement method for new
-  initial messages;
-- contain or resolve to at least one authentication method capable of signing
-  `from_prior`;
-- select at least one DIDComm delivery route;
+- contain its one fixed key-agreement method for new initial messages;
+- contain its one fixed authentication method capable of signing `from_prior`;
+- bind one DIDComm delivery route through `boundRoute`;
 - use seed-derived key names represented by the vault; and
 - have at least one live `rendezvous.generationConfigured` event.
 
@@ -180,13 +177,27 @@ This is the initial-message-bound resolution snapshot used later to verify
 resolution may recover missing bytes only when its canonical document hash
 equals the pinned hash.
 
+An external peer or mediator may use `did:web`; resolving it does not create a
+locally controlled DID entity or a document-publication obligation. A Web
+resolver used by a mediator or client MUST be constrained against SSRF, DNS
+rebinding, redirects to forbidden networks, unbounded responses and DID
+mismatch. Failure to resolve safely is deferred or reported as
+`did-resolution-unavailable`; it never falls back to an unrestricted fetch.
+
+For an external Web rendezvous target, the initiator pins the exact Web
+document revision before first submission and later verifies `from_prior`
+against that snapshot even when the currently published document has changed.
+Key IDs are taken from that exact authorized document, not synthesized from a
+vault key-generation naming convention.
+
 Missing historical snapshot material is a deferred verification state, not
 proof that a handoff is invalid.
 
 ### 5.2 Peer DID numalgo-4 profile
 
-Every version-1.0 relationship DID and the default rendezvous DID use Peer DID
-numalgo 4. A vault stores both validated long form and canonical short form.
+Every locally controlled rendezvous or relationship DID uses Peer DID numalgo
+4. A vault stores both validated long form and canonical short form as
+spellings of one DID entity under `vault-events.md` section 5.2.
 
 For a Peer rendezvous DID:
 
@@ -198,8 +209,8 @@ For a Peer rendezvous DID:
   snapshot and later used as `from_prior.iss`;
 - the `from_prior` protected `kid` is that exact `iss` plus an authentication
   fragment authorized by the pinned document; and
-- the selected ingress route and keys MUST equal the rendezvous long-form input
-  document.
+- the bound ingress route and fixed keys MUST equal the rendezvous long-form
+  input document.
 
 The route embedded in the responder relationship DID is independent of the
 rendezvous ingress route. It MAY use another mediation arrangement to reduce
@@ -226,102 +237,17 @@ On first disclosure, plaintext `from`, the DID portion of `skid`, and decoded
 A short form received before its long-form input document is known is
 unresolved and cannot authenticate a new relationship.
 
-### 5.3 Optional `did:web` profile
-
-A Web rendezvous DID MUST resolve to a selected document revision containing:
-
-- exactly one selected `keyAgreement` method for new initial messages;
-- at least one `authentication` method capable of signing `from_prior`;
-- at least one `DIDCommMessaging` service; and
-- keys and routes equal to portable vault state.
-
-For key generation integer `N`, the fragments are normative:
-
-```text
-#authentication-N
-#key-agreement-N
-```
-
-The complete IDs are:
-
-```text
-<did:web>#authentication-<N>
-<did:web>#key-agreement-<N>
-```
-
-A generation-0 document resembles:
-
-```json
-{
-  "@context": [
-    "https://www.w3.org/ns/did/v1",
-    "https://w3id.org/security/multikey/v1"
-  ],
-  "id": "did:web:alice.example",
-  "verificationMethod": [
-    {
-      "id": "did:web:alice.example#authentication-0",
-      "type": "Multikey",
-      "controller": "did:web:alice.example",
-      "publicKeyMultibase": "z6Mk..."
-    },
-    {
-      "id": "did:web:alice.example#key-agreement-0",
-      "type": "Multikey",
-      "controller": "did:web:alice.example",
-      "publicKeyMultibase": "z6LS..."
-    }
-  ],
-  "authentication": ["did:web:alice.example#authentication-0"],
-  "keyAgreement": ["did:web:alice.example#key-agreement-0"],
-  "service": [
-    {
-      "id": "did:web:alice.example#didcomm",
-      "type": "DIDCommMessaging",
-      "serviceEndpoint": {
-        "uri": "did:web:mediator.example",
-        "accept": ["didcomm/v2"]
-      }
-    }
-  ]
-}
-```
-
-A Web resolver used by a mediator or client MUST be constrained against SSRF,
-DNS rebinding, redirects to forbidden networks, unbounded responses and DID
-mismatch. Failure to resolve safely is deferred or reported as
-`did-resolution-unavailable`; it never falls back to an unrestricted fetch.
-
-The initiator pins the exact Web document revision before first submission and
-later verifies `from_prior` against that snapshot even when the currently
-published document has changed.
-
 ## 6. Out-of-band discovery
 
 A reusable invitation contains a rendezvous DID, not a relationship DID.
 
-Peer-default example:
+Example:
 
 ```json
 {
   "type": "https://didcomm.org/out-of-band/2.0/invitation",
   "id": "019b4d01-0e42-775e-8abe-173d777fcb3a",
   "from": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
-  "body": {
-    "goal_code": "establish-relationship",
-    "goal": "Start a private pairwise relationship",
-    "accept": ["didcomm/v2"]
-  }
-}
-```
-
-Optional Web-facade example:
-
-```json
-{
-  "type": "https://didcomm.org/out-of-band/2.0/invitation",
-  "id": "019b4d01-0e42-775e-8abe-173d777fcb3a",
-  "from": "did:web:alice.example",
   "body": {
     "goal_code": "establish-relationship",
     "goal": "Start a private pairwise relationship",
@@ -346,16 +272,15 @@ the invitation ID as `pthid`. When the invitation supplies no usable child
 protocol message, or the selected protocol has no initial outbound for the
 recipient, the initiator uses Trust Ping 2.0 by default.
 
-Relationship DIDs MUST NOT appear in reusable invitation plaintext, public Web
-pages or `did:web` documents.
+Relationship DIDs MUST NOT appear in reusable invitation plaintext or public
+discovery material.
 
 ## 7. Rendezvous generation profile
 
 A `rendezvous.generationConfigured` event freezes:
 
-- the rendezvous DID and selected key generation;
-- exact resolution evidence;
-- accepted ingress routes;
+- the rendezvous DID and its fixed authentication and key-agreement methods;
+- exact long-form resolution evidence and the DID's immutable bound route;
 - the independently selected route embedded in responder relationship DIDs;
 - `initialMessageTypes`, an exact non-empty post-admission policy set;
 - admission policy `ask`, `auto` or `silent`;
@@ -390,15 +315,16 @@ It MUST include:
 https://didcomm.org/trust-ping/2.0/ping
 ```
 
-A generation is **live** only when its key, document and route dependencies
-validate and all selected mediated ingress routes are reconciled. A configured
-but not-yet-live generation is deferred, not rejected.
+A rendezvous generation is **live** only when its DID, fixed keys, long-form
+document and bound route validate and its mediated bound route, when present,
+is reconciled. A configured but not-yet-live generation is deferred, not
+rejected.
 
-For a Peer rendezvous generation, the sole ingress route MUST equal the route
-encoded in the rendezvous DID. `relationshipRoute` MAY differ; it is encoded
-in each derived responder relationship DID. For overlapping Web generations,
-`relationshipRoute` is stable for an already established relationship but
-need not equal a Web ingress route.
+The sole ingress route is the rendezvous entity's `boundRoute` and MUST equal
+the route encoded in that DID. `relationshipRoute` MAY differ; it is encoded
+in each derived responder relationship DID and remains frozen for an already
+established relationship. A rendezvous generation is admission/handoff policy,
+not an in-place key or route rotation.
 
 ## 8. Initial message profile
 
@@ -493,7 +419,8 @@ The initiator:
    rendezvous DID with it;
 3. writes body and attachment objects;
 4. appends `message.out` for the Trust Ping or application message;
-5. reconciles recipient registration for `P_B` so the response is reachable;
+5. reconciles recipient registration for `P_B` on its bound route when
+   mediated, so the response is reachable;
 6. resolves the rendezvous DID and appends exact `peer.resolved` evidence;
 7. attaches the bootstrap channel with `because == "rendezvous"`;
 8. appends one exact `message.prepared`; and
@@ -511,10 +438,10 @@ A mailbox delivery remains pending, with no pickup ACK and no `message.in`,
 only when recipient ownership cannot yet be safely classified or an exact
 known local receive key has a concrete recoverable prerequisite:
 
-- the vault is locked, recovery is incomplete, or the local key/generation
-  index is not yet authoritative;
-- a recipient `kid` maps to an exact known local **key-agreement** method and
-  generation, but that configured generation is not yet live;
+- the vault is locked, recovery is incomplete, or the local key index is not
+  yet authoritative;
+- a recipient `kid` maps to an exact known local **key-agreement** method, but
+  its configured rendezvous generation is not yet live;
 - required key/document/route state for that exact known method is temporarily
   unavailable; or
 - required historical evidence for that exact known method is temporarily
@@ -523,9 +450,9 @@ known local receive key has a concrete recoverable prerequisite:
 Once local key state is authoritative, the implementation MUST compare the
 complete recipient `kid`, including DID and method fragment/purpose. A foreign
 DID, a locally controlled DID with a nonexistent fragment, an authentication
-fragment used where key agreement is required, a terminal generation, or a
-recipient set containing no valid local key-agreement method is not deferred.
-It is terminal wrong-recipient input.
+fragment used where key agreement is required, a terminal rendezvous generation,
+or a recipient set containing no valid local key-agreement method is not
+deferred. It is terminal wrong-recipient input.
 
 A phase-1 runtime retries deferred input after its local state changes. A
 future sync-enabled runtime may sync and refold first. It MUST NOT treat a
@@ -543,7 +470,7 @@ For an exact local recipient that can be decrypted, the responder then checks
 only conditions needed to classify the input safely before writing portable
 application state:
 
-- recipient DID, exact selected key-agreement method and generation;
+- recipient DID, exact key-agreement method and rendezvous generation;
 - valid DIDComm syntax and authenticated encryption;
 - valid first-disclosure Peer DID plus exact `from`/`skid`/`apu` form;
 - finite, positive message lifetime not above the generation's absolute
@@ -565,7 +492,8 @@ A safely classified hard rejection received through Message Pickup:
 - MAY leave only a bounded local diagnostic.
 
 Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
-terminal generation and hard abuse/resource limits are examples of this gate.
+terminal rendezvous generation and hard abuse/resource limits are examples of
+this gate.
 
 ### 9.3 Durable candidate and local policy
 
@@ -884,7 +812,8 @@ The responder:
 
 1. process-durably appends acceptance, `message.executionBound`, relationship
    state and response `message.out` with its replay deadline;
-2. reconciles recipient registration for canonical short-form `P_A`;
+2. reconciles recipient registration for canonical short-form `P_A` on its
+   bound route when mediated;
 3. prepares the exact response using long-form sender evidence and the frozen
    `fromPrior`; and
 4. submits it.
@@ -1064,9 +993,7 @@ A Peer rendezvous DID has no in-place key or route rollover. Changing the
 mediator encoded in its document creates a new rendezvous DID and invalidates
 old printed or cached invitations unless the old route remains available.
 Changing a pairwise Peer DID route likewise requires a contact-scoped DID
-rotation or continued operation of the old mediator. A stable `did:web`
-rendezvous facade can publish a changed route without changing the public DID;
-this is one reason to add the optional Web facade in a hosted deployment.
+rotation or continued operation of the old mediator.
 
 ## 15. Phase-1 execution and deferred replication
 
@@ -1087,10 +1014,10 @@ per-replica pickup are not phase-1 conformance claims.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
 A reusable Peer rendezvous DID can be shared without DNS but remains linkable.
-A Web facade additionally exposes DNS and hosting metadata.
 
 Relationship DIDs are disclosed only inside encrypted DIDComm messages. They
-MUST NOT appear in reusable OOB invitation plaintext or Web DID documents.
+MUST NOT appear in reusable OOB invitation plaintext or public discovery
+material.
 
 Registering rendezvous and relationship DIDs under one mediation account lets
 the mediator correlate them. Separate arrangements may reduce this metadata
@@ -1114,7 +1041,9 @@ DID as ordinary `writeTo`.
 
 1. A complete bootstrap works with only a long-form `did:peer:4` invitation;
    no domain or Web DID is required.
-2. An optional Web rendezvous DID enters the same processing profile.
+2. External `did:web` resolution is constrained against SSRF and pins the exact
+   initial-message document. A changed current document cannot replace that
+   snapshot for handoff verification.
 3. No emitted message has an `https://estoc.dev/rendezvous/1.0/*` type.
 4. The default initial Trust Ping has `response_requested == true` and
    `please_ack == [""]`; absent `response_requested` is interpreted as true.
@@ -1128,7 +1057,7 @@ DID as ordinary `writeTo`.
    submission.
 10. Peer first disclosure uses the same long form in `from`, `skid` and `apu`.
 11. Before unlock/recovery completes, recipient ownership is not classified.
-    Afterward, only an exact known local key-agreement generation with a
+    Afterward, only an exact known local key-agreement method with a
     recoverable missing prerequisite remains pending without pickup ACK.
 12. Safely classified hard rejection is pickup-ACKed and creates no portable
     candidate.
@@ -1173,7 +1102,7 @@ DID as ordinary `writeTo`.
     and 32 pre-counted transport attempts per wire ID per runtime. Restart may
     reset that local budget but never extends the mandatory frozen expiry.
 30. Peer rendezvous mediator replacement requires a new DID/invitation unless
-    the old route remains; Web facade route updates do not change its DID.
+    the old route remains available.
 31. Rendezvous DIDs never enter ordinary relationship `writeTo`.
 32. Phase 1 works with one active full runtime and standard account-scoped
     pickup; replica mediation and vault sync are not required.
@@ -1181,10 +1110,12 @@ DID as ordinary `writeTo`.
     unconfirmed and is outside reliable-bootstrap conformance.
 34. With the vault unlocked and recovery complete, a foreign recipient DID,
     a local DID with a nonexistent/wrong-purpose fragment, or a terminal
-    generation is terminal wrong-recipient input and does not remain pending.
-35. A configured-but-not-live exact local key-agreement generation remains
-    deferred without pickup ACK; a locked or recovering vault is never
-    classified as wrong-recipient merely because keys are unavailable.
+    rendezvous generation is terminal wrong-recipient input and does not remain
+    pending.
+35. An exact known local key-agreement method whose rendezvous generation is
+    configured but not live remains deferred without pickup ACK; a locked or
+    recovering vault is never classified as wrong-recipient merely because keys
+    are unavailable.
 36. The initiator commits `relationship.initiatorBound` and the handoff
     `message.executionBound` before generating the confirmation effect; restart
     immediately afterward derives the same execution ID.

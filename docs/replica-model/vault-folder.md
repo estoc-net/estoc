@@ -50,10 +50,6 @@ from a server-side backend. A hosted implementation that holds the seed MUST
 be able to export the complete portable vault in this format; its internal
 database MUST NOT be the only recoverable representation.
 
-Selected `did:web` document revisions are ordinary referenced objects and
-vault events. The published `did.json` resource is a deployment projection,
-not a new authoritative file inside `.estoc/`.
-
 A remote thin client that does not hold the seed and full portable state is
 not a vault folder backend. Its command queue and projection cache belong to
 client-local storage outside this format.
@@ -822,8 +818,8 @@ The following require a new folder/vault version:
 19. No mediator or sync operation consumes the folder as plaintext.
 20. A hosted full runtime can export an equivalent complete portable folder;
     server-local database state is not the sole recoverable copy.
-21. A selected `did:web` document revision is retained as a referenced object
-    and event, not as an authoritative mutable `did.json` path in the vault.
+21. Resolved peer DID document snapshots round-trip as event-referenced objects,
+    not mutable document-publication state.
 22. A thin-client cache is not accepted as a complete vault folder.
 23. Historical author directories remain readable after restore or exact
     move; phase 1 defines no mediator-driven author retirement.

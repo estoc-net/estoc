@@ -38,8 +38,9 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
 
 - **Full replica** — an independently writable vault incarnation holding the
   seed and appending vault events. It may run locally or on a server.
-- **Rendezvous DID** — a disclosed vault-scoped DID used only to begin
-  relationships. The required default is `did:peer:4`; `did:web` is optional.
+- **Rendezvous DID** — a disclosed DID used only to begin relationships.
+  Locally controlled rendezvous DIDs are vault-scoped `did:peer:4` entities;
+  external targets are represented by pinned resolution evidence.
 - **Relationship DID** — a vault-scoped pairwise `did:peer:4` used for one
   ongoing relationship.
 - **Outbound message ID (`mid`)** — the vault entity ID of one outbound
@@ -104,8 +105,7 @@ Version 3 recognizes:
 ```text
 rendezvous DID
     disclosed address for bounded first contact
-    default self-resolving did:peer:4
-    optional did:web facade
+    self-resolving did:peer:4
 
 relationship DID
     pairwise did:peer:4
@@ -116,9 +116,11 @@ Both are vault-scoped. The phase-1 active full runtime derives their private
 keys and receives messages addressed to them. A later server or additional
 full replica does not own the DIDs merely because it executes the vault.
 
-A DID may advertise mediated or direct routes. Route choice changes transport,
-not application recipient. A direct endpoint MUST NOT expose a replica ID as
-the peer-visible recipient.
+Each local communication DID has one immutable `boundRoute`, mediated or
+direct. Changing its keys or bound route creates a successor DID entity.
+An external recipient's resolved document may offer transport choices; choosing
+among authorized routes does not change the application recipient. A direct
+endpoint MUST NOT expose a replica ID as the peer-visible recipient.
 
 The phase-1 mediator uses ordinary account-scoped Message Pickup with one
 active pickup client. The deferred `replica-mediation/1.0` extension may later
@@ -337,10 +339,10 @@ security evidence changes under an expressly permitted rule.
 
 A preparer folds the target and selects:
 
-- one live sender DID and key generation;
+- one live sender DID entity and its fixed key-agreement method;
 - one current peer DID and authenticated peer key;
 - exact `peer.resolved` evidence;
-- one route; and
+- one recipient route authorized by that evidence; and
 - any required contact-scoped `from_prior`.
 
 It then constructs the complete innermost plaintext from durable intent.
@@ -374,11 +376,13 @@ bytes.
 
 Retrying a package reuses identical plaintext, normalized ciphertext bytes and
 package ID. A new package for the same logical message may change `from`, `to`,
-selected keys, peer resolution or `from_prior` only when a selected key
-generation, selected route or verified contact-scoped transition permits it.
+selected keys, peer resolution or `from_prior` only under a valid DID-entity
+selection or verified contact-scoped transition for the same logical target.
+A local DID's keys and bound route never change in place; an external
+recipient's transport choice remains constrained by its resolution evidence.
 Every changed plaintext or encryption result requires a new package ID and
 plaintext hash. One initial rendezvous wire ID remains pinned to its original
-resolution generation.
+resolution snapshot and recipient key.
 
 ## 7. Expiration, normal completion and replay retention
 
@@ -659,7 +663,7 @@ cross-key aliasing is forbidden:
 ```json
 {
   "channel": {
-    "myKey": "did/.../key-agreement/0",
+    "myKey": "did/.../key-agreement",
     "peerKey": "..."
   }
 }
@@ -829,7 +833,7 @@ A recommended inbound observation records all hashes and durable headers:
   "expiresTime": null,
   "pleaseAck": [""],
   "ack": [],
-  "myKey": "did/019b.../key-agreement/0",
+  "myKey": "did/019b.../key-agreement",
   "peerKey": "k3j9...",
   "receivedVia": {
     "mediation": "019b...",
@@ -862,8 +866,6 @@ A recommended inbound observation records all hashes and durable headers:
   may lose an in-flight package. Receipt-required sender retry is the recovery boundary.
 - Submission-terminal messages deliberately accept best-effort completion
   after transport acceptance.
-- Loss of an optional Web publisher prevents Web-facade discovery but does not
-  invalidate Peer invitations or established relationship DIDs.
 
 ## 14. Privacy
 

@@ -25,14 +25,16 @@ one vault-scoped DID and sends one encrypted application message. The
 mediator fans that opaque message out to the vault's active replicas, and
 each replica acknowledges independently.
 
-The recipient DID may be:
+The locally controlled recipient DID may be:
 
-- a rendezvous DID, by default self-resolving `did:peer:4` and optionally
-  `did:web`, used for an encrypted initial relationship message; or
+- a self-resolving rendezvous `did:peer:4`, used for an encrypted initial
+  relationship message; or
 - a pairwise relationship `did:peer:4`, used after handoff.
 
 The mediator applies identical storage, fan-out and pickup semantics to both.
-It does not need to know the vault role of a recipient DID.
+It does not need to know the vault role of a recipient DID. Its method-neutral
+resolution rules also support externally managed DIDs; that does not make
+DID-document publication a vault responsibility.
 
 The protocol adds two things to ordinary DIDComm mediation:
 
@@ -79,9 +81,10 @@ advisory; successful `register` is the authoritative capability check.
   Coordinate Mediation arrangement with a mediator. It is shared by all
   full replicas of the vault.
 - **Recipient DID** — any DID registered under the mediation account and
-  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a
-  Peer or Web rendezvous DID or a pairwise relationship
-  DID. The mediator does not assign semantics based on method or role.
+  accepted as `body.next` of a Routing 2.0 `forward` message. Local vault
+  recipients are Peer rendezvous or relationship DIDs; the mediator does not
+  assign semantics based on method or role, including for externally managed
+  Web recipients.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
   incarnation for event provenance, delivery and acknowledgment. It is
   stored as `local/replica.json.replica_id`, is also used as the author of
@@ -130,8 +133,8 @@ A conforming mediator MUST preserve all of the following:
    ultimate recipient durably received the application message.
 9. A sender addresses a recipient DID, never a replica ID. Replica fan-out is
    an internal mailbox operation.
-10. Peer or optional Web rendezvous DIDs and pairwise relationship
-    DIDs receive the same per-replica delivery semantics.
+10. Rendezvous and pairwise relationship DIDs receive the same per-replica
+    delivery semantics; externally managed DID methods do not change them.
 
 ## 5. Replica lifecycle
 
@@ -412,11 +415,11 @@ The mediation account remains the one `recipient` in Coordinate Mediation
 3.0. All full replicas derive and use that account key. Recipient DIDs are
 registered once per mediation arrangement, not once per replica.
 
-Registration is method-neutral. A canonical short-form Peer rendezvous
-DID, an optional `did:web` rendezvous DID, and canonical short-form pairwise
-`did:peer:4` relationship DIDs may all be registered under the same account.
-The recipient-control proof is verified against an authentication method of
-the exact recipient DID.
+Registration is method-neutral. Local vault rendezvous and relationship DIDs
+register their canonical Peer short forms. An externally managed `did:web`
+recipient may also be registered when its control proof and constrained
+resolution validate. The recipient-control proof is verified against an
+authentication method of the exact recipient DID.
 
 ### 6.1 Recipient-control proof
 
@@ -601,11 +604,12 @@ registered recipients have the same shape:
 recipient DID -> mediation account -> active replica deliveries
 ```
 
-The default discovery path gives a peer the long form of a Peer rendezvous DID,
-then registers/routes its canonical short form. An optional `did:web` facade
-may expose the same mediator through `DIDCommMessaging`. Later traffic to a
-pairwise `did:peer:4` may use the same account and storage path or a separate
-vault-scoped arrangement for metadata unlinkability.
+Discovery gives a peer the long form of a Peer rendezvous DID, then
+registers/routes its canonical short form. Later traffic to a pairwise
+`did:peer:4` may use the same account and storage path or a separate
+vault-scoped arrangement for metadata unlinkability. An externally managed
+DID resolved under section 6.2 uses the same mediator machinery, without a
+vault-side publisher.
 
 
 ## 8. Message Pickup 3.0 replica profile
@@ -742,17 +746,17 @@ The rejection path creates no ultimate peer ACK, contact, application effect or
 portable message content. Recipient classification follows the same exact-key
 rule as `rendezvous.md`: while unlock/recovery is incomplete, ownership is not
 classified; once the local key index is authoritative, a recipient is deferred
-only when its complete `kid` maps to a known local key-agreement
-method/generation with a concrete recoverable prerequisite. A foreign DID, a
-locally controlled DID with a nonexistent or wrong-purpose fragment, a
-terminal generation, or a recipient set with no exact local key-agreement
-match is terminal wrong-recipient input and may use the rejection ACK path.
+only when its complete `kid` maps to a known local key-agreement method with a
+concrete recoverable prerequisite. A foreign DID, a locally controlled DID with
+a nonexistent or wrong-purpose fragment, a terminal rendezvous generation, or
+a recipient set with no exact local key-agreement match is terminal
+wrong-recipient input and may use the rejection ACK path.
 
 A delivery that is genuinely undecryptable despite an exact live local key,
-depends on missing recoverable local generation/sync state, or is otherwise
-not safely classifiable MUST NOT be acknowledged. This distinction prevents
-terminal wrong-recipient or malformed input from redelivering forever without
-allowing temporary local incompleteness to lose mail.
+depends on missing recoverable local rendezvous-generation/sync state, or is
+otherwise not safely classifiable MUST NOT be acknowledged. This distinction
+prevents terminal wrong-recipient or malformed input from redelivering forever
+without allowing temporary local incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
 not prerequisites for pickup acknowledgment.
@@ -929,8 +933,8 @@ A conforming implementation demonstrates at least these cases:
 12. Database, object storage, logs and traces do not contain an application
     plaintext sentinel or content key.
 13. Replica protocol messages reveal no hardware/OS identifier or human label.
-14. A default Peer rendezvous recipient, optional Web rendezvous recipient and
-    pairwise Peer recipient receive identical fan-out/ACK isolation.
+14. Peer rendezvous, pairwise Peer and externally managed Web recipients receive
+    identical fan-out/ACK isolation without introducing vault publication state.
 15. Recipient, replica and delivery quotas fail atomically without partial
     state.
 16. Peer DID long-form material is decoded locally, its canonical short form
@@ -951,8 +955,8 @@ A conforming implementation demonstrates at least these cases:
     replay.
 22. A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.
-23. Recipient-key triage defers only an exact known local key-agreement
-    method/generation with a recoverable missing prerequisite. After local key
-    recovery is authoritative, foreign DIDs, nonexistent or wrong-purpose
-    local fragments and terminal generations may use the terminal pre-vault ACK
-    path and do not remain pending.
+23. Recipient-key triage defers only an exact known local key-agreement method
+    with a recoverable missing prerequisite. After local key recovery is
+    authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
+    and terminal rendezvous generations may use the terminal pre-vault ACK path
+    and do not remain pending.
