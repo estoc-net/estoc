@@ -354,7 +354,8 @@ array exactly and apply deduplication only to receipt processing. Absent
 `please_ack` normalizes to null; absent `ack` normalizes to `[]`; absent
 `created_time` or `expires_time` normalizes to null; absent additional headers
 normalize to `{}`. ACK values are interpreted in oldest-to-newest receive
-order, never lexicographic order.
+order, never lexicographic order; this implements the ordering MUST in
+[DIDComm Messaging v2.1, ACKs](https://identity.foundation/didcomm-messaging/spec/v2.1/#acks).
 
 `headers` contains every permitted top-level DIDComm field not represented by
 a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
@@ -1104,21 +1105,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     not create another execution identity for the same relationship/wire ID.
 49. A held normal-only package survives GC and release with its exact envelope;
     terminal normal release with a null replay deadline requires no closure.
-50. An author assigns each new observation its own ordinal, including
-    duplicates. Restore and import continue above all historical authors;
-    cross-author ordinal reuse is valid and sorts by author on a tie.
-51. A binding for ACK-only processing uses `ack` provenance without a handler
+50. A binding for ACK-only processing uses `ack` provenance without a handler
     effect or a different execution identity.
-52. Recovery completes handoff binding even for a known responder DID and finds
+51. Recovery completes handoff binding even for a known responder DID and finds
     pickup-ACKed unfinished work without mediator redelivery.
-53. A crash after an outcome-unknown transport call can reset the local retry
+52. A crash after an outcome-unknown transport call can reset the local retry
     budget, but never changes the wire ID, exact retry package or frozen expiry.
-54. Independently received histories with equal ordinals have the same
-    scope-local ACK-target order after any permutation of their union. A
-    late-imported alias may change future order, never an already frozen ACK.
-55. A same-author receipt-pair conflict excludes only affected ACK targets;
-    other peer scopes and unaffected targets remain processable.
-56. Retry, restore and later aliases reuse the same effect key and frozen
+53. Retry, restore and later aliases reuse the same effect key and frozen
     intent before computing new ACK targets or timing. Concurrent local workers
     cannot commit different intents for that key, or change the ordinal to
     evade the conflict.

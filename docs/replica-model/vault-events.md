@@ -1304,8 +1304,9 @@ or importing history may change this derived key for future decisions, but
 MUST NOT change an ACK array already frozen in a committed `message.out`.
 
 After `eid` deduplication, distinct events with the same `(author,
-receiptOrdinal)` are a receipt-integrity conflict. Retain those events and
-surface the conflict; do not use their affected logical messages as newly
+receiptOrdinal)` are a receipt-integrity conflict. Affected logical messages
+are those observed by the conflicting events. Retain those events and
+surface the conflict; do not use affected logical messages as newly
 frozen ACK targets. Unaffected messages remain processable. Full import MUST
 NOT reject an event union merely for receipt-ordinal reuse or this projected
 conflict. The generic event store remains payload-opaque. Its section 5.3
@@ -2747,10 +2748,9 @@ A portable folder restore creates a new local `replica_id` and
 permanently stopped. The restored runtime derives every mediation and
 communication key, reconciles required recipients using ordinary Coordinate
 Mediation, drains the account-scoped mailbox, and resumes eligible outbox work.
-Before accepting new inbound observations it recovers the receipt-ordinal
-high-water mark across all historical authors. It also reconciles unfinished
-committed inbound work under section 16.1, including observations already
-pickup-ACKed before the snapshot. Local queue state is not a recovery source.
+It also reconciles unfinished committed inbound work under section 16.1,
+including observations already pickup-ACKed before the snapshot. Local queue
+state is not a recovery source.
 
 No previous process must be online. Mediator retention still bounds messages
 that were never committed to the vault. Seed/recovery material must be backed

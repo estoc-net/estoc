@@ -640,12 +640,9 @@ Before writing, the importer MUST:
 6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
-The importer also preflights the prospective merged folds and required
-non-erased held objects under `event-store.md` section 11.3.
-Receipt-ordinal reuse does not reject import: different authors may share an
-ordinal, while same-author receipt-pair conflicts are retained as projections
-under `vault-events.md` section 10.2. This permits recovery by event union
-after independent execution; it does not authorize concurrent phase-1 writers.
+The importer follows `event-store.md` section 11.3 for preflight of the
+prospective merged folds and required non-erased held objects, and for handling
+semantic conflicts.
 
 Under the writer lock required by `event-store.md` section 11.3, it then:
 
@@ -677,8 +674,7 @@ recovered by its owning backend, or supply a verified complete published
 generation; ignoring its journal does not establish completeness.
 
 The target's local author selection and user options are unchanged. Rebuildable
-indexes and the receipt-ordinal high-water mark are refreshed from the published
-union before ordinary work resumes.
+indexes are refreshed from the published union before ordinary work resumes.
 
 Importing the same source repeatedly is a no-op after the first
 successful union. A source containing bytes for a globally erased root
@@ -693,10 +689,8 @@ under the same publication rules, not part of the imported portable bytes.
 
 On first writable open, a new `replica_id` and `store_generation` are minted.
 All historical event authors remain as written. Before accepting new inbound,
-the writer recovers the receipt-ordinal high-water mark across every historical
-author under `vault-events.md` section 10.2. Restart or deleting `local/` has the
-same requirement. Writable-open recovery also reconciles committed unfinished
-inbound work, even if its mediator delivery was already pickup-ACKed.
+the writer completes recovery under `vault-events.md` section 16.1, including
+after restart or deletion of `local/`.
 Because mediation and communication keys are vault-scoped, the runtime derives
 and resumes them after unlock using ordinary account-scoped mediation/pickup.
 
@@ -842,10 +836,9 @@ The following require a new folder/vault version:
 36. Crash during import exposes the previous usable view or a recoverably
     incomplete import. Deleting `local/` cannot bypass its publication barrier.
 37. Full import rejects missing non-erased held objects before publishing a
-    complete view, but preserves cross-author ordinal ties and projects
-    same-author receipt-pair conflicts without rejecting the event union.
-38. Restore continues receipt numbering above all historical authors and
-    discovers unfinished pickup-ACKed inbound work without a local queue.
+    complete view.
+38. Restore discovers unfinished pickup-ACKed inbound work without a local
+    queue.
 39. `import/` is excluded from FileStore, snapshots, exports, restore inputs
     and opaque-file copying. A half-written staged object never travels as an
     unknown portable file.

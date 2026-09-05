@@ -747,11 +747,9 @@ first semantic write:
 6. verify every object to be copied and require every prospective non-erased
    held root to have valid bytes in the source or target.
 
-Receipt-ordinal reuse is not a full-import preflight failure. Distinct authors
-may share an ordinal; same-author receipt-pair conflicts remain visible vault
-projections under `vault-events.md` section 10.2. The importer preserves the
-event union and limits only work affected by a projected conflict. Existing
-`ForkedAuthor`, envelope, identity and object-integrity checks still apply.
+The importer applies the receipt-conflict rules in `vault-events.md` section
+10.2. Existing `ForkedAuthor`, envelope, identity and object-integrity checks
+still apply.
 
 These are full-vault importer duties, not payload validation by the opaque
 `EventStore.ingest` API. A preflight failure writes nothing. Import MUST hold
@@ -791,8 +789,8 @@ The operation is idempotent. It decodes and ingests events rather than copying
 segments as opaque files. Source bytes do not revive an erased message/root
 relation; another independently live reference to the same CID may still retain
 those bytes. Target identity, seed wrapping and local author selection are
-unchanged. Rebuildable indexes, including the receipt-ordinal high-water mark,
-are refreshed from the published union before ordinary work resumes.
+unchanged. Rebuildable indexes are refreshed from the published union before
+ordinary work resumes.
 
 ### 11.4 Restore and bootstrap
 
@@ -949,9 +947,8 @@ A conforming implementation MUST pass at least these cases:
 24. Crash at each full-import boundary exposes either the previous usable view
     or a recoverably incomplete import, never an apparently complete partial
     union. Deleting `local/` does not bypass that publication boundary.
-25. Full import preserves distinct-author observations sharing an ordinal and
-    exposes same-author receipt-pair conflicts as projections, not preflight
-    failures. It recomputes the high-water mark from the accepted event union.
+25. Full import recomputes rebuildable indexes from the published event union
+    before ordinary work resumes.
 26. Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.
