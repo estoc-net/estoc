@@ -1840,25 +1840,42 @@ allocation, but restart, deletion of `local/`, or a new `replica_id` or
 `store_generation` MUST NOT reset the recovered high-water mark or reuse an
 ordinal already present in accepted history.
 
-For one conflict-free logical message, including verified aliases:
+Receipt identity is the pair `(author, receiptOrdinal)`. One author MUST NOT
+allocate the same ordinal to distinct observation events. Distinct authors MAY
+share an ordinal after restore or after merging independently run copies; this
+is valid merged history, not an import incompatibility. The allocator above
+still advances beyond every ordinal known in the current union.
+
+For one observation `e` and one conflict-free logical message `M`, including
+verified aliases, define:
 
 ```text
-firstReceiptOrdinal = min(receiptOrdinal of every observation in the group)
+receiptOrderKey(e) = (integer(e.data.receiptOrdinal), e.author)
+firstReceiptKey(M) = min(receiptOrderKey(e) for every valid observation of M)
 ```
 
-A later observation does not renumber earlier events. Learning an older alias
-may change this derived value for future decisions, but MUST NOT change an ACK
-array already frozen in a committed `message.out`.
+Compare the tuples ascending, first by exact integer ordinal and then by the
+canonical author string. The minimum is one complete observation key, not
+independent minima of its components. ACK-target ordering uses this key only
+within the carrier's validated logical peer scope. In a linear single-writer
+history it preserves first-receipt order, including across restore and author
+changes. For independently run histories it defines deterministic recovery
+order, not a claim about physical receive time between disconnected writers.
+This rule permits history union; it does not enable concurrent phase-1 writers
+or establish multi-writer effect convergence.
 
-Distinct accepted inbound events MUST NOT share an ordinal in a conforming
-phase-1 history. Full-vault import checks this after `eid` deduplication and
-MUST fail semantic preflight on a collision. Low-level ingest or damaged storage
-that exposes such a collision produces an incompatible receipt-history
-condition; ACK-target ordering MUST stop rather than break the tie by wire ID.
-The generic event store remains payload-opaque. This check does not establish
-multi-writer convergence or prove the absence of every historical fork. A
-future multi-writer profile MUST replace this allocator before enabling
-concurrent writers.
+A later observation does not renumber earlier events. Learning an older alias
+or importing history may change this derived key for future decisions, but
+MUST NOT change an ACK array already frozen in a committed `message.out`.
+
+After `eid` deduplication, distinct events with the same `(author,
+receiptOrdinal)` are a receipt-integrity conflict. Retain those events and
+surface the conflict; do not use their affected logical messages as newly
+frozen ACK targets. Unaffected messages remain processable. Full import MUST
+NOT reject an event union merely for receipt-ordinal reuse or this projected
+conflict. The generic event store remains payload-opaque. Its section 5.3
+`ForkedAuthor` check detects unseen events under the current local author; it
+does not prove that every historical author is fork-free.
 
 The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Ciphertext that
@@ -2416,7 +2433,7 @@ DID.
 }
 ```
 
-This event seals responder relationship state for
+This event freezes responder relationship state for
 `(rendezvousDidValue, peerKey)`. Different initial message IDs or protocol
 types from the same authenticated initiator key reuse the same relationship,
 contact, responder relationship DID and route while remaining separate
@@ -2769,8 +2786,14 @@ effect may be emitted. Neither canonical order, author, source preference nor
 `accept > reject > ignore` chooses a winner. Existing effects remain immutable
 history; a conflict does not undo them.
 
-A final accept authorizes the existing materialization procedure. A final
-reject or ignore authorizes candidate-only erasure once any selected rejection
+An **effective admission result** is the unique valid final-result equivalence
+class for a candidate under this section. An undecided candidate or a candidate
+with an admission conflict has no effective result. References to effective
+accept or reject mean that result, not merely the presence of a final event.
+
+An effective accept authorizes the existing materialization procedure. An
+effective reject or ignore authorizes candidate-only erasure once any selected
+rejection
 intent has been frozen. The decision and any chosen rejection intent/binding
 commit atomically under `rendezvous.md` section 9.3. Recovery resumes committed
 response work and erasure; it neither invents an uncommitted optional response
@@ -2782,6 +2805,10 @@ DID lifecycle operations, never a retroactive admission rewrite.
 Before final accept, the writer checks the one-use invitation rule in section
 14.10, deterministic contact tombstones and sender-DID consistency. These
 checks and acceptance commit share one serialized finalization operation.
+An undecided candidate introducing a new consumer of an unavailable one-use
+invitation is finalized as reject with code `not-accepted`, under
+`rendezvous.md` section 9.3. Recovery of an existing final accept and permitted
+reuse by the same consumer do not create another consumer or rewrite a result.
 Rejection never creates a custom rendezvous decline.
 
 Group responder-side `relationship.established` and initiator-side
@@ -3223,8 +3250,9 @@ transactionally but may not reverse the durability boundaries.
    mint local `replica_id` and `store_generation`;
 5. fold portable state and apply extension lifecycle, reconstruct committed
    held roots, and only then release abandoned guards and permit GC;
-6. validate receipt history and recover its vault-wide ordinal high-water mark
-   under section 10.2 before accepting a new inbound observation;
+6. project receipt-integrity conflicts and recover the vault-wide ordinal
+   high-water mark under section 10.2 before accepting a new inbound
+   observation; cross-author ordinal reuse does not block open or import;
 7. enumerate committed inbound observations with unfinished admission,
    transition/binding, ACK or protocol-defined deterministic effect work;
 8. idempotently reconcile those observations and pending candidate erasures,
@@ -3844,7 +3872,8 @@ There is no migration requirement from an earlier event vocabulary.
     execution scope plus requested wire ID; another peer or relationship using
     the same wire ID is never acknowledged.
 61. Every accepted inbound carries a durable phase-1 receipt ordinal. ACK arrays
-    freeze targets in first-receipt order even when the event clock rolls back.
+    use `firstReceiptKey`; clock rollback does not reverse receipt order in a
+    linear history, and cross-author ties have deterministic recovery order.
 62. The initiator commits `relationship.initiatorBound` and a
     `message.executionBound` before the handoff-confirmation effect; restart
     immediately afterward reconstructs the same relationship execution ID.
@@ -3867,11 +3896,11 @@ There is no migration requirement from an earlier event vocabulary.
 70. Shared envelope bytes remain held by another non-erased message even after
     one message/root relation is erased.
 71. Each new duplicate observation receives a fresh ordinal; exact re-ingest
-    does not. The logical group's minimum orders future ACKs without changing
-    any already frozen ACK array.
+    does not. The logical group's minimum complete `(integer ordinal, author)`
+    key orders future ACKs without changing any already frozen ACK array.
 72. Restore, restart and loss of `local/` recover the ordinal high-water mark
-    across all historical authors. Import rejects distinct events with equal
-    ordinals after event-ID deduplication.
+    across all historical authors. Cross-author equal ordinals survive import
+    and sort by author on a tie; allocation resumes above the union's maximum.
 73. Detach, contact deletion, merge and erasure do not reopen a consumed one-use
     invitation. A final accept reserves it across crash before attachment;
     another initial message for the same consumer does not consume it twice.
@@ -3891,3 +3920,14 @@ There is no migration requirement from an earlier event vocabulary.
 80. Final rejection and any selected response intent/binding commit atomically.
     Recovery resumes only committed response work and erasure, never an
     uncommitted optional response or a replacement admission outcome.
+81. Distinct events sharing a receipt `(author, ordinal)` pair remain history
+    with a projected receipt-integrity conflict, not a full-import failure.
+    Only affected logical messages are excluded from newly frozen ACK targets.
+82. Every permutation of a fixed event union yields the same minimum complete
+    receipt key and scope-local order. Learning an older verified alias may
+    change future order, never a previously frozen ACK array.
+83. Equivalent final admission events have one effective result; undecided or
+    conflicted candidates have none, even if a final accept event is present.
+84. A new consumer of an unavailable one-use invitation gets final reject with
+    code `not-accepted`; same-consumer reuse and recovery do not reject or
+    overwrite an existing accepted result.

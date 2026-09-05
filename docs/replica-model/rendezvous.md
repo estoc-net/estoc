@@ -601,6 +601,12 @@ an outcome, source or code precedence rule.
 
 Before final accept, the same serialized operation checks deterministic
 contact tombstones, sender-DID consistency and one-use invitation availability.
+When an undecided candidate would introduce a new consumer but the one-use
+invitation is unavailable, the writer MUST finalize reject with code
+`not-accepted`. If it chooses a Report Problem response, section 13 maps this
+to `e.p.estoc.not-accepted`; rejection may still be silent. Recovery of an
+existing final accept and permitted reuse by the same consumer follow
+`vault-events.md` section 14.10 and MUST NOT rewrite that accepted result.
 A timely final accept remains final during recovery even after the initial
 message expires; the response still obeys its own frozen expiry. Ending an
 accepted relationship uses normal contact deletion and DID/route retirement.
@@ -955,7 +961,8 @@ still requires an explicit `ack` naming its wire ID.
 
 There is no rendezvous `decline` message.
 
-The effective reject code maps to peer-visible Report Problem code as follows:
+The code of the effective reject result maps to peer-visible Report Problem
+code as follows:
 
 ```text
 sender-did-conflict  -> e.p.estoc.sender-did-conflict
@@ -1147,7 +1154,7 @@ DID as ordinary `writeTo`.
     execution identity before the handoff effect; no observation-MID-derived
     identity is used.
 27. Until confirmation, every responder package carries the same stored
-    `fromPrior` and uses the same long-form sender spelling.
+    `fromPrior` and uses long-form sender spelling.
 28. Rejection maps local codes to deterministic coarse problem codes and emits
     no custom decline.
 29. Default local retry uses a 30-second minimum, a 21600-second backoff cap
@@ -1187,3 +1194,10 @@ DID as ordinary `writeTo`.
     A crash cannot expose a final decision with half its chosen response; when
     no response was committed, recovery erases candidate content without
     inventing a new optional response or revisiting admission.
+44. An undecided candidate introducing a new consumer of an unavailable one-use
+    invitation is finalized as reject with code `not-accepted`. An
+    optional Report Problem uses `e.p.estoc.not-accepted`; no new code is added.
+45. Same-consumer reuse and recovery of a committed accept do not become a new
+    invitation take or overwrite the result. Only the unique valid final-result
+    equivalence class is effective; conflicted or undecided candidates have
+    none.

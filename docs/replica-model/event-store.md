@@ -46,7 +46,10 @@ local copy
 
 The portable sets define the identity's recoverable state. Local state is
 not part of the vault, is never synchronized, and is omitted from every
-portable snapshot.
+portable snapshot. Backend import staging and publication-recovery metadata
+are also non-portable; the reference folder reserves `import/` for them under
+`vault-folder.md` section 3. They are recovered before normal access and are
+not opaque portable files or deletable local caches.
 
 The store does not know contacts, messages, public DIDs, mediators or
 replicas as domain objects. It knows only event authors. The vault layer
@@ -737,15 +740,16 @@ interface FileStore {
 }
 ```
 
-Portable files are everything in the interchange format that is neither
-an event segment nor a DASL object. `vault-folder.md` defines reserved
-paths and singleton merge policies.
+Portable files are the portable part of the interchange format other than
+event segments and DASL objects. Local and backend recovery metadata are
+excluded. `vault-folder.md` defines reserved paths and singleton merge
+policies.
 
 A `FileStore` path MUST NOT address:
 
 - an event segment;
 - a DASL object;
-- `local/`;
+- `local/` or backend import-recovery metadata under `import/`;
 - an owned structural directory; or
 - a path that would make one name both a file and a directory.
 
@@ -848,7 +852,7 @@ Export writes the complete portable vault:
 - all retained main DASL objects;
 - all portable files;
 - every non-disposed extension event and object store; and
-- no local state.
+- no local state or backend import staging/recovery metadata.
 
 Every complete event record in a segment is exactly
 `canonicalEventBytes(event)` followed by byte `0x0A`. A writer MUST NOT pretty
@@ -883,10 +887,16 @@ first semantic write:
    may be imported;
 4. compute the prospective merged event sets and held-root folds, applying
    erasure and extension-purge rules;
-5. run vault-level semantic preflight, including the phase-1 receipt-history
-   compatibility check in `vault-events.md` section 10.2; and
+5. derive vault-level semantic projections, preserving valid conflicting
+   facts rather than choosing a winner by arrival order; and
 6. verify every object to be copied and require every prospective non-erased
    held root to have valid bytes in the source or target.
+
+Receipt-ordinal reuse is not a full-import preflight failure. Distinct authors
+may share an ordinal; same-author receipt-pair conflicts remain visible vault
+projections under `vault-events.md` section 10.2. The importer preserves the
+event union and limits only work affected by a projected conflict. Existing
+`ForkedAuthor`, envelope, identity and object-integrity checks still apply.
 
 These are full-vault importer duties, not payload validation by the opaque
 `EventStore.ingest` API. A preflight failure writes nothing. Preflight and
@@ -909,8 +919,13 @@ an explicitly incomplete import; ordinary workers and GC MUST NOT act on a
 partial event union as if it were the completed import. A correctness-critical
 barrier MUST survive restart and deletion of `local/`, identify the intended
 import, and carry enough recovery information to finish or safely roll back.
-It is backend recovery metadata, not a new vault-domain event. A backend unable
-to provide such a barrier MUST keep the generation unpublished instead.
+It is backend recovery metadata, not a new vault-domain event. The reference
+folder keeps it under the reserved, non-portable `import/` root defined by
+`vault-folder.md` section 3. A backend unable to provide such a barrier MUST
+keep the generation unpublished instead. Import and export MUST exclude this
+metadata, not carry it as opaque portable files or execute a source's recovery
+journal as instructions for the target. An incomplete source must be recovered
+or read through a verified complete published generation before full import.
 
 A completed full import requires all non-erased held objects. An explicitly
 requested partial-data import MAY expose missing-material diagnostics, but
@@ -1088,7 +1103,7 @@ A conforming implementation MUST pass at least these cases:
 28. After restart, committed-event retention is reconstructed before abandoned
     pending-reference guards are cleared and before collection runs. A crash
     before event commit leaves an orphan after recovery; a crash after event
-        commit but before guard cleanup leaves a held object.
+    commit but before guard cleanup leaves a held object.
 29. Counter exhaustion fails before any event in the append or batch commits;
     it neither wraps the counter nor advances only the UUID timestamp.
 30. Concurrent erasure/GC cannot publish an export with a dangling held root;
@@ -1096,5 +1111,9 @@ A conforming implementation MUST pass at least these cases:
 31. Crash at each full-import boundary exposes either the previous usable view
     or a recoverably incomplete import, never an apparently complete partial
     union. Deleting `local/` does not bypass that publication boundary.
-32. The vault-level full importer rejects duplicate receipt ordinals belonging
-    to distinct inbound events after `eid` deduplication, before publication.
+32. Full import preserves distinct-author observations sharing an ordinal and
+    exposes same-author receipt-pair conflicts as projections, not preflight
+    failures. It recomputes the high-water mark from the accepted event union.
+33. Import/export never includes backend recovery metadata as portable files.
+    Source recovery journals are not executed on the target, and omitting a
+    journal cannot turn an incomplete source into a complete snapshot.

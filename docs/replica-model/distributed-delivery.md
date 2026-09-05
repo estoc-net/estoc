@@ -482,12 +482,13 @@ algorithm after normal inbound commit:
    to the exact same scope. A verified key transition may widen lookup only
    inside one relationship scope; unrelated relationships, unknown senders,
    conflicted targets and ambiguous scope attribution are omitted.
-4. Derive each target's `firstReceiptOrdinal` under `vault-events.md` section
-   10.2 as the minimum across its valid logical observations and verified
-   aliases. Order by the exact integer value, oldest first, not by decimal
-   string, canonical event or `ChangeToken` order. Distinct inbound events
-   sharing an ordinal are incompatible phase-1 history and block ACK-target
-   ordering; wire ID is not a tie-break repair.
+4. Derive each target's `firstReceiptKey` under `vault-events.md` section
+   10.2 as the minimum complete `(integer receiptOrdinal, author)` tuple across
+   its valid observations and verified aliases. Sort targets ascending by that
+   key within X's scope, never by decimal-string, canonical-event or
+   `ChangeToken` order. Equal ordinals from different authors are valid and
+   compare by author; omit only targets affected by a receipt-integrity
+   conflict, not unrelated messages.
 5. Freeze that exact ordered array as `message.out.ack` in one deterministic
    natural response or one deterministic pure ACK associated with X's logical
    execution ID.
@@ -500,6 +501,12 @@ second ACK effect for X; the sender may request it again in another message. If
 no target remains, the receiver creates no ACK-only effect. DIDComm message IDs
 are sender-scoped; wire-ID equality elsewhere in the vault is never sufficient
 evidence for an ACK target.
+
+This preserves actual first-receipt order in a linear writer history. After
+union of independently run copies, the same key supplies deterministic recovery
+order, not a reconstruction of physical receive time across those copies.
+Import never rewrites an already frozen response or grants a new multi-writer
+execution guarantee.
 
 Before freezing the response it MUST have authenticated and validated X,
 accepted every retained object, process-durably appended `message.in`, and
@@ -966,9 +973,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     no-plaintext profile.
 44. ACK target lookup is scoped by `(carrier.logicalPeerScope, wireId)`;
     another relationship reusing the same wire ID is never acknowledged.
-45. ACK target order follows durable first receipt ordinal, not canonical event
+45. ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
-    does not reverse their ACK order.
+    does not reverse their ACK order in a linear history.
 46. Reaching `replayUntil` does not release exact replay material until a
     durable `message.replayClosed` is committed; restart or clock rollback
     cannot reopen a closed replay obligation.
@@ -984,9 +991,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     not create another execution identity for the same relationship/wire ID.
 50. A held normal-only package survives GC and release with its exact envelope;
     terminal normal release with a null replay deadline requires no closure.
-51. Distinct observations receive distinct ordinals, including duplicates;
-    restore continues above every historical author, and a collision blocks
-    ACK ordering rather than using a wire-ID tie-break.
+51. An author assigns each new observation its own ordinal, including
+    duplicates. Restore and import continue above all historical authors;
+    cross-author ordinal reuse is valid and sorts by author on a tie.
 52. Two relationships in a merged contact never share ACK authority merely
     because of that merge. Exact local handoff/initial references and package
     evidence determine outbound scope.
@@ -996,3 +1003,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     pickup-ACKed unfinished work without mediator redelivery.
 55. A crash after an outcome-unknown transport call can reset the local retry
     budget, but never changes the wire ID, exact retry package or frozen expiry.
+56. Independently received histories with equal ordinals have the same
+    scope-local ACK-target order after any permutation of their union. A
+    late-imported alias may change future order, never an already frozen ACK.
+57. A same-author receipt-pair conflict excludes only affected ACK targets;
+    other peer scopes and unaffected targets remain processable.

@@ -108,6 +108,9 @@ directory.
       objects/
         <cid>
 
+  import/
+    <backend-private staging and publication-recovery metadata>
+
   local/
     replica.json
     agent/
@@ -136,17 +139,33 @@ keystore.json
 events/
 objects/
 extensions/
+import/
 local/
 ```
 
-A malformed entry inside `events/`, `objects/`, `extensions/` or `local/`
-is damage, not an opaque portable file. Unknown top-level paths outside
-these roots are portable opaque files as described in section 7.3.
+`import/` is a reserved, non-portable structural root holding backend import
+staging and the publication barrier. It is never part of a snapshot, copied
+from an import source, synchronized, exposed through `FileStore`, or treated as
+an opaque portable path. Its internal journal format is backend-private. An
+unrecognized or damaged journal MUST block writable open rather than be
+ignored.
+
+A writable open that finds import recovery state MUST, after required format
+and identity validation and acquisition of the exclusive writer lock, complete
+or safely roll back that import before exposing normal operations or GC.
+Deleting `local/` does not bypass this recovery. Read-only access may expose a
+verified complete published generation or explicit incomplete-import
+diagnostics, never a partial generation as a complete vault.
+
+A malformed entry inside `events/`, `objects/`, `extensions/`, `import/` or
+`local/` is damage, not an opaque portable file. Unknown top-level paths
+outside these roots are portable opaque files as described in section 7.3.
 
 ### 3.1 Portable and local halves
 
-Everything except `local/` is portable state. It may appear in a
-snapshot, export or folder import.
+Everything except `local/` and `import/` is portable state. Only the published
+portable view may appear in a snapshot, export or folder import. `import/` is
+non-portable recovery metadata, not ordinary deletable local state.
 
 `local/` belongs only to one writable copy. It is never:
 
@@ -156,8 +175,10 @@ snapshot, export or folder import.
 - exposed through `FileStore`; or
 - used to decide whether a portable event or object exists.
 
-Deleting all of `local/` converts a folder into a portable copy. The next
-writable open creates a new replica ID and store generation.
+After import recovery is complete, deleting all of `local/` leaves the
+published portable copy. The next writable open creates a new replica ID and
+store generation. Removing `local/` alone during an incomplete import neither
+completes it nor makes its staging a portable snapshot.
 
 ### 3.2 Extension stores
 
@@ -326,6 +347,7 @@ keystore.json
 events/**
 objects/**
 extensions/**
+import/**
 local/**
 ```
 
@@ -346,7 +368,8 @@ have its own versioned merge law; there is no fallback latest-wins rule.
 
 A top-level path not reserved above is an opaque portable file or
 directory. A conforming round trip preserves its bytes and relative
-paths.
+paths. `import/` is reserved recovery state, never an unknown portable path;
+snapshot and import MUST NOT copy its staging or journal as opaque files.
 
 On import into an existing vault, an unknown path is copied only when
 absent. An existing target path is never overwritten. A collision in
@@ -552,7 +575,9 @@ A read-only open:
 1. validates path shape;
 2. reads and validates `config.json`;
 3. validates structural roots as needed; and
-4. does not create `local/`.
+4. does not create `local/` or alter `import/`; if import recovery is pending,
+   it exposes only a verified complete published generation or explicit
+   incomplete-import diagnostics.
 
 A writable open additionally:
 
@@ -560,8 +585,8 @@ A writable open additionally:
 2. unlocks or obtains the seed;
 3. verifies the derived anchor;
 4. acquires the folder's single-writer lock before creating mutable local state;
-5. completes backend/import-publication recovery, then creates or validates
-   `local/replica.json`; and
+5. completes or safely rolls back any import recorded under `import/`, then
+   creates or validates `local/replica.json`; and
 6. opens the main and extension stores with `author = replica_id`.
 
 Before running extensions, the application folds extension lifecycle and
@@ -631,7 +656,7 @@ resolution at the vault level.
 
 `FileStore.list()` returns `config.json`, `keystore.json` and opaque
 portable paths, but MUST NOT return event segments, DASL objects or
-anything under `local/`.
+anything under `local/` or `import/`.
 
 `FileStore.write()` obeys singleton and unknown-file rules and refuses
 structural paths. Successful resolution is process-durable under
@@ -644,11 +669,14 @@ file.
 ### 12.1 Snapshot
 
 A folder snapshot contains every portable file under `.estoc/` and omits
-`local/` completely. It obeys `event-store.md` section 11.2's consistent-cut,
-retention and publication contract; a live recursive directory copy without
-that coordination is not a conforming snapshot. Required objects and portable
-file versions are protected until copying and verification complete. Concurrent
-erasure is serialized or aborts the unpublished snapshot.
+`local/` and `import/` completely. It obeys `event-store.md` section 11.2's
+consistent-cut, retention and publication contract; a live recursive directory
+copy without that coordination is not a conforming snapshot. Required objects
+and portable file versions are protected until copying and verification
+complete. Concurrent
+erasure is serialized or aborts the unpublished snapshot. Merely omitting
+`import/` cannot make an incomplete in-place import a complete source: recover
+it first or select a verified complete published generation.
 
 A snapshot may include an extension store that has a converged
 `extension.purged` event but has not yet been physically disposed. An
@@ -666,7 +694,7 @@ A non-folder backend renders:
 - opaque portable files in their paths.
 
 The exporter chooses fresh segment IDs and boundaries. One segment per
-author is sufficient. It MUST NOT create `local/`.
+author is sufficient. It MUST NOT export `local/` or `import/`.
 
 The result must round-trip through the folder reader to the same event
 and byte sets.
@@ -686,9 +714,12 @@ Before writing, the importer MUST:
 6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
-The importer also preflights the prospective merged folds, extension lifecycle,
-required non-erased held objects and phase-1 receipt-ordinal compatibility under
-`event-store.md` section 11.3 and `vault-events.md` section 10.2.
+The importer also preflights the prospective merged folds, extension lifecycle
+and required non-erased held objects under `event-store.md` section 11.3.
+Receipt-ordinal reuse does not reject import: different authors may share an
+ordinal, while same-author receipt-pair conflicts are retained as projections
+under `vault-events.md` section 10.2. This permits recovery by event union
+after independent execution; it does not authorize concurrent phase-1 writers.
 
 Then it:
 
@@ -701,16 +732,28 @@ Then it:
    merged portable view under `event-store.md` section 11.3; and
 7. disposes stores excluded by the published extension-purge fold.
 
-The reference backend MAY quiesce the vault and stage a complete sibling tree.
-It MUST NOT expose an in-place partial import as complete after a crash.
-A required import barrier is backend recovery metadata and cannot live solely
-under deletable `local/`; a backend without such a recoverable barrier must
-keep the generation unpublished. GC and ordinary workers remain excluded until
-publication recovery and committed-retention reconstruction are complete.
+The reference backend MAY quiesce the vault and stage a complete portable view
+under `import/`. A backend using sibling generations outside `.estoc/` MUST
+keep a discoverable publication journal under `import/` until recovery is
+complete; external staging is not part of the exported tree. The journal must
+remain discoverable across every publication/crash boundary and contain enough
+information to finish or safely roll back without the original import source.
 
-Source `local/` is ignored. The target's local author selection and user options
-are unchanged; rebuildable indexes and the receipt-ordinal high-water mark are
-refreshed from the published union before ordinary work resumes.
+It MUST NOT expose an in-place partial import as complete after a crash.
+A required import barrier cannot live solely under deletable `local/`; a
+backend without a recoverable barrier must keep the generation unpublished.
+GC and ordinary workers remain excluded until publication recovery and
+committed-retention reconstruction are complete. Only after that boundary may
+the backend clear the journal and abandoned staging.
+
+Source `local/` and `import/` are not copied. A source journal MUST NOT be
+executed as target recovery instructions. An incomplete source must first be
+recovered by its owning backend, or supply a verified complete published
+generation; ignoring its journal does not establish completeness.
+
+The target's local author selection and user options are unchanged. Rebuildable
+indexes and the receipt-ordinal high-water mark are refreshed from the published
+union before ordinary work resumes.
 
 Importing the same source repeatedly is a no-op after the first
 successful union. A source containing bytes for a globally erased root
@@ -719,7 +762,9 @@ does not revive the erased message.
 ### 13.2 Restore into an empty backend
 
 A restore accepts one valid version-3 snapshot and creates the portable
-folder. It does not restore `local/`.
+folder. It restores neither source `local/` nor source `import/`. Any staging
+or journal created by the restoring backend is target-owned recovery state
+under the same publication rules, not part of the imported portable bytes.
 
 On first writable open, a new `replica_id` and `store_generation` are minted.
 All historical event authors remain as written. Before accepting new inbound,
@@ -811,7 +856,7 @@ The following require a new folder/vault version:
 
 1. A newly created folder stores events under `events/<uuidv7>/`.
 2. The path author and event `author` must match.
-3. A portable snapshot contains no `local/` member.
+3. A portable snapshot contains no `local/` or `import/` member.
 4. Restoring a snapshot mints a new replica ID and store generation.
 5. Moving the complete folder preserves them only when no old writer
    remains.
@@ -834,8 +879,8 @@ The following require a new folder/vault version:
 16. An unknown entry inside a structural root is reported as damage.
 17. Extension stores use the same local author but separate event-ID
     sets.
-18. Import ignores source `local/` even when a nonconforming archive
-    contains it.
+18. Import never copies source `local/` or `import/` from a nonconforming
+    archive and never executes a source recovery journal on the target.
 19. At-rest plaintext message content is not described as protected by
     the vault passphrase.
 20. No mediator or sync operation consumes the folder as plaintext.
@@ -877,7 +922,17 @@ The following require a new folder/vault version:
     is serialized or aborts publication rather than producing a dangling root.
 37. Crash during import exposes the previous usable view or a recoverably
     incomplete import. Deleting `local/` cannot bypass its publication barrier.
-38. Full import rejects missing non-erased held objects and incompatible
-    receipt history before publishing a complete view.
+38. Full import rejects missing non-erased held objects before publishing a
+    complete view, but preserves cross-author ordinal ties and projects
+    same-author receipt-pair conflicts without rejecting the event union.
 39. Restore continues receipt numbering above all historical authors and
     discovers unfinished pickup-ACKed inbound work without a local queue.
+40. `import/` is excluded from FileStore, snapshots, exports, restore inputs
+    and opaque-file copying. A half-written staged object never travels as an
+    unknown portable file.
+41. Writable open recovers a target-owned import under its writer lock before
+    normal operations or GC, including after `local/` deletion. Unknown or
+    damaged recovery journals block writable open.
+42. A source with an incomplete import cannot be made a complete snapshot by
+    omitting `import/`; recover it or read a verified complete published
+    generation. Read-only access never labels a partial generation complete.
