@@ -20,7 +20,7 @@ deferred extensions:
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
-| `rendezvous.md` | method-neutral rendezvous, default `did:peer:4`, optional `did:web`, and contact-scoped pairwise handoff |
+| `rendezvous.md` | method-neutral rendezvous, Peer-DID default, optional Web facade and pairwise handoff |
 | `replica-mediation.md` | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
 | `vault-sync.md` | **deferred:** encrypted anti-entropy through an untrusted sync store |
 
@@ -94,6 +94,32 @@ Every conforming implementation preserves the following rules.
     incarnations and detects accidental forks. A future full replica holding
     the same seed would be equally trusted; author IDs are not a security
     boundary.
+13. **Successful commits are process-durable.** When an append, ingest, object
+    acceptance or portable-file write reports success, a later process restart
+    over the same intact storage generation observes the complete committed
+    value. Power-loss durability is a separate backend policy.
+14. **Collection is coordinated with reference commits.** An object cannot be
+    unlinked while it is retained by a committed event or while an in-flight
+    operation may still commit a reference to it.
+
+### 2.1 Commit and durability terminology
+
+A value is **accepted** or **committed** only after the operation's promise
+resolves successfully.
+
+- If the process terminates before resolution, a restart MAY observe the
+  complete value or no value, but MUST NOT observe a partially accepted value.
+- After successful resolution, every later process restart over the same
+  intact storage generation MUST observe the complete value.
+- Sudden power loss, storage-device failure and loss of volatile operating-system
+  caches are outside this minimum. A backend that offers stronger stable-media
+  durability MUST document the required flush or `fsync` policy and the point
+  at which that stronger guarantee is reached.
+
+Unless another section explicitly says otherwise, the words **durable** and
+**durably committed** in the phase-1 protocol suite mean this process-durable
+success boundary. A product MUST NOT claim power-loss-safe receipt merely from
+this minimum contract.
 
 ## 3. The event
 
@@ -222,7 +248,9 @@ On append and ingest, the store MUST reject an event unless:
 - the top-level member set is exactly
   `eid`, `at`, `author`, `type`, `roots`, `data`;
 - `eid` is a canonical lowercase UUIDv7;
-- `at` is a valid RFC 3339 UTC timestamp using `Z`;
+- `at` is a valid Gregorian UTC instant in the exact canonical form
+  `YYYY-MM-DDTHH:mm:ss.sssZ`, with exactly three fractional digits and seconds
+  from `00` through `59`;
 - `author` is a canonical lowercase UUIDv7;
 - `type` is a non-empty string;
 - `roots` is an array of canonical profile CIDs;
@@ -255,8 +283,12 @@ retirement policy are vault events defined in `vault-events.md`.
 
 ### 4.2 Event ID and timestamp
 
-The store mints `eid` and `at` as part of append. The UUIDv7 timestamp
-and `at` SHOULD come from the same clock reading.
+The store mints `eid` and `at` as part of append. It obtains one integer
+Unix-millisecond clock reading, uses that millisecond in the UUIDv7 timestamp,
+and formats `at` as exactly `YYYY-MM-DDTHH:mm:ss.sssZ`. A sub-millisecond clock
+is truncated to the integer millisecond before both values are produced.
+Leap-second spelling (`ss == 60`), omitted fractional seconds and any precision
+other than three digits are rejected.
 
 An `eid` is trusted to be globally unique. It encodes no subject,
 contact, message, author or permission. A caller that needs the minted
@@ -276,9 +308,11 @@ ascending by:
 (at, eid, author)
 ```
 
-String comparison uses the literal field values; event equality and persistence
-use RFC 8785 canonical bytes. Since `eid` is expected to be unique, `author` is normally only a defensive final
-component.
+String comparison uses the literal field values. Because every accepted `at`
+uses the same UTC form and millisecond precision, this lexical comparison also
+orders accepted timestamps by their represented instant. Event equality and
+persistence use RFC 8785 canonical bytes. Since `eid` is expected to be unique,
+`author` is normally only a defensive final component.
 
 Canonical order is for presentation and explicitly declared
 latest-wins fields. It does not express causality, insertion order or
@@ -375,9 +409,12 @@ indexes. Portable code MUST depend only on the interface above.
 5. treats omitted `roots` as `[]`; and
 6. writes and returns the complete event.
 
-When the returned promise resolves, a process restart MUST observe the
-whole event or none of it. A backend MAY separately document stronger
-power-loss durability such as `fsync`.
+If the process terminates before the returned promise resolves, a restart MAY
+observe the complete event or no event, but never a partial accepted event.
+When the promise resolves, the event is committed under section 2.1 and every
+later process restart MUST observe the complete event. Stable-media survival
+across sudden power loss requires the backend's separately documented flush or
+`fsync` boundary.
 
 Appends through one store handle are serialized. Concurrent handles over
 one writable serialization require an external lock supplied by the
@@ -391,7 +428,11 @@ draft before writing any event. It then:
 - assigns one common `at`;
 - mints UUIDv7 event IDs in input order;
 - assigns the current author to every event; and
-- makes the entire batch visible together after a process restart.
+- commits the entire batch at one process-durable success boundary.
+
+If the process terminates before resolution, a restart may observe the complete
+batch or no batch, but MUST NOT observe a proper subset as accepted. After
+resolution, every later process restart observes the entire batch.
 
 The operation is used when a procedure must not leave only part of a
 set of decisions, for example contact deletion tombstones and their
@@ -413,7 +454,11 @@ For each valid incoming event:
   store, report a conflict and add nothing.
 
 Rejected envelopes are reported and never stored. A backend MUST NOT
-partially reinterpret a malformed line into an event.
+partially reinterpret a malformed line into an event. When `ingest` resolves,
+every event counted in `added` is process-durable under section 2.1. An
+implementation that commits ingest in internal batches may expose a subset of
+whole events after a pre-resolution process crash; retrying the same input is
+idempotent and completes the union.
 
 #### Forked author
 
@@ -575,13 +620,18 @@ nothing until all hash and codec checks succeed.
 
 ### 7.2 Write ordering
 
-A producer accepts every object in an event's `roots` before appending that
-event. A process crash can therefore leave an unreferenced object, but a
-successful event append does not depend on bytes that were never accepted
-locally.
+A producer process-durably accepts every object in an event's `roots` before
+appending that event. From the first successful object acceptance until the
+referencing event commits or the operation aborts, the producer MUST protect
+the object against collection with a vault-level exclusion, temporary pin,
+transaction or an equivalent retention guard. A process crash can therefore
+leave an unreferenced object, but a successful event append does not depend on
+bytes that were never accepted locally.
 
 A transactional backend MAY commit objects and the event together when the
-externally visible result preserves the same invariant.
+externally visible result preserves the same invariant. An orphan grace period
+is crash cleanup policy; it is not a substitute for protecting a live
+write-before-reference operation.
 
 ### 7.3 Missing and damaged objects
 
@@ -601,14 +651,32 @@ Only exact CIDs in the semantic layer's held-root set are retained.
 `collect(keep)` MUST NOT recursively follow DRISL Tag 42 links. A linked object
 that must remain available is listed explicitly in an event's `roots`.
 
-The store may unlink an unkept object only after its orphan grace period. The
-grace protects an object accepted shortly before its referencing event.
-Repeating a successful `putRaw`, `putDrisl` or `putObject` for an existing
-valid object MAY renew its local orphan age.
+The local-vault invariant is:
 
-Collection is serialized with object reads and writes. It MUST NOT race an
-acceptance in the same store generation. Only the application computes `keep`,
-using `vault-events.md`; the object store reads no event type.
+> Collection MUST NOT delete an object retained by any committed event and
+> MUST NOT delete an object protected by an in-flight reference commit.
+
+An orphan grace period may delay cleanup of abandoned accepted objects, but no
+fixed grace interval can establish this invariant by itself. Repeating a
+successful `putRaw`, `putDrisl` or `putObject` MAY renew orphan age only as a
+storage-policy optimization.
+
+The caller and backend MUST coordinate the interval from held-root snapshot to
+physical unlink with event commits and pending-reference guards. A conforming
+implementation does one of the following, or an equivalent operation:
+
+1. holds a vault-level exclusion from the complete committed-event snapshot
+   through unlink;
+2. commits event references, pins and collection in one database transaction;
+   or
+3. immediately before each unlink, atomically revalidates both the committed
+   event frontier and pending pins, abandoning or recomputing the sweep when
+   either changed.
+
+A stale `keep` snapshot MUST NOT authorize deletion after a new reference has
+committed. Collection is also serialized with object acceptance and reads. Only
+the application computes `keep`, using `vault-events.md`; the object store reads
+no event type.
 
 ## 8. Portable files and local state
 
@@ -844,11 +912,13 @@ columns, but the result MUST be byte-identical. `seq` is local insertion order
 used by a local change token. It is not
 part of the event and MUST NOT affect a fold or export.
 
-A backend MUST document:
+A backend MUST implement the mandatory process-durable success boundary in
+section 2.1 and document:
 
-- process-crash durability;
-- power-loss durability;
-- orphan grace for object collection;
+- its stronger power-loss durability and flush policy, if any;
+- orphan grace for abandoned objects;
+- the lock, transaction, pin or frontier-revalidation mechanism used to
+  coordinate collection with event reference commits;
 - maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
@@ -880,32 +950,44 @@ vault version.
 A conforming implementation MUST pass at least these cases:
 
 1. `append` returns a six-field event with `author` equal to the current
-   replica ID.
-2. `appendAll` is all-or-nothing and gives every event one timestamp.
-3. A JCS-ineligible event, including duplicate member names, an unpaired
+   replica ID; after successful resolution, immediate process termination and
+   reopen still observes the complete event.
+2. A process crash before `append` resolves may leave the complete event or no
+   event, never a partial accepted event.
+3. `appendAll` is all-or-nothing, gives every event one timestamp, and remains
+   complete after successful resolution and process restart.
+4. A JCS-ineligible event, including duplicate member names, an unpaired
    surrogate or a non-I-JSON number, is rejected before acceptance.
-4. Two source serializations with different member order or whitespace but
+5. Two source serializations with different member order or whitespace but
    equal RFC 8785 output ingest as one event.
-5. The same `eid` with different RFC 8785 canonical bytes reports a conflict
+6. The same `eid` with different RFC 8785 canonical bytes reports a conflict
    and does not overwrite either value.
-6. Ingesting a previously unseen event authored by the current local author
+7. Ingesting a previously unseen event authored by the current local author
    fails with `ForkedAuthor` before adding anything.
-7. Shuffling and repartitioning one event set does not change a fold.
-8. `scan()` returns canonical event order independently of physical order.
-9. A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
+8. Shuffling and repartitioning one event set does not change a fold.
+9. `scan()` returns canonical event order independently of physical order.
+10. A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
    one LF; re-import preserves those canonical bytes.
-10. `changes()` returns a complete local delta and rejects another store
+11. `changes()` returns a complete local delta and rejects another store
     generation's token.
-11. A token is never required for successful full reconciliation.
-12. `putObject` rejects a CID/content mismatch and non-canonical DRISL.
-13. A crash after object acceptance but before event append leaves only a
+12. A token is never required for successful full reconciliation.
+13. `putObject` rejects a CID/content mismatch and non-canonical DRISL.
+14. A crash after object acceptance but before event append leaves only a
     collectable orphan.
-14. Collection never removes an exact object in the held-root set and never
+15. Collection never removes an exact object in the held-root set and never
     follows an unlisted DRISL link.
-15. Export and re-import preserve every portable byte.
-16. Restore omits local state and mints a fresh replica ID.
-17. Main and extension stores with the same event ID do not conflict.
-18. Disposing an extension invalidates all handles and does not remove the
+16. Export and re-import preserve every portable byte.
+17. Restore omits local state and mints a fresh replica ID.
+18. Main and extension stores with the same event ID do not conflict.
+19. Disposing an extension invalidates all handles and does not remove the
     main-vault purge event.
-19. No API interprets a hardware or operating-system identifier.
-20. Events produced by a retired replica remain valid immutable history.
+20. No API interprets a hardware or operating-system identifier.
+21. Events produced by a retired replica remain valid immutable history.
+22. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
+    other fractional precision and leap-second spelling are rejected, and
+    lexical order matches represented millisecond order.
+23. A collector that snapshots roots before a new event commit cannot unlink
+    the newly referenced object; lock, transaction, pin or frontier
+    revalidation detects the race.
+24. Process-durable success is distinguished from the backend's separately
+    documented sudden-power-loss boundary.

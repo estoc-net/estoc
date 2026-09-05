@@ -409,8 +409,8 @@ A conforming Estoc initial message MUST:
   protected `skid` and decoded `apu`;
 - include immutable `created_time`;
 - include finite `expires_time` with `created_time < expires_time`;
-- have a lifetime of at most 604800 seconds unless the responder has
-  advertised a larger ceiling;
+- have a lifetime of at most 604800 seconds; phase 1 defines no mechanism for
+  a responder to advertise a larger ceiling;
 - request explicit acknowledgment of the current message with
   `please_ack: [""]` or with its own wire ID;
 - include the invitation ID as `pthid` when it arose from OOB discovery; and
@@ -701,24 +701,62 @@ effectKind = ping-response
 ordinal    = 0
 ```
 
-For initial-message observation MID
-`ca6f6a41-454c-53ff-b827-1797156687cf`, the fixed vector is:
+For relationship ID `73a7d8f5-3523-5802-9b65-02da2078273e` and origin wire ID
+`019b4d12-090a-7c3b-92f7-ac2c51f50db4`, the relationship first commits:
 
 ```text
-effectId = j0Ji1-6swFT6C0zHEv5XAE_ouM2A7p7iO707T3YcNfg
-mid      = 93a1a0e9-383c-5106-a995-10234a729f70
-wireId   = bfbdcb31-4ebc-5c57-bbdf-c4d82352afed
+executionScope = {"relationship":"73a7d8f5-3523-5802-9b65-02da2078273e"}
+executionId    = e5d6c70d-ee4c-5dd5-9a02-02e0726e55da
 ```
 
-For the Empty fallback on the same observation MID:
+The Trust Ping response uses this exact closed effect input:
+
+```json
+{
+  "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
+  "body": {},
+  "created_time": 1788442800,
+  "expires_time": 1789652400,
+  "pthid": "019b4d01-0e42-775e-8abe-173d777fcb3a",
+  "relationship_id": "73a7d8f5-3523-5802-9b65-02da2078273e",
+  "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4"
+}
+```
+
+Its fixed vector is:
 
 ```text
-handlerId  = https://estoc.dev/distributed-delivery/1.0#pure-ack
-effectKind = pure-ack
-ordinal    = 0
-effectId   = jnBOdxU8_cdk-8wZ5-vkvv6kxWU_YJWsX09ngGZR5kE
-mid        = 37fb7ed5-767c-5cf4-809a-66af0cf237f1
-wireId     = d2ef3730-73d8-5a54-b038-f2b0b4028cbd
+effectInputHash = 9bPd4ZBv7IxjxhZaqz6bRDJxP8lBJC6uPa4ZR0DRhTg
+effectId        = sq5uy24l9qX5IJRYZVxAauKDZeF-ucjEkXUY0SqJbOs
+mid             = 3ef178eb-d708-5157-b1be-94f5ad0185c7
+wireId          = 07c45e7a-5fef-5542-817b-d4ba69a16d96
+```
+
+For the deterministic Empty fallback, the closed input is:
+
+```json
+{
+  "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
+  "created_time": 1788442800,
+  "expires_time": 1789652400,
+  "pthid": "019b4d01-0e42-775e-8abe-173d777fcb3a",
+  "reply_scope": {
+    "relationship": "73a7d8f5-3523-5802-9b65-02da2078273e"
+  },
+  "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4"
+}
+```
+
+The resulting vector is:
+
+```text
+handlerId       = https://estoc.dev/distributed-delivery/1.0#pure-ack
+effectKind      = pure-ack
+ordinal         = 0
+effectInputHash = TYl33OWYFhWry8XvOaqIP8nI9mFj0uuYP9wOXRNpc7k
+effectId        = P705H2L_3dAvvsFrQqG31HMerwOyHNVK3Tlpywl3T3Y
+mid             = ab5af078-1c93-55cb-9506-978d06eb126e
+wireId          = c0f2ef14-bc56-5c6e-abdb-2313e31146ba
 ```
 
 Response timing is deterministic per triggering message:
@@ -760,13 +798,21 @@ Normative equality rules are:
 - plaintext `from`, protected `skid` and decoded `apu` all use that same long
   form.
 
+Before the first handoff effect, the responder MUST process-durably bind the
+origin observation to its logical execution ID. The handoff `message.out`,
+relationship state and binding SHOULD be one batch.
+
 The first handoff response MUST:
 
 - address initiator relationship DID `P_B`;
 - preserve protocol threading and OOB `pthid` where applicable;
 - include `ack` naming the triggering initial wire ID;
 - include `please_ack: [""]` to request explicit handoff confirmation;
-- copy the exact stored `fromPrior`; and
+- copy the exact stored `fromPrior`;
+- set `replayUntil` exactly equal to the handoff response's
+  `expiresTime`, as required by `distributed-delivery.md` section 7, so a
+  duplicate initial message can re-submit the exact response throughout its
+  complete validity window; and
 - be committed as `message.out` before recipient registration, resolution,
   encryption or submission.
 
@@ -774,7 +820,7 @@ Trust Ping response example:
 
 ```json
 {
-  "id": "bfbdcb31-4ebc-5c57-bbdf-c4d82352afed",
+  "id": "07c45e7a-5fef-5542-817b-d4ba69a16d96",
   "type": "https://didcomm.org/trust-ping/2.0/ping-response",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -793,7 +839,7 @@ Empty fallback example:
 
 ```json
 {
-  "id": "d2ef3730-73d8-5a54-b038-f2b0b4028cbd",
+  "id": "c0f2ef14-bc56-5c6e-abdb-2313e31146ba",
   "type": "https://didcomm.org/empty/1.0/empty",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -812,7 +858,8 @@ Empty fallback example:
 
 The responder:
 
-1. appends acceptance, relationship state and response `message.out`;
+1. process-durably appends acceptance, `message.executionBound`, relationship
+   state and response `message.out` with its replay deadline;
 2. reconciles recipient registration for canonical short-form `P_A`;
 3. prepares the exact response using long-form sender evidence and the frozen
    `fromPrior`; and
@@ -1020,10 +1067,10 @@ DID as ordinary `writeTo`.
     note and relationship termination uses contact deletion.
 16. Timely policy accept beats an automatic expired reject; reject codes use
     deterministic precedence rather than forming conflicts.
-17. Stable relationship/contact/responder-DID vectors recompute from the
-    published Peer rendezvous DID and peer key.
+17. Stable relationship/contact/responder-DID, relationship-scoped execution
+    and effect vectors recompute from the published inputs.
 18. `relationship.established` freezes one origin, long-form responder DID,
-    rotation `iat` and exact compact `fromPrior`.
+    rotation `iat`, exact compact `fromPrior` and deterministic handoff IDs.
 19. `from_prior.iss` and protected `kid` use the exact pinned prior-DID form.
 20. `from_prior.sub` equals plaintext `from` exactly; before confirmation both
     use responder Peer-DID long form.
@@ -1034,18 +1081,24 @@ DID as ordinary `writeTo`.
     traffic.
 23. Handoff response ACKs the triggering message and requests its own ACK with
     `please_ack: [""]`.
-24. The handoff Empty example uses the pure-ACK ID derived from its own
-    triggering inbound MID.
-25. Until confirmation, every responder package carries the same stored
+24. The handoff Empty example uses the pure-ACK ID derived from the committed
+    logical execution identity and its own frozen effect input.
+25. Handoff response intent freezes a replay deadline no later than its
+    expiry; ACK stops normal retry but does not release its exact package before
+    that deadline.
+26. The origin candidate is bound to the deterministic relationship/wire-ID
+    execution identity before the handoff effect; no observation-MID-derived
+    identity is used.
+27. Until confirmation, every responder package carries the same stored
     `fromPrior` and uses the same long-form sender spelling.
-26. Rejection maps local codes to deterministic coarse problem codes and emits
+28. Rejection maps local codes to deterministic coarse problem codes and emits
     no custom decline.
-27. Initial automatic retry is at least 30 seconds apart, capped at 32
+29. Initial automatic retry is at least 30 seconds apart, capped at 32
     submissions and stops at expiry.
-28. Peer rendezvous mediator replacement requires a new DID/invitation unless
+30. Peer rendezvous mediator replacement requires a new DID/invitation unless
     the old route remains; Web facade route updates do not change its DID.
-29. Rendezvous DIDs never enter ordinary relationship `writeTo`.
-30. Phase 1 works with one active full runtime and standard account-scoped
+31. Rendezvous DIDs never enter ordinary relationship `writeTo`.
+32. Phase 1 works with one active full runtime and standard account-scoped
     pickup; replica mediation and vault sync are not required.
-31. A peer lacking `from_prior` or explicit ACK support remains visibly
+33. A peer lacking `from_prior` or explicit ACK support remains visibly
     unconfirmed and is outside reliable-bootstrap conformance.

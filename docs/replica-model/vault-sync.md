@@ -622,6 +622,7 @@ https://estoc.dev/vault-sync/1.0/offer
   "id": "019b1b72-f8f9-7b1d-b2a6-9a71344fba15",
   "type": "https://estoc.dev/vault-sync/1.0/offer",
   "body": {
+    "expected_store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
     "objects": [
       {
         "id": "bXkvh0Q0lE5VZmqPlYI2dlIgweaUa3YMVNXFEDEw1aM",
@@ -634,14 +635,17 @@ https://estoc.dev/vault-sync/1.0/offer
 }
 ```
 
-The list MUST contain no duplicate object ID and MUST not exceed the
-advertised limit. `hash` is a sha2-256 multihash in multibase base32
-lower. `byte_count` counts encrypted bytes, including the 48-byte container
-header and every encrypted segment record.
+`expected_store_id` is REQUIRED on every offer and MUST equal the current
+`hello-result.store_id`. The list contains no duplicate object ID and does not
+exceed the advertised limit. `hash` is a sha2-256 multihash in multibase
+base32 lower. `byte_count` counts encrypted bytes, including the 48-byte
+container header and every encrypted segment record.
 
-During normal `ready` operation, no extra field is present. While the account
-is `rebuilding`, only the reset owner may offer objects, and the body MUST also
-contain:
+The server compares `expected_store_id` before checking object existence or
+issuing an upload URL. A mismatch fails the complete offer with
+`e.estoc.vault-sync.store-reset`; it MUST NOT allocate a ticket. While the
+account is `rebuilding`, only the reset owner may offer objects, and the body
+MUST also contain:
 
 ```json
 {
@@ -671,6 +675,7 @@ https://estoc.dev/vault-sync/1.0/offer-result
   "thid": "019b1b72-f8f9-7b1d-b2a6-9a71344fba15",
   "type": "https://estoc.dev/vault-sync/1.0/offer-result",
   "body": {
+    "store_id": "019b1b70-f42e-7d19-87a0-16a165264762",
     "existing": [
       {
         "id": "QhE...",
@@ -691,8 +696,8 @@ https://estoc.dev/vault-sync/1.0/offer-result
 }
 ```
 
-Each offered ID appears exactly once in `existing`, `uploads` or
-`rejected`.
+`body.store_id` MUST equal the request's accepted `expected_store_id`.
+Each offered ID appears exactly once in `existing`, `uploads` or `rejected`.
 
 An `existing` descriptor reports the server's stored ciphertext, which
 may differ from the offering client's independently generated
@@ -703,8 +708,9 @@ recompute the object ID. The same rule applies after an HTTP 204 upload
 race when the winning stored hash differs from the offered hash.
 
 An upload URL is single-use, unguessable, time-limited and bound to the
-authenticated account, object ID, offered hash and byte count. The client
-performs an HTTP `PUT` of exactly the ciphertext bytes:
+authenticated account, the exact `expected_store_id`, object ID, offered hash
+and byte count. The client performs an HTTP `PUT` of exactly the ciphertext
+bytes:
 
 - no request compression or transfer transformation;
 - `Content-Encoding` absent or exactly `identity`;
@@ -712,9 +718,17 @@ performs an HTTP `PUT` of exactly the ciphertext bytes:
 - no redirect following;
 - `Content-Type: application/octet-stream`.
 
-The server first validates the version-1 public framing and exact length
-formula in section 5, then streams through the advertised byte limit and
-sha2-256 hash. Only a complete framing, length and hash match is committed.
+At HTTP `PUT` commit the server rechecks that the ticket's bound
+`expected_store_id` is still current and that the account is in the state for
+which the ticket was issued. A reset, superseding reset or baseline commit that
+changes the epoch invalidates the ticket even when the URL has not expired.
+Epoch mismatch returns a generic failed upload and commits no object; the
+client re-enters `hello` and pull-before-push.
+
+After epoch validation, the server validates the version-1 public framing and
+exact length formula in section 5, then streams through the advertised byte
+limit and sha2-256 hash. Only a complete framing, length and hash match is
+committed.
 Successful first creation returns HTTP 201. If another upload committed the
 same object ID first, the server returns HTTP 204 and leaves the existing
 object unchanged.
@@ -1101,7 +1115,12 @@ backups or disaster-recovery media.
 
 ### 13.1 Publishing local objects
 
-During ordinary `ready` operation a client publishes in this order:
+During ordinary `ready` operation a client first obtains the current
+`store_id` from `hello`; every following `offer` carries it as
+`expected_store_id`. A reset between `hello`, `offer`, ticket issuance and PUT
+commit is therefore fenced at both protocol boundaries.
+
+The client publishes in this order:
 
 1. ingest and fold all newly learned remote events before offering local
    objects;
@@ -1114,8 +1133,8 @@ During ordinary `ready` operation a client publishes in this order:
    are available remotely.
 
 Objects-before-event preserves availability for normal messages, while the
-held-root test preserves erasure safety. An object not currently held MUST NOT be offered even when its bytes remain
-locally available. An event with no held objects, including an erasure or
+held-root test preserves erasure safety. An object not currently held MUST NOT
+be offered even when its bytes remain locally available. An event with no held objects, including an erasure or
 closure event, may be offered immediately.
 
 The local event store's `changes()` only discovers what this local store gained
@@ -1340,67 +1359,70 @@ MUST NOT disclose another account's object existence.
 1. Two replicas independently encrypt and offer the same logical object with
    different random salts; exactly one immutable server object remains and
    both clients can decrypt and verify the stored winner.
-2. Re-offering an existing ID allocates no overwrite upload; incomplete,
+2. Every offer carries `expected_store_id`; a delayed pre-reset offer is
+   rejected before ticket allocation, and a reset after ticket issuance causes
+   the PUT commit to fail without creating an object.
+3. Re-offering an existing ID allocates no overwrite upload; incomplete,
    oversized, malformed-framing or hash-mismatched uploads create no object or
    insertion sequence.
-3. The server rejects a container whose magic, `L`, segment-derived total
+4. The server rejects a container whose magic, `L`, segment-derived total
    length, offered `byte_count` or HTTP `Content-Length` disagree.
-4. Modifying, deleting, duplicating, truncating or reordering any encrypted
+5. Modifying, deleting, duplicating, truncating or reordering any encrypted
    segment causes authentication or framing failure before semantic
    acceptance.
-5. One-shot and streaming encryption of the same plaintext frame may produce
+6. One-shot and streaming encryption of the same plaintext frame may produce
    different ciphertext but decrypt to the exact same frame and opaque ID.
-6. A client derives the unique `L` from descriptor `byte_count`, fetches the
+7. A client derives the unique `L` from descriptor `byte_count`, fetches the
    single exact range `bytes=0-(63+p0)`, requires the 48-byte header's `L` to
    match, and authenticates segment zero before trusting a frame header;
    transformed, malformed or inconsistent responses are rejected, and prefix
    classification alone never accepts a root, event or DASL object.
-7. `changes` and a fixed-through paged inventory cannot permanently skip a
+8. `changes` and a fixed-through paged inventory cannot permanently skip a
    committed object.
-8. Losing all local cursor state and running inventory discovers the same
+9. Losing all local cursor state and running inventory discovers the same
    ready object set.
-9. Download framing, ciphertext hash, every AEAD tag, frame validation,
+10. Download framing, ciphertext hash, every AEAD tag, frame validation,
    semantic validation and opaque-ID recomputation all precede local
    acceptance.
-10. Exact DASL object bytes are verified against their CID and codec profile
+11. Exact DASL object bytes are verified against their CID and codec profile
     before `ObjectStore.putObject` commits them.
-11. A large whole-resource raw object is uploaded, range-classified,
+12. A large whole-resource raw object is uploaded, range-classified,
     downloaded, decrypted and verified with bounded memory and without any
     portable chunk CID.
-12. Concurrent offline event sets converge after exchange; the same `eid`
+13. Concurrent offline event sets converge after exchange; the same `eid`
     with different RFC 8785 canonical event bytes is an integrity conflict.
-13. A fresh full replica with seed and locator reconstructs root, events and
+14. A fresh full replica with seed and locator reconstructs root, events and
     held objects, then mints new local replica and store-generation IDs.
-14. No sync message or server row exposes replica ID, event type, DASL CID,
+15. No sync message or server row exposes replica ID, event type, DASL CID,
     contact or application plaintext. Public framing reveals only version and
     exact frame length.
-15. A previously unseen sync account without accepted admission creates no
+16. A previously unseen sync account without accepted admission creates no
     account, object or quota reservation.
-16. `sync/account` is the sole named asymmetric key; `K_index` and `K_data`
+17. `sync/account` is the sole named asymmetric key; `K_index` and `K_data`
     match only the explicit HKDF profile.
-17. Version 1.0 exposes no selective retract and documents reset as a whole
+18. Version 1.0 exposes no selective retract and documents reset as a whole
     remote-mirror purge, not logical message erasure.
-18. Reset with stale precondition or malformed confirmation deletes nothing.
-19. Successful reset rotates `store_id`, invalidates old objects and tickets,
+19. Reset with stale precondition or malformed confirmation deletes nothing.
+20. Successful reset rotates `store_id`, invalidates old objects and tickets,
     and enters `rebuilding`; ordinary clients cannot offer, inventory or
     download a partial baseline.
-20. Only a valid reset-owner capability may upload during rebuilding.
-21. `reset-commit` verifies root presence, exact object count and RFC
+21. Only a valid reset-owner capability may upload during rebuilding.
+22. `reset-commit` verifies root presence, exact object count and RFC
     8785-derived baseline hash before atomically entering `ready`.
-22. Repeating one accepted `reset_id` is idempotent; a fresh reset against the
+23. Repeating one accepted `reset_id` is idempotent; a fresh reset against the
     rebuilding store can supersede an abandoned rebuild and invalidates its
     capability.
-23. The reset owner publishes every accepted event, including erase and
+24. The reset owner publishes every accepted event, including erase and
     closure events, but only DASL objects in its current held-root set.
-24. A stale replica observing changed `store_id` performs full
+25. A stale replica observing changed `store_id` performs full
     pull-before-push, ingests baseline events, applies erasure closure and
     recomputes held roots before offering anything.
-25. A stale replica that still physically stores erased bytes does not offer
+26. A stale replica that still physically stores erased bytes does not offer
     those DASL objects after baseline reconciliation.
-26. A late immutable event may reappear after reset, but any newly learned
+27. A late immutable event may reappear after reset, but any newly learned
     root of an already erased logical message receives closure before its
     content object can be offered.
-27. A DRISL Tag 42 link never causes sync fetch or publication unless the
+28. A DRISL Tag 42 link never causes sync fetch or publication unless the
     linked CID is also in the current held-root set.
-28. Sync unavailability never blocks local event commit, send intent or
+29. Sync unavailability never blocks local event commit, send intent or
     mailbox pickup.

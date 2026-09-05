@@ -79,7 +79,8 @@ advisory; successful `register` is the authoritative capability check.
   Coordinate Mediation arrangement with a mediator. It is shared by all
   full replicas of the vault.
 - **Recipient DID** — any DID registered under the mediation account and
-  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a Peer or Web rendezvous DID or a pairwise relationship
+  accepted as `body.next` of a Routing 2.0 `forward` message. It may be a
+  Peer or Web rendezvous DID or a pairwise relationship
   DID. The mediator does not assign semantics based on method or role.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
   incarnation for event provenance, delivery and acknowledgment. It is
@@ -726,12 +727,23 @@ account and named replica. Unknown IDs, IDs already acknowledged and IDs
 belonging to another replica have no effect. Processing the same list
 again is idempotent.
 
-A client MUST NOT send a delivery ID until it has:
+A client may acknowledge a delivery through exactly one of two terminal
+paths:
 
-1. decoded and authenticated the inner DIDComm envelope;
-2. durably stored the message body and every attachment it intends to
-   retain; and
-3. durably appended its inbound vault observation.
+1. **normal acceptance** — it decoded and authenticated the inner DIDComm
+   envelope, process-durably stored every retained object, and
+   process-durably appended the inbound vault observation; or
+2. **terminal pre-vault rejection** — it authenticated enough envelope and
+   protocol state to classify the delivery safely under a profile such as
+   `rendezvous.md`'s hard gate, committed any required bounded local diagnostic,
+   and determined that the message MUST be discarded without `message.in`.
+
+The rejection path creates no ultimate peer ACK, contact, application effect or
+portable message content. A delivery that is undecryptable, depends on missing
+local generation/sync state, or is otherwise deferred or not safely
+classifiable MUST NOT be acknowledged. This distinction prevents malformed
+terminal input from redelivering forever without allowing temporary local
+incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
 not prerequisites for pickup acknowledgment.
@@ -890,41 +902,43 @@ A conforming implementation demonstrates at least these cases:
    older replicas ACKed.
 3. Concurrent replica registration and forwarding cannot omit the new
    replica's delivery.
-4. Crash before durable message commit produces no pickup ACK; crash after
+4. Crash before durable normal acceptance produces no pickup ACK; crash after
    commit may redeliver and converges logically.
-5. Repeating one `forward.id` with identical normalized bytes stores no second
+5. A safely classified terminal pre-vault rejection may be pickup-ACKed without
+   `message.in`, while an undecryptable or deferred delivery remains pending.
+6. Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
-6. `recipient_did` actually filters status and delivery.
-7. A retired/unknown replica cannot inspect or ACK another replica's queue.
-8. With zero active replicas, ciphertext remains retained with zero deliveries;
+7. `recipient_did` actually filters status and delivery.
+8. A retired/unknown replica cannot inspect or ACK another replica's queue.
+9. With zero active replicas, ciphertext remains retained with zero deliveries;
    all pickup without a registered active `replica_id` fails and there is no
    account-global fallback.
-9. First later registration atomically creates retained deliveries before
+10. First later registration atomically creates retained deliveries before
    pickup is possible.
-10. Plain, signed-only, linked or structurally invalid inner attachments are
+11. Plain, signed-only, linked or structurally invalid inner attachments are
     not persisted as mailbox messages.
-11. Database, object storage, logs and traces do not contain an application
+12. Database, object storage, logs and traces do not contain an application
     plaintext sentinel or content key.
-12. Replica protocol messages reveal no hardware/OS identifier or human label.
-13. A default Peer rendezvous recipient, optional Web rendezvous recipient and
+13. Replica protocol messages reveal no hardware/OS identifier or human label.
+14. A default Peer rendezvous recipient, optional Web rendezvous recipient and
     pairwise Peer recipient receive identical fan-out/ACK isolation.
-14. Recipient, replica and delivery quotas fail atomically without partial
+15. Recipient, replica and delivery quotas fail atomically without partial
     state.
-15. Peer DID long-form material is decoded locally, its canonical short form
+16. Peer DID long-form material is decoded locally, its canonical short form
     exactly matches registration/proof payload, and proof key authorization
     verifies after normalization.
-16. `did:web` proof resolution uses only the constrained resolver and never
+17. `did:web` proof resolution uses only the constrained resolver and never
     unrestricted server-side URL fetching.
-17. No public document or application message uses replica ID as peer-visible
+18. No public document or application message uses replica ID as peer-visible
     recipient.
-18. Adding/removing a server full replica changes delivery rows only, not
+19. Adding/removing a server full replica changes delivery rows only, not
     recipient DIDs.
-19. Without an advertised inactivity policy, age alone never retires a
+20. Without an advertised inactivity policy, age alone never retires a
     replica. With one, the server applies the exact disclosed bound and reason
     `inactivity-policy`.
-20. A local copy whose current ID is server-retired stops using it, atomically
+21. A local copy whose current ID is server-retired stops using it, atomically
     mints new replica/store-generation IDs, preserves old-author events,
     registers the fresh ID on every required mediation and obtains retained
     replay.
-21. A restore lists replicas and explicitly retires selected stale IDs rather
+22. A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.

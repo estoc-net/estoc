@@ -397,8 +397,9 @@ After complete validation and fork preflight, one `ingest` call writes
 new events into fresh segments minted by the target store. It SHOULD use
 at most one fresh segment per incoming author for that call.
 
-It MUST NOT copy a source segment as an opaque file. Source events are decoded, duplicate-member checked, deduplicated by
-`eid` using RFC 8785 canonical bytes and reserialized canonically. Therefore the target may
+It MUST NOT copy a source segment as an opaque file. Source events are
+decoded, duplicate-member checked, deduplicated by `eid` using RFC 8785
+canonical bytes and reserialized canonically. Therefore the target may
 contain several segments under one author, some originally appended by
 that author and some created while other stores ingested its events.
 
@@ -454,13 +455,16 @@ truncation or trailing DRISL bytes is damage. The backend SHOULD move damaged
 material out of the owned `objects/` namespace before continuing, so ordinary
 presence checks treat it as absent.
 
-A portable object is immutable by content. Repeating a successful acceptance
-for an existing valid CID is idempotent and MAY renew the local orphan age used
-by collection.
+A portable object is immutable by content. Successful acceptance is
+process-durable under `event-store.md` section 2.1. Repeating acceptance for an
+existing valid CID is idempotent and MAY renew local orphan age as an
+optimization.
 
-Writers accept complete objects before an event reference. A crash may leave a
-valid unreferenced object. Collection later removes only exact unheld objects
-older than the configured grace; it does not traverse DRISL links.
+Writers accept complete objects before an event reference and protect them from
+collection until the reference commits or aborts. A crash may leave a valid
+unreferenced object. Collection later removes only exact unheld, unpinned
+objects older than the configured grace; it does not traverse DRISL links or
+rely on grace in place of commit/GC coordination.
 
 ## 10. `local/`
 
@@ -586,9 +590,11 @@ A local append writes only to the current replica's author directory.
 The backend MUST reject an attempt to provide or override `eid`, `at` or
 `author` through the draft API.
 
-When the append promise resolves, the event line is complete and visible
-after a process restart. Whether it survives sudden power loss depends on
-the backend's documented flush policy.
+If the process terminates before the append promise resolves, reopen may see
+the complete line or no accepted line, never a partial accepted event. When the
+promise resolves, the line is process-durable and every later process restart
+MUST observe it. Sudden power-loss survival depends on the backend's documented
+flush policy.
 
 ### 11.4 Ingest
 
@@ -733,6 +739,13 @@ implementations use:
 Multiple readers are allowed if the backend can provide complete-line
 visibility.
 
+The writer lock or an equivalent backend transaction also forms the reference
+commit/collection coordination domain. From object acceptance through event
+commit, a pending-reference guard protects each to-be-referenced object. A
+collector MUST hold an excluding lock through held-root snapshot and unlink, or
+revalidate the event frontier and pending guards atomically before every
+unlink. A fixed orphan grace period alone is insufficient.
+
 Expected crash residue:
 
 | crash point | permitted result |
@@ -826,3 +839,9 @@ The following require a new folder/vault version:
 32. Filename, digest and codec-specific validation completes before import or
     first entry into the owned `objects/` namespace; a later `open` follows the
     verified-stream completion rules in `dasl-objects.md` section 6.4.
+33. A successful folder append or first object acceptance survives immediate
+    process restart; sudden-power-loss safety remains a separately documented
+    flush boundary.
+34. Collection cannot unlink an object referenced by an event committed after
+    the collector's initial held-root snapshot, nor one protected by a pending
+    reference guard.

@@ -140,18 +140,22 @@ drislCid(value) = DASL-CID(
 An accepted DRISL object MUST satisfy the complete DRISL profile, including:
 
 - one finite, complete CBOR item and no trailing bytes;
-- the deterministic CBOR/c encoding required by DRISL;
+- the deterministic CBOR/c encoding required by DRISL, except that DRISL's
+  binary64-only rule for non-integral floats takes precedence over CBOR/c
+  preferred shortest-float serialization;
 - string-only map keys;
 - map keys sorted by the bytewise lexicographic order of their canonical
   encodings as required by RFC 8949 section 4.2.1; for the string-only keys
   DRISL permits, this is equivalent to sorting first by UTF-8 byte length and
   then by the bytewise lexicographic order of the UTF-8 bytes;
 - integers encoded in the shortest CBOR form and limited to major types 0 and
-  1, so `-2^64 <= n <= 2^64 - 1`; an implementation MUST reject rather than
-  round a value it cannot represent exactly;
+  1, so `-2^64 <= n <= 2^64 - 1`; an integral value outside that range is
+  rejected and is never encoded as a float, and an implementation MUST reject
+  rather than round a value it cannot represent exactly;
 - a numeric value that is integral encoded as a CBOR integer regardless of its
   source-language numeric type; only a non-integral finite value is encoded as
-  a binary64 float;
+  a binary64 float, and a binary64 item whose decoded value is integral is
+  rejected as non-canonical;
 - Tag 42 as the only accepted tag;
 - Tag 42 values containing `0x00` followed by one valid binary DASL CID;
 - no indefinite-length values;
@@ -296,17 +300,29 @@ interface ObjectStore {
 }
 ```
 
-A language binding MUST preserve every DRISL integer exactly. It MUST reject an
-integer or floating-point input that its runtime would silently round before
-encoding. The encoding choice is based on the exact numeric value, not the
-source-language type: an integral value uses CBOR major type 0 or 1, and only a
-non-integral finite value uses binary64. A `number` value MUST be finite and exactly represented by the runtime; when
-it is integral, it is encoded as a CBOR integer. `bigint` or an equivalent
-exact-integer type represents an integer outside the runtime's safe integer
-range.
+A language binding MUST preserve every DRISL integer exactly. The encoding
+choice is based on the exact numeric value, not the source-language type: an
+integral value uses CBOR major type 0 or 1, and only a non-integral finite value
+uses binary64.
+
+In a JavaScript/TypeScript binding, a `number` used as an integer MUST lie in
+`-(2^53 - 1) <= n <= 2^53 - 1`. An integral `number` outside that range is
+rejected and MUST be supplied as `bigint`; decoding returns `number` inside the
+safe range and `bigint` outside it. A non-integral `number` MUST be finite,
+exactly representable as the binary64 value supplied by the runtime, and is
+encoded as binary64. Other language bindings MUST define an equivalent exact
+boundary and MUST reject rather than round.
 
 A backend MAY expose language-specific stream types as long as the observable
 semantics are equivalent.
+
+Object acceptance uses the process-durable commit terminology in
+`event-store.md` section 2.1. If a put operation resolves, every later process
+restart over the same intact store generation MUST observe the complete
+accepted object. If the process terminates before resolution, the complete
+object or no object may remain, but a partial object MUST NOT enter the accepted
+namespace. Stable-media survival across sudden power loss is a separately
+documented backend guarantee.
 
 ### 6.1 `putRaw`
 
@@ -316,8 +332,7 @@ semantics are equivalent.
 2. compute SHA-256 incrementally;
 3. derive the canonical raw DASL CID;
 4. make the complete object visible atomically; and
-5. return only after the accepted object is durable according to the backend's
-   documented commit boundary.
+5. return only after the accepted object is process-durable.
 
 A crash may leave backend-private temporary extents. They are not accepted
 portable objects and MUST be cleaned or ignored on reopen.
@@ -326,7 +341,7 @@ portable objects and MUST be cleaned or ignored on reopen.
 
 `putDrisl` MUST validate the value against the DRISL data model, encode exactly
 one canonical DRISL object, compute its CID, and atomically store those exact
-bytes.
+bytes. Successful resolution means the object is process-durable.
 
 DRISL is finite and bounded. `putDrisl` MAY reject values over a documented
 encoded-size, depth, map-entry or collection-length limit.
@@ -340,7 +355,8 @@ encoded-size, depth, map-entry or collection-length limit.
 3. for a raw CID, require the SHA-256 digest to match;
 4. for a DRISL CID, additionally enforce section 4.2;
 5. reject trailing, truncated or malformed content; and
-6. publish no accepted object until every check succeeds.
+6. publish no accepted object until every check succeeds; and
+7. resolve only after the accepted object is process-durable.
 
 If the CID already exists with valid bytes, the operation is idempotent and
 MUST NOT create a second portable object. The backend MAY use the successful
@@ -407,9 +423,11 @@ bytes `a0`, an empty raw byte sequence, and raw UTF-8 bytes `hello`.
 
 ### 8.1 Write-before-reference
 
-A producer MUST durably accept every object in a new event's `roots` before it
-appends the event. A transactional backend MAY commit objects and the event in
-one transaction whose externally visible result obeys the same ordering.
+A producer MUST process-durably accept every object in a new event's `roots`
+before it appends the event. From acceptance until the referencing event
+commits or aborts, a pending-reference guard MUST protect the object from
+collection. A transactional backend MAY commit objects and the event in one
+transaction whose externally visible result obeys the same ordering.
 
 A crash after object acceptance but before event append may leave an orphan.
 A successful event append MUST NOT depend on an object that was never
@@ -446,15 +464,25 @@ significant. An implementation SHOULD return them in binary-CID byte order for
 deterministic diagnostics.
 
 The store MAY unlink an unkept object only after its documented orphan grace
-period. The grace protects a newly accepted object whose referencing event has
-not yet committed.
+period. Grace protects abandoned crash residue; it does not protect a live
+writer that pauses between object acceptance and event commit.
 
-Collection MUST be serialized with acceptance and reads sufficiently to ensure
-that it cannot delete an object while the same store generation is committing
-or opening it.
+The mandatory local-vault invariant is:
 
-The semantic layer computes `keep` from `vault-events.md`. The object store
-MUST NOT inspect event types.
+> Collection does not delete an object retained by any committed event and does
+> not delete an object that an in-flight operation may still reference.
+
+From object acceptance until the referencing event commits or aborts, the
+producer MUST hold a temporary pin, vault-level exclusion, transaction or
+another pending-reference guard. From the held-root snapshot through physical
+unlink, collection MUST either exclude event commits and pending-reference
+changes or atomically revalidate both the committed event frontier and all
+pending guards immediately before unlink. A changed frontier or guard set makes
+the stale sweep ineligible and requires recomputation or skipping the object.
+
+Collection is also serialized with acceptance and reads. The semantic layer
+computes `keep` from `vault-events.md`; the object store MUST NOT inspect event
+types.
 
 ## 9. Canonical JSON stored as raw DASL objects
 
@@ -639,3 +667,14 @@ A conforming implementation MUST pass at least these cases:
 23. If an accepted object is corrupted and a backend performs lazy read
     verification, `open` fails before successful stream completion and the
     consumer cannot treat earlier chunks as verified.
+24. An integral value outside the DRISL integer range is rejected rather than
+    encoded as a float, and an integral binary64 item on the wire is rejected
+    as non-canonical.
+25. A JavaScript integer `number` outside `±(2^53 - 1)` is rejected unless
+    supplied as `bigint`; decode returns `bigint` outside the safe range.
+26. A successful object put survives immediate process restart; a
+    pre-resolution crash exposes either the whole object or no accepted object.
+27. A live writer paused between object acceptance and event commit remains
+    protected from collection even after orphan grace expires.
+28. A stale keep snapshot cannot unlink an object after a referencing event
+    commits; the sweep is excluded, revalidated or recomputed.
