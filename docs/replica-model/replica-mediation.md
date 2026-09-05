@@ -739,11 +739,20 @@ paths:
    and determined that the message MUST be discarded without `message.in`.
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
-portable message content. A delivery that is undecryptable, depends on missing
-local generation/sync state, or is otherwise deferred or not safely
-classifiable MUST NOT be acknowledged. This distinction prevents malformed
-terminal input from redelivering forever without allowing temporary local
-incompleteness to lose mail.
+portable message content. Recipient classification follows the same exact-key
+rule as `rendezvous.md`: while unlock/recovery is incomplete, ownership is not
+classified; once the local key index is authoritative, a recipient is deferred
+only when its complete `kid` maps to a known local key-agreement
+method/generation with a concrete recoverable prerequisite. A foreign DID, a
+locally controlled DID with a nonexistent or wrong-purpose fragment, a
+terminal generation, or a recipient set with no exact local key-agreement
+match is terminal wrong-recipient input and may use the rejection ACK path.
+
+A delivery that is genuinely undecryptable despite an exact live local key,
+depends on missing recoverable local generation/sync state, or is otherwise
+not safely classifiable MUST NOT be acknowledged. This distinction prevents
+terminal wrong-recipient or malformed input from redelivering forever without
+allowing temporary local incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
 not prerequisites for pickup acknowledgment.
@@ -942,3 +951,8 @@ A conforming implementation demonstrates at least these cases:
     replay.
 22. A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.
+23. Recipient-key triage defers only an exact known local key-agreement
+    method/generation with a recoverable missing prerequisite. After local key
+    recovery is authoritative, foreign DIDs, nonexistent or wrong-purpose
+    local fragments and terminal generations may use the terminal pre-vault ACK
+    path and do not remain pending.

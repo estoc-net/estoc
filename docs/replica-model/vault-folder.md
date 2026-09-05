@@ -634,7 +634,10 @@ portable paths, but MUST NOT return event segments, DASL objects or
 anything under `local/`.
 
 `FileStore.write()` obeys singleton and unknown-file rules and refuses
-structural paths.
+structural paths. Successful resolution is process-durable under
+`event-store.md` section 2.1; a pre-resolution process crash may leave the
+complete portable file or no accepted replacement, never a partially accepted
+file.
 
 ## 12. Snapshot and export
 
@@ -845,3 +848,6 @@ The following require a new folder/vault version:
 34. Collection cannot unlink an object referenced by an event committed after
     the collector's initial held-root snapshot, nor one protected by a pending
     reference guard.
+35. A successful `FileStore.write` survives immediate process restart; a
+    pre-resolution crash leaves the complete portable file or no accepted
+    replacement, never a partial file.

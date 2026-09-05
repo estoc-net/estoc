@@ -505,23 +505,42 @@ concurrently use the same local author.
 ### 9.1 Deferred delivery
 
 A mailbox delivery remains pending, with no pickup ACK and no `message.in`,
-when:
+only when recipient ownership cannot yet be safely classified or an exact
+known local receive key has a concrete recoverable prerequisite:
 
-- the local key named by JWE `kid` is not available;
-- the generation is configured but not yet live;
-- required key/document/route state is temporarily unavailable; or
-- required historical evidence is temporarily unavailable.
+- the vault is locked, recovery is incomplete, or the local key/generation
+  index is not yet authoritative;
+- a recipient `kid` maps to an exact known local **key-agreement** method and
+  generation, but that configured generation is not yet live;
+- required key/document/route state for that exact known method is temporarily
+  unavailable; or
+- required historical evidence for that exact known method is temporarily
+  unavailable.
 
-A phase-1 runtime retries after its local state changes. A future sync-enabled
-runtime may sync and refold first. A terminal generation or permanently invalid
-envelope is not deferred.
+Once local key state is authoritative, the implementation MUST compare the
+complete recipient `kid`, including DID and method fragment/purpose. A foreign
+DID, a locally controlled DID with a nonexistent fragment, an authentication
+fragment used where key agreement is required, a terminal generation, or a
+recipient set containing no valid local key-agreement method is not deferred.
+It is terminal wrong-recipient input.
+
+A phase-1 runtime retries deferred input after its local state changes. A
+future sync-enabled runtime may sync and refold first. It MUST NOT treat a
+locked vault or incomplete recovery as proof that the recipient is foreign.
 
 ### 9.2 Hard pre-vault gate
 
-After authenticated decryption but before writing portable application state,
-the responder checks only conditions needed to classify the input safely:
+Recipient classification begins before decryption once section 9.1 says local
+key state is authoritative. If no recipient `kid` maps to an exact live or
+recoverably pending local key-agreement method, the delivery is terminal
+wrong-recipient input: a mediated delivery MUST be pickup-ACKed and MUST create
+no `message.in`, contact or response effect.
 
-- recipient DID and selected generation;
+For an exact local recipient that can be decrypted, the responder then checks
+only conditions needed to classify the input safely before writing portable
+application state:
+
+- recipient DID, exact selected key-agreement method and generation;
 - valid DIDComm syntax and authenticated encryption;
 - valid first-disclosure Peer DID plus exact `from`/`skid`/`apu` form;
 - finite, positive message lifetime not above the generation's absolute
@@ -897,20 +916,30 @@ When the initiator receives a message from an unknown responder DID carrying
    `createdTime` equals `iat`;
 4. verify the JWT signature and all claims against that exact snapshot;
 5. validate protocol threading and OOB `pthid` where applicable;
-6. only after those checks, process explicit `ack` values;
-7. attach the pairwise channel to the existing contact;
-8. append `peer.transitioned` for this contact only; and
-9. honor any explicit current-message ACK request in the response using an
-   existing deterministic protocol response or a deterministic Empty Message
-   ACK.
+6. attach the pairwise channel to the existing contact and append
+   `peer.transitioned` for this contact only;
+7. derive the deterministic relationship ID from the canonical pinned
+   rendezvous DID and the initiator's own relationship-key fingerprint, then
+   process-durably append `relationship.initiatorBound` naming the exact
+   initial outbound, snapshot, initiator identity and validated handoff;
+8. append or reuse `message.executionBound` for the handoff carrier under that
+   relationship scope; steps 6–8 SHOULD be one `appendAll`;
+9. only after the proof and portable relationship/execution binding are
+   committed, process explicit `ack` values; and
+10. honor any explicit current-message ACK request in the response using an
+    existing deterministic protocol response or a deterministic Empty Message
+    ACK.
 
 Missing historical evidence defers processing. Invalid proof is an integrity
 or protocol failure. A response does not acknowledge the initial message
 unless its authenticated explicit `ack` array names that wire ID.
 
 The confirmation message is sent to `P_A`, contains no `please_ack`, and is
-submission-terminal after first successful submission. Duplicate response
-delivery re-submits the same exact prepared confirmation package.
+submission-terminal after first successful submission. Its execution scope is
+the committed relationship binding above, never a provisional channel scope.
+A crash after binding and before ACK-effect creation therefore reconstructs the
+same confirmation effect. Duplicate response delivery re-submits the same
+exact prepared confirmation package.
 
 The responder may stop attaching `from_prior` after receiving any authenticated
 message addressed to `P_A`. Delivery acknowledgment for the handoff response
@@ -1055,8 +1084,9 @@ DID as ordinary `writeTo`.
 9. Initiator intent precedes registration, resolution, preparation and
    submission.
 10. Peer first disclosure uses the same long form in `from`, `skid` and `apu`.
-11. Missing local key or configured-but-not-live generation remains pending
-    without pickup ACK.
+11. Before unlock/recovery completes, recipient ownership is not classified.
+    Afterward, only an exact known local key-agreement generation with a
+    recoverable missing prerequisite remains pending without pickup ACK.
 12. Safely classified hard rejection is pickup-ACKed and creates no portable
     candidate.
 13. Local preference, capacity and unsupported-protocol decisions occur after
@@ -1102,3 +1132,14 @@ DID as ordinary `writeTo`.
     pickup; replica mediation and vault sync are not required.
 33. A peer lacking `from_prior` or explicit ACK support remains visibly
     unconfirmed and is outside reliable-bootstrap conformance.
+34. With the vault unlocked and recovery complete, a foreign recipient DID,
+    a local DID with a nonexistent/wrong-purpose fragment, or a terminal
+    generation is terminal wrong-recipient input and does not remain pending.
+35. A configured-but-not-live exact local key-agreement generation remains
+    deferred without pickup ACK; a locked or recovering vault is never
+    classified as wrong-recipient merely because keys are unavailable.
+36. The initiator commits `relationship.initiatorBound` and the handoff
+    `message.executionBound` before generating the confirmation effect; restart
+    immediately afterward derives the same execution ID.
+37. Later verified peer-key rotation preserves that relationship execution
+    scope and does not create a second automatic effect for the same wire ID.

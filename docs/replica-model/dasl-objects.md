@@ -429,6 +429,20 @@ commits or aborts, a pending-reference guard MUST protect the object from
 collection. A transactional backend MAY commit objects and the event in one
 transaction whose externally visible result obeys the same ordering.
 
+A pending-reference guard belongs to the writer or transaction generation that
+created it. It MUST NOT remain semantically live after that owning runtime has
+terminated. A backend MAY persist a temporary pin for crash safety, but reopen
+recovery MUST classify pins from the previous runtime as abandoned only after
+it has reconstructed every committed event and the resulting held-root set.
+Collection MUST remain disabled until that recovery step is complete.
+
+Dropping an abandoned guard does not by itself classify its object as an
+orphan. If a recovered committed event retains the object, it remains held. If
+no committed event retains it, the object is an ordinary unreferenced accepted
+object and becomes collectable only under the backend's orphan-grace policy.
+Thus a crash before event commit leaves an orphan after recovery, while a crash
+after event commit but before guard cleanup leaves a normally retained object.
+
 A crash after object acceptance but before event append may leave an orphan.
 A successful event append MUST NOT depend on an object that was never
 accepted.
@@ -678,3 +692,8 @@ A conforming implementation MUST pass at least these cases:
     protected from collection even after orphan grace expires.
 28. A stale keep snapshot cannot unlink an object after a referencing event
     commits; the sweep is excluded, revalidated or recomputed.
+29. Reopen recovery reconstructs committed-event retention before clearing an
+    abandoned pending-reference guard and before enabling GC.
+30. A crash before event commit makes the accepted unreferenced object an
+    ordinary grace-protected orphan after recovery; a crash after event commit
+    but before guard cleanup keeps the object through the recovered event root.

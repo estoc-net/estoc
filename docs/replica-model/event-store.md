@@ -283,12 +283,39 @@ retirement policy are vault events defined in `vault-events.md`.
 
 ### 4.2 Event ID and timestamp
 
-The store mints `eid` and `at` as part of append. It obtains one integer
-Unix-millisecond clock reading, uses that millisecond in the UUIDv7 timestamp,
-and formats `at` as exactly `YYYY-MM-DDTHH:mm:ss.sssZ`. A sub-millisecond clock
-is truncated to the integer millisecond before both values are produced.
-Leap-second spelling (`ss == 60`), omitted fractional seconds and any precision
-other than three digits are rejected.
+The store mints `eid` and `at` as part of a local append. It obtains one
+integer Unix-millisecond clock reading `t`, embeds exactly `t` in the UUIDv7
+`unix_ts_ms` field, and formats the same `t` as
+`YYYY-MM-DDTHH:mm:ss.sssZ`. A sub-millisecond clock is truncated to the integer
+millisecond before both values are produced. Leap-second spelling (`ss == 60`),
+omitted fractional seconds and any precision other than three digits are
+rejected.
+
+The writer's UUIDv7 generator MUST follow RFC 9562 but this profile does not
+assign a fixed counter layout to `rand_a`. It MAY use random data, a fixed or
+randomly seeded counter spanning `rand_a` and part of `rand_b`, additional clock
+precision, or another RFC-9562-conforming strategy. In particular, an
+implementation MUST NOT assume that the 12-bit `rand_a` field is the complete
+same-millisecond counter.
+
+Repeated generation within one millisecond, including an `appendAll` containing
+more than 4096 events, MUST produce distinct UUIDs while preserving the sampled
+`t` in every UUID. A generator MUST NOT advance the embedded UUID timestamp
+merely to create room for another ID because that would break the local
+`eid`/`at` writer contract. If its chosen generation strategy cannot produce the
+requested unique IDs for that timestamp, it MUST fail before committing the
+append or batch.
+
+If the wall clock moves backwards, a later local append uses the newly sampled,
+possibly smaller, `t` for both `eid` and `at`. The generator still MUST avoid a
+UUID collision, but this profile does not require local UUID monotonicity across
+clock rollback. Canonical event order remains a deterministic fold order, not
+append order.
+
+Reader and ingest validation check canonical UUIDv7 syntax and canonical `at`
+syntax independently. They MUST NOT compare the UUID's embedded timestamp with
+`at`; equality of those values is a writer-generation contract for locally
+appended events, not an acceptance rule for imported immutable history.
 
 An `eid` is trusted to be globally unique. It encodes no subject,
 contact, message, author or permission. A caller that needs the minted
@@ -425,8 +452,12 @@ backend or host application.
 `appendAll` is one all-or-nothing logical append. It MUST validate every
 draft before writing any event. It then:
 
-- assigns one common `at`;
-- mints UUIDv7 event IDs in input order;
+- obtains one common integer-millisecond clock sample and assigns the matching
+  common `at`;
+- mints one distinct UUIDv7 per draft, each embedding that same sampled
+  millisecond, without assuming a 4096-event `rand_a` limit;
+- returns events in input order, while making no claim that canonical event
+  order is append order;
 - assigns the current author to every event; and
 - commits the entire batch at one process-durable success boundary.
 
@@ -662,8 +693,18 @@ successful `putRaw`, `putDrisl` or `putObject` MAY renew orphan age only as a
 storage-policy optimization.
 
 The caller and backend MUST coordinate the interval from held-root snapshot to
-physical unlink with event commits and pending-reference guards. A conforming
-implementation does one of the following, or an equivalent operation:
+physical unlink with event commits and pending-reference guards. A pending-
+reference guard is owned by one running writer/recovery generation and has no
+portable lifetime. After process restart, the backend MUST first recover the
+complete committed event set and reconstruct its held-root set, then classify
+all guards owned by the previous runtime as abandoned, and only then enable
+collection. Clearing an abandoned guard does not make its object an orphan when
+a recovered committed event still retains that object. If no recovered event
+retains it, the object is ordinary abandoned pre-reference data and becomes
+eligible only under the documented orphan-grace rule.
+
+A conforming implementation does one of the following, or an equivalent
+operation:
 
 1. holds a vault-level exclusion from the complete committed-event snapshot
    through unlink;
@@ -991,3 +1032,14 @@ A conforming implementation MUST pass at least these cases:
     revalidation detects the race.
 24. Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
+25. More than 4096 events may be appended in one same-millisecond `appendAll`;
+    every UUID remains distinct and embeds the unchanged sampled millisecond.
+26. After clock rollback, a local writer uses the newly sampled earlier
+    millisecond in both `eid` and `at` while still avoiding UUID collision;
+    canonical order is not claimed to equal append order.
+27. Ingest validates UUIDv7 and `at` independently and does not reject immutable
+    history merely because their encoded timestamps differ.
+28. After restart, committed-event retention is reconstructed before abandoned
+    pending-reference guards are cleared and before collection runs. A crash
+    before event commit leaves an orphan after recovery; a crash after event
+    commit but before guard cleanup leaves a held object.
