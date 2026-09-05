@@ -586,10 +586,10 @@ no selected response is silent.
 
 After final reject, the runtime MUST append `message.erased` for candidate-only
 body, attachment and stored-message roots once any selected rejection intent
-has been frozen. The final decision and any chosen rejection intent, together
-with its required execution binding, MUST commit in one `Vault.commit`. If no
-rejection intent is committed with a final reject, recovery MUST NOT invent
-one. It resumes only already committed response work and candidate erasure.
+has been frozen. The final decision and any chosen rejection intent MUST
+commit in one `Vault.commit`. If no rejection intent is committed with a final
+reject, recovery MUST NOT invent one. It resumes only already committed response
+work and candidate erasure.
 Different diagnostic provenance does not select another response or change its
 frozen wire code. The skeleton, resolution evidence and final decision remain.
 A crash before erasure does not authorize later acceptance.
@@ -724,7 +724,7 @@ with rejection.
 
 For final reject, create no relationship DID. Rejection may be silent or may
 select a deterministic protocol error or Report Problem intent.
-Commit the final decision and any chosen rejection intent/binding in one
+Commit the final decision and any chosen rejection intent in one
 `Vault.commit` under `rendezvous.md` section 9.3, before network work. Recovery
 resumes that intent, or treats its absence as no selected response; it does not
 invent a new optional rejection effect. Once the selected intent no longer
@@ -742,8 +742,8 @@ For effective accept:
 4. select a deterministic handoff response: Trust Ping `ping-response`, a
    protocol-defined deterministic response, or Empty Message ACK;
 5. use `Vault.commit`, preferably once for all new objects and events: the
-   admission decision, inbound `message.executionBound`, any new
-   `contact.created`, bootstrap/pairwise `contact.attached`, `did.created`, `contact.useDid`,
+   admission decision, any new `contact.created`, bootstrap/pairwise
+   `contact.attached`, `did.created`, `contact.useDid`,
    fully frozen `relationship.established`, and deterministic response
    `message.out` with a replay deadline;
 6. response intent explicitly ACKs the triggering initial wire ID, uses
@@ -854,10 +854,6 @@ Normative equality rules are:
 - plaintext `from`, protected `skid` and decoded `apu` all use that same long
   form.
 
-Before the first handoff effect, the responder MUST process-durably bind the
-origin observation to its logical execution ID. The handoff `message.out`,
-relationship state and binding SHOULD be one batch.
-
 The first handoff response MUST:
 
 - address initiator relationship DID `P_B`;
@@ -914,8 +910,8 @@ Empty fallback example:
 
 The responder:
 
-1. process-durably appends acceptance, `message.executionBound`, relationship
-   state and response `message.out` with its replay deadline;
+1. process-durably appends acceptance, relationship state and response
+   `message.out` with its replay deadline;
 2. reconciles recipient registration for canonical short-form `P_A` on its
    bound route when mediated;
 3. prepares the exact response using long-form sender evidence and the frozen
@@ -945,7 +941,7 @@ short form. Already prepared exact packages are not rewritten.
 When the initiator receives or recovers a handoff carrying `from_prior`, it
 performs these steps in order. The entry condition is incomplete handoff
 validation/binding, not merely an unknown responder DID. A known DID does not
-prove that `relationship.initiatorBound` or `message.executionBound` exists.
+prove that `relationship.initiatorBound` exists.
 Existing consistent evidence is reused; conflicting evidence blocks processing.
 
 1. require `from_prior.sub` to equal plaintext `from` byte-for-byte;
@@ -964,16 +960,15 @@ Existing consistent evidence is reused; conflicting evidence blocks processing.
    section 11.2;
 7. validate and prepare `relationship.initiatorBound` for that same
    relationship, naming the exact initial outbound, snapshot, initiator identity
-   and validated handoff under `vault-events.md` section 12.5;
-8. append or reuse `message.executionBound` for the handoff carrier under that
-   relationship scope. All missing locally produced facts in steps 6–8 MUST
-   commit in one process-durable `Vault.commit`; the event-store contract makes
+   and validated handoff under `vault-events.md` section 12.5.
+   All missing locally produced facts in steps 6–7 MUST commit in one
+   process-durable `Vault.commit`; the event-store contract makes
    that batch all-or-nothing;
-9. only after the proof and portable relationship/execution binding are
-   committed, process explicit `ack` values; and
-10. honor any explicit current-message ACK request in the response using an
-    existing deterministic protocol response or a deterministic Empty Message
-    ACK.
+8. only after the proof and portable relationship binding are committed,
+   process explicit `ack` values; and
+9. honor any explicit current-message ACK request in the response using an
+   existing deterministic protocol response or a deterministic Empty Message
+   ACK.
 
 Missing historical evidence defers processing. Invalid proof is an integrity
 or protocol failure. An imported or previously separately committed prefix is
@@ -985,8 +980,9 @@ A response does not acknowledge the initial message unless its authenticated
 explicit `ack` array names that wire ID.
 
 The confirmation message is sent to `P_A`, contains no `please_ack`, and is
-submission-terminal after first successful submission. Its execution scope is
-the committed relationship binding above, never a provisional channel scope.
+submission-terminal after first successful submission. Its execution scope
+derives from the committed relationship binding above, never a provisional
+channel scope.
 A crash after binding and before ACK-effect creation therefore reconstructs the
 same confirmation effect. Duplicate response delivery re-submits the same
 exact prepared confirmation package.
@@ -1045,7 +1041,7 @@ Example:
 ```
 
 A selected rejection response uses the candidate's exact authenticated bootstrap
-channel as a non-transitioning control scope. Its binding and deterministic
+channel as a non-transitioning control scope. Its decision and deterministic
 response intent commit before submission. On the initiator, a no-handoff
 problem report may use that same fixed bootstrap channel only after validating
 the original local recipient and the peer key against the pinned initial
@@ -1193,12 +1189,12 @@ DID as ordinary `writeTo`.
     traffic.
 23. Handoff response ACKs the triggering message and requests its own ACK with
     `please_ack: [""]`.
-24. The handoff Empty example uses the pure-ACK ID derived from the committed
-    logical execution identity and its own frozen effect input.
+24. The handoff Empty example uses the pure-ACK ID derived from its logical
+    execution ID and freezes its response intent.
 25. Handoff response intent freezes a replay deadline no later than its
     expiry; ACK stops normal retry but does not release its exact package before
     that deadline.
-26. The origin candidate is bound to the deterministic relationship/wire-ID
+26. The origin candidate's effective accept derives the relationship/wire-ID
     execution identity before the handoff effect; no observation-MID-derived
     identity is used.
 27. Until confirmation, every responder package carries the same stored
@@ -1224,12 +1220,12 @@ DID as ordinary `writeTo`.
     configured but not live remains deferred without pickup ACK; a locked or
     recovering vault is never classified as wrong-recipient merely because keys
     are unavailable.
-36. The initiator commits `relationship.initiatorBound` and the handoff
-    `message.executionBound` before generating the confirmation effect; restart
-    immediately afterward derives the same execution ID.
+36. The initiator commits `relationship.initiatorBound` before generating the
+    confirmation effect; restart immediately afterward derives the same
+    execution ID.
 37. Later verified peer-key rotation preserves that relationship execution
     scope and does not create a second automatic effect for the same wire ID.
-38. A known responder DID with missing initiator/execution binding does not
+38. A known responder DID with missing initiator binding does not
     skip handoff recovery. Missing facts commit atomically before ACK/effects;
     a pre-resolution batch crash exposes all or none of those new facts.
 39. A previously committed/imported transition prefix is completed from pinned
@@ -1241,7 +1237,7 @@ DID as ordinary `writeTo`.
     Further initial messages for the same relationship reuse it.
 42. A no-handoff rejection may ACK only its validated pinned bootstrap channel;
     such a receipt is not successful handoff or relationship establishment.
-43. A final rejection and its optional response intent/binding commit atomically.
+43. A final rejection and its optional response intent commit atomically.
     A crash cannot expose a final decision with half its chosen response; when
     no response was committed, recovery erases candidate content without
     inventing a new optional response or revisiting admission.

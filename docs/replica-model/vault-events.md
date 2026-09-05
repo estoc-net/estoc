@@ -1378,76 +1378,7 @@ empty-message variants are not treated as pure ACKs.
 Anonymous senders can intentionally reuse wire IDs, so applications SHOULD
 apply stricter replay and automatic-handling policy to them.
 
-### 10.4 `message.executionBound`
-
-```json
-{
-  "type": "message.executionBound",
-  "roots": [],
-  "data": {
-    "executionId": "feeae3f7-34ea-5ff1-b449-0ef76a7375c7",
-    "wireId": "019b1b61-3444-7190-9db5-1cc9c215eb23",
-    "scope": {
-      "relationship": "73a7d8f5-3523-5802-9b65-02da2078273e"
-    },
-    "observations": [
-      "206bcd7e-7320-5512-bbdb-a4d19331d58e"
-    ],
-    "because": "first-effect"
-  }
-}
-```
-
-This event binds inbound observation identities to one deterministic logical
-execution identity. `because` is `first-effect`, `verified-alias` or `ack`.
-`observations` is a non-empty, lexicographically sorted, duplicate-free array
-of existing conflict-free inbound MIDs.
-
-Use `ack` when binding a carrier to apply an explicit ACK, interpret its ACK
-request, or bind an older requested target without an application effect. It
-also covers a carrier for which validation leaves no eligible ACK target.
-The reason is provenance only: it changes neither identity nor proof or scope
-requirements. Otherwise compatible bindings do not conflict merely because
-their reasons differ. A binding does not assert that a handler actually ran.
-
-`scope` is exactly one of:
-
-```json
-{ "relationship": "<relationship ID>" }
-```
-
-or:
-
-```json
-{
-  "channel": {
-    "myKey": "did/.../key-agreement",
-    "peerKey": "..."
-  }
-}
-```
-
-The relationship form is used for final accepted responder-side rendezvous
-candidates and established relationship traffic. The channel form is only for
-a durable non-relationship channel whose protocol forbids cross-key aliasing,
-including the final rejection's fixed bootstrap control scope defined in
-`rendezvous.md` section 13. An undecided candidate receives no provisional
-application execution scope merely because its `message.in` has committed.
-
-The required derivation is defined by `distributed-delivery.md` section 9.
-
-A later observation in the same relationship and with the same wire ID derives
-the same execution ID even when it uses a transition-verified peer key. Another
-binding may add that MID to the same execution identity. The first binding does
-not choose an observation MID as permanent identity.
-
-An observation without a stable valid scope is not effect-eligible. It remains
-pending until relationship or channel evidence establishes a scope. A binding
-with the wrong derived ID, a different wire ID or a different scope is an
-execution-identity conflict. Existing effects remain history, but new effects
-are suppressed.
-
-### 10.5 Pickup versus ultimate acknowledgment
+### 10.4 Pickup versus ultimate acknowledgment
 
 
 Message Pickup `messages-received` is mediator queue state, not a vault event.
@@ -1578,7 +1509,7 @@ initial outbound's pinned rendezvous DID and the initiator's own relationship
 key under `rendezvous.md` section 10. Validate the transition and
 `relationship.initiatorBound` together against that evidence; they MUST agree
 on relationship, contact, local identity and handoff observation. The binding
-need not already exist, but all missing transition, relationship and execution
+need not already exist, but all missing transition and relationship
 facts commit in the same `Vault.commit` under `rendezvous.md` section 12 before
 ACK processing or effects. Missing evidence defers processing; ambiguous or
 incompatible attribution is a relationship conflict.
@@ -1812,7 +1743,7 @@ NOT append a different final result for the same candidate. An existing final
 accept is reused after restart even if current time has since passed expiry;
 its original decision instant remains the timeliness evidence.
 
-A local admission decision does not require an application execution binding.
+A local admission decision precedes application execution-scope derivation.
 Any subsequent deterministic peer-visible effect still requires its validated
 execution scope and committed intent. Ending an accepted relationship uses
 `contact.deleted`, DID retirement and route unregistration, not a replacement
@@ -1893,9 +1824,10 @@ Normative rules:
   portion of `skid`/decoded `apu`;
 - `did.created(ourDid).boundRoute` equals the origin generation's
   `relationshipRoute`, which may differ from the rendezvous ingress route;
-- the referenced handoff intent's `executionId` has a valid binding for this
-  relationship and `originWireId` that includes `originInboundMid`, and its
-  `effectKey` validates under `distributed-delivery.md` section 11; and
+- the referenced handoff intent's `executionId` equals the value derived for
+  this relationship and `originWireId` from the carrier group containing
+  `originInboundMid` under `distributed-delivery.md` section 9; its `effectKey`
+  validates under that document's section 11; and
 - `handoffMid` names one valid deterministic `message.out` for
   `originInboundMid` that explicitly ACKs `originWireId`, requests its own ACK
   with `pleaseAck == [""]`, and freezes a replay deadline.
@@ -1904,12 +1836,12 @@ Missing reference evidence defers processing. Conflicting references or
 inconsistent decoded proof claims are integrity conflicts, not another choice
 of relationship material.
 
-The inbound `message.executionBound`, relationship, deterministic contact,
-channel attachments, `contact.useDid`, responder `did.created`, this event and
-handoff `message.out` SHOULD be appended in one process-durable batch. Equal
-statements are duplicates; different values under one relationship ID are an
-integrity conflict. A separately committed final accept remains final while
-this materialization is recovered; it is not replaced by an expired rejection.
+The relationship, deterministic contact, channel attachments, `contact.useDid`,
+responder `did.created`, this event and handoff `message.out` SHOULD be appended
+in one process-durable batch. Equal statements are duplicates; different values
+under one relationship ID are an integrity conflict. A separately committed
+final accept remains final while this materialization is recovered; it is not
+replaced by an expired rejection.
 
 A future multi-writer profile must coordinate origin selection before it can
 claim convergence. Phase 1 has one active writer, so no remote race chooses a
@@ -1989,10 +1921,10 @@ message IDs are not additional executable MID vectors; `distributed-delivery.md`
 section 9 owns the executable observation-ID vectors.
 
 Before processing the handoff ACK or creating the confirmation effect, the
-initiator MUST complete the mutually consistent transition, relationship and
-execution evidence under `rendezvous.md` section 12. All missing locally
-produced facts in that sequence MUST commit in one `Vault.commit`. A known peer
-DID does not prove that either binding exists. Reopen and imported-prefix
+initiator MUST complete the mutually consistent transition and initiator
+binding under `rendezvous.md` section 12. All missing locally produced facts in
+that sequence MUST commit in one `Vault.commit`. A known peer
+DID does not prove that the binding exists. Reopen and imported-prefix
 recovery reuse consistent facts and complete missing facts before effects.
 
 ## 13. Automatic effects
@@ -2137,7 +2069,7 @@ accept or reject mean that result, not merely the presence of a final event.
 
 An effective accept authorizes the existing materialization procedure. An
 effective reject authorizes candidate-only erasure once any selected rejection
-intent has been frozen. The decision and any chosen rejection intent/binding
+intent has been frozen. The decision and any chosen rejection intent
 commit atomically under `rendezvous.md` section 9.3. Recovery resumes committed
 response work and erasure; it neither invents an uncommitted optional response
 nor reopens the decision. No final result can be replaced by later user
@@ -2148,6 +2080,8 @@ DID lifecycle operations, never a retroactive admission rewrite.
 Before final accept, the writer checks the one-use invitation rule in section
 14.9, deterministic contact tombstones and sender-DID consistency. These
 checks and acceptance commit share one serialized finalization operation.
+An initial message from an already accepted relationship still needs its own
+final result; policy may accept it only through those same checks.
 An undecided candidate introducing a new consumer of an unavailable one-use
 invitation is finalized as reject under `rendezvous.md` section 9.3.
 Recovery of an existing final accept and permitted reuse by the same consumer
@@ -2271,38 +2205,17 @@ For each MID group:
 - erasure is applied before object presence; and
 - conflict suppresses automatic effects and disputed ACK processing.
 
+Derive scopes per observation and check row and MID-group consistency under
+`distributed-delivery.md` section 9 before union.
+
 Union authenticated MID groups into one logical message only when they have
 the same wire ID, resolve to the same unique validated relationship scope,
 have a verified scoped `peer.transitioned` chain between their sender
 keys/DIDs, and agree on intent hashes with valid package evidence.
 This is the only cross-peer-key wire-ID merge.
 
-Resolve an execution scope before automatic handling. A final accepted
-responder rendezvous candidate uses its deterministic relationship ID. A final
-rejection may use only the fixed bootstrap control scope in `rendezvous.md`
-section 13. An undecided candidate remains application-effect-deferred.
-Initiator-side
-handoff traffic uses a relationship scope only after a valid
-`relationship.initiatorBound` reconstructs that same stable ID from the pinned
-rendezvous evidence and the initiator's own relationship identity. Established
-relationship traffic continues to use that ID across verified key rotations.
-A permitted non-relationship channel uses its exact channel scope. An
-unattributed, transition-pending or initiator-unbound observation is
-effect-deferred.
-
-Fold every `message.executionBound` whose scope, wire ID, derived execution ID
-and referenced observations validate. A logical group has:
-
-- no execution ID while no stable execution scope is available;
-- one deterministic execution ID when all valid bindings resolve to the same
-  scope and wire ID; or
-- an execution-identity conflict when bindings claim different scopes or IDs.
-
-A transition-verified alias inherits the relationship-derived execution ID and
-is bound before handler execution. The runtime MUST NOT execute it under a
-provisional peer-key/MID identity and merge it afterward. When execution
-identity conflicts, previously recorded effects remain visible but no new
-effect is emitted.
+Each resulting conflict-free logical group uses its derived execution ID under
+`distributed-delivery.md` section 9 for ACK processing and automatic effects.
 
 A conforming `https://didcomm.org/empty/1.0/empty` pure ACK is retained as a
 control observation and its validated `ack` array is processed, but it is
@@ -2381,7 +2294,7 @@ For a valid outbound:
   `receiptRequired` is true exactly when the result contains that wire ID;
 - `acknowledged` is true if a valid authenticated inbound `ack` names the wire
   ID on a validated peer-scoped continuation under the membership rules above,
-  the carrier has its required execution binding, and all proof gates pass;
+  the carrier has a unique derived scope, and all proof gates pass;
 - `submitted` is true if any package has `delivery.submitted`;
 - a message-scoped terminal failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
@@ -2583,7 +2496,8 @@ but may not reverse the durability boundaries.
    high-water mark under section 10.2 before accepting a new inbound
    observation; cross-author ordinal reuse does not block open or import;
 7. enumerate committed inbound observations with unfinished admission,
-   transition/binding, ACK or protocol-defined deterministic effect work;
+   transition/initiator binding, ACK or protocol-defined deterministic effect
+   work;
 8. idempotently reconcile those observations, relationship materialization,
    pending candidate erasures and replay closure from portable history;
 9. derive every required mediation account; and
@@ -2838,13 +2752,14 @@ There is no migration requirement from an earlier event vocabulary.
 15. Equal authenticated variants derive one observation MID. Equal wire IDs
     under transition-verified peer keys in one relationship merge only at the
     logical-message layer.
-16. Before the first automatic effect, `message.executionBound` derives its
-    execution ID from the stable relationship-or-channel scope and wire ID, not
-    from an observation MID or contact ID.
+16. Before the first automatic effect, its execution ID derives from the unique
+    relationship-or-channel scope and wire ID using committed evidence, not
+    an observation MID, contact ID or uncommitted transition.
 17. A transition-pending observation is effect-deferred; once verified, a
     cross-key alias in the same relationship derives the same execution ID.
-18. A wrong derived ID or different scope preserves prior history but suppresses
-    new automatic execution as an execution-identity conflict.
+18. Observations sharing one MID but deriving different scopes preserve prior
+    history and suppress ACK processing and new effects as an execution-scope
+    conflict; different valid local recipient keys cannot cause two executions.
 19. Intent conflicts suppress disputed automatic effects and ACK
     processing.
 20. Pure Empty ACK is retained and processed but excluded from threads,
@@ -2885,6 +2800,8 @@ There is no migration requirement from an earlier event vocabulary.
     evidence conflicts, and later configuration cannot supply a replacement.
 33. Two initial wire IDs from the same `(rendezvous DID, initiator key)` derive
     one relationship/contact/responder DID and remain separate messages.
+    Each needs its own effective admission result; accepting one does not
+    give an undecided or rejected candidate that relationship scope.
 34. A deterministic contact tombstone is not resurrected; reconnect requires a
     fresh initiator relationship key.
 35. Event `at` is parsed as RFC 3339 and compared with Epoch-Seconds expiry as
@@ -2955,15 +2872,16 @@ There is no migration requirement from an earlier event vocabulary.
 61. Every accepted inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
     linear history, and cross-author ties have deterministic recovery order.
-62. The initiator commits `relationship.initiatorBound` and a
-    `message.executionBound` before the handoff-confirmation effect; restart
-    immediately afterward reconstructs the same relationship execution ID
+62. The initiator commits `relationship.initiatorBound` before the
+    handoff-confirmation effect; restart immediately afterward reconstructs
+    the same relationship execution ID
     from the seven-field binding and its matching DID, initial package,
     resolution and handoff/transition evidence. Erasing message content or
     learning a later peer rotation does not change those sources; missing
     evidence defers processing and mismatched references conflict.
 63. Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
+    Detachment or DID/route retirement never selects a new execution scope.
 64. `message.replayClosed` is committed before replay-only roots are released;
     restart, loss of `local/` and clock rollback do not reopen closed replay.
 65. Hold and ordinary terminal delivery failure block replay submission without
@@ -2992,65 +2910,65 @@ There is no migration requirement from an earlier event vocabulary.
     second consumption, and another consumer is rejected.
 74. Responder origin inbound IDs never identify a local outbound by coincidence;
     local handoff and initiator initial outbounds use their exact named MIDs.
-75. An ACK-only carrier can bind with `because == "ack"` without executing a
-    handler. Different descriptive binding reasons do not change identity.
-76. A known responder DID with incomplete handoff binding remains deferred;
+75. A known responder DID with incomplete handoff binding remains deferred;
     recovery completes missing facts atomically before ACK or effect processing.
-77. A pickup-ACKed inbound with unfinished deterministic work is rediscovered
+76. A pickup-ACKed inbound with unfinished deterministic work is rediscovered
     from portable history on open, without redelivery or a surviving local queue.
-78. Final reject followed by erasure cannot be turned into accept for the same
+77. Final reject followed by erasure cannot be turned into accept for the same
     candidate. Incompatible imported final results suppress new effects.
-79. A no-handoff problem report may acknowledge only its validated bootstrap
+78. A no-handoff problem report may acknowledge only its validated bootstrap
     channel; it never establishes a relationship or bypasses handoff proof.
-80. Final rejection and any selected response intent/binding commit atomically.
+    A later relationship binding does not reclassify that control scope.
+79. Final rejection and any selected response intent commit atomically.
     Recovery resumes only committed response work and erasure, never an
     uncommitted optional response or a replacement admission outcome.
-81. Distinct events sharing a receipt `(author, ordinal)` pair remain history
+80. Distinct events sharing a receipt `(author, ordinal)` pair remain history
     with a projected receipt-integrity conflict, not a full-import failure.
     Only affected logical messages are excluded from newly frozen ACK targets.
-82. Every permutation of a fixed event union yields the same minimum complete
+81. Every permutation of a fixed event union yields the same minimum complete
     receipt key and scope-local order. Learning an older verified alias may
     change future order, never a previously frozen ACK array.
-83. Equivalent final admission events have one effective result; undecided or
+82. Equivalent final admission events have one effective result; undecided or
     conflicted candidates have none, even if a final accept event is present.
-84. A new consumer of an unavailable one-use invitation gets final reject;
+83. A new consumer of an unavailable one-use invitation gets final reject;
     same-consumer reuse and recovery do not reject or overwrite an existing
     accepted result. Conflicting accepted consumers keep it unavailable.
-85. Adding `contact.merged` changes only display grouping. Per-`cid` decisions,
+84. Adding `contact.merged` changes only display grouping. Per-`cid` decisions,
     relationship scopes, message/execution IDs, ACK results, invitation state
     and deletion/erasure behavior remain unchanged.
-86. A matching `pthid` without a valid accept for the disclosed local recipient
+85. A matching `pthid` without a valid accept for the disclosed local recipient
     DID does not consume an invitation. `contact.attached` alone does not
     consume it, including when following a remote invitation.
 
-87. Retryable transport failures and attempt phase/status remain local trace.
+86. Retryable transport failures and attempt phase/status remain local trace.
     Restoring an outbound with only `message.out` projects `queued` and permits
     eligible retry; durable prepared/submitted/terminal evidence still applies.
-88. A user send or deterministic response uses its outbound MID as plaintext
+87. A user send or deterministic response uses its outbound MID as plaintext
     `id`; every package and retry preserves it. Inbound observation MIDs remain
     scoped derivations and are not replaced with the received wire ID.
-89. With two configurations for one rendezvous DID, the latest first configuring
+88. With two configurations for one rendezvous DID, the latest first configuring
     event selects the policy. Repeating the older configuration cannot select
     it again; an unavailable selected generation cannot fall back to it.
-90. An undecided candidate may use a newer generation at finalization, with
+89. An undecided candidate may use a newer generation at finalization, with
     stricter policy applied after durable admission. Final admission generation
     and relationship origin remain fixed after later configuration, retirement,
     duplicate receipt or restore; retirement eligibility uses local arrival.
-91. A transition names one relationship and matching contact. Sharing a contact
+90. A transition names one relationship and matching contact. Sharing a contact
     or prior rendezvous DID cannot extend it to another relationship. A first
     initiator handoff validates its derived relationship with the transition
-    and commits all missing bindings together before ACKs or effects.
-92. Erasing message content does not remove the DID, origin and handoff event
+    and commits the transition and initiator binding together before ACKs or
+    effects.
+91. Erasing message content does not remove the DID, origin and handoff event
     skeletons used by `relationship.established`. Restored choices still use
     those references and the exact JWT; a mismatched `iss`, `sub`, `kid` or
     `iat` is a conflict, not authority to select replacement material.
-93. Two automatic intents for the same execution, handler, kind and ordinal
+92. Two automatic intents for the same execution, handler, kind and ordinal
     have one effect key and MID. Different intent hashes conflict after any
     permutation of their union; both variants and their packages remain history,
     with preparation, submission and replay suppressed.
-94. Equal effect keys and intent hashes with different targets or replay
+93. Equal effect keys and intent hashes with different targets or replay
     deadlines still conflict. Exact duplicate intents produce one logical
     outbound.
-95. An automatic intent with a key inconsistent with its execution binding or
-    protocol tuple, or a MID inconsistent with its key, is invalid and cannot
-    execute.
+94. An automatic intent whose execution ID disagrees with its unique carrier
+    group's derived ID, whose key disagrees with that ID or protocol tuple, or
+    whose MID disagrees with its key is invalid and cannot execute.

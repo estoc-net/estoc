@@ -223,7 +223,7 @@ The following table is normative. "Committed" means process-durable success.
 | Prepared package | `message.prepared` and its exact envelope | Submit that exact package |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
-| Stable execution binding | `message.executionBound`, plus `relationship.initiatorBound` when initiator handoff requires it | Apply peer-scoped ACKs, freeze ACK targets, or run an eligible automatic effect |
+| Stable execution scope | Admission, initiator binding, relationship or pinned initial-package evidence under section 9 | Apply peer-scoped ACKs, freeze ACK targets, or run an eligible automatic effect |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Stop normal retry |
 | Replay submission paused | Unresolved hold or ordinary terminal delivery failure | Retain exact replay material but submit nothing automatically |
 | Replay closure | Process-durable `message.replayClosed` after deadline or erasure | Release replay-only exact envelope roots |
@@ -516,12 +516,12 @@ exists under section 11:
 1. If `X.pleaseAck == null`, create no ACK obligation.
 2. Expand `""` to `X.wireId`; retain the first occurrence of every target and
    ignore later duplicates.
-3. Resolve `X.logicalPeerScope` from its durable `message.executionBound`.
+3. Derive `X.logicalPeerScope` under section 9 from committed evidence.
    Look up each requested wire ID only as `(X.logicalPeerScope, wireId)`. The
-   current `X.wireId` is known by virtue of X's own binding. An older target is
-   eligible only when it is conflict-free and can be bound or is already bound
-   to the exact same scope. A verified key transition may widen lookup only
-   inside one relationship scope; unrelated relationships, unknown senders,
+   current `X.wireId` is known by virtue of X's own derived scope. An older
+   target is eligible only when it is conflict-free and derives to the exact
+   same scope. A verified key transition may widen lookup only inside one
+   relationship scope; unrelated relationships, unknown senders,
    conflicted targets and ambiguous scope attribution are omitted.
 4. Derive each target's `firstReceiptKey` under `vault-events.md` section
    10.2 as the minimum complete `(integer receiptOrdinal, author)` tuple across
@@ -534,11 +534,9 @@ exists under section 11:
    natural response or one deterministic pure ACK associated with X's logical
    execution ID.
 
-A requested target unknown or outside X's peer scope at step 3 is omitted. Any
-older target admitted by the "can be bound" branch MUST have that exact
-`message.executionBound` process-durably committed before the response intent
-is frozen. Its later arrival does not mutate the frozen response or create a
-second ACK effect for X; the sender may request it again in another message. If
+A requested target unknown or outside X's peer scope at step 3 is omitted.
+Its later arrival does not mutate the frozen response or create a second ACK
+effect for X; the sender may request it again in another message. If
 no target remains, the receiver creates no ACK-only effect. DIDComm message IDs
 are sender-scoped; wire-ID equality elsewhere in the vault is never sufficient
 evidence for an ACK target.
@@ -688,10 +686,8 @@ These values are **observation identities**. Equal intent hashes under one MID
 form one observation group; differences are intent conflicts.
 
 Automatic execution uses a stable **execution scope**, not an observation MID.
-For any inbound carrier with a validated `message.executionBound`, this exact
-scope is its **logical peer scope** (`logicalPeerScope`) for ACK lookup,
-duplicate replay and automatic execution. A carrier without a unique valid
-binding has no logical peer scope yet and is not eligible for those actions.
+Its unique derived value is the carrier's **logical peer scope**
+(`logicalPeerScope`) for ACK lookup, duplicate replay and automatic execution.
 The closed phase-1 scopes are:
 
 ```json
@@ -710,19 +706,37 @@ cross-key aliasing is forbidden:
 }
 ```
 
-A final accepted responder-side rendezvous candidate uses its deterministic
-relationship ID even before `relationship.established` is appended. An
-undecided candidate has no provisional application execution scope. Final
-rejection uses only the fixed bootstrap control scope in `rendezvous.md`
-section 13.
-Initiator-side handoff traffic uses a relationship scope only after the
-validated handoff is process-durably bound under
-`relationship.initiatorBound`; that binding is derived from the pinned
-rendezvous evidence, the initiator's own relationship identity and the initial
-outbound. Ordinary established relationship traffic reuses the same scope
-through later verified key rotations. Anonymous or unattributed messages are
-not automatically effect-eligible unless a protocol defines another stable
-execution scope in a later version.
+Derive the scope of each authenticated observation `o` from committed,
+validated evidence only. Mediation channels and anonymous observations have no
+application execution scope. Missing prerequisites defer processing;
+conflicting evidence cannot authorize another scope.
+
+During validation of a `Vault.commit`, scope and intent derivation may use its
+prospective atomic event set. Those facts become scope evidence only when the
+whole batch commits.
+
+For relationship `R`, `peerChain(R)` is the historical set containing the
+responder's `relationship.established.peerKey` or the initiator's
+`message.in(relationship.initiatorBound.handoffMid).peerKey`, plus successor
+`peerKey` values from valid `peer.transitioned` events naming `R` under
+`vault-events.md` section 11.2. The first handoff contributes only its successor
+key. Retirement preserves historical scope evidence. Contact attribution and
+route availability do not select a scope; current work eligibility is separate.
+
+| Observation | Required committed evidence | Derived scope |
+| --- | --- | --- |
+| Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. No effective result: no scope. |
+| Initiator handoff | Valid `relationship.initiatorBound` with `handoffMid == o.mid` | Its relationship |
+| Ordinary relationship traffic | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `o.peerKey` in `peerChain(R)` | That unique `R`; no match supplies no scope |
+| Initiator no-handoff problem report under `rendezvous.md` section 13 | `o.fromPrior == null`; a valid initial `message.prepared` has null `fromPrior`, exact `(o.myKey, o.peerKey)` and a pinned `peer.resolved(peerResolution)` validating that channel | Exact channel `(o.myKey, o.peerKey)` |
+
+Each row contributes at most one scope; multiple matching relationships are
+an execution-scope conflict. All applicable rows for one observation MUST agree.
+Then every valid observation in one MID group MUST derive the same scope.
+Missing evidence leaves the group deferred; incompatible scopes preserve
+history but suppress ACK processing and new effects, without selecting a row,
+observation or canonical winner. Only after these checks may groups join under
+`vault-events.md` section 14.7's transition-aware union.
 
 The execution identity is:
 
@@ -733,38 +747,17 @@ executionId = UUIDv5(
 )
 ```
 
-Before applying explicit ACKs, freezing ACK targets or running the first
-automatic effect, the runtime MUST process-durably append or reuse a validated
-`message.executionBound` containing the exact scope, wire ID, execution ID and
-known observations. ACK-only binding uses `because == "ack"` under
-`vault-events.md` section 10.4; it does not imply an application handler ran.
-
 Initiator handoff recovery follows `rendezvous.md` section 12 even when the
 responder DID is already known. A final rejection's fixed bootstrap control
 channel is the explicit non-transitioning exception in that document's section
 13; it neither aliases keys nor establishes a relationship.
 
-Two authenticated observation groups may be unioned as one logical message
-only when they have the same wire ID, agree on intent hashes, validate every
-package proof, and resolve to the same execution scope. A
-cross-peer-key merge is permitted only through the same non-conflicted
-relationship scope and a verified contact-scoped `peer.transitioned` chain.
-Every transition in that chain must name this exact relationship under
-`vault-events.md` section 11.2.
-
-A message whose sender key is not yet attached to such a stable scope is
-**effect-deferred**. It MUST NOT execute under a provisional observation or
-contact identity merely because transition evidence has not arrived yet. When
-the evidence arrives, the observation is bound to the already deterministic
-relationship execution ID. This rule covers the case where the repackaged
-observation arrives before the key transition.
-
-A binding whose `executionId` does not equal the formula above, or two scopes
-claimed for one logical alias group, is an execution-identity conflict.
-Previously committed effects remain immutable history, but no new automatic
-effect is emitted. A conforming phase-1 runtime never executes the same
-relationship/wire-ID input once per peer key and then attempts to repair it by
-choosing a smaller MID.
+A message without a unique stable scope is **effect-deferred**. It MUST NOT
+execute under a provisional observation, contact or channel identity. A later
+verified alias reuses the relationship-derived execution ID; a conforming
+runtime never executes once per peer key and repairs it by choosing a smaller
+MID. All required scope evidence MUST commit before applying explicit ACKs,
+freezing ACK targets or running automatic effects.
 
 A conforming `empty/1.0/empty` pure ACK remains a durable control observation,
 but is excluded from thread display, unread counts, notifications and
@@ -809,20 +802,16 @@ For every account-scoped pickup or direct delivery:
 11. resolve the stable relationship or non-transitioning channel execution
     scope; if required transition/binding evidence is missing, defer ACK
     application and automatic effects;
-12. for every conflict-free carrier whose ACKs, ACK requests or effects will be
-    processed, commit or reuse the scope-derived `message.executionBound`;
-    use `because == "ack"` for ACK-only binding, including older requested
-    targets, without implying that an application handler has run;
-13. only after that stable logical peer scope exists, process explicit `ack`
-    values into idempotent peer-scoped `delivery.acknowledged`;
-14. schedule eligible deterministic application effects through that execution
+12. only after that unique derived logical peer scope exists, process explicit
+    `ack` values into idempotent peer-scoped `delivery.acknowledged`;
+13. schedule eligible deterministic application effects through that execution
     ID. Bootstrap admission itself follows `rendezvous.md` section 10.2 and is a local decision,
     not an application effect requiring a provisional execution identity;
-15. run the frozen peer-scoped ACK-target algorithm in
+14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
     append one deterministic protocol response or pure-ACK intent with a replay
     deadline; and
-16. on duplicate receipt while replay-submission-eligible, re-submit the same
+15. on duplicate receipt while replay-submission-eligible, re-submit the same
     retained response package rather than creating another effect or package.
 
 A conforming pure ACK is retained for audit and delivery processing but excluded
@@ -864,8 +853,8 @@ Problem 2.0; there is no custom decline message.
 ## 11. Automatic effects
 
 An automatic DIDComm output is one effect identified by
-`(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST have a valid
-`message.executionBound` for the conflict-free logical input. Each protocol
+`(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
+derived execution ID of a unique conflict-free carrier group. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
 and output intent rules. Handler IDs and kinds are non-empty strings without
 U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
@@ -887,15 +876,17 @@ effectKey = base64url(
 The key is unpadded base64url. It determines the outbound MID and wire ID under
 `vault-events.md` section 9.1. The effect's content is its `message.out` intent.
 One key permits only one compatible intent under that document's section 14.8;
-payload validation MUST verify the key against the execution binding and
-producing protocol, and verify the derived MID.
+payload validation MUST verify the execution ID against that carrier group,
+the key against its derived execution ID and producing protocol, and the MID
+against the key.
 
-Under the writer lock in `event-store.md` section 10, the runtime MUST look up
-the derived MID before freezing ACK targets, timing or other intent fields.
+Under the writer lock in `event-store.md` section 10, the runtime MUST derive
+the carrier's execution ID and look up the derived MID before freezing ACK
+targets, timing or other intent fields.
 It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
 content erasure, replay closure, a later observation or a changed clock. If no
-intent exists, it commits the intent and any missing execution binding through
-`Vault.commit` before effects. The lookup and commit are one locked operation.
+intent exists, it commits the intent through `Vault.commit` before effects.
+Derivation, lookup and commit are one locked operation.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under `vault-events.md` section 14.8. Duplicate
 carriers use the existing package only while section 8.4 permits replay.
@@ -905,7 +896,7 @@ before execution and use that protocol's idempotency or explicit at-least-once
 contract. The message fold does not validate those payloads.
 
 Phase 1 has one active writer but still makes no process-level exactly-once
-claim. A future multi-writer profile must coordinate execution bindings before
+claim. A future multi-writer profile must coordinate automatic execution before
 claiming stronger behavior.
 
 ## 12. Required vault observations
@@ -923,7 +914,6 @@ delivery.acknowledged             ultimate peer ACK named the wire ID
 delivery.held                     user or policy hold
 delivery.released                 release of one exact hold
 message.in                        durable inbound observation
-message.executionBound            immutable logical execution identity
 peer.transitioned                 DID continuation in one named relationship
 relationship.admissionDecided     local bootstrap admission decision
 relationship.established          stable responder-side pairwise relationship
@@ -976,7 +966,8 @@ A recommended inbound observation records both hashes and durable headers:
   observation.
 - After pickup ACK but before ultimate ACK intent/submission, writable-open
   recovery MUST rediscover unfinished work from committed inbound history,
-  reuse frozen intents and bindings, and resume eligible deterministic work.
+  reuse frozen intents and relationship evidence, and resume eligible
+  deterministic work.
   Neither mediator redelivery nor a local queue is a recovery prerequisite.
 - Loss or unavailability of the recipient runtime beyond mediator retention
   may lose an in-flight package. Receipt-required sender retry is the recovery boundary.
@@ -1049,8 +1040,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 25. A repackaged observation that arrives before transition evidence remains
     effect-deferred. After verification it derives the same relationship/wire-ID
     execution identity and cannot execute once per peer key.
-26. A binding with the wrong derived ID or a different scope suppresses new
-    effects as an execution-identity conflict.
+26. Multiple relationship matches or incompatible derivation rows for one
+    observation suppress ACK processing and new effects as an execution-scope
+    conflict, even when each source is individually valid.
 27. Pure Empty ACK is retained for control/audit but absent from threads,
     unread counts and application handlers.
 28. Invalid `from_prior` prevents ACK processing and transition.
@@ -1105,13 +1097,11 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     not create another execution identity for the same relationship/wire ID.
 49. A held normal-only package survives GC and release with its exact envelope;
     terminal normal release with a null replay deadline requires no closure.
-50. A binding for ACK-only processing uses `ack` provenance without a handler
-    effect or a different execution identity.
-51. Recovery completes handoff binding even for a known responder DID and finds
+50. Recovery completes handoff binding even for a known responder DID and finds
     pickup-ACKed unfinished work without mediator redelivery.
-52. A crash after an outcome-unknown transport call can reset the local retry
+51. A crash after an outcome-unknown transport call can reset the local retry
     budget, but never changes the wire ID, exact retry package or frozen expiry.
-53. Retry, restore and later aliases reuse the same effect key and frozen
+52. Retry, restore and later aliases reuse the same effect key and frozen
     intent before computing new ACK targets or timing. Concurrent local workers
     cannot commit different intents for that key, or change the ordinal to
     evade the conflict.
