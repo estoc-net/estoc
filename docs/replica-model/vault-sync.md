@@ -945,9 +945,10 @@ A download URL is unguessable, time-limited, account-bound and valid only
 for HTTP `GET` and byte-range `GET`. Clients MUST NOT follow redirects. The
 endpoint MUST advertise and implement `Accept-Ranges: bytes`, return standard
 206 responses for satisfiable ranges, and bind every range to the same exact
-immutable encrypted container. It MUST return `Content-Type: application/octet-stream` and MUST apply no
-content coding or transfer transformation; `Content-Encoding` is absent or exactly `identity`. A client
-SHOULD send `Accept-Encoding: identity`.
+immutable encrypted container. It MUST return
+`Content-Type: application/octet-stream` and MUST apply no content coding or
+transfer transformation; `Content-Encoding` is absent or exactly `identity`.
+A client SHOULD send `Accept-Encoding: identity`.
 
 A client derives `L` from the descriptor's `byte_count` under section 4.4,
 calculates `p0 = min(1048576, L)`, and may obtain the single exact inclusive
@@ -1134,8 +1135,8 @@ The client publishes in this order:
 
 Objects-before-event preserves availability for normal messages, while the
 held-root test preserves erasure safety. An object not currently held MUST NOT
-be offered even when its bytes remain locally available. An event with no held objects, including an erasure or
-closure event, may be offered immediately.
+be offered even when its bytes remain locally available. An event with no held
+objects, including an erasure or closure event, may be offered immediately.
 
 The local event store's `changes()` only discovers what this local store gained
 efficiently. A local `ChangeToken` is never sent to the sync store and is

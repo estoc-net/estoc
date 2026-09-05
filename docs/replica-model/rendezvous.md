@@ -332,8 +332,10 @@ Optional Web-facade example:
 
 The invitation ID is the `pthid` of the initial interaction. One reusable
 invitation may start many independent protocol threads. A one-use invitation
-is closed by the first accepted contact according to the vault invitation
-fold.
+is reserved by final acceptance and permanently consumed by the resulting
+relationship under `vault-events.md` section 14.10. Detach, contact deletion
+and erasure do not reopen it; retries for the same consumer reuse that
+relationship rather than creating another take.
 
 An invitation may include one or more alternative protocol-message
 attachments. The recipient chooses at most one supported alternative and acts
@@ -588,42 +590,36 @@ admission policy handles protocol support, current-message receipt request,
 stricter local size/lifetime preferences, relationship capacity, recipient
 capacity, user approval and organization rules.
 
-Reject codes do not create decision conflicts by themselves. For equal
-outcomes, the effective local code is selected by this fixed precedence:
+`vault-events.md` section 14.5 is the sole normative admission reducer. The
+phase-1 writer serializes finalization and commits one final result, not a
+provisional policy suggestion. User review and policy reevaluation occur while
+the candidate is undecided. A final result cannot be replaced, even before
+handoff intent exists; a later attempt requires a new initial message and wire
+ID. Equivalent results are idempotent. Incompatible results, including different
+rejection codes, are conflicts that suppress new effects rather than invoking
+an outcome, source or code precedence rule.
 
-```text
-sender-did-conflict
-unsupported-protocol
-capacity
-policy
-not-accepted
-expired
-```
-
-A valid handoff-response `message.out` for the candidate seals effective
-acceptance. Once such an intent exists, any reject observation is retained as
-a visible post-acceptance note but cannot change the relationship outcome.
-Ending the relationship then uses normal contact deletion and DID/route
-retirement.
-
-Before acceptance is sealed:
-
-1. equal decisions are duplicates;
-2. one valid user outcome outranks policy outcomes;
-3. contradictory user outcomes are a visible conflict;
-4. a timely policy accept outranks policy `reject(code="expired")`; and
-5. otherwise different policy outcomes use the fixed outcome precedence
-   `accept > reject > ignore`, with the reject-code precedence above.
+Before final accept, the same serialized operation checks deterministic
+contact tombstones, sender-DID consistency and one-use invitation availability.
+A timely final accept remains final during recovery even after the initial
+message expires; the response still obeys its own frozen expiry. Ending an
+accepted relationship uses normal contact deletion and DID/route retirement.
 
 Only an effective accept materializes relationship state. Only an effective
 reject may create a protocol-specific error or Report Problem. Ignore emits no
 peer-visible response.
 
-After effective reject or ignore, the runtime MUST append `message.erased` for
-every body, attachment and stored-message root retained solely by that
-candidate. The skeleton `message.in`, resolution evidence and decision remain.
+After final reject or ignore, the runtime MUST append `message.erased` for
+candidate-only body, attachment and stored-message roots once any selected
+rejection intent has been frozen. The final decision and any chosen rejection
+intent, together with its required execution binding, MUST commit in one
+`appendAll`. If no rejection intent is committed with a final reject, recovery
+MUST NOT invent one. It resumes only already committed response work and
+candidate erasure. The skeleton, resolution evidence and final decision remain.
+A crash before erasure does not authorize later acceptance.
 A pending `ask` candidate may retain content until decision or expiry, but the
-product MUST bound that pending period.
+product MUST bound that pending period. Independent references to shared CIDs
+remain live; erasure applies to this candidate's message/root relations.
 
 ## 10. Deterministic relationship materialization
 
@@ -904,8 +900,11 @@ short form. Already prepared exact packages are not rewritten.
 
 ## 12. Initiator transition and confirmation
 
-When the initiator receives a message from an unknown responder DID carrying
-`from_prior`, it performs these steps in order:
+When the initiator receives or recovers a handoff carrying `from_prior`, it
+performs these steps in order. The entry condition is incomplete handoff
+validation/binding, not merely an unknown responder DID. A known DID does not
+prove that `relationship.initiatorBound` or `message.executionBound` exists.
+Existing consistent evidence is reused; conflicting evidence blocks processing.
 
 1. require `from_prior.sub` to equal plaintext `from` byte-for-byte;
 2. require plaintext `from`, protected `skid` and decoded `apu` to use the same
@@ -923,7 +922,9 @@ When the initiator receives a message from an unknown responder DID carrying
    process-durably append `relationship.initiatorBound` naming the exact
    initial outbound, snapshot, initiator identity and validated handoff;
 8. append or reuse `message.executionBound` for the handoff carrier under that
-   relationship scope; steps 6–8 SHOULD be one `appendAll`;
+   relationship scope. All missing locally produced facts in steps 6–8 MUST
+   commit in one process-durable `appendAll`; the event-store contract makes
+   that batch all-or-nothing;
 9. only after the proof and portable relationship/execution binding are
    committed, process explicit `ack` values; and
 10. honor any explicit current-message ACK request in the response using an
@@ -931,8 +932,13 @@ When the initiator receives a message from an unknown responder DID carrying
     ACK.
 
 Missing historical evidence defers processing. Invalid proof is an integrity
-or protocol failure. A response does not acknowledge the initial message
-unless its authenticated explicit `ack` array names that wire ID.
+or protocol failure. An imported or previously separately committed prefix is
+reconciled by validating and atomically appending its missing facts; it MUST
+NOT execute under a provisional observation, contact or channel scope. Reopen
+rediscovers unfinished committed inbound work under `vault-events.md` section
+16.1, even after pickup ACK and without mediator redelivery.
+A response does not acknowledge the initial message unless its authenticated
+explicit `ack` array names that wire ID.
 
 The confirmation message is sent to `P_A`, contains no `please_ack`, and is
 submission-terminal after first successful submission. Its execution scope is
@@ -986,23 +992,43 @@ Example:
 }
 ```
 
-After reject or ignore, candidate content is erased as specified in section
-9.3. Hard pre-vault rejection has no portable candidate to erase.
+A selected rejection response uses the candidate's exact authenticated bootstrap
+channel as a non-transitioning control scope. Its binding and deterministic
+response intent commit before submission. On the initiator, a no-handoff
+problem report may use that same fixed bootstrap channel only after validating
+the original local recipient and the peer key against the pinned initial
+package's resolution evidence. It does not bind or establish a relationship,
+alias peer keys, or waive any `from_prior` gate for handoff traffic. ACK lookup
+still follows `vault-events.md` section 14.9 and never uses wire ID alone.
+
+After final reject or ignore, candidate content is erased as specified in
+section 9.3. Hard pre-vault rejection has no portable candidate to erase.
 
 ## 14. Retry, replacement, rollover and expiry
 
-An initial sender uses bounded retry:
+An initial sender uses bounded local retry. Recommended defaults are:
 
 ```text
 minimum automatic retry interval = 30 seconds
-recommended exponential backoff cap = 21600 seconds
-maximum automatic submissions per wire ID = 32
-absolute stop = expires_time
+exponential backoff cap = 21600 seconds
+transport-attempt budget per wire ID per active runtime = 32
+mandatory absolute stop = expires_time
 ```
 
-A runtime MAY retry more slowly. It MUST NOT exceed the submission count or
-submit at/after expiry. A user who wants another attempt after terminal expiry
-creates a new initial message and wire ID.
+The sender SHOULD use these defaults and MAY choose a slower or stricter local
+policy. All retry tasks in one runtime share a wire ID's budget and count an
+attempt before invoking transport, including failure and unknown outcomes.
+The budget and backoff are local scheduling policy, not a portable lifetime
+submission cap; restart, restore or loss of `local/` may reset accounting.
+
+Expiry is frozen in `message.out` and MUST NOT be extended by retry or restart.
+No attempt is permitted at or after expiry, or while another hold, terminal
+failure or proof gate forbids it. An outcome-unknown attempt reuses the same
+permitted exact package. Absence of `delivery.submitted` is not evidence that
+no transport call occurred, and mediator idempotency does not count attempts.
+A hard crash-persistent cap would require durable pre-call reservations and a
+separate accounting contract; phase 1 does not introduce one. Another attempt
+after terminal expiry requires a new initial message and wire ID.
 
 Other rules:
 
@@ -1093,10 +1119,11 @@ DID as ordinary `writeTo`.
     durable `message.in`.
 14. Reject and ignore erase candidate content roots while retaining skeleton
     observations and decisions.
-15. A sealed handoff response makes accept effective; later reject is a visible
-    note and relationship termination uses contact deletion.
-16. Timely policy accept beats an automatic expired reject; reject codes use
-    deterministic precedence rather than forming conflicts.
+15. A final accept remains final before handoff intent exists and after restart;
+    relationship termination uses contact deletion, not another admission result.
+16. A committed timely accept is not replaced by expiry or user/policy override.
+    Incompatible final results, including different reject codes, are conflicts;
+    final reject/ignore followed by erasure cannot later become accept.
 17. Stable relationship/contact/responder-DID, relationship-scoped execution
     and effect vectors recompute from the published inputs.
 18. `relationship.established` freezes one origin, long-form responder DID,
@@ -1123,8 +1150,9 @@ DID as ordinary `writeTo`.
     `fromPrior` and uses the same long-form sender spelling.
 28. Rejection maps local codes to deterministic coarse problem codes and emits
     no custom decline.
-29. Initial automatic retry is at least 30 seconds apart, capped at 32
-    submissions and stops at expiry.
+29. Default local retry uses a 30-second minimum, a 21600-second backoff cap
+    and 32 pre-counted transport attempts per wire ID per runtime. Restart may
+    reset that local budget but never extends the mandatory frozen expiry.
 30. Peer rendezvous mediator replacement requires a new DID/invitation unless
     the old route remains; Web facade route updates do not change its DID.
 31. Rendezvous DIDs never enter ordinary relationship `writeTo`.
@@ -1143,3 +1171,19 @@ DID as ordinary `writeTo`.
     immediately afterward derives the same execution ID.
 37. Later verified peer-key rotation preserves that relationship execution
     scope and does not create a second automatic effect for the same wire ID.
+38. A known responder DID with missing initiator/execution binding does not
+    skip handoff recovery. Missing facts commit atomically before ACK/effects;
+    a pre-resolution batch crash exposes all or none of those new facts.
+39. A previously committed/imported transition prefix is completed from pinned
+    evidence without minting another relationship or provisional execution ID.
+40. Pickup-ACKed inbound work is recovered from portable history without
+    mediator redelivery or local queues.
+41. A final accept reserves a one-use invitation across crash before attachment;
+    detach, deletion, merge and erasure never make it available to another
+    consumer. Further initial messages for the same relationship reuse it.
+42. A no-handoff rejection may ACK only its validated pinned bootstrap channel;
+    such a receipt is not successful handoff or relationship establishment.
+43. A final rejection and its optional response intent/binding commit atomically.
+    A crash cannot expose a final decision with half its chosen response; when
+    no response was committed, recovery erases candidate content without
+    inventing a new optional response or revisiting admission.

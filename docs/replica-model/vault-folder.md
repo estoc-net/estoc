@@ -559,10 +559,10 @@ A writable open additionally:
 1. validates `keystore.json`;
 2. unlocks or obtains the seed;
 3. verifies the derived anchor;
-4. creates or validates `local/replica.json`;
-5. acquires the folder's single-writer lock; and
-6. opens the main and extension stores with
-   `author = replica_id`.
+4. acquires the folder's single-writer lock before creating mutable local state;
+5. completes backend/import-publication recovery, then creates or validates
+   `local/replica.json`; and
+6. opens the main and extension stores with `author = replica_id`.
 
 Before running extensions, the application folds extension lifecycle and
 applies every pending purge.
@@ -644,7 +644,11 @@ file.
 ### 12.1 Snapshot
 
 A folder snapshot contains every portable file under `.estoc/` and omits
-`local/` completely.
+`local/` completely. It obeys `event-store.md` section 11.2's consistent-cut,
+retention and publication contract; a live recursive directory copy without
+that coordination is not a conforming snapshot. Required objects and portable
+file versions are protected until copying and verification complete. Concurrent
+erasure is serialized or aborts the unpublished snapshot.
 
 A snapshot may include an extension store that has a converged
 `extension.purged` event but has not yet been physically disposed. An
@@ -682,17 +686,31 @@ Before writing, the importer MUST:
 6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
+The importer also preflights the prospective merged folds, extension lifecycle,
+required non-erased held objects and phase-1 receipt-ordinal compatibility under
+`event-store.md` section 11.3 and `vault-events.md` section 10.2.
+
 Then it:
 
-1. ingests main events;
-2. computes held roots over the merged event set;
-3. copies valid absent source objects whose exact CIDs are in those roots;
-4. keeps the target `config.json` and target seed wrapping;
+1. stages the prospective main event union without exposing it as complete;
+2. computes held roots over that union and the allowed extension unions;
+3. verifies and accepts required absent objects under temporary protection;
+4. keeps the target `config.json` and seed wrapping;
 5. copies unknown portable paths only when absent;
-6. imports allowed extension stores by the same rules; and
-7. disposes extension stores the merged lifecycle says are purged.
+6. stages allowed extension stores, verifies completeness and publishes the
+   merged portable view under `event-store.md` section 11.3; and
+7. disposes stores excluded by the published extension-purge fold.
 
-`local/` is ignored and the target's local state is untouched.
+The reference backend MAY quiesce the vault and stage a complete sibling tree.
+It MUST NOT expose an in-place partial import as complete after a crash.
+A required import barrier is backend recovery metadata and cannot live solely
+under deletable `local/`; a backend without such a recoverable barrier must
+keep the generation unpublished. GC and ordinary workers remain excluded until
+publication recovery and committed-retention reconstruction are complete.
+
+Source `local/` is ignored. The target's local author selection and user options
+are unchanged; rebuildable indexes and the receipt-ordinal high-water mark are
+refreshed from the published union before ordinary work resumes.
 
 Importing the same source repeatedly is a no-op after the first
 successful union. A source containing bytes for a globally erased root
@@ -704,9 +722,13 @@ A restore accepts one valid version-3 snapshot and creates the portable
 folder. It does not restore `local/`.
 
 On first writable open, a new `replica_id` and `store_generation` are minted.
-All historical event authors remain as written. Because mediation and
-communication keys are vault-scoped, the new active runtime can derive and
-resume them after unlock using ordinary account-scoped mediation and pickup.
+All historical event authors remain as written. Before accepting new inbound,
+the writer recovers the receipt-ordinal high-water mark across every historical
+author under `vault-events.md` section 10.2. Restart or deleting `local/` has the
+same requirement. Writable-open recovery also reconciles committed unfinished
+inbound work, even if its mediator delivery was already pickup-ACKed.
+Because mediation and communication keys are vault-scoped, the runtime derives
+and resumes them after unlock using ordinary account-scoped mediation/pickup.
 
 ### 13.3 Exact local move
 
@@ -851,3 +873,11 @@ The following require a new folder/vault version:
 35. A successful `FileStore.write` survives immediate process restart; a
     pre-resolution crash leaves the complete portable file or no accepted
     replacement, never a partial file.
+36. A snapshot protects a consistent event/object/file cut; concurrent erasure
+    is serialized or aborts publication rather than producing a dangling root.
+37. Crash during import exposes the previous usable view or a recoverably
+    incomplete import. Deleting `local/` cannot bypass its publication barrier.
+38. Full import rejects missing non-erased held objects and incompatible
+    receipt history before publishing a complete view.
+39. Restore continues receipt numbering above all historical authors and
+    discovers unfinished pickup-ACKed inbound work without a local queue.

@@ -84,7 +84,8 @@ The vault identity is the anchor DID in `config.json`. Two vaults are the
 same identity exactly when their anchor DIDs are equal.
 
 On unlock, the runtime derives the `anchor` key from the seed and MUST verify
-the DID before using the vault. The anchor remains independent of rendezvous and relationship communication
+the DID before using the vault. The anchor remains independent of rendezvous and
+relationship communication
 DIDs. In particular, neither a default Peer rendezvous DID nor an optional
 `did:web` facade replaces the anchor merely because it is disclosed publicly
 or served by a web-hosted full replica.
@@ -1117,7 +1118,8 @@ contact. It is not inferred from a DID claim alone.
 ```
 
 The latest attach/detach decision for the exact `(cid, channel)` by canonical
-order decides whether the edge is live.
+order decides whether the edge is live. It does not undo historical invitation
+consumption under section 14.10.
 
 #### `contact.merged`
 
@@ -1200,7 +1202,8 @@ attachment `id` MUST be non-empty and consist only of URI unreserved
 characters. This is the DIDComm 2.1 attachment-ID restriction required so the
 ID can be safely composed into URI references; it is unrelated to object CIDs
 or filenames. For example, `urn:uuid:...` is not valid here because `:` is not
-an unreserved character. `lastmod_time` is an Epoch-Seconds integer or null. `byte_count` is
+an unreserved character. `lastmod_time` is an Epoch-Seconds integer or null.
+`byte_count` is
 a non-negative integer or null.
 
 The `data` member has exactly one of these closed structural forms:
@@ -1539,11 +1542,13 @@ relationship messages follow the same package rules.
 }
 ```
 
-`replacement` is nullable. Retirement stops normal automatic submission of that package. It releases the
-encrypted-envelope root only after a valid `message.replayClosed` has committed,
-or when explicit erasure commits an early replay closure. Merely observing that the deadline has passed is not a
-portable release condition. Retirement does not terminate the logical message
-or another package.
+`replacement` is nullable. Retirement permanently stops normal automatic
+submission of this package; it does not terminate the logical message or
+another package. Its envelope contribution is determined only by section
+15.3's retention predicate. A null `replayUntil` requires no replay closure;
+for a non-null replay obligation, retention continues until valid closure
+unless explicit message/root erasure overrides that contribution. Wall time
+alone never releases a retained root; erasure does not itself close replay.
 
 ### 9.5 `message.replayClosed`
 
@@ -1671,7 +1676,7 @@ one exact hold has no release; wall-clock ordering is irrelevant.
     "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "wireId": "019b2a71-0a11-72a8-8cb2-9cae8cd9e111",
     "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement/0",
-    "peerKey": "k3j9n0m4x6q2w7c8v5p1d8s0fa",
+    "peerKey": "<alice-pairwise-key-fingerprint>",
     "ackMid": "27c4471f-8937-501b-9ffb-a7eaeeebc178",
     "ackWireId": "21559fb4-1a9f-54b1-b8fa-1bf82700d365"
   }
@@ -1784,11 +1789,9 @@ observation MIDs remain stored for audit and conflict detection.
 Requirements:
 
 - `mid` is the deterministic observation value above;
-- `receiptOrdinal` is a canonical positive decimal integer string assigned
-  process-durably when this logical carrier is first accepted by the phase-1
-  runtime. It is monotonically increasing within this vault runtime, is never
-  changed by duplicate or alias observations, and is portable event evidence
-  rather than an EventStore `ChangeToken`;
+- `receiptOrdinal` is a canonical positive decimal integer string assigned to
+  this newly committed observation event under the vault-wide allocator below;
+  it is immutable portable evidence, not an EventStore `ChangeToken`;
 - all three hashes are computed under section 8;
 - `myKey` is the exact local key that decrypted or verified the message;
 - `peerKey` is the authenticated sender fingerprint or null for anonymous;
@@ -1814,13 +1817,48 @@ Requirements:
 - `roots` is the distinct ordered set of body followed by those attachment
   roots.
 
-The active runtime serializes allocation of `receiptOrdinal` with accepted
-inbound commit. A fresh logical carrier receives `1 +` the greatest ordinal
-already committed by this phase-1 vault runtime. A duplicate observation or a
-later transition-verified alias of an already known logical carrier retains
-the earliest ordinal of that logical message for ACK ordering; it does not
-renumber history. A future multi-writer profile MUST replace this phase-1
-allocator before enabling concurrent writers.
+Every newly committed `message.in` receives its own fresh `receiptOrdinal`,
+including a recorded duplicate or transition-verified alias of an existing MID.
+It MUST NOT copy an earlier observation's ordinal. Re-ingest of an existing
+`eid` preserves its event and allocates no new ordinal.
+
+The value matches `[1-9][0-9]*`. Comparison and arithmetic MUST use its exact
+integer value, never lexical order or an inexact floating-point conversion.
+On writable open, restore and full import, recover the high-water mark from
+all accepted, payload-valid `message.in` events in this main vault, across all
+authors and including erased messages:
+
+```text
+nextReceiptOrdinal = 1 + max(all historical receiptOrdinal values)
+max(empty set) = 0
+```
+
+Allocation and inbound commit MUST be serialized across the active writer.
+A batch assigns distinct ordinals in observation order. Aborted reservations
+may leave gaps; contiguous numbering is not required. A cache may accelerate
+allocation, but restart, deletion of `local/`, or a new `replica_id` or
+`store_generation` MUST NOT reset the recovered high-water mark or reuse an
+ordinal already present in accepted history.
+
+For one conflict-free logical message, including verified aliases:
+
+```text
+firstReceiptOrdinal = min(receiptOrdinal of every observation in the group)
+```
+
+A later observation does not renumber earlier events. Learning an older alias
+may change this derived value for future decisions, but MUST NOT change an ACK
+array already frozen in a committed `message.out`.
+
+Distinct accepted inbound events MUST NOT share an ordinal in a conforming
+phase-1 history. Full-vault import checks this after `eid` deduplication and
+MUST fail semantic preflight on a collision. Low-level ingest or damaged storage
+that exposes such a collision produces an incompatible receipt-history
+condition; ACK-target ordering MUST stop rather than break the tie by wire ID.
+The generic event store remains payload-opaque. This check does not establish
+multi-writer convergence or prove the absence of every historical fork. A
+future multi-writer profile MUST replace this allocator before enabling
+concurrent writers.
 
 The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Ciphertext that
@@ -1857,8 +1895,10 @@ After contact attribution, two authenticated MID groups with the same
 2. their authenticated peer DIDs/keys are joined by a verified
    contact-scoped `peer.transitioned` chain;
 3. the semantic and intent hashes agree;
-4. every package-level address and transition proof validates; and
-5. neither group is already conflicted.
+4. every package-level address and transition proof validates;
+5. both resolve to the same unique validated relationship scope, not merely
+   the same merged contact component; and
+6. neither group is already conflicted.
 
 This transition-aware merge permits a sender to repack one logical wire
 message after an authenticated key/DID continuation without displaying it
@@ -1909,9 +1949,16 @@ apply stricter replay and automatic-handling policy to them.
 ```
 
 This event binds inbound observation identities to one deterministic logical
-execution identity. `because` is `first-effect` or `verified-alias`.
+execution identity. `because` is `first-effect`, `verified-alias` or `ack`.
 `observations` is a non-empty, lexicographically sorted, duplicate-free array
 of existing conflict-free inbound MIDs.
+
+Use `ack` when binding a carrier to apply an explicit ACK, interpret its ACK
+request, or bind an older requested target without an application effect. It
+also covers a carrier for which validation leaves no eligible ACK target.
+The reason is provenance only: it changes neither identity nor proof or scope
+requirements. Otherwise compatible bindings do not conflict merely because
+their reasons differ. A binding does not assert that a handler actually ran.
 
 `scope` is exactly one of:
 
@@ -1930,9 +1977,12 @@ or:
 }
 ```
 
-The relationship form is used for admitted rendezvous candidates and
-established relationship traffic. The channel form is only for a durable
-non-relationship channel whose protocol forbids cross-key aliasing.
+The relationship form is used for final accepted responder-side rendezvous
+candidates and established relationship traffic. The channel form is only for
+a durable non-relationship channel whose protocol forbids cross-key aliasing,
+including the final rejection's fixed bootstrap control scope defined in
+`rendezvous.md` section 13. An undecided candidate receives no provisional
+application execution scope merely because its `message.in` has committed.
 
 The required derivation is:
 
@@ -1966,8 +2016,9 @@ An ultimate ACK is an end-to-end application message. It is recorded as
 `(carrier logical peer scope, wireId)`. A conflict-free local outbound in that
 same relationship or exact non-transitioning channel scope may produce an
 idempotent `delivery.acknowledged`. A wire ID reused by another peer or
-relationship is never selected. A threaded or natural response without an
-explicit `ack` array does not create that delivery observation.
+relationship is never selected. Outbound membership is derived by section
+14.9, not from contact-component equality. A threaded or natural response
+without an explicit `ack` array does not create that delivery observation.
 
 ## 11. Peer and profile observations
 
@@ -2014,9 +2065,10 @@ peer key.
 
 For an initial message to a rendezvous DID, this event is the
 initial-message-bound resolution snapshot. A later `from_prior` is verified
-against this exact event and object, not an unrelated current web document. If the event or object is temporarily
-missing, processing is deferred and retried after sync; absence is not proof
-that the transition is invalid.
+against this exact event and object, not an unrelated current web document.
+If the event or object is temporarily missing, processing is deferred until
+verified recovery material is available; absence is not proof that the
+transition is invalid. Phase 1 does not depend on deferred vault sync.
 
 For a `did:peer:4` first disclosure, the implementation decodes and validates
 `presentedDid`, derives `did` and the document locally, and stores both forms.
@@ -2036,7 +2088,7 @@ and document hash with incompatible contents is an integrity conflict.
     "scope": "relationship",
     "contact": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement/0",
-    "peerKey": "k3j9n0m4x6q2w7c8v5p1d8s0fa",
+    "peerKey": "<alice-pairwise-key-fingerprint>",
     "from": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
     "presentedFrom": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd:z...rendezvous-input-document",
     "to": "did:peer:4zQm...alice-pairwise-short",
@@ -2117,7 +2169,8 @@ observations are harmless.
 
 ## 12. Rendezvous and relationship observations
 
-These events lift durable state defined by the profile in `rendezvous.md`. The rendezvous DID,
+These events lift durable state defined by the profile in `rendezvous.md`. The
+rendezvous DID,
 relationship DIDs and generations are vault-scoped. A web publisher or server
 replica has no special ownership.
 
@@ -2307,27 +2360,18 @@ timely          = decisionInstant < expiryInstant
 Equality is expired. A candidate reaching expiry before acceptance may only
 receive a new reject or ignore decision.
 
-Before acceptance is sealed, equal decisions are duplicates; one valid user
-outcome outranks policy outcomes; contradictory user outcomes are a visible
-conflict; and a timely policy accept outranks an automatic policy
-`reject(code="expired")`. Reject decisions with different codes do not
-conflict merely because of the code: after selecting the effective source,
-choose the first present code in this precedence order:
+Section 14.5 is the sole normative admission reducer. In phase 1 this event is
+a final result, not a provisional policy suggestion. A pending user review
+leaves the candidate undecided. Finalization is serialized, and a writer MUST
+NOT append a different final result for the same candidate. An existing final
+accept is reused after restart even if current time has since passed expiry;
+its original decision instant remains the timeliness evidence.
 
-```text
-sender-did-conflict
-unsupported-protocol
-capacity
-policy
-not-accepted
-expired
-```
-
-A valid deterministic handoff-response `message.out` referenced by
-`relationship.established` seals acceptance. Once it exists, later reject or
-ignore decisions remain visible notes but cannot change the relationship
-outcome. Ending that relationship uses `contact.deleted`, DID retirement and
-route unregistration.
+A local admission decision does not require an application execution binding.
+Any subsequent deterministic peer-visible effect still requires its validated
+execution scope and committed intent. Ending an accepted relationship uses
+`contact.deleted`, DID retirement and route unregistration, not a replacement
+admission result.
 
 The decision does not prescribe a wire message. Rejection may be silent or may
 produce a deterministic protocol error or Report Problem. Acceptance uses only
@@ -2409,8 +2453,10 @@ Normative rules:
 
 The inbound `message.executionBound`, relationship, deterministic contact,
 channel attachments, `contact.useDid`, responder `did.created`, this event and
-handoff `message.out` SHOULD be appended in one process-durable batch. Equal statements are duplicates;
-different values under one relationship ID are an integrity conflict.
+handoff `message.out` SHOULD be appended in one process-durable batch. Equal
+statements are duplicates; different values under one relationship ID are an
+integrity conflict. A separately committed final accept remains final while
+this materialization is recovered; it is not replaced by an expired rejection.
 
 A future multi-writer profile must coordinate origin selection before it can
 claim convergence. Phase 1 has one active writer, so no remote race chooses a
@@ -2463,9 +2509,19 @@ immutable across later responder key rotations. A restart after this event can
 therefore reconstruct the same relationship execution scope without falling
 back to a non-relationship channel scope.
 
-Before the initiator creates the handoff-confirmation effect, it MUST append
-this event and a `message.executionBound` for the handoff carrier, preferably
-in one process-durable `appendAll`.
+In this Bob-local example, the fingerprint used to derive `relationship` is
+Bob's own `k3j9n0m4x6q2w7c8v5p1d8s0fa`, not the remote Alice pairwise key.
+The Bob-local examples in sections 9.10 and 11.2 use the explicitly schematic
+`<alice-pairwise-key-fingerprint>` for that remote key. Those illustrative
+message IDs are not additional executable MID vectors; section 10.1 owns the
+executable observation-ID vectors.
+
+Before processing the handoff ACK or creating the confirmation effect, the
+initiator MUST complete the mutually consistent transition, relationship and
+execution evidence under `rendezvous.md` section 12. All missing locally
+produced facts in that sequence MUST commit in one `appendAll`. A known peer
+DID does not prove that either binding exists. Reopen and imported-prefix
+recovery reuse consistent facts and complete missing facts before effects.
 
 ## 13. Automatic effects
 
@@ -2699,21 +2755,34 @@ Group `relationship.admissionDecided` by `inboundMid`. Discard structurally
 invalid decisions and accepts whose parsed RFC 3339 event `at` is not strictly
 before the Epoch-Seconds inbound expiry.
 
-Before acceptance is sealed:
+This is the sole phase-1 admission reducer. The active writer serializes
+finalization and commits one final `accept`, `reject` or `ignore` result per
+candidate. Policy evaluation and user review happen before this commit; an
+`ask` candidate is undecided, not provisionally rejected.
 
-1. equal decisions are duplicates;
-2. one valid user outcome outranks policy outcomes;
-3. contradictory user outcomes are a visible conflict;
-4. a timely policy accept outranks an automatic policy reject with code
-   `expired`;
-5. equal reject outcomes never conflict merely because their codes differ;
-   select code by the fixed precedence in section 12.3; and
-6. other incompatible effective outcomes remain visible conflicts.
+Equivalent final results are idempotent. Equivalence requires all payload
+fields except descriptive `because` to agree, including the decision,
+rejection code, relationship ID and candidate evidence. A writer MUST reject
+an attempt to append a different final result. Incompatible imported results
+are a visible admission conflict: no new acceptance, rejection or application
+effect may be emitted. Neither canonical order, author, source preference nor
+`accept > reject > ignore` chooses a winner. Existing effects remain immutable
+history; a conflict does not undo them.
 
-A valid `relationship.established` plus its named deterministic handoff
-`message.out` seals acceptance. Later rejection or ignore remains visible but
-cannot undo materialized relationship state. Rejection never creates a custom
-rendezvous decline.
+A final accept authorizes the existing materialization procedure. A final
+reject or ignore authorizes candidate-only erasure once any selected rejection
+intent has been frozen. The decision and any chosen rejection intent/binding
+commit atomically under `rendezvous.md` section 9.3. Recovery resumes committed
+response work and erasure; it neither invents an uncommitted optional response
+nor reopens the decision. No final result can be replaced by later user
+approval, policy reevaluation or an expiry observation. A new attempt requires
+a new initial message and wire ID. Relationship termination uses contact and
+DID lifecycle operations, never a retroactive admission rewrite.
+
+Before final accept, the writer checks the one-use invitation rule in section
+14.10, deterministic contact tombstones and sender-DID consistency. These
+checks and acceptance commit share one serialized finalization operation.
+Rejection never creates a custom rendezvous decline.
 
 Group responder-side `relationship.established` and initiator-side
 `relationship.initiatorBound` by deterministic relationship ID. Each side must
@@ -2726,7 +2795,8 @@ pairwise DID. These values are not re-selected from later arrivals.
 
 A valid relationship contributes:
 
-- one deterministic contact;
+- one contact: deterministic for the responder, or the retained existing
+  contact named by the initiator binding;
 - authenticated bootstrap channels;
 - the pairwise relationship channel;
 - one local relationship DID and route;
@@ -2833,13 +2903,17 @@ For each MID group:
 - conflict suppresses automatic effects and disputed ACK processing.
 
 After contact attribution, union authenticated MID groups into one logical
-message only when they have the same wire ID, the same non-conflicted contact,
-a verified contact-scoped `peer.transitioned` chain between their sender
-keys/DIDs, equal semantic and intent hashes, and valid package evidence. This is
-the only cross-peer-key wire-ID merge.
+message only when they have the same wire ID, resolve to the same unique
+validated relationship scope, have a verified scoped `peer.transitioned` chain
+between their sender keys/DIDs, and agree on semantic and intent hashes with
+valid package evidence. A merged contact alone supplies no alias authority.
+This is the only cross-peer-key wire-ID merge.
 
-Resolve an execution scope before automatic handling. An admitted responder
-rendezvous candidate uses its deterministic relationship ID. Initiator-side
+Resolve an execution scope before automatic handling. A final accepted
+responder rendezvous candidate uses its deterministic relationship ID. A final
+rejection may use only the fixed bootstrap control scope in `rendezvous.md`
+section 13. An undecided candidate remains application-effect-deferred.
+Initiator-side
 handoff traffic uses a relationship scope only after a valid
 `relationship.initiatorBound` reconstructs that same stable ID from the pinned
 rendezvous evidence and the initiator's own relationship identity. Established
@@ -2877,6 +2951,48 @@ Group `message.out` by `mid`. Multiple identical intent events are one logical
 outbound. Different fields, semantic hash or intent hash under one `mid` are a
 conflict.
 
+ACK lookup uses `(carrier.logicalPeerScope, wireId)`. A merged contact component
+is not a logical peer scope. Before applying an ACK, derive the candidate
+outbound's membership from non-conflicted portable evidence as follows.
+
+For relationship `R`, an outbound belongs to `R` when either:
+
+1. a valid `relationship.initiatorBound` names its exact `initialMid` and
+   `initialWireId`, or responder `relationship.established` names its exact
+   local `handoffMid` and `handoffWireId`; or
+2. its validated package sends from `R`'s local relationship DID to a DID/key
+   in `R`'s verified peer chain, including only independently verified scoped
+   continuations; its target is either a contact in `R`'s component or an
+   explicit channel that exactly matches that package's channel.
+
+Responder `originInboundMid` and `originWireId` name received input, not a local
+outbound. Wire-ID equality alone never establishes the first path. Contact
+merge alone never establishes the second path: the local DID and authenticated
+peer-chain evidence must identify the same unique relationship. A subsequent
+initial attempt may also belong to an already bound `R` when its pinned
+rendezvous snapshot and local initiator key independently derive that same
+relationship ID; the original binding is not rewritten to name the new attempt.
+
+All valid packages of one outbound MUST be compatible with the same
+relationship attribution. Retirement preserves historical scope evidence;
+repacking through a verified continuation preserves scope and MUST NOT move
+one logical outbound into a different relationship. Incompatible relationship
+or package evidence is a scope conflict, not a latest-package selection.
+
+For a permitted non-relationship channel `C`, membership requires the exact
+`(myKey, peerKey)` tuple in the explicit target or validated package. If both
+supply channel evidence, they MUST agree. Matching one key is insufficient.
+A handoff carrier missing required relationship binding MUST NOT fall back to
+a provisional channel scope. The no-handoff rejection defined in
+`rendezvous.md` section 13 may instead acknowledge its pinned bootstrap channel;
+that control-only ACK proves receipt, never relationship establishment or a
+successful transition.
+
+Exactly one compatible scope attribution for the requested processing path
+must remain before applying the ACK. Missing evidence defers processing;
+ambiguous or conflicting evidence suppresses it. Recovery may retry using the
+original carrier after evidence arrives, with all original proof gates.
+
 For a valid outbound:
 
 - `packages[]` is every consistent `message.prepared` by `packageId`;
@@ -2891,7 +3007,8 @@ For a valid outbound:
 - expand `message.out.pleaseAck` by replacing `""` with the outbound wire ID;
   `receiptRequired` is true exactly when the result contains that wire ID;
 - `acknowledged` is true if a valid authenticated inbound `ack` names the wire
-  ID on an allowed contact-scoped continuation and all proof gates pass;
+  ID on a validated peer-scoped continuation under the membership rules above,
+  the carrier has its required execution binding, and all proof gates pass;
 - `submitted` is true if any package has `delivery.submitted`;
 - a message-scoped non-retryable failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
@@ -2929,15 +3046,33 @@ durable expiry has passed, no further preparation or submission is allowed.
 
 ### 14.10 Invitation fold
 
-An OOB disclosure with `uses == "one"` is open when:
+An OOB disclosure with `uses == "one"` is available for a new consumer only
+when its DID is not retired, no valid historical consumption exists, and no
+committed acceptance is awaiting consumption recovery.
 
-- its DID is not retired; and
-- no live `contact.attached` names its `oobId`.
+A valid historical `contact.attached` that consumes this locally disclosed
+`oobId` is consumption evidence even after detach. For rendezvous, a final
+accept reserves the invitation as soon as its candidate's immutable `pthid`
+names this `oobId` and the candidate's local recipient DID matches the
+disclosure. The corresponding attachment completes consumption. A matching
+`pthid` without that recipient and acceptance evidence is not a reservation.
+An attachment merely following a remote invitation is not local consumption.
+For rendezvous, attachment evidence counts only for the final accepted
+relationship; a pre-admission attachment alone cannot consume the invitation.
 
-It is taken by the resulting contact component. Concurrent valid takes are
-visible; deterministic automatic IDs prevent duplicate takes of the same
-authenticated initial message but cannot prevent distinct peers from using a copied
-one-use invitation.
+The consumer is the deterministic relationship ID for rendezvous, or the
+original consuming contact ID for another permitted invitation profile.
+Detach, contact deletion, merge, content erasure and clock rollback do not
+reopen an invitation or remove its original consumer. Further initial messages
+for the same already accepted relationship may reuse that relationship; they
+do not constitute a second consumer or reopen the invitation to other peers.
+
+The single writer checks availability and commits the winning acceptance in
+one serialized finalization operation, before network work. Recovery finishes
+that consumer's missing attachment evidence before admitting another consumer.
+Incompatible or conflicted consumption evidence keeps the invitation unavailable
+and surfaces a conflict; merging the contacts does not reconcile distinct
+consumers. No new consumption or unconsumption event is needed.
 
 A `uses == "many"` rendezvous disclosure remains open until its DID is
 retired or publication policy closes it. It does not disclose a relationship
@@ -3002,28 +3137,59 @@ A root is held when at least one accepted event retains it through
 `event.roots`, except that a root named by `message.erased` is no longer held
 by that message.
 
-Prepared-envelope roots have a separate lifecycle:
+This section is the sole normative owner of prepared-envelope retention.
+For a consistent outbound `M` and valid package `P`, define:
 
-- while normal submission remains eligible, every active package envelope is
-  held;
-- when `message.out.replayUntil` is non-null, every exact package needed for
-  deterministic duplicate replay remains held until a valid
-  `message.replayClosed` exists, even after package retirement,
-  submission-terminal completion, acknowledgment, hold or an ordinary terminal
-  delivery failure;
-- reaching the deadline by wall clock is not itself a retention edge change:
-  the runtime first commits `message.replayClosed(because="deadline")`, and
-  only a later fold/GC pass may release replay-only roots;
-- an unresolved hold or ordinary non-retryable delivery failure prevents
-  automatic replay submission without releasing those bytes;
-- explicit `message.erased` may append an early `message.replayClosed` and
-  release replay-only roots; and
-- once closed, replay never reopens after restart, loss of `local/`, clock
-  rollback or a later duplicate observation.
+```text
+normalComplete(M) =
+    acknowledged(M)
+    or (!receiptRequired(M) and submitted(M))
 
-Thus "acknowledged", "normally retryable", "duplicate-replay submission
-eligible", "replay material open" and "eligible for physical collection" are
-distinct states.
+normalMaterialNeeded(M, P) =
+    !retired(P)
+    and !packageTerminalFailure(P)
+    and !messageTerminalFailure(M)
+    and !normalComplete(M)
+
+replayMaterialOpen(M) =
+    M.replayUntil != null
+    and no valid message.replayClosed exists for M
+
+retainEnvelopeForMessage(M, P) =
+    !erased(M, P.envelope)
+    and (normalMaterialNeeded(M, P) or replayMaterialOpen(M))
+```
+
+Terminal failure means valid committed non-retryable `delivery.failed` at the
+specified scope; a committed expired failure is message-terminal. Sampling wall
+time beyond expiry blocks work but MUST NOT release normal-only material until
+that durable termination is committed. A valid ACK completes normal delivery
+even when an outcome-unknown transport attempt has no `delivery.submitted`.
+
+Holds, unavailable routes, retryable resolution failures and other reversible
+scheduling conditions MUST NOT make `normalMaterialNeeded` false. They block
+submission, not retention. A null `replayUntil` creates no replay obligation
+and requires no closure event: retirement or permanent normal completion may
+release that package's contribution immediately under the normal GC rules.
+
+For non-null `replayUntil`, every valid prepared package retains its replay
+contribution until closure. Retirement, completion, hold and ordinary terminal
+delivery failure do not close it. Reaching the replay deadline blocks replay
+submission immediately, but release waits for committed `message.replayClosed`.
+Explicit erasure overrides this message/root contribution and requires the
+existing erased-closure recovery procedure. Closed replay never reopens after
+restart, deletion of `local/`, clock rollback or duplicate receipt.
+
+`erased(M, root)` names the permanent message/root relation, not global deletion
+of a CID. Another independent non-erased reference may retain the same bytes.
+Conflicted evidence is not release authority: disputed package roots remain
+held until unambiguous release evidence or explicit erasure exists.
+
+Normal and replay submission eligibility additionally check current time,
+holds, addressing, proof, route and available bytes. Neither scheduling
+predicate is a retention predicate. Removing one contribution does not authorize
+collection while another event or an in-flight reference/snapshot guard retains
+the object.
 
 An extension store computes held roots from its own events. Unknown event types
 retain every exact root in their `roots` because version 3 defines no erase
@@ -3052,16 +3218,27 @@ transactionally but may not reverse the durability boundaries.
 
 1. verify folder/store version and anchor;
 2. unlock or obtain the seed;
-3. load or mint local `replica_id` and `store_generation`;
-4. acquire the exclusive writer lock for this vault copy;
-5. fold portable state and extension lifecycle;
-6. derive every required mediation account;
-7. reconcile every required mediated recipient through ordinary Coordinate
-   Mediation;
-8. drain the ordinary account-scoped Message Pickup queue;
-9. reconcile selected `did:web` document revisions when this runtime has
-   publication authority; and
-10. start live delivery, publication and retry workers independently.
+3. acquire the exclusive writer lock before creating mutable local state;
+4. complete backend recovery and any import publication barrier, then load or
+   mint local `replica_id` and `store_generation`;
+5. fold portable state and apply extension lifecycle, reconstruct committed
+   held roots, and only then release abandoned guards and permit GC;
+6. validate receipt history and recover its vault-wide ordinal high-water mark
+   under section 10.2 before accepting a new inbound observation;
+7. enumerate committed inbound observations with unfinished admission,
+   transition/binding, ACK or protocol-defined deterministic effect work;
+8. idempotently reconcile those observations and pending candidate erasures,
+   invitation consumption and replay closure from portable history;
+9. derive every required mediation account; and
+10. independently start recipient reconciliation, account-scoped pickup, live
+    delivery, eligible outbox work and optional Web publication reconciliation.
+
+Recovery in steps 7–8 MUST NOT depend on mediator redelivery or a surviving
+local queue. It reuses frozen ACK arrays, output intents and execution IDs;
+it does not invent missing evidence or re-run an optional decision merely
+because a cache was lost. Missing objects or proofs keep the affected work
+deferred. Protocol-defined external effects retain their existing idempotency
+or explicitly at-least-once contract; this procedure makes no exactly-once claim.
 
 Phase 1 MUST NOT require `replica-mediation/1.0` or `vault-sync/1.0`. Failure of
 one mediator or Web publisher MUST NOT prevent offline local vault use or
@@ -3209,27 +3386,34 @@ For a delivery potentially addressed to a rendezvous key:
    pickup-ACKed and leaves no portable message/contact/relationship state;
 7. for an admitted candidate, store retained bytes, append `message.in` with
    its durable receipt ordinal, then ACK account-scoped mediator delivery;
-8. append or await `relationship.admissionDecided` according to `ask`, `auto`
-   or local policy; and
-9. do not materialize a relationship while the effective decision is
-   conflicted.
+8. reuse an existing final `relationship.admissionDecided`, or await/finalize
+   one under section 14.5; before a new accept, check sender-DID consistency,
+   contact tombstones and invitation availability in the same serialized
+   finalization operation; and
+9. leave undecided candidates pending and suppress new materialization or
+   peer-visible effects while the final result is conflicted.
 
 An accept is valid only when its decision event instant is strictly before the
-candidate's Epoch-Seconds expiry. Equality is expired. After expiry, a new
-decision can only reject or ignore.
+candidate's Epoch-Seconds expiry. Equality is expired. An undecided candidate
+may only be finalized as reject or ignore after expiry. A previously committed
+timely accept remains final during recovery; a later clock sample does not
+replace it with rejection.
 
-For effective reject or ignore, create no relationship DID. Rejection may be
-silent or may produce a deterministic protocol error or Report Problem intent,
-which is appended before resolution, preparation or submission. Once every
-selected rejection effect no longer needs the candidate content, append
-`message.erased` for all roots retained solely by that candidate.
+For final reject or ignore, create no relationship DID. Rejection may be
+silent or may select a deterministic protocol error or Report Problem intent.
+Commit the final decision and any chosen rejection intent/binding in one
+`appendAll` under `rendezvous.md` section 9.3, before network work. Recovery
+resumes that intent, or treats its absence as no selected response; it does not
+invent a new optional rejection effect. Once the selected intent no longer
+needs candidate content, append `message.erased` for candidate-only roots.
 
 For effective accept:
 
 1. derive stable relationship, contact and local pairwise DID IDs from the
    canonical rendezvous DID and authenticated initiator key;
-2. reject acceptance when the deterministic contact is tombstoned or the same
-   key presents another canonical initiator DID;
+2. verify the finalization preconditions and existing evidence. If the contact
+   has since been tombstoned, suppress new materialization without rewriting
+   the final decision; incompatible sender-DID evidence is a conflict;
 3. derive/reuse the responder relationship DID using its independently
    selected relationship route;
 4. select a deterministic handoff response: Trust Ping `ping-response`, a
@@ -3241,15 +3425,15 @@ For effective accept:
    `message.out` with a replay deadline;
 6. response intent explicitly ACKs the triggering initial wire ID, uses
    `pleaseAck == [""]`, and carries the exact relationship-level `fromPrior`;
-7. only after the durable batch, register responder pairwise DID canonical
-   short form;
+7. only after all required local facts and response intent are committed,
+   register responder pairwise DID canonical short form;
 8. prepare with long-form first-disclosure sender evidence; and
 9. submit with bounded retry until explicit ACK, expiry or hold.
 
-The first valid handoff-response intent seals acceptance. A later user reject
-is retained as a visible note but cannot retroactively dismantle the
-relationship; the user ends it through ordinary contact deletion and DID/route
-retirement.
+The committed final admission result is the decision boundary; handoff intent
+materializes that result rather than sealing a still-reversible decision.
+The writer rejects a contradictory later admission command. The user ends an
+accepted relationship through contact deletion and DID/route retirement.
 
 Repeated initial messages from the same stable initiator key reuse the
 relationship but remain separate application messages. Until an authenticated
@@ -3327,8 +3511,8 @@ For every account-scoped pickup or direct delivery:
    observations;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
-   proof; for an unknown DID carrying `from_prior`, validate exact pinned
-   historical evidence first;
+   proof; a handoff carrying `from_prior` requires exact pinned historical
+   evidence even if its responder DID is already known but binding is incomplete;
 10. after validation, append `peer.transitioned` when applicable; an initiator
     processing a validated pairwise handoff also commits
     `relationship.initiatorBound` so the relationship scope is reconstructible
@@ -3336,13 +3520,15 @@ For every account-scoped pickup or direct delivery:
 11. resolve the stable relationship or non-transitioning channel execution
     scope; if required transition/binding evidence is missing, defer ACK
     application and automatic effects;
-12. for every conflict-free carrier whose ACKs/effects will be processed,
-    process-durably append or reuse the scope-derived
-    `message.executionBound`;
+12. for every conflict-free carrier whose ACKs, ACK requests or effects will be
+    processed, commit or reuse the scope-derived `message.executionBound`;
+    use `because == "ack"` for ACK-only binding, including older requested
+    targets, without implying that an application handler has run;
 13. only after that stable logical peer scope exists, process explicit `ack`
     values into idempotent peer-scoped `delivery.acknowledged`;
-14. schedule deterministic application effects or
-    `relationship.admissionDecided` through that execution ID;
+14. schedule eligible deterministic application effects through that execution
+    ID. Bootstrap admission itself follows section 16.7 and is a local decision,
+    not an application effect requiring a provisional execution identity;
 15. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
     append one deterministic protocol response or pure-ACK intent with a replay
@@ -3386,8 +3572,8 @@ Clock rollback after step 3 does not reopen replay.
 
 1. fold every root currently retained by the logical message and its prepared
    packages;
-2. if the erase covers exact package roots held for duplicate replay and replay
-   is not already closed, include `message.replayClosed(because="erased")`;
+2. if `replayUntil` is non-null, replay is still open, and the erase covers
+   its exact replay roots, include `message.replayClosed(because="erased")`;
 3. process-durably append the erase event(s) and any replay closure, preferably
    in one `appendAll`;
 4. refold held roots; and
@@ -3430,10 +3616,12 @@ After merge, every fold is recomputed from the union.
 
 ### 17.2 Object merge
 
-After event union, copy only valid absent objects whose exact CIDs are in the
-held-root set computed by the merged fold. No DRISL link traversal is implied.
-An erased relation does not revive merely because an older source still has
-the bytes.
+Compute held roots from the prospective event union and copy only valid absent
+objects required by that fold. Full import publishes events and available
+objects under `event-store.md` section 11.3's complete-view boundary; this
+semantic union is not permission to expose an intermediate event-only import.
+No DRISL link traversal is implied. An erased message/root relation does not
+revive merely because an older source still has the bytes.
 
 Missing non-erased bytes remain an integrity/availability condition and may
 be repaired from a verified folder import or backup. Deferred
@@ -3451,8 +3639,11 @@ A portable folder restore creates a new local `replica_id` and
 `store_generation` unless the operation is an exact move whose old writer is
 permanently stopped. The restored runtime derives every mediation and
 communication key, reconciles required recipients using ordinary Coordinate
-Mediation, drains the account-scoped mailbox, and continues every non-held,
-non-acknowledged outbound message.
+Mediation, drains the account-scoped mailbox, and resumes eligible outbox work.
+Before accepting new inbound observations it recovers the receipt-ordinal
+high-water mark across all historical authors. It also reconciles unfinished
+committed inbound work under section 16.1, including observations already
+pickup-ACKed before the snapshot. Local queue state is not a recovery source.
 
 If the restored runtime has deployment authority for a selected optional
 `did:web` rendezvous facade, it may reconcile and publish the same selected
@@ -3587,16 +3778,18 @@ There is no migration requirement from an earlier event vocabulary.
     hard-gate rejection.
 31. The first bootstrap message is an ordinary application message, not an
     Estoc rendezvous wrapper.
-32. `relationship.admissionDecided` records a local accept/reject/ignore and
-    rejection code; differing reject codes use deterministic precedence.
+32. `relationship.admissionDecided` records one final accept/reject/ignore
+    result. Equivalent results are idempotent; different outcome-affecting
+    payloads, including reject codes, are conflicts rather than precedence.
 33. Two initial wire IDs from the same `(rendezvous DID, initiator key)` derive
     one relationship/contact/responder DID and remain separate messages.
 34. A deterministic contact tombstone is not resurrected; reconnect requires a
     fresh initiator relationship key.
 35. Event `at` is parsed as RFC 3339 and compared with Epoch-Seconds expiry as
     an instant; equality is expired.
-36. A valid deterministic handoff response intent seals acceptance. Later
-    rejection is a visible note; ending the relationship uses contact deletion.
+36. A final accept remains final before handoff materialization and after
+    restart or later expiry. The writer refuses contradictory finalization;
+    ending the relationship uses contact deletion, not a reject note.
 37. Stable `relationship.established` freezes origin, exact prior form/kid,
     responder long form, relationship-level rotation `iat`, `fromPrior` and
     handoff IDs.
@@ -3667,3 +3860,34 @@ There is no migration requirement from an earlier event vocabulary.
     `206bcd7e-7320-5512-bbdb-a4d19331d58e` from their published inputs.
 67. Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
+68. A normal-only package survives hold, GC and release with its exact bytes;
+    route unavailability also does not release normal retry material.
+69. Retiring a normal-only package permits release without an invalid null-
+    deadline closure; replay-enabled packages remain held until valid closure.
+70. Shared envelope bytes remain held by another non-erased message even after
+    one message/root relation is erased.
+71. Each new duplicate observation receives a fresh ordinal; exact re-ingest
+    does not. The logical group's minimum orders future ACKs without changing
+    any already frozen ACK array.
+72. Restore, restart and loss of `local/` recover the ordinal high-water mark
+    across all historical authors. Import rejects distinct events with equal
+    ordinals after event-ID deduplication.
+73. Detach, contact deletion, merge and erasure do not reopen a consumed one-use
+    invitation. A final accept reserves it across crash before attachment;
+    another initial message for the same consumer does not consume it twice.
+74. Two relationships in a merged contact are not interchangeable ACK scopes.
+    Responder origin inbound IDs never identify a local outbound by coincidence;
+    local handoff and initiator initial outbounds use their exact named MIDs.
+75. An ACK-only carrier can bind with `because == "ack"` without executing a
+    handler. Different descriptive binding reasons do not change identity.
+76. A known responder DID with incomplete handoff binding remains deferred;
+    recovery completes missing facts atomically before ACK or effect processing.
+77. A pickup-ACKed inbound with unfinished deterministic work is rediscovered
+    from portable history on open, without redelivery or a surviving local queue.
+78. Final reject/ignore followed by erasure cannot be turned into accept for the
+    same candidate. Incompatible imported final results suppress new effects.
+79. A no-handoff problem report may acknowledge only its validated bootstrap
+    channel; it never establishes a relationship or bypasses handoff proof.
+80. Final rejection and any selected response intent/binding commit atomically.
+    Recovery resumes only committed response work and erasure, never an
+    uncommitted optional response or a replacement admission outcome.

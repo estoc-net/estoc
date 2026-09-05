@@ -291,12 +291,17 @@ millisecond before both values are produced. Leap-second spelling (`ss == 60`),
 omitted fractional seconds and any precision other than three digits are
 rejected.
 
-The writer's UUIDv7 generator MUST follow RFC 9562 but this profile does not
-assign a fixed counter layout to `rand_a`. It MAY use random data, a fixed or
-randomly seeded counter spanning `rand_a` and part of `rand_b`, additional clock
-precision, or another RFC-9562-conforming strategy. In particular, an
-implementation MUST NOT assume that the 12-bit `rand_a` field is the complete
-same-millisecond counter.
+The writer MUST serialize UUIDv7 allocation. Within one writer runtime, during
+an interval without clock rollback, IDs minted with equal `t` MUST compare in
+mint order. Separate appends and `appendAll` share this allocator state;
+independently randomizing ordering-significant bits for each ID is insufficient.
+
+The generator MUST follow RFC 9562. Section 6.2 method 1 or method 2 counters,
+including a counter spanning `rand_a` and part of `rand_b`, MAY be used. This
+profile assigns no fixed counter layout and MUST NOT be implemented with an
+assumed 4096-event limit. Counter exhaustion MUST NOT wrap or produce an
+out-of-order ID; allocation must fail before any part of the append or batch
+commits.
 
 Repeated generation within one millisecond, including an `appendAll` containing
 more than 4096 events, MUST produce distinct UUIDs while preserving the sampled
@@ -308,9 +313,11 @@ append or batch.
 
 If the wall clock moves backwards, a later local append uses the newly sampled,
 possibly smaller, `t` for both `eid` and `at`. The generator still MUST avoid a
-UUID collision, but this profile does not require local UUID monotonicity across
-clock rollback. Canonical event order remains a deterministic fold order, not
-append order.
+UUID collision, including when rollback revisits a previously used millisecond.
+The mint-order guarantee does not span a rollback or runtime restart. This
+profile neither clamps wall time nor introduces a hybrid logical clock.
+Canonical order matches input order within one `appendAll`, but is not a
+vault-wide append or causal order.
 
 Reader and ingest validation check canonical UUIDv7 syntax and canonical `at`
 syntax independently. They MUST NOT compare the UUID's embedded timestamp with
@@ -454,10 +461,9 @@ draft before writing any event. It then:
 
 - obtains one common integer-millisecond clock sample and assigns the matching
   common `at`;
-- mints one distinct UUIDv7 per draft, each embedding that same sampled
-  millisecond, without assuming a 4096-event `rand_a` limit;
-- returns events in input order, while making no claim that canonical event
-  order is append order;
+- mints one distinct UUIDv7 per draft in input order, each embedding that same
+  sampled millisecond and obeying section 4.2's monotonic allocation rule;
+- returns events in input order, which is also this batch's canonical order;
 - assigns the current author to every event; and
 - commits the entire batch at one process-durable success boundary.
 
@@ -850,6 +856,21 @@ print an event or preserve non-canonical imported member order. Segment
 boundaries and names are serialization details. Two exports of the same event
 set need not have the same segment files.
 
+An export MUST select one consistent portable-state cut: the main and extension
+event sets, extension lifecycle, portable-file contents and exact held roots.
+An event scan and an unrelated later object listing do not establish a cut.
+The exporter MUST protect the cut's required objects from collection until
+copying and verification finish, using snapshot pins, a transaction, or a
+quiescence lock. Mutable portable files MUST come from the same cut.
+
+Erasure and export MUST be serialized, or a concurrent erasure MUST invalidate
+and abort the export before publication. A snapshot pin is not authority to
+revive erased content. The destination remains unpublished until every required
+object and file validates. Missing or damaged non-erased content makes the
+export incomplete; it MUST NOT be reported as a successful complete snapshot.
+Temporary protection is released on completion or abort under the normal
+recovery rules. A phase-1 backend MAY quiesce the vault for the whole operation.
+
 ### 11.3 Import into an existing vault
 
 Import is allowed only when source and target have the same format
@@ -860,26 +881,50 @@ first semantic write:
 2. decode and validate every source event envelope;
 3. compute fork checks for the main store and every extension store that
    may be imported;
-4. verify every source object that may be copied; and
-5. determine extension stores already purged by the merged main event
-   set.
+4. compute the prospective merged event sets and held-root folds, applying
+   erasure and extension-purge rules;
+5. run vault-level semantic preflight, including the phase-1 receipt-history
+   compatibility check in `vault-events.md` section 10.2; and
+6. verify every object to be copied and require every prospective non-erased
+   held root to have valid bytes in the source or target.
 
-A preflight failure writes nothing.
+These are full-vault importer duties, not payload validation by the opaque
+`EventStore.ingest` API. A preflight failure writes nothing. Preflight and
+publication MUST be serialized with competing vault mutations, or atomically
+revalidated against the same target frontier before publication.
 
 After preflight, import:
 
-1. ingests main events by `eid`;
-2. copies valid source objects required by the merged held-root fold and
-   absent from the target;
-3. applies singleton and opaque-file policies;
-4. imports each allowed extension's events and objects; and
-5. applies pending extension disposal.
+1. stages the prospective main and allowed extension event sets;
+2. accepts the required absent objects with pending-reference protection before
+   publishing their importing references;
+3. applies singleton and opaque-file policies to the staged view;
+4. excludes purged extension stores and schedules any remaining disposal; and
+5. verifies the prospective held-root requirements and publishes the complete
+   merged view.
 
-The operation is idempotent. It never copies an event segment as an
-opaque file; it decodes and ingests events. An erased root is not revived
-merely because source bytes still exist.
+The backend MUST use a staged-generation publication boundary or an equivalent
+recoverable import barrier. A crash leaves either the previous usable view or
+an explicitly incomplete import; ordinary workers and GC MUST NOT act on a
+partial event union as if it were the completed import. A correctness-critical
+barrier MUST survive restart and deletion of `local/`, identify the intended
+import, and carry enough recovery information to finish or safely roll back.
+It is backend recovery metadata, not a new vault-domain event. A backend unable
+to provide such a barrier MUST keep the generation unpublished instead.
 
-Local state, including the target replica ID, is untouched.
+A completed full import requires all non-erased held objects. An explicitly
+requested partial-data import MAY expose missing-material diagnostics, but
+MUST NOT be described as a complete restore or enable work that needs missing
+material. Recovery reconstructs committed retention before releasing abandoned
+guards or enabling collection. This contract requires no giant transaction;
+a phase-1 backend MAY keep the vault quiescent while staging and publishing.
+
+The operation is idempotent. It decodes and ingests events rather than copying
+segments as opaque files. Source bytes do not revive an erased message/root
+relation; another independently live reference to the same CID may still retain
+those bytes. Target identity, seed wrapping and local author selection are
+unchanged. Rebuildable indexes, including the receipt-ordinal high-water mark,
+are refreshed from the published union before ordinary work resumes.
 
 ### 11.4 Restore and bootstrap
 
@@ -1033,13 +1078,23 @@ A conforming implementation MUST pass at least these cases:
 24. Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
 25. More than 4096 events may be appended in one same-millisecond `appendAll`;
-    every UUID remains distinct and embeds the unchanged sampled millisecond.
+    IDs are distinct, embed the unchanged sample and sort in input order.
+    Back-to-back separate appends with the same sample also sort in mint order.
 26. After clock rollback, a local writer uses the newly sampled earlier
-    millisecond in both `eid` and `at` while still avoiding UUID collision;
-    canonical order is not claimed to equal append order.
+    millisecond in both `eid` and `at` while avoiding collision. No mint-order
+    guarantee spans rollback or restart; a batch still uses one common sample.
 27. Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
 28. After restart, committed-event retention is reconstructed before abandoned
     pending-reference guards are cleared and before collection runs. A crash
     before event commit leaves an orphan after recovery; a crash after event
-    commit but before guard cleanup leaves a held object.
+        commit but before guard cleanup leaves a held object.
+29. Counter exhaustion fails before any event in the append or batch commits;
+    it neither wraps the counter nor advances only the UUID timestamp.
+30. Concurrent erasure/GC cannot publish an export with a dangling held root;
+    the selected cut remains protected or the export aborts before publication.
+31. Crash at each full-import boundary exposes either the previous usable view
+    or a recoverably incomplete import, never an apparently complete partial
+    union. Deleting `local/` does not bypass that publication boundary.
+32. The vault-level full importer rejects duplicate receipt ordinals belonging
+    to distinct inbound events after `eid` deduplication, before publication.

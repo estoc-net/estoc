@@ -222,7 +222,7 @@ The following table is normative. "Committed" means process-durable success.
 | Prepared package | `message.prepared` and its exact envelope | Submit that exact package |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
-| Stable execution binding | `message.executionBound`, plus `relationship.initiatorBound` when initiator handoff requires it | Run one automatic effect under the stable execution ID |
+| Stable execution binding | `message.executionBound`, plus `relationship.initiatorBound` when initiator handoff requires it | Apply peer-scoped ACKs, freeze ACK targets, or run an eligible automatic effect |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Stop normal retry |
 | Replay submission paused | Unresolved hold or ordinary non-retryable delivery failure | Retain exact replay material but submit nothing automatically |
 | Replay closure | Process-durable `message.replayClosed` after deadline or erasure | Release replay-only exact envelope roots |
@@ -425,21 +425,17 @@ Replay has two separate predicates:
 - **replay submission eligible** — automatic duplicate handling is currently
   allowed to submit the retained package.
 
-For a response with non-null `replayUntil`, replay material remains open until
-a valid `message.replayClosed` exists for the response. A committed
-`message.erased` covering the exact replay roots may justify an early
-`message.replayClosed(because="erased")`, but erasure alone does not implicitly
-change the replay fold.
+`vault-events.md` section 15.3 is the sole normative envelope-retention rule.
+It derives normal material need independently of submission eligibility, then
+unions that contribution with the durable replay obligation. A hold or missing
+route therefore does not release a normal-only package. A null `replayUntil`
+requires no closure event. For non-null deadlines, replay-only release requires
+committed `message.replayClosed`, not a wall-clock observation or ordinary
+completion/failure. Explicit message/root erasure has its separate precedence
+and erased-closure recovery path.
 
-Merely observing `now >= replayUntil` does not release roots. The active runtime
-MUST first append `message.replayClosed`; collection may release replay-only
-roots only after that commit. This makes closure irreversible across process
-restart, loss of `local/` and later wall-clock rollback.
-
-While replay material is open, acknowledgment, submission-terminal completion,
-ordinary package retirement, user/policy hold, and a non-retryable delivery
-failure do not by themselves release the exact envelope. They may, however,
-block submission.
+The rules below decide when retained material may be submitted; they do not
+supply another retention predicate.
 
 Automatic duplicate replay is submission-eligible only when all of these are
 true:
@@ -454,8 +450,9 @@ true:
 
 A hold therefore pauses duplicate replay without shortening retention. After a
 matching `delivery.released`, duplicate replay may resume only if every other
-predicate above still holds. A non-retryable delivery failure blocks replay submission but retains
-material until monotonic replay closure or explicit erasure. Package retirement
+predicate above still holds. A non-retryable delivery failure blocks replay
+submission but retains material until monotonic replay closure or explicit
+erasure. Package retirement
 stops normal retry but does not, by itself, close replay.
 
 When a clock sample first observes `now >= replayUntil` and replay material is
@@ -485,11 +482,12 @@ algorithm after normal inbound commit:
    to the exact same scope. A verified key transition may widen lookup only
    inside one relationship scope; unrelated relationships, unknown senders,
    conflicted targets and ambiguous scope attribution are omitted.
-4. For every retained target, derive `firstReceiptOrdinal` as the smallest
-   phase-1 `message.in.receiptOrdinal` among observations belonging to that
-   logical message. Order targets by numeric `firstReceiptOrdinal`, oldest
-   first; break an impossible ordinal tie by wire ID. Canonical event order and
-   local `ChangeToken` order MUST NOT be used as receive order.
+4. Derive each target's `firstReceiptOrdinal` under `vault-events.md` section
+   10.2 as the minimum across its valid logical observations and verified
+   aliases. Order by the exact integer value, oldest first, not by decimal
+   string, canonical event or `ChangeToken` order. Distinct inbound events
+   sharing an ordinal are incompatible phase-1 history and block ACK-target
+   ordering; wire ID is not a tie-break repair.
 5. Freeze that exact ordered array as `message.out.ack` in one deterministic
    natural response or one deterministic pure ACK associated with X's logical
    execution ID.
@@ -582,7 +580,9 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 `ack` array names that outbound wire ID, the candidate outbound belongs to the
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
-passed. Lookup is therefore `(carrier.logicalPeerScope, acknowledgedWireId)`,
+passed. `vault-events.md` section 14.9 defines outbound membership using exact
+initial/handoff references and validated package/DID evidence, not merged
+contact equality. Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`,
 never a vault-global wire-ID search. Threading, a natural response, transport
 acceptance, `please_ack` presence or a mediator receipt is insufficient without
 the explicit value.
@@ -659,8 +659,11 @@ cross-key aliasing is forbidden:
 }
 ```
 
-An admitted responder-side rendezvous candidate uses its deterministic
-relationship ID even before `relationship.established` is appended.
+A final accepted responder-side rendezvous candidate uses its deterministic
+relationship ID even before `relationship.established` is appended. An
+undecided candidate has no provisional application execution scope. Final
+rejection uses only the fixed bootstrap control scope in `rendezvous.md`
+section 13.
 Initiator-side handoff traffic uses a relationship scope only after the
 validated handoff is process-durably bound under
 `relationship.initiatorBound`; that binding is derived from the pinned
@@ -679,9 +682,16 @@ executionId = UUIDv5(
 )
 ```
 
-Before the first automatic effect, the runtime MUST process-durably append a
-`message.executionBound` that records the exact scope, wire ID, execution ID
-and all currently known observations in that logical group.
+Before applying explicit ACKs, freezing ACK targets or running the first
+automatic effect, the runtime MUST process-durably append or reuse a validated
+`message.executionBound` containing the exact scope, wire ID, execution ID and
+known observations. ACK-only binding uses `because == "ack"` under
+`vault-events.md` section 10.4; it does not imply an application handler ran.
+
+Initiator handoff recovery follows `rendezvous.md` section 12 even when the
+responder DID is already known. A final rejection's fixed bootstrap control
+channel is the explicit non-transitioning exception in that document's section
+13; it neither aliases keys nor establishes a relationship.
 
 Two authenticated observation groups may be unioned as one logical message
 only when they have the same wire ID, agree on semantic and intent hashes,
@@ -779,6 +789,7 @@ Exact schemas are in `vault-events.md`:
 message.out                       durable intent and immutable headers
 message.prepared                  exact plaintext and encrypted package
 message.packageRetired            package no longer retried
+message.replayClosed              monotonic end of duplicate replay retention
 delivery.submitted                transport accepted a package
 delivery.failed                   retryable or terminal failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
@@ -788,7 +799,8 @@ message.in                        durable inbound observation
 message.executionBound            immutable logical execution identity
 peer.transitioned                 contact-scoped DID continuation
 relationship.admissionDecided     local bootstrap admission decision
-relationship.established          stable pairwise relationship
+relationship.established          stable responder-side pairwise relationship
+relationship.initiatorBound       portable initiator-side relationship binding
 ```
 
 When `expandPleaseAck(wireId, pleaseAck or [])` contains `wireId`, submission
@@ -803,6 +815,7 @@ A recommended inbound observation records all hashes and durable headers:
 {
   "mid": "<deterministic inbound message id>",
   "wireId": "<innermost message id>",
+  "receiptOrdinal": "42",
   "semanticHash": "<base64url sha-256>",
   "intentHash": "<base64url sha-256>",
   "plaintextHash": "<base64url sha-256>",
@@ -827,15 +840,18 @@ A recommended inbound observation records all hashes and durable headers:
   so.
 - After package storage but before submission observation, the exact package
   may be submitted again.
-- After mediator acceptance but before `delivery.submitted`, retry is
-  idempotent.
+- After mediator acceptance but before `delivery.submitted`, retry reuses the
+  exact package idempotently. Missing submission evidence does not prove that
+  no attempt occurred; the rendezvous attempt budget is runtime-local policy,
+  not a crash-persistent lifetime cap.
 - At expiry before prepare or retry, a message-scoped terminal failure is
   recorded and no package is submitted.
 - After inbound commit but before pickup ACK, redelivery converges as another
   observation.
-- After pickup ACK but before ultimate ACK submission, the active runtime may
-  send or re-send the deterministic response; a future replicated profile may
-  do so from another full replica.
+- After pickup ACK but before ultimate ACK intent/submission, writable-open
+  recovery MUST rediscover unfinished work from committed inbound history,
+  reuse frozen intents and bindings, and resume eligible deterministic work.
+  Neither mediator redelivery nor a local queue is a recovery prerequisite.
 - Loss or unavailability of the recipient runtime beyond mediator retention
   may lose an in-flight package. Receipt-required sender retry is the recovery boundary.
 - Submission-terminal messages deliberately accept best-effort completion
@@ -846,8 +862,9 @@ A recommended inbound observation records all hashes and durable headers:
 ## 14. Privacy
 
 Wire IDs, message types and content are visible only inside end-to-end
-encrypted application messages. Package IDs and recipient routing DIDs are visible to the mediator. Delivery
-IDs are visible to the recipient mediator. A future replica-mediation profile
+encrypted application messages. Package IDs and recipient routing DIDs are
+visible to the mediator. Delivery IDs are visible to the recipient mediator.
+A future replica-mediation profile
 would additionally expose opaque replica IDs to that mediator.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
@@ -903,7 +920,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 22. ACK of a deterministic response stops normal retry but its exact packages
     remain held until durable replay closure.
 23. Duplicate receipt before replay closure re-submits the same response/ACK
-    package only while replay submission is eligible; after durable closure or explicit erasure no replacement is minted.
+    package only while replay submission is eligible; after durable closure or
+    explicit erasure no replacement is minted.
 24. Valid address variants converge; invalid variants conflict.
 25. Equal wire IDs under transition-verified peer keys merge only through the
     same stable relationship execution scope; unrelated key reuse does not.
@@ -964,3 +982,17 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 49. After initiator handoff validation and restart, the portable relationship
     binding reconstructs the same execution ID; later verified rotation does
     not create another execution identity for the same relationship/wire ID.
+50. A held normal-only package survives GC and release with its exact envelope;
+    terminal normal release with a null replay deadline requires no closure.
+51. Distinct observations receive distinct ordinals, including duplicates;
+    restore continues above every historical author, and a collision blocks
+    ACK ordering rather than using a wire-ID tie-break.
+52. Two relationships in a merged contact never share ACK authority merely
+    because of that merge. Exact local handoff/initial references and package
+    evidence determine outbound scope.
+53. A binding for ACK-only processing uses `ack` provenance without a handler
+    effect or a different execution identity.
+54. Recovery completes handoff binding even for a known responder DID and finds
+    pickup-ACKed unfinished work without mediator redelivery.
+55. A crash after an outcome-unknown transport call can reset the local retry
+    budget, but never changes the wire ID, exact retry package or frozen expiry.
