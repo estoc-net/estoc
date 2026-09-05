@@ -237,7 +237,53 @@ Object acceptance and event commit MUST be coordinated with collection as
 specified by `dasl-objects.md`; neither the table nor an orphan grace period
 permits collection to race a reference commit.
 
+### 4.2 Send an ordinary message
+
+These procedures define required ordering. Implementations may combine steps
+transactionally but may not reverse the durability boundaries.
+
+The synchronous full-vault send operation:
+
+1. writes attachment objects;
+2. writes the stored message document;
+3. selects durable nullable `createdTime`, optional `expiresTime`, exact
+   `pleaseAck` value (null or array), exact ordered `ack`, complete `headers`,
+   and any required replay deadline;
+4. computes the intent hash;
+5. rejects a rendezvous DID as an ordinary relationship target;
+6. appends `message.out`; and
+7. returns `mid` and `wireId`.
+
+It performs no network operation. When `createdTime` is null, preparation
+omits `created_time`. Expand `pleaseAck` by replacing `""` with
+the current wire ID. Receipt-required completion is selected only when that
+expanded set contains the current wire ID. `null`, `[]`, or an array naming
+only older messages is submission-terminal for the current message.
+
+The active phase-1 runtime may later:
+
+1. stop when held, acknowledged, terminally failed, expired, or
+   submission-terminal and already submitted;
+2. fold target contact/channel;
+3. choose valid sender DID, peer DID/key and exact resolution evidence;
+4. attach the frozen contact-scoped `fromPrior` while pairwise handoff remains
+   unconfirmed;
+5. construct complete plaintext by copying every intent-time header;
+6. compute plaintext hash, encrypt, store exact envelope and append
+   `message.prepared`;
+7. submit directly or through Routing 2.0 with `packageId == forward.id`;
+8. append submitted or failed observation; and
+9. retry according to completion mode.
+
+A new package may change address/security evidence only under validated repack
+rules while preserving the intent hash. Receiving may join equal wire IDs
+across a verified peer-key transition in one relationship.
+
 ## 5. Canonical projections and hashes
+
+Version 3 uses two hashes: `intentHash` for immutable message intent and
+`plaintextHash` for one exact complete plaintext. The semantic projection below
+is a component of the intent projection, not a separately stored hash.
 
 ### 5.1 Semantic projection
 
@@ -269,6 +315,13 @@ please_ack, ack, from_prior
 
 This projection is the `semantic` member of the intent projection below. It
 has no separately stored hash.
+
+`body` and `attachments` are reconstructed from the closed stored-message
+representation in `vault-events.md` section 8. Absent thread values are null. This exact value is the
+`semantic` member of the intent projection in section 5.2.
+
+`return_route` is forbidden in an Estoc vault application plaintext. It is a
+transport-local hint and is neither a semantic nor package variation.
 
 ### 5.2 Intent projection
 
@@ -324,6 +377,27 @@ a dedicated field. A difference in any such field is an intent difference.
 `intentHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON for
 this projection.
 
+`please_ack` is null when absent or the exact ordered wire array when present.
+For processing, replace `""` with the current wire ID and ignore later
+duplicate targets without rewriting the stored array. A current outbound is
+receipt-required exactly when the expanded targets contain its own wire ID.
+An array naming only older messages does not make the current message
+receipt-required.
+
+Absent `created_time` and `expires_time` normalize to null. Absent `ack`
+normalizes to `[]`; absent additional headers normalize to `{}`. Writers SHOULD
+not emit duplicate receipt targets, but readers preserve them exactly and
+ignore later semantic duplicates after expansion.
+
+`headers` contains every permitted DIDComm top-level header not represented by
+a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
+`created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
+`from_prior`, `return_route`, `body` and `attachments` are forbidden.
+
+`intentHash` is unpadded base64url SHA-256 of the RFC 8785 canonical
+projection. `replayUntil`, execution binding and package addressing are local
+portable control state and are excluded from it.
+
 ### 5.3 Exact plaintext hash
 
 `plaintextHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
@@ -333,6 +407,20 @@ package. It includes `from`, `to`, `from_prior` and every emitted header.
 All packages for one outbound `mid` agree on the intent hash. They may have
 different plaintext hashes only when package-level addressing or security
 evidence changes under an expressly permitted rule.
+
+`plaintextHash` is unpadded base64url SHA-256 of the exact complete RFC 8785
+canonical innermost DIDComm plaintext encrypted by one package or received in
+one observation. It includes `from`, `to`, `from_prior` and every other present
+header.
+
+Several packages or observations of one logical message may have different
+`plaintextHash` values while keeping equal intent hashes only when
+their package-level addressing and security evidence independently validate
+under `distributed-delivery/1.0`.
+
+The stored application document does not preserve insignificant raw-wire JSON.
+The exact plaintext hash and durable normalized headers retain the distinctions
+needed for convergence and auditing.
 
 ## 6. Preparing a package
 
@@ -642,6 +730,32 @@ mid = UUIDv5(
 )
 ```
 
+This value identifies an observation namespace. The authenticated form omits
+`myKey`, so a valid repack to another accepted local DID/key can converge
+under one MID.
+
+The published authenticated vectors are executable:
+
+```text
+peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
+wireId  = 019b2a70-f225-721c-835f-67175be0667e
+mid     = 29370ccd-932b-51eb-9cc3-4c083adc151a
+
+peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
+wireId  = 019b1b61-3444-7190-9db5-1cc9c215eb23
+mid     = 206bcd7e-7320-5512-bbdb-a4d19331d58e
+```
+
+These vectors intentionally use wire IDs different from the outbound examples
+in `vault-events.md` section 9. Equal wire IDs chosen independently by different senders are not by
+themselves a protocol violation; sender/relationship scope is part of logical
+identity and ACK lookup.
+
+A verified contact-scoped transition may cause observations with different
+authenticated `peerKey` values and therefore different MIDs to represent one
+logical message. `vault-events.md` section 14.8 defines that second-stage merge. The original
+observation MIDs remain stored for audit and conflict detection.
+
 These values are **observation identities**. Equal intent hashes under one MID
 form one observation group; differences are intent conflicts.
 
@@ -726,6 +840,73 @@ A conforming `empty/1.0/empty` pure ACK remains a durable control observation,
 but is excluded from thread display, unread counts, notifications and
 application-content handlers.
 
+### 9.1 Receive a message
+
+These procedures define required ordering. Implementations may combine steps
+transactionally but may not reverse the durability boundaries.
+
+For every account-scoped pickup or direct delivery:
+
+1. while the vault is locked, recovery is incomplete, or the local key index is
+   not yet authoritative, do not classify recipient ownership; keep the
+   delivery pending without pickup ACK;
+2. once local key state is authoritative, inspect every recipient `kid` before
+   decryption. A delivery is deferred only when at least one `kid` maps to an
+   exact known local key-agreement method with a concrete recoverable
+   prerequisite that is not yet satisfied, such as a configured-but-not-live
+   rendezvous generation. A foreign DID, a locally controlled DID with a
+   nonexistent or wrong-purpose fragment, a terminal rendezvous generation,
+   or a set of recipient `kid` values with no valid local key-agreement match
+   is terminal wrong-recipient input: safely classify it, pickup-ACK it when
+   mediated, and append no `message.in`, contact or response effect;
+3. authenticate, decrypt and validate the complete innermost message,
+   including the exact selected local key-agreement method, Peer DID long-form
+   and authcrypt sender evidence;
+4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's bounded pre-vault
+   gate; a safely classified hard rejection received through Message Pickup
+   MUST be pickup-ACKed without `message.in`;
+5. for admitted or ordinary traffic, derive channel, observation MID,
+   intent hash and exact plaintext hash;
+6. write retained body/attachment objects and the stored message document;
+7. process-durably append `message.in` with applicable `channel.firstSeen`,
+   exact `peer.resolved`, contact attachment and non-controversial
+   observations;
+8. only then ACK the account-scoped mediator delivery;
+9. before processing ACK values or continuation, validate every package-level
+   proof; a handoff carrying `from_prior` requires exact pinned historical
+   evidence even if its responder DID is already known but binding is incomplete;
+10. after validation, append `peer.transitioned` when applicable; an initiator
+    processing a validated pairwise handoff also commits
+    `relationship.initiatorBound` so the relationship scope is reconstructible
+    after restart;
+11. resolve the stable relationship or non-transitioning channel execution
+    scope; if required transition/binding evidence is missing, defer ACK
+    application and automatic effects;
+12. for every conflict-free carrier whose ACKs, ACK requests or effects will be
+    processed, commit or reuse the scope-derived `message.executionBound`;
+    use `because == "ack"` for ACK-only binding, including older requested
+    targets, without implying that an application handler has run;
+13. only after that stable logical peer scope exists, process explicit `ack`
+    values into idempotent peer-scoped `delivery.acknowledged`;
+14. schedule eligible deterministic application effects through that execution
+    ID. Bootstrap admission itself follows `rendezvous.md` section 10.2 and is a local decision,
+    not an application effect requiring a provisional execution identity;
+15. run the frozen peer-scoped ACK-target algorithm in
+    `distributed-delivery.md` section 8; when at least one target is honored,
+    append one deterministic protocol response or pure-ACK intent with a replay
+    deadline; and
+16. on duplicate receipt while replay-submission-eligible, re-submit the same
+    retained response package rather than creating another effect or package.
+
+Steps 6–7 SHOULD use one atomic batch. A conforming pure ACK is retained for
+audit and delivery processing but excluded from user threads, unread counts,
+notifications and application handlers. It has `pleaseAck == null`, so first
+successful submission ends normal retry.
+
+A crash before durable message commit leaves mediator delivery pending. A
+crash after commit but before pickup ACK causes redelivery and another valid
+duplicate observation.
+
 ## 10. Rendezvous bootstrap delivery
 
 Rendezvous is a processing profile, not an Estoc DIDComm protocol family. The
@@ -759,6 +940,9 @@ Problem 2.0; there is no custom decline message.
 Every automatic effect is scoped by a durable logical execution identity and
 an effect-specific canonical input:
 
+Each protocol defines a closed RFC 8785 `effectInput` containing every portable
+value that can change the logical effect. Then:
+
 ```text
 effectInputHash = base64url(
   SHA-256(UTF8(RFC8785(effectInput)))
@@ -789,6 +973,28 @@ existing package under section 8.4 rather than deriving another effect.
 Phase 1 has one active writer but still makes no process-level exactly-once
 claim. A future multi-writer profile must coordinate execution bindings before
 it can claim stronger behavior.
+
+An automatic handler operates on a conflict-free logical message through its
+durable, scope-derived `message.executionBound` identity, never directly
+through a transient observation MID or contact ID.
+
+Before invoking an external effect or appending its outbound intent, the
+runtime MUST process-durably commit the execution binding and all available
+effect intent. An external system call uses `effectId` as its idempotency key
+or explicitly documents at-least-once behavior.
+
+The pure-ACK algorithm and executable vector are defined by
+section 8. Its effect input freezes the ACK target
+set, normalized timing, thread and logical reply scope. A duplicate carrier
+re-submits an already-existing package while replay-submission-eligible; it does not
+create another effect.
+
+Package routes and `from_prior` are materialization evidence, not effect
+identity.
+
+Phase 1 has one active writer but still makes no process-level exactly-once
+claim. A future multi-writer profile must coordinate execution bindings before
+claiming stronger behavior.
 
 ## 12. Required vault observations
 

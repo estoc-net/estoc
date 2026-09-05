@@ -677,36 +677,7 @@ classes.
 
 ### 7.1 Contact IDs
 
-A user-created contact uses a UUIDv7 `cid`.
-
-An automatic handler adopting an ordinary authenticated channel uses:
-
-```text
-cid = UUIDv5(
-  bc4ed155-49e2-58d4-93da-a4ec78ff2f58,
-  RFC8785(["v1", myKey, peerKey])
-)
-```
-
-A responder admitting an initial message at a rendezvous DID instead uses:
-
-```text
-cid = UUIDv5(
-  dec849c7-4961-5f33-94e7-702684d5a95c,
-  RFC8785(["v1", relationship_id])
-)
-```
-
-`relationship_id` is the deterministic value defined by the rendezvous
-processing profile over the exact rendezvous DID and authenticated initiator
-key. It deliberately excludes the initial-message wire ID. Retries and later
-initial messages from the same initiator key therefore reuse one contact; each
-initial message still has its own protocol thread and response effect. A live
-`contact.deleted` tombstone for this deterministic ID prevents automatic
-recreation.
-
-`peerKey == null` MUST NOT be automatically adopted without an
-application-specific authenticated discriminator.
+See `rendezvous.md` section 10.1.
 
 ### 7.2 Contact event schemas
 
@@ -896,7 +867,7 @@ consumption, deletion or erasure. It creates no protocol representative ID.
 
 This is a permanent tombstone for exactly the named contact ID.
 
-## 8. Stored message document and message hashes
+## 8. Stored message document
 
 Message application content is stored as one whole-resource raw DASL object
 containing UTF-8 RFC 8785 canonical JSON. Version 3 uses the following closed
@@ -999,98 +970,7 @@ portable stored message, but such diagnostics do not affect semantic equality.
 There is no implementation choice about which portable attachment fields are
 hashed.
 
-Version 3 uses two hashes: `intentHash` for immutable message intent and
-`plaintextHash` for one exact complete plaintext. The semantic projection below
-is a component of the intent projection, not a separately stored hash.
-
-### 8.1 Semantic projection
-
-The semantic projection contains only:
-
-```json
-{
-  "id": "<wire ID>",
-  "type": "<message type>",
-  "thid": null,
-  "pthid": null,
-  "body": {},
-  "attachments": []
-}
-```
-
-`body` and `attachments` are reconstructed from the closed stored-message
-representation above. Absent thread values are null. This exact value is the
-`semantic` member of the intent projection in section 8.2.
-
-It excludes package addressing and control headers:
-
-```text
-typ, from, to, created_time, expires_time,
-please_ack, ack, from_prior
-```
-
-`return_route` is forbidden in an Estoc vault application plaintext. It is a
-transport-local hint and is neither a semantic nor package variation.
-
-### 8.2 Intent hash
-
-The intent projection contains the semantic projection plus immutable
-message-level control headers:
-
-```json
-{
-  "semantic": {
-    "id": "<wire ID>",
-    "type": "<message type>",
-    "thid": null,
-    "pthid": null,
-    "body": {},
-    "attachments": []
-  },
-  "created_time": null,
-  "expires_time": null,
-  "please_ack": [""],
-  "ack": [],
-  "headers": {}
-}
-```
-
-`please_ack` is null when absent or the exact ordered wire array when present.
-For processing, replace `""` with the current wire ID and ignore later
-duplicate targets without rewriting the stored array. A current outbound is
-receipt-required exactly when the expanded targets contain its own wire ID.
-An array naming only older messages does not make the current message
-receipt-required.
-
-Absent `created_time` and `expires_time` normalize to null. Absent `ack`
-normalizes to `[]`; absent additional headers normalize to `{}`. Writers SHOULD
-not emit duplicate receipt targets, but readers preserve them exactly and
-ignore later semantic duplicates after expansion.
-
-`headers` contains every permitted DIDComm top-level header not represented by
-a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
-`created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
-`from_prior`, `return_route`, `body` and `attachments` are forbidden.
-
-`intentHash` is unpadded base64url SHA-256 of the RFC 8785 canonical
-projection. `replayUntil`, execution binding and package addressing are local
-portable control state and are excluded from it.
-
-### 8.3 Exact plaintext hash
-
-`plaintextHash` is unpadded base64url SHA-256 of the exact complete RFC 8785
-canonical innermost DIDComm plaintext encrypted by one package or received in
-one observation. It includes `from`, `to`, `from_prior` and every other present
-header.
-
-Several packages or observations of one logical message may have different
-`plaintextHash` values while keeping equal intent hashes only when
-their package-level addressing and security evidence independently validate
-under `distributed-delivery/1.0`.
-
-The stored application document does not preserve insignificant raw-wire JSON.
-The exact plaintext hash and durable normalized headers retain the distinctions
-needed for convergence and auditing.
+Canonical projections and message hashes are defined by `distributed-delivery.md` section 5.
 
 ## 9. Outbound message events
 
@@ -1187,7 +1067,7 @@ Requirements:
 - `attachments` is the distinct ordered list of object-backed attachment
   payload roots from that document; link-only descriptors add no entry;
 - `roots` is the distinct ordered set of `body` followed by `attachments`;
-- `intentHash` is computed under section 8;
+- `intentHash` is computed under `distributed-delivery.md` section 5;
 - `replayUntil` is an Epoch-Seconds integer or null, controls only exact
   duplicate-response retention and is excluded from the wire and intent hash;
 - `executionId` and `effectId` are both null for a user-authored send and both
@@ -1440,49 +1320,7 @@ profile defined by `rendezvous.md`.
 
 ### 10.1 Deterministic inbound observation MID
 
-For an authenticated or signed innermost message:
-
-```text
-mid = UUIDv5(
-  4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6,
-  RFC8785(["v1", "authenticated", peerKey, wireId])
-)
-```
-
-For a truly anonymous message:
-
-```text
-mid = UUIDv5(
-  4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6,
-  RFC8785(["v1", "anonymous", myKey, wireId])
-)
-```
-
-This value identifies an observation namespace. The authenticated form omits
-`myKey`, so a valid repack to another accepted local DID/key can converge
-under one MID.
-
-The published authenticated vectors are executable:
-
-```text
-peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
-wireId  = 019b2a70-f225-721c-835f-67175be0667e
-mid     = 29370ccd-932b-51eb-9cc3-4c083adc151a
-
-peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
-wireId  = 019b1b61-3444-7190-9db5-1cc9c215eb23
-mid     = 206bcd7e-7320-5512-bbdb-a4d19331d58e
-```
-
-These vectors intentionally use wire IDs different from the outbound examples
-above. Equal wire IDs chosen independently by different senders are not by
-themselves a protocol violation; sender/relationship scope is part of logical
-identity and ACK lookup.
-
-A verified contact-scoped transition may cause observations with different
-authenticated `peerKey` values and therefore different MIDs to represent one
-logical message. Section 14.8 defines that second-stage merge. The original
-observation MIDs remain stored for audit and conflict detection.
+See `distributed-delivery.md` section 9.
 
 ### 10.2 `message.in`
 
@@ -1527,7 +1365,7 @@ Requirements:
 - `receiptOrdinal` is a canonical positive decimal integer string assigned to
   this newly committed observation event under the vault-wide allocator below;
   it is immutable portable evidence, not an EventStore `ChangeToken`;
-- `intentHash` and `plaintextHash` are computed under section 8;
+- `intentHash` and `plaintextHash` are computed under `distributed-delivery.md` section 5;
 - `myKey` is the exact local key that decrypted or verified the message;
 - `peerKey` is the authenticated sender fingerprint or null for anonymous;
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
@@ -1733,14 +1571,7 @@ including the final rejection's fixed bootstrap control scope defined in
 `rendezvous.md` section 13. An undecided candidate receives no provisional
 application execution scope merely because its `message.in` has committed.
 
-The required derivation is:
-
-```text
-executionId = UUIDv5(
-  6511fc66-4d39-589e-b2c7-7185a807b6c6,
-  RFC8785(["v2", scope, wireId])
-)
-```
+The required derivation is defined by `distributed-delivery.md` section 9.
 
 A later observation in the same relationship and with the same wire ID derives
 the same execution ID even when it uses a transition-verified peer key. Another
@@ -2147,7 +1978,7 @@ Normative rules:
 - `handoffExecutionId` is derived from the relationship scope and
   `originWireId`, then committed in a binding that includes
   `originInboundMid`;
-- `handoffEffectInputHash` and `handoffEffectId` validate under section 13; and
+- `handoffEffectInputHash` and `handoffEffectId` validate under `distributed-delivery.md` section 11; and
 - the handoff IDs name one valid deterministic `message.out` for
   `originInboundMid` that explicitly ACKs `originWireId`, requests its own ACK
   with `pleaseAck == [""]`, and freezes a replay deadline.
@@ -2214,8 +2045,8 @@ In this Bob-local example, the fingerprint used to derive `relationship` is
 Bob's own `k3j9n0m4x6q2w7c8v5p1d8s0fa`, not the remote Alice pairwise key.
 The Bob-local examples in sections 9.10 and 11.2 use the explicitly schematic
 `<alice-pairwise-key-fingerprint>` for that remote key. Those illustrative
-message IDs are not additional executable MID vectors; section 10.1 owns the
-executable observation-ID vectors.
+message IDs are not additional executable MID vectors; `distributed-delivery.md`
+section 9 owns the executable observation-ID vectors.
 
 Before processing the handoff ACK or creating the confirmation effect, the
 initiator MUST complete the mutually consistent transition, relationship and
@@ -2226,93 +2057,10 @@ recovery reuse consistent facts and complete missing facts before effects.
 
 ## 13. Automatic effects
 
-An automatic handler operates on a conflict-free logical message through its
-durable, scope-derived `message.executionBound` identity, never directly
-through a transient observation MID or contact ID.
-
-Each protocol defines a closed RFC 8785 `effectInput` containing every portable
-value that can change the logical effect. Then:
-
-```text
-effectInputHash = base64url(
-  SHA-256(UTF8(RFC8785(effectInput)))
-)
-
-effectId = base64url(
-  SHA-256(
-    UTF8("estoc/effect/2\0") ||
-    UTF8(executionId) || 0x00 ||
-    UTF8(handlerId) || 0x00 ||
-    UTF8(effectKind) || 0x00 ||
-    UTF8(decimalOrdinal) || 0x00 ||
-    UTF8(effectInputHash)
-  )
-)
-```
-
-Before invoking an external effect or appending its outbound intent, the
-runtime MUST process-durably commit the execution binding and all available
-effect intent. An external system call uses `effectId` as its idempotency key
-or explicitly documents at-least-once behavior.
-
-Automatic outbound messages derive:
-
-```text
-mid = UUIDv5(
-  8847bd57-5907-5bcd-9a71-d1e97cee3199,
-  RFC8785(["v1", effectId])
-)
-
-wireId = UUIDv5(
-  236a6e18-9271-59c8-9a0c-f940a0f8dc6f,
-  RFC8785(["v1", effectId])
-)
-```
-
-The pure-ACK algorithm and executable vector are defined by
-`distributed-delivery.md` section 8. Its effect input freezes the ACK target
-set, normalized timing, thread and logical reply scope. A duplicate carrier
-re-submits an already-existing package while replay-submission-eligible; it does not
-create another effect.
-
-A Trust Ping handoff response uses:
-
-```text
-handlerId  = https://didcomm.org/trust-ping/2.0
-effectKind = ping-response
-ordinal    = 0
-```
-
-For origin inbound MID `ca6f6a41-454c-53ff-b827-1797156687cf`:
-
-```text
-executionId     = e5d6c70d-ee4c-5dd5-9a02-02e0726e55da
-effectInputHash = 9bPd4ZBv7IxjxhZaqz6bRDJxP8lBJC6uPa4ZR0DRhTg
-effectId        = sq5uy24l9qX5IJRYZVxAauKDZeF-ucjEkXUY0SqJbOs
-outbound MID     = 3ef178eb-d708-5157-b1be-94f5ad0185c7
-outbound wire ID = 07c45e7a-5fef-5542-817b-d4ba69a16d96
-```
-
-Its closed effect input is exactly:
-
-```json
-{
-  "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
-  "body": {},
-  "created_time": 1788442800,
-  "expires_time": 1789652400,
-  "pthid": "019b4d01-0e42-775e-8abe-173d777fcb3a",
-  "relationship_id": "73a7d8f5-3523-5802-9b65-02da2078273e",
-  "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4"
-}
-```
-
-Package routes and `from_prior` are materialization evidence, not effect
-identity.
-
-Phase 1 has one active writer but still makes no process-level exactly-once
-claim. A future multi-writer profile must coordinate execution bindings before
-claiming stronger behavior.
+`distributed-delivery.md` section 11 defines effect identity and commit ordering;
+section 8.2 there owns the pure-ACK vector. Section 9.1 of this document defines
+outbound MID and wire-ID derivation. `rendezvous.md` section 11.1 owns the
+handoff response vectors.
 
 ## 14. Folds
 
@@ -2980,214 +2728,19 @@ process displaying the invitation.
 
 ### 16.6 Send an initial message
 
-1. learn a rendezvous DID through OOB, QR, directory, file or manual input;
-2. create/select a contact and append `contact.peerDidAdded` for that DID;
-3. create one local relationship `did:peer:4`, retain both forms and associate
-   it with the contact;
-4. select a first application message; when no application content exists,
-   use Trust Ping 2.0 `ping` with `response_requested == true`;
-5. write body/attachments and append `message.out` with finite expiry,
-   `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and
-   `intentHash`; this may happen offline;
-6. after intent exists, register the initiator relationship DID canonical
-   short form on its bound route when mediated;
-7. resolve the rendezvous DID and append exact `peer.resolved` evidence;
-8. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
-   with `because == "rendezvous"`;
-9. prepare using initiator Peer DID long form in plaintext `from`, protected
-   `skid` and decoded `apu`; and
-10. submit against the pinned snapshot and recipient key with bounded retry
-    until explicit ACK, expiry, hold or the rendezvous retry ceiling.
-
-The first message is the real Trust Ping or application message, not a custom
-rendezvous wrapper. `pleaseAck == []` is legal DIDComm but requests nothing and
-is not used by the conforming phase-1 writer for bootstrap.
-
-If current time reaches expiry before preparation or retry, append
-message-scoped non-retryable `delivery.failed(code="expired")` and submit
-nothing. A replacement initial message uses a new wire ID but normally reuses
-the same initiator relationship key unless the contact was deleted.
-
-The rendezvous DID is never placed in ordinary `writeTo`; only this explicit
-bootstrap procedure targets it.
+See `rendezvous.md` section 8.5.
 
 ### 16.7 Admit and establish a relationship
 
-For a delivery potentially addressed to a rendezvous key:
-
-1. while unlock/recovery is incomplete, keep the delivery pending without
-   deciding recipient ownership;
-2. once local key state is authoritative, map every protected recipient `kid`
-   to an exact local key-agreement method;
-3. defer only an exact known local method whose rendezvous generation or bound
-   route has a concrete recoverable prerequisite and may still become live;
-4. if no exact valid local key-agreement method remains, or the only mapping is
-   foreign, nonexistent, wrong-purpose or terminal, classify wrong recipient,
-   pickup-ACK mediated delivery and create no portable message state;
-5. decrypt with the exact selected key and run `rendezvous.md`'s hard
-   pre-vault gate before `message.in`;
-6. a safely classified hard rejection received through Message Pickup MUST be
-   pickup-ACKed and leaves no portable message/contact/relationship state;
-7. for an admitted candidate, store retained bytes, append `message.in` with
-   its durable receipt ordinal, then ACK account-scoped mediator delivery;
-8. reuse an existing final `relationship.admissionDecided`, or await/finalize
-   one under section 14.5; before a new accept, check sender-DID consistency,
-   contact tombstones and invitation availability in the same serialized
-   finalization operation; and
-9. leave undecided candidates pending and suppress new materialization or
-   peer-visible effects while the final result is conflicted.
-
-An accept is valid only when its decision event instant is strictly before the
-candidate's Epoch-Seconds expiry. Equality is expired. An undecided candidate
-may only be finalized as reject after expiry. A previously committed timely
-accept remains final during recovery; a later clock sample does not replace it
-with rejection.
-
-For final reject, create no relationship DID. Rejection may be silent or may
-select a deterministic protocol error or Report Problem intent.
-Commit the final decision and any chosen rejection intent/binding in one
-`appendAll` under `rendezvous.md` section 9.3, before network work. Recovery
-resumes that intent, or treats its absence as no selected response; it does not
-invent a new optional rejection effect. Once the selected intent no longer
-needs candidate content, append `message.erased` for candidate-only roots.
-
-For effective accept:
-
-1. derive stable relationship, contact and local pairwise DID IDs from the
-   canonical rendezvous DID and authenticated initiator key;
-2. verify the finalization preconditions and existing evidence. If the contact
-   has since been tombstoned, suppress new materialization without rewriting
-   the final decision; incompatible sender-DID evidence is a conflict;
-3. derive/reuse the responder relationship DID using its independently
-   selected relationship route;
-4. select a deterministic handoff response: Trust Ping `ping-response`, a
-   protocol-defined deterministic response, or Empty Message ACK;
-5. append, preferably in one process-durable batch, the admission decision,
-   inbound `message.executionBound`, any new `contact.created`,
-   bootstrap/pairwise `contact.attached`, `did.created`, `contact.useDid`,
-   fully frozen `relationship.established`, and deterministic response
-   `message.out` with a replay deadline;
-6. response intent explicitly ACKs the triggering initial wire ID, uses
-   `pleaseAck == [""]`, and carries the exact relationship-level `fromPrior`;
-7. only after all required local facts and response intent are committed,
-   register responder pairwise DID canonical short form;
-8. prepare with long-form first-disclosure sender evidence; and
-9. submit with bounded retry until explicit ACK, expiry or hold.
-
-The committed final admission result is the decision boundary; handoff intent
-materializes that result rather than sealing a still-reversible decision.
-The writer rejects a contradictory later admission command. The user ends an
-accepted relationship through contact deletion and DID/route retirement.
-
-Repeated initial messages from the same stable initiator key reuse the
-relationship but remain separate application messages. Until an authenticated
-message arrives at the responder pairwise DID, every package from that DID to
-the contact uses its long form and carries the exact frozen `fromPrior`.
-Human-authored messages are ordinary traffic; they never determine the
-handoff proof or rotation instant.
+See `rendezvous.md` section 10.2.
 
 ### 16.8 Send an ordinary message
 
-The synchronous full-vault send operation:
-
-1. writes attachment objects;
-2. writes the stored message document;
-3. selects durable nullable `createdTime`, optional `expiresTime`, exact
-   `pleaseAck` value (null or array), exact ordered `ack`, complete `headers`,
-   and any required replay deadline;
-4. computes the intent hash;
-5. rejects a rendezvous DID as an ordinary relationship target;
-6. appends `message.out`; and
-7. returns `mid` and `wireId`.
-
-It performs no network operation. When `createdTime` is null, preparation
-omits `created_time`. Expand `pleaseAck` by replacing `""` with
-the current wire ID. Receipt-required completion is selected only when that
-expanded set contains the current wire ID. `null`, `[]`, or an array naming
-only older messages is submission-terminal for the current message.
-
-The active phase-1 runtime may later:
-
-1. stop when held, acknowledged, terminally failed, expired, or
-   submission-terminal and already submitted;
-2. fold target contact/channel;
-3. choose valid sender DID, peer DID/key and exact resolution evidence;
-4. attach the frozen contact-scoped `fromPrior` while pairwise handoff remains
-   unconfirmed;
-5. construct complete plaintext by copying every intent-time header;
-6. compute plaintext hash, encrypt, store exact envelope and append
-   `message.prepared`;
-7. submit directly or through Routing 2.0 with `packageId == forward.id`;
-8. append submitted or failed observation; and
-9. retry according to completion mode.
-
-A new package may change address/security evidence only under validated repack
-rules while preserving the intent hash. Receiving may join equal wire IDs
-across a verified peer-key transition in one relationship.
+See `distributed-delivery.md` section 4.2.
 
 ### 16.9 Receive a message
 
-For every account-scoped pickup or direct delivery:
-
-1. while the vault is locked, recovery is incomplete, or the local key index is
-   not yet authoritative, do not classify recipient ownership; keep the
-   delivery pending without pickup ACK;
-2. once local key state is authoritative, inspect every recipient `kid` before
-   decryption. A delivery is deferred only when at least one `kid` maps to an
-   exact known local key-agreement method with a concrete recoverable
-   prerequisite that is not yet satisfied, such as a configured-but-not-live
-   rendezvous generation. A foreign DID, a locally controlled DID with a
-   nonexistent or wrong-purpose fragment, a terminal rendezvous generation,
-   or a set of recipient `kid` values with no valid local key-agreement match
-   is terminal wrong-recipient input: safely classify it, pickup-ACK it when
-   mediated, and append no `message.in`, contact or response effect;
-3. authenticate, decrypt and validate the complete innermost message,
-   including the exact selected local key-agreement method, Peer DID long-form
-   and authcrypt sender evidence;
-4. when addressed to a rendezvous DID, run section 16.7's bounded pre-vault
-   gate; a safely classified hard rejection received through Message Pickup
-   MUST be pickup-ACKed without `message.in`;
-5. for admitted or ordinary traffic, derive channel, observation MID,
-   intent hash and exact plaintext hash;
-6. write retained body/attachment objects and the stored message document;
-7. process-durably append `message.in` with applicable `channel.firstSeen`,
-   exact `peer.resolved`, contact attachment and non-controversial
-   observations;
-8. only then ACK the account-scoped mediator delivery;
-9. before processing ACK values or continuation, validate every package-level
-   proof; a handoff carrying `from_prior` requires exact pinned historical
-   evidence even if its responder DID is already known but binding is incomplete;
-10. after validation, append `peer.transitioned` when applicable; an initiator
-    processing a validated pairwise handoff also commits
-    `relationship.initiatorBound` so the relationship scope is reconstructible
-    after restart;
-11. resolve the stable relationship or non-transitioning channel execution
-    scope; if required transition/binding evidence is missing, defer ACK
-    application and automatic effects;
-12. for every conflict-free carrier whose ACKs, ACK requests or effects will be
-    processed, commit or reuse the scope-derived `message.executionBound`;
-    use `because == "ack"` for ACK-only binding, including older requested
-    targets, without implying that an application handler has run;
-13. only after that stable logical peer scope exists, process explicit `ack`
-    values into idempotent peer-scoped `delivery.acknowledged`;
-14. schedule eligible deterministic application effects through that execution
-    ID. Bootstrap admission itself follows section 16.7 and is a local decision,
-    not an application effect requiring a provisional execution identity;
-15. run the frozen peer-scoped ACK-target algorithm in
-    `distributed-delivery.md` section 8; when at least one target is honored,
-    append one deterministic protocol response or pure-ACK intent with a replay
-    deadline; and
-16. on duplicate receipt while replay-submission-eligible, re-submit the same
-    retained response package rather than creating another effect or package.
-
-Steps 6–7 SHOULD use one atomic batch. A conforming pure ACK is retained for
-audit and delivery processing but excluded from user threads, unread counts,
-notifications and application handlers. It has `pleaseAck == null`, so first
-successful submission ends normal retry.
-
-A crash before durable message commit leaves mediator delivery pending. A
-crash after commit but before pickup ACK causes redelivery and another valid
-duplicate observation.
+See `distributed-delivery.md` section 9.1.
 
 ### 16.10 Replica retirement and re-incarnation (deferred)
 
@@ -3496,7 +3049,7 @@ There is no migration requirement from an earlier event vocabulary.
 65. Hold and ordinary terminal delivery failure block replay submission without
     releasing still-open replay material; release resumes only while every
     remaining replay condition is valid.
-66. The inbound MID vectors in section 10.1 recompute to
+66. The inbound MID vectors in `distributed-delivery.md` section 9 recompute to
     `29370ccd-932b-51eb-9cc3-4c083adc151a` and
     `206bcd7e-7320-5512-bbdb-a4d19331d58e` from their published inputs.
 67. Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of

@@ -429,6 +429,42 @@ Steps 3–4 happen with networking disabled. Registration and resolution are
 retryable effects. Phase 1 has one active runtime; another runtime MUST NOT
 concurrently use the same local author.
 
+### 8.5 Send an initial message
+
+These procedures define required ordering. Implementations may combine steps
+transactionally but may not reverse the durability boundaries.
+
+1. learn a rendezvous DID through OOB, QR, directory, file or manual input;
+2. create/select a contact and append `contact.peerDidAdded` for that DID;
+3. create one local relationship `did:peer:4`, retain both forms and associate
+   it with the contact;
+4. select a first application message; when no application content exists,
+   use Trust Ping 2.0 `ping` with `response_requested == true`;
+5. write body/attachments and append `message.out` with finite expiry,
+   `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and
+   `intentHash`; this may happen offline;
+6. after intent exists, register the initiator relationship DID canonical
+   short form on its bound route when mediated;
+7. resolve the rendezvous DID and append exact `peer.resolved` evidence;
+8. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
+   with `because == "rendezvous"`;
+9. prepare using initiator Peer DID long form in plaintext `from`, protected
+   `skid` and decoded `apu`; and
+10. submit against the pinned snapshot and recipient key with bounded retry
+    until explicit ACK, expiry, hold or the rendezvous retry ceiling.
+
+The first message is the real Trust Ping or application message, not a custom
+rendezvous wrapper. `pleaseAck == []` is legal DIDComm but requests nothing and
+is not used by the conforming phase-1 writer for bootstrap.
+
+If current time reaches expiry before preparation or retry, append
+message-scoped non-retryable `delivery.failed(code="expired")` and submit
+nothing. A replacement initial message uses a new wire ID but normally reuses
+the same initiator relationship key unless the contact was deleted.
+
+The rendezvous DID is never placed in ordinary `writeTo`; only this explicit
+bootstrap procedure targets it.
+
 ## 9. Responder admission
 
 ### 9.1 Deferred delivery
@@ -627,6 +663,110 @@ contact is not recreated; a genuinely new relationship requires a fresh
 initiator relationship key. One key presented under different canonical
 initiator DIDs is a sender-DID conflict.
 
+### 10.1 Contact IDs
+
+A user-created contact uses a UUIDv7 `cid`.
+
+An automatic handler adopting an ordinary authenticated channel uses:
+
+```text
+cid = UUIDv5(
+  bc4ed155-49e2-58d4-93da-a4ec78ff2f58,
+  RFC8785(["v1", myKey, peerKey])
+)
+```
+
+For a responder admitting an initial message at a rendezvous DID, see section 10.
+
+`relationship_id` is the deterministic value defined by the rendezvous
+processing profile over the exact rendezvous DID and authenticated initiator
+key. It deliberately excludes the initial-message wire ID. Retries and later
+initial messages from the same initiator key therefore reuse one contact; each
+initial message still has its own protocol thread and response effect. A live
+`contact.deleted` tombstone for this deterministic ID prevents automatic
+recreation.
+
+`peerKey == null` MUST NOT be automatically adopted without an
+application-specific authenticated discriminator.
+
+### 10.2 Admit and establish a relationship
+
+These procedures define required ordering. Implementations may combine steps
+transactionally but may not reverse the durability boundaries.
+
+For a delivery potentially addressed to a rendezvous key:
+
+1. while unlock/recovery is incomplete, keep the delivery pending without
+   deciding recipient ownership;
+2. once local key state is authoritative, map every protected recipient `kid`
+   to an exact local key-agreement method;
+3. defer only an exact known local method whose rendezvous generation or bound
+   route has a concrete recoverable prerequisite and may still become live;
+4. if no exact valid local key-agreement method remains, or the only mapping is
+   foreign, nonexistent, wrong-purpose or terminal, classify wrong recipient,
+   pickup-ACK mediated delivery and create no portable message state;
+5. decrypt with the exact selected key and run `rendezvous.md`'s hard
+   pre-vault gate before `message.in`;
+6. a safely classified hard rejection received through Message Pickup MUST be
+   pickup-ACKed and leaves no portable message/contact/relationship state;
+7. for an admitted candidate, store retained bytes, append `message.in` with
+   its durable receipt ordinal, then ACK account-scoped mediator delivery;
+8. reuse an existing final `relationship.admissionDecided`, or await/finalize
+   one under `vault-events.md` section 14.5; before a new accept, check sender-DID consistency,
+   contact tombstones and invitation availability in the same serialized
+   finalization operation; and
+9. leave undecided candidates pending and suppress new materialization or
+   peer-visible effects while the final result is conflicted.
+
+An accept is valid only when its decision event instant is strictly before the
+candidate's Epoch-Seconds expiry. Equality is expired. An undecided candidate
+may only be finalized as reject after expiry. A previously committed timely
+accept remains final during recovery; a later clock sample does not replace it
+with rejection.
+
+For final reject, create no relationship DID. Rejection may be silent or may
+select a deterministic protocol error or Report Problem intent.
+Commit the final decision and any chosen rejection intent/binding in one
+`appendAll` under `rendezvous.md` section 9.3, before network work. Recovery
+resumes that intent, or treats its absence as no selected response; it does not
+invent a new optional rejection effect. Once the selected intent no longer
+needs candidate content, append `message.erased` for candidate-only roots.
+
+For effective accept:
+
+1. derive stable relationship, contact and local pairwise DID IDs from the
+   canonical rendezvous DID and authenticated initiator key;
+2. verify the finalization preconditions and existing evidence. If the contact
+   has since been tombstoned, suppress new materialization without rewriting
+   the final decision; incompatible sender-DID evidence is a conflict;
+3. derive/reuse the responder relationship DID using its independently
+   selected relationship route;
+4. select a deterministic handoff response: Trust Ping `ping-response`, a
+   protocol-defined deterministic response, or Empty Message ACK;
+5. append, preferably in one process-durable batch, the admission decision,
+   inbound `message.executionBound`, any new `contact.created`,
+   bootstrap/pairwise `contact.attached`, `did.created`, `contact.useDid`,
+   fully frozen `relationship.established`, and deterministic response
+   `message.out` with a replay deadline;
+6. response intent explicitly ACKs the triggering initial wire ID, uses
+   `pleaseAck == [""]`, and carries the exact relationship-level `fromPrior`;
+7. only after all required local facts and response intent are committed,
+   register responder pairwise DID canonical short form;
+8. prepare with long-form first-disclosure sender evidence; and
+9. submit with bounded retry until explicit ACK, expiry or hold.
+
+The committed final admission result is the decision boundary; handoff intent
+materializes that result rather than sealing a still-reversible decision.
+The writer rejects a contradictory later admission command. The user ends an
+accepted relationship through contact deletion and DID/route retirement.
+
+Repeated initial messages from the same stable initiator key reuse the
+relationship but remain separate application messages. Until an authenticated
+message arrives at the responder pairwise DID, every package from that DID to
+the contact uses its long form and carries the exact frozen `fromPrior`.
+Human-authored messages are ordinary traffic; they never determine the
+handoff proof or rotation instant.
+
 ## 11. Handoff response
 
 ### 11.1 Response selection
@@ -723,6 +863,9 @@ The relationship-level rotation proof is independent of the response:
 from_prior.iat = relationship.rotationIat
                = origin_initial_message.created_time
 ```
+
+For origin inbound MID `ca6f6a41-454c-53ff-b827-1797156687cf`,
+see the Trust Ping handoff vector above.
 
 ### 11.2 Exact `from_prior` construction and handoff headers
 

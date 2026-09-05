@@ -583,124 +583,12 @@ exports or vault sync.
 
 ## 7. ObjectStore
 
-The vault object store implements `dasl-objects.md`. It accepts only canonical
-DASL CIDs using CIDv1, lowercase base32, SHA-256 and the `raw` codec. DRISL
-support is deferred. Portable UnixFS DAG layouts, DAG-PB, CIDv0 and BDASL are
-not part of version 3; raw objects remain valid regardless of how identical
-bytes were produced.
+Object references are the event envelope's `roots` array (section 3.2).
+Only the application computes `keep`, using `vault-events.md`; the object store
+reads no event type.
 
-```ts
-type ByteSource =
-  | Uint8Array
-  | AsyncIterable<Uint8Array>
-  | ReadableStream<Uint8Array>;
-
-type ObjectInfo = {
-  cid: Cid;
-  codec: "raw";
-  size: number;
-};
-
-interface ObjectStore {
-  putRaw(source: ByteSource): Promise<ObjectInfo>;
-  putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
-
-  open(cid: Cid): Promise<ReadableStream<Uint8Array> | null>;
-  read(cid: Cid, maxBytes: number): Promise<Uint8Array | null>;
-
-  stat(cid: Cid): Promise<ObjectInfo | null>;
-  has(cid: Cid): Promise<boolean>;
-  list(): AsyncIterable<Cid>;
-
-  collect(keep: Iterable<Cid>): Promise<{
-    unlinked: Cid[];
-    young: Cid[];
-  }>;
-}
-```
-
-### 7.1 Whole-resource identity
-
-A raw object CID identifies the complete exact byte sequence, regardless of
-size. Portable large objects are not represented as chunk DAGs.
-
-A backend MAY store one portable object in private extents, and a transport MAY
-send it in private segments, but those pieces have no portable CID. Changing
-extent or segment size MUST NOT change the object CID or exported bytes.
-
-`putRaw` computes a raw DASL CID while consuming a finite stream.
-`putObject` verifies exact encoded bytes against an expected CID and publishes
-nothing until all hash and codec checks succeed.
-
-### 7.2 Write ordering
-
-A producer process-durably accepts every object in an event's `roots` before
-appending that event. From the first successful object acceptance until the
-referencing event commits or the operation aborts, the producer MUST protect
-the object against collection with a vault-level exclusion, temporary pin,
-transaction or an equivalent retention guard. A process crash can therefore
-leave an unreferenced object, but a successful event append does not depend on
-bytes that were never accepted locally.
-
-A transactional backend MAY commit objects and the event together when the
-externally visible result preserves the same invariant. An orphan grace period
-is crash cleanup policy; it is not a substitute for protecting a live
-write-before-reference operation.
-
-### 7.3 Missing and damaged objects
-
-The object store reports presence, validated codec/size and damage. The
-semantic layer decides whether an absent object means:
-
-- globally erased by a vault event;
-- missing or corrupt local data; or
-- not yet fetched under an explicitly partial local view.
-
-A CID/content mismatch is damage. A damaged object is treated as absent after
-being reported or quarantined.
-
-### 7.4 Explicit roots and collection
-
-Only exact CIDs in the semantic layer's held-root set are retained.
-`collect(keep)` MUST NOT inspect object content or follow embedded links. An
-object that must remain available is listed explicitly in an event's `roots`.
-
-The local-vault invariant is:
-
-> Collection MUST NOT delete an object retained by any committed event and
-> MUST NOT delete an object protected by an in-flight reference commit.
-
-An orphan grace period may delay cleanup of abandoned accepted objects, but no
-fixed grace interval can establish this invariant by itself. Repeating a
-successful `putRaw` or `putObject` MAY renew orphan age only as a storage-policy
-optimization.
-
-The caller and backend MUST coordinate the interval from held-root snapshot to
-physical unlink with event commits and pending-reference guards. A pending-
-reference guard is owned by one running writer/recovery generation and has no
-portable lifetime. After process restart, the backend MUST first recover the
-complete committed event set and reconstruct its held-root set, then classify
-all guards owned by the previous runtime as abandoned, and only then enable
-collection. Clearing an abandoned guard does not make its object an orphan when
-a recovered committed event still retains that object. If no recovered event
-retains it, the object is ordinary abandoned pre-reference data and becomes
-eligible only under the documented orphan-grace rule.
-
-A conforming implementation does one of the following, or an equivalent
-operation:
-
-1. holds a vault-level exclusion from the complete committed-event snapshot
-   through unlink;
-2. commits event references, pins and collection in one database transaction;
-   or
-3. immediately before each unlink, atomically revalidates both the committed
-   event frontier and pending pins, abandoning or recomputing the sweep when
-   either changed.
-
-A stale `keep` snapshot MUST NOT authorize deletion after a new reference has
-committed. Collection is also serialized with object acceptance and reads. Only
-the application computes `keep`, using `vault-events.md`; the object store reads
-no event type.
+`dasl-objects.md` defines `ObjectStore`, whole-resource identity,
+write-before-reference, collection and object damage.
 
 ## 8. Portable files and local state
 
