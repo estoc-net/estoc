@@ -44,7 +44,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
 - **Relationship DID** — a vault-scoped pairwise `did:peer:4` used for one
   ongoing relationship.
 - **Outbound message ID (`mid`)** — the vault entity ID of one outbound
-  logical message.
+  logical message, also used as its innermost DIDComm plaintext `id`.
 - **Inbound observation MID** — a deterministic ID for one authenticated
   `(peer key, wire ID)` observation before verified aliasing.
 - **Logical execution ID** — a durable, immutable identity used by automatic
@@ -79,7 +79,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
   interpreted through contact-scoped DID transitions.
 
 ```text
-one logical message (mid, wire ID, intent hash)
+one outbound message (mid = wire ID, intent hash)
     ├── package P1
     │     exact plaintext hash H1
     │     exact encrypted envelope E1
@@ -184,7 +184,7 @@ precise account- or recipient-existence oracle.
 A full vault runtime MUST be able to commit a send while DNS, DID resolution
 and every mediator are unavailable. Before required network work it records:
 
-- `mid` and wire ID;
+- `mid`, also used as the wire ID;
 - target contact or explicit channel;
 - message type, thread and parent-thread IDs;
 - body and ordered normalized attachments;
@@ -252,7 +252,7 @@ The synchronous full-vault send operation:
 4. computes the intent hash;
 5. rejects a rendezvous DID as an ordinary relationship target;
 6. appends `message.out`; and
-7. returns `mid` and `wireId`.
+7. returns `mid`.
 
 It performs no network operation. When `createdTime` is null, preparation
 omits `created_time`. Expand `pleaseAck` by replacing `""` with
@@ -456,7 +456,8 @@ They MUST NOT appear in `message.out.headers`. An implementation that cannot
 preserve a supported additional header MUST reject preparation rather than
 dropping it.
 
-The preparer RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
+The plaintext `id` is the committed `message.out.mid`. The preparer
+RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
 encrypts, parses the encrypted-message JSON with duplicate-member and I-JSON
 validation, and stores `UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL
 object before appending `message.prepared`. Submission uses those exact stored
@@ -669,8 +670,7 @@ The generic execution/effect derivation in sections 9 and 11 produces:
 executionId      = feeae3f7-34ea-5ff1-b449-0ef76a7375c7
 effectInputHash  = AaXUfFDZaQtcuTAUZ37wn2hC2yUXs1hqub910SuBfHg
 effectId         = QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok
-outbound MID     = 89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e
-outbound wire ID = 2b85898b-4c15-5212-a56b-4826d9462a81
+outbound MID = wire ID = 89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e
 ```
 
 ### 8.3 Applying `ack`
@@ -822,6 +822,8 @@ only when they have the same wire ID, agree on intent hashes, validate every
 package proof, and resolve to the same execution scope. A
 cross-peer-key merge is permitted only through the same non-conflicted
 relationship scope and a verified contact-scoped `peer.transitioned` chain.
+Every transition in that chain must name this exact relationship under
+`vault-events.md` section 11.2.
 
 A message whose sender key is not yet attached to such a stable scope is
 **effect-deferred**. It MUST NOT execute under a provisional observation or
@@ -967,9 +969,10 @@ clock or rebuildable cache state. Before execution, the runtime process-durably
 commits the execution binding and any effect intent. An external call uses
 `effectId` as its idempotency key or explicitly accepts at-least-once behavior.
 
-Effects emitting DIDComm messages derive stable outbound MID and wire ID from
-`effectId` as specified by `vault-events.md`. Duplicate carriers re-submit the
-existing package under section 8.4 rather than deriving another effect.
+Effects emitting DIDComm messages derive one stable outbound ID from
+`effectId` as specified by `vault-events.md` section 9.1 and use it as the wire
+ID. Duplicate carriers re-submit the existing package under section 8.4 rather
+than deriving another effect.
 
 Phase 1 has one active writer but still makes no process-level exactly-once
 claim. A future multi-writer profile must coordinate execution bindings before
@@ -1013,7 +1016,7 @@ delivery.held                     user or policy hold
 delivery.released                 release of one exact hold
 message.in                        durable inbound observation
 message.executionBound            immutable logical execution identity
-peer.transitioned                 contact-scoped DID continuation
+peer.transitioned                 DID continuation in one named relationship
 relationship.admissionDecided     local bootstrap admission decision
 relationship.established          stable responder-side pairwise relationship
 relationship.initiatorBound       portable initiator-side relationship binding
@@ -1122,9 +1125,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     `createdTime == null` and omits the wire header on every preparation.
 19. The fixed pure-ACK vector derives execution ID
     `feeae3f7-34ea-5ff1-b449-0ef76a7375c7`, effect ID
-    `QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok`, MID
-    `89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e` and wire ID
-    `2b85898b-4c15-5212-a56b-4826d9462a81`.
+    `QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok`, and one outbound/wire ID
+    `89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e`.
 20. One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.

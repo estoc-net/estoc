@@ -135,8 +135,8 @@ informative deferred extensions, not dependencies of this profile.
 8. `from_prior.iss` and its protected `kid` use the exact rendezvous-DID
    spelling pinned by the relationship origin; the `kid` belongs to that exact
    `iss`.
-9. The transition is contact-scoped. It does not globally retire or alias the
-   rendezvous DID.
+9. The transition names its relationship and matching contact. It does not
+   globally retire or alias the rendezvous DID.
 10. Repeated initial messages from the same authenticated initiator key to the
     same rendezvous DID reuse the same relationship.
 11. Each initial message remains a separate application message and may have
@@ -160,7 +160,7 @@ A locally controlled rendezvous DID MUST:
 - contain its one fixed authentication method capable of signing `from_prior`;
 - bind one DIDComm delivery route through `boundRoute`;
 - use seed-derived key names represented by the vault; and
-- have at least one live `rendezvous.generationConfigured` event.
+- have a live selected rendezvous generation under `vault-events.md` section 12.1.
 
 Before the first package is submitted, the initiator MUST durably retain:
 
@@ -318,6 +318,10 @@ methods, and bound ingress route; the generation does not store copies of
 those values. A rendezvous generation is **live** only when that referenced DID
 and route validate and its mediated bound route, when present, is reconciled.
 A configured but not-yet-live generation is deferred, not rejected.
+
+Generation selection and the point at which a candidate's selected policy
+becomes immutable are defined by `vault-events.md` section 12.1. A newer
+policy does not change an established relationship's origin generation.
 
 The sole ingress route is the rendezvous entity's `boundRoute` and MUST equal
 the route encoded in that DID. `relationshipRoute` MAY differ; it is encoded
@@ -634,15 +638,11 @@ The responder pairwise key names are derived from
 `relationshipRoute`, which may differ from the rendezvous ingress route.
 
 The first effective accepted candidate becomes the relationship origin in the
-phase-1 single-writer profile. `relationship.established` freezes:
-
-- `originInboundMid` and the candidate's wire ID;
-- its exact initial-message-bound `peer.resolved` event;
-- exact presented rendezvous DID spelling;
-- the selected prior authentication `kid`;
-- `rotationIat`, equal to the origin candidate's `created_time`;
-- responder relationship Peer-DID long form; and
-- the exact compact `fromPrior` JWT.
+phase-1 single-writer profile. `relationship.established` records the selected
+origin, generation, contact, local DID, peer and handoff outbound, plus the
+exact compact `fromPrior`, under `vault-events.md` section 12.4. DID forms and
+route come from the referenced DID entity; proof claims come from the verified
+JWT; execution and effect IDs come from the handoff intent.
 
 Once frozen, later initial messages reuse the same relationship-level proof.
 A future multi-writer profile must define origin coordination before it may
@@ -819,8 +819,7 @@ Its fixed vector is:
 ```text
 effectInputHash = 9bPd4ZBv7IxjxhZaqz6bRDJxP8lBJC6uPa4ZR0DRhTg
 effectId        = sq5uy24l9qX5IJRYZVxAauKDZeF-ucjEkXUY0SqJbOs
-mid             = 3ef178eb-d708-5157-b1be-94f5ad0185c7
-wireId          = 07c45e7a-5fef-5542-817b-d4ba69a16d96
+mid = wireId    = 3ef178eb-d708-5157-b1be-94f5ad0185c7
 ```
 
 For the deterministic Empty fallback, the closed input is:
@@ -846,8 +845,7 @@ effectKind      = pure-ack
 ordinal         = 0
 effectInputHash = TYl33OWYFhWry8XvOaqIP8nI9mFj0uuYP9wOXRNpc7k
 effectId        = P705H2L_3dAvvsFrQqG31HMerwOyHNVK3Tlpywl3T3Y
-mid             = ab5af078-1c93-55cb-9506-978d06eb126e
-wireId          = c0f2ef14-bc56-5c6e-abdb-2313e31146ba
+mid = wireId    = ab5af078-1c93-55cb-9506-978d06eb126e
 ```
 
 Response timing is deterministic per triggering message:
@@ -860,8 +858,7 @@ response.expires_time = triggering_message.expires_time + 604800
 The relationship-level rotation proof is independent of the response:
 
 ```text
-from_prior.iat = relationship.rotationIat
-               = origin_initial_message.created_time
+from_prior.iat = origin_initial_message.created_time
 ```
 
 For origin inbound MID `ca6f6a41-454c-53ff-b827-1797156687cf`,
@@ -914,7 +911,7 @@ Trust Ping response example:
 
 ```json
 {
-  "id": "07c45e7a-5fef-5542-817b-d4ba69a16d96",
+  "id": "3ef178eb-d708-5157-b1be-94f5ad0185c7",
   "type": "https://didcomm.org/trust-ping/2.0/ping-response",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -933,7 +930,7 @@ Empty fallback example:
 
 ```json
 {
-  "id": "c0f2ef14-bc56-5c6e-abdb-2313e31146ba",
+  "id": "ab5af078-1c93-55cb-9506-978d06eb126e",
   "type": "https://didcomm.org/empty/1.0/empty",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -995,12 +992,14 @@ Existing consistent evidence is reused; conflicting evidence blocks processing.
    `createdTime` equals `iat`;
 4. verify the JWT signature and all claims against that exact snapshot;
 5. validate protocol threading and OOB `pthid` where applicable;
-6. attach the pairwise channel to the existing contact and append
-   `peer.transitioned` for this contact only;
-7. derive the deterministic relationship ID from the canonical pinned
-   rendezvous DID and the initiator's own relationship-key fingerprint, then
-   process-durably append `relationship.initiatorBound` naming the exact
-   initial outbound, snapshot, initiator identity and validated handoff;
+6. derive the deterministic relationship ID from the canonical pinned
+   rendezvous DID and the initiator's own relationship-key fingerprint; attach
+   the pairwise channel to the existing contact and prepare `peer.transitioned`
+   naming that relationship and matching contact under `vault-events.md`
+   section 11.2;
+7. validate and prepare `relationship.initiatorBound` for that same
+   relationship, naming the exact initial outbound, snapshot, initiator identity
+   and validated handoff;
 8. append or reuse `message.executionBound` for the handoff carrier under that
    relationship scope. All missing locally produced facts in steps 6–8 MUST
    commit in one process-durable `appendAll`; the event-store contract makes

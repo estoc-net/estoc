@@ -361,8 +361,9 @@ may use:
 - UUIDv5 for deterministic cross-replica idempotency; and
 - protocol-defined strings such as DIDComm message IDs.
 
-The event ID, vault message ID, DIDComm wire ID, encrypted package ID
-and mediator delivery ID are distinct namespaces.
+Event IDs, encrypted package IDs and mediator delivery IDs have separate
+roles. Outbound message IDs follow `vault-events.md` section 9.1; inbound
+observation and wire IDs follow `distributed-delivery.md` section 9.
 
 ## 5. EventStore
 
