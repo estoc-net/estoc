@@ -642,7 +642,7 @@ phase-1 single-writer profile. `relationship.established` records the selected
 origin, generation, contact, local DID, peer and handoff outbound, plus the
 exact compact `fromPrior`, under `vault-events.md` section 12.4. DID forms and
 route come from the referenced DID entity; proof claims come from the verified
-JWT; execution and effect IDs come from the handoff intent.
+JWT; the execution ID and effect key come from the handoff intent.
 
 Once frozen, later initial messages reuse the same relationship-level proof.
 A future multi-writer profile must define origin coordination before it may
@@ -798,52 +798,19 @@ executionScope = {"relationship":"73a7d8f5-3523-5802-9b65-02da2078273e"}
 executionId    = e5d6c70d-ee4c-5dd5-9a02-02e0726e55da
 ```
 
-The Trust Ping response uses this exact closed effect input:
-
-```json
-{
-  "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
-  "body": {},
-  "created_time": 1788442800,
-  "expires_time": 1789652400,
-  "pthid": "019b4d01-0e42-775e-8abe-173d777fcb3a",
-  "relationship_id": "73a7d8f5-3523-5802-9b65-02da2078273e",
-  "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4"
-}
-```
-
-Its fixed vector is:
+The Trust Ping response's fixed vector is:
 
 ```text
-effectInputHash = 9bPd4ZBv7IxjxhZaqz6bRDJxP8lBJC6uPa4ZR0DRhTg
-effectId        = sq5uy24l9qX5IJRYZVxAauKDZeF-ucjEkXUY0SqJbOs
-mid = wireId    = 3ef178eb-d708-5157-b1be-94f5ad0185c7
+effectKey    = FHfQaPxD2Qfttv_KqJlPWAv_DpJJx3g0DdpoJd1bVHk
+mid = wireId = b1dfe218-df15-5083-bbcc-2329dcb0f5c4
 ```
 
-For the deterministic Empty fallback, the closed input is:
-
-```json
-{
-  "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
-  "created_time": 1788442800,
-  "expires_time": 1789652400,
-  "pthid": "019b4d01-0e42-775e-8abe-173d777fcb3a",
-  "reply_scope": {
-    "relationship": "73a7d8f5-3523-5802-9b65-02da2078273e"
-  },
-  "thid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4"
-}
-```
-
-The resulting vector is:
+The deterministic Empty fallback uses the same execution ID and the pure-ACK
+handler, kind and ordinal from `distributed-delivery.md` section 8.2:
 
 ```text
-handlerId       = https://estoc.dev/distributed-delivery/1.0#pure-ack
-effectKind      = pure-ack
-ordinal         = 0
-effectInputHash = TYl33OWYFhWry8XvOaqIP8nI9mFj0uuYP9wOXRNpc7k
-effectId        = P705H2L_3dAvvsFrQqG31HMerwOyHNVK3Tlpywl3T3Y
-mid = wireId    = ab5af078-1c93-55cb-9506-978d06eb126e
+effectKey    = miY73SVesmJE0PpYo-9XOAKTkh8my-iMbxfP2oNm5rI
+mid = wireId = 27030c47-8058-5e6d-8741-6229e541af78
 ```
 
 Response timing is deterministic per triggering message:
@@ -909,7 +876,7 @@ Trust Ping response example:
 
 ```json
 {
-  "id": "3ef178eb-d708-5157-b1be-94f5ad0185c7",
+  "id": "b1dfe218-df15-5083-bbcc-2329dcb0f5c4",
   "type": "https://didcomm.org/trust-ping/2.0/ping-response",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -928,7 +895,7 @@ Empty fallback example:
 
 ```json
 {
-  "id": "ab5af078-1c93-55cb-9506-978d06eb126e",
+  "id": "27030c47-8058-5e6d-8741-6229e541af78",
   "type": "https://didcomm.org/empty/1.0/empty",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],

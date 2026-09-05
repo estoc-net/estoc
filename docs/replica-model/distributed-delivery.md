@@ -509,7 +509,8 @@ author produced the intent.
 ### 8.1 Freezing an ACK target set
 
 For one received carrier message `X`, a conforming receiver performs this
-algorithm after normal inbound commit:
+algorithm after normal inbound commit, only when no response intent already
+exists under section 11:
 
 1. If `X.pleaseAck == null`, create no ACK obligation.
 2. Expand `""` to `X.wireId`; retain the first occurrence of every target and
@@ -565,28 +566,21 @@ from application thread display.
 
 ### 8.2 Deterministic pure ACK
 
-For a pure ACK, the effect-specific input is the exact RFC 8785 value:
+For a pure ACK:
 
-```json
-{
-  "ack": ["<frozen target IDs>"],
-  "created_time": "<carrier created_time or null>",
-  "expires_time": null,
-  "pthid": "<carrier pthid or null>",
-  "reply_scope": { "relationship": "<relationship ID>" },
-  "thid": "<carrier thid or carrier wire ID>"
-}
+```text
+handlerId  = https://estoc.dev/distributed-delivery/1.0#pure-ack
+effectKind = pure-ack
+ordinal    = 0
 ```
 
-`created_time` copies the carrier's normalized `createdTime`, including null;
-`pthid` copies the carrier's normalized `pthid`, including null; and
-`expires_time` is null. If `createdTime` is null, the outbound intent stores
-null and the wire omits `created_time`. `reply_scope` is the stable execution
-scope used for the carrier. Body and attachments are empty; `pleaseAck` is
-null; `headers` is `{}`.
+The output's `ack`, `thid` and `pthid` follow section 8.1. `createdTime` copies
+the carrier's normalized value, including null; `expiresTime` is null. A null
+`createdTime` omits the wire header. Body and attachments are empty;
+`pleaseAck` is null; `headers` is `{}`.
 
 This is the **generic pure-ACK profile**. A rendezvous handoff Empty Message
-shares the generic deterministic execution/effect/output-ID derivation recipe,
+uses the same handler, kind, ordinal and execution/key/output-ID recipe,
 but it is not this generic profile: `rendezvous.md` freezes its timing,
 `please_ack`, `from_prior`, thread values and replay deadline before intent
 commit. One carrier MUST NOT create both a generic pure-ACK effect and a
@@ -595,28 +589,14 @@ carrier's ACK obligation.
 
 The executable vector uses execution scope
 `{"relationship":"73a7d8f5-3523-5802-9b65-02da2078273e"}`, carrier wire ID
-`019b1b61-3444-7190-9db5-1cc9c215eb23` and this exact effect input:
-
-```json
-{
-  "ack": ["019b1b61-3444-7190-9db5-1cc9c215eb23"],
-  "created_time": null,
-  "expires_time": null,
-  "pthid": null,
-  "reply_scope": {
-    "relationship": "73a7d8f5-3523-5802-9b65-02da2078273e"
-  },
-  "thid": "019b1b61-3444-7190-9db5-1cc9c215eb23"
-}
-```
+`019b1b61-3444-7190-9db5-1cc9c215eb23` and the tuple above.
 
 The generic execution/effect derivation in sections 9 and 11 produces:
 
 ```text
 executionId      = feeae3f7-34ea-5ff1-b449-0ef76a7375c7
-effectInputHash  = AaXUfFDZaQtcuTAUZ37wn2hC2yUXs1hqub910SuBfHg
-effectId         = QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok
-outbound MID = wire ID = 89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e
+effectKey        = QA60SmyoScCqinpKWDanveWJ5CrNVMGA74fKnNxAQpg
+outbound MID = wire ID = f0a3577e-4de5-58aa-8a4b-dd9b3ef0fcf6
 ```
 
 ### 8.3 Applying `ack`
@@ -882,61 +862,46 @@ Problem 2.0; there is no custom decline message.
 
 ## 11. Automatic effects
 
-Every automatic effect is scoped by a durable logical execution identity and
-an effect-specific canonical input:
-
-Each protocol defines a closed RFC 8785 `effectInput` containing every portable
-value that can change the logical effect. Then:
+An automatic DIDComm output is one effect identified by
+`(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST have a valid
+`message.executionBound` for the conflict-free logical input. Each protocol
+MUST define its handler ID, effect kind, stable non-negative integer ordinal
+and output intent rules. Handler IDs and kinds are non-empty strings without
+U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
+leading zeros.
+Retries MUST NOT change the tuple to create another effect or evade a conflict.
 
 ```text
-effectInputHash = base64url(
-  SHA-256(UTF8(RFC8785(effectInput)))
-)
-
-effectId = base64url(
+effectKey = base64url(
   SHA-256(
-    UTF8("estoc/effect/2\0") ||
+    UTF8("estoc/effect/3\0") ||
     UTF8(executionId) || 0x00 ||
     UTF8(handlerId) || 0x00 ||
     UTF8(effectKind) || 0x00 ||
-    UTF8(decimalOrdinal) || 0x00 ||
-    UTF8(effectInputHash)
+    UTF8(decimalOrdinal)
   )
 )
 ```
 
-Each protocol MUST define a closed `effectInput` containing every portable
-value that can change the logical effect, but no package-level route, current
-clock or rebuildable cache state. Before execution, the runtime process-durably
-commits the execution binding and any effect intent. An external call uses
-`effectId` as its idempotency key or explicitly accepts at-least-once behavior.
+The key is unpadded base64url. It determines the outbound MID and wire ID under
+`vault-events.md` section 9.1. The effect's content is its `message.out` intent.
+One key permits only one compatible intent under that document's section 14.8;
+payload validation MUST verify the key against the execution binding and
+producing protocol, and verify the derived MID.
 
-Effects emitting DIDComm messages derive one stable outbound ID from
-`effectId` as specified by `vault-events.md` section 9.1 and use it as the wire
-ID. Duplicate carriers re-submit the existing package under section 8.4 rather
-than deriving another effect.
+Under the writer lock in `event-store.md` section 10, the runtime MUST look up
+the derived MID before freezing ACK targets, timing or other intent fields.
+It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
+content erasure, replay closure, a later observation or a changed clock. If no
+intent exists, it commits the intent and any missing execution binding through
+`Vault.commit` before effects. The lookup and commit are one locked operation.
+A conflicting local intent is rejected before append; imported conflicts remain
+history and suppress work under `vault-events.md` section 14.8. Duplicate
+carriers use the existing package only while section 8.4 permits replay.
 
-Phase 1 has one active writer but still makes no process-level exactly-once
-claim. A future multi-writer profile must coordinate execution bindings before
-it can claim stronger behavior.
-
-An automatic handler operates on a conflict-free logical message through its
-durable, scope-derived `message.executionBound` identity, never directly
-through a transient observation MID or contact ID.
-
-Before invoking an external effect or appending its outbound intent, the
-runtime MUST process-durably commit the execution binding and all available
-effect intent. An external system call uses `effectId` as its idempotency key
-or explicitly documents at-least-once behavior.
-
-The pure-ACK algorithm and executable vector are defined by
-section 8. Its effect input freezes the ACK target
-set, normalized timing, thread and logical reply scope. A duplicate carrier
-re-submits an already-existing package while replay-submission-eligible; it does not
-create another effect.
-
-Package routes and `from_prior` are materialization evidence, not effect
-identity.
+Other external effects MUST commit their protocol-defined portable intent
+before execution and use that protocol's idempotency or explicit at-least-once
+contract. The message fold does not validate those payloads.
 
 Phase 1 has one active writer but still makes no process-level exactly-once
 claim. A future multi-writer profile must coordinate execution bindings before
@@ -1066,9 +1031,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 18. A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
 19. The fixed pure-ACK vector derives execution ID
-    `feeae3f7-34ea-5ff1-b449-0ef76a7375c7`, effect ID
-    `QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok`, and one outbound/wire ID
-    `89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e`.
+    `feeae3f7-34ea-5ff1-b449-0ef76a7375c7`, effect key
+    `QA60SmyoScCqinpKWDanveWJ5CrNVMGA74fKnNxAQpg`, and one outbound/wire ID
+    `f0a3577e-4de5-58aa-8a4b-dd9b3ef0fcf6`.
 20. One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
@@ -1153,3 +1118,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     late-imported alias may change future order, never an already frozen ACK.
 55. A same-author receipt-pair conflict excludes only affected ACK targets;
     other peer scopes and unaffected targets remain processable.
+56. Retry, restore and later aliases reuse the same effect key and frozen
+    intent before computing new ACK targets or timing. Concurrent local workers
+    cannot commit different intents for that key, or change the ordinal to
+    evade the conflict.

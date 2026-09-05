@@ -562,12 +562,7 @@ See `rendezvous.md` section 10.1.
 }
 ```
 
-`because` is `user` or `automatic`. An automatic event also SHOULD carry its
-deterministic `effectId` when the schema-producing procedure has one. For a
-stable rendezvous contact, an initial-message-specific protocol effect ID MUST
-NOT be copied here: later initial messages share the contact. Such an
-event either omits `effectId` or uses a separately defined relationship-stable
-creation effect.
+`because` is `user` or `automatic`.
 
 #### `contact.petname`
 
@@ -860,7 +855,7 @@ An automatic effect derives:
 ```text
 mid = UUIDv5(
   8847bd57-5907-5bcd-9a71-d1e97cee3199,
-  RFC8785(["v1", effectId])
+  RFC8785(["v1", effectKey])
 )
 ```
 
@@ -892,7 +887,7 @@ logical response.
     "intentHash": "<base64url-sha256>",
     "replayUntil": null,
     "executionId": null,
-    "effectId": null
+    "effectKey": null
   }
 }
 ```
@@ -936,9 +931,11 @@ Requirements:
 - `intentHash` is computed under `distributed-delivery.md` section 5;
 - `replayUntil` is an Epoch-Seconds integer or null, controls only exact
   duplicate-response retention and is excluded from the wire and intent hash;
-- `executionId` and `effectId` are both null for a user-authored send and both
+- `executionId` and `effectKey` are both null for a user-authored send and both
   non-null for an automatic effect;
-- `thid`, `pthid`, `expiresTime`, `replayUntil`, `executionId` and `effectId`
+- an automatic intent's key validates under `distributed-delivery.md` section
+  11 and its `mid` equals the section-9.1 derivation;
+- `thid`, `pthid`, `expiresTime`, `replayUntil`, `executionId` and `effectKey`
   are present with null when unused; and
 - appending this event requires no network, resolver, mediator or socket.
 
@@ -1846,7 +1843,7 @@ DID.
     "theirDid": "did:peer:4zQm...initiator-short",
     "ourDid": "2a61bb7e-1578-57ea-83a1-80454032c781",
     "fromPrior": "eyJ...",
-    "handoffMid": "3ef178eb-d708-5157-b1be-94f5ad0185c7"
+    "handoffMid": "b1dfe218-df15-5083-bbcc-2329dcb0f5c4"
   }
 }
 ```
@@ -1872,13 +1869,11 @@ Other values come from immutable references:
 | Responder long form and relationship route | `did.created(ourDid).longForm` and `.boundRoute` |
 | Initiator's presented long form | the origin `message.in` and its validated resolution evidence |
 | Handoff wire ID | `handoffMid` |
-| Handoff execution and effect IDs | `message.out(handoffMid).executionId` and `.effectId` |
+| Handoff execution ID and effect key | `message.out(handoffMid).executionId` and `.effectKey` |
 | Prior spelling, authentication method and rotation instant | verified `fromPrior` payload `iss`/`iat` and protected `kid` |
 
-`effectInputHash` is computed from the protocol's closed effect input during
-handoff-intent validation under `distributed-delivery.md` section 11; it is not
-another relationship payload field. The referenced event skeletons survive
-content erasure. Erasure never selects a new origin, proof or handoff intent.
+The referenced event skeletons survive content erasure. Erasure never selects
+a new origin, proof or handoff intent.
 
 Normative rules:
 
@@ -1899,7 +1894,7 @@ Normative rules:
   `relationshipRoute`, which may differ from the rendezvous ingress route;
 - the referenced handoff intent's `executionId` has a valid binding for this
   relationship and `originWireId` that includes `originInboundMid`, and its
-  `effectId` validates under `distributed-delivery.md` section 11; and
+  `effectKey` validates under `distributed-delivery.md` section 11; and
 - `handoffMid` names one valid deterministic `message.out` for
   `originInboundMid` that explicitly ACKs `originWireId`, requests its own ACK
   with `pleaseAck == [""]`, and freezes a replay deadline.
@@ -2322,6 +2317,12 @@ protocol defines another display time.
 Group `message.out` by `mid`. Multiple identical intent events are one logical
 outbound. Different fields under one `mid` are a conflict, including local
 control fields excluded from the intent hash.
+
+An automatic MID derives only from `effectKey`, so this same fold detects
+different intents under one key. A conflicted MID retains all variants and
+their package history, but MUST NOT prepare, submit or replay any variant;
+arrival order does not select a winner. Previously emitted effects remain
+history.
 
 ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
 derive the candidate outbound's membership from non-conflicted portable
@@ -2894,7 +2895,7 @@ There is no migration requirement from an earlier event vocabulary.
 37. Stable `relationship.established` records the selected origin, generation,
     contact, local DID, peer, handoff MID and exact `fromPrior`. Prior form/kid
     and rotation `iat` derive from the verified JWT; responder long form and
-    route derive from the local DID; execution and effect IDs derive from the
+    route derive from the local DID; execution ID and effect key derive from the
     handoff intent.
 38. `from_prior.iss` uses the exact invitation/snapshot form and its protected
     `kid` belongs to that exact DID.
@@ -3043,3 +3044,13 @@ There is no migration requirement from an earlier event vocabulary.
     skeletons used by `relationship.established`. Restored choices still use
     those references and the exact JWT; a mismatched `iss`, `sub`, `kid` or
     `iat` is a conflict, not authority to select replacement material.
+93. Two automatic intents for the same execution, handler, kind and ordinal
+    have one effect key and MID. Different intent hashes conflict after any
+    permutation of their union; both variants and their packages remain history,
+    with preparation, submission and replay suppressed.
+94. Equal effect keys and intent hashes with different targets or replay
+    deadlines still conflict. Exact duplicate intents produce one logical
+    outbound.
+95. An automatic intent with a key inconsistent with its execution binding or
+    protocol tuple, or a MID inconsistent with its key, is invalid and cannot
+    execute.
