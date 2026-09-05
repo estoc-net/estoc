@@ -109,7 +109,7 @@ informative deferred extensions, not dependencies of this profile.
   responder relationship DID. A conforming initiator also explicitly ACKs the
   handoff response.
 - **Initial-message-bound resolution snapshot** — retained exact DID document
-  bytes, document hash and selected key IDs used to address one initial
+  bytes under their raw CID and selected key IDs used to address one initial
   message. It binds an ordinary application message, not a custom rendezvous
   protocol request.
 - **Bootstrap channel** — the authenticated channel from the initiator
@@ -166,16 +166,15 @@ Before the first package is submitted, the initiator MUST durably retain:
 
 - the exact presented rendezvous DID;
 - the canonical rendezvous DID;
-- the exact RFC 8785 canonical resolved DID document;
-- the unpadded base64url SHA-256 document hash;
+- the exact RFC 8785 canonical resolved DID document under its raw DASL CID;
 - the selected authentication `kid`;
 - the selected key-agreement `kid`; and
 - the resolution event ID.
 
 This is the initial-message-bound resolution snapshot used later to verify
 `from_prior`. A current resolver result MUST NOT silently replace it. A later
-resolution may recover missing bytes only when its canonical document hash
-equals the pinned hash.
+resolution may recover missing bytes only when the raw CID of its canonical
+document bytes equals the pinned document CID.
 
 An external peer or mediator may use `did:web`; resolving it does not create a
 locally controlled DID entity or a document-publication obligation. A Web
@@ -279,8 +278,7 @@ discovery material.
 
 A `rendezvous.generationConfigured` event freezes:
 
-- the rendezvous DID and its fixed authentication and key-agreement methods;
-- exact long-form resolution evidence and the DID's immutable bound route;
+- a reference to the immutable rendezvous DID entity;
 - the independently selected route embedded in responder relationship DIDs;
 - `initialMessageTypes`, an exact non-empty post-admission policy set;
 - admission policy `ask`, `auto` or `silent`;
@@ -315,10 +313,11 @@ It MUST include:
 https://didcomm.org/trust-ping/2.0/ping
 ```
 
-A rendezvous generation is **live** only when its DID, fixed keys, long-form
-document and bound route validate and its mediated bound route, when present,
-is reconciled. A configured but not-yet-live generation is deferred, not
-rejected.
+The DID entity supplies its long form, fixed authentication and key-agreement
+methods, and bound ingress route; the generation does not store copies of
+those values. A rendezvous generation is **live** only when that referenced DID
+and route validate and its mediated bound route, when present, is reconciled.
+A configured but not-yet-live generation is deferred, not rejected.
 
 The sole ingress route is the rendezvous entity's `boundRoute` and MUST equal
 the route encoded in that DID. `relationshipRoute` MAY differ; it is encoded

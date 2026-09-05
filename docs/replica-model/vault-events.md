@@ -381,20 +381,15 @@ A locally controlled communication DID is a Peer DID:
     "did": "did:peer:4zQm...rendezvous-short",
     "longForm": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
     "role": "rendezvous",
-    "authenticationKeys": [
-      "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/authentication"
-    ],
-    "keyAgreementKeys": [
-      "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement"
-    ],
     "boundRoute": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
   }
 }
 ```
 
-`role` is `rendezvous` or `relationship`. `authenticationKeys` and
-`keyAgreementKeys` each contain exactly one version-3 key name under the DID
-entity ID. Both keys are immutable for that entity.
+`role` is `rendezvous` or `relationship`. The entity ID determines exactly
+one authentication key name, `did/<id>/authentication`, and one key-agreement
+key name, `did/<id>/key-agreement`, under section 3.2. Both keys are immutable
+for that entity; their names are derived, not stored as payload fields.
 
 For every locally controlled communication DID:
 
@@ -457,49 +452,6 @@ values under one ID are an integrity conflict. A transport endpoint or
 mediation change creates a new route ID and successor DID entities, allowing
 old and new DIDs and routes to overlap during cutover.
 
-#### `did.routeRegistered`
-
-```json
-{
-  "type": "did.routeRegistered",
-  "roots": [],
-  "data": {
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "route": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
-    "registrationId": "019b2a55-bae7-705a-baea-45782de39809"
-  }
-}
-```
-
-This is an observation that the mediator behind the DID's `boundRoute`
-accepted recipient registration for its canonical short-form spelling.
-`route` MUST equal that `boundRoute`. Phase 1 uses ordinary Coordinate
-Mediation. A deferred mediator extension may later strengthen recipient-control
-proof without changing this event shape.
-
-It is not permanent proof of current mediator state. Every connection
-queries and reconciles the desired `(DID, route)` set from the converged
-vault fold.
-
-#### `did.routeUnregistered`
-
-```json
-{
-  "type": "did.routeUnregistered",
-  "roots": [],
-  "data": {
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "route": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
-    "registrationId": "019b2a55-bae7-705a-baea-45782de39809"
-  }
-}
-```
-
-This observes successful removal of that exact registration generation for
-the `(DID, boundRoute)` pair. A delayed removal for an old `registrationId`
-does not cancel a later registration. Direct routes never produce registration
-events.
-
 #### `route.retired`
 
 ```json
@@ -516,8 +468,7 @@ events.
 Retirement is terminal for the reusable route ID. Every DID that binds it
 becomes visibly unroutable; restoring communication requires a successor DID
 bound to a live route, not a route selection on the old entity. Retirement
-does not erase retained messages or historical per-DID registration
-observations.
+does not erase retained messages.
 
 ### 5.4 Disclosure
 
@@ -1048,9 +999,11 @@ portable stored message, but such diagnostics do not affect semantic equality.
 There is no implementation choice about which portable attachment fields are
 hashed.
 
-Version 3 uses three different hashes. They MUST NOT be conflated.
+Version 3 uses two hashes: `intentHash` for immutable message intent and
+`plaintextHash` for one exact complete plaintext. The semantic projection below
+is a component of the intent projection, not a separately stored hash.
 
-### 8.1 Semantic hash
+### 8.1 Semantic projection
 
 The semantic projection contains only:
 
@@ -1066,9 +1019,8 @@ The semantic projection contains only:
 ```
 
 `body` and `attachments` are reconstructed from the closed stored-message
-representation above. Absent thread values are null. `semanticHash` is
-unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON for this exact
-projection.
+representation above. Absent thread values are null. This exact value is the
+`semantic` member of the intent projection in section 8.2.
 
 It excludes package addressing and control headers:
 
@@ -1132,7 +1084,7 @@ one observation. It includes `from`, `to`, `from_prior` and every other present
 header.
 
 Several packages or observations of one logical message may have different
-`plaintextHash` values while keeping equal semantic and intent hashes only when
+`plaintextHash` values while keeping equal intent hashes only when
 their package-level addressing and security evidence independently validate
 under `distributed-delivery/1.0`.
 
@@ -1191,7 +1143,6 @@ response.
     "headers": {},
     "body": "bafkrei...body",
     "attachments": ["bafkrei...attachment"],
-    "semanticHash": "<base64url-sha256>",
     "intentHash": "<base64url-sha256>",
     "replayUntil": null,
     "executionId": null,
@@ -1236,7 +1187,7 @@ Requirements:
 - `attachments` is the distinct ordered list of object-backed attachment
   payload roots from that document; link-only descriptors add no entry;
 - `roots` is the distinct ordered set of `body` followed by `attachments`;
-- `semanticHash` and `intentHash` are computed under section 8;
+- `intentHash` is computed under section 8;
 - `replayUntil` is an Epoch-Seconds integer or null, controls only exact
   duplicate-response retention and is excluded from the wire and intent hash;
 - `executionId` and `effectId` are both null for a user-authored send and both
@@ -1252,8 +1203,8 @@ non-null; emits `please_ack` whenever `pleaseAck` is non-null; emits `ack` and
 `attachments` when non-empty; and expands `headers` at plaintext top level.
 
 More than one `message.out` under one `mid` is allowed only when every field is
-identical. Reuse of one wire ID with a different semantic or intent projection
-is an integrity conflict.
+identical. Reuse of one wire ID with a different intent projection is an intent
+conflict.
 
 ### 9.3 `message.prepared`
 
@@ -1271,11 +1222,9 @@ is an integrity conflict.
     "recipientDid": "did:peer:4zQm...short",
     "peerResolution": "019b2a72-0626-7a87-a310-941fe4c1ce77",
     "fromPrior": null,
-    "semanticHash": "a4XN_teuGtrU-thj2lhR84rFrY1ZDVtqt2FPBmEDQUY",
     "intentHash": "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA",
     "plaintextHash": "WkPpglZREjLGtviZ1L6c-R3EX1cTHtbe0sJrmhl77LQ",
-    "envelope": "bafkrei...encrypted-envelope",
-    "envelopeHash": "-7R5QBlmLhRVtCZlKz4FtGt35wd9d-9_cNe_NbdCMag"
+    "envelope": "bafkrei...encrypted-envelope"
   }
 }
 ```
@@ -1290,7 +1239,7 @@ Requirements:
   `from` under the exact spelling used by the package;
 - the plaintext `id`, semantic fields and immutable control headers equal
   `message.out`;
-- `semanticHash` and `intentHash` equal the intent values;
+- `intentHash` equals the intent value;
 - `plaintextHash` hashes the complete plaintext actually encrypted;
 - `recipientDid` is the package's exact application `to` DID;
 - `peerResolution` names the exact `peer.resolved` evidence used to select
@@ -1299,13 +1248,12 @@ Requirements:
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
   a raw DASL CID; duplicate members or invalid I-JSON are rejected before
-  canonicalization;
-- `envelopeHash` hashes those bytes;
+  canonicalization. The `envelope` CID commits to those exact bytes;
 - `packageId` is a UUIDv7 and equals outer `forward.id`; and
 - every retry of this package uses identical envelope bytes.
 
-All packages for one `mid` MUST preserve semantic and intent hashes. A new
-package MAY change `senderDid`, `myKey`, `recipientDid`, `peerKey`,
+All packages for one `mid` MUST preserve its intent hash. A new package MAY
+change `senderDid`, `myKey`, `recipientDid`, `peerKey`,
 `peerResolution` or `fromPrior` only when the change follows a valid selected
 DID entity or verified contact-scoped continuation for the same logical target.
 Every such change requires a new package ID and plaintext hash. A protocol may
@@ -1546,7 +1494,6 @@ observation MIDs remain stored for audit and conflict detection.
     "mid": "29370ccd-932b-51eb-9cc3-4c083adc151a",
     "wireId": "019b2a70-f225-721c-835f-67175be0667e",
     "receiptOrdinal": "42",
-    "semanticHash": "eC9pbQTv_pbViy0dXQBZHEFVHybyZZyAfbJbhgwNoR8",
     "intentHash": "855qiA-zQ94SVOPYj2KnooWRNJAe1GB419LMTGLMwAs",
     "plaintextHash": "dpPwT44Xre48u9xon4fUfvLOEQI6nYxQDzCCFnCJMK8",
     "myKey": "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement",
@@ -1580,7 +1527,7 @@ Requirements:
 - `receiptOrdinal` is a canonical positive decimal integer string assigned to
   this newly committed observation event under the vault-wide allocator below;
   it is immutable portable evidence, not an EventStore `ChangeToken`;
-- all three hashes are computed under section 8;
+- `intentHash` and `plaintextHash` are computed under section 8;
 - `myKey` is the exact local key that decrypted or verified the message;
 - `peerKey` is the authenticated sender fingerprint or null for anonymous;
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
@@ -1682,11 +1629,11 @@ First group observations by deterministic `mid`.
 
 Within one MID:
 
-- equal semantic and intent hashes are one observation group;
+- equal intent hashes are one observation group;
 - differing `receivedVia`, valid local recipient keys or valid complete
   plaintext hashes are package/replica observations;
-- different semantic hash is an application-content integrity conflict;
-- equal semantic hash but different intent hash is a control-intent conflict;
+- different intent hash is an intent conflict, whether application content
+  or immutable control headers differ;
 - different plaintext hashes are allowed only when each `from`, `to`,
   `from_prior` and resolution chain validates under the same logical target;
   and
@@ -1698,7 +1645,7 @@ with the same `wireId` are one logical message only when:
 
 1. their authenticated peer DIDs/keys are joined by a verified
    relationship-scoped `peer.transitioned` chain;
-2. the semantic and intent hashes agree;
+2. the intent hashes agree;
 3. every package-level address and transition proof validates; and
 4. neither group is already conflicted.
 
@@ -1707,8 +1654,8 @@ message after an authenticated key/DID continuation without displaying it
 twice. Reuse of the same wire ID by an unrelated key, another relationship or
 an unverified transition remains a separate message or conflict.
 
-When semantic and intent hashes agree, `ack` and `pleaseAck` are stable across
-valid observations because they are inside the intent projection. Valid
+When intent hashes agree, `ack` and `pleaseAck` are stable across valid
+observations because they are inside the intent projection. Valid
 package-specific `from_prior` evidence may differ only alongside a permitted
 address transition and remains independently verifiable.
 
@@ -1839,7 +1786,6 @@ kept distinct from contact decisions and from our own DID entities.
     "presentedDid": "did:web:alice.example",
     "did": "did:web:alice.example",
     "document": "bafkrei...resolved-did-document",
-    "documentHash": "THXDWdlKuVgSgQk5PQIThaGKGQRDxoCmBxsfVGnSLos",
     "authenticationKids": [
       "did:web:alice.example#authentication-0"
     ],
@@ -1857,8 +1803,8 @@ peer key.
 - `presentedDid` is the exact DID string supplied by the peer or resolver.
 - `did` is the canonical DID used by folds. For Peer DID numalgo 4 it is the
   short form; first disclosure keeps the long form in `presentedDid`.
-- `document` is exact RFC 8785 canonical resolved DID document JSON.
-- `documentHash` is unpadded base64url SHA-256 of the object bytes.
+- `document` names the raw DASL object containing exact RFC 8785 canonical
+  resolved DID document JSON. Its CID commits to those bytes.
 - the authenticated `peerKey` must be present under the named DID and exact
   document;
 - `authenticationKids` and `keyAgreementKids` are context, not independent
@@ -1878,7 +1824,7 @@ A short form received before corresponding long-form resolution evidence is
 known cannot establish an authenticated relationship.
 
 Equivalent duplicate observations are harmless. Same presented/canonical DID
-and document hash with incompatible contents is an integrity conflict.
+and document CID with incompatible contents is an integrity conflict.
 
 ### 11.2 `peer.transitioned`
 
@@ -1920,10 +1866,10 @@ inbound message.
 - `mid` is the actual inbound message entity carrying the proof.
 
 The verifier MUST use the named historical resolution snapshot. A network
-fetch of a newer `did:web` document is not a substitute unless its canonical
-hash exactly matches that snapshot. Missing snapshot material creates a
-retryable deferred state; an invalid signature, claim, key or long form is a
-conflict.
+fetch of a newer `did:web` document is not a substitute unless the raw CID of
+its canonical bytes exactly matches the pinned document CID. Missing snapshot
+material creates a retryable deferred state; an invalid signature, claim, key
+or long form is a conflict.
 
 The processing procedure attaches the new authenticated channel to the named
 contact, preferably in the same `appendAll`. The transition changes the
@@ -1977,8 +1923,8 @@ A server runtime has no special ownership.
 
 ### 12.1 `rendezvous.generationConfigured`
 
-A rendezvous generation freezes admission and handoff policy for one Peer
-rendezvous DID; it does not introduce another generation of that entity's keys:
+A rendezvous generation freezes admission and handoff policy for one immutable
+Peer rendezvous DID entity:
 
 ```json
 {
@@ -1987,10 +1933,6 @@ rendezvous DID; it does not introduce another generation of that entity's keys:
   "data": {
     "id": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
     "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "longForm": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd:z...rendezvous-input-document",
-    "documentHash": "THXDWdlKuVgSgQk5PQIThaGKGQRDxoCmBxsfVGnSLos",
-    "authenticationKid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd:z...rendezvous-input-document#auth-0",
-    "keyAgreementKid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd:z...rendezvous-input-document#agreement-0",
     "relationshipRoute": "019b2a58-75ab-7880-a7d2-c677b6b3bfd1",
     "initialMessageTypes": [
       "https://didcomm.org/trust-ping/2.0/ping",
@@ -2004,35 +1946,32 @@ rendezvous DID; it does not introduce another generation of that entity's keys:
 }
 ```
 
-The named DID has role `rendezvous`. `longForm` MUST equal that entity's
-validated self-resolving long form. `documentHash` is unpadded base64url SHA-256
-of its RFC 8785 canonical resolved DID document. The configured authentication
-and key-agreement IDs MUST identify that entity's fixed keys under the exact
-long-form spelling. Its sole ingress route is the entity's `boundRoute`, which
-MUST match the long-form input document. `relationshipRoute` is independent
-and is encoded only in responder relationship DIDs.
+The named DID has role `rendezvous`. Its long form, decoded document, fixed
+authentication and key-agreement methods, and sole ingress `boundRoute` are
+obtained from that immutable DID entity under section 5.2. The generation does
+not copy them or select different keys. `relationshipRoute` is independent of
+that ingress route and is encoded only in responder relationship DIDs.
 
 Every rendezvous generation freezes:
 
-- the key-agreement method that decrypts new initial messages;
-- the authentication method that signs relationship-level `from_prior`;
-- exact long-form resolution evidence and the DID's immutable bound route;
+- the referenced DID entity;
 - the independently selected route encoded into responder relationship DIDs;
 - `initialMessageTypes`, a non-empty post-admission policy set that MUST
   include Trust Ping `ping`;
 - an initial-message lifetime ceiling of at least 604800 seconds;
 - an initial plaintext safety ceiling of at least 65536 canonical UTF-8 bytes;
   and
-- admission policy.
+- admission policy and auto-admission limits.
 
 `admissionPolicy` is `ask`, `auto` or `silent`. `ask` is the default. `auto`
 requires implementation-documented positive `autoLimits`; `ask` and `silent`
 use null. `silent` finalizes reject without selecting a response.
 
 The event is appended before disclosure and does not alone make the generation
-live. Its DID, long form, decoded document, fixed key IDs and bound route MUST
-validate, and a mediated bound route MUST be currently reconciled. No document
-publication is required.
+live. The referenced DID's long form, fixed keys and bound route MUST validate,
+and a mediated bound route MUST be currently reconciled. No document publication
+is required. An established relationship retains its exact `originGeneration`
+so later policy configurations do not change its frozen handoff material.
 
 A configured generation that can still become live is deferred. A retired or
 permanently invalid generation is terminal.
@@ -2433,14 +2372,13 @@ For each DID entity ID:
 
 - exactly one consistent `did.created` defines its spelling set, role, fixed
   keys and immutable `boundRoute`;
-- registration history is grouped by `(DID, boundRoute, registrationId)`;
 - disclosures are every valid `did.disclosed` in canonical order; and
 - any `did.retired` makes the DID entity terminal.
 
 The fold verifies all of the following:
 
-- each key name uses the DID entity ID and the fixed purpose suffix from
-  section 3.2;
+- key names are derived from the DID entity ID and the fixed purpose suffixes
+  in section 3.2;
 - the seed-derived public keys match the Peer DID input document;
 - the entity stores a valid long form and its derived canonical short form;
 - its sole bound route matches that document and is configured, non-retired
@@ -2455,11 +2393,12 @@ reuse, not DID or contact equivalence.
 
 The desired mediator recipient set contains exactly each
 `(canonical DID short form, boundRoute)` pair for a live DID whose bound route
-is mediated. `did.routeRegistered` and `did.routeUnregistered` are audit
-observations only; the phase-1 runtime queries each mediator and reconciles
-that desired set with ordinary Coordinate Mediation `recipient-query` and
-`recipient-update`. A future mediator profile may additionally require a
-recipient-control proof.
+is mediated. On every connection the phase-1 runtime queries each mediator
+and reconciles that desired set with ordinary Coordinate Mediation
+`recipient-query` and `recipient-update`. Current registration is runtime state,
+not portable vault state. Registration diagnostics MAY be kept in local trace;
+a restore re-queries the mediator before disclosure or submission. A future
+mediator profile may additionally require a recipient-control proof.
 
 Direct bound routes do not enter that set. They lead to a full vault runtime
 or ingress service without naming a replica as the application recipient.
@@ -2473,10 +2412,11 @@ cryptographic use.
 ### 14.5 Rendezvous and relationship fold
 
 For each rendezvous generation, require one consistent
-`rendezvous.generationConfigured` and valid DID/key/route dependencies. It is
-live when its DID is live, its stored long form and decoded input document
-match the fixed keys and bound route, and a mediated bound route is currently
-reconciled.
+`rendezvous.generationConfigured` and valid DID/route dependencies. It is live
+when its referenced DID is live, that entity's long form and decoded input
+document match its fixed keys and bound route, and a mediated bound route is
+currently reconciled. The generation contributes policy, not another copy of
+DID or key state.
 
 `rendezvous.generationRetired` supplies terminal `admitUntil`. Deferral is
 allowed only when the recipient `kid` has already been mapped to an exact
@@ -2635,11 +2575,11 @@ First group `message.in` by deterministic observation `mid`.
 
 For each MID group:
 
-- equal `semanticHash` and `intentHash` forms one observation group;
+- equal `intentHash` values form one observation group;
 - collect every distinct valid plaintext hash, receiving channel,
   `receivedVia` and author observation;
-- different semantic hash is an application-content integrity conflict;
-- equal semantic hash with different intent hash is a control-intent conflict;
+- different intent hash is an intent conflict, whether application content
+  or immutable control headers differ;
 - every package-level address and security proof validates independently;
 - erasure is applied before object presence; and
 - conflict suppresses automatic effects and disputed ACK processing.
@@ -2647,7 +2587,7 @@ For each MID group:
 Union authenticated MID groups into one logical message only when they have
 the same wire ID, resolve to the same unique validated relationship scope,
 have a verified scoped `peer.transitioned` chain between their sender
-keys/DIDs, and agree on semantic and intent hashes with valid package evidence.
+keys/DIDs, and agree on intent hashes with valid package evidence.
 This is the only cross-peer-key wire-ID merge.
 
 Resolve an execution scope before automatic handling. A final accepted
@@ -2689,8 +2629,8 @@ protocol defines another display time.
 ### 14.9 Outbound message and delivery fold
 
 Group `message.out` by `mid`. Multiple identical intent events are one logical
-outbound. Different fields, semantic hash or intent hash under one `mid` are a
-conflict.
+outbound. Different fields under one `mid` are a conflict, including local
+control fields excluded from the intent hash.
 
 ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
 derive the candidate outbound's membership from non-conflicted portable
@@ -2736,7 +2676,7 @@ original carrier after evidence arrives, with all original proof gates.
 For a valid outbound:
 
 - `packages[]` is every consistent `message.prepared` by `packageId`;
-- all packages agree on `wireId`, `semanticHash` and `intentHash`;
+- all packages agree on `wireId` and `intentHash`;
 - packages may differ in plaintext hash, sender/recipient DID, keys and
   `fromPrior` only under validated repack rules;
 - one package is inactive for normal retry after `message.packageRetired` or a
@@ -2916,8 +2856,8 @@ collection while another event or an in-flight reference/snapshot guard retains
 the object.
 
 Unknown event types retain every exact root in their `roots` because version 3
-defines no erase rule for them. A DRISL Tag 42 link is not a retention edge
-unless its CID also appears in an accepted event's `roots`.
+defines no erase rule for them. A CID embedded in object content is not a
+retention edge unless it also appears in an accepted event's `roots`.
 
 An object may be collected only when its exact CID is absent from the current
 held-root set, is absent from pending-reference guards, and the backend's
@@ -3007,10 +2947,10 @@ create ordinary pairwise relationships.
 7. associate the DID entity with the intended contact through
    `contact.useDid`.
 
-For a mediated bound route, register the canonical short form and append
-`did.routeRegistered` before first disclosure. The first DIDComm message that
-reveals the relationship DID MUST use the long form; subsequent messages and
-mediator registration use the short form.
+For a mediated bound route, reconcile and verify registration of the canonical
+short form before first disclosure. The first DIDComm message that reveals the
+relationship DID MUST use the long form; subsequent messages and mediator
+registration use the short form.
 
 Changing keys or bound route creates a new relationship DID and a
 contact-scoped transition. The existing DID entity is not edited.
@@ -3024,11 +2964,11 @@ The Peer profile requires no domain or network resolver:
    keys;
 3. build and validate a `did:peer:4` long form whose input document embeds
    those keys and exactly that bound route;
-4. append `did.created` and `rendezvous.generationConfigured` with canonical
-   short form, exact long form, resolution hash, exact `initialMessageTypes`,
-   admission policy and limits;
-5. when the bound route is mediated, register the canonical short form and
-   append `did.routeRegistered`; and
+4. append `did.created` with both Peer spellings and the bound route, plus
+   `rendezvous.generationConfigured` referencing that DID and freezing the
+   relationship route, `initialMessageTypes`, admission policy and limits;
+5. when the bound route is mediated, reconcile and verify registration of the
+   canonical short form; and
 6. append `did.disclosed`, exposing only the rendezvous Peer DID long form in
    an OOB invitation, QR, file or another discovery object.
 
@@ -3047,8 +2987,8 @@ process displaying the invitation.
 4. select a first application message; when no application content exists,
    use Trust Ping 2.0 `ping` with `response_requested == true`;
 5. write body/attachments and append `message.out` with finite expiry,
-   `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and all
-   hashes; this may happen offline;
+   `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and
+   `intentHash`; this may happen offline;
 6. after intent exists, register the initiator relationship DID canonical
    short form on its bound route when mediated;
 7. resolve the rendezvous DID and append exact `peer.resolved` evidence;
@@ -3155,7 +3095,7 @@ The synchronous full-vault send operation:
 3. selects durable nullable `createdTime`, optional `expiresTime`, exact
    `pleaseAck` value (null or array), exact ordered `ack`, complete `headers`,
    and any required replay deadline;
-4. computes semantic and intent hashes;
+4. computes the intent hash;
 5. rejects a rendezvous DID as an ordinary relationship target;
 6. appends `message.out`; and
 7. returns `mid` and `wireId`.
@@ -3182,8 +3122,8 @@ The active phase-1 runtime may later:
 9. retry according to completion mode.
 
 A new package may change address/security evidence only under validated repack
-rules while preserving semantic and intent hashes. Receiving may join equal
-wire IDs across a verified peer-key transition in one relationship.
+rules while preserving the intent hash. Receiving may join equal wire IDs
+across a verified peer-key transition in one relationship.
 
 ### 16.9 Receive a message
 
@@ -3208,7 +3148,7 @@ For every account-scoped pickup or direct delivery:
    gate; a safely classified hard rejection received through Message Pickup
    MUST be pickup-ACKed without `message.in`;
 5. for admitted or ordinary traffic, derive channel, observation MID,
-   semantic hash, intent hash and exact plaintext hash;
+   intent hash and exact plaintext hash;
 6. write retained body/attachment objects and the stored message document;
 7. process-durably append `message.in` with applicable `channel.firstSeen`,
    exact `peer.resolved`, contact attachment and non-controversial
@@ -3323,7 +3263,7 @@ Compute held roots from the prospective event union and copy only valid absent
 objects required by that fold. Full import publishes events and available
 objects under `event-store.md` section 11.3's complete-view boundary; this
 semantic union is not permission to expose an intermediate event-only import.
-No DRISL link traversal is implied. An erased message/root relation does not
+No content traversal is implied. An erased message/root relation does not
 revive merely because an older source still has the bytes.
 
 Missing non-erased bytes remain an integrity/availability condition and may
@@ -3419,11 +3359,11 @@ There is no migration requirement from an earlier event vocabulary.
 7. Standard `please_ack` empty-string and current-ID forms are accepted and
    preserved.
 8. `return_route` is rejected in vault application headers.
-9. Semantic hash covers application ID/type/thread/body/ordered attachments;
-   intent hash additionally covers immutable control headers; plaintext hash
-   covers one exact DIDComm plaintext.
+9. Intent hash covers application ID/type/thread/body/ordered attachments and
+   immutable control headers; plaintext hash covers one exact DIDComm
+   plaintext.
 10. Two packages may differ in valid address/security evidence while agreeing
-    on wire ID, semantic hash and intent hash.
+    on wire ID and intent hash.
 11. Retrying one package preserves identical plaintext, envelope and package
     ID.
 12. HTTP success produces `delivery.submitted`, never acknowledgment.
@@ -3441,7 +3381,7 @@ There is no migration requirement from an earlier event vocabulary.
     cross-key alias in the same relationship derives the same execution ID.
 18. A wrong derived ID or different scope preserves prior history but suppresses
     new automatic execution as an execution-identity conflict.
-19. Semantic/intent conflicts suppress disputed automatic effects and ACK
+19. Intent conflicts suppress disputed automatic effects and ACK
     processing.
 20. Pure Empty ACK is retained and processed but excluded from threads,
     unread counts, notifications and application handlers.
@@ -3458,7 +3398,7 @@ There is no migration requirement from an earlier event vocabulary.
     wrong-recipient input and do not remain pending.
 25. Safely classified hard pre-vault rejection is pickup-ACKed before any
     `message.in` and leaves only bounded local diagnostics.
-26. `peer.resolved` retains exact canonical document bytes/hash,
+26. `peer.resolved` retains exact canonical document bytes under their raw CID,
     presented/canonical DID forms and selected key IDs, including for external
     `did:web` peers.
 27. Peer DID first disclosure uses one identical long-form spelling in
@@ -3514,11 +3454,14 @@ There is no migration requirement from an earlier event vocabulary.
 48. Contact-scoped transition does not globally retire or union the rendezvous
     DID with unrelated relationships.
 49. Peer rendezvous and relationship DIDs may use different mediation routes.
-50. `did.routeRegistered` is an observation that reconnect must revalidate;
-    the desired recipient pair is derived only from a live DID's bound route.
-51. Each local DID entity has one fixed authentication key, one fixed
-    key-agreement key and one immutable bound route. Key or route rotation
-    creates a new entity; both validated Peer spellings map to the same entity.
+50. The desired recipient pair is derived only from a live DID's bound route.
+    Registration is queried and reconciled on reconnect and after restore;
+    local trace loss does not change that desired set.
+51. Each local DID entity derives one fixed authentication key and one fixed
+    key-agreement key by name from its entity ID and has one immutable bound
+    route. Key or route rotation creates a new entity; both validated Peer
+    spellings map to the same entity. A rendezvous generation references that
+    entity and stores only its admission/handoff policy.
 52. Erasure is checked before object presence; late roots receive equivalent
     erasure closure.
 53. Restore from a readable folder creates a new local author unless it is an
@@ -3526,7 +3469,7 @@ There is no migration requirement from an earlier event vocabulary.
     outbox work.
 54. Phase 1 requires neither `replica-mediation/1.0` nor `vault-sync/1.0`.
 55. Shuffling the same event set leaves every phase-1 fold result unchanged.
-56. Closed attachment normalization makes semantic hashes independent of
+56. Closed attachment normalization makes intent hashes independent of
     implementation-selected presentation or diagnostic metadata.
 57. A deterministic response remains replayable from its exact prepared
     envelope after acknowledgment until replay is process-durably closed; merely

@@ -407,23 +407,21 @@ under `dasl-objects.md`:
 - CIDv1;
 - lowercase base32 without padding;
 - SHA-256;
-- codec `raw` or DRISL; and
-- no CIDv0, DAG-PB (including UnixFS metadata nodes), or BDASL.
+- codec `raw`; and
+- no CIDv0, DRISL/`dag-cbor`, DAG-PB (including UnixFS metadata nodes), or BDASL.
 
 The directory is flat. A backend may shard or split an object into private
 extents internally, but export MUST reconstruct one complete file at the flat
 portable path. No portable chunk or extent directory exists.
 
-For a raw CID, the file contains the exact resource bytes. For a DRISL CID, the
-file contains one exact canonical DRISL object. A reader MUST verify filename,
-digest and codec-specific conformance before accepting the object. Acceptance
-means import or first entry into the owned `objects/` namespace. A later
-`open` of an accepted object follows `dasl-objects.md` section 6.4.
+The file contains the exact resource bytes. A reader MUST verify the raw CID
+filename and digest before accepting the object. Acceptance means import or
+first entry into the owned `objects/` namespace. A later `open` of an accepted
+object follows `dasl-objects.md` section 6.3.
 
-A filename/content mismatch, malformed CID, non-canonical DRISL encoding,
-truncation or trailing DRISL bytes is damage. The backend SHOULD move damaged
-material out of the owned `objects/` namespace before continuing, so ordinary
-presence checks treat it as absent.
+A filename/content mismatch, malformed CID or unsupported CID codec is damage.
+The backend SHOULD move damaged material out of the owned `objects/` namespace
+before continuing, so ordinary presence checks treat it as absent.
 
 A portable object is immutable by content. Successful acceptance is
 process-durable under `event-store.md` section 2.1. Repeating acceptance for an
@@ -433,7 +431,7 @@ optimization.
 Writers accept complete objects before an event reference and protect them from
 collection until the reference commits or aborts. A crash may leave a valid
 unreferenced object. Collection later removes only exact unheld, unpinned
-objects older than the configured grace; it does not traverse DRISL links or
+objects older than the configured grace; it does not inspect object content or
 rely on grace in place of commit/GC coordination.
 
 ## 10. `local/`
@@ -805,7 +803,7 @@ The following require a new folder/vault version:
     append.
 11. An ingest writes only decoded events, never copied source segments.
 12. Physical segment order does not affect `scan()`.
-13. An object filename/content mismatch or non-canonical DRISL encoding is damage.
+13. An object filename/content mismatch or unsupported CID codec is damage.
 14. Export from a database and re-import to a folder preserves the event
     set and portable bytes.
 15. Unknown top-level portable files round-trip and are absent-only on
@@ -834,13 +832,13 @@ The following require a new folder/vault version:
     even when the backend stores private extents.
 28. No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
     transport segments.
-29. Collection does not retain or fetch a DRISL-linked object unless its CID is
-    explicitly in the held-root set.
+29. A CID embedded in object content does not cause retention or fetching;
+    only exact CIDs in the held-root set are retained.
 30. Phase 1 never sends `replica_id` to a mediator and does not require
     `vault-sync/1.0`.
-31. Filename, digest and codec-specific validation completes before import or
+31. Raw CID filename and digest validation completes before import or
     first entry into the owned `objects/` namespace; a later `open` follows the
-    verified-stream completion rules in `dasl-objects.md` section 6.4.
+    verified-stream completion rules in `dasl-objects.md` section 6.3.
 32. A successful folder append or first object acceptance survives immediate
     process restart; sudden-power-loss safety remains a separately documented
     flush boundary.

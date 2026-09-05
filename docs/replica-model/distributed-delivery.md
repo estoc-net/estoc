@@ -54,7 +54,6 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
   permitted repackaging.
 - **Semantic projection** — application meaning: `id`, `type`, `thid`,
   `pthid`, body and ordered logical attachments.
-- **Semantic hash** — SHA-256 of the canonical semantic projection.
 - **Intent projection** — semantic projection plus immutable message-level
   control headers recorded by `message.out`.
 - **Intent hash** — SHA-256 of the canonical intent projection.
@@ -80,7 +79,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
   interpreted through contact-scoped DID transitions.
 
 ```text
-one logical message (mid, wire ID, semantic hash, intent hash)
+one logical message (mid, wire ID, intent hash)
     ├── package P1
     │     exact plaintext hash H1
     │     exact encrypted envelope E1
@@ -93,7 +92,7 @@ one logical message (mid, wire ID, semantic hash, intent hash)
             └── mediator delivery D4 to replica B
 ```
 
-`H1` and `H2` may differ while semantic and intent hashes remain equal.
+`H1` and `H2` may differ while intent hashes remain equal.
 
 ## 3. Addressing layers
 
@@ -268,8 +267,8 @@ please_ack, ack, from_prior
 
 `return_route` is forbidden in an Estoc vault application plaintext.
 
-`semanticHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON
-for the projection.
+This projection is the `semantic` member of the intent projection below. It
+has no separately stored hash.
 
 ### 5.2 Intent projection
 
@@ -331,9 +330,9 @@ this projection.
 for the complete innermost DIDComm plaintext actually encrypted by one
 package. It includes `from`, `to`, `from_prior` and every emitted header.
 
-All packages for one outbound `mid` agree on semantic and intent hashes. They
-may have different plaintext hashes only when package-level addressing or
-security evidence changes under an expressly permitted rule.
+All packages for one outbound `mid` agree on the intent hash. They may have
+different plaintext hashes only when package-level addressing or security
+evidence changes under an expressly permitted rule.
 
 ## 6. Preparing a package
 
@@ -643,8 +642,8 @@ mid = UUIDv5(
 )
 ```
 
-These values are **observation identities**. Equal semantic and intent hashes
-under one MID form one observation group; differences are conflicts.
+These values are **observation identities**. Equal intent hashes under one MID
+form one observation group; differences are intent conflicts.
 
 Automatic execution uses a stable **execution scope**, not an observation MID.
 For any inbound carrier with a validated `message.executionBound`, this exact
@@ -704,8 +703,8 @@ channel is the explicit non-transitioning exception in that document's section
 13; it neither aliases keys nor establishes a relationship.
 
 Two authenticated observation groups may be unioned as one logical message
-only when they have the same wire ID, agree on semantic and intent hashes,
-validate every package proof, and resolve to the same execution scope. A
+only when they have the same wire ID, agree on intent hashes, validate every
+package proof, and resolve to the same execution scope. A
 cross-peer-key merge is permitted only through the same non-conflicted
 relationship scope and a verified contact-scoped `peer.transitioned` chain.
 
@@ -819,14 +818,13 @@ Otherwise, first successful submission ends normal background retry for this
 message, even when its `pleaseAck` array asks for acknowledgment of older
 messages.
 
-A recommended inbound observation records all hashes and durable headers:
+A recommended inbound observation records both hashes and durable headers:
 
 ```json
 {
   "mid": "<deterministic inbound message id>",
   "wireId": "<innermost message id>",
   "receiptOrdinal": "42",
-  "semanticHash": "<base64url sha-256>",
   "intentHash": "<base64url sha-256>",
   "plaintextHash": "<base64url sha-256>",
   "createdTime": null,
@@ -898,111 +896,109 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
    and every supported additional header.
 8. `return_route` in vault application headers or innermost plaintext is
    rejected.
-9. Two valid preparations of one intent agree on semantic and intent hashes.
+9. Two valid preparations of one intent agree on the intent hash.
 10. Retrying one package uses identical plaintext, ciphertext and package ID.
 11. A permitted address/key transition creates a new package/plaintext hash
-    while preserving wire ID, semantic hash and intent hash.
-12. Body, type, thread or attachment changes under one wire ID produce a
-    semantic conflict.
-13. Timing, ACK policy or additional-header changes under one wire ID produce
-    an intent conflict.
-14. HTTP or mediator acceptance records submitted, never acknowledged.
-15. A submission-terminal message stops normal retry after first successful
+    while preserving wire ID and intent hash.
+12. Body, type, thread, attachment, timing, ACK policy or additional-header
+    changes under one wire ID produce an intent conflict.
+13. HTTP or mediator acceptance records submitted, never acknowledged.
+14. A submission-terminal message stops normal retry after first successful
     submission; a receipt-required message waits for explicit ACK or another
     terminal state.
-16. A deterministic response acknowledges a message only when explicit `ack`
+15. A deterministic response acknowledges a message only when explicit `ack`
     names its wire ID.
-17. ACK is emitted only after durable inbound commit.
-18. Pure ACK uses `pleaseAck == null`, creates no ACK loop and is
+16. ACK is emitted only after durable inbound commit.
+17. Pure ACK uses `pleaseAck == null`, creates no ACK loop and is
     submission-terminal.
-19. A pure ACK whose carrier omitted `created_time` commits
+18. A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-20. The fixed pure-ACK vector derives execution ID
+19. The fixed pure-ACK vector derives execution ID
     `feeae3f7-34ea-5ff1-b449-0ef76a7375c7`, effect ID
     `QU7ryTNMw1tii4V4tdS3XdEpqknAWUU6PkhTfdgXdok`, MID
     `89bb3649-cd60-51ab-84cf-9f7e0c0f1c3e` and wire ID
     `2b85898b-4c15-5212-a56b-4826d9462a81`.
-21. One carrier that requests current and older known IDs freezes one ordered
+20. One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
-22. ACK of a deterministic response stops normal retry but its exact packages
+21. ACK of a deterministic response stops normal retry but its exact packages
     remain held until durable replay closure.
-23. Duplicate receipt before replay closure re-submits the same response/ACK
+22. Duplicate receipt before replay closure re-submits the same response/ACK
     package only while replay submission is eligible; after durable closure or
     explicit erasure no replacement is minted.
-24. Valid address variants converge; invalid variants conflict.
-25. Equal wire IDs under transition-verified peer keys merge only through the
+23. Valid address variants converge; invalid variants conflict.
+24. Equal wire IDs under transition-verified peer keys merge only through the
     same stable relationship execution scope; unrelated key reuse does not.
-26. A repackaged observation that arrives before transition evidence remains
+25. A repackaged observation that arrives before transition evidence remains
     effect-deferred. After verification it derives the same relationship/wire-ID
     execution identity and cannot execute once per peer key.
-27. A binding with the wrong derived ID or a different scope suppresses new
+26. A binding with the wrong derived ID or a different scope suppresses new
     effects as an execution-identity conflict.
-28. Pure Empty ACK is retained for control/audit but absent from threads,
+27. Pure Empty ACK is retained for control/audit but absent from threads,
     unread counts and application handlers.
-29. Invalid `from_prior` prevents ACK processing and transition.
-30. Duplicate explicit ACKs are harmless and one valid ACK stops all normal
+28. Invalid `from_prior` prevents ACK processing and transition.
+29. Duplicate explicit ACKs are harmless and one valid ACK stops all normal
     receipt-required package retry.
-31. Expiry stops work permanently; a later valid ACK may display
+30. Expiry stops work permanently; a later valid ACK may display
     acknowledged-late without restarting work.
-32. The default initial rendezvous message may be Trust Ping; an admitted
+31. The default initial rendezvous message may be Trust Ping; an admitted
     application message may be first without a custom wrapper.
-33. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
-34. A deterministic handoff response carries pairwise long-form sender
+32. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
+33. A deterministic handoff response carries pairwise long-form sender
     evidence, one frozen relationship-level `from_prior`, explicit ACK and
     `please_ack: [""]`.
-35. `from_prior.sub` equals plaintext `from` byte-for-byte; `from_prior.kid`
+34. `from_prior.sub` equals plaintext `from` byte-for-byte; `from_prior.kid`
     belongs to the exact `iss` spelling pinned from discovery.
-36. Until handoff confirmation, every responder message from the new pairwise
+35. Until handoff confirmation, every responder message from the new pairwise
     DID carries the same `from_prior` and long-form sender spelling.
-37. Direct and mediated delivery enter the same inbound fold.
-38. Crash injection at every section-13 boundary loses neither committed
+36. Direct and mediated delivery enter the same inbound fold.
+37. Crash injection at every section-13 boundary loses neither committed
     outbound intent nor unacknowledged inbound delivery.
-39. Phase 1 works with one active full runtime and ordinary account-scoped
+38. Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
-40. A non-Estoc peer that does not provide explicit ACK or `from_prior`
+39. A non-Estoc peer that does not provide explicit ACK or `from_prior`
     confirmation remains visibly unconfirmed and is outside reliable-bootstrap
     conformance.
-41. A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
+40. A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
     expands the current-message sentinel only for processing, and ignores
     later duplicate targets without changing the stored array.
-42. Two implementations normalize every accepted attachment carrier, missing
+41. Two implementations normalize every accepted attachment carrier, missing
     value, null, empty string and closed metadata field to the same semantic
-    projection and hash.
-43. Conforming mediator operation persists and logs no application plaintext;
+    projection used by `intentHash`.
+42. Conforming mediator operation persists and logs no application plaintext;
     any explicitly enabled bounded diagnostic mode is visibly outside the
     no-plaintext profile.
-44. ACK target lookup is scoped by `(carrier.logicalPeerScope, wireId)`;
+43. ACK target lookup is scoped by `(carrier.logicalPeerScope, wireId)`;
     another relationship reusing the same wire ID is never acknowledged.
-45. ACK target order uses the minimum complete receipt key, not canonical event
+44. ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
-46. Reaching `replayUntil` does not release exact replay material until a
+45. Reaching `replayUntil` does not release exact replay material until a
     durable `message.replayClosed` is committed; restart or clock rollback
     cannot reopen a closed replay obligation.
-47. An unresolved hold or ordinary non-retryable delivery failure blocks
+46. An unresolved hold or ordinary non-retryable delivery failure blocks
     duplicate replay submission without releasing replay material. After
     release, replay resumes only if every other eligibility condition still
     holds.
-48. Generic pure ACK copies carrier `pthid` and normalized `created_time` or
+47. Generic pure ACK copies carrier `pthid` and normalized `created_time` or
     null. Rendezvous handoff Empty uses its separately frozen rendezvous
     profile and one carrier cannot produce both ACK intents.
-49. After initiator handoff validation and restart, the portable relationship
+48. After initiator handoff validation and restart, the portable relationship
     binding reconstructs the same execution ID; later verified rotation does
     not create another execution identity for the same relationship/wire ID.
-50. A held normal-only package survives GC and release with its exact envelope;
+49. A held normal-only package survives GC and release with its exact envelope;
     terminal normal release with a null replay deadline requires no closure.
-51. An author assigns each new observation its own ordinal, including
+50. An author assigns each new observation its own ordinal, including
     duplicates. Restore and import continue above all historical authors;
     cross-author ordinal reuse is valid and sorts by author on a tie.
-52. A binding for ACK-only processing uses `ack` provenance without a handler
+51. A binding for ACK-only processing uses `ack` provenance without a handler
     effect or a different execution identity.
-53. Recovery completes handoff binding even for a known responder DID and finds
+52. Recovery completes handoff binding even for a known responder DID and finds
     pickup-ACKed unfinished work without mediator redelivery.
-54. A crash after an outcome-unknown transport call can reset the local retry
+53. A crash after an outcome-unknown transport call can reset the local retry
     budget, but never changes the wire ID, exact retry package or frozen expiry.
-55. Independently received histories with equal ordinals have the same
+54. Independently received histories with equal ordinals have the same
     scope-local ACK-target order after any permutation of their union. A
     late-imported alias may change future order, never an already frozen ACK.
-56. A same-author receipt-pair conflict excludes only affected ACK targets;
+55. A same-author receipt-pair conflict excludes only affected ACK targets;
     other peer scopes and unaffected targets remain processable.

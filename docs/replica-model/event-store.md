@@ -16,7 +16,7 @@ deferred extensions:
 | document | defines |
 | --- | --- |
 | `event-store.md` | the medium-independent event and vault-store interfaces |
-| `dasl-objects.md` | the pinned DASL CID, object, retention and CAR profile |
+| `dasl-objects.md` | the pinned raw DASL CID, object and retention profile |
 | `vault-folder.md` | the readable `.estoc/` interchange serialization |
 | `vault-events.md` | the meaning and folds of the vault's own event types |
 | `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
@@ -584,30 +584,12 @@ exports or vault sync.
 ## 7. ObjectStore
 
 The vault object store implements `dasl-objects.md`. It accepts only canonical
-DASL CIDs using CIDv1, lowercase base32, SHA-256 and either the `raw` or DRISL
-codec. Portable UnixFS DAG layouts, DAG-PB, CIDv0 and BDASL are not part
-of version 3; raw objects remain valid regardless of how identical bytes were
-produced.
+DASL CIDs using CIDv1, lowercase base32, SHA-256 and the `raw` codec. DRISL
+support is deferred. Portable UnixFS DAG layouts, DAG-PB, CIDv0 and BDASL are
+not part of version 3; raw objects remain valid regardless of how identical
+bytes were produced.
 
 ```ts
-declare const drislLinkBrand: unique symbol;
-
-type DrislLink = {
-  readonly [drislLinkBrand]: true;
-  readonly cid: Cid;
-};
-
-type DrislValue =
-  | null
-  | boolean
-  | bigint
-  | number
-  | string
-  | Uint8Array
-  | DrislLink
-  | readonly DrislValue[]
-  | ReadonlyMap<string, DrislValue>;
-
 type ByteSource =
   | Uint8Array
   | AsyncIterable<Uint8Array>
@@ -615,18 +597,16 @@ type ByteSource =
 
 type ObjectInfo = {
   cid: Cid;
-  codec: "raw" | "drisl";
+  codec: "raw";
   size: number;
 };
 
 interface ObjectStore {
   putRaw(source: ByteSource): Promise<ObjectInfo>;
-  putDrisl(value: DrislValue): Promise<ObjectInfo>;
   putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
 
   open(cid: Cid): Promise<ReadableStream<Uint8Array> | null>;
   read(cid: Cid, maxBytes: number): Promise<Uint8Array | null>;
-  readDrisl(cid: Cid, maxBytes: number): Promise<DrislValue | null>;
 
   stat(cid: Cid): Promise<ObjectInfo | null>;
   has(cid: Cid): Promise<boolean>;
@@ -642,15 +622,13 @@ interface ObjectStore {
 ### 7.1 Whole-resource identity
 
 A raw object CID identifies the complete exact byte sequence, regardless of
-size. A DRISL CID identifies one complete canonical DRISL object. Portable
-large objects are not represented as chunk DAGs.
+size. Portable large objects are not represented as chunk DAGs.
 
 A backend MAY store one portable object in private extents, and a transport MAY
 send it in private segments, but those pieces have no portable CID. Changing
 extent or segment size MUST NOT change the object CID or exported bytes.
 
 `putRaw` computes a raw DASL CID while consuming a finite stream.
-`putDrisl` canonicalizes and validates one bounded DRISL value.
 `putObject` verifies exact encoded bytes against an expected CID and publishes
 nothing until all hash and codec checks succeed.
 
@@ -678,14 +656,14 @@ semantic layer decides whether an absent object means:
 - missing or corrupt local data; or
 - not yet fetched under an explicitly partial local view.
 
-A CID/content mismatch or non-conforming DRISL encoding is damage. A damaged
-object is treated as absent after being reported or quarantined.
+A CID/content mismatch is damage. A damaged object is treated as absent after
+being reported or quarantined.
 
 ### 7.4 Explicit roots and collection
 
 Only exact CIDs in the semantic layer's held-root set are retained.
-`collect(keep)` MUST NOT recursively follow DRISL Tag 42 links. A linked object
-that must remain available is listed explicitly in an event's `roots`.
+`collect(keep)` MUST NOT inspect object content or follow embedded links. An
+object that must remain available is listed explicitly in an event's `roots`.
 
 The local-vault invariant is:
 
@@ -694,8 +672,8 @@ The local-vault invariant is:
 
 An orphan grace period may delay cleanup of abandoned accepted objects, but no
 fixed grace interval can establish this invariant by itself. Repeating a
-successful `putRaw`, `putDrisl` or `putObject` MAY renew orphan age only as a
-storage-policy optimization.
+successful `putRaw` or `putObject` MAY renew orphan age only as a storage-policy
+optimization.
 
 The caller and backend MUST coordinate the interval from held-root snapshot to
 physical unlink with event commits and pending-reference guards. A pending-
@@ -1031,11 +1009,11 @@ A conforming implementation MUST pass at least these cases:
 11. `changes()` returns a complete local delta and rejects another store
     generation's token.
 12. A token is never required for successful full reconciliation.
-13. `putObject` rejects a CID/content mismatch and non-canonical DRISL.
+13. `putObject` rejects a CID/content mismatch or any non-raw CID.
 14. A crash after object acceptance but before event append leaves only a
     collectable orphan.
 15. Collection never removes an exact object in the held-root set and never
-    follows an unlisted DRISL link.
+    follows a link embedded in object content.
 16. Export and re-import preserve every portable byte.
 17. Restore omits local state and mints a fresh replica ID.
 18. No API interprets a hardware or operating-system identifier.

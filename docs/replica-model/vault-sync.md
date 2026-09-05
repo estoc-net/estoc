@@ -212,10 +212,8 @@ Header:
 
 Payload is the exact complete portable object bytes defined by
 `dasl-objects.md`. The CID MUST be canonical. The client MUST call the local
-object verifier before acceptance:
-
-- a raw CID verifies SHA-256 over all payload bytes; and
-- a DRISL CID additionally verifies one complete canonical DRISL object.
+object verifier before acceptance. It requires a raw CID and verifies SHA-256
+over all payload bytes; non-raw CIDs are rejected.
 
 DASL objects are account-wide and MAY satisfy roots from the main vault or any
 extension store. On download, one verified payload may be accepted into every
@@ -1206,7 +1204,7 @@ For a reset baseline or a lost-cursor full reconciliation, the client MUST:
 
 A classified DASL object whose CID is not held MAY be skipped without reading
 its remaining ciphertext. The client MUST NOT expose it, retain it merely
-because a DRISL object links to it, or call `putObject`. The authenticated
+because another object mentions its CID, or call `putObject`. The authenticated
 classification record is sufficient to mark that descriptor as processed for
 this inventory snapshot.
 
@@ -1419,7 +1417,7 @@ MUST NOT disclose another account's object existence.
 27. A late immutable event may reappear after reset, but any newly learned
     root of an already erased logical message receives closure before its
     content object can be offered.
-28. A DRISL Tag 42 link never causes sync fetch or publication unless the
-    linked CID is also in the current held-root set.
+28. A CID embedded in object content never causes sync fetch or publication
+    unless that CID is also in the current held-root set.
 29. Sync unavailability never blocks local event commit, send intent or
     mailbox pickup.
