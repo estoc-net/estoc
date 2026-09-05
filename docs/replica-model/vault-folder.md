@@ -437,7 +437,7 @@ under `dasl-objects.md`:
 - lowercase base32 without padding;
 - SHA-256;
 - codec `raw` or DRISL; and
-- no CIDv0, DAG-PB, UnixFS or BDASL.
+- no CIDv0, DAG-PB (including UnixFS metadata nodes), or BDASL.
 
 The directory is flat. A backend may shard or split an object into private
 extents internally, but export MUST reconstruct one complete file at the flat
@@ -445,7 +445,9 @@ portable path. No portable chunk or extent directory exists.
 
 For a raw CID, the file contains the exact resource bytes. For a DRISL CID, the
 file contains one exact canonical DRISL object. A reader MUST verify filename,
-digest and codec-specific conformance before accepting the object.
+digest and codec-specific conformance before accepting the object. Acceptance
+means import or first entry into the owned `objects/` namespace. A later
+`open` of an accepted object follows `dasl-objects.md` section 6.4.
 
 A filename/content mismatch, malformed CID, non-canonical DRISL encoding,
 truncation or trailing DRISL bytes is damage. The backend SHOULD move damaged
@@ -815,8 +817,12 @@ The following require a new folder/vault version:
     snapshot path is tested by deriving the exact anchor DID.
 28. A large raw object is exported as one exact `objects/<cid>` byte stream
     even when the backend stores private extents.
-29. No folder path exposes UnixFS nodes, portable chunks or transport segments.
+29. No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
+    transport segments.
 30. Collection does not retain or fetch a DRISL-linked object unless its CID is
     explicitly in the held-root set.
 31. Phase 1 never sends `replica_id` to a mediator and does not require
     `vault-sync/1.0`.
+32. Filename, digest and codec-specific validation completes before import or
+    first entry into the owned `objects/` namespace; a later `open` follows the
+    verified-stream completion rules in `dasl-objects.md` section 6.4.

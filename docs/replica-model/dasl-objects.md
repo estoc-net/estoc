@@ -28,7 +28,7 @@ This profile does **not** define:
 - an IPFS node;
 - DHT discovery;
 - Bitswap;
-- UnixFS;
+- portable UnixFS DAG layouts or DAG-PB UnixFS metadata;
 - DAG-PB;
 - automatic graph traversal;
 - a public retrieval service;
@@ -90,11 +90,11 @@ A conforming implementation MUST reject:
 - base58 or another multibase;
 - non-canonical base32;
 - trailing bytes;
-- a codec other than `raw` or `dag-cbor` used with DRISL-conformant bytes;
+- a codec other than `raw` (0x55) or `dag-cbor` (0x71);
 - a hash other than SHA-256;
 - a digest length other than 32 bytes;
 - `dag-pb`;
-- UnixFS roots;
+- DAG-PB UnixFS nodes;
 - BDASL/BLAKE3 identifiers; and
 - a syntactically valid CID whose digest does not match supplied object bytes.
 
@@ -142,6 +142,16 @@ An accepted DRISL object MUST satisfy the complete DRISL profile, including:
 - one finite, complete CBOR item and no trailing bytes;
 - the deterministic CBOR/c encoding required by DRISL;
 - string-only map keys;
+- map keys sorted by the bytewise lexicographic order of their canonical
+  encodings as required by RFC 8949 section 4.2.1; for the string-only keys
+  DRISL permits, this is equivalent to sorting first by UTF-8 byte length and
+  then by the bytewise lexicographic order of the UTF-8 bytes;
+- integers encoded in the shortest CBOR form and limited to major types 0 and
+  1, so `-2^64 <= n <= 2^64 - 1`; an implementation MUST reject rather than
+  round a value it cannot represent exactly;
+- a numeric value that is integral encoded as a CBOR integer regardless of its
+  source-language numeric type; only a non-integral finite value is encoded as
+  a binary64 float;
 - Tag 42 as the only accepted tag;
 - Tag 42 values containing `0x00` followed by one valid binary DASL CID;
 - no indefinite-length values;
@@ -288,9 +298,12 @@ interface ObjectStore {
 
 A language binding MUST preserve every DRISL integer exactly. It MUST reject an
 integer or floating-point input that its runtime would silently round before
-encoding. A `number` value represents only an allowed finite binary64 value;
-`bigint` or an equivalent exact-integer type represents an integer outside the
-runtime's safe integer range.
+encoding. The encoding choice is based on the exact numeric value, not the
+source-language type: an integral value uses CBOR major type 0 or 1, and only a
+non-integral finite value uses binary64. A `number` value MUST be finite and exactly represented by the runtime; when
+it is integral, it is encoded as a CBOR integer. `bigint` or an equivalent
+exact-integer type represents an integer outside the runtime's safe integer
+range.
 
 A backend MAY expose language-specific stream types as long as the observable
 semantics are equivalent.
@@ -338,6 +351,12 @@ operation to renew local orphan age.
 `open(cid)` returns the exact encoded bytes identified by the CID. It returns
 `null` when no accepted object exists. It MUST NOT return a partially written
 object.
+
+Verification is mandatory at acceptance: `putRaw`, `putDrisl`, `putObject` and
+folder import. `open` MAY stream bytes of an already accepted object before the
+digest is rechecked. A backend that rechecks lazily MUST fail the stream before
+completion when the digest or DRISL conformance does not match. A consumer MUST
+NOT treat streamed bytes as verified until the stream completes successfully.
 
 `read(cid, maxBytes)` MUST determine or bound the size before allocating more
 than `maxBytes`. Exceeding the bound is an error, not a truncated success.
@@ -611,3 +630,12 @@ A conforming implementation MUST pass at least these cases:
 19. A private DASL object is not exposed through RASL without a separate
     explicit publication decision.
 20. A core reader rejects a BDASL/BLAKE3 identifier.
+21. DRISL map keys are ordered by canonical-encoding byte order; string keys
+    therefore sort first by UTF-8 byte length and then by UTF-8 bytes.
+22. The same exactly represented integral numeric value supplied through
+    integer-typed and floating-typed language bindings produces identical CBOR
+    integer bytes and the same CID; rounded or out-of-range integers are
+    rejected.
+23. If an accepted object is corrupted and a backend performs lazy read
+    verification, `open` fails before successful stream completion and the
+    consumer cannot treat earlier chunks as verified.

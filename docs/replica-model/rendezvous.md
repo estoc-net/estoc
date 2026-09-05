@@ -409,7 +409,8 @@ A conforming Estoc initial message MUST:
   protected `skid` and decoded `apu`;
 - include immutable `created_time`;
 - include finite `expires_time` with `created_time < expires_time`;
-- have a lifetime no greater than the sender's selected generation ceiling;
+- have a lifetime of at most 604800 seconds unless the responder has
+  advertised a larger ceiling;
 - request explicit acknowledgment of the current message with
   `please_ack: [""]` or with its own wire ID;
 - include the invitation ID as `pthid` when it arose from OOB discovery; and
@@ -736,9 +737,9 @@ from_prior.iat = relationship.rotationIat
 
 ### 11.2 Exact `from_prior` construction and handoff headers
 
-The relationship's compact JWT is constructed once. Its protected header uses
-RFC 8785 JSON and contains a `kid` authorized by the pinned origin snapshot.
-Its payload is:
+The relationship's compact JWT is constructed once and stored byte-exact. Its
+protected header contains a `kid` authorized by the pinned origin snapshot. Its
+payload is:
 
 ```json
 {

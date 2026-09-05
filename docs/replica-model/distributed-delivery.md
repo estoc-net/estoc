@@ -140,7 +140,9 @@ canonicalizes the accepted encrypted-message JSON and stores only those exact
 UTF-8 bytes plus the minimum account, recipient, package, retention, pickup and
 transport metadata required for operation. It MUST NOT persist or log unpacked
 application plaintext, content keys, attachment content, decrypted `forward`
-bodies or request bodies by default.
+bodies or request bodies. A deployment MAY enable bounded diagnostic logging
+only by explicit operator action; such logging is outside the no-plaintext
+profile and MUST be visibly disclosed, access-controlled and time-bounded.
 
 The sender's local DASL CID for the normalized envelope is never part of
 Routing 2.0 and MUST NOT be sent merely to deliver the package.
@@ -297,12 +299,13 @@ For inbound normalization:
 - absent time becomes null; and
 - no additional header becomes `{}`.
 
-`please_ack` and `ack` values are strings. Implementations MUST reject duplicate
-non-empty IDs in one array. At most one empty-string current-message sentinel is
-allowed. Wire order is preserved. `ack` follows oldest-to-newest receive order
-and is never sorted lexicographically. A preparer MUST NOT substitute its clock,
-alter receipt policy, reorder arrays or opportunistically add unrelated
-acknowledgments.
+`please_ack` and `ack` values are strings. Writers SHOULD NOT emit duplicate
+targets. Readers preserve the wire array exactly and, when applying receipt
+semantics, expand `""` only in `please_ack` and ignore each later occurrence of
+a target already seen. Wire order is preserved. `ack` follows oldest-to-newest
+receive order and is never sorted lexicographically. A preparer MUST NOT
+substitute its clock, alter receipt policy, reorder arrays or opportunistically
+add unrelated acknowledgments.
 
 `headers` contains every permitted top-level DIDComm field not represented by
 a dedicated field. A difference in any such field is an intent difference.
@@ -788,3 +791,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 35. A non-Estoc peer that does not provide explicit ACK or `from_prior`
     confirmation remains visibly unconfirmed and is outside reliable-bootstrap
     conformance.
+36. A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
+    expands the current-message sentinel only for processing, and ignores
+    later duplicate targets without changing the stored array.
+37. Conforming mediator operation persists and logs no application plaintext;
+    any explicitly enabled bounded diagnostic mode is visibly outside the
+    no-plaintext profile.

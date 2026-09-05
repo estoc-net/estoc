@@ -504,11 +504,11 @@ exports or vault sync.
 
 The vault object store implements `dasl-objects.md`. It accepts only canonical
 DASL CIDs using CIDv1, lowercase base32, SHA-256 and either the `raw` or DRISL
-codec. UnixFS, DAG-PB, CIDv0 and BDASL are not part of version 3.
+codec. Portable UnixFS DAG layouts, DAG-PB, CIDv0 and BDASL are not part
+of version 3; raw objects remain valid regardless of how identical bytes were
+produced.
 
 ```ts
-type Cid = string;
-
 declare const drislLinkBrand: unique symbol;
 
 type DrislLink = {
@@ -828,7 +828,7 @@ CREATE TABLE events (
   at       TEXT NOT NULL,
   author   TEXT NOT NULL,
   type     TEXT NOT NULL,
-  roots     TEXT NOT NULL,
+  roots    TEXT NOT NULL,
   data     TEXT NOT NULL,
   canonical BLOB NOT NULL
 );

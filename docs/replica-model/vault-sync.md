@@ -360,24 +360,60 @@ accepted object until the complete DASL hash and codec checks succeed.
 ### 4.4 Prefix classification
 
 A download endpoint MUST support byte ranges over the encrypted container.
-A client first requests bytes `0-47` to obtain the complete container header.
+The client derives the plaintext-frame length `L` from the descriptor's
+`byte_count` before making a range request. Let:
+
+```text
+S = 1048576
+B = descriptor.byte_count
+T = B - 48
+
+segment_count = ceil(T / (S + 16))
+L = T - 16 * segment_count
+```
+
+All arithmetic in this inversion MUST use exact integers and MUST reject
+underflow, overflow or a `byte_count` that cannot be represented exactly.
+
+This is the unique inverse of:
+
+```text
+B = 48 + L + 16 * ceil(L / S)
+```
+
+for a valid positive integer `L`, because the right-hand side is strictly
+increasing. The client MUST require:
+
+```text
+segment_count >= 1
+(segment_count - 1) * S < L <= segment_count * S
+B == 48 + L + 16 * ceil(L / S)
+```
+
+A descriptor for which these checks fail is an integrity failure.
+
 Let:
 
 ```text
-p0 = min(1048576, L)
+p0 = min(S, L)
 ```
 
-The exact inclusive range containing the header and complete segment-zero
-record is then:
+The client then requests the single inclusive range:
 
 ```text
 bytes=0-(63+p0)
 ```
 
-That response has exactly `48 + p0 + 16` bytes. After authenticating segment
-zero, the client can parse the bounded plaintext-frame header. This reveals
-the plaintext kind and, for a DASL object, its CID to the authorized client
-without downloading a potentially large payload.
+The response has exactly `48 + p0 + 16` bytes. The client parses the 48-byte
+container header, requires the header's `L` to equal the value derived from
+`byte_count`, derives `K_object`, and authenticates segment zero. Any mismatch
+between the descriptor, header, response length or authenticated segment is an
+integrity failure.
+
+After authenticating segment zero, the client can parse the bounded
+plaintext-frame header. This reveals the plaintext kind and, for a DASL object,
+its CID to the authorized client without downloading a potentially large
+payload.
 
 Prefix classification is an optimization, not acceptance:
 
@@ -899,14 +935,15 @@ immutable encrypted container. It MUST return `Content-Type: application/octet-s
 content coding or transfer transformation; `Content-Encoding` is absent or exactly `identity`. A client
 SHOULD send `Accept-Encoding: identity`.
 
-A client may first obtain bytes `0-47`, calculate `p0 = min(1048576, L)`, and
-then obtain the exact inclusive range `bytes=0-(63+p0)` to authenticate and
-classify the plaintext frame under section 4.4. The `Content-Range`, response
-length, header bytes and any strong entity validator MUST identify the same
-immutable container across both requests. A full acceptance MUST still obtain
-the complete container, enforce `byte_count` and verify `hash`. The client MUST
-abandon a response that is short, overlong, transformed, range-inconsistent or
-hash-invalid.
+A client derives `L` from the descriptor's `byte_count` under section 4.4,
+calculates `p0 = min(1048576, L)`, and may obtain the single exact inclusive
+range `bytes=0-(63+p0)` to authenticate and classify the plaintext frame. The
+`Content-Range`, response length, 48-byte header and any strong entity
+validator MUST identify the advertised immutable container. The header's `L`
+MUST equal the value derived from `byte_count`. A full acceptance MUST still
+obtain the complete container, enforce `byte_count` and verify `hash`. The
+client MUST abandon a response that is short, overlong, transformed,
+range-inconsistent or hash-invalid.
 
 The HTTP URL reveals no logical object ID in its path.
 
@@ -1107,14 +1144,17 @@ replica may reappear.
 A server descriptor is opaque until an authorized client authenticates the
 container prefix. For every previously unknown descriptor, the client:
 
-1. retrieves and validates the 48-byte container header;
-2. derives `p0 = min(1048576, L)` and the exact inclusive segment-zero range
-   `bytes=0-(63+p0)`;
-3. retrieves and authenticates segment zero using the descriptor's opaque
-   object ID;
-4. parses the complete plaintext-frame header, which MUST fit in segment zero;
-5. validates the closed header schema; and
-6. recomputes the expected opaque object ID from the authenticated header.
+1. derives the unique positive `L` from the descriptor's `byte_count` using
+   section 4.4 and rejects an invalid inverse;
+2. derives `p0 = min(1048576, L)` and requests the single exact inclusive
+   segment-zero range `bytes=0-(63+p0)`;
+3. parses the 48-byte container header and requires its `L` to equal the
+   descriptor-derived value;
+4. derives `K_object` and authenticates segment zero using the descriptor's
+   opaque object ID;
+5. parses the complete plaintext-frame header, which MUST fit in segment zero;
+6. validates the closed header schema; and
+7. recomputes the expected opaque object ID from the authenticated header.
 
 An ID mismatch is an integrity failure. Prefix classification does not accept
 the root, event or DASL object and does not replace verification of the full
@@ -1310,10 +1350,11 @@ MUST NOT disclose another account's object existence.
    acceptance.
 5. One-shot and streaming encryption of the same plaintext frame may produce
    different ciphertext but decrypt to the exact same frame and opaque ID.
-6. A client fetches bytes `0-47`, derives `p0`, fetches exactly
-   `bytes=0-(63+p0)`, and authenticates segment zero before trusting a frame
-   header; transformed or inconsistent range responses are rejected, and
-   prefix classification alone never accepts a root, event or DASL object.
+6. A client derives the unique `L` from descriptor `byte_count`, fetches the
+   single exact range `bytes=0-(63+p0)`, requires the 48-byte header's `L` to
+   match, and authenticates segment zero before trusting a frame header;
+   transformed, malformed or inconsistent responses are rejected, and prefix
+   classification alone never accepts a root, event or DASL object.
 7. `changes` and a fixed-through paged inventory cannot permanently skip a
    committed object.
 8. Losing all local cursor state and running inventory discovers the same

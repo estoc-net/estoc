@@ -1841,8 +1841,8 @@ and document hash with incompatible contents is an integrity conflict.
   "roots": [],
   "data": {
     "scope": "relationship",
-    "contact": "48bab320-8759-5579-b78b-531083d49d4c",
-    "myKey": "did/2a61bb7e-1578-57ea-83a1-80454032c781/key-agreement/0",
+    "contact": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement/0",
     "peerKey": "k3j9n0m4x6q2w7c8v5p1d8s0fa",
     "from": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
     "presentedFrom": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd:z...rendezvous-input-document",
@@ -2344,9 +2344,9 @@ The **required receiving set** is every usable mediation that is either:
   DID, appears in the selected route set of a live DID, appears in a selected
   web document revision, or belongs to a non-retired rendezvous generation.
 
-Every full replica attempts replica registration and pickup on every
-reachable mediation in this set. The web publisher and a server full replica
-receive no special ownership.
+The active runtime reconciles recipients and drains account-scoped pickup on
+every reachable mediation in this set. A hosted runtime receives no special
+ownership.
 
 ### 14.3 Sync-store fold (deferred)
 
