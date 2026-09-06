@@ -276,8 +276,9 @@ restored copy also mints a fresh one. An exact physical move MAY preserve
 the author only when no second writer remains.
 
 No author- or replica-creation event is required. The existence of an
-author is evident from its events. Optional replica labels and
-retirement policy are vault events defined in `vault-events.md`.
+author is evident from its events. Optional replica labels and retirement
+policy are deferred `replica.*` events defined in `replica-mediation.md`
+section 5.8; phase 1 defines none.
 
 ### 4.2 Event ID and timestamp
 
@@ -582,8 +583,9 @@ exports or vault sync.
 ## 7. ObjectStore
 
 Object references are the event envelope's `roots` array (section 3.2).
-Only the application computes `keep`, using `vault-events.md`; the object store
-reads no event type.
+Only the vault runtime computes `keep` under `vault-events.md` section 15.3;
+the object store reads no event type and application callers cannot supply a
+keep set.
 
 `dasl-objects.md` defines `ObjectStore`, whole-resource identity,
 write-before-reference, collection and object damage.
@@ -688,13 +690,14 @@ event, object and portable-file mutations. Nested store calls share the
 enclosing operation's lock. A backend MAY use a transaction that provides the
 same serialization.
 
-Object reads use a per-CID read latch shared across every handle, worker and
-process accessing the same physical object namespace, including read-only
-handles. Distinct local store-generation tokens do not separate protection for
-shared bytes. `open` briefly takes the writer lock to check object presence and
-register the latch before exposing a stream, then releases that lock. A backend
-may broker this operation through the active writer process; a read-only handle
-still participates in the same lock and latch registry.
+Within an active writer runtime, object reads use a per-CID read latch shared
+across every handle, worker and process accessing the same physical object
+namespace, including read-only handles. Distinct local store-generation tokens
+do not separate protection for shared bytes. `open` briefly takes the writer
+lock to check object presence and register the latch before exposing a stream,
+then releases that lock. A backend may broker this operation through the active
+writer process; a read-only handle still participates in the same lock and
+latch registry.
 
 The latch remains until stream completion, failure or cancellation and is
 released on each of those paths. A CID remains latched while any of its reads
@@ -702,16 +705,29 @@ is active. `read` uses the same protection. Abandonment without cancellation
 is a caller defect: an idle or unreachable stream's latch MUST NOT time out.
 It persists until one of the release paths above or the process owning that
 stream exits. A process exit releases only its own latches; other processes'
-live streams remain protected. A slow or abandoned consumer therefore retains
-only the opened object's bytes; it MUST NOT hold the writer lock for the
-stream's lifetime. Reads nested inside a commit, import or export share its
-existing lock without shortening that
-operation's required boundary.
+live streams remain protected or fail closed; they never continue unlatched.
+A slow or abandoned consumer in an active writer runtime therefore retains
+only the opened object's bytes; it MUST NOT hold that runtime's writer lock
+for the stream's lifetime. Reads nested inside a commit, import or export
+share its existing lock without shortening that operation's required boundary.
 
-`ingest` holds this lock from its target-state fork and duplicate checks through
-event acceptance. Collection acquires it before computing the current held-root
-set and holds it through physical unlink; a keep set computed before acquiring
-the lock MUST NOT be used. Collection MUST skip a CID with an active read latch
+A read-only stream opened before any writer starts needs the same protection
+against a later collector. It MUST either participate in a cross-process latch
+registry honored by future writers, or acquire the backend's single-writer
+ownership before checking presence and opening bytes, holding that ownership
+until all streams it protects end. This ownership excludes a writable open,
+including its recovery and collection, and is distinct from an active runtime's
+operation lock. A later writable open waits or fails until ownership is
+released. Completion, failure, cancellation and owner-process exit release
+protection as above; idle time does not. Merely observing that no writer is
+running is insufficient. `vault-folder.md` section 15 defines the disk-folder
+case without creating local state from a read-only open.
+
+`ingest` holds the runtime's operation lock from its target-state fork and
+duplicate checks through event acceptance. Collection acquires it before
+computing the current held-root set and holds it through physical unlink;
+a keep set computed before acquiring the lock MUST NOT be used.
+Collection MUST skip a CID with an active read latch
 without waiting for its reader; other eligible CIDs may be unlinked in that
 pass. Latch registration and the collector's latch check/unlink are serialized
 by the writer lock. Latches are local read protection, not portable retention
@@ -908,6 +924,8 @@ section 2.1 and document:
 - implementation of the section-10 writer lock;
 - per-CID latch registration and collection exclusion across processes,
   including read-only handles, stream cancellation and owner-process exit;
+- protection of streams opened without an active writer and how a later
+  writable open joins or waits for that protection;
 - maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
@@ -990,10 +1008,11 @@ A conforming implementation MUST pass at least these cases:
 26. Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.
-27. A paused object stream does not block another handle's commit or portable
-    file write. Collection skips its CID without waiting and can collect an
-    unrelated eligible CID. Completion, failure and cancellation each release
-    the latch so a later pass can collect the now-unkept object.
+27. Within an active writer runtime, a paused object stream does not block
+    another handle's commit or portable-file write. Collection skips its CID
+    without waiting and can collect an unrelated eligible CID. Completion,
+    failure and cancellation each release the latch so a later pass can
+    collect the now-unkept object.
 28. Racing `open` with collection either obtains a protected complete object
     or returns null after unlink; it never exposes an unprotected stream.
     When two streams read the same CID, ending one does not release the other's
@@ -1012,3 +1031,9 @@ A conforming implementation MUST pass at least these cases:
     one reader process releases only its latches; another process's stream on
     the same CID stays protected. A backend without this coordination refuses
     live concurrent object reads rather than exposing an unprotected stream.
+32. A read-only process opens and pauses an object stream before any writer
+    starts. A later writable open either joins its existing cross-process
+    protection or waits/fails behind its single-writer ownership. There is no
+    interval in which collection can unlink the stream's bytes. Releasing one
+    of two streams does not release the other's protection; after the last
+    stream ends, a writer can open and collect an otherwise eligible object.

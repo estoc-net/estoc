@@ -257,9 +257,11 @@ bytes as verified until the stream completes successfully.
 `read(cid, maxBytes)` MUST determine or bound the size before allocating more
 than `maxBytes`. Exceeding the bound is an error, not a truncated success.
 
-Object streams and bounded reads use the per-CID read-latch lifecycle in
-`event-store.md` section 10. Collection cannot unlink their bytes during the
-read, and a caller's stream lifetime does not hold the vault writer lock.
+Object streams and bounded reads use the read protection in `event-store.md`
+section 10. Collection cannot unlink their bytes during the read. Within an
+active writer runtime, a caller's stream lifetime does not hold its operation
+lock; a read-only stream opened without a writer follows that section's
+rule for excluding a later writer or sharing latches with it.
 
 ## 7. Event roots and retention
 

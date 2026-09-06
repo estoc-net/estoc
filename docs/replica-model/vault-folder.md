@@ -518,6 +518,9 @@ A read-only open:
    it exposes only a verified complete published generation or explicit
    incomplete-import diagnostics.
 
+Opening object streams additionally follows section 15, even when no writer
+was running at read-only open time.
+
 A writable open additionally:
 
 1. validates `keystore.json`;
@@ -719,8 +722,9 @@ event and DASL objects without changing this folder format.
 
 ## 15. Concurrency and crash behavior
 
-One writable folder generation requires one logical writer lock. Typical
-implementations use:
+One writable folder generation requires exclusive single-writer ownership
+for the lifetime of the writable open and operation serialization under
+`event-store.md` section 10. Typical ownership mechanisms are:
 
 - a Web Lock for browser OPFS; or
 - one daemon/process lock for a disk folder.
@@ -736,10 +740,27 @@ releases that stream's latch; an idle client does not. A disconnect that ends
 the stream is cancellation. Losing the daemon fails its client streams rather
 than allowing them to continue reading the shared namespace without latches.
 An independent reader MUST NOT bypass this coordination by directly opening
-`objects/<cid>` while collection can run. A backend may instead implement the
-same cross-process lock/latch contract with shared coordination primitives,
-documented under `event-store.md` section 13. Without such coordination it
-refuses live concurrent object reads or serves an isolated immutable snapshot.
+`objects/<cid>` merely because no daemon is currently running.
+
+In this disk implementation, a read-only process without a daemon MUST acquire
+the same single-writer ownership used by writable open before checking object
+presence and opening `objects/<cid>`. It holds ownership until its last object
+stream completes, fails or is cancelled, or the owning process exits. The
+ownership primitive MUST be available without creating or modifying files,
+including `local/`; its identity MUST be shared by readers and future writers.
+An advisory lock on the existing folder is one possible implementation. A
+writable open started meanwhile waits or fails before recovery or collection.
+Checking for a daemon and then opening unprotected bytes is forbidden. If a
+writer wins ownership first, the reader uses its broker, waits or fails. The
+active daemon's per-operation lock is separate from this lifetime ownership;
+ordinary brokered streams never hold that operation lock for their lifetime.
+
+A backend may instead implement the same cross-process lock/latch contract
+with shared coordination primitives, including protection established before
+writer startup, documented under `event-store.md` section 13. Without either
+form of protection it refuses live object reads or serves an isolated immutable
+snapshot. A read-only stream never times out its protection under
+`event-store.md` section 10.
 
 Within the active runtime, all workers MUST obey the operation serialization
 and writer-lock boundaries in `event-store.md` section 10.
@@ -865,3 +886,10 @@ The following require a new folder/vault version:
     `event-store.md` section 10. Holding the disk writer's process lock alone
     cannot authorize an unprotected CLI stream; a brokered reader remains
     protected during collection and fails if its owning daemon exits.
+43. With no daemon, a read-only CLI in the section-15 ownership implementation
+    opens two object streams without creating or modifying files. A later
+    writable open waits or fails, including after only one stream ends; both
+    streams can finish completely. Once the last stream completes, fails or
+    is cancelled, or the reader process exits, a new writer can acquire
+    ownership and collect an otherwise eligible object. No collection overlaps
+    an unprotected stream.

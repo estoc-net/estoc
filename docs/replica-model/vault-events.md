@@ -259,6 +259,12 @@ observed, or null when none was presented. A Peer DID numalgo-4 first
 disclosure therefore records its long form here and its canonical short form
 through `peer.resolved`.
 
+A channel first seen by an authcrypted send, including `rendezvous.md` section
+8.5's initial message, records `kind == "authcrypt"` and `firstDid` as the exact
+peer DID spelling supplied for pinned resolution (the presented long form for
+a first Peer DID numalgo-4 disclosure). This records the selected channel,
+not evidence that the peer received a message.
+
 A replica appends this observation when it first encounters a channel
 for which the converged vault has no equivalent observation. Concurrent
 duplicates are harmless. If one `peerKey` is associated with different
@@ -613,9 +619,10 @@ This outbound preference associates one of our communication DID entities
 with the contact. `because` is `relationship`, `rendezvous`, `manual` or
 another documented policy value.
 
-A normal established contact SHOULD use a relationship DID. A rendezvous DID
-may be used only for bootstrap or another protocol that explicitly permits
-rendezvous-addressed communication. This event
+A normal established contact SHOULD use a local relationship DID. This
+preference MUST NOT select a local rendezvous DID as the sender. The
+initial-message procedure also sends from a local relationship DID; the
+explicit-channel rejection exception is defined in section 9.2. This event
 says nothing about an authenticated peer channel.
 
 #### `contact.peerDidAdded`
@@ -912,10 +919,12 @@ or:
 }
 ```
 
-A contact target may select a rendezvous DID only for an initial-message send
-under `rendezvous.md`. Ordinary relationship messages never select a
-rendezvous DID. A peer-key-null channel cannot be used for an authenticated
-reply.
+A contact target may select a peer's rendezvous DID only for an initial-message
+send under `rendezvous.md`, with a local relationship DID as sender. An explicit
+channel target whose `myKey` belongs to a local rendezvous DID is permitted
+only for the deterministic rejection effect under `rendezvous.md` section 13.
+Ordinary relationship messages use no rendezvous DID as sender or recipient.
+A peer-key-null channel cannot be used for an authenticated reply.
 
 Requirements:
 
@@ -936,6 +945,8 @@ Requirements:
   duplicate-response retention and is excluded from the wire and intent hash;
 - `executionId`, `handlerId`, `effectKind`, `ordinal` and `effectKey` are all
   null for a user-authored send and all non-null for an automatic effect;
+- a user-authored send has `ack == []`; honoring an inbound ACK request uses
+  the deterministic response algorithm;
 - `handlerId` and `effectKind` obey `distributed-delivery.md` section 11;
   `ordinal` stores its `decimalOrdinal` as a canonical non-negative decimal
   integer string (`"0"` for zero, otherwise digits without a leading zero);
@@ -986,7 +997,8 @@ replica.
 
 Requirements:
 
-- `senderDid` names a live local DID entity selected for the target;
+- `senderDid` names a live local DID entity selected for the target under
+  section 9.2's sender and recipient restrictions;
 - `myKey` is that entity's key-agreement key and authorizes the plaintext
   `from` under the exact spelling used by the package;
 - the plaintext `id` equals `message.out.mid`; its other semantic fields
@@ -1380,10 +1392,8 @@ ack != []
 pleaseAck = null
 ```
 
-It remains a durable `message.in` observation and its validated ACK side
-effects are processed, but it is excluded from conversation/thread display,
-unread counts, user notifications and application-content handlers. Invalid
-empty-message variants are not treated as pure ACKs.
+It is a control observation under section 14.7. Invalid empty-message variants
+are not treated as pure ACKs.
 
 Anonymous senders can intentionally reuse wire IDs, so applications SHOULD
 apply stricter replay and automatic-handling policy to them.
@@ -1618,8 +1628,12 @@ Every rendezvous generation freezes:
 - admission policy and auto-admission limits.
 
 `admissionPolicy` is `ask`, `auto` or `silent`. `ask` is the default. `auto`
-requires implementation-documented positive `autoLimits`; `ask` and `silent`
-use null. `silent` finalizes reject without selecting a response.
+requires `autoLimits` to be a non-null `JsonObject` containing positive bounded
+auto-admission limits; `ask` and `silent` use null. Its type is
+`JsonObject | null`; the implementation MUST document the object's supported
+members, units and validation rules. The outer event payload remains closed;
+an implementation unable to interpret the configured limits MUST NOT
+auto-admit under them. `silent` finalizes reject without selecting a response.
 
 The event is appended before disclosure and does not alone make the generation
 live. The referenced DID's long form, fixed keys and bound route MUST validate,
@@ -2187,10 +2201,10 @@ Fold each `cid` independently:
   ordinary package can currently be prepared; and
 - `thread` is the logical application-message union below.
 
-A DID whose local role is `rendezvous` is never included in ordinary
-`writeTo[]`, whether bootstrap is pending, rejected or not yet attempted. It
-may be selected only by the explicit initial-message bootstrap procedure. This
-prevents ordinary content from being sent to a rendezvous address.
+Ordinary `writeTo[]` excludes rendezvous DIDs on either side, regardless of
+bootstrap state. Section 9.2 permits only the initial-message procedure
+targeting a peer's rendezvous DID and the section-13 rejection effect in
+`rendezvous.md` sending from a local rendezvous DID.
 
 A responder relationship may enter ordinary `writeTo[]` after effective
 acceptance and pairwise DID creation. Until an authenticated message is
@@ -2202,6 +2216,31 @@ A fold MUST NOT select one of several current relationship ends by clock
 order. Transition ambiguity, sender-DID disagreement and conflicting user
 decisions are visible conflicts. A tombstoned deterministic rendezvous contact
 is never recreated by another event with the same ID.
+
+The contact view derives attempt diagnostics from conflict-free logical
+no-handoff errors with a unique derived control scope under
+`distributed-delivery.md` section 9. Match each report against all
+initial outbounds with package evidence on that exact pinned channel.
+Report Problem requires `report.pthid == (initial.thid ?? initial.mid)`
+under `rendezvous.md` section 13; another protocol error uses its protocol's
+correlation rule. Exactly one initial MID must match, with valid, conflict-free
+evidence; dropping conflicted evidence cannot resolve an ambiguous match.
+While the report body is available under section 15.2, the view MUST show its
+diagnostic beside that initial outbound's delivery outcome in its target
+contact. An ambiguous
+or unmatched report produces no attempt diagnostic; its `ack` array is never
+used to select the rejected attempt or to mark every acknowledged message
+rejected.
+
+Show Report Problem's validated body `code`, or the protocol-defined error
+reason, once per logical report; multiple reports are ordered by their earliest
+canonical observations, not reduced to a contact-wide rejection state. Erasure
+removes that report's diagnostic even if another reference retains the bytes;
+missing or damaged content follows section 15.2 and supplies no inferred reason.
+Silent rejection supplies no remote diagnostic. These diagnostics neither
+override an established relationship nor change section 14.8's delivery
+precedence, retry or retention rules: explicit ACK still means receipt, and
+without it the initial message follows its existing retry and expiry rules.
 
 ### 14.7 Inbound message and execution fold
 
@@ -2233,10 +2272,24 @@ This is the only cross-peer-key wire-ID merge.
 Each resulting conflict-free logical group uses its derived execution ID under
 `distributed-delivery.md` section 9 for ACK processing and automatic effects.
 
-A conforming `https://didcomm.org/empty/1.0/empty` pure ACK is retained as a
-control observation and its validated `ack` array is processed, but it is
-excluded from thread display, unread counts, notifications and
-application-content handlers.
+A **control observation** is one of:
+
+- a conforming pure ACK under section 10.3;
+- a valid rendezvous handoff response of type
+  `https://didcomm.org/empty/1.0/empty` or
+  `https://didcomm.org/trust-ping/2.0/ping-response`, processed under
+  `rendezvous.md` section 12; or
+- a valid no-handoff error under `distributed-delivery.md` section 9's
+  control row.
+
+Control observations remain durable. Their validated `ack`, transition,
+binding and protocol-required confirmation effects follow the existing
+processing rules; they are excluded from thread display, unread counts,
+notifications and application-content handlers. A no-handoff report's attempt
+diagnostic follows section 14.6. An admitted initial message, including Trust
+Ping `ping`, is not a control observation merely because it bootstraps a
+relationship; the rendezvous fold projects the candidate. A type name alone
+does not make an invalid Empty, handoff or error message a control observation.
 
 A user-visible thread contains each remaining logical application message once,
 positioned by the earliest canonical observation unless its application
@@ -2792,8 +2845,12 @@ There is no migration requirement from an earlier event vocabulary.
     conflict; different valid local recipient keys cannot cause two executions.
 19. Intent conflicts suppress disputed automatic effects and ACK
     processing.
-20. Pure Empty ACK is retained and processed but excluded from threads,
-    unread counts, notifications and application handlers.
+20. Pure Empty ACK, valid handoff Empty with `pleaseAck == [""]`, handoff
+    `ping-response` and valid no-handoff errors obey section 14.7's control
+    classification. Their explicit ACKs still produce `delivery.acknowledged`
+    and a handoff's confirmation still runs; none enters the thread, unread
+    counts, notifications or application-content handlers. An admitted initial
+    Trust Ping remains a bootstrap candidate, not a control observation.
 21. Pure ACK has `pleaseAck == null`; its first successful submission is
     terminal and creates no ACK loop.
 22. Duplicate receipt of a message whose requested IDs were already honored
@@ -2864,8 +2921,11 @@ There is no migration requirement from an earlier event vocabulary.
     spelling.
 46. A rejected durable candidate eventually releases its content roots through
     `message.erased`; the skeleton remains, including for silent rejection.
-47. A rendezvous DID is excluded from ordinary `writeTo`; the initial-message
-    procedure is the only ordinary sender path targeting it.
+47. A rendezvous DID is excluded from ordinary `writeTo`. An initial message
+    sends from a local relationship DID to the peer's rendezvous DID. A valid
+    rejection under `rendezvous.md` section 13 can prepare from the local
+    rendezvous DID through its exact explicit channel; a user send or another
+    effect using that same local rendezvous key is rejected before preparation.
 48. Contact-scoped transition does not globally retire or union the rendezvous
     DID with unrelated relationships.
 49. Peer rendezvous and relationship DIDs may use different mediation routes.
@@ -3006,9 +3066,19 @@ There is no migration requirement from an earlier event vocabulary.
 95. Every automatic `message.out` retains `handlerId`, `effectKind` and the
     canonical decimal `ordinal` with its execution ID and key. Reopen can
     recompute the key from those fields; a missing or altered tuple component
-    cannot authorize work. A user-authored send has all five fields null.
+    cannot authorize work. A user-authored send has all five fields null and
+    `ack == []`; a non-empty ACK cannot bypass deterministic effect selection.
 96. After an ACK-bearing response is frozen, a changed handler, effect kind or
     ordinal cannot create another ACK-bearing MID for that execution, even
     after erasure or replay closure. Importing competing response MIDs keeps
     their history and suppresses all competing responses under every event
     permutation; exact duplicates count once.
+97. A valid no-handoff rejection with a unique pinned-channel and thread match
+    shows its retained reason beside only that initial attempt. With explicit
+    ACK the delivery outcome remains acknowledged and normal retry stops;
+    without ACK existing retry rules continue. Duplicate observations show one
+    diagnostic, and permutations give the same report order. A report naming
+    several ACK targets does not reject them all; ambiguous correlation shows
+    no attempt diagnostic. Restart reconstructs the view, body erasure removes
+    the diagnostic even if its CID remains elsewhere, and a delayed report
+    never overrides an established relationship.

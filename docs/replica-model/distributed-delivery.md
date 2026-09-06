@@ -566,8 +566,8 @@ child thread of X's protocol thread, using that profile's `thid`/`pthid` rule.
 
 A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
-Pure ACKs contain no `please_ack`, are submission-terminal, and are excluded
-from application thread display.
+Pure ACKs contain no `please_ack` and are submission-terminal; they are control
+observations under `vault-events.md` section 14.7.
 
 ### 8.2 Deterministic pure ACK
 
@@ -638,9 +638,10 @@ bounded debounce may reduce repeated submission.
 After `message.replayClosed`, or when explicit erasure has released the
 exact bytes and closed replay, no replay is required and no replacement package
 may be invented. A hold that is later released may resume replay only when closure
-and every other eligibility predicate still permit it. A receiver that never
-honored an optional ACK request has no obligation to invent a response upon
-redelivery.
+and every other eligibility predicate still permit it. If a request was not
+honored because no eligible target remained or the candidate was rejected,
+redelivery creates no new response obligation. Required ACK work left unfinished
+by a crash still follows `vault-events.md` section 16.1's recovery rules.
 
 ## 9. Observation identity, logical aliasing and execution identity
 
@@ -737,7 +738,7 @@ route availability do not select a scope; current work eligibility is separate.
 | Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. Undecided: no scope. Admission conflict: execution-scope conflict. |
 | Initiator handoff | Valid `relationship.initiatorBound` with `handoffMid == o.mid` | Its relationship |
 | Ordinary relationship traffic | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `o.peerKey` in `peerChain(R)` | That unique `R`; no match supplies no scope |
-| Initiator no-handoff problem report under `rendezvous.md` section 13 | All no-handoff control conditions below | Exact channel `(o.myKey, o.peerKey)`, control-only: process explicit `ack`, without application handlers or automatic responses |
+| Initiator no-handoff problem report under `rendezvous.md` section 13 | All no-handoff control conditions below | Exact channel `(o.myKey, o.peerKey)`, control observation under `vault-events.md` section 14.7; explicit `ack` only, no automatic response |
 
 The no-handoff control row requires all of:
 
@@ -799,9 +800,8 @@ MID. All required scope evidence MUST commit before applying explicit ACKs or
 running automatic effects. An intent and its ACK targets may freeze in the
 same atomic commit as their scope evidence under the validation rule above.
 
-A conforming `empty/1.0/empty` pure ACK remains a durable control observation,
-but is excluded from thread display, unread counts, notifications and
-application-content handlers.
+Control-observation classification and display follow `vault-events.md`
+section 14.7.
 
 ### 9.1 Receive a message
 
@@ -845,9 +845,10 @@ For every account-scoped pickup or direct delivery:
 12. only after that unique derived logical peer scope exists, process explicit
     `ack` values into idempotent peer-scoped `delivery.acknowledged`;
 13. schedule eligible deterministic application effects through that execution
-    ID; the no-handoff control row permits only step 12, not application
-    handlers or automatic responses in steps 13–15. Bootstrap admission itself
-    follows `rendezvous.md` section 10.2 and is a local decision,
+    ID under `vault-events.md` section 14.7's control-observation rules; the
+    no-handoff control row permits only step 12 and no automatic responses in
+    steps 14–15. Bootstrap admission itself follows `rendezvous.md` section
+    10.2 and is a local decision,
     not an application effect requiring a provisional execution identity;
 14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
@@ -856,9 +857,8 @@ For every account-scoped pickup or direct delivery:
 15. on duplicate receipt while replay-submission-eligible, re-submit the same
     retained response package rather than creating another effect or package.
 
-A conforming pure ACK is retained for audit and delivery processing but excluded
-from user threads, unread counts, notifications and application handlers. It has
-`pleaseAck == null`, so first successful submission ends normal retry.
+Control observations follow `vault-events.md` section 14.7. A pure ACK has
+`pleaseAck == null`, so first successful submission ends its normal retry.
 
 A crash before durable message commit leaves mediator delivery pending. A
 crash after commit but before pickup ACK causes redelivery and another valid
@@ -1096,8 +1096,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 26. Multiple relationship matches or incompatible derivation rows for one
     observation suppress ACK processing and new effects as an execution-scope
     conflict, even when each source is individually valid.
-27. Pure Empty ACK is retained for control/audit but absent from threads,
-    unread counts and application handlers.
+27. Pure Empty ACK, valid rendezvous handoff Empty or `ping-response`, and
+    valid no-handoff errors obey `vault-events.md` section 14.7's control
+    classification while their validated ACKs still process.
 28. Invalid `from_prior` prevents ACK processing and transition.
 29. Duplicate explicit ACKs are harmless and one valid ACK stops all normal
     receipt-required package retry.

@@ -100,7 +100,8 @@ informative deferred extensions, not dependencies of this profile.
   one bootstrap candidate. It is not a wire message; rejection may be silent.
 - **Deterministic protocol response** — an automatic response whose complete
   portable intent is a pure function of the triggering inbound message and
-  durable policy.
+  durable policy and, for a section-13 rejection, the once-sampled decision
+  clock. Committed intent is always reused.
 - **Handoff response** — the first responder message for the relationship. It
   is a deterministic protocol response, a Trust Ping `ping-response`, or an
   Empty Message ACK, sent from the responder relationship DID with
@@ -1107,10 +1108,13 @@ still follows `vault-events.md` section 14.8 and never uses wire ID alone.
 
 This control path is limited to the valid error messages without `please_ack`
 specified above; `distributed-delivery.md` section 9 defines its scope and
-excludes application handlers and automatic responses. A later relationship
-binding does not invalidate or reclassify a delayed no-handoff report's fixed
-control scope. Such a report can record receipt on its original bootstrap
-channel, but cannot reject or change an established relationship.
+permits no automatic response. It is a control observation under
+`vault-events.md` section 14.7; the initiator displays a uniquely matched
+retained rejection reason as an attempt diagnostic under that document's
+section 14.6. A later relationship binding does not invalidate or reclassify
+a delayed no-handoff report's fixed control scope. Such a report can record
+receipt on its original bootstrap channel, but cannot reject or change an
+established relationship.
 
 After final reject, candidate content is erased as specified in section 9.3.
 Hard pre-vault rejection has no portable candidate to erase.
@@ -1302,6 +1306,9 @@ DID as ordinary `writeTo`.
     Further initial messages for the same relationship reuse it.
 42. A no-handoff rejection may ACK only its validated pinned bootstrap channel;
     such a receipt is not successful handoff or relationship establishment.
+    The report is a control observation and its retained, uniquely correlated
+    reason is shown beside the initial attempt under `vault-events.md` section
+    14.6, without changing delivery precedence or retry rules.
 43. A final rejection and its optional response intent commit atomically.
     A crash cannot expose a final decision with half its chosen response; when
     no response was committed, recovery erases candidate content without
