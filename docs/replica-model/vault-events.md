@@ -1157,6 +1157,9 @@ This event records only a terminal failure. `scope` is `package` or `message`.
 - `code == "expired"` MUST be message-scoped.
 - `code == "peer-key-changed"` is message-scoped with `packageId == null`;
   `rendezvous.md` section 5.1 defines this failure before package preparation.
+- `code == "local-did-rotated"` is message-scoped with `packageId == null`;
+  section 12.4 records it for a frozen initial or explicit-channel intent
+  whose pinned local key was superseded by a local transition.
 
 Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
 belong only to local trace and retry policy. They MUST NOT append
@@ -1361,9 +1364,10 @@ The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Recipient and
 sender-authentication triage for both rendezvous and ordinary relationship
 traffic follows `rendezvous.md` sections 9.1–9.2. Recoverable key/route state or
-unavailable required sender resolution produces no `message.in` and no pickup
-ACK. Safely classified terminal input MUST instead be pickup-ACKed without
-`message.in`; this exception cannot bypass durable receipt for input that
+unavailable required sender resolution within that document's section 5.1
+budget produces no `message.in` and no pickup ACK. Exhausted sender-resolution
+budgets and safely classified terminal input MUST instead be pickup-ACKed
+without `message.in`; this exception cannot bypass durable receipt for input that
 passes the receive and integrity checks.
 
 ### 10.3 Duplicate, transition and conflict rules
@@ -1720,6 +1724,8 @@ Normative rules:
 
 - `id`, `contact` and `ourDid` satisfy `rendezvous.md` section 10's derivations
   using the referenced canonical rendezvous DID and `peerKey`;
+- `ourDid` passes section 14.4's cross-relationship local-DID ownership join,
+  including both initial roots and local-transition members;
 - `originWireId`, nullable `originCreatedTime`, `peerKey` and `theirDid` match
   the origin `message.in`, which must be an application candidate eligible for
   handoff selection under `rendezvous.md` section 10;
@@ -1828,6 +1834,12 @@ method must authenticate the package's `peerKey`; incompatible package evidence
 is a relationship conflict. Import validation checks these reference joins in
 the event union; it does not infer batch boundaries from event ordering.
 
+The binding's `ourDid` also passes section 14.4's cross-relationship ownership
+join. An `ourDid` named by either `relationship.initiatorBound` or
+`relationship.established` that is a local-chain member of another relationship
+conflicts both relationships, even when neither has a local transition yet.
+Local binding validation and import both check this join over the event union.
+
 When no binding exists, select the first initial package the active runtime is
 about to submit and freeze these references. Later initial attempts deriving
 the same relationship reuse the binding without replacing its `initialMid`
@@ -1891,7 +1903,8 @@ strings. The successor uses a newly minted UUIDv7 ID and section 5.2's fixed
 seed-derived keys and route. It MUST NOT already belong to another
 relationship or occur earlier in this relationship's local chain. A local
 relationship DID belongs to at most one relationship, independently of contact
-display merges or outbound preferences.
+display merges or outbound preferences. Section 14.4 owns the cross-relationship
+join for both initial roots and transition members.
 
 For relationship `R`, **`localChain(R)`** is the rooted directed chain starting
 at its immutable `ourDid` and extended only by validated
@@ -1929,6 +1942,12 @@ ordinary sends under `rendezvous.md` section 8, but does not meet this rotation
 precondition. After local rotation, no further initial attempt may continue
 this `R`: an initial from the successor key at a rendezvous DID would derive
 a different relationship. The initial binding and `ourDid` are never rewritten.
+
+This restriction also applies when the peer keeps an original public DID such
+as `did:web`. Without its verified continuation, this phase-1 relationship
+cannot change our immutable route or mediator through local rotation; it
+needs continued operation of that route, or a new relationship with a fresh
+local DID/key. The peer's DID method alone grants no exception.
 
 `fromPrior` is the exact compact JWT created once for this edge under
 [DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation):
@@ -1972,10 +1991,11 @@ above hold; terminal resources are not revived. Explicit contact deletion,
 manual retirement or emergency shutdown can end receipt sooner under sections
 5.5 and 16.6, independently of a rotation's overlap procedure.
 
-From edge commit onward, no package from a superseded local DID may be newly
-submitted. For an unsubmitted ordinary contact-targeted outbound in `R`, retire
-its superseded packages and repack from the current end under section 9.3,
-preserving MID, intent, execution ID and frozen ACK targets. A queued automatic
+Section 14.8 applies the sender eligibility change from edge commit onward,
+before cleanup observations exist. For an unsubmitted ordinary contact-targeted
+outbound in `R`, retire its superseded packages and repack from the current
+end under section 9.3, preserving MID, intent, execution ID and frozen ACK
+targets. A queued automatic
 reply uses its carrier's `R` even when it has no first package yet. A frozen
 initial attempt or explicit-channel intent cannot change its pinned local key;
 if that key is superseded, record message-scoped terminal
@@ -1986,11 +2006,23 @@ later independent retirement leaves no usable current end, existing intents
 remain blocked by lifecycle rules until a valid successor exists; no alternate
 intent or relationship is selected.
 
+If an unconfirmed current end acquires a terminal bound-route dependency and
+no retained inbound can establish its confirmation, this profile has no
+continuation recovery for `R`. Neither rolling back to a predecessor nor
+branching to a different successor is permitted. Resuming communication
+requires a new relationship, which may require rediscovery or a new initial
+from the peer. A temporary endpoint outage is not terminal; DID retirement
+alone does not end receipt under `rendezvous.md` section 9.2.
+
 This event does not itself invent a DIDComm message or an ACK obligation. The
-next eligible ordinary message carries the proof; an application may submit
-an ordinary Trust Ping with a new MID to request a response. Loss after
-committed submission never automatically reopens that MID. Section 16.7 owns
-the local operation; `rendezvous.md` section 12 owns peer verification.
+next eligible ordinary message carries the proof. When no response-generating
+ordinary message is otherwise queued, an application SHOULD use an ordinary
+Trust Ping with a new MID and `response_requested == true` from the successor
+to solicit its confirmation. Until qualifying inbound arrives at that exact
+successor, the overlap rule above still retains the predecessor and its route
+and mediation. Loss after committed submission never automatically reopens
+that MID. Section 16.7 owns the local operation; `rendezvous.md` section 12
+owns peer verification.
 
 ## 13. Automatic effects
 
@@ -2026,9 +2058,11 @@ another before configuring a new mediated route.
 
 The **required receiving set** is every usable mediation that is either
 preferred or referenced by a configured, non-retired, conflict-free mediated
-route bound by a local DID with consistent identity/key evidence. This includes
-a retired relationship DID that remains receive-eligible under `rendezvous.md`
-section 9.2. DID retirement alone never removes its mediation from this set.
+route bound by a non-retired local DID or a retired relationship DID that
+remains receive-eligible under `rendezvous.md` section 9.2. The bound DID must
+have consistent identity/key evidence. A retired rendezvous DID alone
+contributes no receiving dependency. Relationship-DID retirement alone never
+removes its mediation from this set.
 An unpreferred mediation leaves the set only when it has no such route/DID
 dependency or becomes unusable; route/mediation conflicts remain visible.
 This receiving set is independent of the desired recipient registration set:
@@ -2103,8 +2137,9 @@ Rendezvous DIDs use the ordinary DID/route fold in section 14.3 and retirement
 under section 5.5. Durable input is joined to its immutable recipient DID and
 exact sender resolution under section 12.1, independently of present liveness.
 Receive deferral follows `rendezvous.md` section 9.1, including unavailable
-required sender resolution for an otherwise eligible exact recipient method.
-Terminal or foreign input follows its section 9.2.
+required sender resolution within its section 5.1 budget for an otherwise
+eligible exact recipient method. Budget exhaustion, definitive authentication
+failure and terminal or foreign recipients follow its section 9.2.
 
 Every committed bootstrap candidate with consistent section-12.1 evidence
 derives its deterministic relationship scope. It has no pending or rejected
@@ -2146,6 +2181,20 @@ resolution; DID spellings and keys follow the immutable references in section
 12.3. Peer rotation is separate `peer.transitioned` evidence; local rotation
 uses section 12.4. These values are not
 re-selected from later arrivals.
+
+Local-DID ownership is checked across the event union before declaring any
+binding or local transition conflict-free. Join the `ourDid` roots named by
+both binding types and the local-chain members evidenced by their rooted
+transitions under section 12.4. One local DID claimed by distinct relationship
+IDs is a relationship conflict for every claimant, including a shared root
+with no transitions or a root shared with another relationship's successor.
+Contact merges, preferences and DID retirement do not release ownership.
+Use otherwise validated binding/reference/proof evidence before this ownership
+test, not only the final conflict-free projection: discarding one conflicted
+claim cannot make another claim win. Missing evidence defers its dependent
+work. The local writer MUST reject a conflicting proposed binding or edge,
+including conflicts within one batch, under the writer lock; import retains
+the conflicting evidence and suppresses affected new work in every order.
 
 A valid relationship contributes:
 
@@ -2469,6 +2518,15 @@ For a valid outbound:
   unexpired timing, and valid available target/proof/content evidence.
   Submitting a chosen package also requires that it is not retired or
   terminally failed and its exact valid envelope remains available;
+- after a committed `relationship.localTransitioned` for the outbound's `R`,
+  preparation uses `currentLocalDid(R)` under section 12.4, and a package whose
+  `senderDid` is not that current end is not submittable. A frozen initial or
+  explicit-channel intent pinned to a superseded local key is ineligible for
+  preparation or submission. These predicates apply before any
+  package-retirement or `local-did-rotated` failure observation commits;
+  section 12.4 defines the
+  retirement, repack or terminal failure that recovery completes. Missing or
+  conflicting local-chain evidence cannot authorize a fallback to an earlier end;
 - `pleaseAck` and `acknowledged` do not affect these work predicates. An ACK
   received while `delivery.submitted` is absent does not synthesize completion;
   eligible submission may still resume.
@@ -3061,6 +3119,8 @@ There is no migration requirement from an earlier event vocabulary.
     DID is absent from it, but its usable mediation stays in the required
     receiving set while its bound route remains configured and non-retired,
     even when no live DID uses that mediation and it is not preferred.
+    A retired rendezvous DID alone cannot keep an unpreferred mediation in
+    the receiving set.
 51. Each local DID derives fixed authentication and key-agreement keys and
     an immutable bound route. Rotation creates another entity; a responder
     selects its independent pairwise route when creating the relationship DID.
@@ -3264,8 +3324,11 @@ There is no migration requirement from an earlier event vocabulary.
      Every new non-numalgo-4 inbound observation also requires current sender
      authentication under `rendezvous.md` section 5.1; a chain member absent
      from the current document fails, and unavailable resolution defers
-     without pickup ACK. Committed observations recover from their retained
-     evidence without new resolution or retroactive scope changes.
+     without pickup ACK only within that section's per-delivery budget.
+     Exhaustion is terminal input with pickup ACK and no `message.in`, without
+     timing out recoverable local key/route/evidence state.
+     Committed observations recover from their retained evidence without new
+     resolution or retroactive scope changes.
 109. Control candidates retain their derived relationship scope but select
      no origin, handoff, contact or DID, including after restart. Any eligible
      receipt ACK follows `distributed-delivery.md` section 8.1's sender gate
@@ -3298,8 +3361,11 @@ There is no migration requirement from an earlier event vocabulary.
      and mediation through confirmation, without retiring shared resources.
 115. After a local edge, unsubmitted ordinary contact outbounds repack from
      the current local end with the same MID, intent and ACK targets; old
-     packages cannot be submitted. Initial and explicit-channel intents pinned
-     to a superseded key fail with `local-did-rotated`. Submitted MIDs never
+     packages cannot be submitted even if a crash precedes their retirement
+     observations. Initial and explicit-channel intents pinned to a superseded
+     key are immediately ineligible and fail message-scoped with
+     `local-did-rotated` and null `packageId`; missing failure observations do
+     not authorize preparation or submission. Submitted MIDs never
      reopen, and later retirement never selects a prior chain member to send.
 116. Equal local edges are duplicates. Branches, different proofs for one
      predecessor, cycles or a cross-relationship local DID conflict under every
@@ -3309,3 +3375,10 @@ There is no migration requirement from an earlier event vocabulary.
      and outbound ACK membership under `distributed-delivery.md` section 9's
      local-rotation vector. A contact preference cannot attach an unrelated
      local DID to that chain or make an automatic response cross relationships.
+118. Two initial bindings that derive distinct relationship IDs but name the
+     same `ourDid` conflict both relationships under section 14.4, even with
+     no local transitions. The same applies to a root also claimed as another
+     relationship's successor. A local writer rejects the conflicting join;
+     import preserves both claims and blocks affected work in every order,
+     including after retirement or contact merge. Later initial attempts in
+     the same bound, unrotated relationship still reuse its root and binding.

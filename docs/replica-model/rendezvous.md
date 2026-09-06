@@ -216,8 +216,9 @@ Remote initiators and responders may use either a public DID, including
 and authorized key-agreement method under its supported resolver; it MUST NOT
 require the peer to create a pairwise DID. An unsupported sender method fails
 authentication and is terminal under section 9.2; unavailable resolution
-defers receipt without pickup ACK under section 9.1. Numalgo-4 first-disclosure
-requirements apply only when that method is used. A same-DID authenticated
+defers receipt without pickup ACK within this section's sender-resolution
+budget under section 9.1. Numalgo-4 first-disclosure requirements apply only
+when that method is used. A same-DID authenticated
 reply from any key authorized by the pinned initial document needs no
 `from_prior`; a different DID requires verified continuation evidence to join
 the relationship.
@@ -255,8 +256,8 @@ CID equals its `document` and its `myKey`, `peerKey`, `did` and `presentedDid`
 match the observation; otherwise commit new evidence before `message.in`.
 A key absent from the current document fails section 9.2 even when it belongs
 to `peerChain(R)`: the chain scopes already authenticated observations, it does
-not authenticate new ones. Unavailable resolution defers without pickup ACK;
-it cannot fall back to a stale snapshot.
+not authenticate new ones. Unavailable resolution defers without pickup ACK
+only within the budget below; it cannot fall back to a stale snapshot.
 
 For both sender and recipient resolution, **unavailable** means there is no
 definitive answer now: a network/transport failure, timeout, temporary resolver
@@ -266,6 +267,12 @@ result takes precedence over its transport status: an intermediary resolver's
 HTTP 500/501 carrying a malformed-document or unsupported-method result does
 not turn that result into temporary unavailability.
 
+A DNS NXDOMAIN response for the derived `did.json` authority, or NODATA for
+all usable address families after alias resolution, is a definitive failure.
+NODATA for one address family alone does not fail an otherwise usable address.
+SERVFAIL, DNS timeout, connection timeout or refusal, and TLS validation
+failure are unavailable; none permits bypassing TLS or the resolver policy.
+
 A definitive failure includes not found or deactivated (including a derived
 `did.json` 404/410), an invalid DID or document, an unsupported method, a
 document ID inconsistent with the exact presented DID, a key absent from that
@@ -274,14 +281,53 @@ categories include the corresponding
 [DID Resolution errors](https://www.w3.org/TR/did-resolution/#errors), whatever
 the resolver API's spelling. For inbound sender authentication they are
 terminal section-9.2 failures: pickup-ACK when mediated and create no
-`message.in`. Only unavailable answers defer. For first-package recipient
-resolution, definitive failure records message-scoped terminal
+`message.in`. Only unavailable answers defer, within the inbound budget below.
+For first-package recipient resolution, definitive failure records
+message-scoped terminal
 `delivery.failed(code="peer-key-changed", packageId=null)` without preparation
 or binding, including for a first initial attempt; unavailable answers keep
 the outbound retryable. Missing retained historical evidence still follows
 the separate recovery rule and is not a definitive new-resolution result.
 Other completed unsuccessful resolution results are definitive for that
 attempt; a policy refusal MUST NOT be disguised as transient unavailability.
+
+The `peer-key-changed` code also covers definitive first-package resolution
+failure when no earlier peer key exists. User-facing text MUST NOT describe
+every such result as an observed key replacement; use the bounded local
+resolution diagnostic, or a neutral peer-resolution failure label when that
+diagnostic is absent. This does not add a portable diagnostic payload.
+
+**Inbound sender-resolution budget.** Once local receive prerequisites are
+satisfied, the runtime MUST use finite per-attempt timeouts, a finite attempt
+budget and local backoff with a finite cap for each delivery. It SHOULD use
+section 14's retry-interval, backoff-cap and attempt-count defaults, applied
+to resolution calls rather than transport submissions; the outbound wire
+expiry rule does not apply. Count an attempt before invoking the resolver,
+including failure and unknown outcomes. While receive-ready, schedule retries
+without waiting for another delivery or an external resolution-change signal.
+Cap the wait at any known mediator delivery-retention deadline; when only a
+retention duration is advertised, use it as an upper bound on this resolution
+wait. Unknown retention never permits an unlimited budget.
+
+All workers share accounting for the same local mediation and pickup-delivery
+attachment ID; a profile with replica-scoped pickup also includes that replica
+ID. Direct input uses its normalized envelope CID in the local receive context.
+Redelivery and reconnect MUST NOT reset this accounting or start parallel
+budgets. The accounting is local scheduling state, not a portable event;
+runtime restart, restore or loss of local state may reset it as in section 14.
+
+When the budget or retention stop is reached without a definitive answer,
+classify that delivery as terminal input under section 9.2: pickup-ACK when
+mediated, no `message.in`, contact or response effect, and at most a bounded
+local diagnostic. Exhaustion does not prove a key change or permanently reject
+the DID; the sender may make a new explicit attempt under ordinary sending
+rules. It never authorizes automatic retry of a submitted MID. A successful
+resolution within budget instead proceeds through normal authentication and
+durable receipt. Locked-vault, incomplete-recovery and recoverable local
+key/route/historical-evidence deferrals under section 9.1 have no such budget:
+do not run this accounting or apply its terminal path while those prerequisites
+remain unresolved. This bounds an unresolved authentication attempt, not the
+age, expiry or acceptance time of a valid initial message.
 
 These rules also apply to duplicate deliveries that would create a new
 observation. If interruption occurs before inbound commit, resolve again on
@@ -579,7 +625,10 @@ and transport resource rules apply as for later messages.
 
 The initiator:
 
-1. creates or selects its pairwise relationship DID `P_B`;
+1. creates a fresh pairwise relationship DID `P_B` for this relationship, or
+   reuses its root DID for another initial attempt in the same already bound
+   relationship before any local rotation under `vault-events.md` section
+   12.4. It MUST NOT select a DID belonging to another relationship;
 2. selects or creates the local contact and associates the disclosed
    rendezvous DID with it;
 3. prepares body and attachment objects;
@@ -604,8 +653,9 @@ concurrently use the same local author.
 
 1. learn a rendezvous DID through OOB, QR, directory, file or manual input;
 2. create/select a contact and append `contact.peerDidAdded` for that DID;
-3. create one local relationship `did:peer:4`, retain both forms and associate
-   it with the contact;
+3. create a fresh local relationship `did:peer:4`, or reuse the same bound,
+   unrotated relationship's root under section 8.4; retain both forms and
+   associate it with the contact;
 4. select a first application message; when no application content exists,
    use Trust Ping 2.0 `ping` with `response_requested == true`;
 5. validate section 8.1 and use `Vault.commit` for body/attachments and
@@ -632,9 +682,10 @@ is not used by the conforming phase-1 writer for bootstrap.
 
 If an unsubmitted initial message reaches expiry before preparation or retry,
 append message-scoped terminal `delivery.failed(code="expired")` and submit
-nothing. A replacement initial message uses a new wire ID but normally reuses
-the same initiator relationship key unless the contact was deleted or section
-5.1's same-DID key-change recovery requires a fresh local DID/key.
+nothing. A replacement initial message uses a new wire ID and may reuse the
+same bound, unrotated relationship's root key under section 8.4. A deleted
+contact or section 5.1's same-DID key-change recovery requires a fresh local
+DID/key. After local rotation, section 8 forbids another initial in that `R`.
 
 After binding, the pinned peer DID is the relationship's initial current end.
 Before qualifying inbound evidence under section 8, sends to it remain initial
@@ -658,7 +709,9 @@ known local receive key has a concrete recoverable receive prerequisite:
 - required historical evidence for that exact known method is temporarily
   unavailable; or
 - current sender resolution is transiently unavailable under section 5.1 for an
-  otherwise eligible local recipient.
+  otherwise eligible local recipient and its per-delivery budget is not
+  exhausted. Exhaustion uses section 9.2's terminal path; the other deferrals
+  in this list have no sender-resolution budget.
 
 Once local key state is authoritative, the implementation MUST compare the
 complete recipient `kid`, including DID and method fragment/purpose. A foreign
@@ -669,10 +722,11 @@ eligible local key-agreement method is not deferred. It is terminal
 wrong-recipient input. Retirement of a relationship DID alone is not terminal
 for receipt; section 9.2 applies.
 
-A phase-1 runtime retries deferred input after its local state changes or
-required resolution becomes available. A future sync-enabled runtime may sync
-and refold first. It MUST NOT treat a
-locked vault or incomplete recovery as proof that the recipient is foreign.
+A phase-1 runtime retries local-prerequisite deferrals after its local state
+changes. Sender-resolution deferrals follow section 5.1's scheduled bounded
+retry and terminal-exhaustion rules. A future sync-enabled runtime may sync
+and refold first. It MUST NOT treat a locked vault or incomplete recovery as
+proof that the recipient is foreign.
 
 ### 9.2 Hard pre-vault gate
 
@@ -721,9 +775,9 @@ A safely classified hard rejection received through Message Pickup:
 - MAY leave only a bounded local diagnostic.
 
 Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
-retired rendezvous DID, a definitively unresolvable sender DID and hard
-abuse/resource limits are examples of
-this gate.
+retired rendezvous DID, a definitively unresolvable sender DID, exhaustion of
+section 5.1's sender-resolution budget and hard abuse/resource limits are
+examples of this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
@@ -1006,7 +1060,7 @@ response.created_time = triggering_message.created_time
 response.expires_time = null
 ```
 
-The relationship-level rotation proof is independent of the response:
+The initial handoff's rotation proof is independent of the response:
 
 ```text
 from_prior.iat = rotationTime
@@ -1020,8 +1074,10 @@ proof committed with `relationship.established`. It is the rotation instant,
 independent of the possibly old, future or absent input creation time, as
 required by [DIDComm JWT Details](https://identity.foundation/didcomm-messaging/spec/v2.1/#jwt-details).
 No network effect precedes that commit. A crash before it may choose new
-uncommitted material; after it, recovery and every response reuse the exact
-proof without sampling again. The wire examples use `rotationTime = 1788442810`.
+uncommitted material; after it, recovery and packages requiring this initial
+handoff proof reuse it without sampling again. Later local ends use
+`vault-events.md` section 12.4's per-edge proofs. The wire examples use
+`rotationTime = 1788442810`.
 
 For origin inbound MID `8fa18330-6cb7-5ff2-b9b8-603c0a568194`,
 see the Trust Ping handoff vector above.
@@ -1108,10 +1164,10 @@ The responder:
 
 1. with the candidate input already committed under section 10.2,
    uses `Vault.commit` for relationship state and response `message.out`;
-2. reconciles recipient registration for canonical short-form `P_A` on its
-   bound route when mediated;
-3. prepares the exact response using long-form sender evidence and the frozen
-   `fromPrior`; and
+2. reconciles recipient registration for the selected current local end's
+   canonical short form on its bound route when mediated;
+3. prepares the exact response using that local end's disclosure and proof
+   rules under `vault-events.md` sections 12.2 and 12.4; and
 4. submits it.
 
 Intent always precedes effects.
@@ -1382,7 +1438,9 @@ cannot continue the old relationship.
 10. Peer first disclosure uses the same long form in `from`, `skid` and `apu`.
 11. Before unlock/recovery completes, recipient ownership is not classified.
     Afterward, only an exact known local key-agreement method with a
-    recoverable missing prerequisite remains pending without pickup ACK.
+    recoverable missing prerequisite remains pending without pickup ACK;
+    sender-resolution unavailability is bounded under section 5.1, while
+    recoverable local prerequisites have no such budget.
 12. Safely classified hard rejection is pickup-ACKed and creates no portable
     candidate.
 13. There is no user approval or admission-policy wait after `message.in`.
@@ -1509,14 +1567,23 @@ cannot continue the old relationship.
     responder's peer key derived through `message.in.peerResolution`.
 52. Each non-numalgo-4 sender delivery resolves current authentication
     evidence, including duplicates. A removed key fails even if pinned in the
-    chain; resolver unavailability defers without pickup ACK. An unchanged
-    fresh document permits matching evidence reuse. A crash before inbound
+    chain; resolver unavailability defers without pickup ACK only within
+    section 5.1's budget. An unchanged fresh document permits matching
+    evidence reuse. A crash before inbound
     commit requires fresh resolution again; committed input recovers offline
     from retained evidence without revoking historical scope. Not-found,
     deactivated, invalid/mismatched-document, unsupported-method and
     SSRF-forbidden results are terminal, with pickup ACK and no `message.in`.
     A derived-resource 404 differs from a transient timeout/5xx; a definitive
     error from a resolver takes precedence over its enclosing HTTP status.
+    NXDOMAIN and NODATA across all usable address families are definitive;
+    an empty AAAA answer with a usable A answer is not. SERVFAIL, DNS timeout,
+    connection refusal/timeout and TLS validation failure are unavailable.
+    Repeated 503 or stalled connections reach the local budget/retention stop
+    and take the terminal pickup-ACK path with no portable input. Redelivery
+    and reconnect share the budget; scheduled retries need no new delivery.
+    Success before exhaustion receives normally. Locked/recovering or missing
+    local-key/evidence input cannot take this budget's rejection path.
 53. A pure ACK at a rendezvous DID retains scope and processes valid ACKs but
     creates no handoff or relationship, including after restart. An eligible
     control ACK request uses only a generic pure ACK from an existing usable
@@ -1539,3 +1606,10 @@ cannot continue the old relationship.
     protocol-specific error outside those types is application input unless
     its valid control predicate excludes it. Unattributed non-handoff input
     appears in no contact thread and MAY be surfaced as unattributed input.
+57. Reusing one local relationship DID for initial bindings to two different
+    canonical rendezvous DIDs conflicts both relationships under
+    `vault-events.md` section 14.4, including when the second binding arrives
+    through import. A fresh relationship uses a fresh local DID; later initial
+    attempts in the same bound relationship reuse its root only before local
+    rotation. Contact merges and retirement do not permit cross-relationship
+    reuse, and a rotated successor cannot start another initial in the old `R`.

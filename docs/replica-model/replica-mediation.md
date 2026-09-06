@@ -812,12 +812,13 @@ alone still receives eligible input normally; a retired rendezvous DID or any
 DID with a terminal bound-route dependency uses the terminal rejection path.
 Unlock/recovery and concrete recoverable prerequisites defer without pickup
 ACK. Current sender authentication follows that document's section 5.1,
-including its transient-unavailability classification and definitive terminal
-authentication failures; retained chain membership cannot bypass that check.
+including its transient-unavailability classification, per-delivery budget
+and definitive terminal authentication failures. Budget exhaustion uses the
+terminal rejection path; retained chain membership cannot bypass that check.
 
 A delivery that cannot yet be decrypted for a recoverable reason despite an
 eligible exact local key, depends on missing recoverable local DID/route/sync
-state or unavailable required sender resolution, or is
+state or required sender resolution still within that section's budget, or is
 otherwise not safely classifiable MUST NOT be acknowledged. This distinction
 prevents terminal wrong-recipient or malformed input from redelivering forever
 without allowing temporary local incompleteness to lose mail.
@@ -985,7 +986,8 @@ A conforming implementation demonstrates at least these cases:
 4. Crash before durable normal acceptance produces no pickup ACK; crash after
    commit may redeliver and converges logically.
 5. A safely classified terminal pre-vault rejection may be pickup-ACKed without
-   `message.in`, while an undecryptable or deferred delivery remains pending.
+   `message.in`, while recoverable local prerequisites and sender-resolution
+   unavailability within `rendezvous.md` section 5.1's budget remain pending.
 6. Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
 7. `recipient_did` actually filters status and delivery.
@@ -1028,6 +1030,9 @@ A conforming implementation demonstrates at least these cases:
     and retired rendezvous DIDs use the terminal pre-vault ACK path and do not
     remain pending. A retired relationship DID with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
-    resolution instead defers under `rendezvous.md` section 5.1. Definitive
-    not-found, invalid-document, unsupported-method and SSRF-forbidden
-    resolution results use the terminal pre-vault ACK path under that section.
+    resolution instead defers only within `rendezvous.md` section 5.1's budget.
+    Definitive DNS/not-found, invalid-document, unsupported-method and
+    SSRF-forbidden results, or sender-resolution budget exhaustion, use the
+    terminal pre-vault ACK path under that section. Repeated delivery of the
+    same replica-scoped ID shares one budget; missing recoverable local state
+    cannot take that budget's terminal path.

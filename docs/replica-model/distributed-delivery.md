@@ -882,8 +882,9 @@ For every account-scoped pickup or direct delivery:
    including the exact selected local key-agreement method, Peer DID long-form
    and authcrypt sender evidence. Apply `rendezvous.md` section 5.1's current
    sender-resolution and failure-classification rules to every delivery;
-   only transiently unavailable resolution defers without pickup ACK, while
-   definitive failures use its section 9.2 terminal gate;
+   transiently unavailable resolution defers without pickup ACK only within
+   its per-delivery budget. Definitive failures and budget exhaustion use its
+   section 9.2 terminal gate; recoverable local prerequisites have no such budget;
 4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's
    receive and integrity checks; a safely classified terminal failure through Message Pickup
    MUST be pickup-ACKed without `message.in`;
@@ -1195,8 +1196,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 31. The default initial rendezvous message may be Trust Ping; a received
     application message may be first without a custom wrapper.
 32. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
-33. A deterministic handoff response carries pairwise long-form sender
-    evidence, one frozen relationship-level `from_prior`, explicit ACK and
+33. Before confirmation of the responder's initial local end, a deterministic
+    handoff response from it carries pairwise long-form sender evidence,
+    the initial handoff's frozen `from_prior`, explicit ACK and
     `please_ack: [""]`.
 34. `from_prior.sub` equals plaintext `from` byte-for-byte; `from_prior.kid`
     belongs to the exact `iss` spelling pinned from discovery.
@@ -1288,7 +1290,10 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     5.1. An unchanged online-revalidated document still creates new evidence.
     Existing packages retry or repack using retained snapshots only. Each
     inbound delivery instead authenticates against current sender resolution,
-    including duplicates; unavailable resolution defers without pickup ACK.
+    including duplicates; unavailable resolution defers without pickup ACK
+    only within that section's per-delivery budget. Definitive DNS failures
+    and exhausted retries take the terminal pre-vault ACK path; redelivery
+    cannot reset the budget. Recoverable local prerequisites have no such cap.
     Reusing matching evidence requires a fresh document check. Recovery of
     committed input uses its retained snapshot without another network lookup.
 61. Section 8.1's sender gate precedes selection and commit of a deterministic
