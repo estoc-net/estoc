@@ -811,12 +811,13 @@ rule as `rendezvous.md`: while unlock/recovery is incomplete, ownership is not
 classified; once the local key index is authoritative, a recipient is deferred
 only when its complete `kid` maps to a known local key-agreement method with a
 concrete recoverable prerequisite. A foreign DID, a locally controlled DID with
-a nonexistent or wrong-purpose fragment, a terminal rendezvous generation, or
-a recipient set with no exact local key-agreement match is terminal
+a nonexistent or wrong-purpose fragment, a retired rendezvous DID or its
+terminal bound-route dependency, or a recipient set with no exact local
+key-agreement match is terminal
 wrong-recipient input and may use the rejection ACK path.
 
 A delivery that is genuinely undecryptable despite an exact live local key,
-depends on missing recoverable local rendezvous-generation/sync state, or is
+depends on missing recoverable local DID/route/sync state, or is
 otherwise not safely classifiable MUST NOT be acknowledged. This distinction
 prevents terminal wrong-recipient or malformed input from redelivering forever
 without allowing temporary local incompleteness to lose mail.
@@ -1024,5 +1025,5 @@ A conforming implementation demonstrates at least these cases:
 23. Recipient-key triage defers only an exact known local key-agreement method
     with a recoverable missing prerequisite. After local key recovery is
     authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
-    and terminal rendezvous generations may use the terminal pre-vault ACK path
+    and retired rendezvous DIDs may use the terminal pre-vault ACK path
     and do not remain pending.

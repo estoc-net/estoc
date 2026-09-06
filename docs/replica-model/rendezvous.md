@@ -164,7 +164,7 @@ A locally controlled rendezvous DID MUST:
 - contain its one fixed authentication method capable of signing `from_prior`;
 - bind one DIDComm delivery route through `boundRoute`;
 - use seed-derived key names represented by the vault; and
-- have a live selected rendezvous generation under `vault-events.md` section 12.1.
+- be non-retired and satisfy the DID/route checks in `vault-events.md` section 14.3.
 
 Before the first package is submitted, the initiator MUST durably retain:
 
@@ -338,12 +338,12 @@ recipient, the initiator uses Trust Ping 2.0 by default.
 Relationship DIDs MUST NOT appear in reusable invitation plaintext or public
 discovery material.
 
-## 7. Rendezvous generation profile
+## 7. Rendezvous DID lifecycle
 
-A `rendezvous.generationConfigured` event freezes a reference to the immutable
-rendezvous DID entity and the independently selected `relationshipRoute`
-embedded in responder relationship DIDs. It contains no message-type list,
-size or lifetime ceiling, admission policy or automatic-acceptance limits.
+A rendezvous DID uses ordinary `did.created`, `did.disclosed` and `did.retired`
+events under `vault-events.md` section 5. Its immutable entity supplies the
+Peer long form, fixed authentication and key-agreement methods, and ingress
+`boundRoute`. No separate rendezvous configuration event is required.
 
 Every implementation supports Trust Ping 2.0 `ping` and receives otherwise
 valid application types, including ones with no local handler. An unknown
@@ -352,17 +352,17 @@ semantics. There is no initial-specific size or lifetime restriction and no
 user-approval step. Common syntax, authentication, integrity and operational
 resource checks still apply under section 9.
 
-The DID entity supplies its long form, fixed authentication and key-agreement
-methods, and bound ingress route; the generation does not copy those values.
-A generation is **live** when those dependencies validate and its mediated
-bound route, when present, is reconciled. A configured but not-yet-live
-generation is deferred. Selection, retirement and origin freezing are defined
-by `vault-events.md` sections 12.1–12.4.
+A live rendezvous DID can receive new input when its identity and route
+dependencies validate and a mediated bound route is reconciled under
+`vault-events.md` section 14.3. A concrete recoverable prerequisite defers
+delivery under section 9.1. `did.retired` stops new input at its commit; already
+committed candidates can finish materialization using retained proof keys and
+a live pairwise route under `vault-events.md` section 5.5.
 
-The sole ingress route is the rendezvous entity's `boundRoute` and MUST equal
-the route encoded in that DID. `relationshipRoute` MAY differ and remains
-frozen for an established relationship. A new configuration does not perform
-an in-place key or route rotation.
+The responder selects its pairwise route when creating the relationship DID
+under `vault-events.md` section 16.3. It MAY differ from the rendezvous ingress
+route and is frozen in that DID's `boundRoute`. Later preference changes do
+not rewrite an existing DID or its relationship origin.
 
 ## 8. Initial message profile
 
@@ -400,7 +400,7 @@ its exact snapshot and recipient key for all retries of that MID.
 
 Recovery enumerates retained `message.out.initial != null` and their valid
 prepared packages, then restores missing bindings under `vault-events.md`
-section 12.5. It requires neither an inbound response nor a surviving OOB
+section 12.3. It requires neither an inbound response nor a surviving OOB
 invitation, body or envelope. Unprepared initial intents resume the same
 preparation procedure; no ordinary outbound is guessed to be initial. Imports
 validate the frozen fields and package/reference joins from the event union,
@@ -511,7 +511,7 @@ The initiator:
    channel with `because == "rendezvous"`;
 8. uses `Vault.commit` for one exact envelope and its `message.prepared`;
 9. commits or reuses `relationship.initiatorBound` from that committed package
-   under `vault-events.md` section 12.5; and
+   under `vault-events.md` section 12.3; and
 10. submits it directly or through Routing 2.0.
 
 Steps 3–4 happen with networking disabled. Registration and resolution are
@@ -539,7 +539,7 @@ concurrently use the same local author.
 9. prepare and commit the exact package using initiator Peer DID long form in
    plaintext `from`, protected `skid` and decoded `apu`;
 10. commit or reuse the initial-package binding under `vault-events.md` section
-    12.5 before network submission; and
+    12.3 before network submission; and
 11. submit against the pinned snapshot and recipient key with bounded retry
     only while unsubmitted and permitted by expiry and the rendezvous
     retry ceiling. A committed `delivery.submitted` completes this MID.
@@ -571,18 +571,17 @@ known local receive key has a concrete recoverable prerequisite:
 - the vault is locked, recovery is incomplete, or the local key index is not
   yet authoritative;
 - a recipient `kid` maps to an exact known local **key-agreement** method, but
-  its configured rendezvous generation is not yet live;
-- required key/document/route state for that exact known method is temporarily
-  unavailable; or
+  required key/document/route state is temporarily unavailable or route
+  reconciliation is pending; or
 - required historical evidence for that exact known method is temporarily
   unavailable.
 
 Once local key state is authoritative, the implementation MUST compare the
 complete recipient `kid`, including DID and method fragment/purpose. A foreign
 DID, a locally controlled DID with a nonexistent fragment, an authentication
-fragment used where key agreement is required, a terminal rendezvous generation,
-or a recipient set containing no valid local key-agreement method is not
-deferred. It is terminal wrong-recipient input.
+fragment used where key agreement is required, a retired rendezvous DID or its
+terminal bound-route dependency, or a recipient set containing no valid local
+key-agreement method is not deferred. It is terminal wrong-recipient input.
 
 A phase-1 runtime retries deferred input after its local state changes. A
 future sync-enabled runtime may sync and refold first. It MUST NOT treat a
@@ -600,7 +599,7 @@ For an exact local recipient that can be decrypted, the responder then checks
 only conditions needed to classify the input safely before writing portable
 application state:
 
-- recipient DID, exact key-agreement method and rendezvous generation;
+- live recipient DID, exact key-agreement method and valid bound route;
 - valid DIDComm syntax and authenticated encryption;
 - a supported authenticated sender DID under section 5.1, with matching
   `from`/`skid`/`apu` and valid first-disclosure long form for numalgo 4;
@@ -622,15 +621,15 @@ A safely classified hard rejection received through Message Pickup:
 - MAY leave only a bounded local diagnostic.
 
 Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
-terminal rendezvous generation and hard abuse/resource limits are examples of
+retired rendezvous DID and hard abuse/resource limits are examples of
 this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
 Every candidate passing section 9.2 proceeds automatically. Under the vault
 writer lock, before committing a new `message.in`, check deterministic contact
-tombstones, sender-DID consistency, generation/recipient validity and one-use
-invitation availability under `vault-events.md` sections 12.3, 14.4 and 14.9.
+tombstones, sender-DID consistency, recipient DID/route validity and one-use
+invitation availability under `vault-events.md` sections 12.1, 14.4 and 14.9.
 The checks and inbound commit are one serialized operation; network resolution
 is completed before taking that lock. Commit or reuse the exact `peer.resolved`
 and document first, then put its returned event ID in the separate inbound
@@ -640,10 +639,12 @@ defers.
 
 A new attempt failing a known integrity check is terminal input: pickup-ACK it
 when mediated, create no `message.in`, contact, relationship or response, and
-keep at most a bounded local diagnostic. A known duplicate is recognized by
-its exact consistent inbound evidence before the new-attempt checks: it may
-record another receipt observation, but cannot recreate a deleted contact or
-resume forbidden effects. A contradictory duplicate is an integrity failure.
+keep at most a bounded local diagnostic. Recheck recipient liveness under the
+lock for duplicates too: retirement stops any new receipt observation. While
+receipt remains live, a known duplicate is recognized by its exact consistent
+inbound evidence before the new-attempt integrity checks; it may record another
+observation but cannot recreate a deleted contact or resume forbidden effects.
+A contradictory duplicate is an integrity failure.
 
 The successful `message.in` commit and its exact resolution evidence are the
 durable receipt boundary. They consume a matching one-use invitation and
@@ -655,8 +656,10 @@ and derive a response intent in a separate `Vault.commit`.
 Recovery enumerates committed candidates and finishes materialization and
 eligible deterministic work, without rechecking message age or introducing a
 new decision. Current tombstones, lifecycle restrictions and integrity
-conflicts still suppress new work. Retained content follows the ordinary
-erasure rules; there is no rejected-candidate content queue.
+conflicts still suppress new work. Retirement of the rendezvous DID or ingress
+route alone does not cancel a committed candidate under `vault-events.md`
+section 5.5. Retained content follows the ordinary erasure rules; there is no
+rejected-candidate content queue.
 
 ## 10. Deterministic relationship materialization
 
@@ -701,15 +704,18 @@ our_relationship_did_id = adf87d8c-d357-5f96-bbae-f60fe5f18d58
 ```
 
 The responder pairwise key names are derived from
-`our_relationship_did_id`. The relationship DID's input document encodes
-`relationshipRoute`, which may differ from the rendezvous ingress route.
+`our_relationship_did_id`. The relationship DID's input document encodes the
+route selected at its creation under `vault-events.md` section 16.3, which
+may differ from the rendezvous ingress route. That committed DID's `boundRoute`
+is reused after a crash, even if materialization is only partially complete.
 
 The first durable candidate selected for materialization becomes the origin
 in the phase-1 single-writer profile. `relationship.established` records that
-origin, exact sender `originResolution`, generation, contact, local DID, peer,
-handoff outbound and compact `fromPrior`, under `vault-events.md` section 12.4. DID forms and
-route come from the referenced DID entity; proof claims come from the verified
-JWT; the execution ID and effect key come from the handoff intent.
+origin, exact sender `originResolution`, contact, local DID, peer, handoff
+outbound and compact `fromPrior`, under `vault-events.md` section 12.2. The
+origin input's `myKey` identifies the rendezvous DID; responder forms and route
+come from its pairwise DID entity. Proof claims come from the verified JWT;
+the execution ID and effect key come from the handoff intent.
 
 Once frozen, later initial messages reuse the same relationship-level proof.
 A future multi-writer profile must define origin coordination before it may
@@ -770,7 +776,7 @@ For a delivery potentially addressed to a rendezvous key:
    the writer lock run section 9.3's duplicate and integrity checks;
 6. commit/reuse exact `peer.resolved` evidence first, then use its event ID in
    a separate `Vault.commit` of retained bytes and `message.in` with its new
-   receipt ordinal and frozen `rendezvousConfigId`, retaining the same lock.
+   receipt ordinal, retaining the same lock.
    A matching one-use invitation is consumed only by the input commit;
    afterward ACK mediator delivery; and
 7. derive the candidate's relationship scope from that committed input under
@@ -780,13 +786,14 @@ For a delivery potentially addressed to a rendezvous key:
 With that input already committed:
 
 1. derive the stable relationship, contact and local pairwise DID IDs;
-2. reuse existing frozen relationship material. Otherwise, choose this origin
-   and the selected generation under `vault-events.md` section 12.1;
-3. under the writer lock, recheck current tombstones and integrity evidence;
+2. acquire the writer lock and recheck current tombstones, relationship-DID
+   lifecycle and integrity evidence;
    suppress new work if they prohibit it, without undoing durable receipt or
    invitation consumption;
-4. derive/reuse the responder relationship DID with its frozen route and
-   select the deterministic response under section 11;
+3. reuse existing frozen relationship material. Otherwise, choose this origin;
+4. reuse an already committed responder relationship DID, including its frozen
+   route, or create it with a currently usable route under `vault-events.md`
+   section 16.3; select the deterministic response under section 11;
 5. use `Vault.commit`, preferably once for all new objects and events:
    any new `contact.created`, bootstrap/pairwise `contact.attached`,
    `did.created`, `contact.useDid`, `relationship.established` and response
@@ -889,9 +896,10 @@ see the Trust Ping handoff vector above.
 ### 11.2 Exact `from_prior` construction and handoff headers
 
 The relationship's compact JWT is constructed once and stored byte-exact. Its
-protected `kid` is authorized by the local rendezvous DID document referenced
-through `originGeneration`, using that DID's disclosed long form. This is
-distinct from `originResolution`, which pins the initiator's sender document.
+protected `kid` is authorized by the local rendezvous DID document identified
+by the selected origin input's `myKey` through `vault-events.md` section 14.3's
+reverse key index, using that DID's disclosed long form. This is distinct from
+`originResolution`, which pins the initiator's sender document.
 The JWT payload is:
 
 ```json
@@ -1001,7 +1009,7 @@ use the named historical predecessor evidence, just as for the initiator.
 
 On the initiator, before processing incoming traffic, recover any missing
 `relationship.initiatorBound` from the retained initial package under
-`vault-events.md` section 12.5 and commit it. The binding starts at the pinned
+`vault-events.md` section 12.3 and commit it. The binding starts at the pinned
 peer DID/key before any response. A known sender DID does not prove that this
 portable binding exists. Reuse consistent evidence; missing evidence defers
 processing and incompatible attribution conflicts.
@@ -1178,8 +1186,8 @@ material.
 
 Registering rendezvous and relationship DIDs under one mediation account lets
 the mediator correlate them. Separate arrangements may reduce this metadata
-link, and `relationshipRoute` is therefore not required to equal the
-rendezvous ingress route.
+link, so the pairwise DID's `boundRoute` may differ from the rendezvous ingress
+route.
 
 Every otherwise valid initial is received without a message-type, size or
 lifetime policy. Authentication and integrity checks remain mandatory. Source
@@ -1231,16 +1239,16 @@ submission or substitutes for authentication or rotation proof.
     new candidate, contact or response; mediated input is pickup-ACKed.
 15. A committed candidate survives restart before materialization; recovery
     finishes its relationship and eligible response without another decision.
-16. Neither sender expiry nor a later generation removes a durable candidate.
-    Tombstones and integrity conflicts suppress new work without erasing its
-    historical scope or reopening an invitation.
+16. Neither sender expiry nor later rendezvous retirement removes a durable
+    candidate. It can finish through a live pairwise route. Tombstones and
+    integrity conflicts suppress new work without erasing historical scope or
+    reopening an invitation.
 17. Stable relationship/contact/responder-DID, relationship-scoped execution
     and effect vectors recompute from the published inputs.
 18. `relationship.established` retains its selected origin and exact sender
-    `originResolution`, generation, contact, local DID, peer, handoff MID and
-    compact `fromPrior`; derived DID,
-    proof and effect values follow those immutable sources under
-    `vault-events.md` section 12.4.
+    `originResolution`, contact, local DID, peer, handoff MID and compact
+    `fromPrior`; derived DID, proof and effect values follow those immutable
+    sources under `vault-events.md` section 12.2.
 19. `from_prior.iss` and protected `kid` use the exact pinned prior-DID form.
 20. `from_prior.sub` equals plaintext `from` exactly; before confirmation both
     use responder Peer-DID long form.
@@ -1285,13 +1293,13 @@ submission or substitutes for authentication or rotation proof.
     proof blocks ACK/effects and a new DID without proof cannot join the old
     relationship. Missing ACK never reopens a submitted outbound.
 34. With the vault unlocked and recovery complete, a foreign recipient DID,
-    a local DID with a nonexistent/wrong-purpose fragment, or a terminal
-    rendezvous generation is terminal wrong-recipient input and does not remain
+    a local DID with a nonexistent/wrong-purpose fragment, or a retired
+    rendezvous DID is terminal wrong-recipient input and does not remain
     pending.
-35. An exact known local key-agreement method whose rendezvous generation is
-    configured but not live remains deferred without pickup ACK; a locked or
-    recovering vault is never classified as wrong-recipient merely because keys
-    are unavailable.
+35. An exact known local key-agreement method with recoverable missing
+    key/document/route state remains deferred without pickup ACK; a retired
+    bound route is terminal. A locked or recovering vault is never classified
+    as wrong-recipient merely because keys are unavailable.
 36. The initiator commits its initial package, then separately its binding,
     before first submission. It needs no reply to recover that binding. Required
     transition evidence commits before its response intent; a crash between

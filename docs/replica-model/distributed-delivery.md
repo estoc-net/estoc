@@ -220,7 +220,7 @@ The following table is normative. "Committed" means process-durable success.
 | --- | --- | --- |
 | Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
-| Prepared package | `message.prepared` and its exact envelope; an initial outbound also requires its committed initiator binding under `vault-events.md` section 12.5 | Submit that exact package |
+| Prepared package | `message.prepared` and its exact envelope; an initial outbound also requires its committed initiator binding under `vault-events.md` section 12.3 | Submit that exact package |
 | Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that MID; apply envelope retention under `vault-events.md` section 15.3 |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
@@ -722,7 +722,7 @@ initials at a local rendezvous DID follow their own key-derived input row.
 
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
-| Responder candidate addressed to a local rendezvous DID | Committed `o` and its exact resolution with consistent `rendezvousConfigId`/recipient references under `vault-events.md` sections 12.3 and 14.4 | The deterministic relationship derived from the canonical local rendezvous DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
+| Responder candidate addressed to a local rendezvous DID | Committed `o` with `myKey` identifying one immutable local rendezvous DID and its exact `peerResolution` under `vault-events.md` sections 12.1 and 14.4 | The deterministic relationship derived from that canonical recipient DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
 | Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
 
 Each row contributes at most one scope; multiple matching relationships are
@@ -740,7 +740,7 @@ Apply the following rules to every valid observation in one MID group:
 1. Conflicting derivation evidence or two distinct derived scopes makes an
    execution-scope conflict, even when another observation is unresolved.
 2. Otherwise, any observation with no scope leaves the whole group deferred.
-   This includes a candidate with missing configuration/resolution evidence
+   This includes a candidate with missing DID/resolution evidence
    alongside an observation already attributed to a relationship. The deferred observation cannot be
    ignored to run the rest of the group.
 3. Only when every observation derives the same unique scope may the group
@@ -789,10 +789,11 @@ For every account-scoped pickup or direct delivery:
 2. once local key state is authoritative, inspect every recipient `kid` before
    decryption. A delivery is deferred only when at least one `kid` maps to an
    exact known local key-agreement method with a concrete recoverable
-   prerequisite that is not yet satisfied, such as a configured-but-not-live
-   rendezvous generation. A foreign DID, a locally controlled DID with a
-   nonexistent or wrong-purpose fragment, a terminal rendezvous generation,
-   or a set of recipient `kid` values with no valid local key-agreement match
+   prerequisite that is not yet satisfied, such as pending bound-route
+   reconciliation. A foreign DID, a locally controlled DID with a
+   nonexistent or wrong-purpose fragment, a retired rendezvous DID or its
+   terminal bound-route dependency, or a set of recipient `kid` values with
+   no valid local key-agreement match
    is terminal wrong-recipient input: safely classify it, pickup-ACK it when
    mediated, and append no `message.in`, contact or response effect;
 3. authenticate, decrypt and validate the complete innermost message,
@@ -808,9 +809,9 @@ For every account-scoped pickup or direct delivery:
    returned event ID as `message.in.peerResolution` in a separate
    `Vault.commit` with the retained content, applicable contact attachment and
    non-controversial observations.
-   `rendezvousConfigId` is the frozen generation for a bootstrap candidate,
-   otherwise null. For a rendezvous input, its integrity checks and both
-   commits share the writer lock; each complete channel key contains its peer public key;
+   For a rendezvous input, recipient liveness and integrity checks and both
+   commits share the writer lock; its `myKey` identifies the immutable local
+   rendezvous DID. Each complete channel key contains its peer public key;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -975,7 +976,6 @@ A recommended inbound observation records both hashes and durable headers:
   "myKey": "did/019b.../key-agreement",
   "peerKey": "<canonical-peer-public-key>",
   "peerResolution": "<exact-peer.resolved-eid>",
-  "rendezvousConfigId": null,
   "receivedVia": {
     "mediation": "019b...",
     "deliveryId": "019b..."

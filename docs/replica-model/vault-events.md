@@ -112,8 +112,7 @@ replica, domain owner or process location.
 Changing a communication DID's keys or embedded service creates another
 `did:peer:4` entity and an explicit scoped transition. There is no local
 communication-key generation or key-generation selection. Store generations
-and rendezvous generations retain their separate storage and relationship-route
-meanings.
+retain their separate storage meaning.
 
 TLS private keys, DNS credentials, ACME account keys and web deployment
 credentials are not vault communication keys and MUST NOT be derived from
@@ -515,10 +514,26 @@ Retirement is terminal for the DID entity. Its mediated `boundRoute` pair is
 removed from the desired recipient set, and it is not chosen for new outbound
 messages.
 
-An envelope that still arrives for a retired key may be durably recorded
-before policy rejects further interaction; retirement is not retroactive
-erasure. Historical events, key derivation and contact-scoped transition
-evidence remain.
+For a rendezvous DID, retirement stops new input when `did.retired` commits.
+The writer rechecks DID liveness under the same lock as inbound commit; an
+input already committed remains eligible for relationship materialization
+and a response from its pairwise DID, subject to current contact tombstones,
+integrity and the pairwise DID's own lifecycle. Later deliveries to the retired
+rendezvous key, including duplicates, are terminal wrong-recipient input under
+`rendezvous.md` section 9. No timestamp cutoff or replay-time clock comparison
+is required.
+
+Retain keys and Peer document evidence needed to finish committed candidates,
+unsubmitted outbounds and historical proof verification. Retirement of the
+rendezvous DID or its ingress route does not by itself cancel those candidates;
+their handoff can use the retained rendezvous signing key and a live pairwise
+route. Emergency compromise policy may stop work sooner without rewriting
+historical input, invitation consumption or proof evidence.
+
+An envelope that still arrives for a retired relationship key may be durably
+recorded before lifecycle rules prevent further interaction. Retirement is
+not retroactive erasure: historical events, key derivation and contact-scoped
+transition evidence remain.
 
 ## 6. `identity.label`
 
@@ -1181,7 +1196,6 @@ See `distributed-delivery.md` section 9.
     "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "peerResolution": "019b2a72-0626-7a87-a310-941fe4c1ce77",
-    "rendezvousConfigId": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
     "presentedDid": "did:peer:4zQm...short",
     "did": "did:peer:4zQm...short",
     "thid": null,
@@ -1207,10 +1221,6 @@ See `distributed-delivery.md` section 9.
 Requirements:
 
 - `mid` is the deterministic observation value above;
-- `rendezvousConfigId` is REQUIRED: the selected generation ID for a local
-  rendezvous recipient under section 12.3, otherwise null. It records receive
-  configuration, not an admission decision, and is excluded from message
-  hashes;
 - `receiptOrdinal` is a canonical positive decimal integer string assigned to
   this newly committed observation event under the vault-wide allocator below;
   it is immutable portable evidence, not an EventStore `ChangeToken`;
@@ -1512,7 +1522,7 @@ pinned rendezvous predecessor.
 A transition cannot move a peer end into a different relationship merely
 because the contact or prior DID is shared.
 
-For an initiator, first recover and commit the section-12.5 binding from the
+For an initiator, first recover and commit the section-12.3 binding from the
 initial package if needed. The first transition verifies against its pinned
 snapshot; a later transition uses the named historical resolution for that
 relationship's verified predecessor. `rendezvous.md` section 12 defines
@@ -1578,117 +1588,39 @@ observations are harmless.
 ## 12. Rendezvous and relationship observations
 
 These events lift durable state defined by the profile in `rendezvous.md`.
-Rendezvous DIDs, relationship DIDs and rendezvous generations are vault-scoped.
+Rendezvous DIDs and relationship DIDs are vault-scoped.
 A server runtime has no special ownership.
 
-### 12.1 `rendezvous.generationConfigured`
+### 12.1 Durable bootstrap input
 
-A rendezvous generation freezes the responder relationship route for one
-immutable Peer rendezvous DID entity:
-
-```json
-{
-  "type": "rendezvous.generationConfigured",
-  "roots": [],
-  "data": {
-    "id": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
-    "relationshipRoute": "019b2a58-75ab-7880-a7d2-c677b6b3bfd1"
-  }
-}
-```
-
-These are the only payload fields. The named DID has role `rendezvous`.
-Its long form, document, fixed authentication and key-agreement methods and
-ingress `boundRoute` come from `did.created` under section 5.2.
-`relationshipRoute` is independent of that ingress route and is encoded only
-in responder relationship DIDs. No type, size, lifetime or admission settings
-are stored.
-
-Commit configuration before disclosure. It alone does not make the generation
-live: the referenced DID and keys must validate and a mediated ingress route
-must be reconciled. A configured generation that can still become live is
-deferred; a permanently invalid one is terminal. Retirement uses section 12.2.
-
-#### Generation selection
-
-For a rendezvous DID entity, collapse equivalent configurations by ID and use
-each ID's earliest configuring event in canonical order. Select the ID whose
-first configuring event is latest. Repeating a configuration does not select
-it again. Conflicting payloads block use; an unavailable or terminal selected
-generation does not cause fallback to an older configuration for new input.
-
-The active writer selects from committed state before the pre-vault gate and
-rechecks under the writer lock before inbound commit. The new candidate records
-that exact ID in `message.in.rendezvousConfigId`; duplicates for the same MID
-and local recipient key reuse it. A later configuration cannot rewrite it.
-Materialization and recovery use that recorded configuration, without a new
-policy selection or acceptance deadline.
-
-An established relationship retains its `originGeneration`, local DID, bound
-route and proof. A newer generation may be recorded by a later initial from
-the same peer, but cannot rotate the existing relationship or replace its
-origin material.
-
-### 12.2 `rendezvous.generationRetired`
-
-```json
-{
-  "type": "rendezvous.generationRetired",
-  "roots": [],
-  "data": {
-    "id": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
-    "admitUntil": 1789047600
-  }
-}
-```
-
-`admitUntil` is a terminal cutoff for receipt of new input at this generation,
-not a message-expiry or materialization deadline. The first candidate receipt
-must have `parseRFC3339(at) < UnixEpoch + admitUntil seconds`; equality is
-terminal. A candidate already committed before that cutoff remains eligible
-for materialization after it, subject to current tombstones, key availability
-and integrity. Its wire timestamps impose no receive-time limit.
-
-Retain private keys and Peer document evidence needed to finish committed
-candidates, unsubmitted outbounds and historical proof verification. There is
-no finite retention formula based on maximum initial lifetime. Retirement can
-stop new ingress and drain mediator deliveries using the deployment's retention
-and safety margin, but cannot discard evidence still required by committed
-work. Emergency compromise policy may intentionally stop work sooner without
-rewriting historical receipt or proof evidence.
-
-### 12.3 Durable bootstrap input
-
-`message.in.rendezvousConfigId` is non-null exactly for an observation received
-at a local rendezvous DID's fixed key-agreement method. Resolve that reference
-through `rendezvous.generationConfigured.did` to the immutable `did.created`.
-Its key must equal `message.in.myKey`; the canonical recipient DID and
-authenticated `message.in.peerKey` derive the relationship under
-`rendezvous.md` section 10. Sender DID and exact document come from the input's
-`peerResolution`. This committed input supplies scope before materialization.
+A `message.in` is a bootstrap candidate exactly when `myKey` maps through
+section 14.3's reverse key index to one immutable `did.created` with role
+`rendezvous`. The key must be that DID's fixed key-agreement method. Its
+canonical DID and authenticated `message.in.peerKey` derive the relationship
+under `rendezvous.md` section 10. Sender DID and exact document come from the
+input's `peerResolution`. These committed references supply scope before
+materialization; no separate receive-configuration reference is needed.
 
 Before a new input commit, the writer applies `rendezvous.md` section 9.3's
 integrity checks, including contact tombstones, sender-DID consistency and
-one-use availability. The input commit records durable receipt, with no
+one-use availability, and rechecks the recipient DID's live receive state
+under sections 5.5 and 14.3. The input commit records durable receipt, with no
 separate policy result. All valid application types and nullable timestamps
 are received; there is no age or expiry comparison for accepting an initial.
 
-For receipt-cutoff validation, use the first consistent observation for
-`(mid, myKey)` under `receiptOrderKey`, not the sender's creation time or a
-later duplicate's arrival. Consistent duplicates preserve that candidate's
-recorded generation. Missing DID, generation or exact resolution evidence
-defers; inconsistent references, incompatible duplicate generation values or
-sender-DID evidence are integrity conflicts. Imports check these joins over
-the event union, without inferring a historical configuration choice from
-event ordering. The producer's serialized live-state checks are not replayed
-using the importer's present clock or route availability.
+Missing DID or exact resolution evidence defers; inconsistent recipient or
+sender-DID evidence is an integrity conflict. Imports check the immutable
+key/DID and resolution joins over the event union. The producer's serialized
+live-state checks are not replayed using event timestamps, the importer's
+present clock or current DID/route availability. Retirement does not invalidate
+the historical candidate or its scope.
 
 The scope-bearing input must commit before a dependent response intent.
-Later tombstones and retirement can stop new work but cannot select another
-scope, remove invitation consumption or rewrite the input's configuration.
+Later tombstones and relationship-DID retirement can stop new work but cannot
+select another scope or remove invitation consumption. Rendezvous retirement
+allows committed candidates to finish under section 5.5.
 
-### 12.4 `relationship.established`
+### 12.2 `relationship.established`
 
 ```json
 {
@@ -1697,7 +1629,6 @@ scope, remove invitation consumption or rewrite the input's configuration.
   "data": {
     "id": "9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3",
     "contact": "5015e216-bc69-52d8-a7e1-c5c3c9a01254",
-    "originGeneration": "019b2a5d-ea71-72f4-9d99-850d69ee8030",
     "originInboundMid": "8fa18330-6cb7-5ff2-b9b8-603c0a568194",
     "originResolution": "019b4d11-22d3-7fd0-82fb-f33864a75dd4",
     "originWireId": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
@@ -1712,7 +1643,8 @@ scope, remove invitation consumption or rewrite the input's configuration.
 ```
 
 This event freezes responder relationship state for the canonical rendezvous
-DID referenced by `originGeneration` and the authenticated `peerKey`.
+DID identified by the selected origin input's `myKey` and the authenticated
+`peerKey`.
 Different initial message IDs or protocol types from the same authenticated
 initiator key reuse the same relationship, contact, responder relationship
 DID and route while remaining separate
@@ -1720,7 +1652,7 @@ application messages.
 
 Before this event exists, the active phase-1 runtime selects the origin as the
 first durable, conflict-free candidate it is about to materialize. It records the
-selected contact, local DID, generation, origin, peer and handoff outbound,
+selected contact, local DID, origin, peer and handoff outbound,
 together with the origin's exact sender `originResolution` and compact
 `fromPrior`. Later candidates or duplicate observations cannot rewrite
 those choices.
@@ -1729,7 +1661,7 @@ Other values come from immutable references:
 
 | value | source |
 | --- | --- |
-| Rendezvous DID entity and canonical spelling | `rendezvous.generationConfigured(originGeneration).did`, then `did.created` |
+| Rendezvous DID entity and canonical spelling | The selected origin `message.in.myKey` through section 14.3's reverse key index, then `did.created` |
 | Responder long form and relationship route | `did.created(ourDid).longForm` and `.boundRoute` |
 | Initiator's exact presented DID, long form for numalgo 4, and initial chain keys | `peer.resolved(originResolution)`, referenced by the selected origin `message.in.peerResolution` |
 | Handoff wire ID | `handoffMid` |
@@ -1743,16 +1675,15 @@ Normative rules:
 
 - `id`, `contact` and `ourDid` satisfy `rendezvous.md` section 10's derivations
   using the referenced canonical rendezvous DID and `peerKey`;
-- `originGeneration` equals the origin input's `rendezvousConfigId`;
-  `originWireId`, nullable `originCreatedTime`, `peerKey` and `theirDid` match
+- `originWireId`, nullable `originCreatedTime`, `peerKey` and `theirDid` match
   the origin `message.in`;
 - `originResolution` equals that selected observation's `peerResolution`.
   It pins one exact sender document even if another observation of the same
   MID later authenticates under a different document revision. All origin
   field joins must be witnessed by one consistent observation, not assembled
   from incompatible observations;
-- `fromPrior` verifies against the local rendezvous DID document referenced
-  through `originGeneration` under `rendezvous.md` section 11.2 before its
+- `fromPrior` verifies against the local rendezvous DID document identified
+  by that origin input's `myKey` under `rendezvous.md` section 11.2 before its
   claims are used. `originResolution` is the peer's document and cannot
   authorize this locally produced proof;
 - its `iat` is the integer Epoch-Seconds rotation instant sampled once by the
@@ -1764,8 +1695,9 @@ Normative rules:
 - its `sub` equals `did.created(ourDid).longForm` byte-for-byte; every package
   carrying this proof uses that same value in plaintext `from` and the DID
   portion of `skid`/decoded `apu`;
-- `did.created(ourDid).boundRoute` equals the origin generation's
-  `relationshipRoute`, which may differ from the rendezvous ingress route;
+- `did.created(ourDid).boundRoute` is selected and frozen when that pairwise
+  DID is created under section 16.3. It may differ from the rendezvous ingress
+  route; a later preference change cannot replace an already committed route;
 - the referenced handoff intent's `executionId` equals the value derived for
   this relationship and `originWireId` from the carrier group containing
   `originInboundMid` under `distributed-delivery.md` section 9; its `effectKey`
@@ -1798,7 +1730,7 @@ Handoff submission completes at committed `delivery.submitted`, independently
 of peer receipt or handoff confirmation. A duplicate initial message cannot
 cause another submission of that completed handoff MID.
 
-### 12.5 `relationship.initiatorBound`
+### 12.3 `relationship.initiatorBound`
 
 The initiator commits one portable relationship-scope binding from its initial
 package and pinned resolution before first submission. The peer need not reply
@@ -1973,20 +1905,21 @@ or ingress service without naming a replica as the application recipient.
 The fold also maintains a reverse map from every local communication key name
 to exactly one DID entity. Both validated Peer spellings map to that entity,
 but a recipient fragment must still identify its exact key-agreement method.
+The map retains retired DIDs and DIDs whose routes retired for historical
+input and proof joins; present liveness controls new ingress and sending.
 Ambiguous or inconsistent mapping is an integrity conflict and prevents
 cryptographic use.
 
 ### 14.4 Rendezvous and relationship fold
 
-For each generation, require one consistent `rendezvous.generationConfigured`
-and valid DID/route dependencies. Liveness, configuration selection and the
-receipt cutoff follow sections 12.1–12.3. A durable input retains its recorded
-configuration; it is not reconsidered under a later generation or clock.
+Rendezvous DIDs use the ordinary DID/route fold in section 14.3 and retirement
+under section 5.5. Durable input is joined to its immutable recipient DID and
+exact sender resolution under section 12.1, independently of present liveness.
 Deferral is allowed only for an exact known recipient method with a concrete
 recoverable dependency, or before unlock/recovery makes the key index
 authoritative. Terminal or foreign input follows `rendezvous.md` section 9.
 
-Every committed bootstrap candidate with consistent section-12.3 evidence
+Every committed bootstrap candidate with consistent section-12.1 evidence
 derives its deterministic relationship scope. It has no pending or rejected
 policy state. Receipt and exact resolution evidence must commit before
 response-scope derivation. Missing references defer and conflicting evidence
@@ -2016,12 +1949,12 @@ Group responder-side `relationship.established` and initiator-side
 `relationship.initiatorBound` by deterministic relationship ID. Each side must
 validate its own closed schema and derivation. Equal evidence is one
 relationship; incompatible evidence for one ID is an integrity conflict. A
-responder event freezes origin and its exact sender resolution, generation,
-remote DID, local DID, rotation proof
-and handoff MID; route and handoff effect data follow its immutable references.
+responder event freezes origin and its exact sender resolution, remote DID,
+local DID, rotation proof and handoff MID; the rendezvous DID, pairwise route
+and handoff effect data follow its immutable references.
 An initiator binding records contact, local DID, initial outbound, pinned
 resolution; DID spellings and keys follow the immutable references in section
-12.5. Rotation is separate `peer.transitioned` evidence. These values are not
+12.3. Rotation is separate `peer.transitioned` evidence. These values are not
 re-selected from later arrivals.
 
 A valid relationship contributes:
@@ -2373,7 +2306,7 @@ An OOB disclosure with `uses == "one"` is available for a new consumer only
 when its DID is not retired and no valid committed bootstrap candidate has
 consumed it.
 
-A section-12.3 candidate consumes the locally disclosed invitation at its
+A section-12.1 candidate consumes the locally disclosed invitation at its
 `message.in` commit when its immutable `pthid` names this `oobId` and its local
 rendezvous recipient DID matches the disclosure. The consumer is the
 relationship derived from that recipient DID and authenticated initiator key.
@@ -2397,9 +2330,8 @@ by event order. Once a matching structurally valid candidate is present,
 later sender/intent conflicts do not make the invitation available again.
 No consumption or unconsumption event is needed.
 
-A `uses == "many"` rendezvous disclosure remains open while its DID and
-selected generation can receive new input. It does not disclose a relationship
-DID.
+A `uses == "many"` rendezvous disclosure remains open while its DID can receive
+new input. It does not disclose a relationship DID.
 
 ## 15. Erasure and collection
 
@@ -2521,7 +2453,7 @@ list when no new objects are needed; `Vault.events` is read-only.
    high-water mark under section 10.2 before accepting a new inbound
    observation; cross-author ordinal reuse does not block open or import;
 7. recover missing bindings for prepared initial attempts identified under
-   `rendezvous.md` section 8 and validated under section 12.5, then enumerate
+   `rendezvous.md` section 8 and validated under section 12.3, then enumerate
    committed inbound observations with unfinished materialization, transition, ACK
    or protocol-defined deterministic effect work;
 8. idempotently reconcile those observations, relationship materialization,
@@ -2563,8 +2495,13 @@ intent, not a half identity.
 
 ### 16.3 Create a relationship DID
 
-This procedure is used by an initiator before rendezvous and by protocols that
-create ordinary pairwise relationships.
+This procedure is used by an initiator before rendezvous, by a responder
+materializing committed bootstrap input, and by protocols that create ordinary
+pairwise relationships. A responder uses its deterministic entity ID under
+`rendezvous.md` section 10. If `did.created` for that ID already committed,
+recovery MUST reuse its keys, document and `boundRoute`; it cannot select
+another route even if preferences changed or the old route became unavailable.
+A conflicting or retired entity suppresses new work under the ordinary fold.
 
 1. choose one configured live route, creating it first when necessary;
 2. mint a UUIDv7 DID entity ID unless a protocol requires deterministic
@@ -2585,7 +2522,12 @@ registration use the short form.
 Changing keys or bound route creates a new relationship DID and a
 contact-scoped transition. The existing DID entity is not edited.
 
-### 16.4 Configure and disclose a rendezvous DID
+The responder chooses its pairwise route at this creation step, independently
+of the rendezvous ingress route. A crash before `did.created` commits leaves
+no frozen route; a later attempt may choose any currently usable route. A
+partial materialization that already committed that event must reuse it.
+
+### 16.4 Create and disclose a rendezvous DID
 
 The Peer profile requires no domain or network resolver:
 
@@ -2594,19 +2536,18 @@ The Peer profile requires no domain or network resolver:
    keys;
 3. build and validate a `did:peer:4` long form whose input document embeds
    those keys and exactly that bound route;
-4. append `did.created` with both Peer spellings and the bound route, plus
-   `rendezvous.generationConfigured` referencing that DID and freezing the
-   relationship route;
+4. append `did.created` with both Peer spellings, role `rendezvous` and the
+   bound route;
 5. when the bound route is mediated, reconcile and verify registration of the
    canonical short form; and
 6. append `did.disclosed`, exposing only the rendezvous Peer DID long form in
    an OOB invitation, QR, file or another discovery object.
 
-The rendezvous generation is live after local long-form validation and current
-bound-route reconciliation. If the active runtime temporarily cannot map the
-recipient key, it leaves the mediator delivery unacknowledged until local state
-is repaired and refolded. The rendezvous DID belongs to the vault, not the
-process displaying the invitation.
+The non-retired, conflict-free rendezvous DID is ready to receive after local
+long-form validation and current bound-route reconciliation under section 14.3.
+If the active runtime temporarily cannot map the recipient key, it leaves the
+mediator delivery unacknowledged until local state is repaired and refolded.
+The rendezvous DID belongs to the vault, not the process displaying the invitation.
 
 ### 16.5 Erase a message
 
@@ -2799,7 +2740,7 @@ There is no migration requirement from an earlier event vocabulary.
 24. Unlock/recovery-incomplete input and an exact known local key-agreement
     method with a recoverable missing prerequisite remain unacknowledged;
     after key state is authoritative, foreign DIDs, nonexistent/wrong-purpose
-    local fragments and terminal rendezvous generations are terminal
+    local fragments and retired rendezvous DIDs are terminal
     wrong-recipient input and do not remain pending.
 25. Safely classified hard pre-vault rejection is pickup-ACKed before any
     `message.in` and leaves only bounded local diagnostics.
@@ -2816,10 +2757,10 @@ There is no migration requirement from an earlier event vocabulary.
     requests do not block durable receipt or materialization.
 31. The first bootstrap message is an ordinary application message, not an
     Estoc rendezvous wrapper.
-32. A candidate records `rendezvousConfigId` and exact `peerResolution` in
-    its inbound commit. Recovery derives scope from these committed references
-    without a separate admission decision; missing evidence defers and
-    inconsistent references conflict.
+32. A candidate's `myKey` maps to one committed rendezvous DID and its
+    `peerResolution` pins the exact sender document. Recovery derives scope
+    from those references without an admission decision or extra configuration
+    ID; missing evidence defers and inconsistent references conflict.
 33. Two initial wire IDs from the same `(rendezvous DID, initiator key)`
     derive one relationship/contact/responder DID and remain separate messages.
     Each consistent committed candidate supplies that scope independently.
@@ -2830,7 +2771,7 @@ There is no migration requirement from an earlier event vocabulary.
 36. Durable receipt survives restart before materialization and later
     expiry. Current tombstones suppress new work; no new admission command
     is needed to resume a valid candidate.
-37. Stable `relationship.established` records the selected origin, generation,
+37. Stable `relationship.established` records the selected origin,
     contact, local DID, peer, handoff MID and exact `fromPrior`. Prior form/kid
     and rotation `iat` derive from the verified JWT; responder long form and
     route derive from the local DID; execution ID and effect key derive from the
@@ -2868,9 +2809,8 @@ There is no migration requirement from an earlier event vocabulary.
     Registration is queried and reconciled on reconnect and after restore;
     local trace loss does not change that desired set.
 51. Each local DID derives fixed authentication and key-agreement keys and
-    an immutable bound route. Rotation creates another entity; a rendezvous
-    generation references its entity and independently chosen relationship
-    route, with no admission settings.
+    an immutable bound route. Rotation creates another entity; a responder
+    selects its independent pairwise route when creating the relationship DID.
 52. Erasure is checked before object presence; late roots receive equivalent
     erasure closure.
 53. Restore from a readable folder creates a new local author unless it is an
@@ -2973,13 +2913,15 @@ There is no migration requirement from an earlier event vocabulary.
 87. A user send or deterministic response uses its outbound MID as plaintext
     `id`; every package and retry preserves it. Inbound observation MIDs remain
     scoped derivations and are not replaced with the received wire ID.
-88. For new receipt, the latest first configuring event selects the
-    generation. Repeating an older configuration does not select it again;
-    an unavailable selected generation cannot fall back to it.
-89. A candidate freezes its generation in `rendezvousConfigId` at receipt.
-    Later configuration, retirement and duplicate receipt cannot change it or
-    an established origin. Retirement uses first local receipt, and a candidate
-    already committed before its cutoff may materialize after it.
+88. A responder chooses its route at pairwise DID creation. Recovery after
+    a crash before `did.created` commits may choose a current route; after
+    that commit, a partial materialization reuses the same DID and route.
+    A preference change or unavailable route never rewrites that entity.
+89. Rendezvous retirement and input commit share the writer lock. Retirement
+    stops later input, including duplicate observations, but an already
+    committed candidate can finish through a live pairwise route. Restore and
+    shuffled event import preserve its scope and invitation consumption without
+    using timestamps to reconstruct a receive cutoff.
 90. A transition names one relationship and matching contact. A shared
     contact, thread, key or prior DID cannot extend it to another relationship.
     The first initiator transition uses its existing binding's pinned snapshot;
