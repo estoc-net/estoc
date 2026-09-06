@@ -713,7 +713,7 @@ share its existing lock without shortening that operation's required boundary.
 
 A read-only stream opened before any writer starts needs the same protection
 against a later collector. It MUST either participate in a cross-process latch
-registry honored by future writers, or acquire the backend's single-writer
+registry honored by future writers, or acquire the backend's vault
 ownership before checking presence and opening bytes, holding that ownership
 until all streams it protects end. This ownership is shared among readers,
 exclusive against a writer, and excludes a writable open including its recovery
@@ -1034,7 +1034,7 @@ A conforming implementation MUST pass at least these cases:
     live concurrent object reads rather than exposing an unprotected stream.
 32. A read-only process opens and pauses an object stream before any writer
     starts. A later writable open either joins its existing cross-process
-    protection or waits/fails behind its single-writer ownership. There is no
+    protection or waits/fails behind its shared reader ownership. There is no
     interval in which collection can unlink the stream's bytes. Two readers
     can hold shared ownership concurrently; releasing one stream or reader
     does not release another's protection. After the last

@@ -91,9 +91,10 @@ informative deferred extensions, not dependencies of this profile.
 - **Peer rendezvous DID** — the self-resolving `did:peer:4` rendezvous profile.
 - **Relationship DID** — a vault-scoped pairwise `did:peer:4` created for one
   relationship.
-- **Initial message** — the first ordinary DIDComm application message sent
-  to a rendezvous DID. A local initiator uses its relationship DID; a remote
-  initiator may use any supported authenticated DID under section 5.1.
+- **Initial message / initial attempt** — an application message selected for
+  bootstrap or a later bootstrap attempt under section 8. A local initiator
+  records that selection in its outbound intent; a remote initiator may use
+  any supported authenticated DID under section 5.1.
 - **Bootstrap candidate** — an authenticated initial message that has passed
   the hard pre-vault gate and may be admitted into the vault.
 - **Initial-message policy set** — message types a rendezvous generation
@@ -118,8 +119,8 @@ informative deferred extensions, not dependencies of this profile.
   protocol request.
 - **Bootstrap channel** — the authenticated channel from the initiator
   relationship key to the responder rendezvous key.
-- **Relationship ID** — the responder's deterministic local entity ID for
-  `(rendezvous DID, authenticated initiator key)`.
+- **Relationship ID** — the deterministic ID both ends derive for
+  `(rendezvous DID, authenticated initiator public key)`.
 - **Full runtime** — the active writable incarnation of the vault. It may run
   locally or on a server. Phase 1 has exactly one active full runtime.
 
@@ -149,7 +150,8 @@ informative deferred extensions, not dependencies of this profile.
 12. A deterministic contact tombstone is not resurrected by another initial
     message from the same initiator key.
 13. Ordinary `writeTo` never uses a local rendezvous DID as sender. The
-    peer's current verified DID may be its original rendezvous or public DID.
+    peer's current pinned or verified DID may be its original rendezvous or
+    public DID, subject to section 8's qualifying inbound rule.
 14. A mediator treats rendezvous and relationship DIDs as ordinary recipient
     DIDs and stores only encrypted inner envelopes.
 15. Phase 1 has one active full runtime. The deferred replica profiles MUST NOT
@@ -203,6 +205,35 @@ resolution do not authorize a reply. Numalgo-4 first-disclosure requirements
 apply only when that method is used. A same-DID authenticated reply from the
 pinned initial key needs no `from_prior`; a different DID requires verified
 continuation evidence to join the existing relationship.
+
+A key change under the same canonical peer DID without verified continuation
+is not continuation of an existing relationship. Phase 1 uses the following
+policy; a fresh `peer.resolved` never extends `peerChain(R)`:
+
+- For a new package to an existing relationship's peer DID, including a later
+  initial attempt, select an authorized key already in `peerChain(R)` under
+  `distributed-delivery.md` section 9, with the canonical DID and key matching
+  the same binding or transition evidence. If a successful fresh resolution
+  offers no usable key with that evidence, append message-scoped terminal
+  `delivery.failed(code="peer-key-changed", packageId=null)` before preparation
+  or channel attachment. Do not append an incompatible package or binding and
+  do not mark the whole relationship conflicted. Resolution unavailability
+  remains retryable. An already pinned initial package continues to use its
+  exact retained snapshot; it does not re-resolve to replace its key.
+- For an authenticated inbound addressed to `R`'s local relationship DID,
+  whose canonical sender DID is evidenced in `R` but whose key is outside
+  `peerChain(R)` and which carries no `from_prior`, preserve the observation
+  and exact resolution evidence but derive no execution scope. Process no ACK
+  or effect. Surface a `peer-key-changed` diagnostic under
+  `vault-events.md` section 14.6 instead of silently waiting for more evidence.
+  Missing binding/chain evidence remains ordinary deferral; an invalid carried
+  proof follows the existing conflict rule, not this no-proof path.
+- Recovery from such a key change requires an explicit new initial attempt
+  with a fresh local relationship DID/key, producing a new relationship and
+  binding. Do not rewrite the old binding or automatically replay its messages.
+  An incoming initial at a local rendezvous DID still follows its own
+  key-derived relationship and admission procedure; it cannot continue the
+  old relationship merely by repeating the sender DID.
 
 Missing historical snapshot material is a deferred verification state, not
 proof that a handoff is invalid.
@@ -346,6 +377,43 @@ not an in-place key or route rotation.
 
 ## 8. Initial message profile
 
+This section owns outbound initial-attempt classification. A `message.out` is
+an **initial attempt** exactly when its immutable `initial` field is non-null
+under `vault-events.md` section 9.2. It freezes the selected local relationship
+DID and exact presented peer DID before any network work. The classification
+does not depend on OOB discovery, `pthid`, message type, a later reply, current
+resolver results or event arrival order. A replacement is a new initial intent
+with a new MID. An explicit later bootstrap attempt to the original peer DID
+also records `initial`, even when a relationship already exists.
+
+Before committing a new ordinary send through an initiator relationship, the
+writer MUST have a committed authenticated inbound in that relationship's
+unique, conflict-free execution scope, other than a no-handoff rejection
+under `vault-events.md` section 14.7. A direct application reply or pure ACK
+qualifies without rotation. Binding or submission alone does not qualify.
+Until that evidence exists, every send to the pinned initial peer DID uses
+this initial profile. A first send to a disclosed peer with no binding also
+uses this profile. Explicit channel targets cannot bypass this requirement.
+Responder traffic authorized by effective acceptance follows sections 10–11.
+
+Validate `initial` and all locally checkable section-8.1 constraints before
+`message.out` commits. Reject an invalid request without creating an outbound;
+do not add or alter headers later. Under one writer-lock operation, classify
+the send, check the committed evidence and commit the intent. Later inbound
+evidence never changes a committed initial attempt into an ordinary message.
+Every package of an initial attempt MUST use its frozen local DID and the
+canonical peer DID derived from `initial.peerDid`, with resolution evidence
+whose `presentedDid` equals that exact frozen spelling. The first package pins
+its exact snapshot and recipient key for all retries of that MID.
+
+Recovery enumerates retained `message.out.initial != null` and their valid
+prepared packages, then restores missing bindings under `vault-events.md`
+section 12.5. It requires neither an inbound response nor a surviving OOB
+invitation, body or envelope. Unprepared initial intents resume the same
+preparation procedure; no ordinary outbound is guessed to be initial. Imports
+validate the frozen fields and package/reference joins from the event union,
+not an inferred historical before/after order.
+
 ### 8.1 Common requirements
 
 A conforming Estoc initial message MUST:
@@ -358,6 +426,9 @@ A conforming Estoc initial message MUST:
 - include finite `expires_time` with `created_time < expires_time`;
 - have a lifetime of at most 604800 seconds; phase 1 defines no mechanism for
   a responder to advertise a larger ceiling;
+- have canonical plaintext size at most 65536 bytes for the interoperable
+  bootstrap floor; count the exact initial plaintext with its frozen DID
+  spellings and headers before committing the intent;
 - request explicit acknowledgment of the current message with
   `please_ack: [""]` or with its own wire ID;
 - include the invitation ID as `pthid` when it arose from OOB discovery; and
@@ -441,13 +512,14 @@ The initiator:
 2. selects or creates the local contact and associates the disclosed
    rendezvous DID with it;
 3. prepares body and attachment objects;
-4. uses `Vault.commit` for those objects and `message.out` for the Trust Ping
-   or application message;
+4. validates section 8.1 and uses `Vault.commit` for those objects and
+   `message.out`, freezing `initial` for the Trust Ping or application message;
 5. reconciles recipient registration for `P_B` on its bound route when
    mediated, so the response is reachable;
 6. resolves the rendezvous DID and uses `Vault.commit` for the snapshot objects
    and exact `peer.resolved` evidence;
-7. attaches the bootstrap channel with `because == "rendezvous"`;
+7. validates the selected key under section 5.1, then attaches the bootstrap
+   channel with `because == "rendezvous"`;
 8. uses `Vault.commit` for one exact envelope and its `message.prepared`;
 9. commits or reuses `relationship.initiatorBound` from that committed package
    under `vault-events.md` section 12.5; and
@@ -465,15 +537,16 @@ concurrently use the same local author.
    it with the contact;
 4. select a first application message; when no application content exists,
    use Trust Ping 2.0 `ping` with `response_requested == true`;
-5. use `Vault.commit` for body/attachments and `message.out` with finite expiry,
-   `pleaseAck == [""]`, OOB invitation ID as `pthid` when applicable, and
-   `intentHash`; this may happen offline;
+5. validate section 8.1 and use `Vault.commit` for body/attachments and
+   `message.out` with `initial` naming that local DID and exact disclosed peer
+   DID, finite expiry, `pleaseAck == [""]`, OOB invitation ID as `pthid` when
+   applicable, and `intentHash`; this may happen offline;
 6. after intent exists, register the initiator relationship DID canonical
    short form on its bound route when mediated;
 7. resolve the rendezvous DID and use `Vault.commit` for the snapshot objects
    and exact `peer.resolved` evidence;
-8. append `channel.firstSeen` and `contact.attached` for the bootstrap channel
-   with `because == "rendezvous"`;
+8. validate the selected key under section 5.1, then append `contact.attached`
+   for the bootstrap channel with `because == "rendezvous"`;
 9. prepare and commit the exact package using initiator Peer DID long form in
    plaintext `from`, protected `skid` and decoded `apu`;
 10. commit or reuse the initial-package binding under `vault-events.md` section
@@ -489,12 +562,14 @@ is not used by the conforming phase-1 writer for bootstrap.
 If an unsubmitted initial message reaches expiry before preparation or retry,
 append message-scoped terminal `delivery.failed(code="expired")` and submit
 nothing. A replacement initial message uses a new wire ID but normally reuses
-the same initiator relationship key unless the contact was deleted.
+the same initiator relationship key unless the contact was deleted or section
+5.1's same-DID key-change recovery requires a fresh local DID/key.
 
-After binding, the pinned peer DID is the relationship's initial current end
-and may enter ordinary `writeTo` under `vault-events.md` section 14.6. A peer
-that keeps this DID can receive ordinary replies without a handoff. This local
-binding is not evidence of remote receipt or business acceptance.
+After binding, the pinned peer DID is the relationship's initial current end.
+Before qualifying inbound evidence under section 8, sends to it remain initial
+attempts. After that evidence it may enter ordinary `writeTo` under
+`vault-events.md` section 14.6 without a handoff. This local binding is not
+evidence of remote receipt or business acceptance.
 
 ## 9. Responder admission
 
@@ -634,6 +709,9 @@ remain live; erasure applies to this candidate's message/root relations.
 
 Acceptance derives stable IDs from the canonical rendezvous DID and the
 authenticated initiator key, not from the initial message wire ID or type.
+`authenticated_peer_key` is the complete canonical public-key value defined
+by `vault-events.md` section 4.1; the initiator derives it from its own local
+relationship key, and the responder obtains it from authenticated input.
 
 ```text
 relationship_id = UUIDv5(
@@ -658,12 +736,12 @@ The executable phase-1 vector uses canonical rendezvous DID:
 did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd
 ```
 
-and peer key `k3j9n0m4x6q2w7c8v5p1d8s0fa`, producing:
+and peer key `z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis`, producing:
 
 ```text
-relationship_id        = 73a7d8f5-3523-5802-9b65-02da2078273e
-contact_id             = 48bab320-8759-5579-b78b-531083d49d4c
-our_relationship_did_id = 2a61bb7e-1578-57ea-83a1-80454032c781
+relationship_id        = 9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3
+contact_id             = 5015e216-bc69-52d8-a7e1-c5c3c9a01254
+our_relationship_did_id = adf87d8c-d357-5f96-bbae-f60fe5f18d58
 ```
 
 The responder pairwise key names are derived from
@@ -775,7 +853,7 @@ these steps. It cannot share the response-intent batch:
    selected relationship route;
 4. select a deterministic handoff response: Trust Ping `ping-response`, a
    protocol-defined deterministic response, or Empty Message ACK;
-5. use `Vault.commit`, preferably once for all new objects and events: the
+5. use `Vault.commit`, preferably once for all new objects and events:
    any new `contact.created`, bootstrap/pairwise
    `contact.attached`, `did.created`, `contact.useDid`,
    fully frozen `relationship.established`, and deterministic response
@@ -826,27 +904,27 @@ effectKind = ping-response
 ordinal    = 0
 ```
 
-For relationship ID `73a7d8f5-3523-5802-9b65-02da2078273e` and origin wire ID
+For relationship ID `9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3` and origin wire ID
 `019b4d12-090a-7c3b-92f7-ac2c51f50db4`, the committed effective accept derives:
 
 ```text
-executionScope = {"relationship":"73a7d8f5-3523-5802-9b65-02da2078273e"}
-executionId    = e5d6c70d-ee4c-5dd5-9a02-02e0726e55da
+executionScope = {"relationship":"9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3"}
+executionId    = 17ac2c56-1758-5167-9d57-1d1f9a2aa6cd
 ```
 
 The Trust Ping response's fixed vector is:
 
 ```text
-effectKey    = FHfQaPxD2Qfttv_KqJlPWAv_DpJJx3g0DdpoJd1bVHk
-mid = wireId = b1dfe218-df15-5083-bbcc-2329dcb0f5c4
+effectKey    = 9Pg0QtQFIY1RVu9QGLydHQb06X49kHkMJhi8E_jeHGs
+mid = wireId = 058b727b-49c3-565f-a63e-7100fc9ce04c
 ```
 
 The deterministic Empty fallback uses the same execution ID and the pure-ACK
 handler, kind and ordinal from `distributed-delivery.md` section 8.2:
 
 ```text
-effectKey    = miY73SVesmJE0PpYo-9XOAKTkh8my-iMbxfP2oNm5rI
-mid = wireId = 27030c47-8058-5e6d-8741-6229e541af78
+effectKey    = 5WQAS3jcmqIY47WYO06hB2obsFUM_U--4bKqYRy0PQ4
+mid = wireId = d72003b7-4952-5185-b1f3-0601c48c056a
 ```
 
 Response timing is deterministic per triggering message:
@@ -862,7 +940,7 @@ The relationship-level rotation proof is independent of the response:
 from_prior.iat = origin_initial_message.created_time
 ```
 
-For origin inbound MID `ca6f6a41-454c-53ff-b827-1797156687cf`,
+For origin inbound MID `8fa18330-6cb7-5ff2-b9b8-603c0a568194`,
 see the Trust Ping handoff vector above.
 
 ### 11.2 Exact `from_prior` construction and handoff headers
@@ -904,7 +982,7 @@ Trust Ping response example:
 
 ```json
 {
-  "id": "b1dfe218-df15-5083-bbcc-2329dcb0f5c4",
+  "id": "058b727b-49c3-565f-a63e-7100fc9ce04c",
   "type": "https://didcomm.org/trust-ping/2.0/ping-response",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -923,7 +1001,7 @@ Empty fallback example:
 
 ```json
 {
-  "id": "27030c47-8058-5e6d-8741-6229e541af78",
+  "id": "d72003b7-4952-5185-b1f3-0601c48c056a",
   "type": "https://didcomm.org/empty/1.0/empty",
   "from": "did:peer:4zQm...alice-pairwise-short:z...alice-pairwise-input-document",
   "to": ["did:peer:4zQm...bob-short"],
@@ -942,8 +1020,8 @@ Empty fallback example:
 
 The responder:
 
-1. process-durably appends acceptance, relationship state and response
-   `message.out`;
+1. with the final accept already committed under section 10.2,
+   process-durably appends relationship state and response `message.out`;
 2. reconciles recipient registration for canonical short-form `P_A` on its
    bound route when mediated;
 3. prepares the exact response using long-form sender evidence and the frozen
@@ -970,7 +1048,12 @@ short form. Already prepared exact packages are not rewritten.
 
 ## 12. Initiator replies, transition and confirmation
 
-Before processing incoming traffic, recover any missing
+The rotation-validation steps below also apply when a responder receives its
+peer's later rotation at the local relationship DID. Its first predecessor
+snapshot is the origin inbound's exact `peer.resolved` evidence; later steps
+use the named historical predecessor evidence, just as for the initiator.
+
+On the initiator, before processing incoming traffic, recover any missing
 `relationship.initiatorBound` from the retained initial package under
 `vault-events.md` section 12.5 and commit it. The binding starts at the pinned
 peer DID/key before any response. A known sender DID does not prove that this
@@ -992,8 +1075,9 @@ sender or after an earlier direct reply, validate and recover it as follows:
    numalgo 4, require valid long form on first disclosure; another supported
    DID uses its validated exact spelling under section 5.1;
 2. identify the unique relationship through the local recipient key and a
-   verified predecessor in its peer chain. For the first transition, use that
-   binding's pinned initial resolution; for a later transition, use retained
+   verified predecessor in its peer chain. For the first transition, use the
+   pinned initial resolution on the initiator or the origin inbound's exact
+   resolution on the responder; for a later transition, use retained
    resolution evidence for that relationship's predecessor. Require the exact
    presented `iss` and authorized authentication `kid` to match that snapshot.
    Neither a new resolver result nor matching thread IDs substitutes for it;
@@ -1111,10 +1195,10 @@ The rejection vector uses candidate wire ID
 `019b4d12-090a-7c3b-92f7-ac2c51f50db4` and this responder-local scope:
 
 ```text
-executionScope = {"channel":{"myKey":"did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement","peerKey":"k3j9n0m4x6q2w7c8v5p1d8s0fa"}}
-executionId    = bb3acdd0-2cef-521c-ad99-27d7610f45e8
-effectKey      = I03EKj_XArDCV7K6RdmB76WTJVrff3K01VMcpaXhxe0
-mid = wireId   = 937473bc-acfc-570d-a7b5-e984b4dee70c
+executionScope = {"channel":{"myKey":"did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement","peerKey":"z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis"}}
+executionId    = c5ec37ba-0010-5134-a0cd-2ee1a1b47e3a
+effectKey      = YbL-PguiTMC202JGbV9GHTIglL9MP4jKbopw6gLgapg
+mid = wireId   = ab466010-d03d-50b6-8ad8-f5186dbfb76d
 ```
 
 For `decisionTime == 1788443000` and a frozen current-only
@@ -1122,7 +1206,7 @@ ACK target set, its wire example is:
 
 ```json
 {
-  "id": "937473bc-acfc-570d-a7b5-e984b4dee70c",
+  "id": "ab466010-d03d-50b6-8ad8-f5186dbfb76d",
   "type": "https://didcomm.org/report-problem/2.0/problem-report",
   "from": "did:peer:4zQm...alice-rendezvous-short",
   "to": ["did:peer:4zQm...bob-short"],
@@ -1330,7 +1414,8 @@ submission or substitutes for authentication or rotation proof.
 30. Peer rendezvous mediator replacement requires a new DID/invitation unless
     the old route remains available.
 31. Ordinary `writeTo` excludes our rendezvous sender but includes a peer
-    that keeps its verified original rendezvous or public DID. An accepted
+    that keeps its pinned or verified original rendezvous or public DID after
+    qualifying inbound evidence under section 8. An accepted
     remote `did:web` initiator can receive our pairwise handoff and later replies
     without supplying a Peer-DID long form.
 32. Phase 1 works with one active full runtime and standard account-scoped
@@ -1381,8 +1466,25 @@ submission or substitutes for authentication or rotation proof.
     equivalence class is effective; conflicted or undecided candidates have
     none.
 46. The section-13 Report Problem vector recomputes execution ID
-    `bb3acdd0-2cef-521c-ad99-27d7610f45e8`, effect key
-    `I03EKj_XArDCV7K6RdmB76WTJVrff3K01VMcpaXhxe0` and outbound/wire ID
-    `937473bc-acfc-570d-a7b5-e984b4dee70c`. Restart retains its tuple, code,
+    `c5ec37ba-0010-5134-a0cd-2ee1a1b47e3a`, effect key
+    `YbL-PguiTMC202JGbV9GHTIglL9MP4jKbopw6gLgapg` and outbound/wire ID
+    `ab466010-d03d-50b6-8ad8-f5186dbfb76d`. Restart retains its tuple, code,
     ACK targets and decision-clock timing. A different code for that execution
     conflicts under the same key; it cannot select a new ordinal or MID.
+47. OOB and manual discovery both commit non-null `message.out.initial` with
+    the selected local DID and exact presented peer DID. A second send before
+    qualifying inbound evidence uses the same initial profile, including
+    finite lifetime, current-message ACK request and the 65536-byte writer
+    bound. Invalid requests fail before intent commit. A no-handoff rejection
+    does not enable ordinary sending; a direct scoped reply or pure ACK does.
+48. Restore after package commit but before binding reconstructs the binding
+    from `initial` and package evidence without OOB, content or peer reply.
+    Later inbound evidence never reclassifies that initial MID. A retained
+    ordinary outbound is not guessed to be a missing initial binding.
+49. Fresh resolution of the same peer DID with only unchained keys terminates
+    the new outbound with `peer-key-changed` before preparation, preserving
+    the old relationship and submitted history. A same-DID new-key inbound
+    without proof at its local relationship DID has no scope, ACK or effect;
+    it produces a contact diagnostic instead of a thread item. Recovery uses
+    a new local DID/key and binding. A new initial at a local rendezvous DID
+    still requires its own key-derived relationship and admission result.

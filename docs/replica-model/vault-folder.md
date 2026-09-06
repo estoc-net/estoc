@@ -526,7 +526,7 @@ A writable open additionally:
 1. validates `keystore.json`;
 2. unlocks or obtains the seed;
 3. verifies the derived anchor;
-4. acquires the folder's single-writer lock before creating mutable local state;
+4. acquires writer-exclusive vault ownership before creating mutable local state;
 5. completes or safely rolls back any import recorded under `import/`, then
    creates or validates `local/replica.json`; and
 6. opens the event store with `author = replica_id`.
@@ -722,7 +722,7 @@ event and DASL objects without changing this folder format.
 
 ## 15. Concurrency and crash behavior
 
-One writable folder generation requires exclusive single-writer ownership
+One writable folder generation requires writer-exclusive vault ownership
 for the lifetime of the writable open and operation serialization under
 `event-store.md` section 10. Typical ownership mechanisms are:
 
@@ -731,7 +731,7 @@ for the lifetime of the writable open and operation serialization under
 
 Multiple readers require complete-line event visibility and the cross-process
 object-read protection in `event-store.md` section 10, including for read-only
-processes. Single-writer ownership does not by itself protect those reads.
+processes. Writer-exclusive ownership does not by itself protect those reads.
 
 For a disk folder, one concrete implementation has the daemon own the
 operation lock and per-CID latch registry, and serve protected object streams

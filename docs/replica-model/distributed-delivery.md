@@ -190,6 +190,8 @@ and every mediator are unavailable. Before required network work it records:
 
 - `mid`, also used as the wire ID;
 - target contact or explicit channel;
+- the immutable nullable initial-attempt metadata under `vault-events.md`
+  section 9.2;
 - message type, thread and parent-thread IDs;
 - body and ordered normalized attachments;
 - immutable `createdTime`, which is an Epoch-Seconds integer or null;
@@ -242,7 +244,10 @@ The synchronous full-vault send operation:
    `pleaseAck` value (null or array), exact ordered `ack` and complete `headers`;
 4. computes the intent hash;
 5. validates local sender and current peer target under `vault-events.md`
-   section 9.2; the peer may retain its rendezvous DID;
+   section 9.2 and `rendezvous.md` section 8; without that section's qualifying
+   inbound, use its initial-attempt procedure and constraints before intent
+   commit. Ordinary traffic freezes `initial == null`; the peer may retain
+   its rendezvous DID after a qualifying reply;
 6. commits those objects with `message.out` through `Vault.commit`; and
 7. returns `mid`.
 
@@ -255,7 +260,11 @@ The active phase-1 runtime may later:
 1. stop when submitted, terminally failed, expired or conflicted under
    `vault-events.md` section 14.8;
 2. fold target contact/channel;
-3. choose valid sender DID, peer DID/key and exact resolution evidence;
+3. choose valid sender DID, peer DID/key and exact resolution evidence under
+   `rendezvous.md` section 5.1's same-DID key-change policy;
+   ordinary work may select only an eligible `writeTo` under `vault-events.md`
+   section 14.6, and an initial attempt follows its frozen selection under
+   `rendezvous.md` section 8;
 4. attach our frozen contact-scoped `fromPrior` while our own DID rotation
    remains unconfirmed;
 5. construct complete plaintext by copying every intent-time header;
@@ -542,15 +551,15 @@ rendezvous handoff-Empty effect; selecting the handoff fallback consumes the
 carrier's ACK obligation.
 
 The executable vector uses execution scope
-`{"relationship":"73a7d8f5-3523-5802-9b65-02da2078273e"}`, carrier wire ID
+`{"relationship":"9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3"}`, carrier wire ID
 `019b1b61-3444-7190-9db5-1cc9c215eb23` and the tuple above.
 
 The generic execution/effect derivation in sections 9 and 11 produces:
 
 ```text
-executionId      = feeae3f7-34ea-5ff1-b449-0ef76a7375c7
-effectKey        = QA60SmyoScCqinpKWDanveWJ5CrNVMGA74fKnNxAQpg
-outbound MID = wire ID = f0a3577e-4de5-58aa-8a4b-dd9b3ef0fcf6
+executionId      = 225e9711-ab0b-510a-bb99-405e6aaf4bf9
+effectKey        = UruAITvrqWKj_ag-HbwVlxM4TQAQvwFuoefti2CD-W8
+outbound MID = wire ID = 0db52549-496c-5e54-9e60-d660397b5e34
 ```
 
 ### 8.3 Applying `ack`
@@ -613,13 +622,13 @@ under one MID.
 The published authenticated vectors are executable:
 
 ```text
-peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
+peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
 wireId  = 019b2a70-f225-721c-835f-67175be0667e
-mid     = 29370ccd-932b-51eb-9cc3-4c083adc151a
+mid     = 369d7a43-8dce-5b86-b073-e390d457f357
 
-peerKey = k3j9n0m4x6q2w7c8v5p1d8s0fa
+peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
 wireId  = 019b1b61-3444-7190-9db5-1cc9c215eb23
-mid     = 206bcd7e-7320-5512-bbdb-a4d19331d58e
+mid     = a8b9afd5-60fe-5f49-a669-bd998e760e7e
 ```
 
 These vectors intentionally use wire IDs different from the outbound examples
@@ -678,6 +687,12 @@ document's section 11.2. The initiator's initial rendezvous key is a member
 before any reply; rotation adds its successor without removing historical
 scope evidence. Retirement preserves this set. Contact attribution and route
 availability do not select a scope; current work eligibility is separate.
+All key values use `vault-events.md` section 4.1's complete canonical public-key
+encoding. A same-DID new-key observation at `R`'s local relationship DID without
+continuation has no scope and uses `rendezvous.md` section 5.1's
+`peer-key-changed` diagnostic; fresh resolution or contact attribution does
+not extend this chain. New initials at a local rendezvous DID still follow
+the admission row below.
 
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
@@ -766,9 +781,9 @@ For every account-scoped pickup or direct delivery:
 5. for admitted or ordinary traffic, derive channel, observation MID,
    intent hash and exact plaintext hash;
 6. prepare retained body/attachment objects and the stored message document;
-7. use `Vault.commit` for those objects and `message.in` with applicable
-   `channel.firstSeen`, exact `peer.resolved`, contact attachment and
-   non-controversial observations;
+7. use `Vault.commit` for those objects and `message.in` with exact
+   `peer.resolved`, applicable contact attachment and non-controversial
+   observations; each complete channel key already contains its peer public key;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -779,7 +794,8 @@ For every account-scoped pickup or direct delivery:
     from its pinned DID requires no rotation;
 11. resolve the stable relationship or non-transitioning channel execution
     scope; if required transition/binding evidence is missing, defer ACK
-    application and automatic effects;
+    application and automatic effects. Apply `rendezvous.md` section 5.1's
+    same-DID key-change diagnostic when its complete evidence is present;
 12. only after that unique derived logical peer scope exists, process explicit
     `ack` values into idempotent peer-scoped `delivery.acknowledged`;
 13. schedule eligible deterministic application effects through that execution
@@ -805,12 +821,12 @@ duplicate observation.
 ## 10. Rendezvous bootstrap delivery
 
 Rendezvous is a processing profile, not an Estoc DIDComm protocol family. The
-first message to a rendezvous DID is an ordinary allowlisted application
-message.
+initial attempt to a rendezvous DID carries an ordinary application message.
+`rendezvous.md` section 8 owns its durable local classification and constraints.
 
 When no other content is available, the initiator sends Trust Ping 2.0 with
 `response_requested == true`, `please_ack: [""]`, finite expiry and the OOB
-invitation ID as `pthid` when applicable. An allowlisted application protocol
+invitation ID as `pthid` when applicable. A supported application protocol
 may instead send its real first message with the same receipt and expiry
 requirements.
 
@@ -932,7 +948,7 @@ A recommended inbound observation records both hashes and durable headers:
   "pleaseAck": [""],
   "ack": [],
   "myKey": "did/019b.../key-agreement",
-  "peerKey": "k3j9...",
+  "peerKey": "<canonical-peer-public-key>",
   "receivedVia": {
     "mediation": "019b...",
     "deliveryId": "019b..."
@@ -1019,9 +1035,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 18. A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
 19. The fixed pure-ACK vector derives execution ID
-    `feeae3f7-34ea-5ff1-b449-0ef76a7375c7`, effect key
-    `QA60SmyoScCqinpKWDanveWJ5CrNVMGA74fKnNxAQpg`, and one outbound/wire ID
-    `f0a3577e-4de5-58aa-8a4b-dd9b3ef0fcf6`.
+    `225e9711-ab0b-510a-bb99-405e6aaf4bf9`, effect key
+    `UruAITvrqWKj_ag-HbwVlxM4TQAQvwFuoefti2CD-W8`, and one outbound/wire ID
+    `0db52549-496c-5e54-9e60-d660397b5e34`.
 20. One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
@@ -1128,3 +1144,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     acceptance commits before another dispatch, and no later dispatch starts
     after the submitted event. A crash before that commit still permits
     recovery with the same package rather than consuming a pre-call reservation.
+57. Before an initiator has qualifying scoped inbound evidence, a send through
+    its pinned peer end follows `rendezvous.md` section 8 and freezes non-null
+    `initial`; the ordinary send path cannot commit a null-expiry bypass.
+    A later direct reply permits ordinary messages, while previously committed
+    initial attempts retain their profile and exact package constraints.
+58. A freshly resolved same-DID new key does not extend `peerChain(R)`. Outbound
+    preparation follows `rendezvous.md` section 5.1's message-scoped failure;
+    an inbound at the local relationship DID without continuation proof has
+    no scope and processes no ACK/effect. The contact diagnostic cannot make
+    the observation executable, even if DID-graph attribution finds a contact.
