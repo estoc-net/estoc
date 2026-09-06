@@ -586,10 +586,11 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
 passed. `vault-events.md` section 14.8 defines outbound membership using exact
-immutable target/birth references and validated binding/package evidence. Lookup is
-`(carrier.logicalPeerScope, acknowledgedWireId)`, never a vault-global wire-ID
-search. Threading, a natural response, transport acceptance, `please_ack`
-presence or a mediator receipt is insufficient without the explicit value.
+immutable `relationshipId`/`birth` references and validated binding/package
+evidence. Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`, never a
+vault-global wire-ID search. Threading, a natural response, transport acceptance,
+`please_ack` presence or a mediator receipt is insufficient without the
+explicit value.
 
 A valid ACK adds receipt information only. It neither creates a missing
 `delivery.submitted` nor changes submission eligibility or envelope retention.
@@ -775,19 +776,21 @@ Each observation references resolution evidence with its own `localKeyName` and 
 same authenticated peer key/DID pair in `peerChain(R)`. Equal-intent deliveries
 at P0, P1 and P2 therefore share one execution, even after P0 retires. An
 explicit ACK at P2 may acknowledge an outbound whose historical valid package
-sent from P0, and an ACK at eligible P0 may acknowledge a package from P2, by
-`vault-events.md` section 14.8 path 2. A DID outside this chain supplies no such
-membership. These are executable identity and scope fixtures, not JWT or
-numalgo-4 document test vectors; the DID entity IDs stand for validated local
-documents and transition proofs.
+sent from P0, and an ACK at eligible P0 may acknowledge a package from P2, under
+`vault-events.md` section 14.8's membership rules. A DID outside this chain
+supplies no such membership. These are executable identity and scope fixtures,
+not JWT or numalgo-4 document test vectors; the DID entity IDs stand for
+validated local documents and transition proofs.
 
 ### 9.1 Receive a message
 
 1. Before authoritative key/route recovery, retain delivery pending without
    pickup ACK. Then apply `rendezvous.md` sections 9.1–9.2's exact-recipient
-   and lifecycle gate, equally for all communication addresses. A delivery
-   already waiting for relationship evidence stays pending on mere redelivery;
-   resume authentication only on that document's evidence-change retry.
+   and lifecycle gate, equally for all communication addresses. While local
+   wait state is retained, a delivery already waiting for relationship evidence
+   stays pending on mere redelivery; resume authentication only on that
+   document's evidence-change retry. Loss of that state follows its section-5.1
+   receive/authentication rule.
 2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
    consistency, and perform that document's section-5.1 sender resolution with
    its bounded unavailable-result retries. Safely terminal delivery is pickup-
@@ -1206,6 +1209,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     bypasses that deferral; unrelated local pairs are unaffected by the claim.
     The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
     changes relevant to that pair trigger retry with a fresh bounded sender-
-    resolution sequence when needed. Mere redelivery does not retry, and time
-    in the evidence wait consumes neither resolver attempts nor its local
-    retention stop. No local retention timeout clears the pending claim.
+    resolution sequence when needed. While local wait state is retained, mere
+    redelivery does not retry; loss of that state follows rendezvous.md section
+    5.1's receive/authentication rule. Time in the evidence wait consumes neither
+    resolver attempts nor its local retention stop. No local retention timeout
+    clears the pending claim.

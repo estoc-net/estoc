@@ -1074,7 +1074,7 @@ replica.
 
 Requirements:
 
-- `senderDidId` names a live local DID entity selected for the target under
+- `senderDidId` names a live local DID entity selected for the relationship under
   section 9.2's restrictions; for ordinary relationship traffic it is
   `currentLocalDidId(R)` under section 12.4 at preparation;
 - the package belongs to `message.out.relationshipId`; root or valid
@@ -1433,12 +1433,13 @@ no `message.in` and no pickup ACK. That evidence wait follows `rendezvous.md`
 section 9.1: waiting consumes no sender-resolution budget; relevant evidence
 changes permit a fresh bounded resolution sequence under that document's
 section 5.1, excluding waiting time from its local retention stop. Mere
-redelivery does not retry authentication. Carriers allowed to commit with a
-null binding under section 12.1 still follow durable receipt
-before pickup ACK. Exhausted sender-resolution budgets and safely classified
-terminal input MUST instead be pickup-ACKed
-without `message.in`; this exception cannot bypass durable receipt for input
-that passes the receive and integrity checks.
+redelivery does not retry authentication while local wait state is retained;
+loss of that state follows that document's section-5.1 receive/authentication
+rule. Carriers allowed to commit with a null binding under section 12.1 still
+follow durable receipt before pickup ACK. Exhausted sender-resolution budgets
+and safely classified terminal input MUST instead be pickup-ACKed without
+`message.in`; this exception cannot bypass durable receipt for input that
+passes the receive and integrity checks.
 
 ### 10.3 Duplicate, transition and conflict rules
 
@@ -1714,7 +1715,7 @@ A transition cannot move a peer end into a different relationship merely
 because the contact or prior DID is shared.
 
 The bound root snapshot verifies the first remote transition; later ones use
-the named historical snapshot in that same peer chain. The selected carrier's
+the named historical snapshot in that same peer chain. Each complete witness's
 `relationshipBindingEventId`, when non-null, must name this `R`; its exact local key
 must belong to the rooted local history. Commit transition evidence before
 processing the carrier's ACKs or effects. Missing evidence defers; ambiguous
@@ -2485,9 +2486,10 @@ An ACK proves receipt, not remote contact approval or successful rotation.
 
 Apply section 10.5 to all committed `message.in` observations whose explicit
 `ack` names this outbound's `messageId`. Let `ackWitnesses` be the set of
-candidates that authenticate the ultimate peer, have a unique derived scope
-equal to the outbound's R, and pass the membership and proof checks above and
-any protocol-specific ACK security preconditions. This set includes all valid
+candidates that belong to a resolved, conflict-free message ID group,
+authenticate the ultimate peer, have a unique derived scope equal to the
+outbound's R, and pass the membership and proof checks above and any
+protocol-specific ACK security preconditions. This set includes all valid
 duplicates and distinct ACK carriers; it is not restricted to the group or
 witness selected for one `delivery.acknowledged` event.
 
@@ -3139,8 +3141,8 @@ There is no migration requirement from an earlier event vocabulary.
 73. Matching root-address receipt consumes a local one-use invitation at input
     commit, before contact or rotation work. A different consumer fails
     integrity; crash, deletion and erasure never reopen it.
-74. ACK membership joins immutable outbound target, birth metadata, binding
-    and package endpoint evidence. Equal inbound/outbound wire IDs alone
+74. ACK membership joins immutable outbound relationshipId, birth metadata,
+    binding and package endpoint evidence. Equal inbound/outbound wire IDs alone
     cannot acknowledge another message.
 75. A known sender DID or submitted message ID does not bypass missing
     binding/transition recovery. Required scope evidence commits before a
@@ -3376,9 +3378,12 @@ There is no migration requirement from an earlier event vocabulary.
      verification. Restart and body erasure retain the claim; unrelated local
      pairs remain eligible, and restored incompatible evidence conflicts.
      Time spent awaiting relationship evidence does not consume a resolver
-     budget or permit terminal ACK by timeout. Repeated delivery and reconnect
-     do not resolve again; a relevant evidence-change retry gets one fresh
-     bounded sequence as in rendezvous.md section 5.1 and its conformance case
+     budget or permit terminal ACK by timeout. While local wait state is
+     retained, repeated delivery and reconnect do not resolve again. If that
+     state was lost, redelivery re-enters authentication with one fresh bounded
+     sequence; successful authentication rediscovers any still-pending pair and
+     returns to the wait. A relevant evidence-change retry also gets one fresh
+     bounded sequence under rendezvous.md section 5.1 and its conformance case
      61. Mediator expiry removes only that delivery; a later delivery cannot
      bypass the retained pending claim.
 130. Given the same validated numalgo-4 long form L and short form S, every
