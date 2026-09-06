@@ -1233,6 +1233,7 @@ See `distributed-delivery.md` section 9.
     "myKey": "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "peerResolution": "019b2a71-4c18-760a-9017-b3e265aa89d0",
+    "peerTransition": null,
     "presentedDid": "did:peer:4zQm...short",
     "did": "did:peer:4zQm...short",
     "thid": null,
@@ -1277,6 +1278,21 @@ Requirements:
   the reference. Committed observations recover from retained evidence without
   new resolution. It is local
   evidence metadata, excluded from the message hashes;
+- `peerTransition` is REQUIRED and nullable. On proof-free input at a
+  relationship's original rendezvous, the writer uses the already committed
+  `peer.transitioned` event that established this canonical successor DID.
+  Its relationship must name this original recipient under section 14.4,
+  and its `to` equals this observation's canonical `did`. The referenced
+  transition must be valid; its successor-document key membership is checked
+  separately before scope/ACK/effect work. A current authenticated key absent
+  from that document still follows the same-DID diagnostic rule, not bootstrap.
+  For a carried `fromPrior`, an original bootstrap input, or a local
+  relationship recipient, this field is null. It is portable evidence metadata,
+  excluded from message hashes and never sent on the wire. The writer chooses
+  it under the receive lock and does not add or change it after input commit.
+  Missing referenced evidence defers; incompatible evidence conflicts, with
+  no null/bootstrap fallback. Import checks reference joins, not event-time
+  ordering. Sections 12.1 and 14.4 define the classification it preserves;
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
   Peer DID long form when first seen;
 - `did` is the canonical peer DID, using Peer DID numalgo-4 short form after
@@ -1554,8 +1570,11 @@ its canonical bytes exactly matches the pinned document CID. Missing snapshot
 material creates a retryable deferred state; an invalid signature, claim, key
 or long form is a conflict.
 
-The relationship binding MUST name the same `contact`, and `myKey` MUST be a
-key of `localChain(R)` under section 12.4, including a historical member.
+The relationship binding MUST name the same `contact`, and `myKey` MUST be in
+`relationshipRecipientKeys(R)` under section 14.4. This includes a historical
+local-chain key and, on the responder, the original rendezvous recipient key.
+At that shared rendezvous address, the retained predecessor evidence must
+identify the same unique `R`; the address or prior DID alone is insufficient.
 The named inbound MUST authenticate the successor, and its derived peer key
 MUST equal this event's `peerKey`. `from` MUST equal the canonical DID of `priorResolution`,
 which is one of that relationship's pinned or verified predecessor snapshots
@@ -1636,12 +1655,33 @@ A server runtime has no special ownership.
 ### 12.1 Durable bootstrap input
 
 An authenticated `message.in` is a bootstrap candidate exactly when `myKey`
-maps through section 14.3's reverse key index to one immutable `did.created` with role
-`rendezvous`. The key must be that DID's fixed key-agreement method. Its
+maps through section 14.3's reverse key index to one immutable `did.created`
+with role `rendezvous`, and both `fromPrior` and `peerTransition` are null.
+The key must be that DID's fixed key-agreement method. Its
 canonical DID and peer key derived from `message.in.peerResolution` derive the
 relationship under `rendezvous.md` section 10. Sender DID and exact document come from the
 input's `peerResolution`. These committed references supply scope before
 materialization; no separate receive-configuration reference is needed.
+
+An input carrying `fromPrior` takes the continuation path, not the bootstrap
+path. Section 11.2 verifies and commits its transition before section
+14.4 and `distributed-delivery.md` section 9 can give it relationship scope.
+Later proof-free input at that rendezvous preserves its existing continuation
+evidence in `peerTransition` under section 10.2. It is ordinary relationship
+traffic; a same-DID new key still needs retained key authorization to obtain
+scope. The writer MUST NOT commit a null `peerTransition` to bypass a known
+successor binding or its pending/conflicting evidence. Such unresolved
+proof-free classification defers receipt; a carried proof can instead be
+retained as continuation-pending input. Neither path can create a bootstrap
+relationship, consume an invitation or select a handoff instead.
+
+These immutable input fields preserve classification across restore and
+import order. Later initial attempts from the original initiator key keep
+their existing candidate rules. If import supplies a bootstrap candidate and
+a continuation assignment of that same sender DID/key at that rendezvous to
+different relationships, retain both as a relationship conflict under section
+14.4. Do not rewrite the candidate as continuation, choose a new execution
+identity for it, or undo invitation consumption.
 
 Candidate scope does not imply permission to materialize. Only an application
 candidate as defined in `rendezvous.md` section 3 can become an origin or select
@@ -1649,7 +1689,7 @@ a handoff. Control observations under section 14.7 and other non-handoff input
 retain their scope but do not themselves create a contact or relationship DID;
 their ACK handling and recovery follow that same section-10 rule.
 
-Before a new input commit, the writer applies `rendezvous.md` section 9.3's
+Before a new candidate commit, the writer applies `rendezvous.md` section 9.3's
 integrity checks, including contact tombstones, sender-DID consistency and
 one-use availability, and rechecks the recipient DID's live receive state
 under sections 5.5 and 14.3. The input commit records durable receipt, with no
@@ -1933,21 +1973,16 @@ evidence joins against the rooted predecessor prefix: confirmation must derive
 descendants. Import may validate prefixes in dependency order; it does not use
 event timestamps to infer producer ordering.
 
-On the initiator, local rotation additionally requires a verified peer
-continuation away from the binding's original rendezvous DID. Its current
-peer end must be reached through section 11.2, so the proof is sent to that
-established peer end under `rendezvous.md` section 12, not back to the original
-rendezvous address. A direct reply from the original peer DID still permits
-ordinary sends under `rendezvous.md` section 8, but does not meet this rotation
-precondition. After local rotation, no further initial attempt may continue
-this `R`: an initial from the successor key at a rendezvous DID would derive
-a different relationship. The initial binding and `ourDid` are never rewritten.
-
-This restriction also applies when the peer keeps an original public DID such
-as `did:web`. Without its verified continuation, this phase-1 relationship
-cannot change our immutable route or mediator through local rotation; it
-needs continued operation of that route, or a new relationship with a fresh
-local DID/key. The peer's DID method alone grants no exception.
+On the initiator, a qualifying direct reply from the pinned original peer DID
+can supply the predecessor confirmation above; the peer need not rotate.
+Send our proof in ordinary traffic to that relationship's current peer end,
+whether it remains the original rendezvous/public DID or is a verified
+successor. Section 11.2 and `rendezvous.md` section 12 also support receiving
+peer continuation at the original rendezvous address.
+After local rotation, no further initial attempt may continue this `R`:
+the successor continues the committed binding through ordinary traffic and
+its proof, rather than deriving a new bootstrap relationship from its key.
+The initial binding and `ourDid` are never rewritten.
 
 `fromPrior` is the exact compact JWT created once for this edge under
 [DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation):
@@ -2195,6 +2230,35 @@ claim cannot make another claim win. Missing evidence defers its dependent
 work. The local writer MUST reject a conflicting proposed binding or edge,
 including conflicts within one batch, under the writer lock; import retains
 the conflicting evidence and suppresses affected new work in every order.
+
+For relationship `R`, **`relationshipRecipientKeys(R)`** contains every
+historical key in `localChain(R)` and, on the responder, the original
+rendezvous key identified by its committed
+`relationship.established.originInboundMid` under section 12.2. The latter
+is an ingress association, not a local-chain member or sender preference:
+one rendezvous key may serve many relationships without violating local-DID
+ownership. On an initiator there is no additional local rendezvous key from
+the remote discovery address. All entries retain their ordinary recipient
+lifecycle checks; this set cannot revive a retired rendezvous DID or confirm
+a local successor without input addressed to that exact successor.
+
+At the original rendezvous key, a carried `fromPrior` selects a relationship
+only through its retained predecessor snapshot and a valid section-11.2
+transition. Its unauthenticated `iss` is a lookup hint, never authority.
+Once committed, the transition's successor DID/key authorizations identify
+ordinary traffic in that same `R` even without another proof; proof-free
+receipt freezes that event reference as `message.in.peerTransition` under
+section 10.2. Do not apply the bootstrap ID formula to these inputs; a
+recognized successor DID with an unbound new key instead follows
+`rendezvous.md` section 5.1's diagnostic
+rule. Known pending or conflicting continuation evidence blocks bootstrap
+fallback. A committed bootstrap candidate for the same canonical sender
+DID/key and rendezvous recipient in a different `R` conflicts with this
+continuation claim; retain both and suppress affected
+new work without moving prior effects or releasing invitation consumption.
+Different matching relationships are a conflict, never a global DID alias or
+an arrival-order choice. Section 12.1 preserves the original bootstrap inputs;
+`distributed-delivery.md` section 9 owns the final observation-scope rules.
 
 A valid relationship contributes:
 
@@ -2581,8 +2645,10 @@ A section-12.1 candidate consumes the locally disclosed invitation at its
 rendezvous recipient DID matches the disclosure. The consumer is the
 relationship derived from that recipient DID and authenticated initiator key.
 A matching `pthid` on an ordinary inbound or a message following a remote
-invitation is not consumption. Neither attachment nor materialization is
-needed to complete consumption.
+invitation is not consumption. This includes continuation-pending input and
+verified successor traffic at the original rendezvous under section 12.1;
+neither consumes another invitation nor reopens the original consumption.
+Neither attachment nor materialization is needed to complete consumption.
 
 The writer checks availability and commits the new candidate in one locked
 operation. A different consumer of an unavailable invitation is rejected before
@@ -3350,9 +3416,10 @@ There is no migration requirement from an earlier event vocabulary.
      a later mediation preference cannot replace them. The initial binding,
      `ourDid`, relationship ID and peer chain remain unchanged.
 113. Before a local edge, the predecessor's disclosure is confirmed by scoped
-     inbound at that exact DID. An initiator also needs a verified peer end
-     beyond its original rendezvous address. A second local edge waits for
-     confirmation of the first and uses that successor's long form and signing
+     inbound at that exact DID. A direct reply from the pinned original
+     rendezvous or public peer DID qualifies without a peer rotation.
+     A second local edge waits for confirmation of the first and uses that
+     successor's long form and signing
      key as predecessor; short-form traffic does not replace the proof pin.
 114. Until successor confirmation, new packages use its long form and exact
      frozen proof. Receipt at a predecessor cannot confirm it; a pure ACK at
@@ -3382,3 +3449,21 @@ There is no migration requirement from an earlier event vocabulary.
      import preserves both claims and blocks affected work in every order,
      including after retirement or contact merge. Later initial attempts in
      the same bound, unrotated relationship still reuse its root and binding.
+119. A peer transition at a responder's original rendezvous key joins through
+     that exact recipient and retained predecessor evidence. It preserves the
+     original relationship, contact, local chain and invitation consumer;
+     the rendezvous key is not added to `localChain`. Proof-free successor
+     traffic references the committed transition in `message.in.peerTransition`.
+     Missing/invalid proof or competing assignments cannot fall back to
+     creating a bootstrap relationship.
+120. Recovery after input commit but before transition commit reuses the
+     retained carrier and predecessor evidence, with no provisional bootstrap
+     scope or handoff. After the transition commits, receipt at either the
+     original rendezvous or a local-chain key uses the same relationship;
+     erasure and import order do not remove the retained binding evidence.
+121. `message.in.peerTransition` is immutable evidence metadata, not a wire
+     field or hash input. A missing non-null reference defers without a new
+     bootstrap scope. A bootstrap candidate imported alongside a continuation
+     claiming its same sender DID/key and original rendezvous for another
+     relationship conflicts both assignments, preserves consumption and prior
+     effects, and never reclassifies the candidate based on arrival order.

@@ -100,7 +100,10 @@ Every instruction to append an event in this document means
   records that selection in its outbound intent; a remote initiator may use
   any supported authenticated DID under section 5.1.
 - **Bootstrap candidate** — an authenticated message addressed to a
-  local rendezvous DID, committed after the receive and integrity checks.
+  local rendezvous DID, committed after the receive and integrity checks,
+  with neither a carried `fromPrior` nor a `peerTransition` reference under
+  `vault-events.md` section 12.1. Peer continuation uses the existing
+  relationship even when delivered to this same address.
   Its durable receipt supplies relationship scope; only an application
   candidate authorizes automatic materialization under section 10.
 - **Application candidate** — a bootstrap candidate that is neither a
@@ -355,6 +358,7 @@ policy; a fresh `peer.resolved` never extends `peerChain(R)`:
   remains retryable. An already pinned initial package continues to use its
   exact retained snapshot; it does not re-resolve to replace its key.
 - For an authenticated inbound addressed to `R`'s local relationship DID,
+  or a recognized successor at its original rendezvous recipient,
   whose canonical sender DID is evidenced in `R` but whose key is outside
   `peerChain(R)` and which carries no `from_prior`, preserve the observation
   and exact resolution evidence but derive no execution scope. Process no ACK
@@ -365,9 +369,10 @@ policy; a fresh `peer.resolved` never extends `peerChain(R)`:
 - To restart without a valid peer rotation to a different DID, use an explicit
   new initial attempt with a fresh local relationship DID/key, producing a new
   relationship and binding. Do not rewrite the old binding or replay its messages.
-  An incoming initial at a local rendezvous DID still follows its own
-  key-derived relationship and receive procedure; it cannot continue the
-  old relationship merely by repeating the sender DID.
+  A new bootstrap candidate at a local rendezvous DID still follows its
+  key-derived relationship and receive procedure. A carried or already
+  committed continuation follows section 12 instead; repeating the sender
+  DID alone cannot replace the required authorization evidence.
 
 Missing historical snapshot material is a deferred verification state, not
 proof that a handoff is invalid.
@@ -498,9 +503,10 @@ also records `initial`, even when a relationship already exists.
 
 Once that initiator relationship has a committed local rotation under
 `vault-events.md` section 12.4, further sends in it are ordinary traffic to
-its verified current peer end. A new initial from its successor key would
-create a different relationship and cannot continue the old one. Pending
-initial intents pinned to a superseded local key follow that section's
+its pinned or verified current peer end, including the original public or
+rendezvous DID. The successor continues the existing binding with that
+section's proof, not a new initial intent or a new key-derived relationship.
+Pending initial intents pinned to a superseded local key follow that section's
 terminal-failure rule.
 
 Before committing a new ordinary send through an initiator relationship, the
@@ -781,8 +787,22 @@ examples of this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
-Every candidate passing section 9.2 proceeds automatically. Under the vault
-writer lock, before committing a new `message.in`, check deterministic contact
+After section 9.2, distinguish bootstrap candidates from peer continuation
+under `vault-events.md` section 12.1 before running key-derived candidate
+checks. Carried `fromPrior` is retained for section 12's verification. For
+proof-free input from a recognized successor at this relationship's original
+rendezvous, freeze the committed transition reference as `peerTransition`
+under that document's section 10.2. The receive lock covers that selection
+and inbound commit. Missing or conflicting relevant binding evidence defers
+proof-free classification; it cannot become a new initial instead.
+Continuation input uses ordinary durable receipt, with no candidate
+materialization or one-use invitation consumption, even when `pthid` names
+the original invitation. It never bypasses recipient or sender authentication,
+contact lifecycle or proof checks. Transition and scope validation follow
+section 12 before ACK processing or automatic effects.
+
+Every bootstrap candidate passing section 9.2 proceeds automatically. Under
+the vault writer lock, before committing a new `message.in`, check deterministic contact
 tombstones, sender-DID consistency, recipient DID/route validity and one-use
 invitation availability under `vault-events.md` sections 12.1, 14.4 and 14.9.
 The checks and inbound commit are one serialized operation; network resolution
@@ -802,8 +822,8 @@ it may record another
 observation but cannot recreate a deleted contact or resume forbidden effects.
 A contradictory duplicate is an integrity failure.
 
-The successful `message.in` commit and its exact resolution evidence are the
-durable receipt boundary. They consume a matching one-use invitation and
+The successful candidate `message.in` commit and its exact resolution evidence
+are the durable receipt boundary. They consume a matching one-use invitation and
 permit deterministic relationship-scope derivation, even before contact or
 handoff materialization. No separate admission event, pending approval or
 policy rejection exists. Only after that commit may the runtime ACK pickup
@@ -822,6 +842,9 @@ rejected-candidate content queue.
 
 Durable bootstrap receipt derives stable IDs from the canonical rendezvous DID
 and authenticated initiator key, not from the initial message wire ID or type.
+This is the initial binding's derivation. A carried or retained continuation
+uses the original relationship under section 12, including at its original
+rendezvous address; it does not rerun this formula with the successor's key.
 `authenticated_peer_key` is the complete canonical public-key value defined
 by `vault-events.md` section 4.1; the initiator derives it from the public key
 of its own `did/<ourDid>/key-agreement`, the key its authcrypt `skid` names
@@ -956,14 +979,18 @@ For a delivery potentially addressed to a rendezvous key:
    the writer lock run section 9.3's duplicate and integrity checks;
 6. commit/reuse exact `peer.resolved` evidence first, then use its event ID in
    a separate `Vault.commit` of retained bytes and `message.in` with its new
-   receipt ordinal, retaining the same lock.
-   A matching one-use invitation is consumed only by the input commit;
+   receipt ordinal and section 9.3's nullable `peerTransition`, retaining the
+   same lock. Only a bootstrap candidate consumes a matching one-use invitation;
    afterward ACK mediator delivery; and
-7. derive the candidate's relationship scope from that committed input under
-   `distributed-delivery.md` section 9. Missing evidence defers; integrity or
-   scope conflicts suppress new effects. There is no expiry or approval wait.
+7. for continuation input, validate and commit any required transition under
+   section 12 first. Then derive the input's relationship scope under
+   `distributed-delivery.md` section 9. A pending transition has no provisional
+   bootstrap scope. Missing evidence defers; integrity or scope conflicts
+   suppress new effects. There is no expiry or approval wait.
 
 With an application candidate already committed, perform the steps below.
+Continuation traffic instead uses ordinary relationship processing under
+section 12, without selecting another origin, handoff or relationship DID.
 Control and other non-handoff input instead follows section 10's ACK-only
 processing and cannot choose an origin or enter these materialization steps:
 
@@ -1198,7 +1225,8 @@ historical and is never regenerated for a successor.
 ## 12. Initiator replies, transition and confirmation
 
 The rotation-validation steps below also apply when a responder receives its
-peer's later rotation at the local relationship DID. Its first predecessor
+peer's later rotation at a local relationship DID or at that relationship's
+original rendezvous DID. Its first predecessor
 snapshot is `relationship.established.originResolution`, the selected origin
 inbound's exact `peer.resolved` evidence; later steps
 use the named historical predecessor evidence, just as for the initiator.
@@ -1230,10 +1258,13 @@ sender or after an earlier direct reply, validate and recover it as follows:
    authcrypt `skid` byte-for-byte, with exact decoded `apu` consistency. For
    numalgo 4, require valid long form on first disclosure; another supported
    DID uses its validated exact spelling under section 5.1;
-2. identify the unique relationship through any historical recipient key in
-   `localChain(R)` under `vault-events.md` section 12.4 and a
-   verified predecessor in its peer chain. For the first transition, use the
-   pinned initial resolution on the initiator or `originResolution` on the
+2. use `from_prior.iss` to look up retained predecessor evidence for the
+   exact local recipient in `relationshipRecipientKeys(R)` under
+   `vault-events.md` section 14.4. This includes the responder's original
+   rendezvous, without making it a local-chain member. Require one unique
+   relationship with that recipient and predecessor evidence; neither the
+   shared rendezvous nor `iss` alone identifies `R`. For the first transition,
+   use the pinned initial resolution on the initiator or `originResolution` on the
    responder; for a later transition, use retained
    resolution evidence for that relationship's predecessor. Require the exact
    presented `iss` and authorized authentication `kid` to match that snapshot.
@@ -1259,10 +1290,21 @@ sender or after an earlier direct reply, validate and recover it as follows:
    preparation or submission.
 
 Missing historical evidence defers processing; an invalid proof is a failure
-and cannot be ignored to use a direct-reply path. A different DID with no proof
-is a separate identity: it does not join this relationship or ACK its outbounds
-by thread or wire-ID equality. Its own verified attribution must supply a
-separate valid scope before any effects. Reopen recovers unfinished initial
+and cannot be ignored to use a direct-reply or new-bootstrap path. No ACK or
+effect may run in a provisional relationship derived from the successor key.
+After a transition commits, a later message need not carry its proof once
+the sender's disclosure is confirmed. At the original rendezvous, its
+`message.in.peerTransition` retains the exact transition used to recognize the
+successor; on local relationship keys the ordinary chain-membership rule
+applies. Both require authenticated DID/key authorization by that retained
+successor document. Missing references defer and conflicting evidence blocks;
+neither permits a bootstrap fallback. These are ordinary relationship messages,
+so they do not select a handoff, replace the origin or consume an invitation.
+
+A different DID with neither a carried proof nor committed continuation does
+not join this relationship or ACK its outbounds by thread or wire-ID equality.
+It needs its own valid scope; only an eligible new bootstrap candidate may
+derive a new relationship under section 10. Reopen recovers unfinished initial
 bindings, transitions and committed inbound work under `vault-events.md`
 section 16.1, even after pickup ACK and without mediator redelivery.
 
@@ -1413,8 +1455,9 @@ passes the same receive and integrity checks and commits as another candidate
 under `vault-events.md` section 14.4. Missing receipt information never reopens
 submission or substitutes for authentication or rotation proof.
 After local rotation, a new ordinary message to the current peer end may
-carry the retained proof under that document's section 12.4; a new initial
-cannot continue the old relationship.
+carry the retained proof under that document's section 12.4, including when
+the peer retains its original rendezvous or public DID. No prior peer rotation
+is required. A new initial intent cannot continue the old relationship.
 
 ## 17. Required conformance cases
 
@@ -1595,10 +1638,12 @@ cannot continue the old relationship.
     committing intent when no usable local sender exists. A valid successor
     resumes that work in the same relationship; current tombstones still block.
 55. Local rotation uses `vault-events.md` section 12.4's event, proof,
-    confirmation and repack rules. An initiator first needs a verified peer
-    continuation and cannot rotate by sending a new-key initial to the original
-    rendezvous DID. All local initial attempts use their sender's long form,
-    preserving the exact spelling needed by later predecessor proofs.
+    confirmation and repack rules. A direct reply to the initiator's exact
+    local predecessor qualifies it to rotate even when the peer retains its
+    public or rendezvous DID. Send ordinary traffic and the retained proof to
+    that current peer end; do not create a new-key initial. All local initial
+    attempts use their sender's long form, preserving the exact spelling
+    needed by later predecessor proofs.
 56. Section 3's application-candidate definition includes Trust Ping `ping`
     with either response-request value and unknown application types. It
     excludes the three named control types even if they fail the control
@@ -1613,3 +1658,19 @@ cannot continue the old relationship.
     attempts in the same bound relationship reuse its root only before local
     rotation. Contact merges and retirement do not permit cross-relationship
     reuse, and a rotated successor cannot start another initial in the old `R`.
+58. Given P0 already bound in `R`, a P1 message to the same original rendezvous
+    with a valid P0-to-P1 `from_prior` extends `R`, preserving contact, origin,
+    local DID, ACK scope and the original invitation consumer. No new-key
+    relationship or handoff is created. A later proof-free P1 message freezes
+    `peerTransition` and uses ordinary relationship processing after restart
+    or import. Original-key initial retries still use their original binding.
+59. At a shared rendezvous, prior DID lookup also requires the matching
+    original recipient and exact retained predecessor document. Missing proof
+    evidence defers effects; invalid proof and ambiguous bindings cannot
+    authorize another relationship. A recognized successor with a fresh but
+    unbound same-DID key gets no scope and cannot become a new candidate.
+60. A carried-proof input commits before its transition and before any
+    dependent response intent. A crash at either boundary recovers from the
+    retained evidence without a provisional bootstrap effect or new invitation
+    consumption. Missing `peerTransition` references on imported proof-free
+    inputs defer instead of reclassifying them by their new sender key.

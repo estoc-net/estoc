@@ -763,8 +763,10 @@ The same key under another unverified DID cannot join by key equality alone.
 Retirement preserves this historical set. Current address, route availability
 and contact tombstones govern work eligibility separately. A same-DID new key
 outside this set, received at the local relationship DID without continuation,
-has no scope and follows `rendezvous.md` section 5.1's diagnostic rule. New
-initials at a local rendezvous DID follow their own key-derived input row.
+has no scope and follows `rendezvous.md` section 5.1's diagnostic rule. The
+same rule applies to a recognized successor DID at its relationship's
+original rendezvous recipient. New bootstrap candidates follow their
+key-derived input row; continuation traffic is excluded from that row.
 
 The local side uses historical `localChain(R)` from `vault-events.md` section
 12.4. A local transition extends acceptable recipient-key membership without
@@ -772,10 +774,22 @@ changing `R.ourDid`, the relationship ID, execution ID or ACK namespace. Local
 chain conflicts or missing referenced evidence suppress affected ACK/effect
 work just like missing or conflicting peer-chain evidence.
 
+For inbound scope, `relationshipRecipientKeys(R)` under `vault-events.md`
+section 14.4 additionally includes the responder's original rendezvous key.
+That key does not become a member of `localChain(R)` or a possible sender.
+At that address, a carried `from_prior` or non-null `message.in.peerTransition`
+selects the relationship-traffic path before any bootstrap derivation. The
+writer freezes that reference for proof-free successor input under
+`vault-events.md` section 10.2. Such a path requires retained, validated
+transition evidence; it cannot fall back to the candidate row while
+verification is pending or conflicting. The original
+no-proof bootstrap inputs retain their candidate classification under
+`vault-events.md` section 12.1, including after materialization.
+
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
-| Responder candidate addressed to a local rendezvous DID | Committed `o` with `myKey` identifying one immutable local rendezvous DID and its exact `peerResolution` under `vault-events.md` sections 12.1 and 14.4 | The deterministic relationship derived from that canonical recipient DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
-| Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey` the fixed key-agreement key of a DID in `localChain(R)` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
+| Responder bootstrap candidate under `vault-events.md` section 12.1, excluding continuation traffic | Committed `o` with `myKey` identifying one immutable local rendezvous DID and its exact `peerResolution` under that section and section 14.4 of that document | The deterministic relationship derived from that canonical recipient DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
+| Relationship traffic, including direct initial replies, handoffs, no-handoff reports and peer continuation at the original rendezvous | Relationship `R` with `o.myKey` in `relationshipRecipientKeys(R)` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above. At a rendezvous recipient, use the transition validating this carried `from_prior`, or the exact `o.peerTransition` when the proof is absent; its successor document must authorize the observed DID/key. Every carried proof has its required committed transition evidence | That unique `R`; no match supplies no scope |
 
 Each row contributes at most one scope; multiple matching relationships are
 an execution-scope conflict. All applicable rows for one observation MUST agree.
@@ -906,7 +920,9 @@ For every account-scoped pickup or direct delivery:
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
    evidence even if the sender DID is already known; recover and commit any
-   missing initiator binding before transition or response work;
+   missing initiator binding before transition or response work. At an
+   original rendezvous recipient, use the same continuation path under
+   `rendezvous.md` section 12, never a provisional new bootstrap scope;
 10. after validation, commit `peer.transitioned` when applicable; a rotation
     extends the already committed relationship binding, while a direct reply
     from its pinned DID requires no rotation;
@@ -920,8 +936,10 @@ For every account-scoped pickup or direct delivery:
     ID under `vault-events.md` section 14.7's control-observation rules; the
     no-handoff error classification permits ACK processing in step 12 and
     no automatic responses in steps 14–15. Only application candidates enter
-    `rendezvous.md` section 10.2's materialization; control and other
-    non-handoff input follows its section 10 without creating a relationship;
+    `rendezvous.md` section 10.2's materialization. Continuation traffic at a
+    rendezvous uses ordinary relationship handlers and ACK rules, with no new
+    handoff or relationship. Control and other non-handoff candidates follow
+    its section 10 without creating a relationship;
 14. check section 8.1's local-sender gate, then run the frozen peer-scoped
     ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
@@ -1073,6 +1091,7 @@ A recommended inbound observation records both hashes and durable headers:
   "ack": [],
   "myKey": "did/019b.../key-agreement",
   "peerResolution": "<exact-peer.resolved-eid>",
+  "peerTransition": null,
   "receivedVia": {
     "mediation": "019b...",
     "deliveryId": "019b..."
@@ -1306,3 +1325,10 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     and automatic outbound MID across local recipient keys. Historical local
     membership also permits ACKs across predecessor/successor packages under
     `vault-events.md` section 14.8; a shared contact alone does not.
+63. A P0-to-P1 proof delivered to the responder's original rendezvous uses
+    its retained P0 binding to extend the same relationship. Committing the
+    input before its transition supplies no provisional bootstrap scope;
+    recovery commits the transition before ACK/effect work. Later P1 input
+    without a proof pins that membership through `message.in.peerTransition`,
+    including after erasure or restart. Equal-intent copies of one wire ID
+    across verified peer keys keep one execution ID and reuse frozen response work.
