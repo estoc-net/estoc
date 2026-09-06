@@ -2486,8 +2486,8 @@ An ACK proves receipt, not remote contact approval or successful rotation.
 
 Apply section 10.5 to all committed `message.in` observations whose explicit
 `ack` names this outbound's `messageId`. Let `ackWitnesses` be the set of
-candidates that belong to a resolved, conflict-free message ID group,
-authenticate the ultimate peer, have a unique derived scope equal to the
+candidates that belong to a message ID group with no unresolved observation
+and no conflict, authenticate the ultimate peer, have a unique derived scope equal to the
 outbound's R, and pass the membership and proof checks above and any
 protocol-specific ACK security preconditions. This set includes all valid
 duplicates and distinct ACK carriers; it is not restricted to the group or
@@ -3380,10 +3380,12 @@ There is no migration requirement from an earlier event vocabulary.
      Time spent awaiting relationship evidence does not consume a resolver
      budget or permit terminal ACK by timeout. While local wait state is
      retained, repeated delivery and reconnect do not resolve again. If that
-     state was lost, redelivery re-enters authentication with one fresh bounded
-     sequence; successful authentication rediscovers any still-pending pair and
-     returns to the wait. A relevant evidence-change retry also gets one fresh
-     bounded sequence under rendezvous.md section 5.1 and its conformance case
+     state was lost, redelivery re-enters authentication and, when the sender
+     method requires resolution, starts one fresh bounded sequence whether or
+     not resolution accounting survived; successful authentication rediscovers
+     any still-pending pair and returns to the wait. A relevant evidence-change
+     retry also gets one fresh bounded sequence when resolution is required,
+     under rendezvous.md section 5.1 and its conformance case
      61. Mediator expiry removes only that delivery; a later delivery cannot
      bypass the retained pending claim.
 130. Given the same validated numalgo-4 long form L and short form S, every

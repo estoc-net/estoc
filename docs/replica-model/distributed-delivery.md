@@ -789,8 +789,8 @@ validated local documents and transition proofs.
    and lifecycle gate, equally for all communication addresses. While local
    wait state is retained, a delivery already waiting for relationship evidence
    stays pending on mere redelivery; resume authentication only on that
-   document's evidence-change retry. Loss of that state follows its section-5.1
-   receive/authentication rule.
+   document's evidence-change retry. Loss of that state follows
+   `rendezvous.md` section 5.1's receive/authentication rule.
 2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
    consistency, and perform that document's section-5.1 sender resolution with
    its bounded unavailable-result retries. Safely terminal delivery is pickup-

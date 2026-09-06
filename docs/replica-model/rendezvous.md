@@ -255,15 +255,19 @@ retention, and require no cumulative delivery-lifetime wait history.
 All workers share accounting for the same local mediation and pickup-delivery
 attachment ID; a profile with replica-scoped pickup also includes that replica
 ID. Direct input uses its normalized envelope CID in the local receive context.
-Redelivery and reconnect MUST NOT reset this accounting or start parallel
-budgets. An evidence-change retry after a relationship-evidence wait starts a
-fresh sequence only as specified below. The accounting is local scheduling
-state, not a portable event; runtime restart, restore or loss of local state
+Except for the fresh sequences specified below, redelivery and reconnect
+MUST NOT reset this accounting or start parallel budgets. An evidence-change
+retry after a relationship-evidence wait starts a fresh sequence only as
+specified below. The accounting is local scheduling state, not a portable
+event; runtime restart, restore or loss of local state
 may reset it as in section 14. A retained relationship-evidence wait still
 requires a relevant evidence change before retry. If the delivery's wait
-state was also lost, redelivery re-enters ordinary receive/authentication
-gates; retained relationship claims still govern selection after
-authentication.
+state was lost, whether or not resolution accounting survived, redelivery
+re-enters ordinary receive/authentication gates and, when the sender method
+requires resolution, starts a fresh bounded sequence; retained relationship
+claims still govern selection after authentication. All workers for that
+delivery share the fresh sequence; further redelivery while it is active
+does not replenish its budget.
 
 When the budget or retention stop is reached without a definitive answer,
 classify that delivery as terminal input under section 9.2: pickup-ACK when
@@ -534,6 +538,11 @@ DID with a terminal bound-route dependency, or a recipient set containing no
 eligible local key-agreement method is not deferred. It is terminal
 wrong-recipient input. A retired DID retained in an existing local relationship
 history can still receive under section 9.2.
+
+A delivery's **local wait state** is the runtime's record that the delivery
+already authenticated and is parked under this section pending relationship
+evidence. It is local scheduling state; the pending-pair claim of
+`vault-events.md` section 12.1 is portable and is never lost with it.
 
 A phase-1 runtime retries local-prerequisite deferrals after its local state
 changes. Sender-resolution deferrals follow section 5.1's scheduled bounded
@@ -1031,7 +1040,7 @@ automatic resubmission of the completed message ID.
 39. Current sender authentication runs whenever a delivery enters or resumes authentication, including duplicates; while local wait state is retained, section 9.1's relationship-evidence wait suspends this work until a relevant evidence change. Historical scope evidence cannot bypass current key authorization on retry.
 40. NXDOMAIN and no usable address-family data are definitive; one-family NODATA alone is not. SERVFAIL, timeout and TLS failure use bounded unavailability.
 41. Per-delivery sender-resolution retries count before calls, schedule without redelivery, share accounting and stop at their finite budget or active-time retention bound. At a sequence's first attempt, a future known absolute deadline caps active time by its remaining interval, including after local-state reset; an advertised duration also caps active time. A past or unknown deadline supplies no absolute-deadline cap. Unknown retention still requires a finite budget.
-42. Budget exhaustion pickup-ACKs terminal input without message.in. Locked-vault, local recovery and other non-resolution deferrals consume neither attempts nor active time, including when they interrupt a sequence. A wait that crosses an absolute deadline does not itself exhaust the retained sequence on resumption; its previously consumed attempts and active time remain counted. After loss of accounting, a permitted retry, or a redelivery with no retained wait state, instead starts a fresh finite sequence under section 5.1. Neither path permits terminal ACK solely because the wait crossed the deadline.
+42. Budget exhaustion pickup-ACKs terminal input without message.in. Locked-vault, local recovery and other non-resolution deferrals consume neither attempts nor active time, including when they interrupt a sequence. A wait that crosses an absolute deadline does not itself exhaust the retained sequence on resumption; its previously consumed attempts and active time remain counted. A permitted retry after loss of accounting, or a redelivery after loss of local wait state whether or not accounting survived, instead starts a fresh finite sequence when the sender method requires resolution under section 5.1. Neither path permits terminal ACK solely because the wait crossed the deadline.
 43. A successful current resolution within budget permits normal durable receipt. Imported receipts use retained evidence without fresh network requests.
 44. Fresh recipient resolution occurs for each new message ID when required; repacking follows pinned/verified evidence and never silently changes same-DID keys.
 45. Resolution failure before any prior pin uses neutral diagnostics, not an unsupported claim that a key was replaced.
@@ -1050,4 +1059,4 @@ automatic resubmission of the completed message ID.
 58. Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under vault-events.md section 11.1, across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
 59. did:web:Bob.Example and did:web:bob.example remain distinct identity strings and birth-pair inputs. A returned document id matching only after host case folding fails; URL/DNS processing cannot rewrite either retained DID.
 60. Validated message/profile evidence reaches a contact only through relationship.contactAssigned. Reusing a public address or key in another R does not share names or disclosure history; changing either end within one R preserves that history and its contact tombstone.
-61. A did:web delivery first authenticates but waits for relationship evidence. While that local wait state is retained, more than 32 redeliveries, reconnects or unrelated imports cause no resolver calls or pickup ACK. After a wait longer than advertised retention and past a known absolute deadline, relevant evidence changes start one fresh shared bounded resolution sequence; the waiting time cannot exhaust its local retention stop, including across a runtime restart or loss of local state. If reset lost the delivery's wait state, redelivery re-enters the receive/authentication gates with a fresh finite sequence, with that past deadline supplying no cap; successful authentication rediscovers any still-pending pair and returns to the wait. A permitted retry may obtain missing bytes through the next pickup. Evidence changes during an active sequence never replenish its budget. A transient 503 followed by valid resolution within that sequence permits normal receipt if relationship selection now succeeds. Repeated unavailable answers can exhaust that active sequence and take the terminal path. The mediator may independently expire the delivery without clearing the pair claim.
+61. A did:web delivery first authenticates but waits for relationship evidence. While that local wait state is retained, more than 32 redeliveries, reconnects or unrelated imports cause no resolver calls or pickup ACK. After a wait longer than advertised retention and past a known absolute deadline, relevant evidence changes start one fresh shared bounded resolution sequence; the waiting time cannot exhaust its local retention stop, including across a runtime restart or loss of local state. If reset lost the delivery's wait state, redelivery re-enters the receive/authentication gates with a fresh finite sequence whether or not resolution accounting survived, with that deadline, past or now unknown, supplying no cap; successful authentication rediscovers any still-pending pair and returns to the wait. A permitted retry may obtain missing bytes through the next pickup. Evidence changes or redelivery during an active sequence never replenish its budget. A transient 503 followed by valid resolution within that sequence permits normal receipt if relationship selection now succeeds. Repeated unavailable answers can exhaust that active sequence and take the terminal path. The mediator may independently expire the delivery without clearing the pair claim.
