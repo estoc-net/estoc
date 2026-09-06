@@ -1286,7 +1286,7 @@ by phase 1.
 ```
 
 This intent adds one sync-service locator to portable vault
-state. `id` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
+state. `syncId` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
 store; its current endpoint is resolved at runtime and may be cached only
 under `local/`.
 

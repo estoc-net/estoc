@@ -740,9 +740,7 @@ Here `R` is the scope's `relationshipId`. The transcript member name
 `"relationship"` is a fixed derivation tag, independent of the payload and
 runtime field name. Build that exact object for hashing; serializing
 `logicalPeerScope` with its `relationshipId` member would produce a different,
-invalid execution ID. Namespace purpose strings, including `automatic-mid`,
-also remain fixed. Section 11's effect transcript and the semantic/intent
-projections in section 5 retain their specified literal fields.
+invalid execution ID. Namespace purposes follow `vault-events.md` section 3.4.
 
 Rotation preserves R, execution identity and ACK namespace. Historical input
 verifies its saved references during import; producer current-address and

@@ -197,8 +197,8 @@ Sections 3.4, 4.1 and the individual schemas own their derivation and validation
 | --- | --- | --- |
 | Vault message entity or inbound observation group | `MessageId` | `messageId`, `ackMessageId` |
 | Received DIDComm plaintext ID | `WireMessageId` | `wireMessageId`, `ackWireMessageId` |
-| One exact event | `EventId` | envelope `eventId`; references such as `sourceEventId`, `triggerEventId`, `addEventId` |
-| Typed event evidence | `EventReference<T>` | `peerResolutionEventId`, `priorResolutionEventId`, `relationshipBindingEventId`, `peerTransitionEventId` |
+| One exact event | `EventId` | envelope `eventId` |
+| Typed event reference | `EventReference<T>` | every payload field ending in `EventId`, including `sourceEventId`, `triggerEventId`, `addEventId` and resolution/binding/transition references |
 | Contact / relationship | `ContactId` / `RelationshipId` | `contactId`, `fromContactId` / `relationshipId` |
 | Local DID entity | `DidId` | `didId`, `localDidId`, `senderDidId`, `fromDidId`, `toDidId` |
 | Route / mediation arrangement | `RouteId` / `MediationId` | `routeId`, `boundRouteId` / `mediationId` |
@@ -209,6 +209,14 @@ Sections 3.4, 4.1 and the individual schemas own their derivation and validation
 | Vault keystore name | `KeyName` | `localKeyName`, `me.keyName` |
 | Complete canonical public-key value | `PublicKey` | `peerPublicKey` |
 | DID string / verification-method DID URL | `Did` / `DidUrl` | `did`, `peerDid`, `presentedDid`, `longFormDid`, `fromDid`, `toDid` / `authenticationMethodIds`, `keyAgreementMethodIds` |
+
+For every payload `*EventId`, `T` is the target event type fixed by the
+referencing schema. `sourceEventId` is `EventReference<"message.in">` in
+`profile.nameClaimed` and `EventReference<"message.out">` in `profile.shared`;
+`triggerEventId` is `EventReference<"message.in">`, and `addEventId` is
+`EventReference<"contact.peerDidAdded">`. The referencing schema also owns
+presence and nullability; a nullable reference has the same typed non-null
+value. Generic event-store APIs continue to use `EventId`.
 
 Use the same entity noun for creation and later references: `did.created.didId`
 and `did.disclosed.didId`, for example. Add a role prefix when needed, such as
@@ -1633,7 +1641,7 @@ inbound message.
   the exact `fromPrior`; and
 - `messageId` is the actual inbound message entity carrying the proof. Duplicate
   observations of that message ID are interchangeable witnesses only when one exact
-  observation satisfies all carrier fields above together. message ID equality alone
+  observation satisfies all carrier fields above together. Message ID equality alone
   cannot substitute a different `peerResolutionEventId`, proof or local recipient key.
 
 The verifier MUST use the named historical resolution snapshot. A network
@@ -3242,7 +3250,7 @@ There is no migration requirement from an earlier event vocabulary.
      Creating a valid live successor makes that unfinished work recoverable;
      it replies in the same relationship, never another one of the contact.
 111. `message.in` and `message.prepared` have no `peerPublicKey` payload member.
-     message IDs and package comparisons derive it through `peerResolutionEventId`.
+     Message IDs and package comparisons derive it through `peerResolutionEventId`.
      Missing non-null references defer, mismatched evidence conflicts, and only
      an anonymous inbound has null resolution/peer key. Resolution, peer-transition
      and ACK event keys remain present; profile observations reference source
@@ -3381,11 +3389,11 @@ There is no migration requirement from an earlier event vocabulary.
      contact stay separate, and an unassigned or conflicted R contributes none.
      Duplicate lifts, rotation, body erasure and shuffled event arrival leave
      the projection unchanged; no sharing projection authorizes another send.
-137. Crash after a readable profile source commits but before its lift is
-     recoverable on reopen; outbound sharing also requires its valid committed
-     submission. Later scope/evidence recovery permits the same idempotent lift
-     without mediator redelivery or a local queue. Existing lifts are reused;
-     submitted outbounds never prepare or send again. If erasure or a contact
-     tombstone wins before lifting, recovery creates no new lift, even if bytes
-     remain under another root. Retained skeletons preserve an existing valid
-     sharing lift but msgType alone cannot create one after content erasure.
+137. A crash after a readable profile source commits but before its lift leaves
+     work that is recoverable on reopen; outbound sharing also requires its
+     valid committed submission. Later scope/evidence recovery permits the same
+     idempotent lift without mediator redelivery or a local queue. Existing lifts
+     are reused; submitted outbounds never prepare or send again. If erasure or a
+     contact tombstone wins before lifting, recovery creates no new lift, even if
+     bytes remain under another root. Retained skeletons preserve an existing
+     valid sharing lift but msgType alone cannot create one after content erasure.
