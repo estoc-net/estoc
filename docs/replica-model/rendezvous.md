@@ -351,7 +351,8 @@ A conforming Estoc initial message MUST:
   encryption or network submission.
 
 A recipient preserves the exact standard `please_ack` array. `[]` requests no
-explicit message ID and does not make the initial message receipt-required.
+explicit message ID. A receipt request does not change the sender's submission
+completion rule in `distributed-delivery.md` section 7.
 An initial message that fails the Estoc receipt request or protocol-preference
 requirements is handled after durable admission; it is not silently discarded
 solely for that reason.
@@ -456,14 +457,15 @@ concurrently use the same local author.
 9. prepare using initiator Peer DID long form in plaintext `from`, protected
    `skid` and decoded `apu`; and
 10. submit against the pinned snapshot and recipient key with bounded retry
-    until explicit ACK, expiry, hold or the rendezvous retry ceiling.
+    only while unsubmitted and permitted by expiry, hold and the rendezvous
+    retry ceiling. A committed `delivery.submitted` completes this MID.
 
 The first message is the real Trust Ping or application message, not a custom
 rendezvous wrapper. `pleaseAck == []` is legal DIDComm but requests nothing and
 is not used by the conforming phase-1 writer for bootstrap.
 
-If current time reaches expiry before preparation or retry, append
-message-scoped terminal `delivery.failed(code="expired")` and submit
+If an unsubmitted initial message reaches expiry before preparation or retry,
+append message-scoped terminal `delivery.failed(code="expired")` and submit
 nothing. A replacement initial message uses a new wire ID but normally reuses
 the same initiator relationship key unless the contact was deleted.
 
@@ -746,13 +748,15 @@ For effective accept:
    admission decision, any new `contact.created`, bootstrap/pairwise
    `contact.attached`, `did.created`, `contact.useDid`,
    fully frozen `relationship.established`, and deterministic response
-   `message.out` with a replay deadline;
+   `message.out`;
 6. response intent explicitly ACKs the triggering initial wire ID, uses
    `pleaseAck == [""]`, and carries the exact relationship-level `fromPrior`;
 7. only after all required local facts and response intent are committed,
    register responder pairwise DID canonical short form;
 8. prepare with long-form first-disclosure sender evidence; and
-9. submit with bounded retry until explicit ACK, expiry or hold.
+9. submit with bounded retry only while unsubmitted and permitted by expiry
+   and hold. A committed `delivery.submitted` completes the response MID,
+   independently of handoff confirmation.
 
 The committed final admission result is the decision boundary; handoff intent
 materializes that result rather than sealing a still-reversible decision.
@@ -861,11 +865,7 @@ The first handoff response MUST:
 - preserve protocol threading and OOB `pthid` where applicable;
 - include `ack` naming the triggering initial wire ID;
 - include `please_ack: [""]` to request explicit handoff confirmation;
-- copy the exact stored `fromPrior`;
-- set `replayUntil` exactly equal to the handoff response's
-  `expiresTime`, as required by `distributed-delivery.md` section 7, so a
-  duplicate initial message can re-submit the exact response throughout its
-  complete validity window; and
+- copy the exact stored `fromPrior`; and
 - be committed as `message.out` before recipient registration, resolution,
   encryption or submission.
 
@@ -912,7 +912,7 @@ Empty fallback example:
 The responder:
 
 1. process-durably appends acceptance, relationship state and response
-   `message.out` with its replay deadline;
+   `message.out`;
 2. reconciles recipient registration for canonical short-form `P_A` on its
    bound route when mediated;
 3. prepares the exact response using long-form sender evidence and the frozen
@@ -984,14 +984,16 @@ rediscovers unfinished committed inbound work under `vault-events.md` section
 A response does not acknowledge the initial message unless its authenticated
 explicit `ack` array names that wire ID.
 
-The confirmation message is sent to `P_A`, contains no `please_ack`, and is
-submission-terminal after first successful submission. Its execution scope
+The confirmation message is sent to `P_A`, contains no `please_ack`, and
+completes when its `delivery.submitted` commits. Its execution scope
 derives from the committed relationship binding above, never a provisional
 channel scope. Preparation and submission wait for the complete binding and
 intent commits. A crash after a separate binding commit and before the intent
 commit reconstructs the same confirmation effect; a combined batch leaves
-either both committed or neither. Duplicate response delivery re-submits the
-same exact prepared confirmation package.
+either both committed or neither. Duplicate response delivery may resume
+eligible submission of the same frozen confirmation only while it lacks
+`delivery.submitted`; it MUST NOT resend a submitted confirmation or create a
+replacement effect.
 
 The responder may stop attaching `from_prior` after receiving any authenticated
 message addressed to `P_A`. Delivery acknowledgment for the handoff response
@@ -1026,7 +1028,7 @@ to the initiator relationship DID. The response:
 
 - MAY include `ack` naming every explicitly requested and durably known ID;
 - contains no `from_prior`;
-- contains no `please_ack` and is submission-terminal; and
+- contains no `please_ack` and follows the same submitted completion rule; and
 - creates no relationship DID or relationship state.
 
 For this profile's Report Problem response, the producing tuple is:
@@ -1060,7 +1062,6 @@ same commit:
 ```text
 response.createdTime = decisionTime
 response.expiresTime = response.createdTime + 604800
-response.replayUntil = response.expiresTime when ack is non-empty, otherwise null
 ```
 
 Restart, retry or equivalent decision provenance reuses these frozen values.
@@ -1121,7 +1122,8 @@ Hard pre-vault rejection has no portable candidate to erase.
 
 ## 14. Retry, replacement, rollover and expiry
 
-An initial sender uses bounded local retry. Recommended defaults are:
+An initial sender uses bounded local retry only before `delivery.submitted`
+commits. Recommended defaults for that unsubmitted work are:
 
 ```text
 minimum automatic retry interval = 30 seconds
@@ -1135,6 +1137,9 @@ policy. All retry tasks in one runtime share a wire ID's budget and count an
 attempt before invoking transport, including failure and unknown outcomes.
 The budget and backoff are local scheduling policy, not a portable lifetime
 submission cap; restart, restore or loss of `local/` may reset accounting.
+None of those resets reopens a MID with committed `delivery.submitted`.
+The common completion rule also applies to handoff, confirmation and rejection
+responses; missing ACK or a duplicate inbound never reopens a submitted MID.
 
 Expiry is frozen in `message.out` and MUST NOT be extended by retry or restart.
 No attempt is permitted at or after expiry, or while another hold, terminal
@@ -1148,15 +1153,16 @@ after terminal expiry requires a new initial message and wire ID.
 Other rules:
 
 - retrying one prepared package preserves identical plaintext and ciphertext;
-- a permitted route change creates a new package while preserving logical
-  intent;
+- a permitted route change for an unsubmitted MID creates a new package while
+  preserving logical intent;
 - a new initial message with the same initiator key reuses the stable
   relationship but is a distinct application message;
 - the same key under another canonical initiator DID is a conflict;
 - a timely accepted candidate may deliver its deterministic response during
   that response's own lifetime; and
-- duplicate initial/response delivery re-submits the same prepared response or
-  ACK package.
+- duplicate initial/response delivery may resume eligible unsubmitted work
+  using the same frozen response or ACK intent; after `delivery.submitted`,
+  it causes no resubmission or replacement effect.
 
 A Peer rendezvous DID has no in-place key or route rollover. Changing the
 mediator encoded in its document creates a new rendezvous DID and invalidates
@@ -1198,13 +1204,17 @@ silently dropping ordinary interoperable bootstrap. Abuse is instead bounded
 by hard source/rendezvous rate limits, a bounded pending queue, post-admission
 policy and immediate content erasure after reject, including silent rejection.
 
-Full reliable bootstrap conformance assumes the peer implements DIDComm v2.1
-DID rotation (`from_prior`) and explicit `ack`. A non-Estoc agent may process
-the standard Trust Ping or application message but fail to perform the
-pairwise handoff or explicit receipt. Persistent relationship establishment
-with such an agent is best-effort and outside profile 1.0; the Estoc UI MUST
-surface an unconfirmed bootstrap rather than silently treating the rendezvous
-DID as ordinary `writeTo`.
+The profile uses DIDComm v2.1 DID rotation (`from_prior`) and explicit `ack`.
+Submission completion does not establish or confirm a relationship: the
+handoff proof, portable binding and authenticated pairwise confirmation gates
+still apply. Loss of an initial, handoff or confirmation after its sender
+commits `delivery.submitted` can leave bootstrap unconfirmed; the sender does
+not automatically resend that MID. A peer may also process the standard Trust
+Ping or application message without performing the required handoff. The
+Estoc UI MUST surface an unconfirmed bootstrap when the required evidence is
+absent rather than silently treating the rendezvous DID as ordinary `writeTo`.
+Missing explicit receipt remains receipt information and does not reopen
+submission or substitute for handoff proof.
 
 ## 17. Required conformance cases
 
@@ -1258,9 +1268,9 @@ DID as ordinary `writeTo`.
     `please_ack: [""]`.
 24. The handoff Empty example uses the pure-ACK ID derived from its logical
     execution ID and freezes its response intent.
-25. Handoff response intent freezes a replay deadline no later than its
-    expiry; ACK stops normal retry but does not release its exact package before
-    that deadline.
+25. A handoff response stops submission when `delivery.submitted` commits,
+    even without ACK or pairwise confirmation. Duplicate initial receipt does
+    not resend it; its envelope needs no further delivery retention.
 26. The origin candidate's effective accept derives the relationship/wire-ID
     execution identity before the handoff effect; no observation-MID-derived
     identity is used.
@@ -1269,16 +1279,19 @@ DID as ordinary `writeTo`.
 28. The coarse code table serves only an optional Report Problem response.
     Its selected wire code stays frozen despite different admission provenance;
     no custom decline or additional response is created.
-29. Default local retry uses a 30-second minimum, a 21600-second backoff cap
-    and 32 pre-counted transport attempts per wire ID per runtime. Restart may
-    reset that local budget but never extends the mandatory frozen expiry.
+29. Default local retry for an unsubmitted initial uses a 30-second minimum,
+    a 21600-second backoff cap and 32 pre-counted transport attempts per wire ID
+    per runtime. Restart may
+    reset that local budget but never extends the mandatory frozen expiry or
+    reopens a MID with committed `delivery.submitted`.
 30. Peer rendezvous mediator replacement requires a new DID/invitation unless
     the old route remains available.
 31. Rendezvous DIDs never enter ordinary relationship `writeTo`.
 32. Phase 1 works with one active full runtime and standard account-scoped
     pickup; replica mediation and vault sync are not required.
-33. A peer lacking `from_prior` or explicit ACK support remains visibly
-    unconfirmed and is outside reliable-bootstrap conformance.
+33. Missing or invalid handoff proof leaves bootstrap visibly unconfirmed,
+    even after submission or explicit ACK. Missing ACK does not reopen a
+    submitted initial, handoff or confirmation.
 34. With the vault unlocked and recovery complete, a foreign recipient DID,
     a local DID with a nonexistent/wrong-purpose fragment, or a terminal
     rendezvous generation is terminal wrong-recipient input and does not remain

@@ -16,6 +16,12 @@ full vault runtime. Phase 1 has exactly one active full runtime. Stable logical,
 package and wire identifiers are nevertheless defined so a later replicated
 runtime can converge without changing peer-visible messages.
 
+Every outbound completes submission when `delivery.submitted` is durably
+committed for any of its packages. Before that boundary, eligible work may be
+retried or recovered after a crash. After it, no package for that logical
+outbound is prepared or submitted again. Peer ACKs record receipt information;
+they do not select the submission completion boundary.
+
 This profile defines:
 
 - the boundary between rendezvous discovery, pairwise relationships and
@@ -24,8 +30,8 @@ This profile defines:
   plaintext, encrypted packages and mediator deliveries;
 - which DIDComm headers are frozen at intent time;
 - package preparation and valid repackaging;
-- submitted, acknowledged, expired and held states;
-- end-to-end durable receipt with DIDComm `please_ack` and `ack`;
+- submission, expiry and hold states, with independent peer-receipt information;
+- end-to-end durable receipt observations with DIDComm `please_ack` and `ack`;
 - duplicate and conflict handling across process restarts and future replicas;
 - the rendezvous bootstrap delivery profile; and
 - idempotency requirements for automatic handlers.
@@ -64,17 +70,14 @@ fan-out (`replica-mediation/1.0`), the rendezvous admission profile
 - **Delivery ID** — a mediator-generated opaque attachment ID used by Message
   Pickup. In the phase-1 single-replica profile it belongs to the mediation
   account queue; the deferred replica profile scopes it to a replica.
-- **Submitted** — a transport endpoint accepted one package attempt.
+- **Submitted** — a transport endpoint accepted one package attempt and the
+  vault committed `delivery.submitted`; this completes the logical outbound's
+  submission work.
 - **Acknowledged** — the ultimate peer sent an authenticated explicit `ack`
   naming the wire ID after durable receipt.
-- **Receipt-required** — the exact `message.out.pleaseAck` array requests an
-  explicit ACK of this message by containing `""` or this message's wire ID.
-- **Submission-terminal** — this message is not receipt-required; its first
-  successful submission ends normal background retry. The message may still
-  carry a `please_ack` request for older message IDs.
-- **Replay deadline** — the durable local `message.out.replayUntil` instant
-  through which exact deterministic response packages remain retained for
-  duplicate-request recovery. It is not a DIDComm header.
+- **Receipt request** — the exact `message.out.pleaseAck` array names the
+  messages whose explicit ACK is requested. It is independent of local
+  submission completion.
 - **Logical channel** — a local recipient key and authenticated peer key,
   interpreted through contact-scoped DID transitions.
 
@@ -192,19 +195,13 @@ and every mediator are unavailable. Before required network work it records:
 - immutable `expiresTime`, which is an Epoch-Seconds integer or null;
 - immutable `pleaseAck`, represented as null or an ordered array;
 - immutable `ack`, represented as an ordered array;
-- immutable supported additional top-level headers;
-- `replayUntil`, represented as an Epoch-Seconds integer or null; and
+- immutable supported additional top-level headers; and
 - the user or deterministic automatic-effect decision to send.
 
 `createdTime == null` means the DIDComm `created_time` header is absent. A
 preparer MUST NOT invent it. A user-authored message normally freezes commit
 time, while a deterministic response may copy or derive a timestamp under its
 protocol. The value is not a transport-freshness proof.
-
-`replayUntil` controls local retention only. It is excluded from the semantic
-and intent projections and is never emitted on the wire. A deterministic
-response or pure ACK that may be replayed after a duplicate request MUST set a
-non-null replay deadline under section 7.
 
 A successful vault commit uses the process-durable boundary in
 `event-store.md` section 2.1. Correctness MUST NOT depend on an uninterrupted
@@ -221,17 +218,15 @@ The following table is normative. "Committed" means process-durable success.
 | Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope | Submit that exact package |
+| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that MID; apply envelope retention under `vault-events.md` section 15.3 |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
 | Stable execution scope | Admission, initiator binding, relationship or pinned initial-package evidence under section 9 | Apply peer-scoped ACKs or run an eligible automatic effect |
-| Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Stop normal retry |
-| Replay submission paused | Unresolved hold or ordinary terminal delivery failure | Retain exact replay material but submit nothing automatically |
-| Replay closure | Process-durable `message.replayClosed` after deadline or erasure | Release replay-only exact envelope roots |
+| Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Record receipt information independently of submission work |
 
 The terminal pre-vault path creates no `message.in`, peer ACK, contact or
-handler effect. Stopping normal retry after an ultimate ACK does not release
-exact response material. Reaching `replayUntil` also does not release it until
-the monotonic replay-closure event has committed.
+handler effect. An ACK never substitutes for a missing `delivery.submitted`
+event or retains a completed outbound's envelope for a later duplicate.
 
 Object acceptance and event append use `Vault.commit` under `event-store.md`
 section 10.
@@ -243,23 +238,20 @@ The synchronous full-vault send operation:
 1. prepares attachment objects;
 2. prepares the stored message document;
 3. selects durable nullable `createdTime`, optional `expiresTime`, exact
-   `pleaseAck` value (null or array), exact ordered `ack`, complete `headers`,
-   and any required replay deadline;
+   `pleaseAck` value (null or array), exact ordered `ack` and complete `headers`;
 4. computes the intent hash;
 5. rejects a rendezvous DID as an ordinary relationship target;
 6. commits those objects with `message.out` through `Vault.commit`; and
 7. returns `mid`.
 
 It performs no network operation. When `createdTime` is null, preparation
-omits `created_time`. Expand `pleaseAck` by replacing `""` with
-the current wire ID. Receipt-required completion is selected only when that
-expanded set contains the current wire ID. `null`, `[]`, or an array naming
-only older messages is submission-terminal for the current message.
+omits `created_time`. Every outbound uses the same submission completion rule
+in `vault-events.md` section 14.8, regardless of its `pleaseAck` or `ack` arrays.
 
 The active phase-1 runtime may later:
 
-1. stop when held, acknowledged, terminally failed, expired, or
-   submission-terminal and already submitted;
+1. stop when submitted, held, terminally failed, expired or conflicted under
+   `vault-events.md` section 14.8;
 2. fold target contact/channel;
 3. choose valid sender DID, peer DID/key and exact resolution evidence;
 4. attach the frozen contact-scoped `fromPrior` while pairwise handoff remains
@@ -270,11 +262,20 @@ The active phase-1 runtime may later:
 7. submit directly or through Routing 2.0 with `packageId == forward.id`;
 8. append `delivery.submitted` on acceptance or `delivery.failed` on terminal
    failure; record retryable failures only in local trace; and
-9. retry according to completion mode.
+9. schedule another attempt only while submission work remains eligible.
 
-A new package may change address/security evidence only under validated repack
-rules while preserving the intent hash. Receiving may join equal wire IDs
-across a verified peer-key transition in one relationship.
+Within the active runtime, prepare/submit work for one logical MID MUST be
+serialized. Before each transport call, recheck its committed completion and
+eligibility state; after acceptance, commit `delivery.submitted` before
+dispatching further work for that MID. This per-message scheduling boundary
+does not hold the vault writer lock across network calls. If the process exits
+before the submission event commits, reopen may submit the same exact package
+again under section 13. No durable pre-call attempt reservation is required.
+
+A new package may change address/security evidence only while the outbound is
+unsubmitted, under validated repack rules and with the same intent hash.
+Receiving may join equal wire IDs across a verified peer-key transition in one
+relationship.
 
 ## 5. Canonical projections and hashes
 
@@ -345,9 +346,9 @@ expandPleaseAck(currentWireId, values):
     ignore later duplicate targets without reordering
 ```
 
-A current outbound is receipt-required exactly when its expanded array
-contains its own wire ID. Thus an absent or empty array does not request an ACK
-of the current message, while `[""]` and `[currentWireId]` do.
+An expanded array containing the current wire ID requests that message's ACK.
+An absent or empty array does not request it, while `[""]` and `[currentWireId]`
+do. This request never changes submission completion or retry eligibility.
 
 Writers SHOULD NOT emit duplicate targets. Readers preserve the accepted wire
 array exactly and apply deduplication only to receipt processing. Absent
@@ -363,7 +364,7 @@ a dedicated field. The reserved names `typ`, `id`, `type`, `from`, `to`,
 `created_time`, `expires_time`, `thid`, `pthid`, `please_ack`, `ack`,
 `from_prior`, `return_route`, `body` and `attachments` are forbidden. A
 difference in any such field is an intent difference.
-`replayUntil`, local effect bookkeeping and package addressing are excluded.
+Local effect bookkeeping and package addressing are excluded.
 
 `intentHash` is unpadded base64url SHA-256 of RFC 8785 canonical UTF-8 JSON for
 this projection.
@@ -411,8 +412,9 @@ validation, and uses `Vault.commit` to accept
 `UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL object with
 `message.prepared`. Submission uses those exact stored bytes.
 
-Retrying a package reuses identical plaintext, normalized ciphertext bytes and
-package ID. A new package for the same logical message may change `from`, `to`,
+Retrying an unsubmitted package reuses identical plaintext, normalized
+ciphertext bytes and package ID. While the logical outbound remains
+unsubmitted, a new package for it may change `from`, `to`,
 selected keys, peer resolution or `from_prior` only under a valid DID-entity
 selection or verified contact-scoped transition for the same logical target.
 A local DID's keys and bound route never change in place; an external
@@ -421,90 +423,35 @@ Every changed plaintext or encryption result requires a new package ID and
 plaintext hash. One initial rendezvous wire ID remains pinned to its original
 resolution snapshot and recipient key.
 
-## 7. Expiration, normal completion and replay retention
+## 7. Submission completion and expiration
 
-Before preparation or any normal retry, a worker checks durable expiry. When
-`expiresTime != null` and `now >= expiresTime`, it appends a message-scoped,
-terminal `expired` failure and submits no new package. A later user attempt
-requires a new `message.out` and wire ID.
+`vault-events.md` section 14.8 is the sole owner of submission completion and
+work eligibility. A worker checks that fold before preparation or submission.
+After a valid `delivery.submitted` commits for any package, it MUST NOT prepare,
+repackage or submit any package for that logical MID again. This includes
+timer-driven work, reopen recovery and duplicate-triggered responses, even
+when no peer ACK ever arrives. A deliberate later send creates a new
+`message.out` and wire ID.
 
-Normal retry mode is derived from the current wire ID and exact
-`message.out.pleaseAck` value:
+Before completion, an expired message receives a message-scoped terminal
+`delivery.failed(code="expired")` and no new submission. Reaching expiry after
+submission does not create a new delivery failure. An ACK can still supply
+receipt information, including a late indicator, without changing submission
+state or work eligibility.
 
-```text
-requested = expandPleaseAck(wireId, pleaseAck or [])
-receiptRequired = wireId is in requested
-```
-
-- **receipt-required** — normal retry continues until an authenticated explicit
-  ACK names the wire ID, or until expiry, hold or terminal failure.
-- **submission-terminal** — the first successful submission ends normal
-  background retry, while display remains `submitted`, not `acknowledged`.
-
-HTTP, WebSocket or mediator acceptance records only `delivery.submitted`.
-Expiry permanently ends new work. A later valid ACK may improve display to
-`acknowledged-late`, but never reactivates preparation or normal retry.
-
-Normal completion is separate from duplicate-response replay. A deterministic
-protocol response or pure ACK created to honor an inbound `please_ack` MUST
-freeze `replayUntil` before `message.out` is appended. The exact deadline is:
-
-1. a protocol-defined deterministic deadline when that protocol defines one;
-2. otherwise, the response's `expiresTime` when it is non-null; or
-3. otherwise, exactly 604800 seconds after the local decision clock read used
-   to construct the response intent.
-
-A protocol-defined deadline MUST NOT be later than a non-null response
-`expiresTime`; the response remains unexpired throughout its replay window.
-The selected value remains unchanged across preparation, submission, ACK and
-restart. The phase-1 generic pure-ACK fallback uses rule 3. The rendezvous
-handoff profile defines its own deterministic response timing and uses rule 2.
-
-Replay has two separate predicates:
-
-- **replay material open** — exact replay material must remain retained; and
-- **replay submission eligible** — automatic duplicate handling is currently
-  allowed to submit the retained package.
+Eligible unsubmitted work may use local timers, backoff and recovery. Protocols
+may impose tighter limits; `rendezvous.md` section 14 defines initial-message
+defaults. A hold pauses work until released. Release, route recovery or a
+changed clock never reopens a submitted or terminally failed outbound.
+Future synchronization MUST NOT create a hold merely because another author
+produced the intent.
 
 `vault-events.md` section 15.3 is the sole normative envelope-retention rule.
-It derives normal material need independently of submission eligibility, then
-unions that contribution with the durable replay obligation. A hold or missing
-route therefore does not release a normal-only package. A null `replayUntil`
-requires no closure event. For non-null deadlines, replay-only release requires
-committed `message.replayClosed`, not a wall-clock observation or ordinary
-completion/failure. Explicit message/root erasure has its separate precedence
-and erased-closure recovery path.
-
-The rules below decide when retained material may be submitted; they do not
-supply another retention predicate.
-
-Automatic duplicate replay is submission-eligible only when all of these are
-true:
-
-- replay material is still open;
-- the current wall-clock sample is strictly before `replayUntil`;
-- no unresolved `delivery.held` applies to the message;
-- there is no message-scoped terminal `delivery.failed`;
-- the selected package has no package-scoped terminal failure;
-- the selected package itself has not expired; and
-- its exact envelope is still retained and validates.
-
-A hold therefore pauses duplicate replay without shortening retention. After a
-matching `delivery.released`, duplicate replay may resume only if every other
-predicate above still holds. A terminal delivery failure blocks replay
-submission but retains material until monotonic replay closure or explicit
-erasure. Package retirement
-stops normal retry but does not, by itself, close replay.
-
-When a clock sample first observes `now >= replayUntil` and replay material is
-still open, the runtime MUST stop replay submission, append the monotonic
-closure, and only then make replay-only roots eligible for collection. Once
-exact bytes have been intentionally erased, the
-runtime MUST NOT mint a replacement package merely to answer a duplicate.
-
-A user or policy hold stops automatic work. In phase 1 there is one active
-writer; future synchronization MUST NOT create a hold merely because another
-author produced the intent.
+An unsubmitted, non-terminal package remains retained through temporary holds
+or unavailable routes. Committed submission releases this outbound's envelope
+contribution without waiting for ACK or keeping bytes for later response
+replay. Event skeletons, message content and independent references retain
+their own lifetimes under that fold.
 
 ## 8. Durable end-to-end acknowledgment
 
@@ -566,8 +513,9 @@ child thread of X's protocol thread, using that profile's `thid`/`pthid` rule.
 
 A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
-Pure ACKs contain no `please_ack` and are submission-terminal; they are control
-observations under `vault-events.md` section 14.7.
+Pure ACKs contain no `please_ack` and follow the same submission completion
+rule as every outbound; they are control observations under `vault-events.md`
+section 14.7.
 
 ### 8.2 Deterministic pure ACK
 
@@ -587,8 +535,8 @@ the carrier's normalized value, including null; `expiresTime` is null. A null
 This is the **generic pure-ACK profile**. A rendezvous handoff Empty Message
 uses the same handler, kind, ordinal and execution/key/output-ID recipe,
 but it is not this generic profile: `rendezvous.md` freezes its timing,
-`please_ack`, `from_prior`, thread values and replay deadline before intent
-commit. One carrier MUST NOT create both a generic pure-ACK effect and a
+`please_ack`, `from_prior` and thread values before intent commit. One carrier
+MUST NOT create both a generic pure-ACK effect and a
 rendezvous handoff-Empty effect; selecting the handoff fallback consumes the
 carrier's ACK obligation.
 
@@ -616,32 +564,26 @@ initial/handoff references and validated package/DID evidence. Lookup is
 search. Threading, a natural response, transport acceptance, `please_ack`
 presence or a mediator receipt is insufficient without the explicit value.
 
-One valid ACK stops normal retry of every package for the receipt-required
-outbound. It does not end replay retention for packages that answer another
-message. Duplicate ACKs are harmless. Acknowledged means durable receipt by the
-peer vault, not read, displayed or accepted by a business workflow.
+A valid ACK adds receipt information only. It neither creates a missing
+`delivery.submitted` nor changes submission eligibility or envelope retention.
+Duplicate ACKs are harmless. Acknowledged means durable receipt by the peer
+vault, not read, displayed or accepted by a business workflow.
 
 ### 8.4 Duplicate receipt handling
 
-When a conflict-free carrier is delivered again and its frozen ACK target set
-was previously honored, the receiver MUST re-submit an already-existing exact
-deterministic response or pure-ACK package exactly when replay submission is
-eligible under section 7. In particular, an unresolved hold or ordinary
-terminal failure blocks submission even though it does not by itself release
-replay material.
+When a conflict-free carrier is delivered again, the receiver looks up its
+existing deterministic response under section 11. If that outbound has a
+committed `delivery.submitted`, the duplicate causes no further submission,
+even when exact bytes are still present. If it remains unsubmitted, only its
+existing eligible work may resume under section 7.
 
-It MUST NOT mint a new effect, outbound message, wire ID, package or
-`from_prior` only because of the duplicate. Acknowledgment of the response
-stops normal retry but does not cancel an open replay-material obligation. A
-bounded debounce may reduce repeated submission.
-
-After `message.replayClosed`, or when explicit erasure has released the
-exact bytes and closed replay, no replay is required and no replacement package
-may be invented. A hold that is later released may resume replay only when closure
-and every other eligibility predicate still permit it. If a request was not
-honored because no eligible target remained or the candidate was rejected,
-redelivery creates no new response obligation. Required ACK work left unfinished
-by a crash still follows `vault-events.md` section 16.1's recovery rules.
+A duplicate MUST NOT mint a new effect, outbound message, wire ID, package or
+`from_prior`, or change frozen ACK targets, merely to obtain another send.
+Collected or erased response bytes are not recreated for a submitted response.
+If a request was not honored because no eligible target remained or the
+candidate was rejected, redelivery creates no new response obligation.
+Required ACK work left unfinished by a crash still follows `vault-events.md`
+section 16.1's recovery rules, subject to the same submitted boundary.
 
 ## 9. Observation identity, logical aliasing and execution identity
 
@@ -694,7 +636,7 @@ form one observation group; differences are intent conflicts.
 
 Automatic execution uses a stable **execution scope**, not an observation MID.
 Its unique derived value is the carrier's **logical peer scope**
-(`logicalPeerScope`) for ACK lookup, duplicate replay and automatic execution.
+(`logicalPeerScope`) for ACK lookup, duplicate handling and automatic execution.
 The closed phase-1 scopes are:
 
 ```json
@@ -852,13 +794,13 @@ For every account-scoped pickup or direct delivery:
     not an application effect requiring a provisional execution identity;
 14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
-    append one deterministic protocol response or pure-ACK intent with a replay
-    deadline; and
-15. on duplicate receipt while replay-submission-eligible, re-submit the same
-    retained response package rather than creating another effect or package.
+    append one deterministic protocol response or pure-ACK intent; and
+15. on duplicate receipt, reuse existing response work under section 8.4;
+    a submitted response causes no further preparation or submission.
 
 Control observations follow `vault-events.md` section 14.7. A pure ACK has
-`pleaseAck == null`, so first successful submission ends its normal retry.
+`pleaseAck == null` to avoid an ACK loop; its submission follows the same
+completion rule as every other outbound.
 
 A crash before durable message commit leaves mediator delivery pending. A
 crash after commit but before pickup ACK causes redelivery and another valid
@@ -883,9 +825,9 @@ later traffic.
 
 The first responder message is sent from the relationship DID, carries
 `from_prior`, explicitly ACKs the initial wire ID and requests its own ACK with
-`please_ack: [""]`. It freezes a replay deadline and retains every exact
-handoff package through that deadline. The initiator verifies `from_prior`
-before applying the response ACK or appending `peer.transitioned`.
+`please_ack: [""]`. Its submission completes at committed `delivery.submitted`
+even while handoff confirmation remains pending. The initiator verifies
+`from_prior` before applying the response ACK or appending `peer.transitioned`.
 
 Until the responder receives an authenticated message addressed to the new
 relationship DID, outbound packages from that DID carry the same byte-stable
@@ -935,14 +877,14 @@ response work under that fold.
 For each eligible effect, look up its derived MID before freezing ACK targets,
 timing or other intent fields.
 It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
-content erasure, replay closure, a later observation or a changed clock. If no
+content erasure, submission, a later observation or a changed clock. If no
 intent exists, it commits the intent through `Vault.commit` before effects.
 Derivation, lookup and commit are one locked operation.
 For an atomic admission/response batch, these checks validate the proposed
 event set under section 9; outbound work still waits for the complete commit.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under `vault-events.md` section 14.8. Duplicate
-carriers use the existing package only while section 8.4 permits replay.
+carriers may resume only unsubmitted response work under section 8.4.
 
 Other external effects MUST commit their protocol-defined portable intent
 before execution and use that protocol's idempotency or explicit at-least-once
@@ -960,7 +902,6 @@ Exact schemas are in `vault-events.md`:
 message.out                       durable intent and immutable headers
 message.prepared                  exact plaintext and encrypted package
 message.packageRetired            package no longer retried
-message.replayClosed              monotonic end of duplicate replay retention
 delivery.submitted                transport accepted a package
 delivery.failed                   terminal package or message failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
@@ -973,11 +914,11 @@ relationship.established          stable responder-side pairwise relationship
 relationship.initiatorBound       portable initiator-side relationship binding
 ```
 
-When `expandPleaseAck(wireId, pleaseAck or [])` contains `wireId`, submission
-does not remove the outbound from the set awaiting ultimate acknowledgment.
-Otherwise, first successful submission ends normal background retry for this
-message, even when its `pleaseAck` array asks for acknowledgment of older
-messages.
+One valid committed `delivery.submitted` completes the entire outbound's
+submission work, regardless of either ACK array. `delivery.acknowledged`
+records a separate receipt observation and cannot create or reopen submission
+work. Missing submission evidence leaves eligible work recoverable even when
+an earlier transport call may already have succeeded.
 
 A recommended inbound observation records both hashes and durable headers:
 
@@ -1013,8 +954,10 @@ A recommended inbound observation records both hashes and durable headers:
   exact package idempotently. Missing submission evidence does not prove that
   no attempt occurred; the rendezvous attempt budget is runtime-local policy,
   not a crash-persistent lifetime cap.
-- At expiry before prepare or retry, a message-scoped terminal failure is
-  recorded and no package is submitted.
+- After `delivery.submitted` commits, restart, duplicate receipt and missing
+  ACK never cause another submission or replacement package for that MID.
+- At expiry before prepare or retry of an unsubmitted outbound, a
+  message-scoped terminal failure is recorded and no package is submitted.
 - After inbound commit but before pickup ACK, redelivery converges as another
   observation.
 - After pickup ACK but before ultimate ACK intent/submission, writable-open
@@ -1023,9 +966,10 @@ A recommended inbound observation records both hashes and durable headers:
   deterministic work.
   Neither mediator redelivery nor a local queue is a recovery prerequisite.
 - Loss or unavailability of the recipient runtime beyond mediator retention
-  may lose an in-flight package. Receipt-required sender retry is the recovery boundary.
-- Submission-terminal messages deliberately accept best-effort completion
-  after transport acceptance.
+  may lose an in-flight package after submission completed. The sender does
+  not compensate by resending a submitted outbound. This profile provides
+  best-effort delivery after recorded transport acceptance, independently of
+  any later peer receipt observation.
 
 ## 14. Privacy
 
@@ -1050,8 +994,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 3. `pleaseAck == null` omits the wire header; an array is preserved exactly on
    the wire.
 4. `pleaseAck == []` requests no explicit acknowledgment.
-5. `pleaseAck` containing `""` or the current wire ID makes the current
-   message receipt-required; an array naming only older IDs does not.
+5. `pleaseAck` containing `""` or the current wire ID requests its receipt;
+   an array naming only older IDs does not. Neither changes submission work.
 6. A receiver accepts the standard empty-string sentinel and current-message
    ID form and expands them to the current wire ID for processing.
 7. Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
@@ -1065,14 +1009,15 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 12. Body, type, thread, attachment, timing, ACK policy or additional-header
     changes under one wire ID produce an intent conflict.
 13. HTTP or mediator acceptance records submitted, never acknowledged.
-14. A submission-terminal message stops normal retry after first successful
-    submission; a receipt-required message waits for explicit ACK or another
-    terminal state.
+14. Every outbound stops all preparation/submission after committed
+    `delivery.submitted`, including when its `pleaseAck` requests the current
+    wire ID and no ACK arrives. A later transport failure or expiry does not
+    replace the submitted outcome.
 15. A deterministic response acknowledges a message only when explicit `ack`
     names its wire ID.
 16. ACK is emitted only after durable inbound commit.
-17. Pure ACK uses `pleaseAck == null`, creates no ACK loop and is
-    submission-terminal.
+17. Pure ACK uses `pleaseAck == null`, creates no ACK loop and completes
+    submission at the same committed boundary as other outbounds.
 18. A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
 19. The fixed pure-ACK vector derives execution ID
@@ -1082,11 +1027,12 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 20. One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
-21. ACK of a deterministic response stops normal retry but its exact packages
-    remain held until durable replay closure.
-22. Duplicate receipt before replay closure re-submits the same response/ACK
-    package only while replay submission is eligible; after durable closure or
-    explicit erasure no replacement is minted.
+21. A valid ACK received before `delivery.submitted` adds receipt information
+    without completing submission or releasing its envelope. Eligible pending
+    submission remains recoverable with its exact package.
+22. A duplicate carrier reuses its frozen response. Before submitted it may
+    resume eligible work; after submitted it causes no send, even when the
+    exact response bytes remain. Collected bytes do not cause a replacement.
 23. Valid address variants converge; invalid variants conflict.
 24. Equal wire IDs under transition-verified peer keys merge only through the
     same stable relationship execution scope; unrelated key reuse does not.
@@ -1100,10 +1046,11 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     valid no-handoff errors obey `vault-events.md` section 14.7's control
     classification while their validated ACKs still process.
 28. Invalid `from_prior` prevents ACK processing and transition.
-29. Duplicate explicit ACKs are harmless and one valid ACK stops all normal
-    receipt-required package retry.
-30. Expiry stops work permanently; a later valid ACK may display
-    acknowledged-late without restarting work.
+29. Duplicate explicit ACKs are harmless and affect only peer receipt
+    information, never submission completion or envelope retention.
+30. Expiry stops unsubmitted work permanently; a later valid ACK may add a
+    late receipt indicator without changing the expired outcome or restarting
+    work. Already-submitted messages do not acquire a new expired failure.
 31. The default initial rendezvous message may be Trust Ping; an admitted
     application message may be first without a custom wrapper.
 32. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
@@ -1115,13 +1062,14 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 35. Until handoff confirmation, every responder message from the new pairwise
     DID carries the same `from_prior` and long-form sender spelling.
 36. Direct and mediated delivery enter the same inbound fold.
-37. Crash injection at every section-13 boundary loses neither committed
-    outbound intent nor unacknowledged inbound delivery.
+37. Crash before `delivery.submitted` commits may recover by resending the
+    same package; crash after its commit never resends that MID. Committed
+    intent and accepted inbound data survive each section-13 boundary.
 38. Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
-39. A non-Estoc peer that does not provide explicit ACK or `from_prior`
-    confirmation remains visibly unconfirmed and is outside reliable-bootstrap
-    conformance.
+39. An initial message may be submitted while bootstrap remains unconfirmed.
+    Missing required `from_prior` proof cannot be replaced by submitted or
+    acknowledged state; the relationship remains visibly unconfirmed.
 40. A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
     expands the current-message sentinel only for processing, and ignores
     later duplicate targets without changing the stored array.
@@ -1136,21 +1084,21 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 44. ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
-45. Reaching `replayUntil` does not release exact replay material until a
-    durable `message.replayClosed` is committed; restart or clock rollback
-    cannot reopen a closed replay obligation.
-46. An unresolved hold or ordinary terminal delivery failure blocks
-    duplicate replay submission without releasing replay material. After
-    release, replay resumes only if every other eligibility condition still
-    holds.
+45. Submitted completion survives restart, loss of local state, clock rollback,
+    package retirement and envelope collection. Later duplicate input cannot
+    reopen submission or require the collected envelope.
+46. If one of several valid packages for a MID is submitted, every package of
+    that MID stops work; selecting another package, route or handler cannot
+    bypass completion.
 47. Generic pure ACK copies carrier `pthid` and normalized `created_time` or
     null. Rendezvous handoff Empty uses its separately frozen rendezvous
     profile and one carrier cannot produce both ACK intents.
 48. After initiator handoff validation and restart, the portable relationship
     binding reconstructs the same execution ID; later verified rotation does
     not create another execution identity for the same relationship/wire ID.
-49. A held normal-only package survives GC and release with its exact envelope;
-    terminal normal release with a null replay deadline requires no closure.
+49. A held unsubmitted package survives GC and release with its exact envelope.
+    Committed submission or terminal failure releases its contribution under
+    the retention fold; releasing a hold cannot reopen submitted work.
 50. Recovery completes handoff binding even for a known responder DID and finds
     pickup-ACKed unfinished work without mediator redelivery.
 51. A crash after an outcome-unknown transport call can reset the local retry
@@ -1173,3 +1121,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 55. Prospective validation can check an atomic admission/response batch, but a
     failed batch supplies no scope, committed intent, ACK result or executable
     effect. Recovery derives work only from the committed event set.
+56. Two workers handling one outbound serialize prepare/submit work. Observed
+    acceptance commits before another dispatch, and no later dispatch starts
+    after the submitted event. A crash before that commit still permits
+    recovery with the same package rather than consuming a pre-call reservation.

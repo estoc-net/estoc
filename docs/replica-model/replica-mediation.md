@@ -864,9 +864,12 @@ At or after `expires_at`, the mediator MAY delete the message and every
 associated delivery. An inactive but unretired replica MUST NOT prevent
 expiry.
 
-A sender that needs stronger reliability keeps its own durable outbox
-and retries until it receives an ultimate authenticated ACK. This
-protocol does not turn the mediator into a permanent archive.
+Under `distributed-delivery.md` section 7, the sender's durable outbox stops
+submission when `delivery.submitted` commits, independently of the ultimate
+recipient's ACK. Mediator expiry can therefore discard an already submitted
+message before the recipient receives it; it does not trigger sender retry.
+This deferred fanout protocol does not turn the mediator into a permanent
+archive or add an end-to-end delivery guarantee.
 
 ## 10. Quotas and abuse bounds
 

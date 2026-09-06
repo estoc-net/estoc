@@ -62,9 +62,10 @@ authors, but that behavior is not required by phase 1.
    registration, receive and continue pending delivery.
 5. **Stable IDs make retries safe.** A logical message, an encrypted package
    and a mediator delivery have different IDs and different lifetimes.
-6. **At-least-once is expected.** Process restart, transport retry and mailbox
-   redelivery may repeat work. Folds and handlers must be idempotent. Future
-   multi-runtime execution must preserve the same identifiers.
+6. **Duplicate work is expected.** Recovery before recorded submission,
+   transport retry and mailbox redelivery may repeat work. Folds and handlers
+   must be idempotent. Future multi-runtime execution must preserve the same
+   identifiers.
 7. **Conflicts are visible projections.** Concurrent or contradictory
    decisions remain events. A fold uses set semantics, explicit references or
    canonical latest-wins exactly where this document says so.
@@ -892,7 +893,6 @@ logical response.
     "body": "bafkrei...body",
     "attachments": ["bafkrei...attachment"],
     "intentHash": "<base64url-sha256>",
-    "replayUntil": null,
     "executionId": null,
     "handlerId": null,
     "effectKind": null,
@@ -941,8 +941,6 @@ Requirements:
   payload roots from that document; link-only descriptors add no entry;
 - `roots` is the distinct ordered set of `body` followed by `attachments`;
 - `intentHash` is computed under `distributed-delivery.md` section 5;
-- `replayUntil` is an Epoch-Seconds integer or null, controls only exact
-  duplicate-response retention and is excluded from the wire and intent hash;
 - `executionId`, `handlerId`, `effectKind`, `ordinal` and `effectKey` are all
   null for a user-authored send and all non-null for an automatic effect;
 - a user-authored send has `ack == []`; honoring an inbound ACK request uses
@@ -956,13 +954,11 @@ Requirements:
   section 11, and requires its `mid` to equal the section-9.1 derivation;
 - the five automatic-effect fields are portable effect metadata excluded from
   the wire and intent hash; they still participate in full event equality;
-- `thid`, `pthid`, `expiresTime`, `replayUntil` and all five automatic-effect
+- `thid`, `pthid`, `expiresTime` and all five automatic-effect
   fields are present with null when unused; and
 - appending this event requires no network, resolver, mediator or socket.
 
-A deterministic response that may have to replay exact bytes after duplicate
-receipt MUST set `replayUntil` according to `distributed-delivery.md` section
-7. A preparer emits `created_time`, `expires_time`, `thid` and `pthid` only when
+A preparer emits `created_time`, `expires_time`, `thid` and `pthid` only when
 non-null; emits `please_ack` whenever `pleaseAck` is non-null; emits `ack` and
 `attachments` when non-empty; and expands `headers` at plaintext top level.
 
@@ -1016,8 +1012,9 @@ Requirements:
 - `packageId` is a UUIDv7 and equals outer `forward.id`; and
 - every retry of this package uses identical envelope bytes.
 
-All packages for one `mid` MUST preserve its intent hash. A new package MAY
-change `senderDid`, `myKey`, `recipientDid`, `peerKey`,
+All packages for one `mid` MUST preserve its intent hash. No new package may
+be prepared after that MID is submitted under section 14.8. Before then, a
+new package MAY change `senderDid`, `myKey`, `recipientDid`, `peerKey`,
 `peerResolution` or `fromPrior` only when the change follows a valid selected
 DID entity or verified contact-scoped continuation for the same logical target.
 Every such change requires a new package ID and plaintext hash. A protocol may
@@ -1042,46 +1039,13 @@ relationship messages follow the same package rules.
 }
 ```
 
-`replacement` is nullable. Retirement permanently stops normal automatic
+`replacement` is nullable. Retirement permanently stops automatic
 submission of this package; it does not terminate the logical message or
 another package. Its envelope contribution is determined only by section
-15.3's retention predicate. A null `replayUntil` requires no replay closure;
-for a non-null replay obligation, retention continues until valid closure
-unless explicit message/root erasure overrides that contribution. Wall time
-alone never releases a retained root; erasure does not itself close replay.
+15.3's retention predicate. Retirement preserves the package's historical
+submission and scope evidence; it cannot undo a completed submission.
 
-### 9.5 `message.replayClosed`
-
-```json
-{
-  "type": "message.replayClosed",
-  "roots": [],
-  "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "replayUntil": 1789652400,
-    "because": "deadline"
-  }
-}
-```
-
-This event is the portable monotonic closure of exact-response replay.
-`replayUntil` MUST equal the non-null value frozen in `message.out`. `because`
-is `deadline` or `erased`.
-
-For `because == "deadline"`, the runtime MUST have observed an instant greater
-than or equal to `replayUntil`. For `because == "erased"`, corresponding
-portable `message.erased` evidence covering the replay-only roots MUST already
-be committed or be committed atomically in the same `Vault.commit`; this form
-may close replay before the deadline.
-
-Once any valid `message.replayClosed` exists for an outbound, replay material
-is closed permanently. Restart, loss of `local/`, wall-clock rollback, later
-holds/releases, transport retry state or a later duplicate observation MUST
-NOT reopen the obligation or require a replacement package. A deadline-based
-worker MUST append this event process-durably before GC may release roots held
-only for duplicate replay.
-
-### 9.6 `delivery.submitted`
+### 9.5 `delivery.submitted`
 
 ```json
 {
@@ -1096,12 +1060,17 @@ only for duplicate replay.
 
 This says only that one transport endpoint accepted the attempt. It does not
 mean route existence, mediator retention, pickup or ultimate durable receipt.
-Concurrent observations through different routes are expected.
+
+`packageId` MUST identify a valid `message.prepared` for this exact `mid`.
+A local runtime appends this event after observing transport acceptance. Its
+successful commit completes submission for the entire logical outbound under
+section 14.8. If acceptance happened but this event did not commit, recovery
+may resubmit the existing package. No pre-call attempt event is required.
 
 Transport, endpoint and response status are local trace data. They are not
 fields of this portable event and do not participate in the delivery fold.
 
-### 9.7 `delivery.failed`
+### 9.6 `delivery.failed`
 
 ```json
 {
@@ -1130,12 +1099,13 @@ belong only to local trace and retry policy. They MUST NOT append
 `delivery.failed`. Losing that local state does not terminate the intent or
 change its portable delivery state.
 
-A worker that observes `now >= expiresTime` before prepare or retry appends
-that expired failure and submits nothing. A later user attempt requires a new
-`message.out` and wire ID. Sensitive strings remain in local trace; `code` is
-a stable non-secret value.
+A worker that observes `now >= expiresTime` for an unsubmitted outbound before
+prepare or retry appends that expired failure and submits nothing. It does not
+append an expired failure merely because an already-submitted message later
+reaches expiry. A later user attempt requires a new `message.out` and wire ID.
+Sensitive strings remain in local trace; `code` is a stable non-secret value.
 
-### 9.8 `delivery.held`
+### 9.7 `delivery.held`
 
 ```json
 {
@@ -1151,7 +1121,7 @@ a stable non-secret value.
 `because` is `user` or `policy`. A hold stops automatic preparation and
 submission vault-wide. There is no imported hold.
 
-### 9.9 `delivery.released`
+### 9.8 `delivery.released`
 
 ```json
 {
@@ -1167,7 +1137,7 @@ submission vault-wide. There is no imported hold.
 `hold` names one `delivery.held` event. A message remains held while at least
 one exact hold has no release; wall-clock ordering is irrelevant.
 
-### 9.10 `delivery.acknowledged`
+### 9.9 `delivery.acknowledged`
 
 ```json
 {
@@ -1189,11 +1159,12 @@ package-level address, transition and protocol-specific security precondition
 for that ACK has validated. Threading or a natural response without `ack` is insufficient.
 `ackMid` identifies the local inbound ACK-bearing observation.
 
-One valid acknowledgment stops automatic retry of every package for the
-logical outbound. Duplicate observations are harmless. A valid ACK received
-after local expiry is retained and derives an `acknowledged` outcome with a
-`late` indicator; it does not restart any expired work. Acknowledged means
-durable receipt by the peer vault, not read or business acceptance.
+An acknowledgment supplies receipt information independently of the outbound's
+submission state. Duplicate observations are harmless. A valid ACK received
+after local expiry is retained with a `late` receipt indicator. ACKs neither
+create a missing `delivery.submitted` nor change preparation, submission or
+envelope retention. Acknowledged means durable receipt by the peer vault,
+not read or business acceptance.
 
 An ACK-bearing problem report may acknowledge delivery while still being
 excluded from a higher-level protocol success condition. In particular,
@@ -1854,7 +1825,7 @@ Normative rules:
   validates under that document's section 11; and
 - `handoffMid` names one valid deterministic `message.out` for
   `originInboundMid` that explicitly ACKs `originWireId`, requests its own ACK
-  with `pleaseAck == [""]`, and freezes a replay deadline.
+  with `pleaseAck == [""]`, and follows section 14.8's submission completion.
 
 Missing reference evidence defers processing. Conflicting references or
 inconsistent decoded proof claims are integrity conflicts, not another choice
@@ -1873,8 +1844,9 @@ different origin.
 
 The responder repeats the exact stored `fromPrior` on every package from
 `ourDid` until it receives an authenticated message addressed to `ourDid`.
-Receipt-required handoff retry ends only after explicit ACK or another
-terminal state.
+Handoff submission completes at committed `delivery.submitted`, independently
+of peer receipt or handoff confirmation. A duplicate initial message cannot
+cause another submission of that completed handoff MID.
 
 ### 12.5 `relationship.initiatorBound`
 
@@ -1939,7 +1911,7 @@ non-relationship channel scope.
 
 In this Bob-local example, the fingerprint used to derive `relationship` is
 Bob's own `k3j9n0m4x6q2w7c8v5p1d8s0fa`, not the remote Alice pairwise key.
-The Bob-local examples in sections 9.10 and 11.2 use the explicitly schematic
+The Bob-local examples in sections 9.9 and 11.2 use the explicitly schematic
 `<alice-pairwise-key-fingerprint>` for that remote key. Those illustrative
 message IDs are not additional executable MID vectors; `distributed-delivery.md`
 section 9 owns the executable observation-ID vectors.
@@ -2139,9 +2111,10 @@ A valid relationship contributes:
 The pairwise handoff is confirmed when an authenticated message is received at
 the responder relationship DID. Until then, every package from that DID to the
 contact carries the exact frozen `fromPrior` and uses the frozen long-form
-sender spelling. An explicit ACK naming the receipt-required handoff response
-controls delivery retry; a message merely addressed to the new DID confirms
-rotation but does not invent an ACK.
+sender spelling. An explicit ACK naming the handoff response records peer
+receipt independently of submission completion; a message merely addressed
+to the new DID confirms rotation but does not invent an ACK. Neither a
+missing ACK nor incomplete confirmation reopens a submitted handoff MID.
 
 A valid `peer.transitioned` changes current peer DID only inside its named
 relationship and its matching contact. It never globally retires or aliases
@@ -2239,8 +2212,8 @@ removes that report's diagnostic even if another reference retains the bytes;
 missing or damaged content follows section 15.2 and supplies no inferred reason.
 Silent rejection supplies no remote diagnostic. These diagnostics neither
 override an established relationship nor change section 14.8's delivery
-precedence, retry or retention rules: explicit ACK still means receipt, and
-without it the initial message follows its existing retry and expiry rules.
+precedence, retry or retention rules. Explicit ACK still means receipt; the
+initial outbound follows the same submitted boundary with or without it.
 
 ### 14.7 Inbound message and execution fold
 
@@ -2303,23 +2276,23 @@ control fields excluded from the intent hash.
 
 An automatic MID derives only from `effectKey`, so this same fold detects
 different intents under one key. A conflicted MID retains all variants and
-their package history, but MUST NOT prepare, submit or replay any variant;
+their package history, but MUST NOT prepare or submit any variant;
 arrival order does not select a winner. Previously emitted effects remain
 history.
 
 Also group automatic outbounds with non-empty `ack` by `executionId`. Each
 execution permits at most one such logical outbound MID, across all handler
 IDs, effect kinds and ordinals. Exact duplicate intents count once. This
-selection remains consumed after erasure, expiry or replay closure because the
+selection remains consumed after erasure, expiry or submission because the
 intent skeleton remains history. Other protocol-defined effects with empty
 `ack` do not consume the selection.
 
 A local writer MUST reuse the selected ACK-bearing intent and reject an
 attempt to add another MID to that execution's selection, including within one
 batch. If import supplies distinct ACK-bearing MIDs for the same execution,
-retain all as an automatic-response conflict and suppress preparation,
-submission and replay of every competing response; arrival order selects no
-winner. Previously emitted responses remain history.
+retain all as an automatic-response conflict and suppress preparation and
+submission of every competing response; arrival order selects no winner.
+Previously emitted responses remain history.
 
 ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
 derive the candidate outbound's membership from non-conflicted portable
@@ -2368,54 +2341,60 @@ For a valid outbound:
 - all packages use the outbound `mid` as plaintext `id` and agree on `intentHash`;
 - packages may differ in plaintext hash, sender/recipient DID, keys and
   `fromPrior` only under validated repack rules;
-- one package is inactive for normal retry after `message.packageRetired` or a
-  package-scoped terminal failure, but its exact envelope may remain held
-  for duplicate replay;
+- one package is inactive after `message.packageRetired` or a package-scoped
+  terminal failure, while its skeleton remains historical evidence;
 - unresolved holds are exact `delivery.held` events not named by
   `delivery.released`;
-- expand `message.out.pleaseAck` by replacing `""` with the outbound wire ID;
-  `receiptRequired` is true exactly when the result contains that wire ID;
 - `acknowledged` is true if a valid authenticated inbound `ack` names the wire
   ID on a validated peer-scoped continuation under the membership rules above,
   the carrier has a unique derived scope, and all proof gates pass;
-- `submitted` is true if any package has `delivery.submitted`;
+- `submitted` is true if any valid package has a committed
+  `delivery.submitted` naming this exact `mid` and `packageId`. Validation uses
+  the retained intent/package skeletons; collecting or erasing an envelope,
+  retiring a package or later changing a route cannot remove completion;
+- once `submitted` is true, no new automatic preparation, repackaging or
+  submission is permitted for any package of that MID, including on duplicate
+  input, restore or missing ACK;
 - a message-scoped terminal failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
-- for `receiptRequired == false`, the first successful submission also ends
-  automatic background retry for the current message;
+- before submission, work additionally requires no unresolved hold, no message
+  terminal failure, unexpired timing, and valid available target/proof/content
+  evidence. Submitting a chosen package also requires that it is not retired
+  or terminally failed and its exact valid envelope remains available;
+- `pleaseAck` and `acknowledged` do not affect these work predicates. An ACK
+  received while `delivery.submitted` is absent does not synthesize completion;
+  eligible submission may still resume; and
 - a valid ACK arriving after expiry sets `acknowledged == true` and derives
-  `late == true`, but does not reactivate work;
-- `replayMaterialOpen` is true only when `replayUntil != null` and no valid
-  `message.replayClosed` exists;
-- `replaySubmissionEligible` additionally requires an unresolved hold to be
-  absent, no message- or selected-package-scoped terminal failure, package
-  expiry not to have passed, fold time to be before `replayUntil`, and an exact
-  valid package to remain.
+  `late == true` as receipt information only.
 
-Work eligibility and displayed outcome are separate. The displayed precedence
-is:
+The displayed submission outcome has this precedence:
 
 ```text
 conflict
-acknowledged (with late indicator when applicable)
+submitted
 held
 expired-or-terminal-failure
-submitted
 prepared
 queued
 ```
 
+`acknowledged` and its optional late indicator are separate receipt information,
+not alternative submission outcomes. A missing ACK never downgrades a submitted
+message. A later failure or hold likewise does not erase evidence of submission.
+
 After restore or local trace loss, the fold uses only this portable evidence.
 An outbound with only `message.out` is `queued`, even if a previous runtime
 recorded retryable failures in its trace. Existing prepared, submitted, held,
-terminal or acknowledged evidence keeps its normal precedence.
+or terminal evidence keeps its stated precedence; receipt observations remain
+independent.
 
-Expiry is an irreversible no-more-work boundary; later authenticated evidence
-may improve display to acknowledged-late without restarting work.
+Expiry is an irreversible no-more-work boundary for an unsubmitted intent;
+later authenticated evidence may add receipt information without restarting it.
 
-The phase-1 active runtime processes every valid queued or retryable message.
-Authorship never limits outbox ownership after an exact move or restore. When a
-durable expiry has passed, no further preparation or submission is allowed.
+The phase-1 active runtime processes every valid queued or retryable unsubmitted
+message. Authorship never limits outbox ownership after an exact move or restore.
+When a durable expiry has passed, no further preparation or submission is
+allowed. An already-submitted message does not receive a new expired failure.
 
 ### 14.9 Invitation fold
 
@@ -2498,53 +2477,39 @@ This section is the sole normative owner of prepared-envelope retention.
 For a consistent outbound `M` and valid package `P`, define:
 
 ```text
-normalComplete(M) =
-    acknowledged(M)
-    or (!receiptRequired(M) and submitted(M))
-
-normalMaterialNeeded(M, P) =
-    !retired(P)
-    and !packageTerminalFailure(P)
-    and !messageTerminalFailure(M)
-    and !normalComplete(M)
-
-replayMaterialOpen(M) =
-    M.replayUntil != null
-    and no valid message.replayClosed exists for M
-
 retainEnvelopeForMessage(M, P) =
     !erased(M, P.envelope)
-    and (normalMaterialNeeded(M, P) or replayMaterialOpen(M))
+    and !submitted(M)
+    and !retired(P)
+    and !packageTerminalFailure(P)
+    and !messageTerminalFailure(M)
 ```
 
 Terminal failure means valid committed `delivery.failed` at the
 specified scope; a committed expired failure is message-terminal. Sampling wall
-time beyond expiry blocks work but MUST NOT release normal-only material until
-that durable termination is committed. A valid ACK completes normal delivery
-even when an outcome-unknown transport attempt has no `delivery.submitted`.
+time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
+until that durable termination is committed. `submitted(M)` is defined by
+section 14.8 and remains true after envelope collection or package retirement.
+It releases this message's envelope contribution for every package. An ACK
+does not affect retention, including when an outcome-unknown transport attempt
+has no `delivery.submitted`.
 
 Holds, unavailable routes, retryable resolution failures and other reversible
-scheduling conditions MUST NOT make `normalMaterialNeeded` false. They block
-submission, not retention. A null `replayUntil` creates no replay obligation
-and requires no closure event: retirement or permanent normal completion may
-release that package's contribution immediately under the normal GC rules.
-
-For non-null `replayUntil`, every valid prepared package retains its replay
-contribution until closure. Retirement, completion, hold and ordinary terminal
-delivery failure do not close it. Reaching the replay deadline blocks replay
-submission immediately, but release waits for committed `message.replayClosed`.
-Explicit erasure overrides this message/root contribution and requires the
-existing erased-closure recovery procedure. Closed replay never reopens after
-restart, deletion of `local/`, clock rollback or duplicate receipt.
+scheduling conditions do not release an unsubmitted, non-terminal package.
+There is no separate response-replay retention contribution or closure event.
+After submission, even a duplicate inbound request cannot require these bytes
+again or authorize a replacement package. The message's body/attachments and
+its event skeletons keep their separate retention rules; completing submission
+does not erase conversation content or receipt/scope evidence.
 
 `erased(M, root)` names the permanent message/root relation, not global deletion
 of a CID. Another independent non-erased reference may retain the same bytes.
 Conflicted evidence is not release authority: disputed package roots remain
 held until unambiguous release evidence or explicit erasure exists.
 
-Normal and replay submission eligibility additionally check current time,
-holds, addressing, proof, route and available bytes. Neither scheduling
-predicate is a retention predicate.
+Submission eligibility additionally checks current time, holds, addressing,
+proof, route and available bytes. Scheduling eligibility is not a retention
+predicate.
 
 Unknown event types retain every exact root in their `roots` because version 3
 defines no erase rule for them. A CID embedded in object content is not a
@@ -2582,13 +2547,17 @@ but may not reverse the durability boundaries.
    transition/initiator binding, ACK or protocol-defined deterministic effect
    work;
 8. idempotently reconcile those observations, relationship materialization,
-   pending candidate erasures and replay closure from portable history;
+   pending candidate erasures and eligible unsubmitted outbound work from
+   portable history;
 9. derive every required mediation account; and
 10. independently start recipient reconciliation, account-scoped pickup, live
     delivery and eligible outbox work.
 
 Recovery in steps 7–8 MUST NOT depend on mediator redelivery or a surviving
 local queue. It reuses frozen ACK arrays, output intents and execution IDs;
+submitted outbounds never resume, including deterministic responses whose
+carriers are observed again. An outbound without `delivery.submitted` may
+resume eligible work even when an earlier transport call might have succeeded;
 it does not invent missing evidence or re-run an optional decision merely
 because a cache was lost. Missing objects or proofs keep the affected work
 deferred. Protocol-defined external effects retain their existing idempotency
@@ -2661,29 +2630,13 @@ recipient key, it leaves the mediator delivery unacknowledged until local state
 is repaired and refolded. The rendezvous DID belongs to the vault, not the
 process displaying the invitation.
 
-### 16.5 Close duplicate replay
-
-For every outbound whose `replayUntil` is non-null:
-
-1. if replay is already closed, do nothing;
-2. if explicit erasure applies, append
-   `message.replayClosed(because="erased")`;
-3. otherwise, when the runtime observes `now >= replayUntil`, append
-   `message.replayClosed(because="deadline")`;
-4. after that event is process-durable, permit GC using the locked held-root
-   fold and collection under section 15.3.
-
-Clock rollback after step 3 does not reopen replay.
-
-### 16.6 Erase a message
+### 16.5 Erase a message
 
 1. fold every root currently retained by the logical message and its prepared
    packages;
-2. if `replayUntil` is non-null, replay is still open, and the erase covers
-   its exact replay roots, include `message.replayClosed(because="erased")`;
-3. process-durably commit the erase event(s) and any replay closure, preferably
-   in one `Vault.commit`; and
-4. run the locked held-root fold and collection under section 15.3.
+2. process-durably commit the erase event(s), preferably in one `Vault.commit`;
+   and
+3. run the locked held-root fold and collection under section 15.3.
 
 Late duplicate observations may introduce another event retaining the same
 logical roots. The active runtime that observes an existing erase MUST append
@@ -2691,7 +2644,7 @@ an equivalent erase for newly learned roots of that message before those roots
 are considered intentionally released. A future replicated profile applies the
 same closure rule in every full copy.
 
-### 16.7 Delete a contact
+### 16.6 Delete a contact
 
 1. append `contact.deleted` for the exact `cid`;
 2. for every message exactly attributed to that contact, append erases for
@@ -2815,8 +2768,9 @@ There is no migration requirement from an earlier event vocabulary.
    exact `ack` and every permitted additional header.
 5. Null `pleaseAck` omits the wire header; `[]` emits an empty header and
    requests no explicit message ID.
-6. `pleaseAck` containing `""` or the current wire ID makes that message
-   receipt-required; an array naming only older IDs does not.
+6. `pleaseAck` containing `""` or the current wire ID requests that message's
+   receipt; an array naming only older IDs does not. Neither changes submission
+   completion or envelope retention.
 7. Standard `please_ack` empty-string and current-ID forms are accepted and
    preserved.
 8. `return_route` is rejected in vault application headers.
@@ -2830,8 +2784,9 @@ There is no migration requirement from an earlier event vocabulary.
 12. HTTP success produces `delivery.submitted`, never acknowledgment.
 13. A deterministic response acknowledges an outbound only when authenticated
     explicit `ack` names its wire ID.
-14. Expiry irreversibly ends work; later valid evidence may display
-    acknowledged-late without restarting it.
+14. Expiry irreversibly ends unsubmitted work; later valid ACK evidence adds
+    a late receipt flag without changing its expired outcome. Already submitted
+    messages do not acquire a new expired failure.
 15. Equal authenticated variants derive one observation MID. Equal wire IDs
     under transition-verified peer keys in one relationship merge only at the
     logical-message layer.
@@ -2851,10 +2806,12 @@ There is no migration requirement from an earlier event vocabulary.
     and a handoff's confirmation still runs; none enters the thread, unread
     counts, notifications or application-content handlers. An admitted initial
     Trust Ping remains a bootstrap candidate, not a control observation.
-21. Pure ACK has `pleaseAck == null`; its first successful submission is
-    terminal and creates no ACK loop.
+21. Pure ACK has `pleaseAck == null`; it completes when `delivery.submitted`
+    commits under the common rule and creates no ACK loop.
 22. Duplicate receipt of a message whose requested IDs were already honored
-    re-submits the same prepared response/ACK package.
+    may resume eligible unsubmitted work from the same frozen response/ACK
+    intent. After that intent's `delivery.submitted`, it causes no resubmission
+    or replacement effect.
 23. Account-scoped Pickup ACK follows durable message/object commit for
     admitted traffic.
 24. Unlock/recovery-incomplete input and an exact known local key-agreement
@@ -2946,11 +2903,10 @@ There is no migration requirement from an earlier event vocabulary.
 55. Shuffling the same event set leaves every phase-1 fold result unchanged.
 56. Closed attachment normalization makes intent hashes independent of
     implementation-selected presentation or diagnostic metadata.
-57. A deterministic response remains replayable from its exact prepared
-    envelope after acknowledgment until replay is process-durably closed; merely
-    reaching `replayUntil` does not authorize collection before
-    `message.replayClosed`. Explicit erasure may close it early without minting
-    a replacement package.
+57. ACK before `delivery.submitted` does not complete submission or release an
+    otherwise retained package. Committing `delivery.submitted` releases every
+    package's delivery retention contribution for that MID without waiting for
+    ACK; message body and attachment lifetimes remain separate.
 58. Commit and collection share the writer lock; GC computes current held roots
     under that lock and cannot unlink a retained object or overlap acceptance
     and append within a commit.
@@ -2973,20 +2929,23 @@ There is no migration requirement from an earlier event vocabulary.
 63. Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
     Detachment or DID/route retirement never selects a new execution scope.
-64. `message.replayClosed` is committed before replay-only roots are released;
-    restart, loss of `local/` and clock rollback do not reopen closed replay.
-65. Hold and ordinary terminal delivery failure block replay submission without
-    releasing still-open replay material; release resumes only while every
-    remaining replay condition is valid.
+64. Committed submission remains complete after restart, loss of `local/`,
+    clock rollback, package retirement, content erasure and envelope collection.
+    Retained event skeletons prevent resubmission or replacement of that MID.
+65. One package's committed `delivery.submitted` completes its entire MID and
+    suppresses every other package's preparation or submission. Workers
+    serialize dispatch per MID and commit acceptance before further dispatch.
 66. The inbound MID vectors in `distributed-delivery.md` section 9 recompute to
     `29370ccd-932b-51eb-9cc3-4c083adc151a` and
     `206bcd7e-7320-5512-bbdb-a4d19331d58e` from their published inputs.
 67. Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
-68. A normal-only package survives hold, GC and release with its exact bytes;
-    route unavailability also does not release normal retry material.
-69. Retiring a normal-only package permits release without an invalid null-
-    deadline closure; replay-enabled packages remain held until valid closure.
+68. An otherwise retained unsubmitted package survives hold, GC and release
+    with its exact bytes; route unavailability also does not release it.
+    Releasing a hold cannot reopen a submitted MID.
+69. Retiring an unsubmitted package releases its delivery retention contribution
+    without completing the MID. Retiring a submitted package does not undo the
+    MID's committed submission evidence.
 70. Shared envelope bytes remain held by another non-erased message even after
     one message/root relation is erased.
 71. Each new duplicate observation receives a fresh ordinal; exact re-ingest
@@ -3034,6 +2993,8 @@ There is no migration requirement from an earlier event vocabulary.
 86. Retryable transport failures and attempt phase/status remain local trace.
     Restoring an outbound with only `message.out` projects `queued` and permits
     eligible retry; durable prepared/submitted/terminal evidence still applies.
+    A crash before `delivery.submitted` commits may resend the exact package
+    even if transport had accepted it; a crash after commit cannot resend it.
 87. A user send or deterministic response uses its outbound MID as plaintext
     `id`; every package and retry preserves it. Inbound observation MIDs remain
     scoped derivations and are not replaced with the received wire ID.
@@ -3056,10 +3017,9 @@ There is no migration requirement from an earlier event vocabulary.
 92. Two automatic intents for the same execution, handler, kind and ordinal
     have one effect key and MID. Different intent hashes conflict after any
     permutation of their union; both variants and their packages remain history,
-    with preparation, submission and replay suppressed.
-93. Equal effect keys and intent hashes with different targets or replay
-    deadlines still conflict. Exact duplicate intents produce one logical
-    outbound.
+    with preparation and submission suppressed.
+93. Equal effect keys and intent hashes with different targets still conflict.
+    Exact duplicate intents produce one logical outbound.
 94. An automatic intent whose execution ID disagrees with its unique carrier
     group's derived ID, whose key disagrees with that ID or protocol tuple, or
     whose MID disagrees with its key is invalid and cannot execute.
@@ -3070,15 +3030,16 @@ There is no migration requirement from an earlier event vocabulary.
     `ack == []`; a non-empty ACK cannot bypass deterministic effect selection.
 96. After an ACK-bearing response is frozen, a changed handler, effect kind or
     ordinal cannot create another ACK-bearing MID for that execution, even
-    after erasure or replay closure. Importing competing response MIDs keeps
+    after submission or erasure. Importing competing response MIDs keeps
     their history and suppresses all competing responses under every event
     permutation; exact duplicates count once.
 97. A valid no-handoff rejection with a unique pinned-channel and thread match
-    shows its retained reason beside only that initial attempt. With explicit
-    ACK the delivery outcome remains acknowledged and normal retry stops;
-    without ACK existing retry rules continue. Duplicate observations show one
-    diagnostic, and permutations give the same report order. A report naming
-    several ACK targets does not reject them all; ambiguous correlation shows
-    no attempt diagnostic. Restart reconstructs the view, body erasure removes
+    shows its retained reason beside only that initial attempt. Explicit ACK
+    adds receipt information; with or without ACK, committed `delivery.submitted`
+    stops submission and its absence leaves the existing unsubmitted-work rules
+    in force. Duplicate observations show one diagnostic, and permutations give
+    the same report order. A report naming several ACK targets does not reject
+    them all; ambiguous correlation shows no attempt diagnostic. Restart
+    reconstructs the view, body erasure removes
     the diagnostic even if its CID remains elsewhere, and a delayed report
     never overrides an established relationship.
