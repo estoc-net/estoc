@@ -50,12 +50,12 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
 - **Relationship** — the stable symmetric birth-address identity with two
   independently changeable ends under `vault-events.md` section 12; its local
   and peer histories determine message scope under section 9.
-- **Outbound message ID (`mid`)** — the vault entity ID of one outbound
+- **Outbound message ID (`messageId`)** — the vault entity ID of one outbound
   logical message, also used as its innermost DIDComm plaintext `id`.
-- **Inbound observation MID** — a deterministic ID for one authenticated
+- **Inbound observation message ID** — a deterministic ID for one authenticated
   `(peer key, wire ID)` observation before verified aliasing.
 - **Logical execution ID** — a durable, immutable identity used by automatic
-  effects after one or more inbound observation MIDs are recognized as the same
+  effects after one or more inbound observation message IDs are recognized as the same
   logical input. It never changes merely because a later alias is learned.
 - **Wire ID** — the innermost DIDComm plaintext `id`, stable across retries and
   permitted repackaging.
@@ -81,7 +81,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
   submission completion.
 
 ```text
-one outbound message (mid = wire ID, intent hash)
+one outbound message (messageId = wire ID, intent hash)
     ├── package P1
     │     exact plaintext hash H1
     │     exact encrypted envelope E1
@@ -108,7 +108,7 @@ path. A later server or replica does not own an address merely by executing
 the vault. The symmetric relationship is independent of local/peer orientation;
 each message still has a sender and recipient, and every rotation is directed.
 
-Each local communication DID has one immutable `boundRoute`, mediated or
+Each local communication DID has one immutable `boundRouteId`, mediated or
 direct. Changing its keys or bound route creates a successor DID entity;
 `vault-events.md` section 12.4 records a relationship's local continuation.
 An external recipient's resolved document may offer transport choices; choosing
@@ -182,7 +182,7 @@ Every instruction to append an event in this document means
 A full vault runtime MUST be able to commit a send while DNS, DID resolution
 and every mediator are unavailable. Before required network work it records:
 
-- `mid`, also used as the wire ID;
+- `messageId`, also used as the wire ID;
 - one immutable target relationship and nullable birth-address selection
   under `vault-events.md` section 9.2;
 - message type, thread and parent-thread IDs;
@@ -214,7 +214,7 @@ The following table is normative. "Committed" means process-durable success.
 | Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under `vault-events.md` section 12.2 | Submit that exact package |
-| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that MID; apply envelope retention under `vault-events.md` section 15.3 |
+| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under `vault-events.md` section 15.3 |
 | Normal inbound | Objects, `message.in` and required resolution/binding evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
 | Stable execution scope | Previously committed receipt and binding evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
@@ -242,7 +242,7 @@ The synchronous full-vault send operation:
    sender nor absence of a first reply prevents this operation;
 
 6. commits those objects with `message.out` through `Vault.commit`; and
-7. returns `mid`.
+7. returns `messageId`.
 
 It performs no network operation. When `createdTime` is null, preparation
 omits `created_time`. Every outbound uses the same submission completion rule
@@ -267,10 +267,10 @@ The active phase-1 runtime may later:
    failure; record retryable failures only in local trace; and
 9. schedule another attempt only while submission work remains eligible.
 
-Within the active runtime, prepare/submit work for one logical MID MUST be
+Within the active runtime, prepare/submit work for one logical message ID MUST be
 serialized. Before each transport call, recheck its committed completion and
 eligibility state; after acceptance, commit `delivery.submitted` before
-dispatching further work for that MID. This per-message scheduling boundary
+dispatching further work for that message ID. This per-message scheduling boundary
 does not hold the vault writer lock across network calls. If the process exits
 before the submission event commits, reopen may submit the same exact package
 again under section 13. No durable pre-call attempt reservation is required.
@@ -379,7 +379,7 @@ for the complete innermost DIDComm plaintext actually encrypted by one
 package or received in one observation. It includes `from`, `to`, `from_prior`
 and every present header.
 
-All packages for one outbound `mid` agree on the intent hash. They may have
+All packages for one outbound `messageId` agree on the intent hash. They may have
 different plaintext hashes only when package-level addressing or security
 evidence changes under an expressly permitted rule.
 
@@ -391,7 +391,7 @@ A preparer folds the target and selects:
   relationship's current local end under `vault-events.md` section 12.4;
 - one current peer DID and authenticated peer key;
 - exact `peer.resolved` evidence, fresh for the first package of each new
-  non-numalgo-4 MID under `rendezvous.md` section 5.1;
+  non-numalgo-4 message ID under `rendezvous.md` section 5.1;
 - one recipient route authorized by that evidence; and
 - any required relationship-scoped `from_prior`.
 
@@ -410,7 +410,7 @@ Version 3 emits:
 implementation that cannot preserve a supported additional header MUST reject
 preparation rather than dropping it.
 
-The plaintext `id` is the committed `message.out.mid`. The preparer
+The plaintext `id` is the committed `message.out.messageId`. The preparer
 RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
 encrypts, parses the encrypted-message JSON with duplicate-member and I-JSON
 validation, and uses `Vault.commit` to accept
@@ -433,7 +433,7 @@ validated changes of either end in the same R.
 `vault-events.md` section 14.8 is the sole owner of submission completion and
 work eligibility. A worker checks that fold before preparation or submission.
 After a valid `delivery.submitted` commits for any package, it MUST NOT prepare,
-repackage or submit any package for that logical MID again. This includes
+repackage or submit any package for that logical message ID again. This includes
 timer-driven work, reopen recovery and duplicate-triggered responses, even
 when no peer ACK ever arrives. A deliberate later send creates a new
 `message.out` and wire ID.
@@ -488,11 +488,11 @@ algorithm after normal inbound commit, only when no response intent already
 exists under section 11 and the sender gate above passes:
 
 1. If `X.pleaseAck == null`, create no ACK obligation.
-2. Expand `""` to `X.wireId`; retain the first occurrence of every target and
+2. Expand `""` to `X.wireMessageId`; retain the first occurrence of every target and
    ignore later duplicates.
 3. Derive `X.logicalPeerScope` under section 9.
-   Look up each requested wire ID only as `(X.logicalPeerScope, wireId)`. The
-   current `X.wireId` is known by virtue of X's own derived scope. An older
+   Look up each requested wire ID only as `(X.logicalPeerScope, wireMessageId)`. The
+   current `X.wireMessageId` is known by virtue of X's own derived scope. An older
    target is eligible only when it is conflict-free and derives to the exact
    same scope. A verified key transition may widen lookup only inside one
    relationship scope; unrelated relationships, unknown senders,
@@ -530,7 +530,7 @@ freezing ACK targets or committing its intent under section 9.
 The response thread follows X, not each older target:
 
 ```text
-thid  = X.thid, or X.wireId when X.thid is null
+thid  = X.thid, or X.wireMessageId when X.thid is null
 pthid = X.pthid
 ```
 
@@ -568,7 +568,7 @@ ACK response selection. Control input cannot trigger a privacy notification;
 the generic ACK variant cannot request another ACK.
 
 The executable vector uses execution scope
-`{"relationship":"35807a1e-3b8a-52f5-9580-29cd5265882e"}`, carrier wire ID
+`{"relationshipId":"35807a1e-3b8a-52f5-9580-29cd5265882e"}`, carrier wire ID
 `019b1b61-3444-7190-9db5-1cc9c215eb23` and the tuple above.
 
 The generic execution/effect derivation in sections 9 and 11 produces:
@@ -576,7 +576,7 @@ The generic execution/effect derivation in sections 9 and 11 produces:
 ```text
 executionId      = cf135b1f-1d7a-51eb-88ae-42447d426abe
 effectKey        = MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU
-outbound MID = wire ID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
+outbound message ID = wire ID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
 ```
 
 ### 8.3 Applying `ack`
@@ -614,8 +614,8 @@ section 16.1's recovery rules, subject to the same submitted boundary.
 
 ## 9. Observation identity, logical aliasing and execution identity
 
-`peerKey` below is derived from the observation's referenced
-`peer.resolved(peerResolution).peerKey` under `vault-events.md` section 4.1;
+`peerPublicKey` below is derived from the observation's referenced
+`peer.resolved(peerResolutionEventId).peerPublicKey` under `vault-events.md` section 4.1;
 it is not duplicated in `message.in` or `message.prepared`. The same derivation
 supplies all message/package peer-key comparisons in this document. A missing
 non-null reference defers, never falls back to null.
@@ -623,35 +623,35 @@ non-null reference defers, never falls back to null.
 For an authenticated or signed innermost message:
 
 ```text
-mid = UUIDv5(
+messageId = UUIDv5(
   estocNamespace("inbound-message"),
-  RFC8785(["v1", "authenticated", peerKey, wireId])
+  RFC8785(["v1", "authenticated", peerPublicKey, wireMessageId])
 )
 ```
 
 For a truly anonymous message:
 
 ```text
-mid = UUIDv5(
+messageId = UUIDv5(
   estocNamespace("inbound-message"),
-  RFC8785(["v1", "anonymous", myKey, wireId])
+  RFC8785(["v1", "anonymous", localKeyName, wireMessageId])
 )
 ```
 
 This value identifies an observation namespace. The authenticated form omits
-`myKey`, so a valid repack to another accepted local DID/key can converge
-under one MID.
+`localKeyName`, so a valid repack to another accepted local DID/key can converge
+under one message ID.
 
 The published authenticated vectors are executable:
 
 ```text
-peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireId  = 019b2a70-f225-721c-835f-67175be0667e
-mid     = 369d7a43-8dce-5b86-b073-e390d457f357
+peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
+wireMessageId = 019b2a70-f225-721c-835f-67175be0667e
+messageId     = 369d7a43-8dce-5b86-b073-e390d457f357
 
-peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireId  = 019b1b61-3444-7190-9db5-1cc9c215eb23
-mid     = a8b9afd5-60fe-5f49-a669-bd998e760e7e
+peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
+wireMessageId = 019b1b61-3444-7190-9db5-1cc9c215eb23
+messageId     = a8b9afd5-60fe-5f49-a669-bd998e760e7e
 ```
 
 These vectors intentionally use wire IDs different from the outbound examples
@@ -660,20 +660,20 @@ themselves a protocol violation; sender/relationship scope is part of logical
 identity and ACK lookup.
 
 A verified relationship-scoped transition may cause observations with different
-authenticated `peerKey` values and therefore different MIDs to represent one
+authenticated `peerPublicKey` values and therefore different message IDs to represent one
 logical message. `vault-events.md` section 14.7 defines that second-stage merge. The original
-observation MIDs remain stored for audit and conflict detection.
+observation message IDs remain stored for audit and conflict detection.
 
-These values are **observation identities**. Equal intent hashes under one MID
+These values are **observation identities**. Equal intent hashes under one message ID
 form one observation group; differences are intent conflicts.
 
-Automatic execution uses a stable **execution scope**, not an observation MID.
+Automatic execution uses a stable **execution scope**, not an observation message ID.
 Its unique derived value is the carrier's **logical peer scope**
 (`logicalPeerScope`) for ACK lookup, duplicate handling and automatic execution.
 The phase-1 application execution scope is:
 
 ```json
-{ "relationship": "<relationship ID>" }
+{ "relationshipId": "<relationship ID>" }
 ```
 
 Every authenticated application address pair uses this same scope. Anonymous
@@ -687,21 +687,21 @@ first, then derive and commit the effect; recovery resumes from that prefix.
 
 `peerChain(R)` contains canonical DID/key authorizations from exactly:
 
-- the peer document referenced by `relationship.bound.peerResolution`; and
-- every valid `relationship.peerTransitioned.peerResolution` for that R's rooted
+- the peer document referenced by `relationship.bound.peerResolutionEventId`; and
+- every valid `relationship.peerTransitioned.peerResolutionEventId` for that R's rooted
   peer chain.
 
 Each node includes all key-agreement methods authorized by its exact document,
 not only the selected encryption key. Resolve those methods to section 4.1 of
-`vault-events.md`'s canonical key values. The resolution's `keyAgreementKids`
+`vault-events.md`'s canonical key values. The resolution's `keyAgreementMethodIds`
 must match the document; missing bytes defer and a fresh document may recover
 them only when its canonical raw CID is identical. Different selected keys
 within one document can scope the same R. Equal keys under unrelated canonical
 DIDs do not imply continuation. A current resolver result cannot extend the
 historical set; current sender authentication remains a separate receive gate.
 
-The local history starts with `relationship.bound.ourDid` and extends through
-`relationship.localTransitioned`. `relationshipRecipientKeys(R)` includes that
+The local history starts with `relationship.bound.localDidId` and extends through
+`relationship.localTransitioned`. `relationshipRecipientKeyNames(R)` includes that
 whole rooted history. For a new delivery, first apply `rendezvous.md` section
 9.3's producer-time superseded-sender check under the receive lock. The rows
 below validate immutable evidence of committed observations; they neither
@@ -711,8 +711,8 @@ of these rows:
 
 | Observation | Immutable evidence and authorization | Scope |
 | --- | --- | --- |
-| Proof-free root sender | `relationshipBinding` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransition == null` | R |
-| Proof-free peer successor | Same binding/local history check; `peerTransition` names the valid R edge whose `to` and exact successor document authorize the observed DID/key | R |
+| Proof-free root sender | `relationshipBindingEventId` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransitionEventId == null` | R |
+| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge whose `toDid` and exact successor document authorize the observed DID/key | R |
 | Carried `fromPrior` | A valid `relationship.peerTransitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
 
 These rows do not inspect public/private policy or message type. Lookup hints
@@ -724,7 +724,7 @@ binding evidence defers, never falls back to a fresh birth or key-based scope.
 
 All applicable evidence must identify one unique R. The pair index under
 `vault-events.md` section 14.4 catches competing birth/continuation claims.
-For each MID group, every valid observation must derive the same R: different
+For each message ID group, every valid observation must derive the same R: different
 Rs conflict, any unresolved observation defers the group, and neither permits
 per-observation effects. Retain previous committed receipts/effects without
 reassigning their identities when a later conflict appears.
@@ -732,9 +732,17 @@ reassigning their identities when a later conflict appears.
 ```text
 executionId = UUIDv5(
   estocNamespace("message-execution"),
-  RFC8785(["v2", {"relationship": R}, wireId])
+  RFC8785(["v2", {"relationship": R}, wireMessageId])
 )
 ```
+
+Here `R` is the scope's `relationshipId`. The transcript member name
+`"relationship"` is a fixed derivation tag, independent of the payload and
+runtime field name. Build that exact object for hashing; serializing
+`logicalPeerScope` with its `relationshipId` member would produce a different,
+invalid execution ID. Namespace purpose strings, including `automatic-mid`,
+also remain fixed. Section 11's effect transcript and the semantic/intent
+projections in section 5 retain their specified literal fields.
 
 Rotation preserves R, execution identity and ACK namespace. Historical input
 verifies its saved references during import; producer current-address and
@@ -750,22 +758,22 @@ validated local transitions extend P0 to P1 and then P1 to P2, each with the
 predecessor-confirmation evidence required by `vault-events.md` section 12.4:
 
 ```text
-R  = 35807a1e-3b8a-52f5-9580-29cd5265882e
-P0 = 019b2a60-c68e-75bf-b6fb-ae1a41f8d715
-P1 = 019b6a10-12c0-7410-89ab-38e54b097c21
-P2 = 019b6a20-12c0-7420-89ab-38e54b097c22
-peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireId = 019b1b61-3444-7190-9db5-1cc9c215eb23
+R             = 35807a1e-3b8a-52f5-9580-29cd5265882e
+P0            = 019b2a60-c68e-75bf-b6fb-ae1a41f8d715
+P1            = 019b6a10-12c0-7410-89ab-38e54b097c21
+P2            = 019b6a20-12c0-7420-89ab-38e54b097c22
+peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
+wireMessageId = 019b1b61-3444-7190-9db5-1cc9c215eb23
 
-for myKey = did/<P0|P1|P2>/key-agreement:
-  mid = a8b9afd5-60fe-5f49-a669-bd998e760e7e
-  executionScope = {"relationship":"35807a1e-3b8a-52f5-9580-29cd5265882e"}
+for localKeyName = did/<P0|P1|P2>/key-agreement:
+  messageId = a8b9afd5-60fe-5f49-a669-bd998e760e7e
+  executionScope = {"relationshipId":"35807a1e-3b8a-52f5-9580-29cd5265882e"}
   executionId = cf135b1f-1d7a-51eb-88ae-42447d426abe
   pure-ack effectKey = MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU
-  pure-ack outbound MID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
+  pure-ack outbound message ID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
 ```
 
-Each observation references resolution evidence with its own `myKey` and this
+Each observation references resolution evidence with its own `localKeyName` and this
 same authenticated peer key/DID pair in `peerChain(R)`. Equal-intent deliveries
 at P0, P1 and P2 therefore share one execution, even after P0 retires. An
 explicit ACK at P2 may acknowledge an outbound whose historical valid package
@@ -796,7 +804,7 @@ documents and transition proofs.
    that section follows `rendezvous.md` section 9.1, with no
    `message.in` or pickup ACK while awaiting that evidence.
 4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
-   is needed, commit it separately and obtain its returned `eid`; only then
+   is needed, commit it separately and obtain its returned `eventId`; only then
    commit `message.in` referencing that binding, with retained content, hashes
    and its fresh receipt ordinal. Hold the receive lock across these dependent
    commits and recheck recipient eligibility. Crash after binding but before
@@ -808,7 +816,7 @@ documents and transition proofs.
    carrier evidence; commit/reuse `relationship.peerTransitioned` before
    scope/ACK/effects.
    Missing evidence leaves that input deferred, without a new-birth fallback.
-7. Derive per-observation scope and MID-group consistency under section 9,
+7. Derive per-observation scope and message ID-group consistency under section 9,
    then process explicit ACKs through section 8.3's exact outbound membership.
 8. Apply contact and early-privacy policy only to eligible application input
    under `rendezvous.md` sections 10.2 and 11. Binding already exists; a contact
@@ -868,14 +876,14 @@ effectKey = base64url(
 )
 ```
 
-The key is unpadded base64url. It determines the outbound MID and wire ID under
+The key is unpadded base64url. It determines the outbound message ID and wire ID under
 `vault-events.md` section 9.1. The effect's content is its `message.out` intent.
 That event retains the complete producing tuple under its section-9.2 schema;
 the stored `ordinal` is exactly `decimalOrdinal`, not a runtime-only counter.
 One key permits only one compatible intent under that document's section 14.8;
 payload validation MUST verify the execution ID against that carrier group,
 the stored tuple and output intent against the producing protocol, the key
-against that tuple, and the MID against the key.
+against that tuple, and the message ID against the key.
 
 Under the writer lock in `event-store.md` section 10, the runtime MUST derive
 the carrier's execution ID and check for an already-selected ACK-bearing
@@ -885,7 +893,7 @@ the carrier's ACK obligation again. Competing imported selections suppress
 response work under that fold.
 For a new DIDComm reply, apply section 8.1's local-sender gate before selection;
 missing a sender leaves unfinished work without committing intent.
-For each eligible effect, look up its derived MID before freezing ACK targets,
+For each eligible effect, look up its derived message ID before freezing ACK targets,
 timing or other intent fields.
 It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
 content erasure, submission, a later observation or a changed clock. If no
@@ -934,8 +942,8 @@ A recommended inbound observation records both hashes and durable headers:
 
 ```json
 {
-  "mid": "<deterministic inbound message id>",
-  "wireId": "<innermost message id>",
+  "messageId": "<deterministic inbound message id>",
+  "wireMessageId": "<innermost message id>",
   "receiptOrdinal": "42",
   "intentHash": "<base64url sha-256>",
   "plaintextHash": "<base64url sha-256>",
@@ -943,12 +951,12 @@ A recommended inbound observation records both hashes and durable headers:
   "expiresTime": null,
   "pleaseAck": [""],
   "ack": [],
-  "myKey": "did/019b.../key-agreement",
-  "peerResolution": "<exact-peer.resolved-eid>",
-  "relationshipBinding": "<exact-relationship.bound-eid>",
-  "peerTransition": null,
+  "localKeyName": "did/019b.../key-agreement",
+  "peerResolutionEventId": "<exact-peer.resolved-eventId>",
+  "relationshipBindingEventId": "<exact-relationship.bound-eventId>",
+  "peerTransitionEventId": null,
   "receivedVia": {
-    "mediation": "019b...",
+    "mediationId": "019b...",
     "deliveryId": "019b..."
   }
 }
@@ -967,7 +975,7 @@ A recommended inbound observation records both hashes and durable headers:
   no attempt occurred; the rendezvous attempt budget is runtime-local policy,
   not a crash-persistent lifetime cap.
 - After `delivery.submitted` commits, restart, duplicate receipt and missing
-  ACK never cause another submission or replacement package for that MID.
+  ACK never cause another submission or replacement package for that message ID.
 - At expiry before prepare or retry of an unsubmitted outbound, a
   message-scoped terminal failure is recorded and no package is submitted.
 - After inbound commit but before pickup ACK, redelivery converges as another
@@ -1078,7 +1086,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     variant.
 36. Direct and mediated delivery enter the same inbound fold.
 37. Crash before `delivery.submitted` commits may recover by resending the
-    same package; crash after its commit never resends that MID. Committed
+    same package; crash after its commit never resends that message ID. Committed
     intent and accepted inbound data survive each section-13 boundary.
 38. Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
@@ -1094,7 +1102,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 42. Conforming mediator operation persists and logs no application plaintext;
     any explicitly enabled bounded diagnostic mode is visibly outside the
     no-plaintext profile.
-43. ACK target lookup is scoped by `(carrier.logicalPeerScope, wireId)`;
+43. ACK target lookup is scoped by `(carrier.logicalPeerScope, wireMessageId)`;
     another relationship reusing the same wire ID is never acknowledged.
 44. ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
@@ -1102,8 +1110,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 45. Submitted completion survives restart, loss of local state, clock rollback,
     package retirement and envelope collection. Later duplicate input cannot
     reopen submission or require the collected envelope.
-46. If one of several valid packages for a MID is submitted, every package of
-    that MID stops work; selecting another package, route or handler cannot
+46. If one of several valid packages for a message ID is submitted, every package of
+    that message ID stops work; selecting another package, route or handler cannot
     bypass completion.
 47. Generic pure ACK copies carrier pthid and nullable creation time. An Empty
     rotation notification uses the same tuple with its policy-defined ACK
@@ -1146,7 +1154,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 59. All key-agreement keys of the same pinned document can authenticate in one
     R. Equal-intent wire variants merge once; fresh unpinned keys cannot
     enlarge membership or change birth identity.
-60. A new non-numalgo-4 MID resolves and commits current recipient evidence
+60. A new non-numalgo-4 message ID resolves and commits current recipient evidence
     before first preparation. Transient unavailability leaves it retryable;
     definitive resolution failure is terminal under `rendezvous.md` section
     5.1. An unchanged online-revalidated document still creates new evidence.
@@ -1166,8 +1174,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     with no reply intent or frozen ACK selection. Recovery after a valid local
     transition sends from that relationship's current end, reusing any already
     committed response instead of creating another effect.
-62. Section 9's local-rotation vector preserves MID, execution ID, effect key
-    and automatic outbound MID across local recipient keys. Historical local
+62. Section 9's local-rotation vector preserves message ID, execution ID, effect key
+    and automatic outbound message ID across local recipient keys. Historical local
     membership also permits ACKs across predecessor/successor packages under
     `vault-events.md` section 14.8; a shared contact alone does not.
 63. A proof at the original address or any local successor extends the common
@@ -1183,13 +1191,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 66. Local and remote rotations commute across the two ends. Unsubmitted birth
     and ordinary intents repack while preserving their wire/execution IDs;
     submitted ones stay complete.
-67. After a peer edge commits, a new MID from the superseded node is terminal
+67. After a peer edge commits, a new message ID from the superseded node is terminal
     before message.in, with pickup ACK only. A matching committed observation
-    MID in R creates no new response obligation; ordinary unfinished work
+    message ID in R creates no new response obligation; ordinary unfinished work
     remains recoverable. Later transitions and import order cannot retroactively
     remove scope from previously committed input.
 68. A new inbound binding commits before the message.in draft can reference
-    its returned eid. Crash at that boundary leaves no receipt, invitation
+    its returned eventId. Crash at that boundary leaves no receipt, invitation
     consumption or pickup ACK; reauthentication reuses the binding, including
     when the incoming message is a pure ACK control observation. The enclosing
     receive operation holds the shared writer lock across lookup and these

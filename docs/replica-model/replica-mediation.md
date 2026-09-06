@@ -413,7 +413,7 @@ by phase 1.
   "type": "replica.label",
   "roots": [],
   "data": {
-    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
+    "replicaId": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
     "name": "Phone"
   }
 }
@@ -430,7 +430,7 @@ canonical order wins. It is never sent to the mediator.
   "type": "replica.retired",
   "roots": [],
   "data": {
-    "replica": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
+    "replicaId": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
     "because": "inactivity-policy"
   }
 }

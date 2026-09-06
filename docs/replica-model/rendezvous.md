@@ -99,7 +99,7 @@ Every instruction to append an event in this document means
 7. Birth binding, contact assignment and local rotation are separate events.
 8. Public addresses may send and receive ordinary relationship traffic.
 9. Fresh pairwise allocation and early notification are local privacy policy.
-10. A submitted MID is never automatically prepared or submitted again.
+10. A submitted message ID is never automatically prepared or submitted again.
 11. Contact deletion and erasure preserve identity and consumed invitations.
 12. Phase 1 has one active full runtime; peers and mediators address DIDs,
     never replica IDs or vault-local relationship IDs.
@@ -110,7 +110,7 @@ Every instruction to append an event in this document means
 
 A locally controlled communication DID MUST have its fixed key-agreement and
 authentication methods, seed-derived keys, validated numalgo-4 document and one
-immutable `boundRoute` under `vault-events.md` section 5.2. That document must
+immutable `boundRouteId` under `vault-events.md` section 5.2. That document must
 support authenticated messages and signing `from_prior`. Recipient lifecycle
 is role-independent under section 9; sending and new births require a live DID.
 
@@ -159,7 +159,7 @@ This section owns recipient-resolution freshness. A `did:peer:4` recipient
 uses its retained, validated long-form document and needs no fresh resolution.
 For every other supported DID method, the preparer MUST resolve after the
 new outbound intent commits and commit that fresh `peer.resolved` before its
-first package. Do this for each new MID, including later sends in the same relationship;
+first package. Do this for each new message ID, including later sends in the same relationship;
 an earlier outbound's snapshot, a local TTL or a resolver's stale/offline cache
 cannot satisfy the requirement. An online conditional revalidation that
 confirms the same document is sufficient and produces a new resolution event.
@@ -169,7 +169,7 @@ key change. Freshness is a producer ordering rule, not a clock comparison in
 the portable fold.
 
 Once a package exists, retry does not re-resolve and uses its exact bytes.
-Permitted repacking of that MID reuses its retained snapshot, or the exact
+Permitted repacking of that message ID reuses its retained snapshot, or the exact
 carrying-inbound snapshot of a committed verified continuation to a new peer
 end; it never obtains a fresh document merely to replace a pinned key or route.
 First-package resolution uses the failure classification below, including
@@ -185,7 +185,7 @@ current document. Redelivery during a relationship-evidence wait follows the
 suspension rule below. Online conditional revalidation is sufficient; a local
 TTL or stale/offline cache is not. A retained
 `peer.resolved` may be reused only when that freshly validated document's raw
-CID equals its `document` and its `myKey`, `peerKey`, `did` and `presentedDid`
+CID equals its `documentCid` and its `localKeyName`, `peerPublicKey`, `did` and `presentedDid`
 match the observation; otherwise commit new evidence before `message.in`.
 A key absent from the current document fails section 9.2 even when it belongs
 to `peerChain(R)`: the chain scopes already authenticated observations, it does
@@ -256,7 +256,7 @@ classify that delivery as terminal input under section 9.2: pickup-ACK when
 mediated, no `message.in`, contact or response effect, and at most a bounded
 local diagnostic. Exhaustion does not prove a key change or permanently reject
 the DID; the sender may make a new explicit attempt under ordinary sending
-rules. It never authorizes automatic retry of a submitted MID. A successful
+rules. It never authorizes automatic retry of a submitted message ID. A successful
 resolution within budget instead proceeds through normal authentication and
 durable receipt. Locked-vault, incomplete-recovery, recoverable local
 key/route/historical-evidence and relationship-evidence deferrals under section
@@ -412,7 +412,7 @@ retire resources only when no other relationship or disclosure requires them.
 ## 8. Ordinary sending and birth selection
 
 `vault-events.md` section 9.2 owns the outbound schema. Every send freezes one
-`target.relationship`. A contact or address selection API determines that R
+`target.relationshipId`. A contact or address selection API determines that R
 under the writer lock before intent commit, using existing address histories
 first. For a new pair, nullable `birth` freezes the local DID entity and exact
 peer DID spelling, allowing an offline send before resolution. These birth
@@ -482,9 +482,9 @@ Content remains application content regardless of whether a rotation is carried.
 5. Verify local recipient registration before first disclosure, submit, and
    commit `delivery.submitted` on acceptance.
 
-Until submission, permitted repacks preserve MID, intent and R. Birth metadata
+Until submission, permitted repacks preserve message ID, intent and R. Birth metadata
 does not prevent repacking after a verified local or peer rotation. After
-submission no duplicate, lost ACK or later address change reopens the MID.
+submission no duplicate, lost ACK or later address change reopens the message ID.
 
 ## 9. Uniform receipt
 
@@ -609,7 +609,7 @@ for new interaction and one-use invitation availability. After authentication
 and pair lookup, apply this producer-time rule using the committed state at
 that instant: if the canonical authenticated sender is a node of the unique
 R's peer history other than `currentPeerDid(R)`, a delivery without an already
-committed observation with that observation MID in R is terminal input
+committed observation with that observation message ID in R is terminal input
 under section 9.2. Pickup-ACK it when mediated; create no `message.in`, contact,
 relationship, ultimate ACK or response effect, and at most a bounded local
 diagnostic. This applies with or without a carried proof and implements
@@ -618,7 +618,7 @@ Unresolved or conflicting lookup still follows the missing-evidence/conflict
 rules; another relationship sharing the old DID is not rejected merely for
 this R's rotation.
 
-A delivery matching such an existing MID group follows ordinary duplicate and
+A delivery matching such an existing message ID group follows ordinary duplicate and
 integrity handling, including conflict recording for contradictory evidence.
 Matching only a wire ID or thread is insufficient. It creates no new response
 obligation; only existing eligible unfinished work may resume under
@@ -627,7 +627,7 @@ required for the delivery.
 
 For input passing these checks, commit or reuse the exact resolution first.
 When a new binding is needed, commit it in a separate `Vault.commit` and obtain
-its returned `eid`; only then commit `message.in` with that `relationshipBinding`
+its returned `eventId`; only then commit `message.in` with that `relationshipBindingEventId`
 and its other immutable evidence references. Keep the receive lock across
 these dependent commits, releasing it before network acknowledgment work.
 A crash after resolution or binding but before inbound commit leaves reusable
@@ -662,19 +662,19 @@ normalization, resolver-dependent aliasing or public-key sorting is implied.
 ```text
 [lo, hi] = sortCanonicalDids([A, B])
 
-relationship_id = UUIDv5(
+relationshipId    = UUIDv5(
   estocNamespace("relationship"),
   RFC8785(["v1", lo, hi])
 )
 
-contact_id = UUIDv5(
+contactId         = UUIDv5(
   estocNamespace("relationship-contact"),
-  RFC8785(["v1", relationship_id])
+  RFC8785(["v1", relationshipId])
 )
 
-early_private_did_id = UUIDv5(
+earlyPrivateDidId = UUIDv5(
   estocNamespace("relationship-local-did"),
-  RFC8785(["v1", relationship_id, canonical_local_birth_did])
+  RFC8785(["v1", relationshipId, canonicalLocalBirthDid])
 )
 ```
 
@@ -686,24 +686,24 @@ there is no circular derivation. Ordinary later rotations use fresh UUIDv7 IDs.
 Identifier fixture (not a live resolver or JWT fixture):
 
 ```text
-A = did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd
-B = did:web:bob.example
-relationship_id        = 35807a1e-3b8a-52f5-9580-29cd5265882e
-contact_id             = e0d4f3cf-e4d1-5774-b273-cbe08b2d26dd
-early_private_did_id_A = 4734b126-9706-5c8f-b971-91a5afb9c1d4
-early_private_did_id_B = 30d9a3a6-0e65-52a4-a822-591a683bb1e6
+A                  = did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd
+B                  = did:web:bob.example
+relationshipId     = 35807a1e-3b8a-52f5-9580-29cd5265882e
+contactId          = e0d4f3cf-e4d1-5774-b273-cbe08b2d26dd
+earlyPrivateDidIdA = 4734b126-9706-5c8f-b971-91a5afb9c1d4
+earlyPrivateDidIdB = 30d9a3a6-0e65-52a4-a822-591a683bb1e6
 ```
 
 This second identifier-only fixture puts the higher-sorting endpoint first:
 
 ```text
-A = did:web:zoe.example
-B = did:web:amy.example
+A                  = did:web:zoe.example
+B                  = did:web:amy.example
 RFC8785(["v1", lo, hi]) = ["v1","did:web:amy.example","did:web:zoe.example"]
-relationship_id        = 249fc438-75bc-53a9-904d-99d44edd6d23
-contact_id             = cbe762f9-132c-572d-bb0e-bc88efd1fb82
-early_private_did_id_A = 6d4670d0-42a0-5978-9030-072fd06f45f0
-early_private_did_id_B = 20d9f6a9-8383-5c09-8134-a52954217b3b
+relationshipId     = 249fc438-75bc-53a9-904d-99d44edd6d23
+contactId          = cbe762f9-132c-572d-bb0e-bc88efd1fb82
+earlyPrivateDidIdA = 6d4670d0-42a0-5978-9030-072fd06f45f0
+earlyPrivateDidIdB = 20d9f6a9-8383-5c09-8134-a52954217b3b
 ```
 
 For each fixture, run the relationship derivation for both `[A, B]` and `[B, A]`
@@ -721,7 +721,7 @@ pair already claimed by another R through rotation is an index conflict under
 ### 10.1 Contact IDs
 
 Explicit user contacts use UUIDv7. Automatic contact creation for a relationship
-uses `contact_id` above, unless that R already has a contact assignment. Reuse
+uses `contactId` above, unless that R already has a contact assignment. Reuse
 the selected assignment under the writer lock; do not infer cryptographic
 identity from a display name, contact merge or globally shared public address.
 The contact tombstone remains effective for that R after rotation or erasure.
@@ -761,7 +761,7 @@ Under the writer lock, reuse any existing local transition. Otherwise select
 one eligible committed application observation with no already selected natural,
 pure-ACK or notification response, validate its exact-root
 confirmation, and atomically commit a fresh successor and a normal
-`relationship.localTransitioned` whose `trigger` references that observation.
+`relationship.localTransitioned` whose `triggerEventId` references that observation.
 The allocation MAY use section 10's endpoint-specific deterministic ID under
 `vault-events.md` section 12.4; otherwise it uses a fresh UUIDv7.
 Route, proof and trigger are frozen by this commit. A retry reuses them.
@@ -807,14 +807,14 @@ handlerId   = https://didcomm.org/trust-ping/2.0
 effectKind  = ping-response
 ordinal     = 0
 effectKey   = VXXR0fOxbJlvgykd90BsYKbbh4K85FsNhordsPbFw7Y
-mid         = 8e0d1442-50f3-57b6-a356-7939851af021
+messageId   = 8e0d1442-50f3-57b6-a356-7939851af021
 ```
 
 For Empty with the same execution:
 
 ```text
 effectKey = HTh08t3qCpxpGnvXXQq7ClgPUIhSNi7d6uSkk27RAWA
-mid       = 7e6a39e8-57fb-5cca-9460-edfc806a2297
+messageId = 7e6a39e8-57fb-5cca-9460-edfc806a2297
 ```
 
 ### 11.2 Proof and ordinary message headers
@@ -896,7 +896,7 @@ R; explicit ACKs prove only receipt. A no-response error with no rotation or
 ACK request is a control observation under `vault-events.md` section 14.7.
 It creates no privacy reply or new contact. Its retained reason can appear
 beside one uniquely correlated outbound; erasure removes that diagnostic.
-It does not terminate R, confirm a local successor or reopen a submitted MID.
+It does not terminate R, confirm a local successor or reopen a submitted message ID.
 
 ## 14. Retry, replacement and address rollover
 
@@ -911,15 +911,15 @@ mandatory absolute stop = expires_time, when non-null
 
 The sender SHOULD use these defaults or a stricter local policy. Count before
 transport invocation, including unknown outcomes, with shared accounting per
-MID. Restart/restore may reset this local budget but never a committed
+message ID. Restart/restore may reset this local budget but never a committed
 `delivery.submitted`. Expiry is immutable and stops new work at equality. No
 durable pre-call reservation or lifetime attempt cap is implied. Unknown
 outcomes reuse exact eligible packages; absent submission evidence does not
 prove no transport call occurred.
 
-A new explicit send uses a new MID in the same R. It does not rederive R from
+A new explicit send uses a new message ID in the same R. It does not rederive R from
 current keys or addresses. Permitted repacks change address/proof evidence
-only along that R's verified chains while preserving intent. A submitted MID
+only along that R's verified chains while preserving intent. A submitted message ID
 never reopens for missing ACK, lost confirmation, duplicate input or rotation.
 
 A Peer DID's embedded keys/route cannot change in place. A new address with a
@@ -968,7 +968,7 @@ incomplete merely because no rotation occurred. Rotation confirmation and ACK
 receipt information are separate. An unconfirmed terminal successor still has
 the explicit recovery limitation in `vault-events.md` section 12.4; submitted
 notification loss is recovered only by another explicit ordinary send, not
-automatic resubmission of the completed MID.
+automatic resubmission of the completed message ID.
 
 ## 17. Required conformance cases
 
@@ -1004,7 +1004,7 @@ automatic resubmission of the completed MID.
 30. Competing successors, cycles and an address pair claimed by distinct Rs are conflicts without automatic merge or event-order winner.
 31. Missing binding/transition references defer through partial import; a pending proof cannot fall back to a new relationship birth.
 32. A current peer DID using an unpinned current key is retained as a no-scope diagnostic; no new R, ACK or effect is created. A superseded sender first follows section 9.3.
-33. After B0-to-B1 commits in R, a new MID from B0 to any local address in R is terminal before message.in, with pickup ACK only. A matching committed observation MID in R follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
+33. After B0-to-B1 commits in R, a new message ID from B0 to any local address in R is terminal before message.in, with pickup ACK only. A matching committed observation message ID in R follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
 34. One-use invitation is consumed by matching root-address receipt before contact/rotation work; continuation or matching pthid alone cannot consume it.
 35. Same-consumer invitation reuse is idempotent; different consumers conflict. Crash, deletion and erasure never reopen it.
 36. A retired DID cannot create new relationships but can receive in existing histories while its route remains eligible, regardless of disclosure policy.
@@ -1015,9 +1015,9 @@ automatic resubmission of the completed MID.
 41. Per-delivery sender-resolution retries count before calls, schedule without redelivery, share accounting and stop at their finite budget/known retention bound.
 42. Budget exhaustion pickup-ACKs terminal input without message.in; locked-vault or local recovery deferrals do not consume that resolver budget.
 43. A successful current resolution within budget permits normal durable receipt. Imported receipts use retained evidence without fresh network requests.
-44. Fresh recipient resolution occurs for each new MID when required; repacking follows pinned/verified evidence and never silently changes same-DID keys.
+44. Fresh recipient resolution occurs for each new message ID when required; repacking follows pinned/verified evidence and never silently changes same-DID keys.
 45. Resolution failure before any prior pin uses neutral diagnostics, not an unsupported claim that a key was replaced.
-46. Unsubmitted birth and ordinary intents both repack after rotation, preserving MID, R, intent and automatic effect identity.
+46. Unsubmitted birth and ordinary intents both repack after rotation, preserving message ID, R, intent and automatic effect identity.
 47. Committed submission stops all automatic repack/retry, including notification/ACK loss and duplicate receipt.
 48. Expiry and local retry defaults remain independent of incoming message age, receipt acceptance and rotation iat.
 49. Contact assignment is separate from binding. A control-only R has no contact; a selected existing contact wins local policy before automatic creation.
@@ -1026,7 +1026,7 @@ automatic resubmission of the completed MID.
 52. A remote problem report is displayed only beside a uniquely correlated outbound while its body is available; it changes no submission or relationship state.
 53. An unconfirmed successor with a terminal route cannot branch or roll back; temporary outage does not invoke this terminal limitation.
 54. Phase-1 operation needs no replica-mediation or vault-sync implementation and discloses no replica ID to peers.
-55. Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eid. One shared writer lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
+55. Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eventId. One shared writer lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
 56. A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A predecessor pin whose presentedDid is short and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
 57. An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt without a client retention cap; restart, body erasure and mediator expiry preserve that pair claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
 58. Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under vault-events.md section 11.1, across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.

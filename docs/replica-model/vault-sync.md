@@ -187,7 +187,7 @@ Header:
 {
   "kind": "event",
   "store": "vault",
-  "eid": "019b1b61-1ff1-74d7-a3d6-c493db8e5032",
+  "eventId": "019b1b61-1ff1-74d7-a3d6-c493db8e5032",
   "sha256": "k3sU...base64url..."
 }
 ```
@@ -196,7 +196,7 @@ Header:
 8785 canonical UTF-8 event JSON. `sha256` is the unpadded base64url SHA-256 of
 that payload.
 
-The client MUST validate the event envelope, require its `eid` to equal the
+The client MUST validate the event envelope, require its `eventId` to equal the
 header, and require the payload hash to match before ingest.
 
 #### DASL object
@@ -231,18 +231,18 @@ root:
 
 event:
   HMAC(K_index,
-       UTF8("event\0" + store + "\0" + eid + "\0") || SHA256(payload))
+       UTF8("event\0" + store + "\0" + eventId + "\0") || SHA256(payload))
 
 DASL object:
   HMAC(K_index, UTF8("object\0") || binary_dasl_cid)
 ```
 
-Each `\0` is one zero byte. `store` and `eid` are encoded as UTF-8 exactly as
+Each `\0` is one zero byte. `store` and `eventId` are encoded as UTF-8 exactly as
 serialized in the frame header. `binary_dasl_cid` is the exact 36-byte decoded
 DASL CID, not its string form.
 
 Including the event payload hash permits two conflicting contents under one
-`eid` to coexist as different opaque server objects so clients can report the
+`eventId` to coexist as different opaque server objects so clients can report the
 event-store conflict instead of having the server choose one. A DASL CID
 already commits to its object payload.
 
@@ -1230,7 +1230,7 @@ server descriptor or accept bytes without `ObjectStore.putObject` verification.
 
 ### 13.4 Event conflicts
 
-Two decrypted event objects with the same `eid` and different event
+Two decrypted event objects with the same `eventId` and different event
 content are an integrity conflict, not an ordinary concurrent decision.
 A client MUST surface the conflict and MUST NOT claim full convergence.
 It MAY quarantine the incoming object. Automatic first-wins resolution
@@ -1279,7 +1279,7 @@ by phase 1.
   "type": "sync.configured",
   "roots": [],
   "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
+    "syncId": "019b2a5d-4cd0-7d87-a464-f0614c310870",
     "storeDid": "did:web:sync.example"
   }
 }
@@ -1301,7 +1301,7 @@ allowed but SHOULD be surfaced as redundant configuration.
   "type": "sync.selected",
   "roots": [],
   "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870"
+    "syncId": "019b2a5d-4cd0-7d87-a464-f0614c310870"
   }
 }
 ```
@@ -1317,7 +1317,7 @@ another configured store; a runtime MAY mirror to every usable store.
   "type": "sync.retired",
   "roots": [],
   "data": {
-    "id": "019b2a5d-4cd0-7d87-a464-f0614c310870",
+    "syncId": "019b2a5d-4cd0-7d87-a464-f0614c310870",
     "because": "replaced"
   }
 }
@@ -1459,7 +1459,7 @@ MUST NOT disclose another account's object existence.
 12. A large whole-resource raw object is uploaded, range-classified,
     downloaded, decrypted and verified with bounded memory and without any
     portable chunk CID.
-13. Concurrent offline event sets converge after exchange; the same `eid`
+13. Concurrent offline event sets converge after exchange; the same `eventId`
     with different RFC 8785 canonical event bytes is an integrity conflict.
 14. A fresh full replica with seed and locator reconstructs root, events and
     held objects, then mints new local replica and store-generation IDs.

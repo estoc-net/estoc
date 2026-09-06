@@ -133,7 +133,7 @@ change object identity.
 ## 6. ObjectStore
 
 ```ts
-type Cid = string;
+type Cid = string & { readonly __cid: unique symbol };
 
 type ByteSource =
   | Uint8Array
@@ -170,6 +170,12 @@ interface ObjectStore {
   }>;
 }
 ```
+
+`Cid` is a distinct validated API type. Its brand adds no bytes or JSON wrapper;
+construction requires section 3's canonical-CID checks, while object acceptance
+also verifies the digest against the bytes. It is not interchangeable with an
+entity UUID, event ID, public key or arbitrary string. The TypeScript brand
+illustrates the contract; other languages may use an equivalent nominal type.
 
 A backend MAY expose language-specific stream types as long as the observable
 semantics are equivalent.

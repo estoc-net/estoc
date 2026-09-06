@@ -36,7 +36,7 @@ environment:
 
 ```text
 portable vault
-    events       immutable facts, merged by `eid`
+    events       immutable facts, merged by `eventId`
     DASL objects  immutable content-addressed bytes
     files        singleton and opaque portable files
 
@@ -66,8 +66,8 @@ Every conforming implementation preserves the following rules.
 
 1. **Events are immutable.** An event is appended or ingested whole. No
    operation edits or deletes one.
-2. **Merge is set union by event ID.** The same `eid` with identical RFC 8785
-   canonical event bytes is a duplicate. The same `eid` with different content
+2. **Merge is set union by event ID.** The same `eventId` with identical RFC 8785
+   canonical event bytes is a duplicate. The same `eventId` with different content
    is a conflict and MUST NOT overwrite either store's accepted value.
 3. **Folds are functions of the event set.** Ingest order, segment order,
    replica order and transport order MUST NOT change a fold's result.
@@ -133,12 +133,14 @@ type JsonValue =
   | JsonValue[]
   | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
-type Cid = string;
+// Cid is the validated type defined by dasl-objects.md section 6.
+type EventId = string & { readonly __eventId: unique symbol };
+type AuthorId = string & { readonly __authorId: unique symbol };
 
 type Event<D extends JsonObject = JsonObject> = {
-  eid: string;
+  eventId: EventId;
   at: string;
-  author: string;
+  author: AuthorId;
   type: string;
   roots: Cid[];
   data: D;
@@ -147,24 +149,30 @@ type Event<D extends JsonObject = JsonObject> = {
 
 | field | meaning |
 | --- | --- |
-| `eid` | canonical UUIDv7, minted by the appending store; event identity and deduplication key |
-| `at` | RFC 3339 UTC timestamp obtained with the `eid` |
+| `eventId` | canonical UUIDv7, minted by the appending store; event identity and deduplication key |
+| `at` | RFC 3339 UTC timestamp obtained with the `eventId` |
 | `author` | canonical UUIDv7 identifying the local replica that appended the event |
 | `type` | non-empty event-type string |
 | `roots` | complete list of retained object roots, always present, `[]` when none |
 | `data` | type-specific JSON object, always present, `{}` when empty |
 
+`EventId`, `AuthorId` and `Cid` are distinct validated API types that serialize
+as plain strings. Type brands do not replace format validation or add fields
+to the event. The generic store does not interpret domain-specific identifiers
+in `data`; `vault-events.md` section 3.5 owns their names and types. In a vault,
+the author value is the local replica ID under section 4.1.
+
 Example:
 
 ```json
 {
-  "eid": "019b2a46-8b36-75c6-a74b-81a2aa5fb407",
+  "eventId": "019b2a46-8b36-75c6-a74b-81a2aa5fb407",
   "at": "2026-09-03T15:04:05.123Z",
   "author": "019b2a43-4a56-7c0f-862f-194c0c4124a0",
   "type": "contact.petname",
   "roots": [],
   "data": {
-    "cid": "019b2a45-8381-793f-943c-f5d806fd5ca2",
+    "contactId": "019b2a45-8381-793f-943c-f5d806fd5ca2",
     "name": "Alice"
   }
 }
@@ -198,9 +206,9 @@ on the event. A folder path confirms an author but never supplies one.
   the local object store.
 
 A type may repeat the roots in `data` under semantic names such as
-`body`, `attachments` or `envelope`. Repetition does not create another
+`bodyCid`, `attachmentCids` or `envelopeCid`. Repetition does not create another
 reference. A type such as `message.erased` may name roots to release in
-`data.drop`; those roots MUST NOT appear in that event's `roots`.
+`data.dropCids`; those roots MUST NOT appear in that event's `roots`.
 
 ### 3.3 RFC 8785 canonical JSON and equality
 
@@ -247,8 +255,8 @@ On append and ingest, the store MUST reject an event unless:
 
 - the value is a JSON object;
 - the top-level member set is exactly
-  `eid`, `at`, `author`, `type`, `roots`, `data`;
-- `eid` is a canonical lowercase UUIDv7;
+  `eventId`, `at`, `author`, `type`, `roots`, `data`;
+- `eventId` is a canonical lowercase UUIDv7;
 - `at` is a valid Gregorian UTC instant in the exact canonical form
   `YYYY-MM-DDTHH:mm:ss.sssZ`, with exactly three fractional digits and seconds
   from `00` through `59`;
@@ -282,7 +290,7 @@ section 5.8; phase 1 defines none.
 
 ### 4.2 Event ID and timestamp
 
-The store mints `eid` and `at` as part of a local append. It obtains one
+The store mints `eventId` and `at` as part of a local append. It obtains one
 integer Unix-millisecond clock reading `t`, embeds exactly `t` in the UUIDv7
 `unix_ts_ms` field, and formats the same `t` as
 `YYYY-MM-DDTHH:mm:ss.sssZ`. A sub-millisecond clock is truncated to the integer
@@ -306,12 +314,12 @@ Repeated generation within one millisecond, including an `appendAll` containing
 more than 4096 events, MUST produce distinct UUIDs while preserving the sampled
 `t` in every UUID. A generator MUST NOT advance the embedded UUID timestamp
 merely to create room for another ID because that would break the local
-`eid`/`at` writer contract. If its chosen generation strategy cannot produce the
+`eventId`/`at` writer contract. If its chosen generation strategy cannot produce the
 requested unique IDs for that timestamp, it MUST fail before committing the
 append or batch.
 
 If the wall clock moves backwards, a later local append uses the newly sampled,
-possibly smaller, `t` for both `eid` and `at`. The generator still MUST avoid a
+possibly smaller, `t` for both `eventId` and `at`. The generator still MUST avoid a
 UUID collision, including when rollback revisits a previously used millisecond.
 The mint-order guarantee does not span a rollback or runtime restart. This
 profile neither clamps wall time nor introduces a hybrid logical clock.
@@ -323,7 +331,7 @@ syntax independently. They MUST NOT compare the UUID's embedded timestamp with
 `at`; equality of those values is a writer-generation contract for locally
 appended events, not an acceptance rule for imported immutable history.
 
-An `eid` is trusted to be globally unique. It encodes no subject,
+An `eventId` is trusted to be globally unique. It encodes no subject,
 contact, message, author or permission. A caller that needs the minted
 ID obtains it from the returned event.
 
@@ -338,13 +346,13 @@ Whenever a fold or `scan()` requires one total order, events are ordered
 ascending by:
 
 ```text
-(at, eid, author)
+(at, eventId, author)
 ```
 
 String comparison uses the literal field values. Because every accepted `at`
 uses the same UTC form and millisecond precision, this lexical comparison also
 orders accepted timestamps by their represented instant. Event equality and
-persistence use RFC 8785 canonical bytes. Since `eid` is expected to be unique,
+persistence use RFC 8785 canonical bytes. Since `eventId` is expected to be unique,
 `author` is normally only a defensive final component.
 
 Canonical order is for presentation and explicitly declared
@@ -379,7 +387,7 @@ type Draft<D extends JsonObject = JsonObject> = {
 };
 
 type Filter = {
-  author?: string;
+  author?: AuthorId;
   type?: string;
   data?: { [field: string]: JsonPrimitive | undefined };
 };
@@ -387,7 +395,7 @@ type Filter = {
 type ChangeToken = string;
 
 type Conflict = {
-  eid: string;
+  eventId: EventId;
   kept: Event;
   rejected: Event;
   source?: string;
@@ -414,7 +422,7 @@ type Ingested = {
 
 interface EventStore {
   /** Author assigned to every locally appended event. */
-  readonly author: string;
+  readonly author: AuthorId;
 
   append(draft: Draft): Promise<Event>;
   appendAll(drafts: Draft[]): Promise<Event[]>;
@@ -443,7 +451,7 @@ its runtime. Portable application code uses the section-10 vault interface.
 1. validates that `draft.type`, `draft.roots` and `draft.data` can form a
    valid event;
 2. obtains one clock reading;
-3. mints a UUIDv7 `eid` and RFC 3339 UTC `at` from it;
+3. mints a UUIDv7 `eventId` and RFC 3339 UTC `at` from it;
 4. sets `author` to the store's current author;
 5. treats omitted `roots` as `[]`; and
 6. writes and returns the complete event.
@@ -489,9 +497,9 @@ anything needed for the fork check below.
 
 For each valid incoming event:
 
-- absent `eid`: add it;
-- same `eid`, same content: count a duplicate and add nothing;
-- same `eid`, different content: keep the value already accepted by this
+- absent `eventId`: add it;
+- same `eventId`, same content: count a duplicate and add nothing;
+- same `eventId`, different content: keep the value already accepted by this
   store, report a conflict and add nothing.
 
 Rejected envelopes are reported and never stored. A backend MUST NOT
@@ -521,7 +529,7 @@ against a malicious holder of the shared seed.
 
 ### 5.4 `scan`
 
-`scan(filter)` yields one accepted event per `eid`, in canonical order.
+`scan(filter)` yields one accepted event per `eventId`, in canonical order.
 Returned objects MUST parse from the accepted RFC 8785 canonical event bytes.
 The filter is equality only:
 
@@ -561,7 +569,7 @@ DASL object. It is reported with its location and excluded from normal reads.
 A backend MAY quarantine damaged bytes but MUST NOT present them as a
 valid event or missing-by-policy object.
 
-**Conflict** is more than one JSON content for one `eid`. The store never
+**Conflict** is more than one JSON content for one `eventId`. The store never
 creates one through `append` or `ingest`; a folder can contain one after
 a manual edit or copied segment. Each backend MUST define a stable local
 tie-break for reads and report every discarded content. The tie-break is
@@ -757,7 +765,7 @@ obtains stores already configured with that author.
 Every backend MUST export a version-3 `.estoc/` folder and import one.
 For any conforming vault:
 
-- every event returns with identical RFC 8785 canonical bytes and `eid`;
+- every event returns with identical RFC 8785 canonical bytes and `eventId`;
 - every retained DASL object returns byte-for-byte under the same CID;
 - every portable file returns byte-for-byte unless its documented
   singleton merge policy applies; and
@@ -875,8 +883,8 @@ Replica synchronization is immutable anti-entropy:
 ```text
 remote object absent locally -> verify and putObject
 remote event absent locally  -> validate and ingest
-same eid, same content        -> duplicate
-same eid, different content   -> conflict
+same eventId, same content    -> duplicate
+same eventId, different content -> conflict
 ```
 
 `vault-sync/1.0` encrypts these objects before an untrusted server sees
@@ -902,17 +910,17 @@ A database commonly uses:
 
 ```sql
 CREATE TABLE events (
-  seq      INTEGER PRIMARY KEY,
-  eid      TEXT NOT NULL UNIQUE,
-  at       TEXT NOT NULL,
-  author   TEXT NOT NULL,
-  type     TEXT NOT NULL,
-  roots    TEXT NOT NULL,
-  data     TEXT NOT NULL,
+  seq       INTEGER PRIMARY KEY,
+  eventId   TEXT NOT NULL UNIQUE,
+  at        TEXT NOT NULL,
+  author    TEXT NOT NULL,
+  type      TEXT NOT NULL,
+  roots     TEXT NOT NULL,
+  data      TEXT NOT NULL,
   canonical BLOB NOT NULL
 );
 
-CREATE INDEX events_canonical ON events (at, eid, author);
+CREATE INDEX events_canonical ON events (at, eventId, author);
 CREATE INDEX events_author ON events (author);
 CREATE INDEX events_type ON events (type);
 ```
@@ -941,6 +949,10 @@ section 2.1 and document:
 `config.json.version` covers the event envelope, folder layout,
 singleton meanings and vault-event semantics together. This document is
 version 3.
+
+Version 3 is an unreleased draft. Its current schema supersedes earlier draft
+spellings without a migration or read alias; for example, the event envelope
+uses `eventId`. The compatibility rules below apply to published versions.
 
 A version-3 reader MUST refuse another version before interpreting or
 writing portable state. There is no migration requirement in this
@@ -975,7 +987,7 @@ A conforming implementation MUST pass at least these cases:
    surrogate or a non-I-JSON number, is rejected before acceptance.
 5. Two source serializations with different member order or whitespace but
    equal RFC 8785 output ingest as one event.
-6. The same `eid` with different RFC 8785 canonical bytes reports a conflict
+6. The same `eventId` with different RFC 8785 canonical bytes reports a conflict
    and does not overwrite either value.
 7. Ingesting a previously unseen event authored by the current local author
    fails with `ForkedAuthor` before adding anything.
@@ -999,7 +1011,7 @@ A conforming implementation MUST pass at least these cases:
     IDs are distinct, embed the unchanged sample and sort in input order.
     Back-to-back separate appends with the same sample also sort in mint order.
 20. After clock rollback, a local writer uses the newly sampled earlier
-    millisecond in both `eid` and `at` while avoiding collision. No mint-order
+    millisecond in both `eventId` and `at` while avoiding collision. No mint-order
     guarantee spans rollback or restart; a batch still uses one common sample.
 21. Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.

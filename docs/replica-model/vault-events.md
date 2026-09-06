@@ -185,6 +185,103 @@ runtime MUST derive and verify the namespace UUID from the URI above rather
 than trusting a copied table constant. The table is a test vector, not a
 second source of truth.
 
+### 3.5 Identifier and reference vocabulary
+
+Vault-event payloads and application interfaces use the following names and
+distinct validated types. The suffix describes what the value identifies;
+it does not imply that every identifier has the same encoding or scope.
+Sections 3.4, 4.1 and the individual schemas own their derivation and validation.
+`event-store.md` owns event identity; `dasl-objects.md` owns content identity.
+
+| Value | Type | Field names |
+| --- | --- | --- |
+| Vault message entity or inbound observation group | `MessageId` | `messageId`, `ackMessageId` |
+| Received DIDComm plaintext ID | `WireMessageId` | `wireMessageId`, `ackWireMessageId` |
+| One exact event | `EventId` | envelope `eventId`; references such as `sourceEventId`, `triggerEventId`, `addEventId` |
+| Typed event evidence | `EventReference<T>` | `peerResolutionEventId`, `priorResolutionEventId`, `relationshipBindingEventId`, `peerTransitionEventId` |
+| Contact / relationship | `ContactId` / `RelationshipId` | `contactId`, `fromContactId` / `relationshipId` |
+| Local DID entity | `DidId` | `didId`, `localDidId`, `senderDidId`, `fromDidId`, `toDidId` |
+| Route / mediation arrangement | `RouteId` / `MediationId` | `routeId`, `boundRouteId` / `mediationId` |
+| One prepared package | `PackageId` | `packageId`, `replacementPackageId` |
+| Scoped mediator delivery | `DeliveryId` | `deliveryId` |
+| Relationship-scoped automatic execution | `ExecutionId` | `executionId` |
+| Exact content bytes | `Cid` | `bodyCid`, `attachmentCids`, `documentCid`, `envelopeCid`, `dropCids`; generic object APIs use `cid` |
+| Vault keystore name | `KeyName` | `localKeyName`, `me.keyName` |
+| Complete canonical public-key value | `PublicKey` | `peerPublicKey` |
+| DID string / verification-method DID URL | `Did` / `DidUrl` | `did`, `peerDid`, `presentedDid`, `longFormDid`, `fromDid`, `toDid` / `authenticationMethodIds`, `keyAgreementMethodIds` |
+
+Use the same entity noun for creation and later references: `did.created.didId`
+and `did.disclosed.didId`, for example. Add a role prefix when needed, such as
+`senderDidId`. Payloads do not abbreviate a contact ID as `cid`, or hide an
+entity ID behind a bare `id`, `contact`, `relationship` or `mediation` field.
+`cid` and `*Cid` always mean content addresses; `*Did` always means a DID
+string, while `*DidId` means a local entity UUID. Arrays of references use the
+plural suffix, such as `attachmentCids` and `localDidIds`; collections of view
+records retain their own names and carry typed identifiers in each record.
+
+The type distinction is part of the API contract. One possible TypeScript
+representation is below; other languages may use equivalent nominal types.
+`EventId` and `AuthorId` come from `event-store.md` section 3, and `Cid` from
+`dasl-objects.md` section 6.
+
+```ts
+type EntityId<Kind extends string> = string & { readonly __entity: Kind };
+type MessageId = EntityId<"message">;
+type ContactId = EntityId<"contact">;
+type RelationshipId = EntityId<"relationship">;
+type DidId = EntityId<"did">;
+type RouteId = EntityId<"route">;
+type MediationId = EntityId<"mediation">;
+type PackageId = EntityId<"package">;
+type ExecutionId = EntityId<"execution">;
+type SyncId = EntityId<"sync">; // Deferred configuration events only.
+type ReplicaId = AuthorId;
+type WireMessageId = string & { readonly __wireMessageId: unique symbol };
+type DeliveryId = string & { readonly __deliveryId: unique symbol };
+type KeyName = string & { readonly __keyName: unique symbol };
+type PublicKey = string & { readonly __publicKey: unique symbol };
+type Did = string & { readonly __did: unique symbol };
+type DidUrl = string & { readonly __didUrl: unique symbol };
+type EffectKey = string & { readonly __effectKey: unique symbol };
+type EventReference<T extends string> = EventId & { readonly __eventType: T };
+```
+
+These types serialize as the existing validated strings, without wrapper
+objects or type prefixes. Parsers and derivation functions produce them only
+after the owning format checks. A cast is not validation. An event-reference
+type records its required target type; missing evidence still defers and
+incompatible evidence still conflicts under the referencing schema. It is
+never proof that the target is available or valid. `effectKey` is the existing
+derived idempotency key, not a keystore name or a cryptographic public key.
+
+Message identity has three levels. `eventId` names one exact receipt or other
+event; repeated receipt may create several event IDs with one `messageId`.
+An inbound `messageId` names the key-scoped observation group; verified
+cross-key variants may have different message IDs but one `executionId` in R.
+An outbound `messageId` is also its plaintext `id`; no duplicate
+`wireMessageId` field is stored on `message.out`. Inbound wire IDs have the
+sender's scope and are stored separately. `packageId` names a prepared
+package; `envelopeCid` addresses its bytes. `localKeyName`, `peerPublicKey`
+and a verification-method DID URL are separate kinds of value and cannot be
+substituted for one another.
+
+This vocabulary applies to vault payloads, including deferred `replicaId`
+and `syncId` fields. The event envelope's `author` and `roots`, serialized
+local-file fields such as `replica_id`, and wire/protocol fields retain their
+owner-defined names. In particular, DIDComm `id`, `body`, `attachments`,
+`from`, `to`, `thid`, `pthid` and `kid` are unchanged; the stored message
+document in section 8 also retains its application-content shape. Producers
+map vault fields to those protocol fields explicitly.
+
+Namespace purpose strings, keystore paths, literal hash-transcript tags and
+message-content serialization are fixed separately from field spelling.
+Implementations MUST construct each specified derivation input, not serialize
+an arbitrary renamed payload or API object as its substitute. The execution
+transcript's literal `"relationship"` is specified in `distributed-delivery.md`
+section 9 even though payloads and runtime scope use `relationshipId`. Event
+canonical bytes do use the current schema; any content hash of an event or
+container therefore follows those actual bytes.
+
 ## 4. Message keys and peer evidence
 
 ### 4.1 Key evidence
@@ -192,9 +289,9 @@ second source of truth.
 Each message or resolution retains the keys used for that observation or
 package, directly or through its exact evidence references:
 
-- `myKey` is the vault key name that decrypted or authenticated the
+- `localKeyName` is the vault key name that decrypted or authenticated the
   message, or `null` when no local key participated.
-- `peerKey` is the complete authenticated or selected peer public key in the
+- `peerPublicKey` is the complete authenticated or selected peer public key in the
   canonical encoding below, or `null` for an anonymous sender.
 
 Each event schema below defines its required fields and nullability. The keys
@@ -224,15 +321,15 @@ codec `0xec` (unsigned-varint bytes `ec01`), with these 32 raw public-key bytes:
 
 ```text
 0900000000000000000000000000000000000000000000000000000000000000
-peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
+peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
 ```
 
-`message.in` and `message.prepared` store `myKey` and `peerResolution`, with
-no `peerKey` payload field. Their peer key is derived as
-`peer.resolved(peerResolution).peerKey`. For an anonymous
-inbound only, null `peerResolution` yields null `peerKey`; an unavailable or
+`message.in` and `message.prepared` store `localKeyName` and `peerResolutionEventId`, with
+no `peerPublicKey` payload field. Their peer key is derived as
+`peer.resolved(peerResolutionEventId).peerPublicKey`. For an anonymous
+inbound only, null `peerResolutionEventId` yields null `peerPublicKey`; an unavailable or
 invalid reference is deferred or conflicted, never treated as anonymous.
-In this document and the delivery profile, a message or package's `peerKey`
+In this document and the delivery profile, a message or package's `peerPublicKey`
 always means this derived value. `peer.resolved`, `relationship.peerTransitioned`
 and ACK observations retain their explicit keys. Profile observations instead
 reference their source message under sections 11.3–11.4.
@@ -279,10 +376,10 @@ not create a local DID entity or a publication obligation.
   "type": "mediation.created",
   "roots": [],
   "data": {
-    "id": "019b2a51-118f-7e46-b31b-c63cd090c92c",
+    "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
     "mediatorDid": "did:web:mediator.example",
     "me": {
-      "key": "mediation/019b2a51-118f-7e46-b31b-c63cd090c92c/me",
+      "keyName": "mediation/019b2a51-118f-7e46-b31b-c63cd090c92c/me",
       "did": "did:peer:4zQm..."
     }
   }
@@ -290,7 +387,7 @@ not create a local DID entity or a publication obligation.
 ```
 
 This intent creates the stable vault-controlled identity for one mediation
-arrangement. `me.key` MUST use the arrangement ID and `me.did` MUST match the
+arrangement. `me.keyName` MUST use the arrangement ID and `me.did` MUST match the
 seed-derived key.
 
 Repeating the same arrangement ID with different values is an integrity
@@ -303,7 +400,7 @@ conflict. A new attempt against the same mediator uses a new ID.
   "type": "mediation.granted",
   "roots": [],
   "data": {
-    "id": "019b2a51-118f-7e46-b31b-c63cd090c92c",
+    "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
     "routingDid": "did:peer:2.Ez..."
   }
 }
@@ -323,7 +420,7 @@ arrangement or obtains an explicit current answer from the mediator.
   "type": "mediation.selected",
   "roots": [],
   "data": {
-    "id": "019b2a51-118f-7e46-b31b-c63cd090c92c"
+    "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c"
   }
 }
 ```
@@ -341,7 +438,7 @@ still referenced by a live route remains required.
   "type": "mediation.retired",
   "roots": [],
   "data": {
-    "id": "019b2a51-118f-7e46-b31b-c63cd090c92c",
+    "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
     "because": "replaced"
   }
 }
@@ -363,10 +460,10 @@ A locally controlled communication DID is a Peer DID:
   "type": "did.created",
   "roots": [],
   "data": {
-    "id": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "didId": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
     "did": "did:peer:4zQm...rendezvous-short",
-    "longForm": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
-    "boundRoute": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
+    "longFormDid": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
+    "boundRouteId": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73"
   }
 }
 ```
@@ -379,14 +476,14 @@ for that entity; their names are derived, not stored as payload fields.
 For every locally controlled communication DID:
 
 - `did` is the canonical `did:peer:4` short form;
-- `longForm` is the validated self-resolving long form;
-- `boundRoute` is REQUIRED and equals the route encoded in the input document;
+- `longFormDid` is the validated self-resolving long form;
+- `boundRouteId` is REQUIRED and equals the route encoded in the input document;
 - seed-derived public keys and route MUST match that document; and
 - changing keys or route creates another DID entity and an explicit scoped
   transition.
 
 The entity has a spelling set, not a DID string as its identity: in this
-version the set consists of `did` and its validated `longForm`. A future
+version the set consists of `did` and its validated `longFormDid`. A future
 alias-declaration profile may extend that set with externally managed
 spellings without making DID-document publication vault state; this version
 defines no alias-declaration event or implicit equivalence from an external
@@ -414,9 +511,9 @@ or direct ingress without sharing an application identity.
   "type": "route.configured",
   "roots": [],
   "data": {
-    "id": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
+    "routeId": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
     "kind": "mediated",
-    "mediation": "019b2a51-118f-7e46-b31b-c63cd090c92c",
+    "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
     "endpoint": null
   }
 }
@@ -424,8 +521,8 @@ or direct ingress without sharing an application identity.
 
 `kind` is `mediated` or `direct`.
 
-- A mediated route has non-null `mediation` and null `endpoint`.
-- A direct route has null `mediation` and an absolute HTTPS or WSS
+- A mediated route has non-null `mediationId` and null `endpoint`.
+- A direct route has null `mediationId` and an absolute HTTPS or WSS
   `endpoint`.
 
 A direct endpoint routes to a full vault runtime or an ingress service. It
@@ -446,7 +543,7 @@ does not migrate existing DIDs or change their immutable routes.
   "type": "route.retired",
   "roots": [],
   "data": {
-    "id": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
+    "routeId": "019b2a58-fef5-7d59-ae1c-46e4f0a13c73",
     "because": "replaced"
   }
 }
@@ -466,7 +563,7 @@ does not erase retained messages.
   "type": "did.disclosed",
   "roots": [],
   "data": {
-    "did": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "didId": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
     "as": "oob",
     "uses": "many",
     "oobId": "019b2a57-a947-7502-8fee-4d80d949dbcb",
@@ -477,14 +574,13 @@ does not erase retained messages.
 
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
-Here `data.did` is a local entity ID referencing `did.created.data.id`, not a
-DID string. This field and `contact.useDid.data.did` in section 7.2 are explicit
-naming exceptions; both retain the local UUID rather than a wire spelling.
+`data.didId` references the local entity's `did.created.data.didId` under
+section 3.5. Its DID spellings remain on that entity.
 A one-use OOB invitation may disclose any live communication DID; matching
 root-address receipt consumes it under section 14.9.
 
 This is the permanent record that an address was revealed. Before disclosure,
-a mediated `boundRoute` MUST have currently verified recipient registration.
+a mediated `boundRouteId` MUST have currently verified recipient registration.
 Reusable/public disclosure SHOULD use an address allocated for discovery, and
 SHOULD NOT publish an address already allocated for private communication.
 These are privacy policies, not relationship-formation or cryptographic role
@@ -497,7 +593,7 @@ checks. First disclosure exposes the validated `did:peer:4` long form.
   "type": "did.retired",
   "roots": [],
   "data": {
-    "id": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
+    "didId": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
     "because": "contact-deleted"
   }
 }
@@ -539,7 +635,7 @@ It is ordinary LWW metadata and has no key or protocol effect.
 
 ## 7. Contacts
 
-A contact is a set of decisions identified by one `cid`. It may hold an
+A contact is a set of decisions identified by one `contactId`. It may hold an
 unverified discovery DID before a relationship is bound, and may have several
 relationships assigned under section 12.3. Each relationship preserves its
 identity as either end changes address. Contact IDs name local decisions;
@@ -558,7 +654,7 @@ See `rendezvous.md` section 10.1.
   "type": "contact.created",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "because": "user"
   }
 }
@@ -573,13 +669,13 @@ See `rendezvous.md` section 10.1.
   "type": "contact.petname",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "name": "alice"
   }
 }
 ```
 
-Latest by canonical order wins for that `cid`.
+Latest by canonical order wins for that `contactId`.
 
 #### `contact.flag`
 
@@ -588,14 +684,14 @@ Latest by canonical order wins for that `cid`.
   "type": "contact.flag",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "flag": "pinned",
     "value": true
   }
 }
 ```
 
-Latest per `(cid, flag)` wins.
+Latest per `(contactId, flag)` wins.
 
 #### `contact.useDid`
 
@@ -604,16 +700,16 @@ Latest per `(cid, flag)` wins.
   "type": "contact.useDid",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "did": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "didId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
     "because": "relationship"
   }
 }
 ```
 
 This outbound preference associates one of our communication DID entities
-with the contact. `data.did` is that entity's `did.created.data.id`, under
-section 5.4's naming exception. `because` is `relationship`, `rendezvous`,
+with the contact. `data.didId` is that entity's `did.created.data.didId` under
+section 3.5. `because` is `relationship`, `rendezvous`,
 `manual` or another documented policy value.
 
 This preference selects among relationship addresses already eligible under
@@ -630,7 +726,7 @@ relationship-to-contact decision independently of these address preferences.
   "type": "contact.peerDidAdded",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "did": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
     "because": "oob"
   }
@@ -652,13 +748,13 @@ cryptographic evidence later.
   "type": "contact.peerDidRemoved",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "add": "019b2a64-86fa-7f28-a63a-5d70ce1d829a"
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "addEventId": "019b2a64-86fa-7f28-a63a-5d70ce1d829a"
   }
 }
 ```
 
-`add` is the `eid` of one `contact.peerDidAdded`. Explicit references make
+`addEventId` is the `eventId` of one `contact.peerDidAdded`. Explicit references make
 removal independent of wall-clock ordering. A scoped transition may make an
 older rendezvous DID non-preferred without deleting the historical add event.
 
@@ -669,13 +765,14 @@ older rendezvous DID non-preferred without deleting the historical add event.
   "type": "contact.merged",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "from": "019b2a66-c794-7b41-bff1-68a4ecdd0b67"
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "fromContactId": "019b2a66-c794-7b41-bff1-68a4ecdd0b67"
   }
 }
 ```
 
-This is a display-only grouping hint between two contact IDs. A UI MAY group
+`contactId` and `fromContactId` name the two contacts. This is a display-only
+grouping hint between them. A UI MAY group
 those contact views, but every member retains its own decisions and
 relationship identity. This event MUST NOT affect attribution, DID selection,
 transitions, message or execution identity, ACK scope, relationship receipt, invitation
@@ -688,7 +785,7 @@ consumption, deletion or erasure. It creates no protocol representative ID.
   "type": "contact.deleted",
   "roots": [],
   "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da"
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da"
   }
 }
 ```
@@ -804,27 +901,27 @@ Canonical projections and message hashes are defined by `distributed-delivery.md
 
 ### 9.1 IDs
 
-- `mid` is both the outbound vault message entity ID and the innermost
+- `messageId` is both the outbound vault message entity ID and the innermost
   DIDComm plaintext `id`.
 - `packageId` identifies one exact encrypted inner envelope and is Routing
   2.0 `forward.id`.
 - mediator `deliveryId` is not stored by outbound events.
 
-A user send mints one UUIDv7 `mid`. Every package uses it as plaintext `id`.
-Outbound events do not store a second `wireId`. Inbound observations keep
-their scoped MID and the received wire ID under `distributed-delivery.md`
+A user send mints one UUIDv7 `messageId`. Every package uses it as plaintext `id`.
+Outbound events do not store a second `wireMessageId`. Inbound observations keep
+their scoped message ID and the received wire ID under `distributed-delivery.md`
 section 9; the equality applies only to locally authored outbound messages.
 
 An automatic effect derives:
 
 ```text
-mid = UUIDv5(
+messageId = UUIDv5(
   8847bd57-5907-5bcd-9a71-d1e97cee3199,
   RFC8785(["v1", effectKey])
 )
 ```
 
-The resulting `mid` is also the response's wire ID. Retrying or repackaging
+The resulting `messageId` is also the response's wire ID. Retrying or repackaging
 preserves this one ID. Equivalent automatic effects therefore identify one
 logical response.
 
@@ -835,9 +932,9 @@ logical response.
   "type": "message.out",
   "roots": ["bafkrei...body", "bafkrei...attachment"],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "target": {
-      "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e"
+      "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e"
     },
     "birth": null,
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
@@ -848,8 +945,8 @@ logical response.
     "pleaseAck": [""],
     "ack": [],
     "headers": {},
-    "body": "bafkrei...body",
-    "attachments": ["bafkrei...attachment"],
+    "bodyCid": "bafkrei...body",
+    "attachmentCids": ["bafkrei...attachment"],
     "intentHash": "<base64url-sha256>",
     "executionId": null,
     "handlerId": null,
@@ -860,7 +957,7 @@ logical response.
 }
 ```
 
-`target` is the closed object `{ "relationship": "<R>" }`. A contact-send API
+`target` is the closed object `{ "relationshipId": "<R>" }`. A contact-send API
 selects one relationship before intent commit; an explicit address API
 must resolve the same address-pair identity before using this event. The target
 is immutable and cannot be changed by later preferences, contact merges or
@@ -872,13 +969,13 @@ yet committed, it contains the offline selection:
 
 ```json
 {
-  "ourDid": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
+  "localDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
   "peerDid": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document"
 }
 ```
 
 The local DID must exist and be live. Canonicalize the exact selected peer
-spelling and derive `target.relationship` from the two birth addresses under
+spelling and derive `target.relationshipId` from the two birth addresses under
 `rendezvous.md` section 10. No online resolution is required to commit intent.
 Repeated unbound sends freeze the same selection. A known binding uses null;
 any non-null birth must agree with it. Missing evidence defers preparation,
@@ -909,10 +1006,10 @@ Requirements:
   oldest-to-newest target array frozen by the response algorithm;
 - `headers` contains every otherwise-unmodeled supported top-level DIDComm
   header and no reserved field, including `return_route`;
-- `body` names the canonical stored message document;
-- `attachments` is the distinct ordered list of object-backed attachment
+- `bodyCid` names the canonical stored message document;
+- `attachmentCids` is the distinct ordered list of object-backed attachment
   payload roots from that document; link-only descriptors add no entry;
-- `roots` is the distinct ordered set of `body` followed by `attachments`;
+- `roots` is the distinct ordered set of `bodyCid` followed by `attachmentCids`;
 - `intentHash` is computed under `distributed-delivery.md` section 5;
 - `executionId`, `handlerId`, `effectKind`, `ordinal` and `effectKey` are all
   null for a locally initiated send and all non-null for an inbound-triggered
@@ -926,7 +1023,7 @@ Requirements:
 - an automatic intent stores the complete producing tuple. Validation checks
   its execution ID against the carrier group, its tuple and intent against the
   producing protocol, recomputes its key under `distributed-delivery.md`
-  section 11, and requires its `mid` to equal the section-9.1 derivation;
+  section 11, and requires its `messageId` to equal the section-9.1 derivation;
 - the five automatic-effect fields are portable effect metadata excluded from
   the wire and intent hash; they still participate in full event equality;
 - `thid`, `pthid`, `expiresTime` and all five automatic-effect
@@ -937,7 +1034,7 @@ A preparer emits `created_time`, `expires_time`, `thid` and `pthid` only when
 non-null; emits `please_ack` whenever `pleaseAck` is non-null; emits `ack` and
 `attachments` when non-empty; and expands `headers` at plaintext top level.
 
-More than one `message.out` under one `mid` is allowed only when every field is
+More than one `message.out` under one `messageId` is allowed only when every field is
 identical. Reuse of one wire ID with a different intent projection is an intent
 conflict.
 
@@ -950,16 +1047,16 @@ conflict.
     "bafkrei...encrypted-envelope"
   ],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "senderDid": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
+    "senderDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
+    "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "recipientDid": "did:web:bob.example",
-    "peerResolution": "019b2a72-0626-7a87-a310-941fe4c1ce77",
+    "peerResolutionEventId": "019b2a72-0626-7a87-a310-941fe4c1ce77",
     "fromPrior": null,
     "intentHash": "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA",
     "plaintextHash": "WkPpglZREjLGtviZ1L6c-R3EX1cTHtbe0sJrmhl77LQ",
-    "envelope": "bafkrei...encrypted-envelope"
+    "envelopeCid": "bafkrei...encrypted-envelope"
   }
 }
 ```
@@ -969,35 +1066,35 @@ replica.
 
 Requirements:
 
-- `senderDid` names a live local DID entity selected for the target under
+- `senderDidId` names a live local DID entity selected for the target under
   section 9.2's restrictions; for ordinary relationship traffic it is
-  `currentLocalDid(R)` under section 12.4 at preparation;
-- the package belongs to `message.out.target.relationship`; root or valid
+  `currentLocalDidId(R)` under section 12.4 at preparation;
+- the package belongs to `message.out.target.relationshipId`; root or valid
   rotated endpoint evidence must agree with that same `R`;
-- `myKey` is that entity's key-agreement key and authorizes the plaintext
+- `localKeyName` is that entity's key-agreement key and authorizes the plaintext
   `from` under the exact spelling used by the package;
-- the plaintext `id` equals `message.out.mid`; its other semantic fields
+- the plaintext `id` equals `message.out.messageId`; its other semantic fields
   and immutable control headers equal the committed intent;
 - `intentHash` equals the intent value;
 - `plaintextHash` hashes the complete plaintext actually encrypted;
 - `recipientDid` is the package's exact application `to` DID;
-- `peerResolution` names the exact `peer.resolved` evidence used to select
-  the recipient key; its `peerKey` supplies the package's derived peer key.
-  Its `myKey` equals the package's local key and its canonical `did` matches
+- `peerResolutionEventId` names the exact `peer.resolved` evidence used to select
+  the recipient key; its `peerPublicKey` supplies the package's derived peer key.
+  Its `localKeyName` equals the package's local key and its canonical `did` matches
   `recipientDid`. It is non-null for every phase-1 package, including a
   retained numalgo-4 resolution. First-package freshness and
   snapshot reuse follow `rendezvous.md` section 5.1;
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
   a raw DASL CID; duplicate members or invalid I-JSON are rejected before
-  canonicalization. The `envelope` CID commits to those exact bytes;
+  canonicalization. The `envelopeCid` CID commits to those exact bytes;
 - `packageId` is a UUIDv7 and equals outer `forward.id`; and
 - every retry of this package uses identical envelope bytes.
 
-All packages for one `mid` MUST preserve its intent hash. No new package may
-be prepared after that MID is submitted under section 14.8. Before then, a
-new package MAY change `senderDid`, `myKey`, `recipientDid`, the derived peer
-key, `peerResolution` or `fromPrior` only when the change follows a valid selected
+All packages for one `messageId` MUST preserve its intent hash. No new package may
+be prepared after that message ID is submitted under section 14.8. Before then, a
+new package MAY change `senderDidId`, `localKeyName`, `recipientDid`, the derived peer
+key, `peerResolutionEventId` or `fromPrior` only when the change follows a valid selected
 DID entity or verified relationship-scoped continuation for the same logical target.
 Every such change requires a new package ID and plaintext hash. A protocol may
 be stricter. Birth metadata never forces a package back to a superseded end.
@@ -1006,7 +1103,7 @@ Local rotation's current-sender, proof and repack rules are in section 12.4.
 Liveness and current-end selection are producer checks at preparation and
 submission, not retroactive invalidation of historical package evidence.
 On a local-key repack, a new `peer.resolved` MAY re-express the pinned recipient
-snapshot with the new `myKey`, retaining the identical document CID, DID
+snapshot with the new `localKeyName`, retaining the identical document CID, DID
 spellings, selected peer key, authorized methods and service. This is local
 evidence rebinding, not a fresh resolution or a peer-chain extension.
 
@@ -1020,15 +1117,15 @@ relationship messages follow the same package rules.
   "type": "message.packageRetired",
   "roots": [],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
     "because": "repacked",
-    "replacement": "019b2a75-11bd-7ae2-8e41-279d84c2528a"
+    "replacementPackageId": "019b2a75-11bd-7ae2-8e41-279d84c2528a"
   }
 }
 ```
 
-`replacement` is nullable. Retirement permanently stops automatic
+`replacementPackageId` is nullable. Retirement permanently stops automatic
 submission of this package; it does not terminate the logical message or
 another package. Its envelope contribution is determined only by section
 15.3's retention predicate. Retirement preserves the package's historical
@@ -1041,7 +1138,7 @@ submission and scope evidence; it cannot undo a completed submission.
   "type": "delivery.submitted",
   "roots": [],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c"
   }
 }
@@ -1050,7 +1147,7 @@ submission and scope evidence; it cannot undo a completed submission.
 This says only that one transport endpoint accepted the attempt. It does not
 mean route existence, mediator retention, pickup or ultimate durable receipt.
 
-`packageId` MUST identify a valid `message.prepared` for this exact `mid`.
+`packageId` MUST identify a valid `message.prepared` for this exact `messageId`.
 A local runtime appends this event after observing transport acceptance. Its
 successful commit completes submission for the entire logical outbound under
 section 14.8. If acceptance happened but this event did not commit, recovery
@@ -1066,7 +1163,7 @@ fields of this portable event and do not participate in the delivery fold.
   "type": "delivery.failed",
   "roots": [],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "scope": "message",
     "packageId": null,
     "code": "expired"
@@ -1103,22 +1200,22 @@ Sensitive strings remain in local trace; `code` is a stable non-secret value.
   "type": "delivery.acknowledged",
   "roots": [],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "peerKey": "<alice-pairwise-public-key>",
-    "ackMid": "27c4471f-8937-501b-9ffb-a7eaeeebc178",
-    "ackWireId": "21559fb4-1a9f-54b1-b8fa-1bf82700d365"
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
+    "peerPublicKey": "<alice-pairwise-public-key>",
+    "ackMessageId": "27c4471f-8937-501b-9ffb-a7eaeeebc178",
+    "ackWireMessageId": "21559fb4-1a9f-54b1-b8fa-1bf82700d365"
   }
 }
 ```
 
 This event is appended only after an authenticated ultimate peer plaintext
-contains the outbound `mid` in its explicit DIDComm `ack` array and every
+contains the outbound `messageId` in its explicit DIDComm `ack` array and every
 package-level address, transition and protocol-specific security precondition
 for that ACK has validated. Threading or a natural response without `ack` is insufficient.
-`ackMid` identifies the local inbound ACK-bearing observation.
-One valid carrier observation MUST witness `ackMid`, `ackWireId`, `myKey`,
-the derived `peerKey` and the explicit acknowledged value together. These keys
+`ackMessageId` identifies the local inbound ACK-bearing observation.
+One valid carrier observation MUST witness `ackMessageId`, `ackWireMessageId`, `localKeyName`,
+the derived `peerPublicKey` and the explicit acknowledged value together. These keys
 identify the ACK carrier and may differ from the old outbound package's keys;
 section 14.8's historical local/peer-chain membership permits rotation between
 that package and its ACK.
@@ -1138,7 +1235,7 @@ rotation confirmation requires receipt at the exact successor under section
 
 ## 10. Inbound message events
 
-### 10.1 Deterministic inbound observation MID
+### 10.1 Deterministic inbound observation message ID
 
 See `distributed-delivery.md` section 9.
 
@@ -1152,16 +1249,16 @@ See `distributed-delivery.md` section 9.
     "bafkrei...attachment"
   ],
   "data": {
-    "mid": "369d7a43-8dce-5b86-b073-e390d457f357",
-    "wireId": "019b2a70-f225-721c-835f-67175be0667e",
+    "messageId": "369d7a43-8dce-5b86-b073-e390d457f357",
+    "wireMessageId": "019b2a70-f225-721c-835f-67175be0667e",
     "receiptOrdinal": "42",
     "intentHash": "855qiA-zQ94SVOPYj2KnooWRNJAe1GB419LMTGLMwAs",
     "plaintextHash": "dpPwT44Xre48u9xon4fUfvLOEQI6nYxQDzCCFnCJMK8",
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
+    "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
-    "peerResolution": "019b2a71-4c18-760a-9017-b3e265aa89d0",
-    "relationshipBinding": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
-    "peerTransition": null,
+    "peerResolutionEventId": "019b2a71-4c18-760a-9017-b3e265aa89d0",
+    "relationshipBindingEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
+    "peerTransitionEventId": null,
     "presentedDid": "did:web:bob.example",
     "did": "did:web:bob.example",
     "thid": null,
@@ -1174,14 +1271,14 @@ See `distributed-delivery.md` section 9.
     "ack": [],
     "headers": {},
     "fromPrior": null,
-    "body": "bafkrei...body",
-    "attachments": [
+    "bodyCid": "bafkrei...body",
+    "attachmentCids": [
       "bafkrei...attachment"
     ],
     "bytes": 48213,
     "signedBy": null,
     "receivedVia": {
-      "mediation": "019b2a51-118f-7e46-b31b-c63cd090c92c",
+      "mediationId": "019b2a51-118f-7e46-b31b-c63cd090c92c",
       "deliveryId": "01J...opaque"
     }
   }
@@ -1190,18 +1287,18 @@ See `distributed-delivery.md` section 9.
 
 Requirements:
 
-- `mid` is the deterministic observation value above;
+- `messageId` is the deterministic observation value above;
 - `receiptOrdinal` is a canonical positive decimal integer string assigned to
   this newly committed observation event under the vault-wide allocator below;
   it is immutable portable evidence, not an EventStore `ChangeToken`;
 - `intentHash` and `plaintextHash` are computed under `distributed-delivery.md` section 5;
-- `myKey` is the exact local key that decrypted or verified the message;
-- `peerResolution` is REQUIRED and names the exact `peer.resolved` used to
+- `localKeyName` is the exact local key that decrypted or verified the message;
+- `peerResolutionEventId` is REQUIRED and names the exact `peer.resolved` used to
   authenticate the sender. It is null exactly for an anonymous observation,
   in which `did`, `presentedDid` and the derived peer key are also null.
   An authenticated or signed sender requires DID resolution evidence; there
   is no DID-less authenticated-key fallback. A non-null reference supplies
-  the authenticated peer key under section 4.1; its `myKey`, `did` and
+  the authenticated peer key under section 4.1; its `localKeyName`, `did` and
   `presentedDid` match this observation. Sender authentication and evidence
   reuse MUST satisfy
   `rendezvous.md` section 5.1's freshness rule, including for duplicate
@@ -1210,16 +1307,16 @@ Requirements:
   the reference. Committed observations recover from retained evidence without
   new resolution. It is local
   evidence metadata, excluded from the message hashes;
-- `relationshipBinding` is REQUIRED and nullable; it references the exact
-  `relationship.bound` selected under sections 12.1 and 14.4. Obtain its `eid`
-  from a previously completed commit, as for `peerResolution`; it cannot refer
+- `relationshipBindingEventId` is REQUIRED and nullable; it references the exact
+  `relationship.bound` selected under sections 12.1 and 14.4. Obtain its `eventId`
+  from a previously completed commit, as for `peerResolutionEventId`; it cannot refer
   to another draft in the inbound batch. Every authenticated proof-free
   observation has this reference, including a new birth receipt. Null is used
   for anonymous input and a carried proof whose existing
   relationship is still unresolved. The latter can obtain scope only through
   that carrier's verified `relationship.peerTransitioned`, never a new birth
   from its sender;
-- `peerTransition` is REQUIRED and nullable. A proof-free peer successor
+- `peerTransitionEventId` is REQUIRED and nullable. A proof-free peer successor
   references the already committed `relationship.peerTransitioned` that pins its
   canonical DID and successor document in the selected binding's `R`. A root sender or
   carried proof uses null. This rule is the same at every local address.
@@ -1241,7 +1338,7 @@ Requirements:
   preserve normalized wire headers; absent `please_ack` is null, a present
   array is retained exactly, absent `ack` is `[]`, and no additional header is
   `{}`;
-- ACK processing expands `""` in `pleaseAck` to this `wireId` and ignores only
+- ACK processing expands `""` in `pleaseAck` to this `wireMessageId` and ignores only
   later duplicate targets; stored arrays are not rewritten;
 - `headers` contains every otherwise-unmodeled permitted top-level member and
   MUST NOT contain any reserved field, including `return_route`;
@@ -1249,16 +1346,15 @@ Requirements:
 - event `author` identifies the active receiving runtime;
 - mediation and delivery ID are null for direct transport without them;
 - `bytes` is the canonical retained document byte length; and
-- `attachments` is the distinct ordered list of object-backed attachment
+- `attachmentCids` is the distinct ordered list of object-backed attachment
   payload roots in the closed stored document; link-only descriptors add no
   entry; and
-- `roots` is the distinct ordered set of body followed by those attachment
-  roots.
+- `roots` is the distinct ordered set of `bodyCid` followed by `attachmentCids`.
 
 Every newly committed `message.in` receives its own fresh `receiptOrdinal`,
-including a recorded duplicate or transition-verified alias of an existing MID.
+including a recorded duplicate or transition-verified alias of an existing message ID.
 It MUST NOT copy an earlier observation's ordinal. Re-ingest of an existing
-`eid` preserves its event and allocates no new ordinal.
+`eventId` preserves its event and allocates no new ordinal.
 
 The value matches `[1-9][0-9]*`. Comparison and arithmetic MUST use its exact
 integer value, never lexical order or an inexact floating-point conversion.
@@ -1306,7 +1402,7 @@ A later observation does not renumber earlier events. Learning an older alias
 or importing history may change this derived key for future decisions, but
 MUST NOT change an ACK array already frozen in a committed `message.out`.
 
-After `eid` deduplication, distinct events with the same `(author,
+After `eventId` deduplication, distinct events with the same `(author,
 receiptOrdinal)` are a receipt-integrity conflict. Affected logical messages
 are those observed by the conflicting events. Retain those events and
 surface the conflict; do not use affected logical messages as newly
@@ -1335,9 +1431,9 @@ that passes the receive and integrity checks.
 
 ### 10.3 Duplicate, transition and conflict rules
 
-First group observations by deterministic `mid`.
+First group observations by deterministic `messageId`.
 
-Within one MID:
+Within one message ID:
 
 - equal intent hashes are one observation group;
 - differing `receivedVia`, valid local recipient keys or valid complete
@@ -1350,8 +1446,8 @@ Within one MID:
 - every conflict suppresses automatic application effects and disputed ACK
   handling until explicitly resolved.
 
-Within one unique validated relationship scope, two authenticated MID groups
-with the same `wireId` are one logical message only when:
+Within one unique validated relationship scope, two authenticated message ID groups
+with the same `wireMessageId` are one logical message only when:
 
 1. their authenticated peer DIDs/keys are authorized by the same pinned
    document, or joined through verified relationship-scoped transitions,
@@ -1395,7 +1491,7 @@ In phase 1 it acknowledges one account-scoped delivery and follows durable
 
 An ultimate ACK is an end-to-end application message. It is recorded as
 `message.in`; each target in its validated `ack` array is resolved only as
-`(carrier logical peer scope, wireId)`. A conflict-free local outbound in that
+`(carrier logical peer scope, wireMessageId)`. A conflict-free local outbound in that
 same relationship scope may produce an
 idempotent `delivery.acknowledged`. A wire ID reused by another peer or
 relationship is never selected. Outbound membership is derived by section
@@ -1417,15 +1513,15 @@ These facts remain distinct from contact assignments and local DID entities.
     "bafkrei...resolved-did-document"
   ],
   "data": {
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
+    "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
+    "peerPublicKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
     "presentedDid": "did:web:bob.example",
     "did": "did:web:bob.example",
-    "document": "bafkrei...resolved-did-document",
-    "authenticationKids": [
+    "documentCid": "bafkrei...resolved-did-document",
+    "authenticationMethodIds": [
       "did:web:bob.example#authentication-0"
     ],
-    "keyAgreementKids": [
+    "keyAgreementMethodIds": [
       "did:web:bob.example#key-agreement-0"
     ],
     "service": "did:web:mediator.example"
@@ -1441,11 +1537,11 @@ peer key.
 - `did` is the canonical DID used by folds under `rendezvous.md` section 5.2,
   including its exact-string rule for `did:web`. For Peer DID numalgo 4 it is
   the short form; first disclosure keeps the long form in `presentedDid`.
-- `document` names the raw DASL object containing exact RFC 8785 canonical
+- `documentCid` names the raw DASL object containing exact RFC 8785 canonical
   resolved DID document JSON. Its CID commits to those bytes.
-- the authenticated `peerKey` must be present under the named DID and exact
+- the authenticated `peerPublicKey` must be present under the named DID and exact
   document;
-- `authenticationKids` and `keyAgreementKids` enumerate all methods authorized
+- `authenticationMethodIds` and `keyAgreementMethodIds` enumerate all methods authorized
   for those purposes in the exact retained document, with references resolved
   against that document's `id`. They do not prove every listed key controlled the
   observed message; the key-agreement methods are historical chain evidence
@@ -1466,7 +1562,7 @@ A short form received before corresponding long-form resolution evidence is
 known cannot establish an authenticated relationship.
 
 For numalgo 4, let `L` be the retained validated long form and `S` its derived
-short form. `document` MUST store the
+short form. `documentCid` MUST store the
 [Peer DID Method's long-form resolution result](https://identity.foundation/peer-did-method-spec/#resolving-a-did)
 with optional reference expansion disabled. Starting from the decoded input
 document, set the root `id` to `L`; preserve its `alsoKnownAs` array (or start
@@ -1480,7 +1576,7 @@ expansion, context injection or short-form output is not a storage choice.
 
 Later short-form lookup or receipt MUST reuse or reproduce those same document
 bytes and CID from `L`, even though `presentedDid` may now be `S`. New resolution
-events may record another presented spelling, selected key or local `myKey`;
+events may record another presented spelling, selected key or local `localKeyName`;
 they do not produce a second document for the same numalgo-4 DID. Import
 validates this representation against `L`; it never repairs a pin by rewriting
 the retained bytes or CID. Method-ID comparison follows section 11.2.
@@ -1495,17 +1591,17 @@ and document CID with incompatible contents is an integrity conflict.
   "type": "relationship.peerTransitioned",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "peerKey": "<bob-pairwise-public-key>",
-    "from": "did:web:bob.example",
-    "presentedFrom": "did:web:bob.example",
-    "to": "did:peer:4zQm...bob-pairwise-short",
-    "presentedTo": "did:peer:4zQm...bob-pairwise-short:z...bob-pairwise-input-document",
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
+    "peerPublicKey": "<bob-pairwise-public-key>",
+    "fromDid": "did:web:bob.example",
+    "presentedFromDid": "did:web:bob.example",
+    "toDid": "did:peer:4zQm...bob-pairwise-short",
+    "presentedToDid": "did:peer:4zQm...bob-pairwise-short:z...bob-pairwise-input-document",
     "fromPrior": "eyJ...",
-    "priorResolution": "019b4d11-22d3-7fd0-82fb-f33864a75dd4",
-    "peerResolution": "019b4d14-18bd-77f1-b4a4-5c2a6c2694ba",
-    "mid": "3e7a2368-4a71-5560-8785-348ca4fbf548"
+    "priorResolutionEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd4",
+    "peerResolutionEventId": "019b4d14-18bd-77f1-b4a4-5c2a6c2694ba",
+    "messageId": "3e7a2368-4a71-5560-8785-348ca4fbf548"
   }
 }
 ```
@@ -1513,32 +1609,32 @@ and document CID with incompatible contents is an integrity conflict.
 This event is lifted only from a valid DIDComm `from_prior` in the named
 inbound message.
 
-- `relationship` is REQUIRED and names the exact relationship whose peer end
+- `relationshipId` is REQUIRED and names the exact relationship whose peer end
   is continued.
-- `from` is the canonical prior DID.
-- `presentedFrom` is byte-for-byte equal to `from_prior.iss`.
+- `fromDid` is the canonical prior DID.
+- `presentedFromDid` is byte-for-byte equal to `from_prior.iss`.
 - `iat` is an integer Epoch-Seconds value retained in the JWT. It has no
   message-age acceptance window and does not choose a document snapshot;
 - the protected JWT `kid` has a DID portion byte-for-byte equal to
-  `presentedFrom` and is authorized by the named historical resolution under
+  `presentedFromDid` and is authorized by the named historical resolution under
   the method-ID comparison below;
-- `to` is the new canonical DID; for Peer DID numalgo 4 it is the short form;
-- `from` and `to` MUST differ; a same-DID document/key update, including
+- `toDid` is the new canonical DID; for Peer DID numalgo 4 it is the short form;
+- `fromDid` and `toDid` MUST differ; a same-DID document/key update, including
   long/short spellings of one DID, cannot use this rotation event;
-- `presentedTo` is byte-for-byte equal to `from_prior.sub`, plaintext `from`
+- `presentedToDid` is byte-for-byte equal to `from_prior.sub`, plaintext `from`
   and the DID portion of authcrypt `skid`; for Peer DID numalgo 4 it is the
   valid long form on first disclosure. Other supported peer DIDs use their
   validated exact spelling under `rendezvous.md` section 5.1;
-- `priorResolution` names the exact `peer.resolved` event whose document and
+- `priorResolutionEventId` names the exact `peer.resolved` event whose document and
   authentication method verify `fromPrior`;
-- `peerResolution` names the successor's exact `peer.resolved`, equal to the
-  selected carrier observation's `message.in.peerResolution`. That one
-  observation must also witness `mid`, `peerKey`, `myKey`, `presentedTo` and
+- `peerResolutionEventId` names the successor's exact `peer.resolved`, equal to the
+  selected carrier observation's `message.in.peerResolutionEventId`. That one
+  observation must also witness `messageId`, `peerPublicKey`, `localKeyName`, `presentedToDid` and
   the exact `fromPrior`; and
-- `mid` is the actual inbound message entity carrying the proof. Duplicate
-  observations of that MID are interchangeable witnesses only when one exact
-  observation satisfies all carrier fields above together. MID equality alone
-  cannot substitute a different `peerResolution`, proof or local recipient key.
+- `messageId` is the actual inbound message entity carrying the proof. Duplicate
+  observations of that message ID are interchangeable witnesses only when one exact
+  observation satisfies all carrier fields above together. message ID equality alone
+  cannot substitute a different `peerResolutionEventId`, proof or local recipient key.
 
 The verifier MUST use the named historical resolution snapshot. A network
 fetch of a newer `did:web` document is not a substitute unless the raw CID of
@@ -1546,9 +1642,9 @@ its canonical bytes exactly matches the pinned document CID. Missing snapshot
 material creates a retryable deferred state; an invalid signature, claim, key
 or long form is a conflict.
 
-For predecessor spelling comparison, canonicalize `presentedFrom`/`iss` under
-`rendezvous.md` section 5.2 and require equality with `priorResolution.did`.
-Byte equality with `priorResolution.presentedDid` is not required. Numalgo-4
+For predecessor spelling comparison, canonicalize `presentedFromDid`/`iss` under
+`rendezvous.md` section 5.2 and require equality with `peer.resolved(priorResolutionEventId).did`.
+Byte equality with `peer.resolved(priorResolutionEventId).presentedDid` is not required. Numalgo-4
 long/short equivalence requires validation of the long form and its derived
 short form; other supported methods use that section's canonicalization,
 including the exact-string fallback, never inferred aliases from shared keys
@@ -1565,21 +1661,22 @@ document. A valid long-form `iss`/`kid` can therefore verify against a snapshot
 whose `presentedDid` is the short form of the same numalgo-4 DID; its stored
 document still uses section 11.1's long-form representation.
 
-`myKey` MUST be in
-`relationshipRecipientKeys(R)` under section 14.4. This includes every historical
+`localKeyName` MUST be in
+`relationshipRecipientKeyNames(R)` under section 14.4. This includes every historical
 local-chain key, starting with the birth address. The actual local recipient
 and retained predecessor evidence must identify one unique `R`; neither address
 alone supplies scope.
 The named inbound MUST authenticate the successor, and its derived peer key
-MUST equal this event's `peerKey`. `from` MUST equal the canonical DID of `priorResolution`,
-which is one of that relationship's pinned or verified predecessor snapshots
+MUST equal this event's `peerPublicKey`. `fromDid` MUST equal the canonical DID
+of `peer.resolved(priorResolutionEventId)`, which is one of that relationship's
+pinned or verified predecessor snapshots
 under `distributed-delivery.md` section 9, starting with the common root binding.
 A transition cannot move a peer end into a different relationship merely
 because the contact or prior DID is shared.
 
 The bound root snapshot verifies the first remote transition; later ones use
 the named historical snapshot in that same peer chain. The selected carrier's
-`relationshipBinding`, when non-null, must name this `R`; its exact local key
+`relationshipBindingEventId`, when non-null, must name this `R`; its exact local key
 must belong to the rooted local history. Commit transition evidence before
 processing the carrier's ACKs or effects. Missing evidence defers; ambiguous
 or incompatible attribution conflicts. Threads, contact labels and current
@@ -1615,16 +1712,16 @@ compact JWT is evidence, not an object reference.
   "type": "profile.nameClaimed",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "source": "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1",
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "sourceEventId": "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1",
     "name": "Alice L."
   }
 }
 ```
 
-`source` is the `eid` of one exact committed `message.in` observation, not its
-`mid` or wire ID. Its validated logical-message scope under section 14.7 MUST
-equal `relationship`. The source and any required binding/transition evidence
+`sourceEventId` is the `eventId` of one exact committed `message.in` observation, not its
+`messageId` or wire ID. Its validated logical-message scope under section 14.7 MUST
+equal `relationshipId`. The source and any required binding/transition evidence
 MUST already be committed before this event is lifted. A pending, anonymous,
 mediator or conflicted source supplies no profile claim.
 
@@ -1660,16 +1757,16 @@ leave no profile fact; these events create no additional content hold.
   "type": "profile.shared",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "source": "019b2a85-0912-7b2c-9425-4fd7fd0dd019"
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "sourceEventId": "019b2a85-0912-7b2c-9425-4fd7fd0dd019"
   }
 }
 ```
 
-`source` is the `eid` of one exact committed `message.out` profile disclosure.
-Its immutable `target.relationship` MUST equal `relationship`, and its
+`sourceEventId` is the `eventId` of one exact committed `message.out` profile disclosure.
+Its immutable `target.relationshipId` MUST equal `relationshipId`, and its
 validated outbound membership follows section 14.8. Lift this observation only
-after that MID has a committed valid `delivery.submitted`, recognizing the
+after that message ID has a committed valid `delivery.submitted`, recognizing the
 supported disclosure from readable source content under section 11.3's writer
 lock, erasure and tombstone rules. A queued intent, prepared package, unknown
 transport outcome or peer ACK alone is insufficient.
@@ -1690,7 +1787,7 @@ history. Recovering a missing lift never prepares or resubmits its source.
 A relationship is an unordered pair of birth addresses with a stable ID and
 two independently replaceable ends. Public, rendezvous and pairwise describe
 address allocation/disclosure policy, not different relationship types. The
-local perspective supplies `ourDid` and the peer end; it does not affect the ID.
+local perspective supplies `localDidId` and the peer end; it does not affect the ID.
 `rendezvous.md` section 10 owns the symmetric ID derivation.
 
 ### 12.1 Receipt and relationship evidence
@@ -1719,8 +1816,8 @@ irrespective of the recipient's allocation policy. Under the receive lock:
    the actual recipient DID and authenticated sender resolution; and
 5. apply `rendezvous.md` section 9.3's receive-time superseded-sender and
    integrity checks; commit/reuse the selected binding before freezing its
-   returned `eid` in `message.in.relationshipBinding`, and freeze
-   `peerTransition` under section 10.2. Commit receipt before ACK processing,
+   returned `eventId` in `message.in.relationshipBindingEventId`, and freeze
+   `peerTransitionEventId` under section 10.2. Commit receipt before ACK processing,
    contact policy or reply effects.
 
 The root addresses are canonical DIDs, not authentication keys. An unknown key
@@ -1784,16 +1881,16 @@ contact, local successor or acknowledgment.
   "type": "relationship.bound",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "ourDid": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "peerResolution": "019b4d11-22d3-7fd0-82fb-f33864a75dd4"
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "localDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
+    "peerResolutionEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd4"
   }
 }
 ```
 
-`ourDid` names a local communication DID. The exact referenced `peer.resolved`
-has `myKey == did/<ourDid>/key-agreement`; its canonical `did` supplies the
-other birth address. Both addresses are distinct. `relationship` equals
+`localDidId` names a local communication DID. The exact referenced `peer.resolved`
+has `localKeyName == did/<localDidId>/key-agreement`; its canonical `did` supplies the
+other birth address. Both addresses are distinct. `relationshipId` equals
 section 10 of `rendezvous.md`'s derivation over their sorted canonical strings.
 The local DID's document and the peer resolution snapshot retain their exact
 presented spellings, key authorizations and routes. Every key-agreement key
@@ -1804,7 +1901,7 @@ For a new outbound, the writer first commits the offline intent's `birth`
 selection under section 9.2. After resolution and before preparing/submitting
 its first package, commit this binding. For new inbound, authentication and
 `peer.resolved` commit first, then this binding in its own commit, then
-`message.in` referencing the binding's returned `eid`. Keep the receive lock
+`message.in` referencing the binding's returned `eventId`. Keep the receive lock
 across these dependent commits under section 12.1. A crash after
 the binding commit leaves reusable binding evidence and no receipt; it consumes
 no invitation and creates no pickup ACK or ultimate ACK/effect work. A binding
@@ -1835,8 +1932,8 @@ cryptographic identity, choose a current address or change `R`.
   "type": "relationship.contactAssigned",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "contact": "019b2a63-48bf-7214-961d-4c3f97cb95da"
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da"
   }
 }
 ```
@@ -1868,16 +1965,16 @@ same scoped, directed predecessor-to-successor rule.
   "type": "relationship.localTransitioned",
   "roots": [],
   "data": {
-    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
-    "fromDid": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "toDid": "019b6a10-12c0-7410-89ab-38e54b097c21",
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "fromDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
+    "toDidId": "019b6a10-12c0-7410-89ab-38e54b097c21",
     "fromPrior": "eyJ...",
-    "trigger": null
+    "triggerEventId": null
   }
 }
 ```
 
-`fromDid` and `toDid` are distinct local DID entity IDs, with no role test.
+`fromDidId` and `toDidId` are distinct local DID entity IDs, with no role test.
 The successor MUST NOT already occur in this relationship's local chain. The
 ordinary allocator uses a fresh UUIDv7; the early privacy policy MAY use the
 deterministic successor ID in `rendezvous.md` section 10. A DID used by another
@@ -1885,16 +1982,16 @@ relationship is not, by itself, a chain conflict. The privacy allocator MUST
 avoid such reuse; imports still validate address-pair ambiguity, not exclusive
 DID ownership.
 
-`localChain(R)` starts at `relationship.bound.ourDid` and includes every
-validated local transition, its document and fixed key. `currentLocalDid(R)`
-is the unique final node regardless of liveness. Equal transitions are
+`localChain(R)` starts at `relationship.bound.localDidId` and includes every
+validated local transition, its document and fixed key. `currentLocalDidId(R)`
+is the `DidId` of the unique final node regardless of liveness. Equal transitions are
 idempotent. Competing successors/proofs for one predecessor, cycles or
 incompatible binding/proof evidence are conflicts. Missing evidence defers.
 Neither event timestamps nor a live predecessor can select a winner or roll
 back the current end. Changes to the two different ends of `R` commute.
 
 Before a local edge, require a committed conflict-free binding, a permitted
-contact assignment if one exists, `fromDid == currentLocalDid(R)`, and retained
+contact assignment if one exists, `fromDidId == currentLocalDidId(R)`, and retained
 authenticated input in `R` addressed to that exact predecessor. A protocol
 error that declines interaction is not confirmation. This condition already
 holds for a normal first incoming message to the root address; it does not
@@ -1913,8 +2010,8 @@ against the immutable predecessor document. First disclosure of a local
 address always supplies this pinned long form under `rendezvous.md` section
 5.2. Subsequent short-form messages do not change the pin.
 
-`trigger` is REQUIRED and nullable. It names the `eid` of the exact committed
-`message.in` observation, not its shared `mid`, selected when the automatic
+`triggerEventId` is REQUIRED and nullable. It names the `eventId` of the exact committed
+`message.in` observation, not its shared `messageId`, selected when the automatic
 early-privacy policy starts this transition; that input must supply the
 predecessor confirmation and qualify under
 `rendezvous.md` section 11. A manual/local rotation uses null. This reference
@@ -1938,10 +2035,10 @@ An independently retired predecessor may sign a recovery edge when its retained
 confirmation and key evidence qualify; this does not revive terminal routes.
 
 Every unsubmitted outbound already names `R`. From edge commit onward, retire
-superseded packages and repack from the current local end, preserving MID,
+superseded packages and repack from the current local end, preserving message ID,
 intent, execution ID and ACK targets, including a message carrying `birth`
 metadata. Birth addresses identify `R`; they do not pin a current sender.
-Submitted MIDs never reopen. An unavailable current end blocks work without
+Submitted message IDs never reopen. An unavailable current end blocks work without
 falling back to a predecessor or another relationship.
 
 An unconfirmed successor with a terminal route and no retained confirming input
@@ -2014,7 +2111,7 @@ temporarily unavailable endpoint is not terminal.
 For each DID entity ID:
 
 - exactly one consistent `did.created` defines its spelling set, fixed
-  keys and immutable `boundRoute`;
+  keys and immutable `boundRouteId`;
 - disclosures are every valid `did.disclosed` in canonical order; and
 - any `did.retired` makes the DID entity terminal.
 
@@ -2035,7 +2132,7 @@ establishes it. A single route may be bound by many DIDs. This is transport
 reuse, not DID or contact equivalence.
 
 The desired mediator recipient set contains exactly each
-`(canonical DID short form, boundRoute)` pair for a live DID whose bound route
+`(canonical DID short form, boundRouteId)` pair for a live DID whose bound route
 is mediated. On every connection the phase-1 runtime queries each mediator
 and reconciles that desired set with ordinary Coordinate Mediation
 `recipient-query` and `recipient-update`. Current registration is runtime state,
@@ -2065,8 +2162,9 @@ never from the current endpoints, selected public keys, contact, sender role,
 message ID or arrival order.
 
 For each `R`, retain local and peer address histories and each node's exact
-document evidence. `relationshipRecipientKeys(R)` is exactly all historical
-keys in `localChain(R)`, including its root. No additional rendezvous recipient
+document evidence. `relationshipRecipientKeyNames(R)` is the set of `KeyName`
+values for all historical keys in `localChain(R)`, including its root.
+No additional rendezvous recipient
 rule exists. The index of `(local canonical DID, peer canonical DID)` is the
 full Cartesian product of the canonical DID nodes in `localChain(R)` and
 `peerChain(R)`, including every root and intermediate historical node on each
@@ -2086,13 +2184,13 @@ claims under its lock; import preserves conflicts and suppresses new work.
 Scope for an incoming message is derived from its immutable binding reference
 and the exact root or successor document authorizing its peer key. A carried
 proof additionally needs the verified `relationship.peerTransitioned` for that
-observation; a proof-free successor uses its frozen `peerTransition`. Null binding on a
+observation; a proof-free successor uses its frozen `peerTransitionEventId`. Null binding on a
 proof carrier remains pending until its transition supplies the binding. No
 incomplete/conflicting proof or known address claim authorizes a new birth.
 Section 12.1 defines the pending claim from an unmatched committed carrier;
 that claim defers new receipt without adding an unverified edge to this index.
 The same-DID unknown-key diagnostic follows section 14.6. Full per-observation
-and MID-group scope validation belongs to `distributed-delivery.md` section 9.
+and message ID-group scope validation belongs to `distributed-delivery.md` section 9.
 
 `relationship.contactAssigned` supplies zero or one contact; multiple distinct
 assignments are conflicts. Contact existence, assignment or deletion never
@@ -2111,7 +2209,7 @@ proof disclosure, not whether the relationship exists or messages may be sent.
 ### 14.5 Relationship profile fold
 
 Group valid `profile.nameClaimed` and `profile.shared` observations by their
-`relationship`, verifying their source references under sections 11.3–11.4.
+`relationshipId`, verifying their source references under sections 11.3–11.4.
 They do not establish a binding or assign a contact. Missing source/scope
 evidence defers the affected records; conflicted evidence supplies no profile
 value and remains visible as a diagnostic. An unassigned R retains its profile
@@ -2139,7 +2237,7 @@ For each R, this fold yields:
 - `nameConflict`: true when otherwise valid lifts disagree on the name from at
   least one logical inbound source, false otherwise. Those sources supply no
   name, but other non-conflicted sources remain eligible; and
-- `shared`: the complete canonical source key `(at, eid, author)` of the
+- `shared`: the complete canonical source key `(at, eventId, author)` of the
   latest valid logical `profile.shared` source under the same ordering, or
   null when none exists. This is that source's minimum key, not the lift's key
   or submission time.
@@ -2162,7 +2260,7 @@ The same assignment governs profile display. Shared DIDs, keys, discovery
 seeds and contact display merges cannot assign an unassigned R, transfer its
 profile history or change message scope and deletion boundaries.
 
-Fold each `cid` independently:
+Fold each `contactId` independently:
 
 - deleted when that ID has a `contact.deleted` tombstone;
 - `petname` is latest by canonical order;
@@ -2170,18 +2268,20 @@ Fold each `cid` independently:
 - `claimedName` is the latest eligible name claim across relationships uniquely
   assigned to this contact, using section 14.5's source ordering; absent claims
   yield null, and missing/conflicted records supply diagnostics, not names;
-- `profileShared[]` has one `{ relationship: R, sourceKey: shared }` for every
+- `profileShared[]` has one `{ relationshipId: R, sourceKey: shared }` for every
   non-conflicted R uniquely assigned to this contact whose section-14.5
   `shared` is non-null, ordered by the literal R string. An unassigned,
   assignment-conflicted or relationship-conflicted R contributes none;
 - `relationships[]` is every R uniquely assigned to this contact under section
   12.3, retaining pending/conflict status where binding evidence is incomplete
   or conflicting;
-- `ourDids[]` is the non-retired local address history of relationships
-  assigned to this contact, with current ends identified separately;
+- `localDidIds[]` contains the `DidId` values of the non-retired local address
+  history of relationships assigned to this contact, with current ends
+  identified separately;
 - `peerDidSeeds[]` is every `contact.peerDidAdded` not named by a
   `contact.peerDidRemoved`;
-- `theirDids[]` includes the current peer ends of assigned relationships;
+- `peerDids[]` includes the canonical DID strings of the current peer ends of
+  assigned relationships;
   unbound discovery seeds remain separate pending targets;
 - `writeTo[]` is every non-conflicted assigned relationship meeting the
   portable sender, peer and route eligibility rules below; and
@@ -2210,7 +2310,7 @@ the local recipient DID and canonical peer DID. Show it in that relationship's
 contact view through that R's unique contact assignment; the
 diagnostic does not grant execution scope. Keep the affected
 unscoped observation out of the application thread, unread count and normal
-message notifications, and process no ACK or effect from its MID group under
+message notifications, and process no ACK or effect from its message ID group under
 `distributed-delivery.md` section 9. If relationship evidence is missing or
 ambiguous, retain the ordinary missing-evidence or conflict diagnostic rather
 than assigning this one to an arbitrary contact. This no-proof observation
@@ -2222,7 +2322,7 @@ relationship. No new diagnostic event or retained body is needed.
 The contact view derives remote-error diagnostics from a conflict-free logical
 report with unique R scope. Match it to retained outbound packages in that
 same R, using the protocol's thread and authenticated peer-document evidence.
-Report Problem requires `report.pthid == (outbound.thid ?? outbound.mid)` under
+Report Problem requires `report.pthid == (outbound.thid ?? outbound.messageId)` under
 `rendezvous.md` section 13. Other protocols use their own correlation rules.
 Exactly one compatible outbound must match; dropping conflicted evidence cannot
 resolve ambiguity. The ACK array is never a rejected-message selector.
@@ -2237,12 +2337,12 @@ confirm rotation, change submission completion or restart an outbound.
 
 ### 14.7 Inbound message and execution fold
 
-First group `message.in` by deterministic observation `mid`.
+First group `message.in` by deterministic observation `messageId`.
 
-For each MID group:
+For each message ID group:
 
 - equal `intentHash` values form one observation group;
-- collect every distinct valid plaintext hash, receiving `myKey`/`peerResolution`,
+- collect every distinct valid plaintext hash, receiving `localKeyName`/`peerResolutionEventId`,
   `receivedVia` and author observation;
 - different intent hash is an intent conflict, whether application content
   or immutable control headers differ;
@@ -2250,17 +2350,17 @@ For each MID group:
 - erasure is applied before object presence; and
 - conflict suppresses automatic effects and disputed ACK processing.
 
-Derive scopes per observation and check row and MID-group consistency under
+Derive scopes per observation and check row and message ID-group consistency under
 `distributed-delivery.md` section 9 before union.
 `rendezvous.md` section 9.3 rejects new superseded-sender input at receive time;
 committed observations are never re-evaluated against later transitions.
 Their historical scope and existing unfinished work do not depend on today's
 current peer end. This does not bypass the ordinary evidence/conflict checks.
 An unresolved observation defers the whole group; distinct relationship
-scopes in the same MID group conflict under that rule. Neither case
+scopes in the same message ID group conflict under that rule. Neither case
 permits per-observation execution or ACK processing.
 
-Union authenticated MID groups into one logical message only when they have
+Union authenticated message ID groups into one logical message only when they have
 the same wire ID, resolve to the same unique validated relationship scope,
 have sender DID/key pairs authorized by the same pinned snapshot or connected
 by verified scoped transitions under `distributed-delivery.md` section 9,
@@ -2300,35 +2400,35 @@ protocol defines another display time.
 
 ### 14.8 Outbound message and delivery fold
 
-Group `message.out` by `mid`. Multiple identical intent events are one logical
-outbound. Different fields under one `mid` are a conflict, including local
+Group `message.out` by `messageId`. Multiple identical intent events are one logical
+outbound. Different fields under one `messageId` are a conflict, including local
 control fields excluded from the intent hash.
 
-An automatic MID derives only from `effectKey`, so this same fold detects
-different intents under one key. A conflicted MID retains all variants and
+An automatic message ID derives only from `effectKey`, so this same fold detects
+different intents under one key. A conflicted message ID retains all variants and
 their package history, but MUST NOT prepare or submit any variant;
 arrival order does not select a winner. Previously emitted effects remain
 history.
 
 Also group automatic outbounds with non-empty `ack` by `executionId`. Each
-execution permits at most one such logical outbound MID, across all handler
+execution permits at most one such logical outbound message ID, across all handler
 IDs, effect kinds and ordinals. Exact duplicate intents count once. This
 selection remains consumed after erasure, expiry or submission because the
 intent skeleton remains history. Other protocol-defined effects with empty
 `ack` do not consume the selection.
 
 A local writer MUST reuse the selected ACK-bearing intent and reject an
-attempt to add another MID to that execution's selection, including within one
-batch. If import supplies distinct ACK-bearing MIDs for the same execution,
+attempt to add another message ID to that execution's selection, including within one
+batch. If import supplies distinct ACK-bearing message IDs for the same execution,
 retain all as an automatic-response conflict and suppress preparation and
 submission of every competing response; arrival order selects no winner.
 Previously emitted responses remain history.
 
-ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
+ACK lookup uses `(carrier.logicalPeerScope, wireMessageId)`. Before applying an ACK,
 derive the candidate outbound's membership from non-conflicted portable
 evidence as follows.
 
-An application outbound belongs to its immutable `message.out.target.relationship`.
+An application outbound belongs to its immutable `message.out.target.relationshipId`.
 Its birth metadata, if present, must derive that `R`; its retained binding and
 every valid package must independently agree. A package uses a historical local
 address in `localChain(R)` and a peer DID/key authorized by one exact document
@@ -2346,7 +2446,7 @@ An ACK proves receipt, not remote contact approval or successful rotation.
 For a valid outbound:
 
 - `packages[]` is every consistent `message.prepared` by `packageId`;
-- all packages use the outbound `mid` as plaintext `id` and agree on `intentHash`;
+- all packages use the outbound `messageId` as plaintext `id` and agree on `intentHash`;
 - packages may differ in plaintext hash, sender/recipient DID, keys and
   `fromPrior` only under validated repack rules;
 - one package is inactive after `message.packageRetired` or a package-scoped
@@ -2355,11 +2455,11 @@ For a valid outbound:
   ID on a validated peer-scoped continuation under the membership rules above,
   the carrier has a unique derived scope, and all proof gates pass;
 - `submitted` is true if any valid package has a committed
-  `delivery.submitted` naming this exact `mid` and `packageId`. Validation uses
+  `delivery.submitted` naming this exact `messageId` and `packageId`. Validation uses
   the retained intent/package skeletons; collecting or erasing an envelope,
   retiring a package or later changing a route cannot remove completion;
 - once `submitted` is true, no new automatic preparation, repackaging or
-  submission is permitted for any package of that MID, including on duplicate
+  submission is permitted for any package of that message ID, including on duplicate
   input, restore or missing ACK;
 - a message-scoped terminal failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
@@ -2368,8 +2468,8 @@ For a valid outbound:
   Submitting a chosen package also requires that it is not retired or
   terminally failed and its exact valid envelope remains available;
 - after a committed `relationship.localTransitioned` for the outbound's `R`,
-  preparation uses `currentLocalDid(R)` under section 12.4, and a package whose
-  `senderDid` is not that current end is not submittable. These predicates
+  preparation uses `currentLocalDidId(R)` under section 12.4, and a package whose
+  `senderDidId` is not that current end is not submittable. These predicates
   apply before package-retirement observations commit; section 12.4 defines
   the package retirement and repack that recovery completes. Missing or
   conflicting local-chain evidence cannot authorize a fallback to an earlier end;
@@ -2422,8 +2522,8 @@ An OOB disclosure with `uses == "one"` is available while its DID is live and
 no matching committed root-address receipt has consumed it. The rule applies
 to any communication DID; allocation labels do not authorize consumption.
 
-A root-address receipt has non-null `relationshipBinding`, null `fromPrior`
-and `peerTransition`, the binding's root local key as `myKey`, and the binding's
+A root-address receipt has non-null `relationshipBindingEventId`, null `fromPrior`
+and `peerTransitionEventId`, the binding's root local key as `localKeyName`, and the binding's
 canonical root peer DID as sender. It consumes a local invitation when `pthid`
 equals that disclosure's `oobId` and the actual local recipient is the disclosed
 DID. Its consumer is the binding's symmetric `R`. A continuation, another
@@ -2454,15 +2554,15 @@ addresses to publish under `rendezvous.md` section 6.
   "type": "message.erased",
   "roots": [],
   "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "drop": ["bafkrei...body", "bafkrei...attachment"],
+    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
+    "dropCids": ["bafkrei...body", "bafkrei...attachment"],
     "because": "user"
   }
 }
 ```
 
 `because` is `user`, `contact-deleted` or another stable policy code.
-`drop` contains roots named by one or more events for the message.
+`dropCids` contains roots named by one or more events for the message.
 They are names to release and therefore MUST NOT appear in the erase
 event's `roots`.
 
@@ -2497,7 +2597,7 @@ For a consistent outbound `M` and valid package `P`, define:
 
 ```text
 retainEnvelopeForMessage(M, P) =
-    !erased(M, P.envelope)
+    !erased(M, P.envelopeCid)
     and !submitted(M)
     and !retired(P)
     and !packageTerminalFailure(P)
@@ -2616,7 +2716,7 @@ intent, not a half identity.
    `rendezvous.md` section 10 when that policy applies;
 3. derive the fixed authentication and key-agreement keys;
 4. build and validate a Peer DID numalgo-4 document encoding those keys and route;
-5. commit `did.created` with canonical short form, long form and `boundRoute`.
+5. commit `did.created` with canonical short form, long form and `boundRouteId`.
 
 There is no role field. A committed ID reuses its exact keys, document and route
 after a crash; it cannot be recreated using a new route. A conflicting or retired
@@ -2654,7 +2754,7 @@ same closure rule in every full copy.
 
 ### 16.6 Delete a contact
 
-1. append `contact.deleted` for the exact `cid`;
+1. append `contact.deleted` for the exact `contactId`;
 2. for every message exactly attributed to that contact, append erases for
    body, attachment and prepared-envelope roots required by policy;
 3. retire communication DIDs required exclusively by that contact, preserving
@@ -2698,7 +2798,7 @@ private-to-private changes execute this same procedure.
 
 ### 17.1 Event merge
 
-Merge is event-store union by `eid`. It never:
+Merge is event-store union by `eventId`. It never:
 
 - rewrites an event;
 - removes another replica's decision;
@@ -2826,15 +2926,15 @@ There is no migration requirement from an earlier event vocabulary.
     a later duplicate and delayed `delivery.acknowledged` commit do not change
     an on-time receipt into a late one. No expired failure is needed for a
     submitted message's late receipt.
-15. Equal authenticated variants derive one observation MID. Equal wire IDs
+15. Equal authenticated variants derive one observation message ID. Equal wire IDs
     under transition-verified peer keys in one relationship merge only at the
     logical-message layer.
 16. Execution ID derives from the unique symmetric relationship scope and wire
     ID using previously committed evidence, never a key pair, contact,
-    observation MID or uncommitted transition.
+    observation message ID or uncommitted transition.
 17. A transition-pending observation is effect-deferred; once verified, a
     cross-key alias in the same relationship derives the same execution ID.
-18. Observations sharing one MID but deriving different scopes preserve prior
+18. Observations sharing one message ID but deriving different scopes preserve prior
     history and suppress ACK processing and new effects as an execution-scope
     conflict; different valid local recipient keys cannot cause two executions.
 19. Intent conflicts suppress disputed automatic effects and ACK
@@ -2948,7 +3048,7 @@ There is no migration requirement from an earlier event vocabulary.
     implementation-selected presentation or diagnostic metadata.
 57. ACK before `delivery.submitted` does not complete submission or release an
     otherwise retained package. Committing `delivery.submitted` releases every
-    package's delivery retention contribution for that MID without waiting for
+    package's delivery retention contribution for that message ID without waiting for
     ACK; message body and attachment lifetimes remain separate.
 58. Commit and collection share the writer lock; GC computes current held roots
     under that lock and cannot unlink a retained object or overlap acceptance
@@ -2970,20 +3070,20 @@ There is no migration requirement from an earlier event vocabulary.
     Contact decisions or DID/route retirement never select a new execution scope.
 64. Committed submission remains complete after restart, loss of `local/`,
     clock rollback, package retirement, content erasure and envelope collection.
-    Retained event skeletons prevent resubmission or replacement of that MID.
-65. One package's committed `delivery.submitted` completes its entire MID and
+    Retained event skeletons prevent resubmission or replacement of that message ID.
+65. One package's committed `delivery.submitted` completes its entire message ID and
     suppresses every other package's preparation or submission. Workers
-    serialize dispatch per MID and commit acceptance before further dispatch.
-66. The inbound MID vectors in `distributed-delivery.md` section 9 recompute to
+    serialize dispatch per message ID and commit acceptance before further dispatch.
+66. The inbound message ID vectors in `distributed-delivery.md` section 9 recompute to
     `369d7a43-8dce-5b86-b073-e390d457f357` and
     `a8b9afd5-60fe-5f49-a669-bd998e760e7e` from their published inputs.
 67. Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
 68. An otherwise retained unsubmitted package survives route unavailability
-    and GC with its exact bytes. Route recovery cannot reopen a submitted MID.
+    and GC with its exact bytes. Route recovery cannot reopen a submitted message ID.
 69. Retiring an unsubmitted package releases its delivery retention contribution
-    without completing the MID. Retiring a submitted package does not undo the
-    MID's committed submission evidence.
+    without completing the message ID. Retiring a submitted package does not undo the
+    message ID's committed submission evidence.
 70. Shared envelope bytes remain held by another non-erased message even after
     one message/root relation is erased.
 71. Each new duplicate observation receives a fresh ordinal; exact re-ingest
@@ -2998,7 +3098,7 @@ There is no migration requirement from an earlier event vocabulary.
 74. ACK membership joins immutable outbound target, birth metadata, binding
     and package endpoint evidence. Equal inbound/outbound wire IDs alone
     cannot acknowledge another message.
-75. A known sender DID or submitted MID does not bypass missing
+75. A known sender DID or submitted message ID does not bypass missing
     binding/transition recovery. Required scope evidence commits before a
     separate response-intent commit.
 76. A pickup-ACKed inbound with unfinished deterministic work is rediscovered
@@ -3023,7 +3123,7 @@ There is no migration requirement from an earlier event vocabulary.
     missing/conflicting continuation cannot fall back to a birth.
 83. Same-consumer invitation reuse does not create another take. Imported
     incompatible consumers leave it unavailable; event order chooses no winner.
-84. Adding `contact.merged` changes only display grouping. Per-`cid` decisions,
+84. Adding `contact.merged` changes only display grouping. Per-`contactId` decisions,
     relationship scopes, message/execution IDs, ACK results, invitation state
     and deletion/erasure behavior remain unchanged.
 85. Matching pthid alone, a foreign local recipient, remote invitation or
@@ -3034,8 +3134,8 @@ There is no migration requirement from an earlier event vocabulary.
     eligible retry; durable prepared/submitted/terminal evidence still applies.
     A crash before `delivery.submitted` commits may resend the exact package
     even if transport had accepted it; a crash after commit cannot resend it.
-87. A user send or deterministic response uses its outbound MID as plaintext
-    `id`; every package and retry preserves it. Inbound observation MIDs remain
+87. A user send or deterministic response uses its outbound message ID as plaintext
+    `id`; every package and retry preserves it. Inbound observation message IDs remain
     scoped derivations and are not replaced with the received wire ID.
 88. A successor freezes its own route at DID creation. Crash before commit may
     choose again; afterward recovery reuses that exact document and route.
@@ -3051,22 +3151,22 @@ There is no migration requirement from an earlier event vocabulary.
     and notification trigger. Missing evidence defers; invalid proof fields
     never select replacement material.
 92. Two automatic intents for the same execution, handler, kind and ordinal
-    have one effect key and MID. Different intent hashes conflict after any
+    have one effect key and message ID. Different intent hashes conflict after any
     permutation of their union; both variants and their packages remain history,
     with preparation and submission suppressed.
 93. Equal effect keys and intent hashes with different targets still conflict.
     Exact duplicate intents produce one logical outbound.
 94. An automatic intent whose execution ID disagrees with its unique carrier
     group's derived ID, whose key disagrees with that ID or protocol tuple, or
-    whose MID disagrees with its key is invalid and cannot execute.
+    whose message ID disagrees with its key is invalid and cannot execute.
 95. Every automatic `message.out` retains `handlerId`, `effectKind` and the
     canonical decimal `ordinal` with its execution ID and key. Reopen can
     recompute the key from those fields; a missing or altered tuple component
     cannot authorize work. A user-authored send has all five fields null and
     `ack == []`; a non-empty ACK cannot bypass deterministic effect selection.
 96. After an ACK-bearing response is frozen, a changed handler, effect kind or
-    ordinal cannot create another ACK-bearing MID for that execution, even
-    after submission or erasure. Importing competing response MIDs keeps
+    ordinal cannot create another ACK-bearing message ID for that execution, even
+    after submission or erasure. Importing competing response message IDs keeps
     their history and suppresses all competing responses under every event
     permutation; exact duplicates count once.
 97. A valid no-response rejection with a unique pinned-document and thread
@@ -3090,7 +3190,7 @@ There is no migration requirement from an earlier event vocabulary.
      the same batch. Commit scope evidence first; a rotation trigger and its
      required response are recovered through separate committed dependencies.
 101. Key encoding normalization still governs authentication,
-     observation MIDs and key membership. Relationship IDs instead use
+     observation message IDs and key membership. Relationship IDs instead use
      canonical DID strings; selected keys do not enter them. The X25519
      fixture round-trips its type code and public bytes.
 102. First-disclosure validation and recovery use the complete keys and
@@ -3098,7 +3198,7 @@ There is no migration requirement from an earlier event vocabulary.
      key or assigning a relationship to a contact does not prove authenticated
      inbound traffic. Anonymous, mediator and relationship-pending observations
      retain their key evidence without an application execution scope.
-103. message.out.target.relationship and nullable birth are immutable portable
+103. message.out.target.relationshipId and nullable birth are immutable portable
      metadata outside wire hashes. Birth selection permits offline queueing
      and must agree with a later binding. Packages may follow valid rotations
      without changing these fields.
@@ -3123,7 +3223,7 @@ There is no migration requirement from an earlier event vocabulary.
      authentication evidence but cannot change R.
 108. First-package preparation for each new non-numalgo-4 outbound performs
      fresh resolution. Retry and permitted repack use retained evidence;
-     neither an old snapshot nor a local TTL bypasses the new-MID rule.
+     neither an old snapshot nor a local TTL bypasses the new-message ID rule.
      Every new non-numalgo-4 inbound observation also requires current sender
      authentication under `rendezvous.md` section 5.1; a chain member absent
      from the current document fails, and unavailable resolution defers
@@ -3141,8 +3241,8 @@ There is no migration requirement from an earlier event vocabulary.
      no deterministic reply/ACK intent and consumes no ACK-bearing selection.
      Creating a valid live successor makes that unfinished work recoverable;
      it replies in the same relationship, never another one of the contact.
-111. `message.in` and `message.prepared` have no `peerKey` payload member.
-     MIDs and package comparisons derive it through `peerResolution`.
+111. `message.in` and `message.prepared` have no `peerPublicKey` payload member.
+     message IDs and package comparisons derive it through `peerResolutionEventId`.
      Missing non-null references defer, mismatched evidence conflicts, and only
      an anonymous inbound has null resolution/peer key. Resolution, peer-transition
      and ACK event keys remain present; profile observations reference source
@@ -3165,8 +3265,8 @@ There is no migration requirement from an earlier event vocabulary.
      A manual rotation with no other message soliciting confirmation SHOULD
      queue an ordinary Trust Ping with response_requested true.
 115. Every unsubmitted R-targeted intent, including birth intents, repacks
-     after a local edge with the same MID, intent and ACK targets. Old
-     packages stop immediately, before cleanup observations; submitted MIDs
+     after a local edge with the same message ID, intent and ACK targets. Old
+     packages stop immediately, before cleanup observations; submitted message IDs
      never reopen and no old-address fallback is allowed.
 116. Duplicate local edges are idempotent; branches, cycles and incompatible
      evidence conflict in every import order. Missing prefixes defer. Sharing
@@ -3186,7 +3286,7 @@ There is no migration requirement from an earlier event vocabulary.
 120. Recovery between input and peer-transition commits supplies no
      provisional birth scope. Once validated, the same R applies at root and
      successor local addresses, after erasure and in every import order.
-121. relationshipBinding and peerTransition are immutable receipt evidence,
+121. relationshipBindingEventId and peerTransitionEventId are immutable receipt evidence,
      never wire fields or hash inputs. Missing references defer; competing
      birth/continuation claims conflict without moving prior effects or
      releasing invitation consumption.
@@ -3195,23 +3295,23 @@ There is no migration requirement from an earlier event vocabulary.
 123. Contact assignment can precede resolution for an offline birth and is
      independent of the binding. Control-only R has no contact; conflicting
      assignments never change cryptographic scope.
-124. A notification trigger names the eid of one committed qualifying application
+124. A notification trigger names the eventId of one committed qualifying application
      observation with no prior response selection, even when duplicates share
-     its mid. Repeated edge evidence cannot substitute another observation's
-     eid. Its response is recovered exactly once, using the normal
+     its messageId. Repeated edge evidence cannot substitute another observation's
+     eventId. Its response is recovered exactly once, using the normal
      automatic-effect tuple and submitted boundary.
 125. The common DID schema has no role member. Fresh pairwise allocation
      avoids reuse locally; authentication and relationship formation remain
      identical for every address.
-126. A new MID from a superseded peer node is terminal at receipt before
+126. A new message ID from a superseded peer node is terminal at receipt before
      message.in, with mediated pickup ACK and no ultimate ACK/effect. A recorded
-     observation with the same MID in R follows the normal integrity rules and
+     observation with the same message ID in R follows the normal integrity rules and
      creates no new response obligation. Later transitions and import order
      do not invalidate previously committed observations or their unfinished
      work, and a shared DID still current in another R remains eligible there.
 127. New inbound resolution, binding and receipt use separate dependent
-     commits. The receipt references the returned binding eid; no draft may
-     supply a pre-minted eid. Crash after binding consumes no invitation and
+     commits. The receipt references the returned binding eventId; no draft may
+     supply a pre-minted eventId. Crash after binding consumes no invitation and
      creates no receipt ACK; recovery reuses that binding after authentication.
      The enclosing receive operation holds the same vault-wide writer lock as
      outbound preparation, so that preparation cannot insert another binding
@@ -3254,14 +3354,14 @@ There is no migration requirement from an earlier event vocabulary.
      shared evidence. An unassigned R contributes no contact name; conflicting
      assignments choose no contact. Rotation preserves each R's assignment,
      profile history and contact tombstone.
-133. profile.nameClaimed references an exact committed message.in eid and its
+133. profile.nameClaimed references an exact committed message.in eventId and its
      validated R. Unknown, missing, mismatching, anonymous or conflicted source
      evidence cannot supply a projected name. A proof carrier can supply one
      only after its required relationship.peerTransitioned commits. An existing
      valid lifted name survives source-body erasure; a new lift cannot read
      erased content or bypass a contact tombstone.
-134. profile.shared references an exact message.out eid in the same R and
-     requires committed valid submission for its MID. Intent, preparation,
+134. profile.shared references an exact message.out eventId in the same R and
+     requires committed valid submission for its message ID. Intent, preparation,
      transport uncertainty and ACK alone do not suffice. Duplicate lifts,
      repacks, erasure and later rotations preserve the one source disclosure;
      they cannot mark a different R as shared or reopen submitted work.
@@ -3275,7 +3375,7 @@ There is no migration requirement from an earlier event vocabulary.
      With no lifts it is null, false and null. Conflicting names from
      one otherwise valid logical source set nameConflict without hiding an
      older non-conflicted name. Shared selects the latest logical disclosure
-     using each source's minimum (at, eid, author), never submission or lift
+     using each source's minimum (at, eventId, author), never submission or lift
      order. Contact profileShared lists only uniquely assigned non-conflicted
      Rs with non-null shared and their source keys, sorted by R. Two Rs at one
      contact stay separate, and an unassigned or conflicted R contributes none.

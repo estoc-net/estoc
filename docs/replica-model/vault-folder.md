@@ -374,7 +374,7 @@ new events into fresh segments minted by the target store. It SHOULD use
 at most one fresh segment per incoming author for that call.
 
 It MUST NOT copy a source segment as an opaque file. Source events are
-decoded, duplicate-member checked, deduplicated by `eid` using RFC 8785
+decoded, duplicate-member checked, deduplicated by `eventId` using RFC 8785
 canonical bytes and reserialized canonically. Therefore the target may
 contain several segments under one author, some originally appended by
 that author and some created while other stores ingested its events.
@@ -540,9 +540,9 @@ A writable open additionally:
 2. reads complete lines;
 3. validates envelope and path-author equality;
 4. records damaged lines;
-5. deduplicates by `eid` and records conflicts;
+5. deduplicates by `eventId` and records conflicts;
 6. applies the equality filter;
-7. sorts by `(at, eid, author)`; and
+7. sorts by `(at, eventId, author)`; and
 8. yields accepted events.
 
 A filter reduces output, not necessarily I/O. Local indexes may optimize
@@ -551,7 +551,7 @@ this without changing results.
 ### 11.3 Append
 
 A local append writes only to the current replica's author directory.
-The backend MUST reject an attempt to provide or override `eid`, `at` or
+The backend MUST reject an attempt to provide or override `eventId`, `at` or
 `author` through the draft API.
 
 If the process terminates before the append promise resolves, reopen may see
@@ -570,7 +570,7 @@ Only then does it write fresh ingest segments. A validation or fork
 failure before this point writes nothing.
 
 The operation is idempotent. Repeating it may rescan input but adds no
-second copy by `eid`.
+second copy by `eventId`.
 
 ### 11.5 Damage and conflict
 
@@ -585,7 +585,7 @@ A damaged line is:
 
 It is skipped and reported, never joined with a following line.
 
-If manual file operations place different contents under one `eid`, the
+If manual file operations place different contents under one `eventId`, the
 folder reader keeps the content from the lexicographically first segment
 path and, within one segment, the first line offset. It reports every
 other content. This deterministic local choice is not conflict
