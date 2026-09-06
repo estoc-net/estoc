@@ -896,7 +896,7 @@ an existing local relationship history still receives eligible input normally;
 an unbound retired address or terminal bound-route dependency takes the terminal
 rejection path, independently of public/private allocation.
 Unlock/recovery and concrete recoverable prerequisites defer without pickup
-ACK. Current sender authentication follows that document's section 5.1,
+ACK. Current sender authentication follows that document's [section 10.1](relationships.md#did-resolution-requirements),
 including its transient-unavailability classification, per-delivery budget
 and definitive terminal authentication failures. Budget exhaustion uses the
 terminal rejection path; retained chain membership cannot bypass that check.
@@ -911,7 +911,7 @@ classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
 budget and has no client retention cap. While local wait state is retained,
 mere redelivery does not retry; relevant evidence changes start a fresh bounded
 resolution sequence when needed, with waiting time excluded from its local
-retention stop under that document's section 5.1. Loss of local wait state
+retention stop under that document's [section 10.1](relationships.md#did-resolution-requirements). Loss of local wait state
 follows that section's receive/authentication rule. Mediator expiry does not
 clear the pending pair claim.
 This distinction prevents terminal wrong-recipient or malformed input from
@@ -1099,7 +1099,7 @@ A conforming implementation demonstrates at least these cases:
    commit may redeliver and converges logically.
 5. <a id="rm-5"></a> A safely classified terminal pre-vault rejection may be pickup-ACKed without
    `message.in`, while recoverable local prerequisites and sender-resolution
-   unavailability within [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s budget remain pending.
+   unavailability within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget remain pending.
 6. <a id="rm-6"></a> Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
 7. <a id="rm-7"></a> `recipient_did` actually filters status and delivery.
@@ -1152,7 +1152,7 @@ A conforming implementation demonstrates at least these cases:
     and unbound retired DIDs use the terminal pre-vault ACK path and do not
     remain pending. A retired historical local address with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
-    resolution instead defers only within [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s budget.
+    resolution instead defers only within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget.
     Definitive DNS/not-found, invalid-document, unsupported-method and
     SSRF-forbidden results, or sender-resolution budget exhaustion, use the
     terminal pre-vault ACK path under that section. Repeated delivery of the
@@ -1165,5 +1165,5 @@ A conforming implementation demonstrates at least these cases:
     While local wait state is retained, redelivery alone does not resolve
     again; relevant evidence changes start one fresh shared bounded sequence
     when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
+    retention stop. Loss of local wait state follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
     claim.

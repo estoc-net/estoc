@@ -67,12 +67,12 @@ This index records the existing division of responsibilities.
 | Stored message and attachment normalization | [VE §8](vault-events.md#stored-message-document) | [DD hash projections](distributed-delivery.md#canonical-projections-and-hashes) |
 | Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
 | Inbound observation IDs, execution scope and execution IDs | [DD §9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE inbound fold](vault-events.md#inbound-message-and-execution-fold) |
-| Relationship ID and default allocation IDs | [RZ §10](relationships.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
+| Relationship ID and default allocation IDs | [RZ §5](relationships.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
 | Binding evidence, pending-pair claims and address index | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](relationships.md#deferred-delivery), [DD scope validation](distributed-delivery.md#address-chains-and-observation-membership) |
 | Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ early-privacy policy](relationships.md#early-private-address-policy-and-notifications), [RZ peer changes](relationships.md#peer-address-changes) |
-| Resolution freshness, failures and bounded retry | [RZ §5.1](relationships.md#did-resolution-requirements) | [RZ local wait state](relationships.md#deferred-delivery), [DD receive procedure](distributed-delivery.md#receive-a-message) |
-| Receipt gates and default contact/address policy | [RZ §9](relationships.md#uniform-receipt), [RZ §10.2](relationships.md#binding-and-contact-policy), [RZ §11](relationships.md#early-private-address-policy-and-notifications) | [DD receipt ordering](distributed-delivery.md#receive-a-message), [VE contact fold](vault-events.md#contact-fold) |
-| Send, receive and ACK procedure ordering | [DD §4.2](distributed-delivery.md#send-an-ordinary-message), [DD §8](distributed-delivery.md#durable-end-to-end-acknowledgment), [DD §9.1](distributed-delivery.md#receive-a-message) | [VE schemas and folds](vault-events.md#reading-guide) |
+| Resolution freshness, failures and bounded retry | [RZ §10.1](relationships.md#did-resolution-requirements) | [RZ local wait state](relationships.md#deferred-delivery), [DD receive procedure](distributed-delivery.md#receive-a-message) |
+| Receipt gates and default contact/address policy | [RZ §9](relationships.md#uniform-receipt), [RZ §5.2](relationships.md#binding-and-contact-policy), [RZ §11](relationships.md#early-private-address-policy-and-notifications) | [DD receipt ordering](distributed-delivery.md#receive-a-message), [VE contact fold](vault-events.md#contact-fold) |
+| Send, receive and ACK procedure ordering | [DD §4.2](distributed-delivery.md#send-an-ordinary-message), [DD §8](distributed-delivery.md#durable-end-to-end-acknowledgment), [DD §4.3](distributed-delivery.md#receive-a-message) | [VE schemas and folds](vault-events.md#reading-guide) |
 | Complete observation witness matching | [VE §10.5](vault-events.md#complete-observation-witnesses) | [VE peer-transition evidence](vault-events.md#relationship-peertransitioned), [VE ACK aggregation](vault-events.md#outbound-message-and-delivery-fold) |
 | Submission completion, ACK receipt timing and outbound work eligibility | [VE §9.8](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD applying ACK](distributed-delivery.md#applying-ack) |
 | Prepared-envelope retention and erasure | [VE §12.3](vault-events.md#held-roots) | [DO collection](dasl-objects.md#collection), [VE erase procedure](vault-events.md#erase-a-message) |
@@ -181,5 +181,35 @@ in `vault-events.md`, and runtime procedures remain together in that file.
 | 18 | [15](vault-events.md#privacy-and-security-boundaries) | Privacy and security boundaries |
 | 19 | [16](vault-events.md#versioning) | Versioning |
 | 20 | [17](vault-events.md#required-conformance-cases) | Required conformance cases |
+
+</details>
+
+The relationship identity and delivery receive procedures were moved after
+commit `0958f32`. The tables below map that commit's sections to their current
+locations; all other numbers are unchanged. Named anchors, earlier numbered
+heading aliases and conformance case IDs are retained.
+
+<details>
+<summary>Relationships: identity before discovery and detailed resolution</summary>
+
+| Previous section | Current section | Topic |
+| --- | --- | --- |
+| 10 | [5](relationships.md#symmetric-relationship-identity) | Symmetric relationship identity |
+| 10.1 | [5.1](relationships.md#contact-ids) | Contact IDs |
+| 10.2 | [5.2](relationships.md#binding-and-contact-policy) | Binding and contact policy |
+| 5 | [10](relationships.md#did-profiles-and-resolution-evidence) | DID profiles and resolution evidence |
+| 5.1 | [10.1](relationships.md#did-resolution-requirements) | Common requirements |
+| 5.2 | [10.2](relationships.md#peer-did-numalgo-4-profile) | Peer DID numalgo-4 profile |
+
+</details>
+
+<details>
+<summary>Distributed delivery: send, receive and recovery together</summary>
+
+| Previous section | Current section | Topic |
+| --- | --- | --- |
+| 4 | [4](distributed-delivery.md#vault-first-procedures-and-commit-boundaries) | Vault-first sending and commit boundaries → Vault-first procedures and commit boundaries (retitled) |
+| 9.1 | [4.3](distributed-delivery.md#receive-a-message) | Receive a message |
+| 9.2 | [4.4](distributed-delivery.md#receive-recovery) | Receive recovery |
 
 </details>

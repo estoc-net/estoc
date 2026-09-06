@@ -29,7 +29,7 @@ appear in all capitals.
 - [1. What it is for](#what-it-is-for)
 - [2. Terms](#terms)
 - [3. Addressing layers](#addressing-layers)
-- [4. Vault-first sending and commit boundaries](#vault-first-sending-and-commit-boundaries)
+- [4. Vault-first procedures and commit boundaries](#vault-first-procedures-and-commit-boundaries)
 - [5. Canonical projections and hashes](#canonical-projections-and-hashes)
 - [6. Preparing a package](#preparing-a-package)
 - [7. Submission completion and expiration](#submission-completion-and-expiration)
@@ -218,9 +218,13 @@ batch size and retention time. A quota or validation failure MUST NOT leave a
 partially stored package. Anonymous routing responses SHOULD avoid becoming a
 precise account- or recipient-existence oracle.
 
+<a id="4-vault-first-sending-and-commit-boundaries"></a>
+
 <a id="vault-first-sending-and-commit-boundaries"></a>
 
-## 4. Vault-first sending and commit boundaries
+<a id="vault-first-procedures-and-commit-boundaries"></a>
+
+## 4. Vault-first procedures and commit boundaries
 
 Every instruction to append an event in this document means
 `Vault.commit(objects, drafts)`, with an empty object list when none are new;
@@ -303,7 +307,7 @@ The active phase-1 runtime may later:
 1. stop when submitted, terminally failed, expired or conflicted under
    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold);
 2. fold the intent's target R and any birth metadata;
-3. resolve under [relationships.md section 5.1](relationships.md#did-resolution-requirements) and commit/reuse the common root
+3. resolve under [relationships.md section 10.1](relationships.md#did-resolution-requirements) and commit/reuse the common root
    binding before preparation. Select that R's current sender and peer end,
    checking portable lifecycle, assignment and pinned/verified key evidence;
 
@@ -329,6 +333,68 @@ A new package may change address/security evidence only while the outbound is
 unsubmitted, under validated repack rules and with the same intent hash.
 Receiving may join equal wire IDs across a verified peer-key transition in one
 relationship.
+
+<a id="91-receive-a-message"></a>
+
+<a id="receive-a-message"></a>
+
+### 4.3 Receive a message
+
+1. Before authoritative key/route recovery, retain delivery pending without
+   pickup ACK. Then apply [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s exact-recipient
+   and lifecycle gate, equally for all communication addresses. While local
+   wait state is retained, a delivery already waiting for relationship evidence
+   stays pending on mere redelivery; resume authentication only on that
+   document's evidence-change retry. Loss of that state follows
+   [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule.
+2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
+   consistency, and perform that document's [section-10.1](relationships.md#did-resolution-requirements) sender resolution with
+   its bounded unavailable-result retries. Safely terminal delivery is pickup-
+   ACKed without portable application input; recoverable prerequisites defer.
+3. Under the receive lock defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), find a
+   unique existing address-pair binding or a genuinely new live root pair.
+   Select the generic binding/transition evidence, apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s superseded-sender check, and check
+   invitation/relationship integrity. [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)'s known
+   pending membership blocks new proof-free receipt; omitting an unresolved
+   carrier's proof cannot create a new birth. Pre-receipt deferral required by
+   that section follows [relationships.md section 9.1](relationships.md#deferred-delivery), with no
+   `message.in` or pickup ACK while awaiting that evidence.
+4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
+   is needed, commit it separately and obtain its returned `eventId`; only then
+   commit `message.in` referencing that binding, with retained content, hashes
+   and its fresh receipt ordinal. Hold the receive lock across these dependent
+   commits and recheck recipient eligibility. Crash after binding but before
+   receipt leaves reusable evidence, no invitation consumption and no receipt
+   ACK; redelivery repeats authentication and reuses the binding.
+5. Only after durable receipt, ACK the mediator delivery. A crash before this
+   point leaves it pending or causes idempotent redelivery.
+6. Validate every carried rotation against its exact retained predecessor and
+   carrier evidence; commit/reuse `relationship.peerTransitioned` before
+   scope/ACK/effects.
+   Missing evidence leaves that input deferred, without a new-birth fallback.
+7. Derive per-observation scope and message ID-group consistency under section 9,
+   then process explicit ACKs through section 8.3's exact outbound membership.
+8. Apply contact and early-privacy policy only to eligible application input
+   under [relationships.md sections 5.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications). Binding already exists; a contact
+   or local successor is not required to assign protocol identity.
+9. Check the local-sender gate, reuse any chosen protocol/notification effect,
+   freeze eligible ACK targets, and commit at most one ACK-bearing response
+   before sending. Control input uses ordinary control/ACK rules without a
+   recursive privacy notification or contact creation.
+10. On a duplicate or recovery, reuse existing intents. Resume only eligible
+    unsubmitted work. A submitted response never gets another package or send.
+
+<a id="92-receive-recovery"></a>
+
+<a id="receive-recovery"></a>
+
+### 4.4 Receive recovery
+
+Recovery enumerates retained input, binding references, peer transitions,
+local policy triggers and unfinished effects. It requires no mediator redelivery
+or runtime-local queue. Partial imports retain missing-reference deferral;
+conflicting evidence suppresses affected work in every import order. Neither
+recovery nor a later rotation may derive a new R from a successor address.
 
 <a id="canonical-projections-and-hashes"></a>
 
@@ -451,7 +517,7 @@ A preparer folds the target and selects:
   relationship's current local end under [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned);
 - one current peer DID and authenticated peer key;
 - exact `peer.resolved` evidence, fresh for the first package of each new
-  non-numalgo-4 message ID under [relationships.md section 5.1](relationships.md#did-resolution-requirements);
+  non-numalgo-4 message ID under [relationships.md section 10.1](relationships.md#did-resolution-requirements);
 - one recipient route authorized by that evidence; and
 - any required relationship-scoped `from_prior`.
 
@@ -865,64 +931,6 @@ supplies no such membership. These are executable identity and scope fixtures,
 not JWT or numalgo-4 document test vectors; the DID entity IDs stand for
 validated local documents and transition proofs.
 
-<a id="receive-a-message"></a>
-
-### 9.1 Receive a message
-
-1. Before authoritative key/route recovery, retain delivery pending without
-   pickup ACK. Then apply [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s exact-recipient
-   and lifecycle gate, equally for all communication addresses. While local
-   wait state is retained, a delivery already waiting for relationship evidence
-   stays pending on mere redelivery; resume authentication only on that
-   document's evidence-change retry. Loss of that state follows
-   [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s receive/authentication rule.
-2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
-   consistency, and perform that document's section-5.1 sender resolution with
-   its bounded unavailable-result retries. Safely terminal delivery is pickup-
-   ACKed without portable application input; recoverable prerequisites defer.
-3. Under the receive lock defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), find a
-   unique existing address-pair binding or a genuinely new live root pair.
-   Select the generic binding/transition evidence, apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s superseded-sender check, and check
-   invitation/relationship integrity. [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)'s known
-   pending membership blocks new proof-free receipt; omitting an unresolved
-   carrier's proof cannot create a new birth. Pre-receipt deferral required by
-   that section follows [relationships.md section 9.1](relationships.md#deferred-delivery), with no
-   `message.in` or pickup ACK while awaiting that evidence.
-4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
-   is needed, commit it separately and obtain its returned `eventId`; only then
-   commit `message.in` referencing that binding, with retained content, hashes
-   and its fresh receipt ordinal. Hold the receive lock across these dependent
-   commits and recheck recipient eligibility. Crash after binding but before
-   receipt leaves reusable evidence, no invitation consumption and no receipt
-   ACK; redelivery repeats authentication and reuses the binding.
-5. Only after durable receipt, ACK the mediator delivery. A crash before this
-   point leaves it pending or causes idempotent redelivery.
-6. Validate every carried rotation against its exact retained predecessor and
-   carrier evidence; commit/reuse `relationship.peerTransitioned` before
-   scope/ACK/effects.
-   Missing evidence leaves that input deferred, without a new-birth fallback.
-7. Derive per-observation scope and message ID-group consistency under section 9,
-   then process explicit ACKs through section 8.3's exact outbound membership.
-8. Apply contact and early-privacy policy only to eligible application input
-   under [relationships.md sections 10.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications). Binding already exists; a contact
-   or local successor is not required to assign protocol identity.
-9. Check the local-sender gate, reuse any chosen protocol/notification effect,
-   freeze eligible ACK targets, and commit at most one ACK-bearing response
-   before sending. Control input uses ordinary control/ACK rules without a
-   recursive privacy notification or contact creation.
-10. On a duplicate or recovery, reuse existing intents. Resume only eligible
-    unsubmitted work. A submitted response never gets another package or send.
-
-<a id="receive-recovery"></a>
-
-### 9.2 Receive recovery
-
-Recovery enumerates retained input, binding references, peer transitions,
-local policy triggers and unfinished effects. It requires no mediator redelivery
-or runtime-local queue. Partial imports retain missing-reference deferral;
-conflicting evidence suppresses affected work in every import order. Neither
-recovery nor a later rotation may derive a new R from a successor address.
-
 <a id="first-contact-and-address-policy"></a>
 
 ## 10. First contact and address policy
@@ -1281,7 +1289,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     can send before a first reply. All later packages use current endpoints in
     that same R; birth metadata never blocks a valid repack.
 58. <a id="dd-58"></a> A freshly resolved same-DID new key does not extend `peerChain(R)`. Outbound
-    preparation follows [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s message-scoped failure;
+    preparation follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s message-scoped failure;
     an inbound at the local relationship DID without continuation proof has
     no scope and processes no ACK/effect. The contact diagnostic cannot make
     the observation executable, even when that R has a contact assignment.
@@ -1290,7 +1298,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     enlarge membership or change birth identity.
 60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
     before first preparation. Transient unavailability leaves it retryable;
-    definitive resolution failure is terminal under [relationships.md section 5.1](relationships.md#did-resolution-requirements). An unchanged online-revalidated document still creates new evidence.
+    definitive resolution failure is terminal under [relationships.md section 10.1](relationships.md#did-resolution-requirements). An unchanged online-revalidated document still creates new evidence.
     Existing packages retry or repack using retained snapshots only. Whenever
     an inbound delivery enters or resumes authentication, including duplicates,
     it uses current sender resolution; unavailability defers without pickup ACK
@@ -1347,6 +1355,6 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
     changes relevant to that pair trigger retry with a fresh bounded sender-
     resolution sequence when needed. While local wait state is retained, mere
-    redelivery does not retry; loss of that state follows [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Time in the evidence wait consumes neither
+    redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Time in the evidence wait consumes neither
     resolver attempts nor its local retention stop. No local retention timeout
     clears the pending claim.

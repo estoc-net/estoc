@@ -519,7 +519,7 @@ peer key.
 
 - `presentedDid` is the exact DID string supplied for resolution, preserved
   across any resolver-internal URL or DNS normalization.
-- `did` is the canonical DID used by folds under [relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile),
+- `did` is the canonical DID used by folds under [relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile),
   including its exact-string rule for `did:web`. For Peer DID numalgo 4 it is
   the short form; first disclosure keeps the long form in `presentedDid`.
 - `documentCid` names the raw DASL object containing exact RFC 8785 canonical
@@ -998,7 +998,7 @@ A relationship is an unordered pair of birth addresses with a stable ID and
 two independently replaceable ends. Public, rendezvous and pairwise describe
 address allocation/disclosure policy, not different relationship types. The
 local perspective supplies `localDidId` and the peer end; it does not affect the ID.
-[relationships.md section 10](relationships.md#symmetric-relationship-identity) owns the symmetric ID derivation.
+[relationships.md section 5](relationships.md#symmetric-relationship-identity) owns the symmetric ID derivation.
 
 <a id="121-receipt-and-relationship-evidence"></a>
 
@@ -1074,7 +1074,7 @@ an unrelated local address or authorize continuation there.
 Receipt and relationship formation do not require a contact, a reply, a private
 address or a completed rotation. A control message may establish a binding and
 process scoped ACKs without creating a contact or selecting a privacy reply.
-Application/contact policy is defined in [relationships.md sections 10.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications).
+Application/contact policy is defined in [relationships.md sections 5.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications).
 One-use invitation integrity follows [section 5.8](#invitation-fold) at the receipt boundary.
 
 These immutable evidence references preserve a message's interpretation through
@@ -1107,7 +1107,7 @@ contact, local successor or acknowledgment.
 `localDidId` names a local communication DID. The exact referenced `peer.resolved`
 has `localKeyName == did/<localDidId>/key-agreement`; its canonical `did` supplies the
 other birth address. Both addresses are distinct. `relationshipId` equals
-section [10](relationships.md#symmetric-relationship-identity) of [relationships.md](relationships.md)'s derivation over their sorted canonical strings.
+section [5](relationships.md#symmetric-relationship-identity) of [relationships.md](relationships.md)'s derivation over their sorted canonical strings.
 The local DID's document and the peer resolution snapshot retain their exact
 presented spellings, key authorizations and routes. Every key-agreement key
 authorized by that peer document starts `peerChain(R)`; the selected transport
@@ -1130,7 +1130,7 @@ resolution references with the same canonical DID, exact document CID and
 root local DID are equivalent binding evidence; different selected keys within
 that same document do not conflict. Incompatible roots, local perspective or
 peer document CIDs for one `R` are a binding conflict. A fresh resolver result
-cannot replace the pin; section [5.1](relationships.md#did-resolution-requirements) of [relationships.md](relationships.md) governs new authentication
+cannot replace the pin; section [10.1](relationships.md#did-resolution-requirements) of [relationships.md](relationships.md) governs new authentication
 and preparation independently.
 
 The birth addresses and initial pin never change after rotation. Another
@@ -1160,7 +1160,7 @@ cryptographic identity, choose a current address or change `R`.
 An outbound selected through a contact commits this assignment with its intent,
 even if the birth binding still awaits resolution. On inbound, ordinary
 application policy assigns an existing selected contact or the deterministic
-contact ID in [relationships.md section 10.1](relationships.md#contact-ids); control input alone assigns none.
+contact ID in [relationships.md section 5.1](relationships.md#contact-ids); control input alone assigns none.
 The writer reuses an existing assignment under its lock. Equal assignments
 are duplicates; distinct contacts assigned to one `R` are a visible assignment
 conflict, not an arrival-order choice. One contact may hold many relationships.
@@ -1216,7 +1216,7 @@ inbound message.
 - `presentedToDid` is byte-for-byte equal to `from_prior.sub`, plaintext `from`
   and the DID portion of authcrypt `skid`; for Peer DID numalgo 4 it is the
   valid long form on first disclosure. Other supported peer DIDs use their
-  validated exact spelling under [relationships.md section 5.1](relationships.md#did-resolution-requirements);
+  validated exact spelling under [relationships.md section 10.1](relationships.md#did-resolution-requirements);
 - `priorResolutionEventId` names the exact `peer.resolved` event whose document and
   authentication method verify `fromPrior`;
 - `peerResolutionEventId` names the successor's exact `peer.resolved`; and
@@ -1236,7 +1236,7 @@ material creates a retryable deferred state; an invalid signature, claim, key
 or long form is a conflict.
 
 For predecessor spelling comparison, canonicalize `presentedFromDid`/`iss` under
-[relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile) and require equality with `peer.resolved(priorResolutionEventId).did`.
+[relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile) and require equality with `peer.resolved(priorResolutionEventId).did`.
 Byte equality with `peer.resolved(priorResolutionEventId).presentedDid` is not required. Numalgo-4
 long/short equivalence requires validation of the long form and its derived
 short form; other supported methods use that section's canonicalization,
@@ -1326,7 +1326,7 @@ same scoped, directed predecessor-to-successor rule.
 `fromDidId` and `toDidId` are distinct local DID entity IDs, with no role test.
 The successor MUST NOT already occur in this relationship's local chain. The
 ordinary allocator uses a fresh UUIDv7; the early privacy policy MAY use the
-deterministic successor ID in [relationships.md section 10](relationships.md#symmetric-relationship-identity). A DID used by another
+deterministic successor ID in [relationships.md section 5](relationships.md#symmetric-relationship-identity). A DID used by another
 relationship is not, by itself, a chain conflict. The privacy allocator MUST
 avoid such reuse; imports still validate address-pair ambiguity, not exclusive
 DID ownership.
@@ -1356,7 +1356,7 @@ Its `iss` is the predecessor's exact long form, its protected `kid` uses that
 spelling and an authorized authentication method, `sub` is the successor's
 long form, and integer `iat` is sampled once at rotation. Validate the signature
 against the immutable predecessor document. First disclosure of a local
-address always supplies this pinned long form under [relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile). Subsequent short-form messages do not change the pin.
+address always supplies this pinned long form under [relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile). Subsequent short-form messages do not change the pin.
 
 `triggerEventId` is REQUIRED and nullable. It names the `eventId` of the exact committed
 `message.in` observation, not its shared `messageId`, selected when the automatic
@@ -1467,7 +1467,7 @@ they do not merge protocol identities.
 
 ### 7.1 Contact IDs
 
-See [relationships.md section 10.1](relationships.md#contact-ids).
+See [relationships.md section 5.1](relationships.md#contact-ids).
 
 <a id="contact-event-schemas"></a>
 
@@ -1822,7 +1822,7 @@ cannot choose among competing address transitions by clock order. Privacy
 policy may schedule an early rotation under [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications), but
 neither relationship formation nor ordinary sending waits for that policy.
 
-For a same-DID key change under [relationships.md section 5.1](relationships.md#did-resolution-requirements), derive a
+For a same-DID key change under [relationships.md section 10.1](relationships.md#did-resolution-requirements), derive a
 `peer-key-changed` diagnostic from the retained authenticated `message.in`,
 its exact `peer.resolved` evidence and the unique relationship identified by
 the local recipient DID and canonical peer DID. Show it in that relationship's
@@ -2045,7 +2045,7 @@ yet committed, it contains the offline selection:
 
 The local DID must exist and be live. Canonicalize the exact selected peer
 spelling and derive `relationshipId` from the two birth addresses under
-[relationships.md section 10](relationships.md#symmetric-relationship-identity). No online resolution is required to commit intent.
+[relationships.md section 5](relationships.md#symmetric-relationship-identity). No online resolution is required to commit intent.
 Repeated unbound sends freeze the same selection. A known binding uses null;
 any non-null birth must agree with it. Missing evidence defers preparation,
 and contradictory birth/binding evidence is a relationship conflict.
@@ -2154,7 +2154,7 @@ Requirements:
   Its `localKeyName` equals the package's local key and its canonical `did` matches
   `recipientDid`. It is non-null for every phase-1 package, including a
   retained numalgo-4 resolution. First-package freshness and
-  snapshot reuse follow [relationships.md section 5.1](relationships.md#did-resolution-requirements);
+  snapshot reuse follow [relationships.md section 10.1](relationships.md#did-resolution-requirements);
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
   a raw DASL CID; duplicate members or invalid I-JSON are rejected before
@@ -2256,7 +2256,7 @@ This event records only a terminal failure. `scope` is `package` or `message`.
   submission for the intent.
 - `code == "expired"` MUST be message-scoped.
 - `code == "peer-key-changed"` is message-scoped with `packageId == null`;
-  [relationships.md section 5.1](relationships.md#did-resolution-requirements) defines this failure before package preparation.
+  [relationships.md section 10.1](relationships.md#did-resolution-requirements) defines this failure before package preparation.
 
 Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
 belong only to local trace and retry policy. They MUST NOT append
@@ -2517,7 +2517,7 @@ Requirements:
   the authenticated peer key under [section 4.1](#key-evidence); its `localKeyName`, `did` and
   `presentedDid` match this observation. Sender authentication and evidence
   reuse MUST satisfy
-  [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s freshness rule, including for duplicate
+  [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s freshness rule, including for duplicate
   deliveries. Commit/reuse that event and document first, then use its returned
   event ID in the separate inbound commit; later resolutions cannot replace
   the reference. Committed observations recover from retained evidence without
@@ -2632,13 +2632,13 @@ The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Recipient and
 sender-authentication triage for both rendezvous and ordinary relationship
 traffic follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate). Recoverable key/route state,
-unavailable required sender resolution within that document's [section 5.1](relationships.md#did-resolution-requirements)
+unavailable required sender resolution within that document's [section 10.1](relationships.md#did-resolution-requirements)
 budget, or a relationship-evidence deferral required by [section 6.1](#receipt-and-relationship-evidence) produces
 no `message.in` and no pickup ACK. That evidence wait follows [relationships.md section 9.1](relationships.md#deferred-delivery): waiting consumes no sender-resolution budget; relevant evidence
 changes permit a fresh bounded resolution sequence under that document's
-[section 5.1](relationships.md#did-resolution-requirements), excluding waiting time from its local retention stop. Mere
+[section 10.1](relationships.md#did-resolution-requirements), excluding waiting time from its local retention stop. Mere
 redelivery does not retry authentication while local wait state is retained;
-loss of that state follows that document's [section-5.1](relationships.md#did-resolution-requirements) receive/authentication
+loss of that state follows that document's [section-10.1](relationships.md#did-resolution-requirements) receive/authentication
 rule. Carriers allowed to commit with a null binding under [section 6.1](#receipt-and-relationship-evidence) still
 follow durable receipt before pickup ACK. Exhausted sender-resolution budgets
 and safely classified terminal input MUST instead be pickup-ACKed without
@@ -2948,8 +2948,8 @@ absence never authorizes collection elsewhere.
 ## 13. Procedures
 
 Address selection and binding are defined in [relationships.md sections 8](relationships.md#ordinary-sending-and-birth-selection) and
-[10.2](relationships.md#binding-and-contact-policy); all sending and receipt use [distributed-delivery.md sections 4.2](distributed-delivery.md#send-an-ordinary-message) and
-[9.1](distributed-delivery.md#receive-a-message). These wire procedures and the runtime procedures below
+[5.2](relationships.md#binding-and-contact-policy); all sending and receipt use [distributed-delivery.md sections 4.2](distributed-delivery.md#send-an-ordinary-message) and
+[4.3](distributed-delivery.md#receive-a-message). These wire procedures and the runtime procedures below
 define required ordering. Implementations may combine steps transactionally
 but may not reverse the durability boundaries. Every instruction to append
 an event below means `Vault.commit(objects, drafts)`, using an empty object
@@ -3028,7 +3028,7 @@ intent, not a half identity.
 
 1. choose a configured live route, creating it first when necessary;
 2. choose a fresh UUIDv7 entity ID, or the deterministic early-privacy ID under
-   [relationships.md section 10](relationships.md#symmetric-relationship-identity) when that policy applies;
+   [relationships.md section 5](relationships.md#symmetric-relationship-identity) when that policy applies;
 3. derive the fixed authentication and key-agreement keys;
 4. build and validate a Peer DID numalgo-4 document encoding those keys and route;
 5. commit `did.created` with canonical short form, long form and `boundRouteId`.
@@ -3037,7 +3037,7 @@ There is no role field. A committed ID reuses its exact keys, document and route
 after a crash; it cannot be recreated using a new route. A conflicting or retired
 entity cannot be silently replaced. Registration of a mediated recipient must
 be verified before disclosure. First disclosure uses the long form under
-[relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile). Address allocation may prefer another mediator to
+[relationships.md section 10.2](relationships.md#peer-did-numalgo-4-profile). Address allocation may prefer another mediator to
 reduce linkability, but route choice does not establish a relationship.
 
 <a id="164-disclose-an-address"></a>
@@ -3337,7 +3337,7 @@ There is no migration requirement from an earlier event vocabulary.
     pickup ACK. Missing/pending relationship evidence under [section 6.1](#receipt-and-relationship-evidence) also
     defers receipt when required by that section, without message.in or pickup
     ACK; it retries on relevant evidence changes under [relationships.md section 9.1](relationships.md#deferred-delivery). The wait consumes no sender-resolution budget and has no local retention
-    timeout; retry uses [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s fresh bounded resolution
+    timeout; retry uses [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s fresh bounded resolution
     sequence when needed, excluding waiting time from its local retention stop.
     Foreign/nonexistent/wrong-purpose methods, unbound retired
     addresses and terminal routes are terminal. A retired address in a bound
@@ -3642,7 +3642,7 @@ There is no migration requirement from an earlier event vocabulary.
      fresh resolution. Retry and permitted repack use retained evidence;
      neither an old snapshot nor a local TTL bypasses the new-message ID rule.
      Every new non-numalgo-4 inbound observation also requires current sender
-     authentication under [relationships.md section 5.1](relationships.md#did-resolution-requirements); a chain member absent
+     authentication under [relationships.md section 10.1](relationships.md#did-resolution-requirements); a chain member absent
      from the current document fails, and unavailable resolution defers
      without pickup ACK only within that section's per-delivery budget.
      Exhaustion is terminal input with pickup ACK and no `message.in`, without
@@ -3764,7 +3764,7 @@ There is no migration requirement from an earlier event vocabulary.
      not resolution accounting survived; successful authentication rediscovers
      any still-pending pair and returns to the wait. A relevant evidence-change
      retry also gets one fresh bounded sequence when resolution is required,
-     under [relationships.md section 5.1](relationships.md#did-resolution-requirements) and its conformance case
+     under [relationships.md section 10.1](relationships.md#did-resolution-requirements) and its conformance case
      61. Mediator expiry removes only that delivery; a later delivery cannot
      bypass the retained pending claim.
 130. <a id="ve-130"></a> Given the same validated numalgo-4 long form L and short form S, every
