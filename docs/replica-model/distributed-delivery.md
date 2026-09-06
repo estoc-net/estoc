@@ -120,7 +120,8 @@ keys and receives messages addressed to them. A later server or additional
 full replica does not own the DIDs merely because it executes the vault.
 
 Each local communication DID has one immutable `boundRoute`, mediated or
-direct. Changing its keys or bound route creates a successor DID entity.
+direct. Changing its keys or bound route creates a successor DID entity;
+`vault-events.md` section 12.4 records a relationship's local continuation.
 An external recipient's resolved document may offer transport choices; choosing
 among authorized routes does not change the application recipient. A direct
 endpoint MUST NOT expose a replica ID as the peer-visible recipient.
@@ -399,7 +400,8 @@ evidence changes under an expressly permitted rule.
 
 A preparer folds the target and selects:
 
-- one live sender DID entity and its fixed key-agreement method;
+- one live sender DID entity and its fixed key-agreement method, using the
+  relationship's current local end under `vault-events.md` section 12.4;
 - one current peer DID and authenticated peer key;
 - exact `peer.resolved` evidence, fresh for the first package of each new
   non-numalgo-4 MID under `rendezvous.md` section 5.1;
@@ -472,9 +474,34 @@ references retain their own lifetimes under that fold.
 
 ### 8.1 Freezing an ACK target set
 
+Before selecting or committing any new deterministic reply intent, including
+a natural protocol response with no ACK targets, the writer MUST check for a
+usable local sender in the input's unique relationship scope. This means that
+relationship's `currentLocalDid(R)` is eligible in its contact's `writeTo[]`
+under `vault-events.md` sections 12.4 and 14.6. It is a portable lifecycle and
+evidence check, not a requirement for online resolution or registration before
+intent. A sender in another relationship of the same contact cannot substitute.
+For a permitted non-relationship channel, the exact channel's local sender
+must satisfy the same local DID/route restrictions.
+
+If there is no usable sender, receive and scope the input normally but commit
+no reply intent and freeze no ACK targets. Required response/ACK work remains
+unfinished, rediscovered from committed input under `vault-events.md` section
+16.1 when a usable sender exists, including after a local successor is created.
+Current tombstones, integrity and erasure rules still apply. Already committed
+intents are reused; later rotation or retirement uses that document's section
+12.4 repack/blocking rules without minting a replacement effect.
+
+A first application candidate under `rendezvous.md` section 3 may materialize
+its root DID and handoff intent together under that document's section 10.2.
+For this case the proposed materialization must pass the same local sender
+checks in the batch; its scope must still come from previously committed input
+under section 9. Control or non-handoff input cannot create that DID. Recheck
+the applicable gate under the same writer lock as selection and intent commit.
+
 For one received carrier message `X`, a conforming receiver performs this
 algorithm after normal inbound commit, only when no response intent already
-exists under section 11:
+exists under section 11 and the sender gate above passes:
 
 1. If `X.pleaseAck == null`, create no ACK obligation.
 2. Expand `""` to `X.wireId`; retain the first occurrence of every target and
@@ -531,9 +558,9 @@ natural response is available, use `https://didcomm.org/empty/1.0/empty`.
 Pure ACKs contain no `please_ack` and follow the same submission completion
 rule as every outbound; they are control observations under `vault-events.md`
 section 14.7. A control candidate at a rendezvous DID never selects a handoff
-response. Its permitted receipt ACK uses the generic profile only when an
-already materialized relationship supplies a usable local DID, under
-`rendezvous.md` section 10; the ACK request alone cannot materialize one.
+response. Its permitted receipt ACK uses the generic profile subject to the
+same gate above and `rendezvous.md` section 10; the ACK request alone cannot
+materialize a local DID.
 No-handoff errors retain their no-response rule.
 
 ### 8.2 Deterministic pure ACK
@@ -607,6 +634,12 @@ Required ACK work left unfinished by a crash still follows `vault-events.md`
 section 16.1's recovery rules, subject to the same submitted boundary.
 
 ## 9. Observation identity, logical aliasing and execution identity
+
+`peerKey` below is derived from the observation's referenced
+`peer.resolved(peerResolution).peerKey` under `vault-events.md` section 4.1;
+it is not duplicated in `message.in` or `message.prepared`. The same derivation
+supplies their `ChannelKey` values and all message/package peer-key comparisons
+in this document. A missing non-null reference defers, never falls back to null.
 
 For an authenticated or signed innermost message:
 
@@ -733,10 +766,16 @@ outside this set, received at the local relationship DID without continuation,
 has no scope and follows `rendezvous.md` section 5.1's diagnostic rule. New
 initials at a local rendezvous DID follow their own key-derived input row.
 
+The local side uses historical `localChain(R)` from `vault-events.md` section
+12.4. A local transition extends acceptable recipient-key membership without
+changing `R.ourDid`, the relationship ID, execution ID or ACK namespace. Local
+chain conflicts or missing referenced evidence suppress affected ACK/effect
+work just like missing or conflicting peer-chain evidence.
+
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
 | Responder candidate addressed to a local rendezvous DID | Committed `o` with `myKey` identifying one immutable local rendezvous DID and its exact `peerResolution` under `vault-events.md` sections 12.1 and 14.4 | The deterministic relationship derived from that canonical recipient DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
-| Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
+| Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey` the fixed key-agreement key of a DID in `localChain(R)` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
 
 Each row contributes at most one scope; multiple matching relationships are
 an execution-scope conflict. All applicable rows for one observation MUST agree.
@@ -792,6 +831,38 @@ scope evidence.
 Control-observation classification and display follow `vault-events.md`
 section 14.7.
 
+#### Local-rotation scope vector
+
+Using the existing relationship, key and carrier fixture above, let two
+validated local transitions extend P0 to P1 and then P1 to P2, each with the
+predecessor-confirmation evidence required by `vault-events.md` section 12.4:
+
+```text
+R  = 9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3
+P0 = 019b2a60-c68e-75bf-b6fb-ae1a41f8d715
+P1 = 019b6a10-12c0-7410-89ab-38e54b097c21
+P2 = 019b6a20-12c0-7420-89ab-38e54b097c22
+peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
+wireId = 019b1b61-3444-7190-9db5-1cc9c215eb23
+
+for myKey = did/<P0|P1|P2>/key-agreement:
+  mid = a8b9afd5-60fe-5f49-a669-bd998e760e7e
+  executionScope = {"relationship":"9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3"}
+  executionId = 225e9711-ab0b-510a-bb99-405e6aaf4bf9
+  pure-ack effectKey = UruAITvrqWKj_ag-HbwVlxM4TQAQvwFuoefti2CD-W8
+  pure-ack outbound MID = 0db52549-496c-5e54-9e60-d660397b5e34
+```
+
+Each observation references resolution evidence with its own `myKey` and this
+same authenticated peer key/DID pair in `peerChain(R)`. Equal-intent deliveries
+at P0, P1 and P2 therefore share one execution, even after P0 retires. An
+explicit ACK at P2 may acknowledge an outbound whose historical valid package
+sent from P0, and an ACK at eligible P0 may acknowledge a package from P2, by
+`vault-events.md` section 14.8 path 2. A DID outside this chain supplies no such
+membership. These are executable identity and scope fixtures, not JWT or
+numalgo-4 document test vectors; the DID entity IDs stand for validated local
+documents and transition proofs.
+
 ### 9.1 Receive a message
 
 For every account-scoped pickup or direct delivery:
@@ -810,9 +881,9 @@ For every account-scoped pickup or direct delivery:
 3. authenticate, decrypt and validate the complete innermost message,
    including the exact selected local key-agreement method, Peer DID long-form
    and authcrypt sender evidence. Apply `rendezvous.md` section 5.1's current
-   sender-resolution rule to every delivery; unavailable resolution defers
-   without pickup ACK, and unsupported methods or keys absent from the current
-   document fail its section 9.2 gate;
+   sender-resolution and failure-classification rules to every delivery;
+   only transiently unavailable resolution defers without pickup ACK, while
+   definitive failures use its section 9.2 terminal gate;
 4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's
    receive and integrity checks; a safely classified terminal failure through Message Pickup
    MUST be pickup-ACKed without `message.in`;
@@ -828,8 +899,8 @@ For every account-scoped pickup or direct delivery:
    a control candidate alone creates no contact. Recheck recipient eligibility
    and retain the writer lock across both commits, including for duplicates.
    A rendezvous input also performs its integrity checks under that lock;
-   its `myKey` identifies the immutable local rendezvous DID. Each complete
-   channel key contains its peer public key;
+   its `myKey` identifies the immutable local rendezvous DID. The complete
+   channel key derives its peer public key through the committed resolution;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -850,7 +921,8 @@ For every account-scoped pickup or direct delivery:
     no automatic responses in steps 14–15. Only application candidates enter
     `rendezvous.md` section 10.2's materialization; control and other
     non-handoff input follows its section 10 without creating a relationship;
-14. run the frozen peer-scoped ACK-target algorithm in
+14. check section 8.1's local-sender gate, then run the frozen peer-scoped
+    ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
     append one deterministic protocol response or pure-ACK intent; and
 15. on duplicate receipt, reuse existing response work under section 8.4;
@@ -876,7 +948,8 @@ the OOB invitation ID as `pthid` when applicable. An application protocol may
 instead send its real first message. There are no initial-specific type, size
 or lifetime limits, and receipt/materialization has no expiry deadline.
 
-After durable receipt of an application bootstrap, the responder selects a
+After durable receipt of an application candidate as defined in `rendezvous.md`
+section 3, the responder selects a
 deterministic handoff response: Trust Ping `ping-response`, a protocol-defined
 deterministic machine response, or Empty Message ACK. Human-authored content is ordinary
 later traffic. Control and other non-handoff candidates retain scope and
@@ -937,6 +1010,8 @@ response under `vault-events.md` section 14.8 before selecting an ACK response
 handler or tuple. If one exists, reuse it; a new handler or tuple cannot consume
 the carrier's ACK obligation again. Competing imported selections suppress
 response work under that fold.
+For a new DIDComm reply, apply section 8.1's local-sender gate before selection;
+missing a sender leaves unfinished work without committing intent.
 For each eligible effect, look up its derived MID before freezing ACK targets,
 timing or other intent fields.
 It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
@@ -973,6 +1048,7 @@ message.in                        durable inbound observation
 peer.transitioned                 DID continuation in one named relationship
 relationship.established          stable responder-side pairwise relationship
 relationship.initiatorBound       portable initiator-side relationship binding
+relationship.localTransitioned    frozen successor and proof for our end
 ```
 
 One valid committed `delivery.submitted` completes the entire outbound's
@@ -995,7 +1071,6 @@ A recommended inbound observation records both hashes and durable headers:
   "pleaseAck": [""],
   "ack": [],
   "myKey": "did/019b.../key-agreement",
-  "peerKey": "<canonical-peer-public-key>",
   "peerResolution": "<exact-peer.resolved-eid>",
   "receivedVia": {
     "mediation": "019b...",
@@ -1208,10 +1283,21 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     ID merge and execute once; neither key replaces the selected origin.
     A fresh unpinned document cannot grant membership to another key.
 60. A new non-numalgo-4 MID resolves and commits current recipient evidence
-    before first preparation. Resolution failure leaves it retryable, and
-    an unchanged online-revalidated document still creates new evidence.
+    before first preparation. Transient unavailability leaves it retryable;
+    definitive resolution failure is terminal under `rendezvous.md` section
+    5.1. An unchanged online-revalidated document still creates new evidence.
     Existing packages retry or repack using retained snapshots only. Each
     inbound delivery instead authenticates against current sender resolution,
     including duplicates; unavailable resolution defers without pickup ACK.
     Reusing matching evidence requires a fresh document check. Recovery of
     committed input uses its retained snapshot without another network lookup.
+61. Section 8.1's sender gate precedes selection and commit of a deterministic
+    reply, including a natural response without ACK targets. A retired local
+    end without a usable successor leaves durable input and unfinished work,
+    with no reply intent or frozen ACK selection. Recovery after a valid local
+    transition sends from that relationship's current end, reusing any already
+    committed response instead of creating another effect.
+62. Section 9's local-rotation vector preserves MID, execution ID, effect key
+    and automatic outbound MID across local recipient keys. Historical local
+    membership also permits ACKs across predecessor/successor packages under
+    `vault-events.md` section 14.8; a shared contact alone does not.

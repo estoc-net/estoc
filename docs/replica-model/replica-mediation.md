@@ -812,8 +812,8 @@ alone still receives eligible input normally; a retired rendezvous DID or any
 DID with a terminal bound-route dependency uses the terminal rejection path.
 Unlock/recovery and concrete recoverable prerequisites defer without pickup
 ACK. Current sender authentication follows that document's section 5.1,
-including its unavailable-resolution deferral and terminal authentication
-failures; retained chain membership cannot bypass that check.
+including its transient-unavailability classification and definitive terminal
+authentication failures; retained chain membership cannot bypass that check.
 
 A delivery that cannot yet be decrypted for a recoverable reason despite an
 eligible exact local key, depends on missing recoverable local DID/route/sync
@@ -1028,4 +1028,6 @@ A conforming implementation demonstrates at least these cases:
     and retired rendezvous DIDs use the terminal pre-vault ACK path and do not
     remain pending. A retired relationship DID with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
-    resolution instead defers under `rendezvous.md` section 5.1.
+    resolution instead defers under `rendezvous.md` section 5.1. Definitive
+    not-found, invalid-document, unsupported-method and SSRF-forbidden
+    resolution results use the terminal pre-vault ACK path under that section.

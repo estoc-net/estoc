@@ -56,40 +56,14 @@ The normative DASL dependency is DASL CIDs: <https://dasl.ing/cid.html>.
 
 ## 3. Accepted DASL CIDs
 
-An Estoc DASL CID MUST be a CIDv1 in the canonical string representation of exactly 36
-binary bytes with this structure:
-
-```text
-byte 0      CID version       0x01
-byte 1      codec             0x55 raw
-byte 2      multihash code    0x12 SHA-256
-byte 3      digest length     0x20
-bytes 4-35  digest            32 bytes
-```
-
-The string form MUST:
-
-- begin with lowercase `b`;
-- encode the 36 binary bytes with lowercase RFC 4648 base32;
-- contain no padding;
-- use the shortest canonical representation; and
-- round-trip to the same exact string after parse and re-encode.
-
-A conforming implementation MUST reject:
-
-- CIDv0;
-- any CID version other than 1;
-- uppercase or mixed-case base32;
-- base58 or another multibase;
-- non-canonical base32;
-- trailing bytes;
-- a codec other than `raw` (0x55), including DRISL/`dag-cbor` (0x71);
-- a hash other than SHA-256;
-- a digest length other than 32 bytes;
-- `dag-pb`;
-- DAG-PB UnixFS nodes;
-- BDASL/BLAKE3 identifiers; and
-- a syntactically valid CID whose digest does not match supplied object bytes.
+An Estoc DASL CID MUST conform to the binary and canonical string rules in
+[DASL Content IDs](https://dasl.ing/cid.html). This phase-1 profile accepts
+only the `raw` codec (0x55). It rejects DRISL/`dag-cbor`, `dag-pb`, DAG-PB
+UnixFS nodes and BDASL/BLAKE3 identifiers. Parsing and re-encoding MUST yield
+the exact input string. Estoc uses unpadded strings and rejects trailing
+binary bytes; a syntactically valid CID whose digest does not match
+the supplied object bytes MUST also be rejected. Section 4.2 supplies the
+executable raw-CID vectors.
 
 `Cid` in the Estoc TypeScript interfaces means a validated canonical DASL CID
 string, not an arbitrary string alias.
