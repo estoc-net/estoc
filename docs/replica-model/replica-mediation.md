@@ -25,32 +25,23 @@ one vault-scoped DID and sends one encrypted application message. The
 mediator fans that opaque message out to the vault's active replicas, and
 each replica acknowledges independently.
 
-The locally controlled recipient DID may be:
-
-- a self-resolving rendezvous `did:peer:4`, used for an encrypted initial
-  relationship message; or
-- a pairwise relationship `did:peer:4`, used after handoff.
-
-The mediator applies identical storage, fan-out and pickup semantics to both.
-It does not need to know the vault role of a recipient DID. Its method-neutral
-resolution rules also support externally managed DIDs; that does not make
-DID-document publication a vault responsibility.
+Local recipients are ordinary seed-derived `did:peer:4` communication addresses.
+Public discovery and private pairwise allocation use the same storage, fan-out,
+pickup and relationship-binding semantics. The mediator receives no address-role
+classification. Its method-neutral resolution also supports externally managed
+DIDs without making document publication a vault responsibility.
 
 The protocol adds two things to ordinary DIDComm mediation:
 
 1. a lifecycle for **replicas** under one mediation account; and
 2. a replica-scoped profile of Message Pickup 3.0.
 
-It also fixes the storage and privacy rules that make this fan-out safe: the
-mediator stores one encrypted inner DIDComm envelope, creates one
-**delivery** per active replica, and never treats one replica's
-acknowledgment as another replica's.
-
-This protocol does not synchronize the vault event set. That is
-`vault-sync/1.0`. It does not define rendezvous-to-pairwise handoff; that is
-the processing profile in `rendezvous.md`. It does not make one full replica
-less trusted than another, and it does not make a lost copy of the shared seed
-revocable.
+The mediator stores one encrypted inner DIDComm envelope, creates one delivery
+per active replica, and never treats one replica's acknowledgment as another's.
+This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
+Relationship formation and address-rotation policy belong to `rendezvous.md`.
+It does not make one full replica less trusted than another or make a lost
+copy of the shared seed revocable.
 
 ## 2. Dependencies
 
@@ -62,8 +53,7 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the processing profile in `rendezvous.md` for rendezvous-to-pairwise
-  handoff; and
+- the relationship/address-policy profile in `rendezvous.md`; and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -807,9 +797,10 @@ paths:
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
 portable message content. Recipient classification follows `rendezvous.md`
-sections 9.1–9.2's exact-key and lifecycle rules. A retired relationship DID
-alone still receives eligible input normally; a retired rendezvous DID or any
-DID with a terminal bound-route dependency uses the terminal rejection path.
+sections 9.1–9.2's exact-key and lifecycle rules. A retired DID retained in
+an existing local relationship history still receives eligible input normally;
+an unbound retired address or terminal bound-route dependency takes the terminal
+rejection path, independently of public/private allocation.
 Unlock/recovery and concrete recoverable prerequisites defer without pickup
 ACK. Current sender authentication follows that document's section 5.1,
 including its transient-unavailability classification, per-delivery budget
@@ -1027,8 +1018,8 @@ A conforming implementation demonstrates at least these cases:
 23. Recipient-key triage defers only an exact known local key-agreement method
     with a recoverable missing prerequisite. After local key recovery is
     authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
-    and retired rendezvous DIDs use the terminal pre-vault ACK path and do not
-    remain pending. A retired relationship DID with a valid non-terminal
+    and unbound retired DIDs use the terminal pre-vault ACK path and do not
+    remain pending. A retired historical local address with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
     resolution instead defers only within `rendezvous.md` section 5.1's budget.
     Definitive DNS/not-found, invalid-document, unsupported-method and
