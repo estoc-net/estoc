@@ -725,8 +725,21 @@ implementations use:
 - a Web Lock for browser OPFS; or
 - one daemon/process lock for a disk folder.
 
-Multiple readers are allowed if the backend can provide complete-line
-visibility.
+Multiple readers require complete-line event visibility and the cross-process
+object-read protection in `event-store.md` section 10, including for read-only
+processes. Single-writer ownership does not by itself protect those reads.
+
+For a disk folder, one concrete implementation has the daemon own the
+operation lock and per-CID latch registry, and serve protected object streams
+to CLI/read-only clients. A client finishing, failing or cancelling its stream
+releases that stream's latch; an idle client does not. A disconnect that ends
+the stream is cancellation. Losing the daemon fails its client streams rather
+than allowing them to continue reading the shared namespace without latches.
+An independent reader MUST NOT bypass this coordination by directly opening
+`objects/<cid>` while collection can run. A backend may instead implement the
+same cross-process lock/latch contract with shared coordination primitives,
+documented under `event-store.md` section 13. Without such coordination it
+refuses live concurrent object reads or serves an isolated immutable snapshot.
 
 Within the active runtime, all workers MUST obey the operation serialization
 and writer-lock boundaries in `event-store.md` section 10.
@@ -848,3 +861,7 @@ The following require a new folder/vault version:
 41. A source with an incomplete import cannot be made a complete snapshot by
     omitting `import/`; recover it or read a verified complete published
     generation. Read-only access never labels a partial generation complete.
+42. A read-only CLI and the active writer share object-read protection under
+    `event-store.md` section 10. Holding the disk writer's process lock alone
+    cannot authorize an unprotected CLI stream; a brokered reader remains
+    protected during collection and fails if its owning daemon exits.

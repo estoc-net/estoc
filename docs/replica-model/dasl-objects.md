@@ -202,8 +202,10 @@ semantics are equivalent.
 
 This is the backend object interface. In a full vault, `putRaw` and `putObject`
 are internal primitives for `Vault.commit` and validated import/restore, not
-standalone application operations. `event-store.md` section 10 defines the
-application-facing subset and the shared writer lock.
+standalone application operations. `collect` is internal to the vault runtime,
+which supplies the current held roots under `vault-events.md` section 15.3.
+`event-store.md` section 10 defines the application-facing subset and the shared
+writer lock.
 
 Object acceptance uses the process-durable commit terminology in
 `event-store.md` section 2.1. If a put operation resolves, every later process

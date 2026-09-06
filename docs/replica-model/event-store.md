@@ -650,7 +650,7 @@ type CommitObject = {
 
 interface Vault {
   readonly events: EventStore;
-  readonly objects: Omit<ObjectStore, "putRaw" | "putObject">;
+  readonly objects: Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
   readonly files: FileStore;
 
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
@@ -665,6 +665,9 @@ The object put primitives are backend-internal to `commit` and the validated
 import/restore paths. They are not exposed through `Vault.objects` for
 standalone application writes. Application preparation uses private temporary
 storage; accepting new objects and their local event references uses `commit`.
+`collect(keep)` is also backend-internal. The vault runtime computes the
+held-root set under `vault-events.md` section 15.3 and invokes collection within
+the locked boundary below; application callers cannot supply a keep set.
 
 `commit(objects, drafts)` holds the writer lock while validating all drafts,
 accepting supplied objects under `ObjectStore.putObject`'s rules, requiring
@@ -685,15 +688,24 @@ event, object and portable-file mutations. Nested store calls share the
 enclosing operation's lock. A backend MAY use a transaction that provides the
 same serialization.
 
-Object reads use a per-CID read latch shared across all handles and workers of
-the storage generation. `open` briefly takes the writer lock to check object
-presence and register the latch before exposing a stream, then releases that
-lock. The latch remains until stream completion, failure or cancellation and
-is released on each of those paths. A CID remains latched while any of its
-reads is active. `read` uses the same protection. A slow or abandoned consumer
-therefore retains only the opened object's bytes; it MUST
-NOT hold the writer lock for the stream's lifetime. Reads nested inside a
-commit, import or export share its existing lock without shortening that
+Object reads use a per-CID read latch shared across every handle, worker and
+process accessing the same physical object namespace, including read-only
+handles. Distinct local store-generation tokens do not separate protection for
+shared bytes. `open` briefly takes the writer lock to check object presence and
+register the latch before exposing a stream, then releases that lock. A backend
+may broker this operation through the active writer process; a read-only handle
+still participates in the same lock and latch registry.
+
+The latch remains until stream completion, failure or cancellation and is
+released on each of those paths. A CID remains latched while any of its reads
+is active. `read` uses the same protection. Abandonment without cancellation
+is a caller defect: an idle or unreachable stream's latch MUST NOT time out.
+It persists until one of the release paths above or the process owning that
+stream exits. A process exit releases only its own latches; other processes'
+live streams remain protected. A slow or abandoned consumer therefore retains
+only the opened object's bytes; it MUST NOT hold the writer lock for the
+stream's lifetime. Reads nested inside a commit, import or export share its
+existing lock without shortening that
 operation's required boundary.
 
 `ingest` holds this lock from its target-state fork and duplicate checks through
@@ -703,7 +715,10 @@ the lock MUST NOT be used. Collection MUST skip a CID with an active read latch
 without waiting for its reader; other eligible CIDs may be unlinked in that
 pass. Latch registration and the collector's latch check/unlink are serialized
 by the writer lock. Latches are local read protection, not portable retention
-references; after release or process exit, normal collection rules apply.
+references; when the last latch is released, normal collection rules apply.
+A backend unable to coordinate a concurrent reader with that namespace's
+collector MUST refuse the live object read; it may serve an isolated immutable
+snapshot instead. Complete-line event visibility alone is insufficient.
 Full import and export hold the writer lock across the boundaries
 defined in sections 11.2 and 11.3. Existing rules for serialized receipt
 allocation and admission finalization use this same lock.
@@ -891,6 +906,8 @@ section 2.1 and document:
 - its stronger power-loss durability and flush policy, if any;
 - orphan grace for abandoned objects;
 - implementation of the section-10 writer lock;
+- per-CID latch registration and collection exclusion across processes,
+  including read-only handles, stream cancellation and owner-process exit;
 - maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
@@ -981,6 +998,17 @@ A conforming implementation MUST pass at least these cases:
     or returns null after unlink; it never exposes an unprotected stream.
     When two streams read the same CID, ending one does not release the other's
     protection.
-29. `Vault.objects` exposes no standalone put operation. Application object
-    preparation stays private until `commit` accepts it with its references;
-    validated import/restore uses the internal object primitives.
+29. `Vault.objects` exposes no standalone put or collection operation.
+    Application object preparation stays private until `commit` accepts it
+    with its references;
+    validated import/restore uses the internal object primitives. Only the
+    vault runtime passes the held-root set computed under the writer lock to
+    the internal collector.
+30. An abandoned, uncancelled stream remains latched across idle periods and
+    collection passes. A still-reachable paused stream can resume to completion
+    without losing protection; elapsed time alone never releases its latch.
+31. A read-only process opens an object while the writer process remains active.
+    Collection skips that object and can collect another eligible CID. Exiting
+    one reader process releases only its latches; another process's stream on
+    the same CID stays protected. A backend without this coordination refuses
+    live concurrent object reads rather than exposing an unprotected stream.

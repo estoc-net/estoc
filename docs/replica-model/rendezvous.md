@@ -963,12 +963,16 @@ Existing consistent evidence is reused; conflicting evidence blocks processing.
    and validated handoff under `vault-events.md` section 12.5.
    All missing locally produced facts in steps 6–7 MUST commit in one
    process-durable `Vault.commit`; the event-store contract makes
-   that batch all-or-nothing;
+   that batch all-or-nothing. The confirmation intent MAY join this batch under
+   `distributed-delivery.md` section 9's prospective validation rule. If
+   committed separately, `vault-events.md` section 16.1 recovery reconstructs
+   the unfinished confirmation work from the committed binding;
 8. only after the proof and portable relationship binding are committed,
    process explicit `ack` values; and
 9. honor any explicit current-message ACK request in the response using an
    existing deterministic protocol response or a deterministic Empty Message
-   ACK.
+   ACK. Reuse the intent if committed in step 7; otherwise freeze and commit
+   it before execution.
 
 Missing historical evidence defers processing. Invalid proof is an integrity
 or protocol failure. An imported or previously separately committed prefix is
@@ -982,10 +986,11 @@ explicit `ack` array names that wire ID.
 The confirmation message is sent to `P_A`, contains no `please_ack`, and is
 submission-terminal after first successful submission. Its execution scope
 derives from the committed relationship binding above, never a provisional
-channel scope.
-A crash after binding and before ACK-effect creation therefore reconstructs the
-same confirmation effect. Duplicate response delivery re-submits the same
-exact prepared confirmation package.
+channel scope. Preparation and submission wait for the complete binding and
+intent commits. A crash after a separate binding commit and before the intent
+commit reconstructs the same confirmation effect; a combined batch leaves
+either both committed or neither. Duplicate response delivery re-submits the
+same exact prepared confirmation package.
 
 The responder may stop attaching `from_prior` after receiving any authenticated
 message addressed to `P_A`. Delivery acknowledgment for the handoff response
@@ -1023,15 +1028,66 @@ to the initiator relationship DID. The response:
 - contains no `please_ack` and is submission-terminal; and
 - creates no relationship DID or relationship state.
 
-Example:
+For this profile's Report Problem response, the producing tuple is:
+
+```text
+handlerId  = https://didcomm.org/report-problem/2.0
+effectKind = problem-report
+ordinal    = 0
+```
+
+Its execution scope is the effective reject's exact candidate channel
+`(o.myKey, o.peerKey)` under `distributed-delivery.md` section 9, with that
+candidate's wire ID as the carrier wire ID. `target` is that explicit channel.
+The selected wire `code` is intent content, not part of the producing tuple.
+Changing it for the same execution is an intent conflict under the same effect
+key and MID, not another effect.
+
+The output body is exactly `{"code": selectedWireCode}`, with no attachments
+and `headers == {}`. It starts a child problem-report thread: `thid` is null and
+`pthid` is the triggering message's `thid`, or its wire ID if `thid` is null,
+as specified by [DIDComm Problem Reports](https://identity.foundation/didcomm-messaging/spec/v2.1/#problem-reports).
+It does not copy the triggering message's OOB parent as the problem's parent.
+`pleaseAck` is null; if policy elects to honor ACK targets, `ack` follows
+`distributed-delivery.md` section 8.1, otherwise it is `[]`.
+
+When selecting the rejection intent, read the local decision clock once as
+integer Epoch Seconds `decisionTime`. This is an intent-construction sample,
+not the EventStore batch's `at`. Freeze timing with the final decision in the
+same commit:
+
+```text
+response.createdTime = decisionTime
+response.expiresTime = response.createdTime + 604800
+response.replayUntil = response.expiresTime when ack is non-empty, otherwise null
+```
+
+Restart, retry or equivalent decision provenance reuses these frozen values.
+A protocol-specific error used instead MUST define its producing tuple and
+output intent rules under `distributed-delivery.md` section 11, including
+threading and timing; it cannot borrow an unspecified Report Problem variant.
+
+The rejection vector uses candidate wire ID
+`019b4d12-090a-7c3b-92f7-ac2c51f50db4` and this responder-local scope:
+
+```text
+executionScope = {"channel":{"myKey":"did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement","peerKey":"k3j9n0m4x6q2w7c8v5p1d8s0fa"}}
+executionId    = bb3acdd0-2cef-521c-ad99-27d7610f45e8
+effectKey      = I03EKj_XArDCV7K6RdmB76WTJVrff3K01VMcpaXhxe0
+mid = wireId   = 937473bc-acfc-570d-a7b5-e984b4dee70c
+```
+
+For `decisionTime == 1788443000` and a frozen current-only
+ACK target set, its wire example is:
 
 ```json
 {
-  "id": "019b4d30-ea93-7826-baf6-e26449150367",
+  "id": "937473bc-acfc-570d-a7b5-e984b4dee70c",
   "type": "https://didcomm.org/report-problem/2.0/problem-report",
   "from": "did:peer:4zQm...alice-rendezvous-short",
   "to": ["did:peer:4zQm...bob-short"],
   "created_time": 1788443000,
+  "expires_time": 1789047800,
   "pthid": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
   "ack": ["019b4d12-090a-7c3b-92f7-ac2c51f50db4"],
   "body": {
@@ -1227,9 +1283,11 @@ DID as ordinary `writeTo`.
     configured but not live remains deferred without pickup ACK; a locked or
     recovering vault is never classified as wrong-recipient merely because keys
     are unavailable.
-36. The initiator commits `relationship.initiatorBound` before generating the
-    confirmation effect; restart immediately afterward derives the same
-    execution ID.
+36. The initiator commits `relationship.initiatorBound` no later than the
+    confirmation intent and before executing it. A combined batch is
+    all-or-nothing across crash; after a separate binding commit, restart
+    derives the same execution ID and recovers the unfinished confirmation
+    without mediator redelivery.
 37. Later verified peer-key rotation preserves that relationship execution
     scope and does not create a second automatic effect for the same wire ID.
 38. A known responder DID with missing initiator binding does not
@@ -1255,3 +1313,9 @@ DID as ordinary `writeTo`.
     invitation take or overwrite the result. Only the unique valid final-result
     equivalence class is effective; conflicted or undecided candidates have
     none.
+46. The section-13 Report Problem vector recomputes execution ID
+    `bb3acdd0-2cef-521c-ad99-27d7610f45e8`, effect key
+    `I03EKj_XArDCV7K6RdmB76WTJVrff3K01VMcpaXhxe0` and outbound/wire ID
+    `937473bc-acfc-570d-a7b5-e984b4dee70c`. Restart retains its tuple, code,
+    ACK targets and decision-clock timing. A different code for that execution
+    conflicts under the same key; it cannot select a new ordinal or MID.

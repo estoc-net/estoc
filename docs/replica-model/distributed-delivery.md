@@ -561,6 +561,9 @@ thid  = X.thid, or X.wireId when X.thid is null
 pthid = X.pthid
 ```
 
+The Report Problem response in `rendezvous.md` section 13 instead starts a
+child thread of X's protocol thread, using that profile's `thid`/`pthid` rule.
+
 A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
 Pure ACKs contain no `please_ack`, are submission-terminal, and are excluded
@@ -734,7 +737,17 @@ route availability do not select a scope; current work eligibility is separate.
 | Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. Undecided: no scope. Admission conflict: execution-scope conflict. |
 | Initiator handoff | Valid `relationship.initiatorBound` with `handoffMid == o.mid` | Its relationship |
 | Ordinary relationship traffic | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `o.peerKey` in `peerChain(R)` | That unique `R`; no match supplies no scope |
-| Initiator no-handoff problem report under `rendezvous.md` section 13 | `o.fromPrior == null` and `o.pleaseAck == null`; a valid initial `message.prepared` has null `fromPrior`, exact `(o.myKey, o.peerKey)` and a pinned `peer.resolved(peerResolution)` validating that channel; `o.msgType` is `https://didcomm.org/report-problem/2.0/problem-report` or a deterministic error type defined by that initial outbound's protocol, and the error message validates under its protocol | Exact channel `(o.myKey, o.peerKey)`, control-only: process explicit `ack`, without application handlers or automatic responses |
+| Initiator no-handoff problem report under `rendezvous.md` section 13 | All no-handoff control conditions below | Exact channel `(o.myKey, o.peerKey)`, control-only: process explicit `ack`, without application handlers or automatic responses |
+
+The no-handoff control row requires all of:
+
+- `o.fromPrior == null` and `o.pleaseAck == null`;
+- a valid initial `message.prepared` with null `fromPrior`, exact
+  `(o.myKey, o.peerKey)` and a pinned `peer.resolved(peerResolution)` validating
+  that channel; and
+- `o.msgType` equal to `https://didcomm.org/report-problem/2.0/problem-report`
+  or a deterministic error type defined by that initial outbound's protocol,
+  with the error message valid under its protocol.
 
 Each row contributes at most one scope; multiple matching relationships are
 an execution-scope conflict. All applicable rows for one observation MUST agree.
@@ -885,7 +898,9 @@ An automatic DIDComm output is one effect identified by
 `(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
 derived execution ID of a unique conflict-free carrier group. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
-and output intent rules. Handler IDs and kinds are non-empty strings without
+and output intent rules. Its outputs MUST obey `vault-events.md` section 14.8's
+limit of one logical outbound carrying a non-empty `ack` per execution, across
+all producing tuples. Handler IDs and kinds are non-empty strings without
 U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
 leading zeros.
 Retries MUST NOT change the tuple to create another effect or evade a conflict.

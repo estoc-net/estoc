@@ -1811,7 +1811,7 @@ Other values come from immutable references:
 | Responder long form and relationship route | `did.created(ourDid).longForm` and `.boundRoute` |
 | Initiator's presented long form | the origin `message.in` and its validated resolution evidence |
 | Handoff wire ID | `handoffMid` |
-| Handoff execution ID and effect key | `message.out(handoffMid).executionId` and `.effectKey` |
+| Handoff execution ID, effect key and `(handlerId, effectKind, ordinal)` tuple | `message.out(handoffMid).executionId`, `.effectKey`, `.handlerId`, `.effectKind` and `.ordinal` |
 | Prior spelling, authentication method and rotation instant | verified `fromPrior` payload `iss`/`iat` and protected `kid` |
 
 The referenced event skeletons survive content erasure. Erasure never selects
@@ -1865,7 +1865,7 @@ terminal state.
 ### 12.5 `relationship.initiatorBound`
 
 The initiator commits one portable relationship-scope binding after validating
-the responder handoff and before generating the confirmation ACK effect.
+the responder handoff and no later than committing the confirmation ACK intent.
 
 ```json
 {
@@ -1930,19 +1930,22 @@ The Bob-local examples in sections 9.10 and 11.2 use the explicitly schematic
 message IDs are not additional executable MID vectors; `distributed-delivery.md`
 section 9 owns the executable observation-ID vectors.
 
-Before processing the handoff ACK or creating the confirmation effect, the
+Before processing the handoff ACK or executing the confirmation effect, the
 initiator MUST complete the mutually consistent transition and initiator
 binding under `rendezvous.md` section 12. All missing locally produced facts in
-that sequence MUST commit in one `Vault.commit`. A known peer DID does not
-prove that the binding exists. Reopen and imported-prefix
-recovery reuse consistent facts and complete missing facts before effects.
+that sequence MUST commit in one `Vault.commit`. The confirmation intent MAY
+join that batch under `distributed-delivery.md` section 9's prospective
+validation rule. If committed separately, section 16.1 recovery reconstructs
+the unfinished confirmation work from the committed binding. A known peer DID
+does not prove that the binding exists. Reopen and imported-prefix recovery
+reuse consistent facts and complete missing facts before executing effects.
 
 ## 13. Automatic effects
 
 `distributed-delivery.md` section 11 defines effect identity and commit ordering;
 section 8.2 there owns the pure-ACK vector. Section 9.1 of this document defines
 outbound ID derivation. `rendezvous.md` section 11.1 owns the
-handoff response vectors.
+handoff response vectors; its section 13 owns the rejection-response vector.
 
 ## 14. Folds
 
@@ -2431,7 +2434,7 @@ Missing bytes MUST NOT be displayed as intentional deletion.
 
 ### 15.3 Held roots
 
-Under the writer lock in `event-store.md` section 10, the application computes
+Under the writer lock in `event-store.md` section 10, the vault runtime computes
 the held roots passed to `ObjectStore.collect` in `dasl-objects.md` section 8.3.
 
 A root is held when at least one accepted event retains it through
@@ -2899,12 +2902,14 @@ There is no migration requirement from an earlier event vocabulary.
 61. Every accepted inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
     linear history, and cross-author ties have deterministic recovery order.
-62. The initiator commits `relationship.initiatorBound` before the
-    handoff-confirmation effect; restart immediately afterward reconstructs
+62. The initiator commits `relationship.initiatorBound` no later than the
+    handoff-confirmation intent and before executing it; restart reconstructs
     the same relationship execution ID from the seven-field binding and its
     matching DID, initial package, resolution and handoff/transition evidence.
     Erasing message content or learning a later peer rotation preserves those
     sources. Missing evidence defers processing; mismatched references conflict.
+    A combined binding/intent batch exposes all or none on crash; a separate
+    intent commit is recovered from the committed binding without redelivery.
 63. Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
     Detachment or DID/route retirement never selects a new execution scope.
