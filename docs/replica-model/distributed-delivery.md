@@ -354,8 +354,11 @@ relationship.
    root pair. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
    superseded-sender and invitation/relationship-integrity checks. Required
    pre-receipt evidence deferral follows [section 9.1](relationships.md#deferred-delivery),
-   with no `message.in` or pickup ACK; missing, pending or conflicting membership
-   cannot become a new birth.
+   with no `message.in` or pickup ACK. Known pending membership, missing
+   relationship evidence and conflicting membership, as defined in
+   [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence),
+   prevent a new-birth fallback. A previously unknown proof-free pair with no
+   such claim can form a birth under that section's step 4.
 4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
    is needed, commit it separately and obtain its returned `eventId`; only then
    commit `message.in` referencing that binding, with retained content, hashes
@@ -575,7 +578,7 @@ defaults. Route recovery or a changed clock never reopens a submitted or
 terminally failed outbound.
 
 Envelope collection uses [vault-events.md section 12.3](vault-events.md#held-roots)'s retention predicate,
-independently of scheduling eligibility. Submission releases this outbound's
+independently of scheduling eligibility. Committed submission releases this outbound's
 envelope contribution; ACK and duplicate-response replay add no retention.
 That definition also governs unavailable routes, retryable resolution failures
 and the separate lifetimes of content, skeletons and independent references.
@@ -1346,6 +1349,6 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
     changes relevant to that pair trigger retry with a fresh bounded sender-
     resolution sequence when needed. While local wait state is retained, mere
-    redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Time in the evidence wait consumes neither
+    redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Time in the evidence wait consumes neither
     resolver attempts nor its local retention stop. No local retention timeout
     clears the pending claim.

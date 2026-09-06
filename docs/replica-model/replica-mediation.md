@@ -893,8 +893,9 @@ Recipient classification follows [relationships.md sections 9.1](relationships.m
 including eligible retired historical addresses. For an otherwise eligible
 recipient, apply that profile's
 [sender authentication](relationships.md#sender-authentication-freshness),
-[failure classification](relationships.md#resolution-failure-classification) and
-[bounded resolution](relationships.md#inbound-sender-resolution-budget) rules;
+[failure classification](relationships.md#resolution-failure-classification),
+[bounded resolution](relationships.md#inbound-sender-resolution-budget) and
+[exhaustion](relationships.md#exhaustion-and-non-resolution-deferral) rules;
 retained chain membership cannot bypass current authentication.
 
 A delivery awaiting recoverable decryption, local DID/route/sync state,
@@ -1156,5 +1157,5 @@ A conforming implementation demonstrates at least these cases:
     While local wait state is retained, redelivery alone does not resolve
     again; relevant evidence changes start one fresh shared bounded sequence
     when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
+    retention stop. Loss of local wait state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Mediator expiry does not clear the pair
     claim.

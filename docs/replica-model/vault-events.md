@@ -851,7 +851,8 @@ receipt while its bound route has no terminal dependency, including after DID
 retirement. This rule applies equally to publicly disclosed and privately
 allocated addresses. No renewed registration is required to drain retained
 deliveries. An unknown address pair cannot establish a new relationship on a
-retired local DID. [relationships.md section 9](relationships.md#uniform-receipt) owns the receive procedure.
+retired local DID. [relationships.md section 9](relationships.md#uniform-receipt) owns the receipt gates;
+[distributed-delivery.md section 4.3](distributed-delivery.md#receive-a-message) owns the receive procedure.
 
 Retain the key/document evidence and usable mediation needed by existing
 relationships. Their messages still scope through the historical local chain;
@@ -3760,7 +3761,7 @@ There is no migration requirement from an earlier event vocabulary.
      not resolution accounting survived; successful authentication rediscovers
      any still-pending pair and returns to the wait. A relevant evidence-change
      retry also gets one fresh bounded sequence when resolution is required,
-     under [relationships.md section 10.1](relationships.md#did-resolution-requirements) and its conformance case
+     under [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state) and its conformance case
      61. Mediator expiry removes only that delivery; a later delivery cannot
      bypass the retained pending claim.
 130. <a id="ve-130"></a> Given the same validated numalgo-4 long form L and short form S, every

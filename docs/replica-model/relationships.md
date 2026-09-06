@@ -442,7 +442,7 @@ pair, reapplying the ordinary receive/authentication gates with a fresh
 bytes no longer held locally, it MAY obtain them through the next pickup;
 that redelivery performs the already-permitted retry. While local wait state
 is retained, mere redelivery or reconnect without a permitted retry does not
-restart authentication; loss of that state follows [section 10.1](#did-resolution-requirements)'s
+restart authentication; loss of that state follows [section 10.1](#shared-accounting-and-lost-wait-state)'s
 receive/authentication rule.
 The wait consumes no sender-resolution budget and has no client retention cap;
 [section 10.1](#did-resolution-requirements) excludes this waiting time from the retry's local retention stop.
@@ -546,8 +546,8 @@ required for the delivery.
 
 For input passing these checks, follow [distributed-delivery.md section 4.3](distributed-delivery.md#receive-a-message)
 steps 4–6 for separate dependent resolution/binding/inbound commits, pickup ACK
-and carried-proof verification. The receive lock spans those commits, not
-network ACK work. On redelivery after a pre-receipt crash, authenticate again
+and carried-proof verification. The receive lock spans step 4's dependent
+commits, not network ACK work. On redelivery after a pre-receipt crash, authenticate again
 under [section 10.1](#duplicate-authentication-and-historical-recovery) and reuse committed evidence.
 Safely identified integrity rejection is terminal without new input or response effect.
 
