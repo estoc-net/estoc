@@ -801,8 +801,9 @@ paths:
    process-durably appended the inbound vault observation; or
 2. **terminal pre-vault rejection** — it authenticated enough envelope and
    protocol state to classify the delivery safely under a profile such as
-   `rendezvous.md`'s hard gate, committed any required bounded local diagnostic,
-   and determined that the message MUST be discarded without `message.in`.
+   `rendezvous.md` sections 9.2–9.3 (recipient, syntax, authentication,
+   integrity and operational resource checks), recorded any bounded local
+   diagnostic, and determined that the message MUST be discarded without `message.in`.
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
 portable message content. Recipient classification follows the same exact-key

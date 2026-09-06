@@ -366,6 +366,11 @@ observation and wire IDs follow `distributed-delivery.md` section 9.
 
 ## 5. EventStore
 
+`EventStore` is the backend interface. Its `append`, `appendAll` and `ingest`
+methods are internal to `Vault.commit` and validated import/restore, just like
+the object-store put primitives. Application callers receive only the read
+interface through `Vault.events` in section 10.
+
 ```ts
 type Draft<D extends JsonObject = JsonObject> = {
   type: string;
@@ -428,8 +433,8 @@ interface EventStore {
 }
 ```
 
-A store MAY expose additional backend diagnostics, transactions or
-indexes. Portable code MUST depend only on the interface above.
+A store MAY expose additional backend diagnostics, transactions or indexes to
+its runtime. Portable application code uses the section-10 vault interface.
 
 ### 5.1 `append`
 
@@ -651,7 +656,7 @@ type CommitObject = {
 };
 
 interface Vault {
-  readonly events: EventStore;
+  readonly events: Pick<EventStore, "scan" | "changes" | "damaged" | "conflicting">;
   readonly objects: Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
   readonly files: FileStore;
 
@@ -680,9 +685,10 @@ Object acceptance or root-check failure appends no events. Accepted objects
 may remain after failure or crash under `dasl-objects.md`'s orphan-grace policy;
 the event batch still obeys section 5.2's all-or-nothing rule.
 
-For the exposed `EventStore`, `appendAll(drafts)` is the no-new-object form
-`commit([], drafts)`; `append(draft)` is its single-event form. Both include
-the same root checks and lock.
+`Vault.events` exposes reads only; it has no `append`, `appendAll` or `ingest`
+method. Locally authored events with no new objects use `commit([], drafts)`
+with the same payload validation, root checks and lock. Import/restore uses
+the internal ingest primitive only within its validated publication boundary.
 
 Phase 1 MUST serialize operations over one writable vault generation with one
 vault-wide writer lock, across all handles and workers. The lock covers all
@@ -738,7 +744,7 @@ collector MUST refuse the live object read; it may serve an isolated immutable
 snapshot instead. Complete-line event visibility alone is insufficient.
 Full import and export hold the writer lock across the boundaries
 defined in sections 11.2 and 11.3. Existing rules for serialized receipt
-allocation and admission finalization use this same lock.
+allocation and bootstrap integrity checks use this same lock.
 
 The current replica and other local state are intentionally absent from
 `Vault`. A host opens a vault backend with a local replica context and
@@ -962,8 +968,8 @@ A conforming implementation MUST pass at least these cases:
    reopen still observes the complete event.
 2. A process crash before `append` resolves may leave the complete event or no
    event, never a partial accepted event.
-3. `commit` and its `appendAll` form append all events or none, give every event
-   one timestamp, and remain complete with required objects after successful
+3. `commit` and its internal `appendAll` primitive append all events or none,
+   give every event one timestamp, and remain complete with required objects after successful
    resolution and process restart.
 4. A JCS-ineligible event, including duplicate member names, an unpaired
    surrogate or a non-I-JSON number, is rejected before acceptance.
@@ -1018,7 +1024,10 @@ A conforming implementation MUST pass at least these cases:
     or returns null after unlink; it never exposes an unprotected stream.
     When two streams read the same CID, ending one does not release the other's
     protection.
-29. `Vault.objects` exposes no standalone put or collection operation.
+29. `Vault.events` exposes only `scan`, `changes`, `damaged` and `conflicting`;
+    callers cannot append or ingest through it. All local event writes,
+    including those with no new objects, use `Vault.commit`.
+    `Vault.objects` exposes no standalone put or collection operation.
     Application object preparation stays private until `commit` accepts it
     with its references;
     validated import/restore uses the internal object primitives. Only the

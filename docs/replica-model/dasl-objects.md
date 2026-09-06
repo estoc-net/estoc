@@ -293,9 +293,10 @@ mentioned only inside the document does not retain or fetch that attachment.
 
 ### 8.1 Write-before-reference
 
-Locally authored events MUST use `Vault.commit` or its no-new-object forms
-under `event-store.md` section 10. New objects are accepted within the commit
-that references them; collection never runs concurrently with that commit.
+Locally authored events MUST use `Vault.commit`, including `commit([], drafts)`
+when there are no new objects, under `event-store.md` section 10. New objects
+are accepted within the commit that references them; collection never runs
+concurrently with that commit.
 
 A failure or crash after object acceptance but before event commit may leave
 an orphan. Reopen MUST reconstruct every committed event and the resulting

@@ -37,7 +37,7 @@ This profile defines:
 - idempotency requirements for automatic handlers.
 
 It does not define the DASL object profile (`dasl-objects.md`), mailbox
-fan-out (`replica-mediation/1.0`), the rendezvous admission profile
+fan-out (`replica-mediation/1.0`), the rendezvous receive profile
 (`rendezvous.md`) or event/object replication (`vault-sync/1.0`).
 
 ## 2. Terms
@@ -107,12 +107,12 @@ Version 3 recognizes:
 
 ```text
 rendezvous DID
-    disclosed address for bounded first contact
+    disclosed address for first contact
     self-resolving did:peer:4
 
 relationship DID
     pairwise did:peer:4
-    ordinary traffic after admission
+    ordinary relationship traffic
 ```
 
 Both are vault-scoped. The phase-1 active full runtime derives their private
@@ -224,7 +224,7 @@ The following table is normative. "Committed" means process-durable success.
 | Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that MID; apply envelope retention under `vault-events.md` section 15.3 |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
-| Stable execution scope | Previously committed admission or relationship evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
+| Stable execution scope | Previously committed bootstrap input or relationship evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Record receipt information independently of submission work |
 
 The terminal pre-vault path creates no `message.in`, peer ACK, contact or
@@ -261,7 +261,7 @@ The active phase-1 runtime may later:
    `vault-events.md` section 14.8;
 2. fold target contact/channel;
 3. choose valid sender DID, peer DID/key and exact resolution evidence under
-   `rendezvous.md` section 5.1's same-DID key-change policy;
+   `rendezvous.md` section 5.1's resolution-freshness and same-DID key-change rules;
    ordinary work may select only an eligible `writeTo` under `vault-events.md`
    section 14.6, and an initial attempt follows its frozen selection under
    `rendezvous.md` section 8;
@@ -397,7 +397,8 @@ A preparer folds the target and selects:
 
 - one live sender DID entity and its fixed key-agreement method;
 - one current peer DID and authenticated peer key;
-- exact `peer.resolved` evidence;
+- exact `peer.resolved` evidence, fresh for the first package of each new
+  non-numalgo-4 MID under `rendezvous.md` section 5.1;
 - one recipient route authorized by that evidence; and
 - any required contact-scoped `from_prior`.
 
@@ -518,8 +519,8 @@ thid  = X.thid, or X.wireId when X.thid is null
 pthid = X.pthid
 ```
 
-The Report Problem response in `rendezvous.md` section 13 instead starts a
-child thread of X's protocol thread, using that profile's `thid`/`pthid` rule.
+Remote Report Problem correlation in `rendezvous.md` section 13 instead
+uses its child-thread `pthid` rule; this profile selects no local rejection effect.
 
 A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
@@ -591,7 +592,7 @@ A duplicate MUST NOT mint a new effect, outbound message, wire ID, package or
 `from_prior`, or change frozen ACK targets, merely to obtain another send.
 Collected or erased response bytes are not recreated for a submitted response.
 If a request was not honored because no eligible target remained or the
-candidate was rejected, redelivery creates no new response obligation.
+input failed integrity, redelivery creates no new response obligation.
 Required ACK work left unfinished by a crash still follows `vault-events.md`
 section 16.1's recovery rules, subject to the same submitted boundary.
 
@@ -672,32 +673,57 @@ conflicting evidence cannot authorize another scope.
 
 A `Vault.commit` validator MUST derive an automatic intent's execution scope
 and ACK targets from the event set committed before that call. A proposed
-admission result, binding or transition in the same batch cannot supply scope.
+bootstrap input, binding or transition in the same batch cannot supply scope.
 Commit those prerequisites first, then derive and commit the response intent
 in a separate call. Other intra-batch reference/schema checks remain part of
 ordinary batch validation; they do not create an execution-scope exception.
 A crash between calls is recovered from the committed prefix under
 `vault-events.md` section 16.1 and the protocol's response rules.
 
-For relationship `R`, `peerChain(R)` is the historical set containing the
-responder's `relationship.established.peerKey` or the initiator binding's
-pinned initial peer key under `vault-events.md` section 12.5, plus successor
-`peerKey` values from valid `peer.transitioned` events naming `R` under that
-document's section 11.2. The initiator's initial rendezvous key is a member
-before any reply; rotation adds its successor without removing historical
-scope evidence. Retirement preserves this set. Contact attribution and route
-availability do not select a scope; current work eligibility is separate.
-All key values use `vault-events.md` section 4.1's complete canonical public-key
-encoding. A same-DID new-key observation at `R`'s local relationship DID without
-continuation has no scope and uses `rendezvous.md` section 5.1's
-`peer-key-changed` diagnostic; fresh resolution or contact attribution does
-not extend this chain. New initials at a local rendezvous DID still follow
-the admission row below.
+For relationship `R`, `peerChain(R)` is the historical set of canonical
+`(peer DID, peerKey)` pairs backed by the following exact retained snapshots:
+
+- on the initiator, every key-agreement key authorized by
+  `peer.resolved(initiatorBound.resolution)` under its canonical peer DID;
+- on the responder, every key-agreement key in
+  `peer.resolved(relationship.established.originResolution)` under its
+  canonical sender DID. That event is the selected origin observation's
+  `peerResolution`, frozen independently of later duplicates; and
+- for each valid `peer.transitioned` naming `R`, its authenticated `peerKey`
+  and all key-agreement keys of its frozen `peerResolution` document, under
+  its canonical `to` DID. This reference matches the selected carrying
+  inbound and cannot be replaced by a later observation of the same MID.
+
+The `keyAgreementKids` list in each named resolution must agree with all
+key-agreement authorizations in that document. Resolve each method to the
+canonical public-key value in `vault-events.md` section 4.1. Unsupported keys
+cannot be selected or used to authenticate, but must not be silently mistaken
+for another key. Missing snapshot evidence defers the affected validation;
+fresh resolution cannot substitute unless it recovers the identical raw CID.
+
+The selected initial-package key and `relationship.established.peerKey` retain
+their origin roles; other authorized keys are chain members without origin
+status. On the initiator, the peer's pinned rendezvous keys are members before
+any reply; on the responder, the origin sender document supplies the keys.
+Fresh unpinned resolution never extends this set. Verified transitions add
+successor document keys without removing historical scope evidence.
+
+Membership always checks DID and key from the same pinned or transition
+snapshot, not two unrelated entries. A reply under another authorized key in
+that snapshot needs no rotation. Equal-intent wire messages under those keys
+can merge in this same relationship under `vault-events.md` section 14.7.
+The same key under another unverified DID cannot join by key equality alone.
+
+Retirement preserves this historical set. Current address, route availability
+and contact tombstones govern work eligibility separately. A same-DID new key
+outside this set, received at the local relationship DID without continuation,
+has no scope and follows `rendezvous.md` section 5.1's diagnostic rule. New
+initials at a local rendezvous DID follow their own key-derived input row.
 
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
-| Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. Undecided: no scope. Admission conflict: execution-scope conflict. |
-| Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `o.peerKey` in `peerChain(R)`; `o.did` and `o.peerKey` match the same binding or transition evidence; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
+| Responder candidate addressed to a local rendezvous DID | Committed `o` and its exact resolution with consistent `rendezvousConfigId`/recipient references under `vault-events.md` sections 12.3 and 14.4 | The deterministic relationship derived from the canonical local rendezvous DID and `o.peerKey`, even before materialization; missing evidence defers and integrity conflicts suppress effects |
+| Traffic addressed to a local relationship DID, including direct initial replies, handoffs and no-handoff reports | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `(o.did, o.peerKey)` in `peerChain(R)` through the same pinned or verified transition snapshot defined above; any carried `from_prior` has its required committed transition evidence | That unique `R`; no match supplies no scope |
 
 Each row contributes at most one scope; multiple matching relationships are
 an execution-scope conflict. All applicable rows for one observation MUST agree.
@@ -713,11 +739,9 @@ Apply the following rules to every valid observation in one MID group:
 
 1. Conflicting derivation evidence or two distinct derived scopes makes an
    execution-scope conflict, even when another observation is unresolved.
-   In particular, a relationship scope and an effective reject's bootstrap
-   channel scope are incompatible; they are not separate executions.
 2. Otherwise, any observation with no scope leaves the whole group deferred.
-   This includes an undecided rendezvous candidate alongside an observation
-   already attributed to a relationship. The deferred observation cannot be
+   This includes a candidate with missing configuration/resolution evidence
+   alongside an observation already attributed to a relationship. The deferred observation cannot be
    ignored to run the rest of the group.
 3. Only when every observation derives the same unique scope may the group
    process ACKs or eligible effects and participate in `vault-events.md`
@@ -739,9 +763,8 @@ executionId = UUIDv5(
 ```
 
 Initiator binding and transition recovery follow `rendezvous.md` section 12
-even when the responder DID is already known. A final rejection uses the
-candidate's fixed channel only on the responder. On the initiator its report
-uses the pinned relationship scope, with control classification and diagnostics
+even when the responder DID is already known. A remote no-handoff report
+uses the initiator's pinned relationship scope, with control classification and diagnostics
 under `vault-events.md` sections 14.7 and 14.6.
 
 A message without a unique stable scope is **effect-deferred**. It MUST NOT
@@ -775,15 +798,19 @@ For every account-scoped pickup or direct delivery:
 3. authenticate, decrypt and validate the complete innermost message,
    including the exact selected local key-agreement method, Peer DID long-form
    and authcrypt sender evidence;
-4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's bounded pre-vault
-   gate; a safely classified hard rejection received through Message Pickup
+4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's
+   receive and integrity checks; a safely classified terminal failure through Message Pickup
    MUST be pickup-ACKed without `message.in`;
 5. for admitted or ordinary traffic, derive channel, observation MID,
    intent hash and exact plaintext hash;
 6. prepare retained body/attachment objects and the stored message document;
-7. use `Vault.commit` for those objects and `message.in` with exact
-   `peer.resolved`, applicable contact attachment and non-controversial
-   observations; each complete channel key already contains its peer public key;
+7. commit/reuse the exact `peer.resolved` and document first, then use its
+   returned event ID as `message.in.peerResolution` in a separate
+   `Vault.commit` with the retained content, applicable contact attachment and
+   non-controversial observations.
+   `rendezvousConfigId` is the frozen generation for a bootstrap candidate,
+   otherwise null. For a rendezvous input, its integrity checks and both
+   commits share the writer lock; each complete channel key contains its peer public key;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -801,9 +828,8 @@ For every account-scoped pickup or direct delivery:
 13. schedule eligible deterministic application effects through that execution
     ID under `vault-events.md` section 14.7's control-observation rules; the
     no-handoff error classification permits ACK processing in step 12 and
-    no automatic responses in steps 14–15. Bootstrap admission itself follows
-    `rendezvous.md` section 10.2 and is a local decision, not an application
-    effect requiring a provisional execution identity;
+    no automatic responses in steps 14–15. Bootstrap materialization follows
+    `rendezvous.md` section 10.2 using the already committed candidate scope;
 14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
     append one deterministic protocol response or pure-ACK intent; and
@@ -825,18 +851,18 @@ initial attempt to a rendezvous DID carries an ordinary application message.
 `rendezvous.md` section 8 owns its durable local classification and constraints.
 
 When no other content is available, the initiator sends Trust Ping 2.0 with
-`response_requested == true`, `please_ack: [""]`, finite expiry and the OOB
-invitation ID as `pthid` when applicable. A supported application protocol
-may instead send its real first message with the same receipt and expiry
-requirements.
+`response_requested == true`, `please_ack: [""]`, common nullable expiry and
+the OOB invitation ID as `pthid` when applicable. An application protocol may
+instead send its real first message. There are no initial-specific type, size
+or lifetime limits, and receipt/materialization has no expiry deadline.
 
-After local relationship admission, the responder selects a deterministic
+After durable bootstrap receipt, the responder selects a deterministic
 handoff response: Trust Ping `ping-response`, a protocol-defined deterministic
 machine response, or Empty Message ACK. Human-authored content is ordinary
 later traffic.
 
 A local Estoc responder sends its first message from its relationship DID,
-with `from_prior`, explicit ACK of the initial wire ID and `please_ack: [""]`.
+with `from_prior`, eligible requested ACK targets and `please_ack: [""]`.
 Its submission completes at committed `delivery.submitted` even while rotation
 confirmation remains pending. A remote peer may keep its original rendezvous
 or public DID: its authenticated replies use the initiator's precommitted
@@ -846,8 +872,8 @@ or selecting response intents under `rendezvous.md` section 12.
 
 Until the responder receives an authenticated message addressed to the new
 relationship DID, outbound packages from that DID carry the same byte-stable
-`from_prior`. Rejection is silent or uses a protocol-specific error or Report
-Problem 2.0; there is no custom decline message.
+`from_prior`. Known integrity failures create no local rejection effect;
+remote errors follow `rendezvous.md` section 13. There is no custom decline message.
 
 ## 11. Automatic effects
 
@@ -895,7 +921,7 @@ It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
 content erasure, submission, a later observation or a changed clock. If no
 intent exists, it commits the intent through `Vault.commit` before effects.
 Derivation, lookup and commit are one locked operation.
-Admission decisions, initiator bindings and required transitions MUST already
+Bootstrap input, initiator bindings and required transitions MUST already
 be committed before this operation. A batch cannot authorize its own response
 scope; section 9 permits no prospective-scope exception.
 A conflicting local intent is rejected before append; imported conflicts remain
@@ -923,7 +949,6 @@ delivery.failed                   terminal package or message failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
 message.in                        durable inbound observation
 peer.transitioned                 DID continuation in one named relationship
-relationship.admissionDecided     local bootstrap admission decision
 relationship.established          stable responder-side pairwise relationship
 relationship.initiatorBound       portable initiator-side relationship binding
 ```
@@ -949,6 +974,8 @@ A recommended inbound observation records both hashes and durable headers:
   "ack": [],
   "myKey": "did/019b.../key-agreement",
   "peerKey": "<canonical-peer-public-key>",
+  "peerResolution": "<exact-peer.resolved-eid>",
+  "rendezvousConfigId": null,
   "receivedVia": {
     "mediation": "019b...",
     "deliveryId": "019b..."
@@ -1129,28 +1156,35 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     the valid error receives no-handoff control treatment and generates no
     response; other traffic follows its protocol and ACK-request rules. A
     different DID without proof cannot obtain that scope.
-54. Two observations with equal intent and the same `(peerKey, wireId)` arrive
-    at a relationship DID and a rendezvous DID. An undecided rendezvous
-    candidate defers the whole MID group. An effective accept deriving the
-    same relationship permits one execution; an effective reject derives an
-    incompatible channel and conflicts the whole group. Event order does not
-    select one observation, and previously emitted effects remain history.
-55. A batch proposing a new admission result, binding or transition and a
-    response intent dependent on its scope is rejected. Commit the prerequisite
-    first and the intent later; a crash between calls retains the first commit.
-    Accepted work recovers the required response; a reject with no committed
-    optional intent recovers as silent. No uncommitted event authorizes effects.
+54. Two equal-intent observations with the same `(peerKey, wireId)` at a
+    relationship DID and rendezvous DID execute once only if both committed
+    observations derive the same relationship. Missing candidate evidence
+    defers the group; inconsistent evidence conflicts it. Event order does not
+    select an observation to execute, and emitted effects remain history.
+55. A batch proposing scope-bearing bootstrap input, binding or transition
+    with a dependent response intent is rejected. Commit the prerequisite
+    first and the intent later; crash recovery uses that committed prefix
+    without a new decision or provisional scope.
 56. Two workers handling one outbound serialize prepare/submit work. Observed
     acceptance commits before another dispatch, and no later dispatch starts
     after the submitted event. A crash before that commit still permits
     recovery with the same package rather than consuming a pre-call reservation.
-57. Before an initiator has qualifying scoped inbound evidence, a send through
-    its pinned peer end follows `rendezvous.md` section 8 and freezes non-null
-    `initial`; the ordinary send path cannot commit a null-expiry bypass.
-    A later direct reply permits ordinary messages, while previously committed
-    initial attempts retain their profile and exact package constraints.
+57. Before qualifying scoped inbound, an initiator send through its pinned
+    peer end uses `rendezvous.md` section 8 and freezes non-null `initial`.
+    Nullable expiry is valid for both initial and ordinary traffic. Direct
+    replies, pure ACKs and verified handoffs/rotations qualify; a no-handoff
+    error does not. Explicit-channel attempts fail before commit without
+    rewriting the target. Existing initials keep their frozen classification.
 58. A freshly resolved same-DID new key does not extend `peerChain(R)`. Outbound
     preparation follows `rendezvous.md` section 5.1's message-scoped failure;
     an inbound at the local relationship DID without continuation proof has
     no scope and processes no ACK/effect. The contact diagnostic cannot make
     the observation executable, even if DID-graph attribution finds a contact.
+59. Two keys authorized by the same exact pinned peer document can carry
+    direct replies in the same relationship. Equal-intent variants of one wire
+    ID merge and execute once; neither key replaces the selected origin.
+    A fresh unpinned document cannot grant membership to another key.
+60. A new non-numalgo-4 MID resolves and commits current recipient evidence
+    before first preparation. Resolution failure leaves it retryable, and
+    an unchanged online-revalidated document still creates new evidence.
+    Existing packages retry or repack using retained snapshots only.
