@@ -89,7 +89,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
   Local addresses are seed-derived Peer DIDs. Public/rendezvous disclosure and
   pairwise allocation are policies with identical core relationship semantics.
 - **Relationship** — the stable symmetric birth-address identity with two
-  independently changeable ends under [vault-events.md section 12](vault-events.md#relationships-and-address-changes); its local
+  independently changeable ends under [vault-events.md section 6](vault-events.md#relationships-and-address-changes); its local
   and peer histories determine message scope under section 9.
 - **Outbound message ID (`messageId`)** — the vault entity ID of one outbound
   logical message, also used as its innermost DIDComm plaintext `id`.
@@ -153,7 +153,7 @@ each message still has a sender and recipient, and every rotation is directed.
 
 Each local communication DID has one immutable `boundRouteId`, mediated or
 direct. Changing its keys or bound route creates a successor DID entity;
-[vault-events.md section 12.4](vault-events.md#relationship-localtransitioned) records a relationship's local continuation.
+[vault-events.md section 6.5](vault-events.md#relationship-localtransitioned) records a relationship's local continuation.
 An external recipient's resolved document may offer transport choices; choosing
 among authorized routes does not change the application recipient. A direct
 endpoint MUST NOT expose a replica ID as the peer-visible recipient.
@@ -262,8 +262,8 @@ The following table is normative. "Committed" means process-durable success.
 | --- | --- | --- |
 | Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
-| Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under [vault-events.md section 12.2](vault-events.md#relationship-bound) | Submit that exact package |
-| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under [vault-events.md section 15.3](vault-events.md#held-roots) |
+| Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under [vault-events.md section 6.2](vault-events.md#relationship-bound) | Submit that exact package |
+| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under [vault-events.md section 12.3](vault-events.md#held-roots) |
 | Normal inbound | Objects, `message.in` and required resolution/binding evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
 | Stable execution scope | Previously committed receipt and binding evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
@@ -296,12 +296,12 @@ The synchronous full-vault send operation:
 
 It performs no network operation. When `createdTime` is null, preparation
 omits `created_time`. Every outbound uses the same submission completion rule
-in [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold), regardless of its `pleaseAck` or `ack` arrays.
+in [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold), regardless of its `pleaseAck` or `ack` arrays.
 
 The active phase-1 runtime may later:
 
 1. stop when submitted, terminally failed, expired or conflicted under
-   [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold);
+   [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold);
 2. fold the intent's target R and any birth metadata;
 3. resolve under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements) and commit/reuse the common root
    binding before preparation. Select that R's current sender and peer end,
@@ -448,7 +448,7 @@ evidence changes under an expressly permitted rule.
 A preparer folds the target and selects:
 
 - one live sender DID entity and its fixed key-agreement method, using the
-  relationship's current local end under [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned);
+  relationship's current local end under [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned);
 - one current peer DID and authenticated peer key;
 - exact `peer.resolved` evidence, fresh for the first package of each new
   non-numalgo-4 message ID under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements);
@@ -492,7 +492,7 @@ validated changes of either end in the same R.
 
 ## 7. Submission completion and expiration
 
-[vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold) is the sole owner of submission completion and
+[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) is the sole owner of submission completion and
 work eligibility. A worker checks that fold before preparation or submission.
 After a valid `delivery.submitted` commits for any package, it MUST NOT prepare,
 repackage or submit any package for that logical message ID again. This includes
@@ -504,7 +504,7 @@ Before completion, an expired message receives a message-scoped terminal
 `delivery.failed(code="expired")` and no new submission. Reaching expiry after
 submission does not create a new delivery failure. An ACK can still supply
 receipt information, including the late indicator defined from committed
-carrier observations in [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold), without changing
+carrier observations in [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold), without changing
 submission state or work eligibility.
 
 Eligible unsubmitted work may use local timers, backoff and recovery. Protocols
@@ -512,7 +512,7 @@ may impose tighter limits; [rendezvous.md section 14](rendezvous.md#retry-replac
 defaults. Route recovery or a changed clock never reopens a submitted or
 terminally failed outbound.
 
-[vault-events.md section 15.3](vault-events.md#held-roots) is the sole normative envelope-retention rule.
+[vault-events.md section 12.3](vault-events.md#held-roots) is the sole normative envelope-retention rule.
 An unsubmitted, non-terminal package remains retained through unavailable
 routes and retryable resolution failures. Committed submission releases this
 outbound's envelope contribution without waiting for ACK or keeping bytes for
@@ -530,17 +530,16 @@ references retain their own lifetimes under that fold.
 Before selecting or committing any new deterministic reply intent, including
 a natural protocol response with no ACK targets, the writer MUST check for a
 usable local sender in the input's unique relationship scope. Its current local
-DID must pass portable identity/route checks under [vault-events.md sections 12.4](vault-events.md#relationship-localtransitioned) and [14.6](vault-events.md#contact-fold); any contact assignment must be conflict-free and not deleted.
+DID must pass portable identity/route checks under [vault-events.md sections 6.5](vault-events.md#relationship-localtransitioned) and [7.6](vault-events.md#contact-fold); any contact assignment must be conflict-free and not deleted.
 An unassigned control relationship needs no contact. These are portable checks,
 not requirements for online resolution or observed registration before intent.
 No other R or historical local end may substitute for an unavailable sender.
 
 If there is no usable sender, receive and scope the input normally but commit
 no reply intent and freeze no ACK targets. Required response/ACK work remains
-unfinished, rediscovered from committed input under [vault-events.md section 16.1](vault-events.md#open-the-writable-full-runtime) when a usable sender exists, including after a local successor is created.
+unfinished, rediscovered from committed input under [vault-events.md section 13.1](vault-events.md#open-the-writable-full-runtime) when a usable sender exists, including after a local successor is created.
 Current tombstones, integrity and erasure rules still apply. Already committed
-intents are reused; later rotation or retirement uses that document's section
-12.4 repack/blocking rules without minting a replacement effect.
+intents are reused; later rotation or retirement uses that document's [section 6.5](vault-events.md#relationship-localtransitioned) repack/blocking rules without minting a replacement effect.
 
 Binding and required input/proof evidence must already be committed. An early
 privacy transition and its notification follow [rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications);
@@ -603,7 +602,7 @@ uses its child-thread `pthid` rule; this profile selects no local rejection effe
 A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
 Pure ACKs contain no `please_ack` and follow the same submission completion
-rule as every outbound; they are control observations under [vault-events.md section 14.7](vault-events.md#inbound-message-and-execution-fold). Control input creates no contact or early-privacy notification.
+rule as every outbound; they are control observations under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold). Control input creates no contact or early-privacy notification.
 Its permitted receipt ACK uses the same scope and sender gates at every local
 address. No-response protocol errors retain their no-response rule.
 
@@ -650,7 +649,7 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 `ack` array names that outbound wire ID, the candidate outbound belongs to the
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
-passed. [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold) defines outbound membership using exact
+passed. [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) defines outbound membership using exact
 immutable `relationshipId`/`birth` references and validated binding/package
 evidence. Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`, never a
 vault-global wire-ID search. Threading, a natural response, transport acceptance,
@@ -677,7 +676,7 @@ A duplicate MUST NOT mint a new effect, outbound message, wire ID, package or
 Collected or erased response bytes are not recreated for a submitted response.
 If a request was not honored because no eligible target remained or the
 input failed integrity, redelivery creates no new response obligation.
-Required ACK work left unfinished by a crash still follows [vault-events.md section 16.1](vault-events.md#open-the-writable-full-runtime)'s recovery rules, subject to the same submitted boundary.
+Required ACK work left unfinished by a crash still follows [vault-events.md section 13.1](vault-events.md#open-the-writable-full-runtime)'s recovery rules, subject to the same submitted boundary.
 
 <a id="observation-identity-logical-aliasing-and-execution-identity"></a>
 
@@ -734,7 +733,7 @@ identity and ACK lookup.
 
 A verified relationship-scoped transition may cause observations with different
 authenticated `peerPublicKey` values and therefore different message IDs to represent one
-logical message. [vault-events.md section 14.7](vault-events.md#inbound-message-and-execution-fold) defines that second-stage merge. The original
+logical message. [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold) defines that second-stage merge. The original
 observation message IDs remain stored for audit and conflict detection.
 
 These values are **observation identities**. Equal intent hashes under one message ID
@@ -802,7 +801,7 @@ has no scope and follows that document's same-DID diagnostic. Missing proof or
 binding evidence defers, never falls back to a fresh birth or key-based scope.
 
 All applicable evidence must identify one unique R. The pair index under
-[vault-events.md section 14.4](vault-events.md#relationship-fold-and-address-index) catches competing birth/continuation claims.
+[vault-events.md section 6.6](vault-events.md#relationship-fold-and-address-index) catches competing birth/continuation claims.
 For each message ID group, every valid observation must derive the same R: different
 Rs conflict, any unresolved observation defers the group, and neither permits
 per-observation effects. Retain previous committed receipts/effects without
@@ -838,7 +837,7 @@ labels do not supply relationship identity.
 
 Using the existing relationship, key and carrier fixture above, let two
 validated local transitions extend P0 to P1 and then P1 to P2, each with the
-predecessor-confirmation evidence required by [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned):
+predecessor-confirmation evidence required by [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned):
 
 ```text
 R             = 35807a1e-3b8a-52f5-9580-29cd5265882e
@@ -861,7 +860,7 @@ same authenticated peer key/DID pair in `peerChain(R)`. Equal-intent deliveries
 at P0, P1 and P2 therefore share one execution, even after P0 retires. An
 explicit ACK at P2 may acknowledge an outbound whose historical valid package
 sent from P0, and an ACK at eligible P0 may acknowledge a package from P2, under
-[vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold)'s membership rules. A DID outside this chain
+[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s membership rules. A DID outside this chain
 supplies no such membership. These are executable identity and scope fixtures,
 not JWT or numalgo-4 document test vectors; the DID entity IDs stand for
 validated local documents and transition proofs.
@@ -881,10 +880,10 @@ validated local documents and transition proofs.
    consistency, and perform that document's section-5.1 sender resolution with
    its bounded unavailable-result retries. Safely terminal delivery is pickup-
    ACKed without portable application input; recoverable prerequisites defer.
-3. Under the receive lock defined in [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence), find a
+3. Under the receive lock defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), find a
    unique existing address-pair binding or a genuinely new live root pair.
    Select the generic binding/transition evidence, apply [rendezvous.md section 9.3](rendezvous.md#integrity-checks-and-durable-receipt)'s superseded-sender check, and check
-   invitation/relationship integrity. [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence)'s known
+   invitation/relationship integrity. [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)'s known
    pending membership blocks new proof-free receipt; omitting an unresolved
    carrier's proof cannot create a new birth. Pre-receipt deferral required by
    that section follows [rendezvous.md section 9.1](rendezvous.md#deferred-delivery), with no
@@ -936,7 +935,7 @@ address pair and R; it does not pin later package addresses.
 
 After binding, the optional early-privacy policy may create a local successor
 and send an ordinary notification with `from_prior`. Both initial and later
-rotations use [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned). Either peer may keep a public
+rotations use [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned). Either peer may keep a public
 address. Messages, ACKs, notification effects, repacks and submission completion
 all use the same R throughout. The detailed policy and idempotent trigger
 recovery are in [rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications).
@@ -949,7 +948,7 @@ An automatic DIDComm output is one effect identified by
 `(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
 derived execution ID of a unique conflict-free carrier group. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
-and output intent rules. Its outputs MUST obey [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold)'s
+and output intent rules. Its outputs MUST obey [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s
 limit of one logical outbound carrying a non-empty `ack` per execution, across
 all producing tuples. Handler IDs and kinds are non-empty strings without
 U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
@@ -970,16 +969,16 @@ effectKey = base64url(
 
 The key is unpadded base64url. It determines the outbound message ID and wire ID under
 [vault-events.md section 9.1](vault-events.md#ids). The effect's content is its `message.out` intent.
-That event retains the complete producing tuple under its section-9.2 schema;
+That event retains the complete producing tuple under its [section-9.2](vault-events.md#message-out) schema;
 the stored `ordinal` is exactly `decimalOrdinal`, not a runtime-only counter.
-One key permits only one compatible intent under that document's section 14.8;
+One key permits only one compatible intent under that document's [section 9.8](vault-events.md#outbound-message-and-delivery-fold);
 payload validation MUST verify the execution ID against that carrier group,
 the stored tuple and output intent against the producing protocol, the key
 against that tuple, and the message ID against the key.
 
 Under the writer lock in [event-store.md section 10](event-store.md#vault-interface), the runtime MUST derive
 the carrier's execution ID and check for an already-selected ACK-bearing
-response under [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold) before selecting an ACK response
+response under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) before selecting an ACK response
 handler or tuple. If one exists, reuse it; a new handler or tuple cannot consume
 the carrier's ACK obligation again. Competing imported selections suppress
 response work under that fold.
@@ -995,7 +994,7 @@ Receipt, common bindings and required transitions MUST already
 be committed before this operation. A batch cannot authorize its own response
 scope; section 9 permits no prospective-scope exception.
 A conflicting local intent is rejected before append; imported conflicts remain
-history and suppress work under [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
+history and suppress work under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
 carriers may resume only unsubmitted response work under section 8.4.
 
 Other external effects MUST commit their protocol-defined portable intent
@@ -1177,14 +1176,14 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 26. <a id="dd-26"></a> Multiple relationship matches or incompatible derivation rows for one
     observation suppress ACK processing and new effects as an execution-scope
     conflict, even when each source is individually valid.
-27. <a id="dd-27"></a> Control observations follow vault-events section 14.7 at every address.
+27. <a id="dd-27"></a> Control observations follow [vault-events section 10.6](vault-events.md#inbound-message-and-execution-fold) at every address.
     Binding and scoped ACK processing remain possible without contact creation
     or a recursive privacy notification.
 28. <a id="dd-28"></a> Invalid `from_prior` prevents ACK processing and transition.
 29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
 30. <a id="dd-30"></a> Expiry stops unsubmitted work permanently. Receipt `late` follows
-    [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
+    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
     submitted and expired messages, without changing submission outcome or
     restarting work. Already-submitted messages acquire no new expired failure.
 
@@ -1199,7 +1198,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     frozen from_prior rules, including the first public-to-private rotation.
 34. <a id="dd-34"></a> `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
     `kid` has the exact `iss` DID portion. Predecessor method authorization uses
-    [vault-events.md section 11.2](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
+    [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
     pinned document, without requiring byte equality with presentedDid.
 35. <a id="dd-35"></a> Until exact-successor confirmation, every new package from that end
     carries its proof and long form. The root has no initial-handoff proof
@@ -1311,7 +1310,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 62. <a id="dd-62"></a> Section 9's local-rotation vector preserves message ID, execution ID, effect key
     and automatic outbound message ID across local recipient keys. Historical local
     membership also permits ACKs across predecessor/successor packages under
-    [vault-events.md section 14.8](vault-events.md#outbound-message-and-delivery-fold); a shared contact alone does not.
+    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold); a shared contact alone does not.
 
 <a id="rotation-membership-and-receipt-recovery-dd-63-dd-69"></a>
 

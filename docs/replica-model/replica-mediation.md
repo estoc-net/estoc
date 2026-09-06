@@ -905,7 +905,7 @@ A delivery that cannot yet be decrypted for a recoverable reason despite an
 eligible exact local key, depends on missing recoverable local DID/route/sync
 state or required sender resolution still within that section's budget, has
 known pending membership or missing relationship evidence requiring pre-receipt
-deferral under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence), or is otherwise not safely
+deferral under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), or is otherwise not safely
 classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
 [rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s retry rule: the wait consumes no sender-resolution
 budget and has no client retention cap. While local wait state is retained,
@@ -1159,7 +1159,7 @@ A conforming implementation demonstrates at least these cases:
     same replica-scoped ID shares one active sequence; missing recoverable
     local state cannot take that budget's terminal path.
     Known pending membership or missing relationship evidence preventing
-    receipt under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
+    receipt under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
     using [rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s evidence-change retry rule. This wait
     consumes no sender-resolution budget and has no client retention cap.
     While local wait state is retained, redelivery alone does not resolve

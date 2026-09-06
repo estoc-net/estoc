@@ -118,7 +118,7 @@ Every instruction to append an event in this document means
   its two address histories. Its local/peer orientation is a vault-local view.
 - **Birth intent** — an ordinary outbound whose nullable `birth` metadata
   freezes a new address pair before network work. It is not a wire message type.
-- **Root-address receipt** — the binding-root input defined in [vault-events.md section 14.9](vault-events.md#invitation-fold) for invitation consumption, irrespective of address policy.
+- **Root-address receipt** — the binding-root input defined in [vault-events.md section 5.8](vault-events.md#invitation-fold) for invitation consumption, irrespective of address policy.
 - **Application input** — authenticated scoped input other than a control
   observation, Empty, Trust Ping `ping-response` or Report Problem. Excluding
   these types from privacy-response selection prevents reply cycles; it does
@@ -427,7 +427,7 @@ policy; a fresh `peer.resolved` never extends `peerChain(R)`:
   `peerChain(R)` and which carries no `from_prior`, preserve the observation
   and exact resolution evidence but derive no execution scope. Process no ACK
   or effect. Surface a `peer-key-changed` diagnostic under
-  [vault-events.md section 14.6](vault-events.md#contact-fold) instead of silently waiting for more evidence.
+  [vault-events.md section 7.6](vault-events.md#contact-fold) instead of silently waiting for more evidence.
   A superseded sender node first follows section 9.3's receipt rule.
   Missing binding/chain evidence remains ordinary deferral; an invalid carried
   proof follows the existing conflict rule, not this no-proof path.
@@ -448,7 +448,7 @@ proof that a rotation is invalid.
 Every local communication address is a Peer DID numalgo 4. Both validated long
 and canonical short forms name one entity. Canonicalization validates the long
 form and uses its derived short form. The retained resolution document follows
-[vault-events.md section 11.1](vault-events.md#peer-resolved)'s fixed long-form representation, including when
+[vault-events.md section 4.4](vault-events.md#peer-resolved)'s fixed long-form representation, including when
 the presented DID is short. Supported non-Peer methods use their method-defined
 canonical DID, with no inferred aliases from names, common keys, resolver
 redirects or service endpoints.
@@ -485,7 +485,7 @@ known long-form document fails authentication; it does not create a relationship
 The predecessor's exact first-disclosure long form is used for `from_prior.iss`
 and its protected authentication `kid`; `sub` uses the successor's long form.
 A receiver compares predecessor DID spellings and authentication-method IDs
-under [vault-events.md section 11.2](vault-events.md#relationship-peertransitioned), using only the method's validated spelling
+under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned), using only the method's validated spelling
 equivalence and the pinned document. Exact wire spellings remain retained.
 A successor may bind another route or mediation for privacy. Neither changing
 transport preference nor choosing another service changes an existing DID.
@@ -510,7 +510,7 @@ introducing different receive or relationship types.
 
 An OOB identifier supplies `pthid` for an interaction following that invitation;
 it is not a relationship ID. One-use disclosure is consumed at matching durable
-root-address receipt under [vault-events.md section 14.9](vault-events.md#invitation-fold), independent of
+root-address receipt under [vault-events.md section 5.8](vault-events.md#invitation-fold), independent of
 contact creation, rotation or response. Tombstones and erasure do not reopen it.
 Repeated input by the same R reuses consumption; different consumers conflict.
 
@@ -605,7 +605,7 @@ Content remains application content regardless of whether a rotation is carried.
 1. Check submitted/expiry/conflict/lifecycle predicates before network work.
 2. Resolve the selected peer under section 5.1 and retain `peer.resolved`.
 3. Under the writer lock defined for receive and outbound binding operations
-   in [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence), recheck the pair and, for an unbound birth,
+   in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), recheck the pair and, for an unbound birth,
    commit the common `relationship.bound`. If a reverse-direction incoming
    message has already bound that pair, reuse its
    binding and pin; a fresh resolution controls key selection under section
@@ -643,7 +643,7 @@ authentication or relationship selection:
   exhausted; or
 - an authenticated delivery cannot select its binding or required transition
   because its exact address pair has known pending membership or missing
-  relationship evidence under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence). That section's
+  relationship evidence under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence). That section's
   unresolved proof carriers allowed to commit with a null binding are not
   blocked from durable receipt by this rule.
 
@@ -662,7 +662,7 @@ history can still receive under section 9.2.
 A delivery's **local wait state** is the runtime's record that the delivery
 already authenticated and is parked under this section pending relationship
 evidence. It is local scheduling state; the pending-pair claim of
-[vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence) is portable and is never lost with it.
+[vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence) is portable and is never lost with it.
 
 A phase-1 runtime retries local-prerequisite deferrals after its local state
 changes. Sender-resolution deferrals follow section 5.1's scheduled bounded
@@ -703,7 +703,7 @@ Input to an eligible retired local key MUST pass through ordinary
 decryption, authentication and durable receipt. It does not require renewed
 recipient registration. Scope derivation is unchanged; current tombstones and
 the availability of a usable local sender under [distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set) still govern subsequent work. Its mediation stays in the required
-receiving set under [vault-events.md section 14.2](vault-events.md#mediation-fold) while its bound route
+receiving set under [vault-events.md section 5.6](vault-events.md#mediation-fold) while its bound route
 remains configured, non-retired and conflict-free and the mediation is usable.
 Contact tombstones still apply under that document's section 16.6.
 
@@ -742,15 +742,16 @@ rejection and hard abuse/resource limits are examples of this gate.
 ### 9.3 Integrity checks and durable receipt
 
 Network resolution and authentication finish before taking the receive lock
-defined in [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence). Under that lock, every local recipient
-follows that document's sections 12.1 and 14.4's pair lookup. A carried proof
+defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence). Under that lock, every local recipient
+follows that document's
+[sections 6.1](vault-events.md#receipt-and-relationship-evidence) and [6.6](vault-events.md#relationship-fold-and-address-index)'s pair lookup. A carried proof
 uses its predecessor only as a lookup hint until verified; a proof-free
 successor freezes its exact committed transition reference. A new proof-free
 pair binds actual canonical addresses,
 never a recipient role or selected sender key. New births at retired addresses
 are terminal. Known missing/conflicting membership cannot become a new birth.
 In particular, an unresolved committed proof carrier can keep its exact
-local/sender pair pending under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence); a later
+local/sender pair pending under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence); a later
 proof-free input does not bypass that pending membership.
 
 Recheck exact recipient eligibility, binding/intent integrity, contact tombstones
@@ -867,7 +868,7 @@ The model has one relationship for the same address pair; protocol threads
 provide multiple conversations. Two independently selected fresh pairs need
 not denote the same relationship merely because the humans are the same. A
 pair already claimed by another R through rotation is an index conflict under
-[vault-events.md section 14.4](vault-events.md#relationship-fold-and-address-index), not permission to merge protocol identities.
+[vault-events.md section 6.6](vault-events.md#relationship-fold-and-address-index), not permission to merge protocol identities.
 
 <a id="contact-ids"></a>
 
@@ -900,7 +901,7 @@ effects and section 11's privacy policy are independently recoverable work;
 none supplies a missing cryptographic relationship scope.
 
 Profile disclosures belong to R through their exact source messages under
-[vault-events.md sections 11.3](vault-events.md#profile-nameclaimed)–[11.4](vault-events.md#profile-shared). Contact profile display follows that R's
+[vault-events.md sections 7.3](vault-events.md#profile-nameclaimed)–[7.4](vault-events.md#profile-shared). Contact profile display follows that R's
 assignment; shared addresses or keys do not transfer claims between Rs.
 
 <a id="early-private-address-policy-and-notifications"></a>
@@ -920,7 +921,7 @@ pure-ACK or notification response, validate its exact-root
 confirmation, and atomically commit a fresh successor and a normal
 `relationship.localTransitioned` whose `triggerEventId` references that observation.
 The allocation MAY use section 10's endpoint-specific deterministic ID under
-[vault-events.md section 12.4](vault-events.md#relationship-localtransitioned); otherwise it uses a fresh UUIDv7.
+[vault-events.md section 6.5](vault-events.md#relationship-localtransitioned); otherwise it uses a fresh UUIDv7.
 Route, proof and trigger are frozen by this commit. A retry reuses them.
 The public/reuse predicate is a producer policy choice evaluated there, not
 a fold-time test that can invalidate a committed edge. If an old input already
@@ -980,7 +981,7 @@ messageId = 7e6a39e8-57fb-5cca-9460-edfc806a2297
 
 ### 11.2 Proof and ordinary message headers
 
-All local changes use [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned)'s one JWT construction.
+All local changes use [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned)'s one JWT construction.
 There is no initial-handoff proof variant. The package's sender is the current
 local end, recipient the current peer end, and proof the current local edge's
 exact JWT while unconfirmed. Ordinary content, Empty and Trust Ping use the
@@ -1004,9 +1005,9 @@ Authenticated input in R at the exact current successor confirms it. Input at
 another local historical address does not. Until confirmation, every new
 package from this end uses its long form and retained proof. Afterward, new
 packages omit the proof; exact prepared packages are not rewritten. Predecessor
-receipt routes overlap as specified in [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned).
+receipt routes overlap as specified in [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned).
 A manual rotation can solicit that input with the response-requesting ordinary
-Trust Ping in [vault-events.md section 16.7](vault-events.md#rotate-a-local-relationship-address).
+Trust Ping in [vault-events.md section 13.7](vault-events.md#rotate-a-local-relationship-address).
 
 <a id="peer-address-changes"></a>
 
@@ -1019,12 +1020,11 @@ For a carrier from B1 to any retained local address A in R:
    historical local addresses; known B1 alone does not excuse proof validation;
 3. verify the JWT against R's exact pinned/verified predecessor document and
    authorized authentication method, comparing predecessor spellings and method
-   IDs under [vault-events.md section 11.2](vault-events.md#relationship-peertransitioned); the pinned `presentedDid` need not
+   IDs under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned); the pinned `presentedDid` need not
    be byte-identical to `iss`;
 4. require `sub` to equal the carrier's exact authenticated sender spelling,
    with a valid long form on first Peer-DID disclosure, and require the carrier
-   to satisfy the witness rule in [vault-events.md section 10.5](vault-events.md#complete-observation-witnesses) with that
-   document's section-11.2 requirements;
+   to satisfy the witness rule in [vault-events.md section 10.5](vault-events.md#complete-observation-witnesses) with that document's [section-6.4](vault-events.md#relationship-peertransitioned) requirements;
 5. commit `relationship.peerTransitioned` for that R before ACK/effect work,
    reusing a duplicate edge and surfacing incompatible successors or evidence
    as conflict;
@@ -1036,7 +1036,7 @@ cannot replace them unless their canonical raw CID is identical. A proof is
 not a global DID alias. A shared public address, thread or contact name alone
 cannot identify R. Unmatched/missing proof evidence never bootstraps a new R
 from B1. When an authenticated committed carrier's `iss` pair has no binding,
-its actual local/B1 pair is known pending membership under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence). Later proof-free input to that same pair waits before durable
+its actual local/B1 pair is known pending membership under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence). Later proof-free input to that same pair waits before durable
 receipt; it cannot silently create a replacement relationship. Recovery of the
 predecessor evidence and verification of the carried edge unlock that pair.
 Without that evidence it remains pending; this profile supplies no automatic
@@ -1062,7 +1062,7 @@ message's `thid`, or wire ID when absent, under
 [DIDComm Problem Reports](https://identity.foundation/didcomm-messaging/spec/v2.1/#problem-reports).
 Other protocols use their defined correlation. Validate the report in the same
 R; explicit ACKs prove only receipt. A no-response error with no rotation or
-ACK request is a control observation under [vault-events.md section 14.7](vault-events.md#inbound-message-and-execution-fold).
+ACK request is a control observation under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
 It creates no privacy reply or new contact. Its retained reason can appear
 beside one uniquely correlated outbound; erasure removes that diagnostic.
 It does not terminate R, confirm a local successor or reopen a submitted message ID.
@@ -1141,7 +1141,7 @@ historical proof verification.
 The UI MUST NOT describe a public/public or public/pairwise relationship as
 incomplete merely because no rotation occurred. Rotation confirmation and ACK
 receipt information are separate. An unconfirmed terminal successor still has
-the explicit recovery limitation in [vault-events.md section 12.4](vault-events.md#relationship-localtransitioned); submitted
+the explicit recovery limitation in [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned); submitted
 notification loss is recovered only by another explicit ordinary send, not
 automatic resubmission of the completed message ID.
 
@@ -1241,7 +1241,7 @@ automatic resubmission of the completed message ID.
 55. <a id="rz-55"></a> Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eventId. One shared writer lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
 56. <a id="rz-56"></a> A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A predecessor pin whose presentedDid is short and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
 57. <a id="rz-57"></a> An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt without a client retention cap; restart, body erasure and mediator expiry preserve that pair claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
-58. <a id="rz-58"></a> Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under [vault-events.md section 11.1](vault-events.md#peer-resolved), across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
+58. <a id="rz-58"></a> Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under [vault-events.md section 4.4](vault-events.md#peer-resolved), across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
 59. <a id="rz-59"></a> did:web:Bob.Example and did:web:bob.example remain distinct identity strings and birth-pair inputs. A returned document id matching only after host case folding fails; URL/DNS processing cannot rewrite either retained DID.
 60. <a id="rz-60"></a> Validated message/profile evidence reaches a contact only through relationship.contactAssigned. Reusing a public address or key in another R does not share names or disclosure history; changing either end within one R preserves that history and its contact tombstone.
 61. <a id="rz-61"></a> A did:web delivery first authenticates but waits for relationship evidence. While that local wait state is retained, more than 32 redeliveries, reconnects or unrelated imports cause no resolver calls or pickup ACK. After a wait longer than advertised retention and past a known absolute deadline, relevant evidence changes start one fresh shared bounded resolution sequence; the waiting time cannot exhaust its local retention stop, including across a runtime restart or loss of local state. If reset lost the delivery's wait state, redelivery re-enters the receive/authentication gates with a fresh finite sequence whether or not resolution accounting survived, with that deadline, past or now unknown, supplying no cap; successful authentication rediscovers any still-pending pair and returns to the wait. A permitted retry may obtain missing bytes through the next pickup. Evidence changes or redelivery during an active sequence never replenish its budget. A transient 503 followed by valid resolution within that sequence permits normal receipt if relationship selection now succeeds. Repeated unavailable answers can exhaust that active sequence and take the terminal path. The mediator may independently expire the delivery without clearing the pair claim.

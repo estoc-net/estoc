@@ -234,7 +234,7 @@ semantics are equivalent.
 This is the backend object interface. In a full vault, `putRaw` and `putObject`
 are internal primitives for `Vault.commit` and validated import/restore, not
 standalone application operations. `collect` is internal to the vault runtime,
-which supplies the current held roots under [vault-events.md section 15.3](vault-events.md#held-roots).
+which supplies the current held roots under [vault-events.md section 12.3](vault-events.md#held-roots).
 [event-store.md section 10](event-store.md#vault-interface) defines the application-facing subset and the shared
 writer lock.
 

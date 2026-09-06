@@ -678,7 +678,7 @@ exports or vault sync.
 ## 7. ObjectStore
 
 Object references are the event envelope's `roots` array (section 3.2).
-Only the vault runtime computes `keep` under [vault-events.md section 15.3](vault-events.md#held-roots);
+Only the vault runtime computes `keep` under [vault-events.md section 12.3](vault-events.md#held-roots);
 the object store reads no event type and application callers cannot supply a
 keep set.
 
@@ -773,7 +773,7 @@ import/restore paths. They are not exposed through `Vault.objects` for
 standalone application writes. Application preparation uses private temporary
 storage; accepting new objects and their local event references uses `commit`.
 `collect(keep)` is also backend-internal. The vault runtime computes the
-held-root set under [vault-events.md section 15.3](vault-events.md#held-roots) and invokes collection within
+held-root set under [vault-events.md section 12.3](vault-events.md#held-roots) and invokes collection within
 the locked boundary below; application callers cannot supply a keep set.
 
 `commit(objects, drafts)` holds the writer lock while validating all drafts,

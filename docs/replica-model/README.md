@@ -68,15 +68,15 @@ This index records the existing division of responsibilities.
 | Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
 | Inbound observation IDs, execution scope and execution IDs | [DD §9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Relationship ID and default allocation IDs | [RZ §10](rendezvous.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
-| Binding evidence, pending-pair claims and address index | [VE §12.1](vault-events.md#receipt-and-relationship-evidence), [VE §14.4](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](rendezvous.md#deferred-delivery), [DD scope validation](distributed-delivery.md#address-chains-and-observation-membership) |
-| Peer and local transition evidence | [VE §11.2](vault-events.md#relationship-peertransitioned), [VE §12.4](vault-events.md#relationship-localtransitioned) | [RZ early-privacy policy](rendezvous.md#early-private-address-policy-and-notifications), [RZ peer changes](rendezvous.md#peer-address-changes) |
+| Binding evidence, pending-pair claims and address index | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](rendezvous.md#deferred-delivery), [DD scope validation](distributed-delivery.md#address-chains-and-observation-membership) |
+| Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ early-privacy policy](rendezvous.md#early-private-address-policy-and-notifications), [RZ peer changes](rendezvous.md#peer-address-changes) |
 | Resolution freshness, failures and bounded retry | [RZ §5.1](rendezvous.md#did-resolution-requirements) | [RZ local wait state](rendezvous.md#deferred-delivery), [DD receive procedure](distributed-delivery.md#receive-a-message) |
 | Receipt gates and default contact/address policy | [RZ §9](rendezvous.md#uniform-receipt), [RZ §10.2](rendezvous.md#binding-and-contact-policy), [RZ §11](rendezvous.md#early-private-address-policy-and-notifications) | [DD receipt ordering](distributed-delivery.md#receive-a-message), [VE contact fold](vault-events.md#contact-fold) |
 | Send, receive and ACK procedure ordering | [DD §4.2](distributed-delivery.md#send-an-ordinary-message), [DD §8](distributed-delivery.md#durable-end-to-end-acknowledgment), [DD §9.1](distributed-delivery.md#receive-a-message) | [VE schemas and folds](vault-events.md#reading-guide) |
 | Complete observation witness matching | [VE §10.5](vault-events.md#complete-observation-witnesses) | [VE peer-transition evidence](vault-events.md#relationship-peertransitioned), [VE ACK aggregation](vault-events.md#outbound-message-and-delivery-fold) |
-| Submission completion, ACK receipt timing and outbound work eligibility | [VE §14.8](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD applying ACK](distributed-delivery.md#applying-ack) |
-| Prepared-envelope retention and erasure | [VE §15.3](vault-events.md#held-roots) | [DO collection](dasl-objects.md#collection), [VE erase procedure](vault-events.md#erase-a-message) |
-| Local runtime open, erase, delete and rotate procedures | [VE §16](vault-events.md#procedures) | [ES Vault interface](event-store.md#vault-interface), [DD delivery procedures](distributed-delivery.md#reading-guide) |
+| Submission completion, ACK receipt timing and outbound work eligibility | [VE §9.8](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD applying ACK](distributed-delivery.md#applying-ack) |
+| Prepared-envelope retention and erasure | [VE §12.3](vault-events.md#held-roots) | [DO collection](dasl-objects.md#collection), [VE erase procedure](vault-events.md#erase-a-message) |
+| Local runtime open, erase, delete and rotate procedures | [VE §13](vault-events.md#procedures) | [ES Vault interface](event-store.md#vault-interface), [DD delivery procedures](distributed-delivery.md#reading-guide) |
 
 <a id="conformance-and-references"></a>
 
@@ -100,5 +100,66 @@ Existing case numbers are retained. A prefix identifies the document, so
 
 Named section anchors support direct links without depending on a heading's
 displayed number. Keep those anchors and case identities when editing or
-reordering text. The original numbered sections remain available for review
-references. Code examples and derivation vectors live with their defining rule.
+reordering text. The section history below maps earlier numbered review references to their
+current locations. Code examples and derivation vectors live with their defining rule.
+
+<a id="section-history"></a>
+
+## Section history
+
+The vault-events domain reordering retains every named anchor and conformance
+case ID. This table maps section numbers from commit `a720fdf` to the current
+locations; numbers not listed are unchanged. Event schemas and folds remain
+in `vault-events.md`, and runtime procedures remain together in that file.
+
+<details>
+<summary>Vault-events section numbers before and after domain grouping</summary>
+
+| Previous section | Current section | Topic |
+| --- | --- | --- |
+| 6 | [3.6](vault-events.md#identity-label) | identity.label |
+| 11 | [4.3](vault-events.md#peer-and-profile-observations) | Peer and profile observations |
+| 11.1 | [4.4](vault-events.md#peer-resolved) | peer.resolved |
+| 11.2 | [6.4](vault-events.md#relationship-peertransitioned) | relationship.peerTransitioned |
+| 11.3 | [7.3](vault-events.md#profile-nameclaimed) | profile.nameClaimed |
+| 11.4 | [7.4](vault-events.md#profile-shared) | profile.shared |
+| 12 | [6](vault-events.md#relationships-and-address-changes) | Relationships and address changes |
+| 12.1 | [6.1](vault-events.md#receipt-and-relationship-evidence) | Receipt and relationship evidence |
+| 12.2 | [6.2](vault-events.md#relationship-bound) | relationship.bound |
+| 12.3 | [6.3](vault-events.md#relationship-contactassigned) | relationship.contactAssigned |
+| 12.4 | [6.5](vault-events.md#relationship-localtransitioned) | relationship.localTransitioned |
+| 13 | [11](vault-events.md#automatic-effects) | Automatic effects |
+| 14 | [2.1](vault-events.md#folds) | Fold conventions |
+| 14.1 | [3.7](vault-events.md#runtime-author-fold) | Runtime-author fold |
+| 14.2 | [5.6](vault-events.md#mediation-fold) | Mediation fold |
+| 14.3 | [5.7](vault-events.md#route-did-and-key-fold) | Route, DID and key fold |
+| 14.4 | [6.6](vault-events.md#relationship-fold-and-address-index) | Relationship fold and address index |
+| 14.5 | [7.5](vault-events.md#relationship-profile-fold) | Relationship profile fold |
+| 14.6 | [7.6](vault-events.md#contact-fold) | Contact fold |
+| 14.7 | [10.6](vault-events.md#inbound-message-and-execution-fold) | Inbound message and execution fold |
+| 14.8 | [9.8](vault-events.md#outbound-message-and-delivery-fold) | Outbound message and delivery fold |
+| 14.9 | [5.8](vault-events.md#invitation-fold) | Invitation fold |
+| 15 | [12](vault-events.md#erasure-and-collection) | Erasure and collection |
+| 15.1 | [12.1](vault-events.md#message-erased) | message.erased |
+| 15.2 | [12.2](vault-events.md#reading-content) | Reading content |
+| 15.3 | [12.3](vault-events.md#held-roots) | Held roots |
+| 15.4 | [12.4](vault-events.md#no-runtime-local-eviction-event) | No runtime-local eviction event |
+| 16 | [13](vault-events.md#procedures) | Procedures |
+| 16.1 | [13.1](vault-events.md#open-the-writable-full-runtime) | Open the writable full runtime |
+| 16.2 | [13.2](vault-events.md#establish-mediation) | Establish mediation |
+| 16.3 | [13.3](vault-events.md#create-a-communication-did) | Create a communication DID |
+| 16.4 | [13.4](vault-events.md#disclose-an-address) | Disclose an address |
+| 16.5 | [13.5](vault-events.md#erase-a-message) | Erase a message |
+| 16.6 | [13.6](vault-events.md#delete-a-contact) | Delete a contact |
+| 16.7 | [13.7](vault-events.md#rotate-a-local-relationship-address) | Rotate a local relationship address |
+| 17 | [14](vault-events.md#merge-synchronization-and-restore) | Merge, synchronization and restore |
+| 17.1 | [14.1](vault-events.md#event-merge) | Event merge |
+| 17.2 | [14.2](vault-events.md#object-merge) | Object merge |
+| 17.3 | [14.3](vault-events.md#replica-synchronization-deferred) | Replica synchronization (deferred) |
+| 17.4 | [14.4](vault-events.md#restore) | Restore |
+| 17.5 | [14.5](vault-events.md#forked-author) | Forked author |
+| 18 | [15](vault-events.md#privacy-and-security-boundaries) | Privacy and security boundaries |
+| 19 | [16](vault-events.md#versioning) | Versioning |
+| 20 | [17](vault-events.md#required-conformance-cases) | Required conformance cases |
+
+</details>

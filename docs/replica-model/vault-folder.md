@@ -803,7 +803,7 @@ under the same publication rules, not part of the imported portable bytes.
 
 On first writable open, a new `replica_id` and `store_generation` are minted.
 All historical event authors remain as written. Before accepting new inbound,
-the writer completes recovery under [vault-events.md section 16.1](vault-events.md#open-the-writable-full-runtime), including
+the writer completes recovery under [vault-events.md section 13.1](vault-events.md#open-the-writable-full-runtime), including
 after restart or deletion of `local/`.
 Because mediation and communication keys are vault-scoped, the runtime derives
 and resumes them after unlock using ordinary account-scoped mediation/pickup.
