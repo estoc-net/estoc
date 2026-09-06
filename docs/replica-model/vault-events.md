@@ -53,8 +53,9 @@ authors, but that behavior is not required by phase 1.
    and referenced objects before DNS, DID resolution, encryption or network
    submission begins.
 2. **Observations carry their evidence boundary.** A peer observation carries
-   the local and peer keys authenticated by the envelope. A mediator
-   observation names the mediation arrangement that produced it.
+   the local and peer keys directly or through retained evidence references.
+   Lifted profile facts reference their source messages. A mediator observation
+   names the mediation arrangement that produced it.
 3. **Portable folds have no current-runtime parameter.** Event `author` is
    provenance, not ownership of communication state.
 4. **Mediation and communication keys are vault-scoped.** The active full
@@ -184,27 +185,22 @@ runtime MUST derive and verify the namespace UUID from the URI above rather
 than trusting a copied table constant. The table is a test vector, not a
 second source of truth.
 
-## 4. Channels and peer evidence
+## 4. Message keys and peer evidence
 
-### 4.1 Channel key
+### 4.1 Key evidence
 
-A channel is a value, not an entity or stored directory:
-
-```ts
-type ChannelKey = {
-  myKey: string | null;
-  peerKey: string | null;
-};
-```
+Each message or resolution retains the keys used for that observation or
+package, directly or through its exact evidence references:
 
 - `myKey` is the vault key name that decrypted or authenticated the
   message, or `null` when no local key participated.
 - `peerKey` is the complete authenticated or selected peer public key in the
   canonical encoding below, or `null` for an anonymous sender.
 
-Both fields MUST be present in a `ChannelKey` value. JSON null is a value;
-an omitted field is invalid. Events may instead reference the key evidence
-as specified below; they do not duplicate the channel's peer key.
+Each event schema below defines its required fields and nullability. The keys
+provide authentication, decryption and package evidence; they do not identify
+a relationship or assign a contact. Anonymous input and mediator traffic may
+retain key evidence without an application relationship.
 
 The canonical public-key value follows the
 [did:key identifier syntax and public-key encoding rules](https://w3c-ccg.github.io/did-key-spec/#did-key-identifier-syntax),
@@ -216,7 +212,8 @@ encoding MUST validate. NIST-curve keys use compressed points under
 [SEC 1 section 2.3.3](https://www.secg.org/sec1-v2.pdf) (including P-521),
 with public-key type codes from the
 [multicodec table](https://github.com/multiformats/multicodec/blob/master/table.csv).
-Every deterministic ID and channel/scope comparison uses this exact string.
+Every deterministic ID or authorization check that uses a peer key uses this
+exact string.
 
 For an inbound observation it is the key that authenticated the message; for
 an outbound package or resolution it is the selected recipient key. Selection
@@ -231,25 +228,25 @@ peerKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
 ```
 
 `message.in` and `message.prepared` store `myKey` and `peerResolution`, with
-no `peerKey` payload field. Their derived channel is
-`{myKey, peerKey: peer.resolved(peerResolution).peerKey}`. For an anonymous
+no `peerKey` payload field. Their peer key is derived as
+`peer.resolved(peerResolution).peerKey`. For an anonymous
 inbound only, null `peerResolution` yields null `peerKey`; an unavailable or
 invalid reference is deferred or conflicted, never treated as anonymous.
 In this document and the delivery profile, a message or package's `peerKey`
-always means this derived value. `peer.resolved`, contact attachments,
-`peer.transitioned`, profile and ACK observations retain their explicit keys.
+always means this derived value. `peer.resolved`, `relationship.peerTransitioned`
+and ACK observations retain their explicit keys. Profile observations instead
+reference their source message under sections 11.3–11.4.
 
-Channels are enumerated from these derived values and complete channel values
-in other validated events. No separate channel-creation observation is required.
-Each event retains its own evidence: `message.in.presentedDid` preserves the wire spelling,
-and `peer.resolved.presentedDid` preserves the spelling used for resolution.
-First disclosure is validated from that evidence, not a channel's arrival order.
+`message.in.presentedDid` preserves the wire spelling, and
+`peer.resolved.presentedDid` preserves the spelling used for resolution.
+First-disclosure validation and recovery use this retained evidence. A
+relationship's local and peer histories identify its authorized keys under
+section 14.4; rotation may change those keys while preserving R. Equal key
+values under different DIDs do not supply relationship identity or a contact
+assignment. An observation awaiting relationship verification keeps its key
+evidence without provisional scope.
 
-A DID is not part of the channel key. DIDs may rotate keys or routing
-services. `peer.resolved` connects channels to peer DIDs. `peer.transitioned`
-changes a peer DID only inside one relationship.
-
-### 4.2 Mediation channels
+### 4.2 Mediation key evidence
 
 Traffic between the vault and a mediator uses a local key beginning with:
 
@@ -257,8 +254,8 @@ Traffic between the vault and a mediator uses a local key beginning with:
 mediation/
 ```
 
-Those channels are excluded from contact attribution. They belong to the
-mediation fold.
+These observations belong to the mediation fold, not application
+relationships or contact/profile projections.
 
 ## 5. Mediation, communication DIDs and routes
 
@@ -543,10 +540,10 @@ It is ordinary LWW metadata and has no key or protocol effect.
 ## 7. Contacts
 
 A contact is a set of decisions identified by one `cid`. It may hold an
-unverified rendezvous DID before any authenticated channel exists and later
-move to a pairwise DID within the same relationship context. Protocol identity
-is the relationship; contact IDs name decisions, not identity equivalence
-classes.
+unverified discovery DID before a relationship is bound, and may have several
+relationships assigned under section 12.3. Each relationship preserves its
+identity as either end changes address. Contact IDs name local decisions;
+they do not merge protocol identities.
 
 ### 7.1 Contact IDs
 
@@ -641,12 +638,12 @@ relationship-to-contact decision independently of these address preferences.
 ```
 
 This records a peer DID selected as an outbound target before or independently
-of an authenticated channel. `because` is `oob`, `user`, `rendezvous`,
+of a bound relationship. `because` is `oob`, `user`, `rendezvous`,
 `resolved` or another documented source.
 
 The event is a routing/contact decision, not proof that the peer controls the
-DID. `peer.resolved` or a valid `peer.transitioned` supplies cryptographic
-evidence later.
+DID. `peer.resolved` or a valid `relationship.peerTransitioned` supplies
+cryptographic evidence later.
 
 #### `contact.peerDidRemoved`
 
@@ -664,46 +661,6 @@ evidence later.
 `add` is the `eid` of one `contact.peerDidAdded`. Explicit references make
 removal independent of wall-clock ordering. A scoped transition may make an
 older rendezvous DID non-preferred without deleting the historical add event.
-
-#### `contact.attached`
-
-```json
-{
-  "type": "contact.attached",
-  "roots": [],
-  "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "myKey": "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement",
-    "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
-    "because": "rendezvous",
-    "oobId": "019b2a57-a947-7502-8fee-4d80d949dbcb"
-  }
-}
-```
-
-`because` is `invitation`, `rendezvous`, `accepted`, `automatic` or
-`manual`. `oobId` is nullable provenance naming the invitation followed by
-this attachment. It is not invitation-consumption evidence.
-
-This is the explicit decision that an authenticated channel belongs to a
-contact. It is not inferred from a DID claim alone.
-
-#### `contact.detached`
-
-```json
-{
-  "type": "contact.detached",
-  "roots": [],
-  "data": {
-    "cid": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "myKey": "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement",
-    "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis"
-  }
-}
-```
-
-The latest attach/detach decision for the exact `(cid, channel)` by canonical
-order decides whether the edge is live.
 
 #### `contact.merged`
 
@@ -904,11 +861,11 @@ logical response.
 ```
 
 `target` is the closed object `{ "relationship": "<R>" }`. A contact-send API
-selects one relationship before intent commit; an explicit address/channel API
+selects one relationship before intent commit; an explicit address API
 must resolve the same address-pair identity before using this event. The target
 is immutable and cannot be changed by later preferences, contact merges or
 repacking. Anonymous or mediator control traffic does not acquire application
-relationship scope through an arbitrary channel target.
+relationship scope through a selected key pair.
 
 `birth` is REQUIRED and nullable. For a new address pair whose binding is not
 yet committed, it contains the offline selection:
@@ -1162,7 +1119,7 @@ for that ACK has validated. Threading or a natural response without `ack` is ins
 `ackMid` identifies the local inbound ACK-bearing observation.
 One valid carrier observation MUST witness `ackMid`, `ackWireId`, `myKey`,
 the derived `peerKey` and the explicit acknowledged value together. These keys
-identify the ACK carrier, not necessarily the old outbound package's channel;
+identify the ACK carrier and may differ from the old outbound package's keys;
 section 14.8's historical local/peer-chain membership permits rotation between
 that package and its ACK.
 
@@ -1260,10 +1217,11 @@ Requirements:
   observation has this reference, including a new birth receipt. Null is used
   for anonymous input and a carried proof whose existing
   relationship is still unresolved. The latter can obtain scope only through
-  that carrier's verified `peer.transitioned`, never a new birth from its sender;
+  that carrier's verified `relationship.peerTransitioned`, never a new birth
+  from its sender;
 - `peerTransition` is REQUIRED and nullable. A proof-free peer successor
-  references the already committed `peer.transitioned` that pins its canonical
-  DID and successor document in the selected binding's `R`. A root sender or
+  references the already committed `relationship.peerTransitioned` that pins its
+  canonical DID and successor document in the selected binding's `R`. A root sender or
   carried proof uses null. This rule is the same at every local address.
   The referenced edge must be valid; the observation's currently authenticated
   key must separately be authorized by that exact root/successor document for
@@ -1443,8 +1401,9 @@ create that delivery observation.
 
 ## 11. Peer and profile observations
 
-All events in this section carry a complete channel key. Peer DID evidence is
-kept distinct from contact decisions and from our own DID entities.
+Resolution and peer-transition observations retain exact cryptographic
+evidence. Profile observations name one relationship and their source message.
+These facts remain distinct from contact assignments and local DID entities.
 
 ### 11.1 `peer.resolved`
 
@@ -1526,11 +1485,11 @@ the retained bytes or CID. Method-ID comparison follows section 11.2.
 Equivalent duplicate observations are harmless. Same presented/canonical DID
 and document CID with incompatible contents is an integrity conflict.
 
-### 11.2 `peer.transitioned`
+### 11.2 `relationship.peerTransitioned`
 
 ```json
 {
-  "type": "peer.transitioned",
+  "type": "relationship.peerTransitioned",
   "roots": [],
   "data": {
     "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
@@ -1626,8 +1585,8 @@ resolver results cannot substitute for a predecessor proof.
 The transition updates only this relationship's peer end. It does not globally
 alias or retire the predecessor, nor transfer contact decisions between `R`s.
 Existing contact attribution follows section 12.3; an unassigned relationship
-can rotate without creating a contact. A new authenticated channel may be
-attached to the assigned contact as separate display evidence.
+can rotate without creating a contact. Its profile history stays with that
+same R under section 14.5.
 
 The first committed transition pins its successor document. On a repeated
 carrier/proof, reuse that transition; a later resolution or duplicate inbound
@@ -1653,16 +1612,28 @@ compact JWT is evidence, not an object reference.
   "type": "profile.nameClaimed",
   "roots": [],
   "data": {
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
-    "wireId": "019b2a84-44dd-7d96-b98c-5195950a1b06",
+    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "source": "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1",
     "name": "Alice L."
   }
 }
 ```
 
-This lifted observation preserves a claimed name after the source message
-body is erased. It is not a verified identity name.
+`source` is the `eid` of one exact committed `message.in` observation, not its
+`mid` or wire ID. Its validated logical-message scope under section 14.7 MUST
+equal `relationship`. The source and any required binding/transition evidence
+MUST already be committed before this event is lifted. A pending, anonymous,
+mediator or conflicted source supplies no profile claim.
+
+The producer lifts `name` from a supported profile disclosure while its source
+content is readable and eligible for application processing under section
+14.7, checking erasure and contact tombstones under the writer lock. A claim
+may belong to an unassigned R; later contact assignment only changes where it
+is displayed. This lifted value survives source-body erasure; it is a peer's
+claim, not a verified identity name. It holds no source content roots. Missing
+event/scope evidence defers projection and incompatible evidence conflicts;
+source-body erasure alone does not invalidate an existing lifted value.
+Deduplication and display ordering follow section 14.5.
 
 ### 11.4 `profile.shared`
 
@@ -1671,15 +1642,25 @@ body is erased. It is not a verified identity name.
   "type": "profile.shared",
   "roots": [],
   "data": {
-    "myKey": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
-    "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
-    "wireId": "019b2a85-090f-75a4-beb3-8440780d46e9"
+    "relationship": "35807a1e-3b8a-52f5-9580-29cd5265882e",
+    "source": "019b2a85-0912-7b2c-9425-4fd7fd0dd019"
   }
 }
 ```
 
-This observes that our profile was sent on the channel. Duplicate lifted
-observations are harmless.
+`source` is the `eid` of one exact committed `message.out` profile disclosure.
+Its immutable `target.relationship` MUST equal `relationship`, and its
+validated outbound membership follows section 14.8. Lift this observation only
+after that MID has a committed valid `delivery.submitted`. A queued intent,
+prepared package, unknown transport outcome or peer ACK alone is insufficient.
+Submission is the sharing boundary; this event does not claim that the peer
+read the profile and cannot authorize another submission.
+
+The source intent, package/submission evidence and relationship references
+remain verifiable from their retained skeletons after content erasure. Missing
+evidence defers projection; incompatible evidence conflicts. No content roots
+are retained by this event. Deduplication and display ordering follow section
+14.5; rotation preserves this R's sharing history.
 
 ## 12. Relationships and address changes
 
@@ -1733,8 +1714,8 @@ retry rule.
 an existing binding/edge claim for the exact canonical `(local recipient DID,
 sender DID)` pair, or a committed authenticated `message.in` at that pair with
 a syntactically valid `fromPrior` whose `sub` equals its authenticated
-`presentedDid`, for which section 11.2's valid `peer.transitioned` has not yet
-committed. A missing `iss`-pair binding, rooted prefix or historical snapshot
+`presentedDid`, for which section 11.2's valid `relationship.peerTransitioned`
+has not yet committed. A missing `iss`-pair binding, rooted prefix or historical snapshot
 all count, as does verification work left unfinished after receipt. A known
 invalid proof is conflicting membership instead. The carrier's unverified
 claims supply no scope and create no address-index edge, but its exact pair
@@ -2074,8 +2055,8 @@ claims under its lock; import preserves conflicts and suppresses new work.
 
 Scope for an incoming message is derived from its immutable binding reference
 and the exact root or successor document authorizing its peer key. A carried
-proof additionally needs the verified `peer.transitioned` for that observation;
-a proof-free successor uses its frozen `peerTransition`. Null binding on a
+proof additionally needs the verified `relationship.peerTransitioned` for that
+observation; a proof-free successor uses its frozen `peerTransition`. Null binding on a
 proof carrier remains pending until its transition supplies the binding. No
 incomplete/conflicting proof or known address claim authorizes a new birth.
 Section 12.1 defines the pending claim from an unmatched committed carrier;
@@ -2097,56 +2078,54 @@ remain current indefinitely. Neither direct communication nor the absence of
 rotation is an incomplete relationship. Exact-successor confirmation controls
 proof disclosure, not whether the relationship exists or messages may be sent.
 
-### 14.5 Peer evidence and contact-scoped attribution
+### 14.5 Relationship profile fold
 
-Build an evidence graph whose nodes are:
+Group valid `profile.nameClaimed` and `profile.shared` observations by their
+`relationship`, verifying their source references under sections 11.3–11.4.
+They do not establish a binding or assign a contact. Missing source/scope
+evidence defers the affected records; conflicted evidence supplies no profile
+value and remains visible as a diagnostic. An unassigned R retains its profile
+history without contributing to a contact view.
 
-- channels with `peerKey != null`; and
-- canonical peer DID strings.
+Deduplicate each event type by its source logical message under sections 14.7
+and 14.8, including repeated lifts referencing different duplicate observations
+or a verified cross-key alias. Equal lifted values count once. Different names
+lifted from the same logical inbound are a profile conflict; preserve them
+without choosing a name from that source by event order.
 
-The only global evidence edge is:
+Order each logical source by its minimum complete canonical source-event key
+under `event-store.md` section 4.3, across its consistent source observations
+or duplicate outbound intents. The latest non-conflicted name claim in R is
+the claim with the greatest such key. The same rule orders shared-profile
+sources. Lift-event timestamps do not make an old message newer; recovery or
+duplicate receipt cannot advance its display position merely by lifting it
+again. Existing lifted records remain usable after source-body erasure under
+sections 11.3–11.4.
 
-- `peer.resolved`: the exact channel to the canonical DID under which its
-  authenticated peer key was found, together with the retained resolution
-  snapshot.
-
-A `peer.transitioned` edge is not global. It belongs only to its named
-relationship under section 11.2, and must name the exact
-historical resolution evidence used to verify `from_prior`. Likewise,
-`contact.peerDidAdded` is an outbound contact decision,
-not global control evidence.
-
-Exclude mediation channels from contact attribution.
-
-For a channel, collect the distinct contact IDs from live `contact.attached`
-edges reachable through its evidence graph:
-
-- none: unattributed;
-- one `cid`: attributed to it;
-- several: multi-valued attribution conflict.
-
-The fold never attributes an anonymous `peerKey == null` channel through the
-graph.
-
-For each relationship ID within a contact, apply only `peer.transitioned`
-events naming that ID as a directed graph. A transition replaces its
-predecessor only in that relationship. Several unretired current ends are a
-visible relationship conflict.
+Rotation of either end preserves R and its profile history. Sharing a DID,
+public key or contact with another R never transfers a name claim or marks our
+profile as shared there. Section 14.6 aggregates names only through explicit
+relationship-to-contact assignments. Profile evidence never authorizes ACKs,
+effects, key membership or relationship continuation.
 
 ### 14.6 Contact fold
 
 A uniquely scoped message takes its contact from `relationship.contactAssigned`.
-The channel/DID display graph cannot override that assignment or invent one for
-an unassigned R. It may still supply profile/channel display evidence without
-changing message scope, endpoint selection or deletion boundaries.
+The same assignment governs profile display. Shared DIDs, keys, discovery
+seeds and contact display merges cannot assign an unassigned R, transfer its
+profile history or change message scope and deletion boundaries.
 
 Fold each `cid` independently:
 
 - deleted when that ID has a `contact.deleted` tombstone;
 - `petname` is latest by canonical order;
 - each flag is latest by canonical order;
-- `claimedName` is latest `profile.nameClaimed` across attributed channels;
-- `attached[]` is every live attach edge;
+- `claimedName` is the latest eligible name claim across relationships uniquely
+  assigned to this contact, using section 14.5's source ordering; absent claims
+  yield null, and missing/conflicted records supply diagnostics, not names;
+- `relationships[]` is every R uniquely assigned to this contact under section
+  12.3, retaining pending/conflict status where binding evidence is incomplete
+  or conflicting;
 - `ourDids[]` is the non-retired local address history of relationships
   assigned to this contact, with current ends identified separately;
 - `peerDidSeeds[]` is every `contact.peerDidAdded` not named by a
@@ -2177,8 +2156,8 @@ For a same-DID key change under `rendezvous.md` section 5.1, derive a
 `peer-key-changed` diagnostic from the retained authenticated `message.in`,
 its exact `peer.resolved` evidence and the unique relationship identified by
 the local recipient DID and canonical peer DID. Show it in that relationship's
-contact view, including when global DID-graph attribution is ambiguous; the
-diagnostic is not a new attachment or execution-scope edge. Keep the affected
+contact view through that R's unique contact assignment; the
+diagnostic does not grant execution scope. Keep the affected
 unscoped observation out of the application thread, unread count and normal
 message notifications, and process no ACK or effect from its MID group under
 `distributed-delivery.md` section 9. If relationship evidence is missing or
@@ -2212,7 +2191,7 @@ First group `message.in` by deterministic observation `mid`.
 For each MID group:
 
 - equal `intentHash` values form one observation group;
-- collect every distinct valid plaintext hash, receiving channel,
+- collect every distinct valid plaintext hash, receiving `myKey`/`peerResolution`,
   `receivedVia` and author observation;
 - different intent hash is an intent conflict, whether application content
   or immutable control headers differ;
@@ -2304,13 +2283,13 @@ every valid package must independently agree. A package uses a historical local
 address in `localChain(R)` and a peer DID/key authorized by one exact document
 in `peerChain(R)`. The binding and any required transitions must be complete
 and conflict-free. An arbitrary `R` string or equal wire ID does not authorize
-an ACK. Contact/channel preferences cannot move the outbound after commit.
+an ACK. Contact or address preferences cannot move the outbound after commit.
 
 These joins work before or after rotation and include the first package in
 either direction. Missing package/binding/proof evidence defers ACK application;
 incompatible or ambiguous scope suppresses it. Historical packages retain
 membership after retirement and erasure. Repacking preserves `R` and every
-previously emitted effect's identity. No provisional channel fallback exists.
+previously emitted effect's identity. Raw key equality supplies no fallback scope.
 An ACK proves receipt, not remote contact approval or successful rotation.
 
 For a valid outbound:
@@ -2407,7 +2386,7 @@ invitation with a new root-address input. Duplicate receipt never takes it
 twice. A crash before inbound commit consumes nothing; after commit the
 consumption survives without contact or reply work.
 
-Deletion, detach, erasure, retirement and clock rollback never reopen a consumed
+Deletion, erasure, retirement and clock rollback never reopen a consumed
 invitation. Import with different consumers leaves it unavailable and exposes
 an integrity conflict; arrival order chooses none. A later intent/sender
 conflict does not release a structurally valid committed consumption. No
@@ -2798,7 +2777,7 @@ There is no migration requirement from an earlier event vocabulary.
     under transition-verified peer keys in one relationship merge only at the
     logical-message layer.
 16. Execution ID derives from the unique symmetric relationship scope and wire
-    ID using previously committed evidence, never a channel, contact,
+    ID using previously committed evidence, never a key pair, contact,
     observation MID or uncommitted transition.
 17. A transition-pending observation is effect-deferred; once verified, a
     cross-key alias in the same relationship derives the same execution ID.
@@ -2891,7 +2870,7 @@ There is no migration requirement from an earlier event vocabulary.
 46. Known terminal integrity rejection creates no message.in or response.
     Retained valid input uses ordinary erasure rules.
 47. A root public sender enters ordinary sending without a qualifying first
-    reply or handoff. All target intents freeze one R; no contact/channel
+    reply or handoff. All target intents freeze one R; no contact/address
     preference substitutes another relationship at preparation.
 48. Relationship-scoped transition does not globally retire or union the rendezvous
     DID with unrelated relationships.
@@ -2933,7 +2912,7 @@ There is no migration requirement from an earlier event vocabulary.
     conflict.
 63. Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
-    Detachment or DID/route retirement never selects a new execution scope.
+    Contact decisions or DID/route retirement never select a new execution scope.
 64. Committed submission remains complete after restart, loss of `local/`,
     clock rollback, package retirement, content erasure and envelope collection.
     Retained event skeletons prevent resubmission or replacement of that MID.
@@ -2960,7 +2939,7 @@ There is no migration requirement from an earlier event vocabulary.
     and sort by author on a tie; allocation resumes above the union's maximum.
 73. Matching root-address receipt consumes a local one-use invitation at input
     commit, before contact or rotation work. A different consumer fails
-    integrity; crash, detach, deletion and erasure never reopen it.
+    integrity; crash, deletion and erasure never reopen it.
 74. ACK membership joins immutable outbound target, birth metadata, binding
     and package endpoint evidence. Equal inbound/outbound wire IDs alone
     cannot acknowledge another message.
@@ -3055,14 +3034,15 @@ There is no migration requirement from an earlier event vocabulary.
 100. A proposed binding/input/transition cannot authorize its own response in
      the same batch. Commit scope evidence first; a rotation trigger and its
      required response are recovered through separate committed dependencies.
-101. Key encoding normalization still governs channels, authentication,
+101. Key encoding normalization still governs authentication,
      observation MIDs and key membership. Relationship IDs instead use
      canonical DID strings; selected keys do not enter them. The X25519
      fixture round-trips its type code and public bytes.
-102. Channel enumeration, first-disclosure validation and recovery use the
-     complete keys and presented DID evidence in message/resolution events,
-     without a separate channel-creation event. Selecting a recipient key or
-     attaching a channel does not prove authenticated inbound traffic.
+102. First-disclosure validation and recovery use the complete keys and
+     presented DID evidence in message/resolution events. Selecting a recipient
+     key or assigning a relationship to a contact does not prove authenticated
+     inbound traffic. Anonymous, mediator and relationship-pending observations
+     retain their key evidence without an application execution scope.
 103. message.out.target.relationship and nullable birth are immutable portable
      metadata outside wire hashes. Birth selection permits offline queueing
      and must agree with a later binding. Packages may follow valid rotations
@@ -3076,7 +3056,7 @@ There is no migration requirement from an earlier event vocabulary.
      package or binding. An authenticated same-DID new-key inbound without
      proof at the old relationship DID stays unscoped and out of the thread,
      unread count and normal notifications. Its contact diagnostic survives
-     restart and body erasure; graph attribution never authorizes its ACKs or
+     restart and body erasure; contact assignment never authorizes its ACKs or
      effects. Missing or ambiguous relationship evidence selects no contact.
 106. The peer chain includes every key-agreement key in the pinned initial
      document and each verified successor document. A second authorized key
@@ -3107,10 +3087,11 @@ There is no migration requirement from an earlier event vocabulary.
      Creating a valid live successor makes that unfinished work recoverable;
      it replies in the same relationship, never another one of the contact.
 111. `message.in` and `message.prepared` have no `peerKey` payload member.
-     Channels, MIDs and package comparisons derive it through `peerResolution`.
+     MIDs and package comparisons derive it through `peerResolution`.
      Missing non-null references defer, mismatched evidence conflicts, and only
-     an anonymous inbound has null resolution/peer key. Explicit channel and
-     peer/attachment/profile/ACK event keys remain present.
+     an anonymous inbound has null resolution/peer key. Resolution, peer-transition
+     and ACK event keys remain present; profile observations reference source
+     messages instead of copying their keys or wire IDs.
 112. A local edge atomically freezes a fresh successor, exact JWT and nullable
      notification trigger. Ordinary rotations use UUIDv7; automatic first
      private allocation may use the endpoint-specific deterministic ID. Root R
@@ -3209,3 +3190,26 @@ There is no migration requirement from an earlier event vocabulary.
      differences do not collapse R, pair lookup or predecessor comparison;
      did:web resolution rejects any document id not byte-identical to the
      presented DID. Import applies the same rule without rewriting evidence.
+132. Contact message and profile views follow only relationship.contactAssigned.
+     Two Rs sharing a public DID or key may belong to different contacts
+     without profile leakage or an attribution conflict merely from that
+     shared evidence. An unassigned R contributes no contact name; conflicting
+     assignments choose no contact. Rotation preserves each R's assignment,
+     profile history and contact tombstone.
+133. profile.nameClaimed references an exact committed message.in eid and its
+     validated R. Unknown, missing, mismatching, anonymous or conflicted source
+     evidence cannot supply a projected name. A proof carrier can supply one
+     only after its required relationship.peerTransitioned commits. An existing
+     valid lifted name survives source-body erasure; a new lift cannot read
+     erased content or bypass a contact tombstone.
+134. profile.shared references an exact message.out eid in the same R and
+     requires committed valid submission for its MID. Intent, preparation,
+     transport uncertainty and ACK alone do not suffice. Duplicate lifts,
+     repacks, erasure and later rotations preserve the one source disclosure;
+     they cannot mark a different R as shared or reopen submitted work.
+135. Profile ordering uses the earliest canonical source event of each logical
+     message, not lift-event order. Recovery lifting an old claim after a newer
+     message, duplicate observations, cross-key aliases and every import order
+     yield the same latest name. Conflicting names lifted from one logical
+     source remain a profile conflict and supply no name from that source;
+     other valid claims remain usable under the same ordering.

@@ -89,7 +89,7 @@ advisory; successful `register` is the authoritative capability check.
   eligible for replay to newly registered replicas.
 
 Every unlocked full replica is equally authorized to act as the vault.
-The mediation account's authenticated DIDComm channel authorizes
+The mediation account's authenticated DIDComm messages authorize
 `register`, `list` and `retire`. The `replica_id` only separates normal
 clients' pickup and acknowledgment state.
 
@@ -832,7 +832,7 @@ receive the same delivery. They share that replica's acknowledgment
 domain. Disconnecting or failing a push MUST NOT acknowledge a delivery.
 
 This live connection is the permitted form of direct-to-replica transport in
-version 1.0. It is an internal mailbox delivery channel authenticated under
+version 1.0. It is an internal mailbox delivery connection authenticated under
 the mediation account; the external sender still addresses the recipient
 DID and never learns the replica ID. A live push never replaces the durable
 delivery row before `messages-received`.

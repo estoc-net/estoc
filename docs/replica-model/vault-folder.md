@@ -111,7 +111,7 @@ directory.
 ```
 
 There is no per-host directory or record, and no directory per contact,
-channel, conversation or message.
+relationship, conversation or message.
 
 The structural roots are:
 

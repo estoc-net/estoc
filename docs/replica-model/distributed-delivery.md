@@ -79,8 +79,8 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
 - **Receipt request** — the exact `message.out.pleaseAck` array names the
   messages whose explicit ACK is requested. It is independent of local
   submission completion.
-- **Logical channel** — a local recipient key and authenticated peer key,
-  interpreted through relationship-scoped DID transitions.
+- **Relationship** — the stable symmetric birth-address identity whose local
+  and peer histories determine message scope under section 9.
 
 ```text
 one outbound message (mid = wire ID, intent hash)
@@ -217,7 +217,7 @@ The following table is normative. "Committed" means process-durable success.
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under `vault-events.md` section 12.2 | Submit that exact package |
 | Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that MID; apply envelope retention under `vault-events.md` section 15.3 |
-| Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
+| Normal inbound | Objects, `message.in` and required resolution/binding evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
 | Stable execution scope | Previously committed receipt and binding evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Record receipt information independently of submission work |
@@ -525,7 +525,7 @@ execution guarantee.
 
 Before proposing the response it MUST have authenticated and validated X,
 accepted every retained object and process-durably appended `message.in`.
-Any additional non-conflicted scope or channel evidence needed for the
+Any additional non-conflicted relationship or key evidence needed for the
 response MUST already be committed before deriving the response execution ID,
 freezing ACK targets or committing its intent under section 9.
 
@@ -619,8 +619,8 @@ section 16.1's recovery rules, subject to the same submitted boundary.
 `peerKey` below is derived from the observation's referenced
 `peer.resolved(peerResolution).peerKey` under `vault-events.md` section 4.1;
 it is not duplicated in `message.in` or `message.prepared`. The same derivation
-supplies their `ChannelKey` values and all message/package peer-key comparisons
-in this document. A missing non-null reference defers, never falls back to null.
+supplies all message/package peer-key comparisons in this document. A missing
+non-null reference defers, never falls back to null.
 
 For an authenticated or signed innermost message:
 
@@ -680,7 +680,7 @@ The phase-1 application execution scope is:
 
 Every authenticated application address pair uses this same scope. Anonymous
 input and mediator control traffic have no application execution scope; no
-provisional channel identity executes before relationship evidence is ready.
+provisional key-based scope executes before relationship evidence is ready.
 
 A `Vault.commit` validator derives automatic-intent scope and ACK targets from
 the event set committed before that call. Receipt/binding/transition proposed
@@ -690,7 +690,8 @@ first, then derive and commit the effect; recovery resumes from that prefix.
 `peerChain(R)` contains canonical DID/key authorizations from exactly:
 
 - the peer document referenced by `relationship.bound.peerResolution`; and
-- every valid `peer.transitioned.peerResolution` for that R's rooted peer chain.
+- every valid `relationship.peerTransitioned.peerResolution` for that R's rooted
+  peer chain.
 
 Each node includes all key-agreement methods authorized by its exact document,
 not only the selected encryption key. Resolve those methods to section 4.1 of
@@ -714,14 +715,14 @@ of these rows:
 | --- | --- | --- |
 | Proof-free root sender | `relationshipBinding` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransition == null` | R |
 | Proof-free peer successor | Same binding/local history check; `peerTransition` names the valid R edge whose `to` and exact successor document authorize the observed DID/key | R |
-| Carried `fromPrior` | A valid `peer.transitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
+| Carried `fromPrior` | A valid `relationship.peerTransitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
 
 These rows do not inspect public/private policy or message type. Lookup hints
 alone authorize none of them. A newly authenticated root pair first commits a
 common binding under `rendezvous.md` section 9.3, then follows the first row.
 A recognized DID with an unpinned key retains its binding/edge references but
 has no scope and follows that document's same-DID diagnostic. Missing proof or
-binding evidence defers, never falls back to a fresh pair or channel.
+binding evidence defers, never falls back to a fresh birth or key-based scope.
 
 All applicable evidence must identify one unique R. The pair index under
 `vault-events.md` section 14.4 catches competing birth/continuation claims.
@@ -804,7 +805,8 @@ documents and transition proofs.
 5. Only after durable receipt, ACK the mediator delivery. A crash before this
    point leaves it pending or causes idempotent redelivery.
 6. Validate every carried rotation against its exact retained predecessor and
-   carrier evidence; commit/reuse `peer.transitioned` before scope/ACK/effects.
+   carrier evidence; commit/reuse `relationship.peerTransitioned` before
+   scope/ACK/effects.
    Missing evidence leaves that input deferred, without a new-birth fallback.
 7. Derive per-observation scope and MID-group consistency under section 9,
    then process explicit ACKs through section 8.3's exact outbound membership.
@@ -916,7 +918,7 @@ delivery.submitted                transport accepted a package
 delivery.failed                   terminal package or message failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
 message.in                        durable inbound observation
-peer.transitioned                 DID continuation in one named relationship
+relationship.peerTransitioned     peer DID continuation in one named relationship
 relationship.bound                symmetric birth addresses and pinned peer document
 relationship.contactAssigned      independent local contact assignment
 relationship.localTransitioned    frozen successor and proof for our end
@@ -990,7 +992,7 @@ A future replica-mediation profile
 would additionally expose opaque replica IDs to that mediator.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
-Relationship DIDs SHOULD be disclosed only in encrypted channels and use
+Relationship DIDs SHOULD be disclosed only in encrypted messages and use
 Peer DID long form on first disclosure.
 
 Pure ACKs reveal durable receipt timing to the ultimate peer, not which
@@ -1140,7 +1142,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     preparation follows `rendezvous.md` section 5.1's message-scoped failure;
     an inbound at the local relationship DID without continuation proof has
     no scope and processes no ACK/effect. The contact diagnostic cannot make
-    the observation executable, even if DID-graph attribution finds a contact.
+    the observation executable, even when that R has a contact assignment.
 59. All key-agreement keys of the same pinned document can authenticate in one
     R. Equal-intent wire variants merge once; fresh unpinned keys cannot
     enlarge membership or change birth identity.

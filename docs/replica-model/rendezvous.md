@@ -280,8 +280,8 @@ policy; a fresh `peer.resolved` never extends `peerChain(R)`:
   the same pinned or verified transition snapshot. If a successful fresh
   resolution offers no usable key with that evidence, or resolution fails
   definitively under the classification above, append message-scoped terminal
-  `delivery.failed(code="peer-key-changed", packageId=null)` before preparation
-  or channel attachment. Do not append an incompatible package or binding and
+  `delivery.failed(code="peer-key-changed", packageId=null)` before preparation.
+  Do not append an incompatible package or binding and
   do not mark the whole relationship conflicted. Resolution unavailability
   remains retryable. An already prepared package continues to use its
   exact retained snapshot; it does not re-resolve to replace its key.
@@ -698,7 +698,7 @@ Explicit user contacts use UUIDv7. Automatic contact creation for a relationship
 uses `contact_id` above, unless that R already has a contact assignment. Reuse
 the selected assignment under the writer lock; do not infer cryptographic
 identity from a display name, contact merge or globally shared public address.
-The contact tombstone remains effective for that R after detach or erasure.
+The contact tombstone remains effective for that R after rotation or erasure.
 
 ### 10.2 Binding and contact policy
 
@@ -710,13 +710,17 @@ types or role arbitration are needed. Different first snapshots for one R
 still conflict rather than selecting one by receive order after import.
 
 After receipt, default application policy creates or reuses the contact
-assigned to R and attaches its authenticated channel. If R is unassigned,
+assigned to R. If R is unassigned,
 use section 10.1's deterministic contact unless an explicit local selection
 already chose one; tombstones still prohibit recreation. Control input alone
 creates no contact or privacy response, but may bind R and process scoped ACKs. All
 receipts use the same scope rules. Contact assignment, ordinary protocol
 effects and section 11's privacy policy are independently recoverable work;
 none supplies a missing cryptographic relationship scope.
+
+Profile disclosures belong to R through their exact source messages under
+`vault-events.md` sections 11.3–11.4. Contact profile display follows that R's
+assignment; shared addresses or keys do not transfer claims between Rs.
 
 ## 11. Early private-address policy and notifications
 
@@ -827,8 +831,9 @@ For a carrier from B1 to any retained local address A in R:
 4. require `sub` to equal the carrier's exact authenticated sender spelling,
    with a valid long form on first Peer-DID disclosure, and require the carrier
    observation to witness all referenced key/document/proof fields;
-5. commit `peer.transitioned` for that R before ACK/effect work, reusing a
-   duplicate edge and surfacing incompatible successors or evidence as conflict;
+5. commit `relationship.peerTransitioned` for that R before ACK/effect work,
+   reusing a duplicate edge and surfacing incompatible successors or evidence
+   as conflict;
 6. use the new peer end for further communication in R, preserving its birth
    ID, message identity and all unrelated relationships.
 
@@ -975,7 +980,7 @@ automatic resubmission of the completed MID.
 32. A current peer DID using an unpinned current key is retained as a no-scope diagnostic; no new R, ACK or effect is created. A superseded sender first follows section 9.3.
 33. After B0-to-B1 commits in R, a new MID from B0 to any local address in R is terminal before message.in, with pickup ACK only. A matching committed observation MID in R follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
 34. One-use invitation is consumed by matching root-address receipt before contact/rotation work; continuation or matching pthid alone cannot consume it.
-35. Same-consumer invitation reuse is idempotent; different consumers conflict. Crash, detach, deletion and erasure never reopen it.
+35. Same-consumer invitation reuse is idempotent; different consumers conflict. Crash, deletion and erasure never reopen it.
 36. A retired DID cannot create new relationships but can receive in existing histories while its route remains eligible, regardless of disclosure policy.
 37. A terminal route or mediation rejects input; temporary missing key/route/recovery prerequisites defer without pickup ACK.
 38. Wrong recipient DID or method fragment, authentication-purpose kid and unknown Peer short form are terminal before application state.
@@ -1000,3 +1005,4 @@ automatic resubmission of the completed MID.
 57. An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt without a client retention cap; restart, body erasure and mediator expiry preserve that pair claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
 58. Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under vault-events.md section 11.1, across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
 59. did:web:Bob.Example and did:web:bob.example remain distinct identity strings and birth-pair inputs. A returned document id matching only after host case folding fails; URL/DNS processing cannot rewrite either retained DID.
+60. Validated message/profile evidence reaches a contact only through relationship.contactAssigned. Reusing a public address or key in another R does not share names or disclosure history; changing either end within one R preserves that history and its contact tombstone.
