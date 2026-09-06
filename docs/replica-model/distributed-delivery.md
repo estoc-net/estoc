@@ -47,9 +47,9 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
 - **Communication address** — a supported DID used to send and receive.
   Local addresses are seed-derived Peer DIDs. Public/rendezvous disclosure and
   pairwise allocation are policies with identical core relationship semantics.
-- **Relationship** — a symmetric birth-address identity with two independently
-  changeable ends, under `vault-events.md` section 12.
-
+- **Relationship** — the stable symmetric birth-address identity with two
+  independently changeable ends under `vault-events.md` section 12; its local
+  and peer histories determine message scope under section 9.
 - **Outbound message ID (`mid`)** — the vault entity ID of one outbound
   logical message, also used as its innermost DIDComm plaintext `id`.
 - **Inbound observation MID** — a deterministic ID for one authenticated
@@ -79,8 +79,6 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
 - **Receipt request** — the exact `message.out.pleaseAck` array names the
   messages whose explicit ACK is requested. It is independent of local
   submission completion.
-- **Relationship** — the stable symmetric birth-address identity whose local
-  and peer histories determine message scope under section 9.
 
 ```text
 one outbound message (mid = wire ID, intent hash)
@@ -781,7 +779,9 @@ documents and transition proofs.
 
 1. Before authoritative key/route recovery, retain delivery pending without
    pickup ACK. Then apply `rendezvous.md` sections 9.1–9.2's exact-recipient
-   and lifecycle gate, equally for all communication addresses.
+   and lifecycle gate, equally for all communication addresses. A delivery
+   already waiting for relationship evidence stays pending on mere redelivery;
+   resume authentication only on that document's evidence-change retry.
 2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
    consistency, and perform that document's section-5.1 sender resolution with
    its bounded unavailable-result retries. Safely terminal delivery is pickup-
@@ -1150,12 +1150,14 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     before first preparation. Transient unavailability leaves it retryable;
     definitive resolution failure is terminal under `rendezvous.md` section
     5.1. An unchanged online-revalidated document still creates new evidence.
-    Existing packages retry or repack using retained snapshots only. Each
-    inbound delivery instead authenticates against current sender resolution,
-    including duplicates; unavailable resolution defers without pickup ACK
+    Existing packages retry or repack using retained snapshots only. Whenever
+    an inbound delivery enters or resumes authentication, including duplicates,
+    it uses current sender resolution; unavailability defers without pickup ACK
     only within that section's per-delivery budget. Definitive DNS failures
     and exhausted retries take the terminal pre-vault ACK path; redelivery
-    cannot reset the budget. Recoverable local prerequisites have no such cap.
+    cannot reset the active sequence. Recoverable local prerequisite waits
+    consume no budget. Relationship-evidence waits and their evidence-change
+    retries use that section's suspension and fresh-sequence rule.
     Reusing matching evidence requires a fresh document check. Recovery of
     committed input uses its retained snapshot without another network lookup.
 61. Section 8.1's sender gate precedes selection and commit of a deterministic
@@ -1197,4 +1199,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     and the verified edge are available. No new birth or provisional scope
     bypasses that deferral; unrelated local pairs are unaffected by the claim.
     The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
-    changes trigger retry; no local retention timeout clears the pending claim.
+    changes relevant to that pair trigger retry with a fresh bounded sender-
+    resolution sequence when needed. Mere redelivery does not retry, and time
+    in the evidence wait consumes neither resolver attempts nor its local
+    retention stop. No local retention timeout clears the pending claim.

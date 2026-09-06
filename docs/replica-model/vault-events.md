@@ -1323,8 +1323,11 @@ traffic follows `rendezvous.md` sections 9.1–9.2. Recoverable key/route state,
 unavailable required sender resolution within that document's section 5.1
 budget, or a relationship-evidence deferral required by section 12.1 produces
 no `message.in` and no pickup ACK. That evidence wait follows `rendezvous.md`
-section 9.1, independently of the sender-resolution budget. Carriers allowed
-to commit with a null binding under section 12.1 still follow durable receipt
+section 9.1: waiting consumes no sender-resolution budget; relevant evidence
+changes permit a fresh bounded resolution sequence under that document's
+section 5.1, excluding waiting time from its local retention stop. Mere
+redelivery does not retry authentication. Carriers allowed to commit with a
+null binding under section 12.1 still follow durable receipt
 before pickup ACK. Exhausted sender-resolution budgets and safely classified
 terminal input MUST instead be pickup-ACKed
 without `message.in`; this exception cannot bypass durable receipt for input
@@ -1625,6 +1628,13 @@ equal `relationship`. The source and any required binding/transition evidence
 MUST already be committed before this event is lifted. A pending, anonymous,
 mediator or conflicted source supplies no profile claim.
 
+A **supported profile disclosure** is a message whose application protocol
+explicitly defines profile fields and their extraction. That protocol owns its
+wire types, schema, validation and interpretation; this vault format selects no
+profile wire protocol or implicit Basic Message convention. A producer lifts
+only disclosures from protocols it supports, not names inferred from arbitrary
+message content. This definition also applies to section 11.4.
+
 The producer lifts `name` from a supported profile disclosure while its source
 content is readable and eligible for application processing under section
 14.7, checking erasure and contact tombstones under the writer lock. A claim
@@ -1634,6 +1644,14 @@ claim, not a verified identity name. It holds no source content roots. Missing
 event/scope evidence defers projection and incompatible evidence conflicts;
 source-body erasure alone does not invalidate an existing lifted value.
 Deduplication and display ordering follow section 14.5.
+
+Lifting under sections 11.3–11.4 is idempotent by event type and logical source.
+Under the writer lock, reuse an existing valid lift; otherwise recognize and
+lift the disclosure from eligible readable source content. Reopen/recovery
+enumerates missing lifts under section 16.1, including sources whose scope
+became available later. Missing content defers this work; erased content or a
+contact tombstone forbids a new lift. Erasure before lifting may therefore
+leave no profile fact; these events create no additional content hold.
 
 ### 11.4 `profile.shared`
 
@@ -1651,16 +1669,21 @@ Deduplication and display ordering follow section 14.5.
 `source` is the `eid` of one exact committed `message.out` profile disclosure.
 Its immutable `target.relationship` MUST equal `relationship`, and its
 validated outbound membership follows section 14.8. Lift this observation only
-after that MID has a committed valid `delivery.submitted`. A queued intent,
-prepared package, unknown transport outcome or peer ACK alone is insufficient.
+after that MID has a committed valid `delivery.submitted`, recognizing the
+supported disclosure from readable source content under section 11.3's writer
+lock, erasure and tombstone rules. A queued intent, prepared package, unknown
+transport outcome or peer ACK alone is insufficient.
 Submission is the sharing boundary; this event does not claim that the peer
 read the profile and cannot authorize another submission.
 
-The source intent, package/submission evidence and relationship references
-remain verifiable from their retained skeletons after content erasure. Missing
-evidence defers projection; incompatible evidence conflicts. No content roots
-are retained by this event. Deduplication and display ordering follow section
-14.5; rotation preserves this R's sharing history.
+For an existing lift, the source intent, package/submission evidence and
+relationship references remain verifiable from their retained skeletons after
+content erasure. This verifies the retained lift's linkage; it does not
+reconstruct a disclosure from `msgType` alone or permit a new lift without
+readable content. Missing evidence defers projection; incompatible evidence
+conflicts. No content roots are retained by this event. Deduplication and
+display ordering follow section 14.5; rotation preserves this R's sharing
+history. Recovering a missing lift never prepares or resubmits its source.
 
 ## 12. Relationships and address changes
 
@@ -1691,9 +1714,9 @@ irrespective of the recipient's allocation policy. Under the receive lock:
 3. for proof-free input, select the unique existing binding and, for a peer
    successor, the committed transition that pins that successor document;
 4. only for a previously unknown address pair with no carried proof, no known
-   pending membership as defined below and no conflicting membership, select
-   a new binding under section 12.2 using the actual recipient DID and
-   authenticated sender resolution; and
+   pending membership, no missing relationship evidence as defined below and
+   no conflicting membership, select a new binding under section 12.2 using
+   the actual recipient DID and authenticated sender resolution; and
 5. apply `rendezvous.md` section 9.3's receive-time superseded-sender and
    integrity checks; commit/reuse the selected binding before freezing its
    returned `eid` in `message.in.relationshipBinding`, and freeze
@@ -1704,11 +1727,18 @@ The root addresses are canonical DIDs, not authentication keys. An unknown key
 under a recognized DID is section 14.6's diagnostic, never a new relationship.
 A new input with an unresolved carried proof may commit with a null binding;
 its eventual scope must come from the validated transition carrying that exact
-observation. Missing history defers and conflicting matches suppress effects;
-neither permits a new birth-address fallback. A proof-free input lacking enough
-local history to choose its binding remains pending before durable receipt,
-without pickup ACK, under `rendezvous.md` section 9.1's relationship-evidence
-retry rule.
+observation. Missing relationship evidence defers and conflicting matches
+suppress effects; neither permits a new birth-address fallback. A proof-free
+input lacking enough local history to choose its binding remains pending before
+durable receipt, without pickup ACK, under `rendezvous.md` section 9.1's
+relationship-evidence retry rule.
+
+**Missing relationship evidence** means a binding, rooted transition prefix,
+historical snapshot or completed verification required to select the exact
+pair's binding/transition is absent or incomplete in the local evidence set.
+It requires a reference or claim that makes that evidence necessary; a
+previously unknown proof-free pair with no such claim can still form a birth
+under step 4.
 
 **Known pending membership** means either incomplete evidence referenced by
 an existing binding/edge claim for the exact canonical `(local recipient DID,
@@ -2102,11 +2132,28 @@ duplicate receipt cannot advance its display position merely by lifting it
 again. Existing lifted records remain usable after source-body erasure under
 sections 11.3–11.4.
 
+For each R, this fold yields:
+
+- `claimedName`: the latest non-conflicted eligible name under the source
+  ordering above, or null when none exists;
+- `nameConflict`: true when otherwise valid lifts disagree on the name from at
+  least one logical inbound source, false otherwise. Those sources supply no
+  name, but other non-conflicted sources remain eligible; and
+- `shared`: the complete canonical source key `(at, eid, author)` of the
+  latest valid logical `profile.shared` source under the same ordering, or
+  null when none exists. This is that source's minimum key, not the lift's key
+  or submission time.
+
+Missing or conflicted relationship/source evidence contributes no value and
+retains the diagnostics above. `nameConflict` reports disagreement between
+lifted names; it does not replace these evidence diagnostics.
+
 Rotation of either end preserves R and its profile history. Sharing a DID,
 public key or contact with another R never transfers a name claim or marks our
-profile as shared there. Section 14.6 aggregates names only through explicit
-relationship-to-contact assignments. Profile evidence never authorizes ACKs,
-effects, key membership or relationship continuation.
+profile as shared there. Section 14.6 aggregates names and sharing records only
+through explicit relationship-to-contact assignments. These are projections,
+not a policy requiring an automatic profile send. Profile evidence never
+authorizes ACKs, effects, key membership or relationship continuation.
 
 ### 14.6 Contact fold
 
@@ -2123,6 +2170,10 @@ Fold each `cid` independently:
 - `claimedName` is the latest eligible name claim across relationships uniquely
   assigned to this contact, using section 14.5's source ordering; absent claims
   yield null, and missing/conflicted records supply diagnostics, not names;
+- `profileShared[]` has one `{ relationship: R, sourceKey: shared }` for every
+  non-conflicted R uniquely assigned to this contact whose section-14.5
+  `shared` is non-null, ordered by the literal R string. An unassigned,
+  assignment-conflicted or relationship-conflicted R contributes none;
 - `relationships[]` is every R uniquely assigned to this contact under section
   12.3, retaining pending/conflict status where binding evidence is incomplete
   or conflicting;
@@ -2515,8 +2566,10 @@ list when no new objects are needed; `Vault.events` is read-only.
    observation; cross-author ordinal reuse does not block open or import;
 7. recover birth/binding work from queued intents and retained resolution
    evidence under section 12.2, and enumerate committed receipts with unfinished
-   contact policy, transition, notification, ACK or protocol work. Control input
-   never becomes an early-privacy trigger merely through recovery;
+   contact policy, transition, notification, ACK or protocol work. Also enumerate
+   missing profile lifts under sections 11.3–11.4 from eligible readable inbound
+   sources and submitted outbound intents. Control input never becomes an
+   early-privacy trigger merely through recovery;
 8. reuse committed bindings, contact assignments, local successors/proofs and
    frozen triggers. Finish package retirement and repacking for eligible
    unsubmitted intents; rediscover replies previously blocked by the local
@@ -2802,8 +2855,10 @@ There is no migration requirement from an earlier event vocabulary.
 24. Unlock/recovery and recoverable exact-method prerequisites defer without
     pickup ACK. Missing/pending relationship evidence under section 12.1 also
     defers receipt when required by that section, without message.in or pickup
-    ACK; it retries on evidence changes under rendezvous.md section 9.1, with
-    no sender-resolution budget or local retention timeout.
+    ACK; it retries on relevant evidence changes under rendezvous.md section
+    9.1. The wait consumes no sender-resolution budget and has no local retention
+    timeout; retry uses rendezvous.md section 5.1's fresh bounded resolution
+    sequence when needed, excluding waiting time from its local retention stop.
     Foreign/nonexistent/wrong-purpose methods, unbound retired
     addresses and terminal routes are terminal. A retired address in a bound
     local history still receives while its route is eligible; tombstoned
@@ -3175,8 +3230,11 @@ There is no migration requirement from an earlier event vocabulary.
      verification. Restart and body erasure retain the claim; unrelated local
      pairs remain eligible, and restored incompatible evidence conflicts.
      Time spent awaiting relationship evidence does not consume a resolver
-     budget or permit terminal ACK by timeout. Mediator expiry removes only
-     that delivery; a later delivery cannot bypass the retained pending claim.
+     budget or permit terminal ACK by timeout. Repeated delivery and reconnect
+     do not resolve again; a relevant evidence-change retry gets one fresh
+     bounded sequence as in rendezvous.md section 5.1 and its conformance case
+     61. Mediator expiry removes only that delivery; a later delivery cannot
+     bypass the retained pending claim.
 130. Given the same validated numalgo-4 long form L and short form S, every
      stored resolution document uses id=L, preserves input alsoKnownAs entries
      before appending S, fills omitted method controllers with L and leaves
@@ -3213,3 +3271,21 @@ There is no migration requirement from an earlier event vocabulary.
      yield the same latest name. Conflicting names lifted from one logical
      source remain a profile conflict and supply no name from that source;
      other valid claims remain usable under the same ordering.
+136. The per-R profile result includes claimedName, nameConflict and shared.
+     With no lifts it is null, false and null. Conflicting names from
+     one otherwise valid logical source set nameConflict without hiding an
+     older non-conflicted name. Shared selects the latest logical disclosure
+     using each source's minimum (at, eid, author), never submission or lift
+     order. Contact profileShared lists only uniquely assigned non-conflicted
+     Rs with non-null shared and their source keys, sorted by R. Two Rs at one
+     contact stay separate, and an unassigned or conflicted R contributes none.
+     Duplicate lifts, rotation, body erasure and shuffled event arrival leave
+     the projection unchanged; no sharing projection authorizes another send.
+137. Crash after a readable profile source commits but before its lift is
+     recoverable on reopen; outbound sharing also requires its valid committed
+     submission. Later scope/evidence recovery permits the same idempotent lift
+     without mediator redelivery or a local queue. Existing lifts are reused;
+     submitted outbounds never prepare or send again. If erasure or a contact
+     tombstone wins before lifting, recovery creates no new lift, even if bytes
+     remain under another root. Retained skeletons preserve an existing valid
+     sharing lift but msgType alone cannot create one after content erasure.

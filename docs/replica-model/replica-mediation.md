@@ -812,10 +812,14 @@ eligible exact local key, depends on missing recoverable local DID/route/sync
 state or required sender resolution still within that section's budget, has
 known pending membership or missing relationship evidence requiring pre-receipt
 deferral under `vault-events.md` section 12.1, or is otherwise not safely
-classifiable MUST NOT be acknowledged. Relationship-evidence waits follow `rendezvous.md`
-section 9.1's retry rule without a client retention cap; mediator expiry does
-not clear the pending pair claim. This distinction prevents terminal
-wrong-recipient or malformed input from redelivering forever
+classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
+`rendezvous.md` section 9.1's retry rule: the wait consumes no sender-resolution
+budget and has no client retention cap. Mere redelivery does not retry;
+relevant evidence changes start a fresh bounded resolution sequence when
+needed, with waiting time excluded from its local retention stop under that
+document's section 5.1. Mediator expiry does not clear the pending pair claim.
+This distinction prevents terminal wrong-recipient or malformed input from
+redelivering forever
 without allowing temporary local incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
@@ -1029,9 +1033,13 @@ A conforming implementation demonstrates at least these cases:
     Definitive DNS/not-found, invalid-document, unsupported-method and
     SSRF-forbidden results, or sender-resolution budget exhaustion, use the
     terminal pre-vault ACK path under that section. Repeated delivery of the
-    same replica-scoped ID shares one budget; missing recoverable local state
-    cannot take that budget's terminal path.
+    same replica-scoped ID shares one active sequence; missing recoverable
+    local state cannot take that budget's terminal path.
     Known pending membership or missing relationship evidence preventing
     receipt under vault-events.md section 12.1 also withholds pickup ACK,
-    using rendezvous.md section 9.1's evidence-change retry rule. This wait has
-    no client retention cap, and mediator expiry does not clear the pair claim.
+    using rendezvous.md section 9.1's evidence-change retry rule. This wait
+    consumes no sender-resolution budget and has no client retention cap.
+    Redelivery alone does not resolve again; relevant evidence changes start
+    one fresh shared bounded sequence when resolution is required, excluding
+    waiting time from its local retention stop. Mediator expiry does not clear
+    the pair claim.
