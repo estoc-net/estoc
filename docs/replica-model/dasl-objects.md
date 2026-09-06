@@ -1,5 +1,9 @@
 # The Estoc DASL object profile, version 1
 
+<!-- suite-navigation:start -->
+[Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+<!-- suite-navigation:end -->
+
 Status: **draft, phase 1** — clean-break content-addressed object profile for the
 version-3 Estoc vault. Phase 1 accepts only raw objects; DRISL support is
 deferred.
@@ -8,6 +12,39 @@ This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14 when,
 and only when, they appear in all capitals.
+
+<!-- reading-guide:start -->
+<a id="reading-guide"></a>
+
+**Reading guide**
+
+| Task | Read together |
+| --- | --- |
+| Implement object storage | [Accepted CIDs](#accepted-dasl-cids) → [Identity and vectors](#object-identity) → [ObjectStore](#objectstore) |
+| Handle large objects and reads | [Whole-resource identity](#whole-resource-identity-and-large-objects) → [Read operations](#read-operations) |
+| Retain and collect content | [Event roots](#event-roots-and-retention) → [Ordering, damage and collection](#write-ordering-damage-and-collection) |
+
+<details>
+<summary>Contents</summary>
+
+- [1. Scope](#scope)
+- [2. Terms](#terms)
+- [3. Accepted DASL CIDs](#accepted-dasl-cids)
+- [4. Object identity](#object-identity)
+- [5. Whole-resource identity and large objects](#whole-resource-identity-and-large-objects)
+- [6. ObjectStore](#objectstore)
+- [7. Event roots and retention](#event-roots-and-retention)
+- [8. Write ordering, damage and collection](#write-ordering-damage-and-collection)
+- [9. Canonical JSON stored as raw DASL objects](#canonical-json-stored-as-raw-dasl-objects)
+- [10. Folder representation](#folder-representation)
+- [11. Deferred encodings and transports](#deferred-encodings-and-transports)
+- [12. Security and resource limits](#security-and-resource-limits)
+- [13. Required conformance cases](#required-conformance-cases)
+
+</details>
+<!-- reading-guide:end -->
+
+<a id="scope"></a>
 
 ## 1. Scope
 
@@ -35,11 +72,13 @@ This profile does **not** define:
 - remote authorization; or
 - vault synchronization encryption.
 
-`event-store.md` defines how events reference objects. `vault-folder.md`
-defines the readable folder representation. `vault-sync.md` defines how exact
+[event-store.md](event-store.md) defines how events reference objects. [vault-folder.md](vault-folder.md)
+defines the readable folder representation. [vault-sync.md](vault-sync.md) defines how exact
 object bytes are hidden and transferred through an untrusted sync store.
 
 The normative DASL dependency is DASL CIDs: <https://dasl.ing/cid.html>.
+
+<a id="terms"></a>
 
 ## 2. Terms
 
@@ -53,6 +92,8 @@ The normative DASL dependency is DASL CIDs: <https://dasl.ing/cid.html>.
   portable object. An extent has no portable CID and never appears in an event.
 - **Transport segment** — a protocol-private fragment used to stream one
   portable object. A segment has no portable CID and never appears in an event.
+
+<a id="accepted-dasl-cids"></a>
 
 ## 3. Accepted DASL CIDs
 
@@ -68,7 +109,11 @@ executable raw-CID vectors.
 `Cid` in the Estoc TypeScript interfaces means a validated canonical DASL CID
 string, not an arbitrary string alias.
 
+<a id="object-identity"></a>
+
 ## 4. Object identity
+
+<a id="raw-object"></a>
 
 ### 4.1 Raw object
 
@@ -90,6 +135,8 @@ removed before hashing when they are not part of the application resource.
 
 A zero-length byte sequence is a valid raw object.
 
+<a id="executable-cid-vectors"></a>
+
 ### 4.2 Executable CID vectors
 
 ```text
@@ -103,6 +150,8 @@ string CID:      bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq
 ```
 
 Implementations MUST reproduce these values from the bytes.
+
+<a id="whole-resource-identity-and-large-objects"></a>
 
 ## 5. Whole-resource identity and large objects
 
@@ -129,6 +178,8 @@ large raw object. They MUST NOT require the complete object to fit in memory.
 An implementation MAY impose a local maximum object size. A protocol MAY
 advertise a transfer maximum. Limits MUST be explicit and MUST NOT silently
 change object identity.
+
+<a id="objectstore"></a>
 
 ## 6. ObjectStore
 
@@ -183,17 +234,19 @@ semantics are equivalent.
 This is the backend object interface. In a full vault, `putRaw` and `putObject`
 are internal primitives for `Vault.commit` and validated import/restore, not
 standalone application operations. `collect` is internal to the vault runtime,
-which supplies the current held roots under `vault-events.md` section 15.3.
-`event-store.md` section 10 defines the application-facing subset and the shared
+which supplies the current held roots under [vault-events.md section 15.3](vault-events.md#held-roots).
+[event-store.md section 10](event-store.md#vault-interface) defines the application-facing subset and the shared
 writer lock.
 
 Object acceptance uses the process-durable commit terminology in
-`event-store.md` section 2.1. If a put operation resolves, every later process
+[event-store.md section 2.1](event-store.md#commit-and-durability-terminology). If a put operation resolves, every later process
 restart over the same intact store generation MUST observe the complete
 accepted object. If the process terminates before resolution, the complete
 object or no object may remain, but a partial object MUST NOT enter the accepted
 namespace. Stable-media survival across sudden power loss is a separately
 documented backend guarantee.
+
+<a id="putraw"></a>
 
 ### 6.1 `putRaw`
 
@@ -208,6 +261,8 @@ documented backend guarantee.
 A crash may leave backend-private temporary extents. They are not accepted
 portable objects and MUST be cleaned or ignored on reopen.
 
+<a id="putobject"></a>
+
 ### 6.2 `putObject`
 
 `putObject(cid, source)` MUST:
@@ -221,6 +276,8 @@ portable objects and MUST be cleaned or ignored on reopen.
 If the CID already exists with valid bytes, the operation is idempotent and
 MUST NOT create a second portable object. The backend MAY use the successful
 operation to renew local orphan age.
+
+<a id="read-operations"></a>
 
 ### 6.3 Read operations
 
@@ -237,15 +294,16 @@ bytes as verified until the stream completes successfully.
 `read(cid, maxBytes)` MUST determine or bound the size before allocating more
 than `maxBytes`. Exceeding the bound is an error, not a truncated success.
 
-Object streams and bounded reads use the read protection in `event-store.md`
-section 10. Collection cannot unlink their bytes during the read. Within an
+Object streams and bounded reads use the read protection in [event-store.md section 10](event-store.md#vault-interface). Collection cannot unlink their bytes during the read. Within an
 active writer runtime, a caller's stream lifetime does not hold its operation
 lock; a read-only stream opened without a writer follows that section's
 rule for excluding a later writer or sharing latches with it.
 
+<a id="event-roots-and-retention"></a>
+
 ## 7. Event roots and retention
 
-Every event has an explicit `roots` array defined by `event-store.md`.
+Every event has an explicit `roots` array defined by [event-store.md](event-store.md).
 
 A root means:
 
@@ -269,12 +327,16 @@ For example, a stored message document naming two object-backed attachments
 lists its own raw CID and both attachment CIDs in the event's `roots`. A CID
 mentioned only inside the document does not retain or fetch that attachment.
 
+<a id="write-ordering-damage-and-collection"></a>
+
 ## 8. Write ordering, damage and collection
+
+<a id="write-before-reference"></a>
 
 ### 8.1 Write-before-reference
 
 Locally authored events MUST use `Vault.commit`, including `commit([], drafts)`
-when there are no new objects, under `event-store.md` section 10. New objects
+when there are no new objects, under [event-store.md section 10](event-store.md#vault-interface). New objects
 are accepted within the commit that references them; collection never runs
 concurrently with that commit.
 
@@ -282,6 +344,8 @@ A failure or crash after object acceptance but before event commit may leave
 an orphan. Reopen MUST reconstruct every committed event and the resulting
 held-root set before enabling collection. A recovered committed reference keeps
 its object; otherwise the accepted object follows the orphan-grace policy.
+
+<a id="missing-and-damaged-objects"></a>
 
 ### 8.2 Missing and damaged objects
 
@@ -295,6 +359,8 @@ semantic layer decides whether absence means:
 A file or row whose bytes do not match its CID is damaged, not an alternate
 version. It MUST be excluded from normal reads and SHOULD be quarantined before
 repair.
+
+<a id="collection"></a>
 
 ### 8.3 Collection
 
@@ -310,16 +376,17 @@ arrays MUST contain canonical unique CIDs. Their order is not semantically
 significant. An implementation SHOULD return them in binary-CID byte order for
 deterministic diagnostics.
 
-An active read latch causes collection to skip that CID under `event-store.md`
-section 10. CIDs skipped because of read latches appear in neither output
+An active read latch causes collection to skip that CID under [event-store.md section 10](event-store.md#vault-interface). CIDs skipped because of read latches appear in neither output
 array. Release of the latch does not itself trigger unlink.
 
 The store MAY unlink an unkept object only after its documented orphan grace
 period. Grace covers abandoned writes after failure or crash. Live operations
-use the writer-lock boundaries in `event-store.md` section 10.
+use the writer-lock boundaries in [event-store.md section 10](event-store.md#vault-interface).
 
-The semantic layer computes `keep` from `vault-events.md`; the object store
+The semantic layer computes `keep` from [vault-events.md](vault-events.md); the object store
 MUST NOT inspect event types.
+
+<a id="canonical-json-stored-as-raw-dasl-objects"></a>
 
 ## 9. Canonical JSON stored as raw DASL objects
 
@@ -352,6 +419,8 @@ cid   = rawCid(bytes)
 The raw codec is intentional. Changing the encoded bytes changes the CID;
 Estoc MUST NOT transcode a stored document and preserve its old CID.
 
+<a id="folder-representation"></a>
+
 ## 10. Folder representation
 
 The canonical readable folder stores each accepted portable object as one
@@ -371,6 +440,8 @@ A backend may store an object internally in extents, but export MUST create one
 complete file or stream at the object path. The folder representation has no
 portable extent directory.
 
+<a id="deferred-encodings-and-transports"></a>
+
 ## 11. Deferred encodings and transports
 
 DRISL objects, typed CBOR APIs, MASL metadata and CAR transport are deferred.
@@ -386,6 +457,8 @@ CID codec.
 RASL publication is outside this private vault profile. Private vault history
 MUST NOT become publicly retrievable merely because it has a DASL CID.
 BDASL/BLAKE3 identifiers remain outside version 3.
+
+<a id="security-and-resource-limits"></a>
 
 ## 12. Security and resource limits
 
@@ -405,47 +478,64 @@ The store MUST hash the exact bytes it commits. It MUST NOT rely on a filename,
 HTTP `Content-Digest`, server claim or sync descriptor without local
 verification.
 
+<a id="required-conformance-cases"></a>
+
 ## 13. Required conformance cases
 
 A conforming implementation MUST pass at least these cases:
 
-1. One-shot and arbitrarily chunked streaming input produce the same raw DASL
+
+<a id="object-identity-verification-and-streaming-do-1-do-7"></a>
+
+### Object identity, verification and streaming (DO-1–DO-7)
+
+1. <a id="do-1"></a> One-shot and arbitrarily chunked streaming input produce the same raw DASL
    CID and exact output bytes.
-2. Empty input produces the specified raw DASL CID and round-trips.
-3. CIDv0, uppercase base32, non-canonical base32, DRISL/`dag-cbor`,
+2. <a id="do-2"></a> Empty input produces the specified raw DASL CID and round-trips.
+3. <a id="do-3"></a> CIDv0, uppercase base32, non-canonical base32, DRISL/`dag-cbor`,
    `dag-pb`, non-SHA-256 and wrong digest length are rejected.
-4. A raw CID with one changed payload byte is rejected without exposing a
+4. <a id="do-4"></a> A raw CID with one changed payload byte is rejected without exposing a
    partial object.
-5. Filesystem, SQL, IndexedDB and OPFS backends export identical bytes and CID
+5. <a id="do-5"></a> Filesystem, SQL, IndexedDB and OPFS backends export identical bytes and CID
    for the same object.
-6. Backend internal extent size does not affect CID or exported bytes.
-7. A large object can be put, opened, verified and exported with bounded
+6. <a id="do-6"></a> Backend internal extent size does not affect CID or exported bytes.
+7. <a id="do-7"></a> A large object can be put, opened, verified and exported with bounded
    memory.
-8. A commit appends no events when a supplied object fails verification or any
+
+<a id="commit-roots-collection-and-damage-do-8-do-16"></a>
+
+### Commit roots, collection and damage (DO-8–DO-16)
+
+8. <a id="do-8"></a> A commit appends no events when a supplied object fails verification or any
    required root, including a reused root, is absent.
-9. A CID appearing only in event `data` creates no retention reference.
-10. A CID embedded in object content but absent from event `roots` is not
+9. <a id="do-9"></a> A CID appearing only in event `data` creates no retention reference.
+10. <a id="do-10"></a> A CID embedded in object content but absent from event `roots` is not
     implicitly retained or fetched.
-11. Collection never removes an exact CID in the current held-root set.
-12. A crash after object acceptance but before event append leaves only a
+11. <a id="do-11"></a> Collection never removes an exact CID in the current held-root set.
+12. <a id="do-12"></a> A crash after object acceptance but before event append leaves only a
     grace-protected orphan.
-13. A folder object whose filename does not match its bytes is reported as
+13. <a id="do-13"></a> A folder object whose filename does not match its bytes is reported as
     damage.
-14. A private DASL object is not exposed through RASL without a separate
+14. <a id="do-14"></a> A private DASL object is not exposed through RASL without a separate
     explicit publication decision.
-15. A core reader rejects a BDASL/BLAKE3 identifier.
-16. If an accepted object is corrupted and a backend performs lazy read
+15. <a id="do-15"></a> A core reader rejects a BDASL/BLAKE3 identifier.
+16. <a id="do-16"></a> If an accepted object is corrupted and a backend performs lazy read
     verification, `open` fails before successful stream completion and the
     consumer cannot treat earlier chunks as verified.
-17. A successful object put survives immediate process restart; a
+
+<a id="durability-and-collection-recovery-do-17-do-21"></a>
+
+### Durability and collection recovery (DO-17–DO-21)
+
+17. <a id="do-17"></a> A successful object put survives immediate process restart; a
     pre-resolution crash exposes either the whole object or no accepted object.
-18. Collection waits while a commit pauses between object acceptance and event
+18. <a id="do-18"></a> Collection waits while a commit pauses between object acceptance and event
     append, even after orphan grace expires; on success the event retains the
     object.
-19. Collection computes its held-root set after acquiring the writer lock and
+19. <a id="do-19"></a> Collection computes its held-root set after acquiring the writer lock and
     holds it through unlink; a reference commit completes before that fold or
     starts after the collection pass.
-20. Reopen recovery reconstructs committed-event retention before enabling GC.
-21. A crash before event commit makes the accepted unreferenced object an
+20. <a id="do-20"></a> Reopen recovery reconstructs committed-event retention before enabling GC.
+21. <a id="do-21"></a> A crash before event commit makes the accepted unreferenced object an
     ordinary grace-protected orphan after recovery; a crash after event commit
     keeps the object through the recovered event root.

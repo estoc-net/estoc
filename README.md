@@ -22,6 +22,11 @@ The libraries are still published to npm for everyone else — `pnpm publish`
 rewrites `workspace:^` to the real semver range on the way out — but that
 now happens at milestones, not per commit.
 
+The proposed [version-3 vault specification](docs/replica-model/README.md)
+has a separate reading guide covering storage, events, delivery and relationship
+policy. It is a draft; the vault and event-store documentation linked above
+describes the existing version-2 implementation.
+
 The mediator ([didcomm-mediator]) stays its own repository: it is a thing
 anyone runs, with its own one-click deploy, and depends only on the
 published `@estoc/did-peer`.

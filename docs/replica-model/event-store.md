@@ -1,5 +1,9 @@
 # The Estoc event store, version 3
 
+<!-- suite-navigation:start -->
+[Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+<!-- suite-navigation:end -->
+
 Status: **draft, phase 1** — clean-break event, object and interchange model
 for one active writable Estoc vault runtime. The author model remains
 replication-ready, while network replica synchronization is deferred.
@@ -10,24 +14,59 @@ This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 when, and only when, they appear in all capitals.
 
 This is one of eight documents in the protocol suite. Six define the phase-1
-vault and delivery system; `replica-mediation.md` and `vault-sync.md` are
+vault and delivery system; [replica-mediation.md](replica-mediation.md) and [vault-sync.md](vault-sync.md) are
 deferred extensions:
 
 | document | defines |
 | --- | --- |
-| `event-store.md` | the medium-independent event and vault-store interfaces |
-| `dasl-objects.md` | the pinned raw DASL CID, object and retention profile |
-| `vault-folder.md` | the readable `.estoc/` interchange serialization |
-| `vault-events.md` | the meaning and folds of the vault's own event types |
-| `distributed-delivery.md` | vault-first send, packaging, retry and end-to-end acknowledgment |
-| `rendezvous.md` | Symmetric relationships, pinned resolution and early address-rotation policy |
-| `replica-mediation.md` | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
-| `vault-sync.md` | **deferred:** encrypted anti-entropy through an untrusted sync store |
+| [event-store.md](event-store.md) | the medium-independent event and vault-store interfaces |
+| [dasl-objects.md](dasl-objects.md) | the pinned raw DASL CID, object and retention profile |
+| [vault-folder.md](vault-folder.md) | the readable `.estoc/` interchange serialization |
+| [vault-events.md](vault-events.md) | the meaning and folds of the vault's own event types |
+| [distributed-delivery.md](distributed-delivery.md) | vault-first send, packaging, retry and end-to-end acknowledgment |
+| [rendezvous.md](rendezvous.md) | Symmetric relationships, pinned resolution and early address-rotation policy |
+| [replica-mediation.md](replica-mediation.md) | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
+| [vault-sync.md](vault-sync.md) | **deferred:** encrypted anti-entropy through an untrusted sync store |
 
-Dependency runs downward. `dasl-objects.md` defines the object layer used
-here. `vault-folder.md` serializes this model. `vault-events.md` defines
+Dependency runs downward. [dasl-objects.md](dasl-objects.md) defines the object layer used
+here. [vault-folder.md](vault-folder.md) serializes this model. [vault-events.md](vault-events.md) defines
 payloads above it. The delivery, rendezvous, mediation and sync protocols use
 the event and object primitives but do not change their meaning.
+
+<!-- reading-guide:start -->
+<a id="reading-guide"></a>
+
+**Reading guide**
+
+| Task | Read together |
+| --- | --- |
+| Implement a backend | [Envelope](#the-event) → [EventStore](#eventstore) → [Vault](#vault-interface) → [Backend obligations](#backend-obligations) |
+| Understand commit guarantees | [Durability terminology](#commit-and-durability-terminology) → [Atomic append](#appendall) → [Writer lock and commit](#vault-interface) |
+| Transfer or recover a vault | [Interchange](#interchange) → [Synchronization boundary](#synchronization-boundary) |
+
+<details>
+<summary>Contents</summary>
+
+- [1. Scope](#scope)
+- [2. Invariants](#invariants)
+- [3. The event](#the-event)
+- [4. Identity, authorship, time and order](#identity-authorship-time-and-order)
+- [5. EventStore](#eventstore)
+- [6. Folds and local caches](#folds-and-local-caches)
+- [7. ObjectStore](#objectstore)
+- [8. Portable files and local state](#portable-files-and-local-state)
+- [9. Deferred extension stores](#deferred-extension-stores)
+- [10. Vault interface](#vault-interface)
+- [11. Interchange](#interchange)
+- [12. Synchronization boundary](#synchronization-boundary)
+- [13. Backend obligations](#backend-obligations)
+- [14. Versioning](#versioning)
+- [15. Required conformance cases](#required-conformance-cases)
+
+</details>
+<!-- reading-guide:end -->
+
+<a id="scope"></a>
 
 ## 1. Scope
 
@@ -48,7 +87,7 @@ The portable sets define the identity's recoverable state. Local state is
 not part of the vault, is never synchronized, and is omitted from every
 portable snapshot. Backend import staging and publication-recovery metadata
 are also non-portable; the reference folder reserves `import/` for them under
-`vault-folder.md` section 3. They are recovered before normal access and are
+[vault-folder.md section 3](vault-folder.md#layout). They are recovered before normal access and are
 not opaque portable files or deletable local caches.
 
 The store does not know contacts, messages, public DIDs, mediators or
@@ -59,6 +98,8 @@ requires the author used for local appends to equal the current local
 A writable vault runtime may execute in an end-user application or on a
 server. The event store assigns no authority based on process location and
 has no special web-host author type.
+
+<a id="invariants"></a>
 
 ## 2. Invariants
 
@@ -103,6 +144,8 @@ Every conforming implementation preserves the following rules.
 14. **Collection shares the vault writer lock.** Computing held roots and
     unlinking objects cannot overlap a reference commit (section 10).
 
+<a id="commit-and-durability-terminology"></a>
+
 ### 2.1 Commit and durability terminology
 
 A value is **accepted** or **committed** only after the operation's promise
@@ -121,6 +164,8 @@ Unless another section explicitly says otherwise, the words **durable** and
 **durably committed** in the phase-1 protocol suite mean this process-durable
 success boundary. A product MUST NOT claim power-loss-safe receipt merely from
 this minimum contract.
+
+<a id="the-event"></a>
 
 ## 3. The event
 
@@ -159,7 +204,7 @@ type Event<D extends JsonObject = JsonObject> = {
 `EventId`, `AuthorId` and `Cid` are distinct validated API types that serialize
 as plain strings. Type brands do not replace format validation or add fields
 to the event. The generic store does not interpret domain-specific identifiers
-in `data`; `vault-events.md` section 3.5 owns their names and types. In a vault,
+in `data`; [vault-events.md section 3.5](vault-events.md#identifier-and-reference-vocabulary) owns their names and types. In a vault,
 the author value is the local replica ID under section 4.1.
 
 Example:
@@ -178,6 +223,8 @@ Example:
 }
 ```
 
+<a id="data"></a>
+
 ### 3.1 `data`
 
 `data` is opaque to the event store. The store MUST NOT use event-type
@@ -191,6 +238,8 @@ a vault-format version change.
 
 Everything needed to understand an event apart from storage location is
 on the event. A folder path confirms an author but never supplies one.
+
+<a id="roots"></a>
 
 ### 3.2 `roots`
 
@@ -209,6 +258,8 @@ A type may repeat the roots in `data` under semantic names such as
 `bodyCid`, `attachmentCids` or `envelopeCid`. Repetition does not create another
 reference. A type such as `message.erased` may name roots to release in
 `data.dropCids`; those roots MUST NOT appear in that event's `roots`.
+
+<a id="rfc-8785-canonical-json-and-equality"></a>
 
 ### 3.3 RFC 8785 canonical JSON and equality
 
@@ -246,8 +297,10 @@ algorithm.
 event becomes accepted. `ingest` MAY receive non-canonical source JSON, but it
 MUST parse with duplicate-name detection, reject invalid I-JSON and store or
 compare the RFC 8785 canonical bytes. Folder serialization is stricter:
-section 11 and `vault-folder.md` require each JSONL event record itself to be
+section 11 and [vault-folder.md](vault-folder.md) require each JSONL event record itself to be
 the canonical bytes followed by one LF.
+
+<a id="envelope-validation"></a>
 
 ### 3.4 Envelope validation
 
@@ -270,7 +323,11 @@ The store validates no payload field. A known-type validator above the
 store MUST quarantine or surface an invalid payload; it MUST NOT silently
 reinterpret it.
 
+<a id="identity-authorship-time-and-order"></a>
+
 ## 4. Identity, authorship, time and order
+
+<a id="author"></a>
 
 ### 4.1 Author
 
@@ -285,8 +342,9 @@ the author only when no second writer remains.
 
 No author- or replica-creation event is required. The existence of an
 author is evident from its events. Optional replica labels and retirement
-policy are deferred `replica.*` events defined in `replica-mediation.md`
-section 5.8; phase 1 defines none.
+policy are deferred `replica.*` events defined in [replica-mediation.md section 5.8](replica-mediation.md#portable-replica-events); phase 1 defines none.
+
+<a id="event-id-and-timestamp"></a>
 
 ### 4.2 Event ID and timestamp
 
@@ -340,6 +398,8 @@ protocol decision whose correctness cannot tolerate timestamp ordering
 MUST use explicit references, immutable IDs, tombstones or set semantics
 rather than relying on latest-wins.
 
+<a id="canonical-order"></a>
+
 ### 4.3 Canonical order
 
 Whenever a fold or `scan()` requires one total order, events are ordered
@@ -359,6 +419,8 @@ Canonical order is for presentation and explicitly declared
 latest-wins fields. It does not express causality, insertion order or
 network order.
 
+<a id="other-ids"></a>
+
 ### 4.4 Other IDs
 
 The event store does not validate IDs inside `data`. Vault event types
@@ -369,8 +431,10 @@ may use:
 - protocol-defined strings such as DIDComm message IDs.
 
 Event IDs, encrypted package IDs and mediator delivery IDs have separate
-roles. Outbound message IDs follow `vault-events.md` section 9.1; inbound
-observation and wire IDs follow `distributed-delivery.md` section 9.
+roles. Outbound message IDs follow [vault-events.md section 9.1](vault-events.md#ids); inbound
+observation and wire IDs follow [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity).
+
+<a id="eventstore"></a>
 
 ## 5. EventStore
 
@@ -444,6 +508,8 @@ interface EventStore {
 A store MAY expose additional backend diagnostics, transactions or indexes to
 its runtime. Portable application code uses the section-10 vault interface.
 
+<a id="append"></a>
+
 ### 5.1 `append`
 
 `append(draft)`:
@@ -465,6 +531,8 @@ across sudden power loss requires the backend's separately documented flush or
 
 Appends use the vault-wide writer lock in section 10, including calls from
 concurrent handles and workers in the same runtime.
+
+<a id="appendall"></a>
 
 ### 5.2 `appendAll`
 
@@ -489,6 +557,8 @@ known erasures.
 
 An empty input returns an empty array and writes nothing.
 
+<a id="ingest"></a>
+
 ### 5.3 `ingest`
 
 `ingest` accepts events from a snapshot, another backend or
@@ -509,6 +579,8 @@ implementation that commits ingest in internal batches may expose a subset of
 whole events after a pre-resolution process crash; retrying the same input is
 idempotent and completes the union.
 
+<a id="forked-author"></a>
+
 #### Forked author
 
 If an incoming event has `author == store.author` and is not already
@@ -527,6 +599,8 @@ Existing events under the old author remain immutable history. This rule
 detects accidental cloned local state. It does not authenticate an author
 against a malicious holder of the shared seed.
 
+<a id="scan"></a>
+
 ### 5.4 `scan`
 
 `scan(filter)` yields one accepted event per `eventId`, in canonical order.
@@ -541,6 +615,8 @@ The filter is equality only:
 `undefined` means no constraint. `null` matches a present JSON null.
 There are no range, join, full-text or nested-field semantics in this
 interface. Such views are folds and indexes above the store.
+
+<a id="changes"></a>
 
 ### 5.5 `changes`
 
@@ -562,6 +638,8 @@ A token is not an authorization credential, replica cursor, Lamport
 clock, vector clock or network synchronization token. A client MUST NOT
 send it to another replica or to the sync store.
 
+<a id="damage-and-conflicts"></a>
+
 ### 5.6 Damage and conflicts
 
 **Damage** is storage material that cannot be decoded as a valid event or
@@ -574,6 +652,8 @@ creates one through `append` or `ingest`; a folder can contain one after
 a manual edit or copied segment. Each backend MUST define a stable local
 tie-break for reads and report every discarded content. The tie-break is
 not a claim that the selected content is correct.
+
+<a id="folds-and-local-caches"></a>
 
 ## 6. Folds and local caches
 
@@ -593,17 +673,23 @@ and refolds.
 Caches belong under local state. They do not appear in snapshots,
 exports or vault sync.
 
+<a id="objectstore"></a>
+
 ## 7. ObjectStore
 
 Object references are the event envelope's `roots` array (section 3.2).
-Only the vault runtime computes `keep` under `vault-events.md` section 15.3;
+Only the vault runtime computes `keep` under [vault-events.md section 15.3](vault-events.md#held-roots);
 the object store reads no event type and application callers cannot supply a
 keep set.
 
-`dasl-objects.md` defines `ObjectStore`, whole-resource identity,
+[dasl-objects.md](dasl-objects.md) defines `ObjectStore`, whole-resource identity,
 write-before-reference, collection and object damage.
 
+<a id="portable-files-and-local-state"></a>
+
 ## 8. Portable files and local state
+
+<a id="filestore"></a>
 
 ### 8.1 FileStore
 
@@ -617,7 +703,7 @@ interface FileStore {
 
 Portable files are the portable part of the interchange format other than
 event segments and DASL objects. Local and backend recovery metadata are
-excluded. `vault-folder.md` defines reserved paths and singleton merge
+excluded. [vault-folder.md](vault-folder.md) defines reserved paths and singleton merge
 policies.
 
 A `FileStore` path MUST NOT address:
@@ -632,6 +718,8 @@ Version-3 correctness-critical mutable state MUST be an event or object,
 not an arbitrary portable file. Unknown portable files are carried for
 forward compatibility but are not interpreted or synchronized by
 `vault-sync/1.0` unless another protocol defines them.
+
+<a id="local-state"></a>
 
 ### 8.2 Local state
 
@@ -650,10 +738,14 @@ It is not exposed through `FileStore`, not present in a snapshot, and not
 merged or synchronized. Anything whose loss would violate a committed
 user decision is in the wrong place.
 
+<a id="deferred-extension-stores"></a>
+
 ## 9. Deferred extension stores
 
 Extension stores are deferred alongside replica mediation and vault sync.
 Phase 1 defines no extension-store API, lifecycle or portable layout.
+
+<a id="vault-interface"></a>
 
 ## 10. Vault interface
 
@@ -672,7 +764,7 @@ interface Vault {
 }
 ```
 
-`ByteSource` is defined by `dasl-objects.md`. Each supplied object names its
+`ByteSource` is defined by [dasl-objects.md](dasl-objects.md). Each supplied object names its
 expected raw CID; preparing a source in private temporary storage does not
 accept it into the portable object store.
 
@@ -681,7 +773,7 @@ import/restore paths. They are not exposed through `Vault.objects` for
 standalone application writes. Application preparation uses private temporary
 storage; accepting new objects and their local event references uses `commit`.
 `collect(keep)` is also backend-internal. The vault runtime computes the
-held-root set under `vault-events.md` section 15.3 and invokes collection within
+held-root set under [vault-events.md section 15.3](vault-events.md#held-roots) and invokes collection within
 the locked boundary below; application callers cannot supply a keep set.
 
 `commit(objects, drafts)` holds the writer lock while validating all drafts,
@@ -690,7 +782,7 @@ every draft root (including reused objects) to identify a present accepted
 object, and appending and returning one process-durable batch under section 5.2.
 
 Object acceptance or root-check failure appends no events. Accepted objects
-may remain after failure or crash under `dasl-objects.md`'s orphan-grace policy;
+may remain after failure or crash under [dasl-objects.md](dasl-objects.md)'s orphan-grace policy;
 the event batch still obeys section 5.2's all-or-nothing rule.
 
 `Vault.events` exposes reads only; it has no `append`, `appendAll` or `ingest`
@@ -735,7 +827,7 @@ and collection. It is distinct from an active runtime's
 operation lock. A later writable open waits or fails until ownership is
 released. Completion, failure, cancellation and owner-process exit release
 protection as above; idle time does not. Merely observing that no writer is
-running is insufficient. `vault-folder.md` section 15 defines the disk-folder
+running is insufficient. [vault-folder.md section 15](vault-folder.md#concurrency-and-crash-behavior) defines the disk-folder
 case without creating local state from a read-only open.
 
 `ingest` holds the runtime's operation lock from its target-state fork and
@@ -758,7 +850,11 @@ The current replica and other local state are intentionally absent from
 `Vault`. A host opens a vault backend with a local replica context and
 obtains stores already configured with that author.
 
+<a id="interchange"></a>
+
 ## 11. Interchange
+
+<a id="folder-round-trip"></a>
 
 ### 11.1 Folder round trip
 
@@ -773,6 +869,8 @@ For any conforming vault:
 
 The folder is the readable sovereignty format. `vault-sync/1.0` is a
 separate encrypted wire representation and is not a folder export.
+
+<a id="export"></a>
 
 ### 11.2 Export
 
@@ -798,6 +896,8 @@ unpublished until every required object and file validates. Missing or damaged
 non-erased content makes the export incomplete; it MUST NOT be reported as a
 successful complete snapshot.
 
+<a id="import-into-an-existing-vault"></a>
+
 ### 11.3 Import into an existing vault
 
 Import is allowed only when source and target have the same format
@@ -814,8 +914,7 @@ first semantic write:
 6. verify every object to be copied and require every prospective non-erased
    held root to have valid bytes in the source or target.
 
-The importer applies the receipt-conflict rules in `vault-events.md` section
-10.2. Existing `ForkedAuthor`, envelope, identity and object-integrity checks
+The importer applies the receipt-conflict rules in [vault-events.md section 10.2](vault-events.md#message-in). Existing `ForkedAuthor`, envelope, identity and object-integrity checks
 still apply.
 
 These are full-vault importer duties, not payload validation by the opaque
@@ -840,7 +939,7 @@ barrier MUST survive restart and deletion of `local/`, identify the intended
 import, and carry enough recovery information to finish or safely roll back.
 It is backend recovery metadata, not a new vault-domain event. The reference
 folder keeps it under the reserved, non-portable `import/` root defined by
-`vault-folder.md` section 3. A backend unable to provide such a barrier MUST
+[vault-folder.md section 3](vault-folder.md#layout). A backend unable to provide such a barrier MUST
 keep the generation unpublished instead. Import and export MUST exclude this
 metadata, not carry it as opaque portable files or execute a source's recovery
 journal as instructions for the target. An incomplete source must be recovered
@@ -859,6 +958,8 @@ those bytes. Target identity, seed wrapping and local author selection are
 unchanged. Rebuildable indexes are refreshed from the published union before
 ordinary work resumes.
 
+<a id="restore-and-bootstrap"></a>
+
 ### 11.4 Restore and bootstrap
 
 A restore reads a folder into an empty backend. It writes portable state
@@ -875,6 +976,8 @@ the immutable root, event and DASL objects; the new local copy then creates
 its own passphrase wrapping and local replica context. Opaque portable files
 not represented by a versioned sync object remain folder-interchange data
 and are not reconstructed by this bootstrap.
+
+<a id="synchronization-boundary"></a>
 
 ## 12. Synchronization boundary
 
@@ -898,6 +1001,8 @@ erase.
 
 No synchronization correctness depends on `changes()`, a server push,
 one replica staying online or a mutable local queue.
+
+<a id="backend-obligations"></a>
 
 ## 13. Backend obligations
 
@@ -944,6 +1049,8 @@ section 2.1 and document:
 - maximum event, batch and object sizes; and
 - locking requirements for concurrent handles.
 
+<a id="versioning"></a>
+
 ## 14. Versioning
 
 `config.json.version` covers the event envelope, folder layout,
@@ -971,72 +1078,94 @@ Changing an existing field's meaning, event-envelope fields, ID format,
 folder path grammar, key derivation or required fold rule requires a new
 vault version.
 
+<a id="required-conformance-cases"></a>
+
 ## 15. Required conformance cases
 
 A conforming implementation MUST pass at least these cases:
 
-1. `append` returns a six-field event with `author` equal to the current
+
+<a id="commit-validation-and-event-identity-es-1-es-7"></a>
+
+### Commit, validation and event identity (ES-1–ES-7)
+
+1. <a id="es-1"></a> `append` returns a six-field event with `author` equal to the current
    replica ID; after successful resolution, immediate process termination and
    reopen still observes the complete event.
-2. A process crash before `append` resolves may leave the complete event or no
+2. <a id="es-2"></a> A process crash before `append` resolves may leave the complete event or no
    event, never a partial accepted event.
-3. `commit` and its internal `appendAll` primitive append all events or none,
+3. <a id="es-3"></a> `commit` and its internal `appendAll` primitive append all events or none,
    give every event one timestamp, and remain complete with required objects after successful
    resolution and process restart.
-4. A JCS-ineligible event, including duplicate member names, an unpaired
+4. <a id="es-4"></a> A JCS-ineligible event, including duplicate member names, an unpaired
    surrogate or a non-I-JSON number, is rejected before acceptance.
-5. Two source serializations with different member order or whitespace but
+5. <a id="es-5"></a> Two source serializations with different member order or whitespace but
    equal RFC 8785 output ingest as one event.
-6. The same `eventId` with different RFC 8785 canonical bytes reports a conflict
+6. <a id="es-6"></a> The same `eventId` with different RFC 8785 canonical bytes reports a conflict
    and does not overwrite either value.
-7. Ingesting a previously unseen event authored by the current local author
+7. <a id="es-7"></a> Ingesting a previously unseen event authored by the current local author
    fails with `ForkedAuthor` before adding anything.
-8. Shuffling and repartitioning one event set does not change a fold.
-9. `scan()` returns canonical event order independently of physical order.
-10. A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
+
+<a id="folds-scans-and-interchange-es-8-es-16"></a>
+
+### Folds, scans and interchange (ES-8–ES-16)
+
+8. <a id="es-8"></a> Shuffling and repartitioning one event set does not change a fold.
+9. <a id="es-9"></a> `scan()` returns canonical event order independently of physical order.
+10. <a id="es-10"></a> A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
    one LF; re-import preserves those canonical bytes.
-11. `changes()` returns a complete local delta and rejects another store
+11. <a id="es-11"></a> `changes()` returns a complete local delta and rejects another store
     generation's token.
-12. A token is never required for successful full reconciliation.
-13. Export and re-import preserve every portable byte.
-14. Restore omits local state and mints a fresh replica ID.
-15. No API interprets a hardware or operating-system identifier.
-16. Events produced by a retired replica remain valid immutable history.
-17. Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
+12. <a id="es-12"></a> A token is never required for successful full reconciliation.
+13. <a id="es-13"></a> Export and re-import preserve every portable byte.
+14. <a id="es-14"></a> Restore omits local state and mints a fresh replica ID.
+15. <a id="es-15"></a> No API interprets a hardware or operating-system identifier.
+16. <a id="es-16"></a> Events produced by a retired replica remain valid immutable history.
+
+<a id="time-ordering-and-durability-es-17-es-22"></a>
+
+### Time, ordering and durability (ES-17–ES-22)
+
+17. <a id="es-17"></a> Accepted timestamps use exactly `YYYY-MM-DDTHH:mm:ss.sssZ`; omitted or
     other fractional precision and leap-second spelling are rejected, and
     lexical order matches represented millisecond order.
-18. Process-durable success is distinguished from the backend's separately
+18. <a id="es-18"></a> Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
-19. More than 4096 events may be appended in one same-millisecond `appendAll`;
+19. <a id="es-19"></a> More than 4096 events may be appended in one same-millisecond `appendAll`;
     IDs are distinct, embed the unchanged sample and sort in input order.
     Back-to-back separate appends with the same sample also sort in mint order.
-20. After clock rollback, a local writer uses the newly sampled earlier
+20. <a id="es-20"></a> After clock rollback, a local writer uses the newly sampled earlier
     millisecond in both `eventId` and `at` while avoiding collision. No mint-order
     guarantee spans rollback or restart; a batch still uses one common sample.
-21. Ingest validates UUIDv7 and `at` independently and does not reject immutable
+21. <a id="es-21"></a> Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
-22. Counter exhaustion fails before any event in the append or batch commits;
+22. <a id="es-22"></a> Counter exhaustion fails before any event in the append or batch commits;
     it neither wraps the counter nor advances only the UUID timestamp.
-23. Concurrent erasure/GC cannot publish an export with a dangling held root;
+
+<a id="import-collection-and-reader-protection-es-23-es-32"></a>
+
+### Import, collection and reader protection (ES-23–ES-32)
+
+23. <a id="es-23"></a> Concurrent erasure/GC cannot publish an export with a dangling held root;
     the selected cut remains protected or the export aborts before publication.
-24. Crash at each full-import boundary exposes either the previous usable view
+24. <a id="es-24"></a> Crash at each full-import boundary exposes either the previous usable view
     or a recoverably incomplete import, never an apparently complete partial
     union. Deleting `local/` does not bypass that publication boundary.
-25. Full import recomputes rebuildable indexes from the published event union
+25. <a id="es-25"></a> Full import recomputes rebuildable indexes from the published event union
     before ordinary work resumes.
-26. Import/export never includes backend recovery metadata as portable files.
+26. <a id="es-26"></a> Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.
-27. Within an active writer runtime, a paused object stream does not block
+27. <a id="es-27"></a> Within an active writer runtime, a paused object stream does not block
     another handle's commit or portable-file write. Collection skips its CID
     without waiting and can collect an unrelated eligible CID. Completion,
     failure and cancellation each release the latch so a later pass can
     collect the now-unkept object.
-28. Racing `open` with collection either obtains a protected complete object
+28. <a id="es-28"></a> Racing `open` with collection either obtains a protected complete object
     or returns null after unlink; it never exposes an unprotected stream.
     When two streams read the same CID, ending one does not release the other's
     protection.
-29. `Vault.events` exposes only `scan`, `changes`, `damaged` and `conflicting`;
+29. <a id="es-29"></a> `Vault.events` exposes only `scan`, `changes`, `damaged` and `conflicting`;
     callers cannot append or ingest through it. All local event writes,
     including those with no new objects, use `Vault.commit`.
     `Vault.objects` exposes no standalone put or collection operation.
@@ -1045,15 +1174,15 @@ A conforming implementation MUST pass at least these cases:
     validated import/restore uses the internal object primitives. Only the
     vault runtime passes the held-root set computed under the writer lock to
     the internal collector.
-30. An abandoned, uncancelled stream remains latched across idle periods and
+30. <a id="es-30"></a> An abandoned, uncancelled stream remains latched across idle periods and
     collection passes. A still-reachable paused stream can resume to completion
     without losing protection; elapsed time alone never releases its latch.
-31. A read-only process opens an object while the writer process remains active.
+31. <a id="es-31"></a> A read-only process opens an object while the writer process remains active.
     Collection skips that object and can collect another eligible CID. Exiting
     one reader process releases only its latches; another process's stream on
     the same CID stays protected. A backend without this coordination refuses
     live concurrent object reads rather than exposing an unprotected stream.
-32. A read-only process opens and pauses an object stream before any writer
+32. <a id="es-32"></a> A read-only process opens and pauses an object stream before any writer
     starts. A later writable open either joins its existing cross-process
     protection or waits/fails behind its shared reader ownership. There is no
     interval in which collection can unlink the stream's bytes. Two readers

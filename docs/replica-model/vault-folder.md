@@ -1,5 +1,9 @@
 # The `.estoc` folder, version 3
 
+<!-- suite-navigation:start -->
+[Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+<!-- suite-navigation:end -->
+
 Status: **draft, phase 1** — clean-break readable interchange format and
 reference folder backend for one active writable Estoc vault runtime. Deferred
 replication does not change this portable format.
@@ -9,10 +13,10 @@ This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **NOT RECOMMENDED**, **MAY**, and **OPTIONAL** as described in BCP 14
 when, and only when, they appear in all capitals.
 
-`event-store.md` defines the medium-independent event and vault interfaces.
-`dasl-objects.md` defines the portable object profile. This document maps
+[event-store.md](event-store.md) defines the medium-independent event and vault interfaces.
+[dasl-objects.md](dasl-objects.md) defines the portable object profile. This document maps
 those interfaces to files. It defines no event payload and never interprets
-`data`; event meanings and held-root rules are `vault-events.md`'s.
+`data`; event meanings and held-root rules are [vault-events.md](vault-events.md)'s.
 
 The folder is both:
 
@@ -22,6 +26,43 @@ The folder is both:
 
 It is not a network sync wire format. Deferred `vault-sync/1.0` deliberately
 uses opaque encrypted objects instead.
+
+<!-- reading-guide:start -->
+<a id="reading-guide"></a>
+
+**Reading guide**
+
+| Task | Read together |
+| --- | --- |
+| Inspect a backup | [Layout](#layout) → [Config](#config-json) → [Keystore](#keystore-json) → [Events](#event-paths) → [Objects](#dasl-object-paths) |
+| Implement the folder backend | [Byte rules](#path-and-byte-rules) → [Segments](#segments) → [Backend procedures](#reference-folder-backend) → [Concurrency and crash behavior](#concurrency-and-crash-behavior) |
+| Export, import or restore | [Snapshot and export](#snapshot-and-export) → [Import and restore](#import-and-restore) → [Deferred sync boundary](#transfer-and-deferred-synchronization-boundary) |
+
+<details>
+<summary>Contents</summary>
+
+- [1. Trust and portability](#trust-and-portability)
+- [2. Path and byte rules](#path-and-byte-rules)
+- [3. Layout](#layout)
+- [4. config.json](#config-json)
+- [5. keystore.json](#keystore-json)
+- [6. Event paths](#event-paths)
+- [7. Portable opaque files](#portable-opaque-files)
+- [8. Segments](#segments)
+- [9. DASL object paths](#dasl-object-paths)
+- [10. local/](#local)
+- [11. Reference folder backend](#reference-folder-backend)
+- [12. Snapshot and export](#snapshot-and-export)
+- [13. Import and restore](#import-and-restore)
+- [14. Transfer and deferred synchronization boundary](#transfer-and-deferred-synchronization-boundary)
+- [15. Concurrency and crash behavior](#concurrency-and-crash-behavior)
+- [16. Versioning and boundaries](#versioning-and-boundaries)
+- [17. Required conformance cases](#required-conformance-cases)
+
+</details>
+<!-- reading-guide:end -->
+
+<a id="trust-and-portability"></a>
 
 ## 1. Trust and portability
 
@@ -54,6 +95,8 @@ A remote thin client that does not hold the seed and full portable state is
 not a vault folder backend. Its command queue and projection cache belong to
 client-local storage outside this format.
 
+<a id="path-and-byte-rules"></a>
+
 ## 2. Path and byte rules
 
 All paths in this document are relative to the vault root and use `/` as
@@ -81,6 +124,8 @@ Text conventions:
 
 A reader MUST reject a tree in which one path is both a file and a
 directory.
+
+<a id="layout"></a>
 
 ## 3. Layout
 
@@ -142,6 +187,8 @@ A malformed entry inside `events/`, `objects/`, `import/` or
 `local/` is damage, not an opaque portable file. Unknown top-level paths
 outside these roots are portable opaque files as described in section 7.3.
 
+<a id="portable-and-local-halves"></a>
+
 ### 3.1 Portable and local halves
 
 Everything except `local/` and `import/` is portable state. Only the published
@@ -160,6 +207,8 @@ After import recovery is complete, deleting all of `local/` leaves the
 published portable copy. The next writable open creates a new replica ID and
 store generation. Removing `local/` alone during an incomplete import neither
 completes it nor makes its staging a portable snapshot.
+
+<a id="config-json"></a>
 
 ## 4. `config.json`
 
@@ -192,6 +241,8 @@ identity operation.
 Two folders represent the same vault identity exactly when their anchor
 DIDs are equal. An import into an existing vault requires both version
 and anchor equality.
+
+<a id="keystore-json"></a>
 
 ## 5. `keystore.json`
 
@@ -227,6 +278,8 @@ NOT write derived private keys, a key registry or a derivation cache anywhere
 under `.estoc/`, including `local/`. Every later session derives requested
 keys again from the seed and exact portable key name.
 
+<a id="import-policy"></a>
+
 ### 5.1 Import policy
 
 For import into an existing unlocked vault:
@@ -239,12 +292,16 @@ For import into an existing unlocked vault:
 The local passphrase or platform wrapping may differ between replicas. Equal
 vault identity does not require byte-equal `seedJwe`.
 
+<a id="sync-bootstrap-deferred"></a>
+
 ### 5.2 Sync bootstrap (deferred)
 
 Deferred `vault-sync/1.0` does not upload `seedJwe`. A future user
 bootstrapping from a sync store would supply the vault seed by another trusted
 means and write a new local passphrase or platform wrapping. Phase-1 recovery
 uses the readable folder or snapshot plus independent recovery material.
+
+<a id="recovery-material-and-product-requirement"></a>
 
 ### 5.3 Recovery material and product requirement
 
@@ -271,6 +328,8 @@ current recovery status. A release relying on the single-seed model MUST test
 loss of every active runtime followed by restoration from the documented
 recovery material.
 
+<a id="event-paths"></a>
+
 ## 6. Event paths
 
 The mapping is:
@@ -284,14 +343,18 @@ locate(event) = events/<event.author>/
 
 A reader requires each complete JSONL line, excluding its final LF, to
 be exactly `canonicalEventBytes(event)` under RFC 8785, then validates the full
-event envelope under `event-store.md`. It then requires the path author to
+event envelope under [event-store.md](event-store.md). It then requires the path author to
 equal the line's `author`. The path confirms authorship; it never
 supplies it.
 
 A line remains self-describing when copied out of its folder. Nothing in
 the event payload is recovered from the path.
 
+<a id="portable-opaque-files"></a>
+
 ## 7. Portable opaque files
+
+<a id="owned-paths"></a>
 
 ### 7.1 Owned paths
 
@@ -309,6 +372,8 @@ local/**
 `FileStore.write` MUST refuse to create or overwrite a path in these
 owned trees except through the operation that owns it.
 
+<a id="no-generic-synchronized-mutable-state"></a>
+
 ### 7.2 No generic synchronized mutable state
 
 Version 3 has no generic `state/` directory and no timestamp-based
@@ -318,6 +383,8 @@ Correctness-critical state that must converge across replicas is an
 event or referenced object. High-churn state that belongs only to one
 local copy goes under `local/`. A future portable mutable file type must
 have its own versioned merge law; there is no fallback latest-wins rule.
+
+<a id="unknown-top-level-paths"></a>
 
 ### 7.3 Unknown top-level paths
 
@@ -334,6 +401,8 @@ which one side has a file and the other a directory is a preflight error.
 that requires them on every replica must define an encrypted sync object
 or, preferably, use events and objects.
 
+<a id="segments"></a>
+
 ## 8. Segments
 
 A segment is:
@@ -347,6 +416,8 @@ where `<segment>` is a canonical lowercase UUIDv7.
 Each complete line is exactly `canonicalEventBytes(event)` under RFC 8785
 followed by `\n`. A segment has no header and no semantic metadata. Segment
 name, order, size and boundary are not part of any event's identity.
+
+<a id="local-append-segments"></a>
 
 ### 8.1 Local append segments
 
@@ -367,6 +438,8 @@ the next event. The fragment remains reportable damage.
 into place, so a process restart observes the complete batch or none of
 it.
 
+<a id="ingest-segments"></a>
+
 ### 8.2 Ingest segments
 
 After complete validation and fork preflight, one `ingest` call writes
@@ -381,6 +454,8 @@ that author and some created while other stores ingested its events.
 
 All lines under one author directory still carry that author.
 
+<a id="no-physical-ordering-guarantee"></a>
+
 ### 8.3 No physical ordering guarantee
 
 Segments are not sorted streams:
@@ -393,6 +468,8 @@ Segments are not sorted streams:
 reader MUST NOT infer order from segment name, directory order or line
 position.
 
+<a id="dasl-object-paths"></a>
+
 ## 9. DASL object paths
 
 Each accepted portable object is one file:
@@ -402,7 +479,7 @@ objects/<canonical-dasl-cid>
 ```
 
 The filename MUST be the canonical DASL CID of the exact complete file bytes
-under `dasl-objects.md`:
+under [dasl-objects.md](dasl-objects.md):
 
 - CIDv1;
 - lowercase base32 without padding;
@@ -417,23 +494,27 @@ portable path. No portable chunk or extent directory exists.
 The file contains the exact resource bytes. A reader MUST verify the raw CID
 filename and digest before accepting the object. Acceptance means import or
 first entry into the owned `objects/` namespace. A later `open` of an accepted
-object follows `dasl-objects.md` section 6.3.
+object follows [dasl-objects.md section 6.3](dasl-objects.md#read-operations).
 
 A filename/content mismatch, malformed CID or unsupported CID codec is damage.
 The backend SHOULD move damaged material out of the owned `objects/` namespace
 before continuing, so ordinary presence checks treat it as absent.
 
 A portable object is immutable by content. Successful acceptance is
-process-durable under `event-store.md` section 2.1. Repeating acceptance for an
+process-durable under [event-store.md section 2.1](event-store.md#commit-and-durability-terminology). Repeating acceptance for an
 existing valid CID is idempotent and MAY renew local orphan age as an
 optimization.
 
-`dasl-objects.md` section 8 defines write ordering, crash recovery and collection
+[dasl-objects.md section 8](dasl-objects.md#write-ordering-damage-and-collection) defines write ordering, crash recovery and collection
 under the vault writer lock.
+
+<a id="local"></a>
 
 ## 10. `local/`
 
 `local/` contains state of this writable copy only.
+
+<a id="local-replica-json"></a>
 
 ### 10.1 `local/replica.json`
 
@@ -469,6 +550,8 @@ Phase 1 has no mediator-side replica registry, so a mediator never retires
 this ID. Local restore and exact-move behavior
 are defined below. Events already authored by an old ID are never rewritten.
 
+<a id="owner-directories"></a>
+
 ### 10.2 Owner directories
 
 Each local owner may keep:
@@ -486,6 +569,8 @@ indexes and fold projections but MUST NOT contain derived private keys or a
 keystore registry. A trace may use the same six-field JSON shape for
 convenience, but it is not in the vault's event set and may be pruned according
 to local retention.
+
+<a id="change-tokens"></a>
 
 ### 10.3 Change tokens
 
@@ -505,7 +590,11 @@ A token is rejected if:
 Hand-editing bytes without changing length can evade this structural
 check; deleting local caches is the recovery for any manual edit.
 
+<a id="reference-folder-backend"></a>
+
 ## 11. Reference folder backend
+
+<a id="open"></a>
 
 ### 11.1 Open
 
@@ -531,6 +620,8 @@ A writable open additionally:
    creates or validates `local/replica.json`; and
 6. opens the event store with `author = replica_id`.
 
+<a id="scan"></a>
+
 ### 11.2 Scan
 
 `scan(filter)`:
@@ -548,6 +639,8 @@ A writable open additionally:
 A filter reduces output, not necessarily I/O. Local indexes may optimize
 this without changing results.
 
+<a id="append"></a>
+
 ### 11.3 Append
 
 A local append writes only to the current replica's author directory.
@@ -560,6 +653,8 @@ promise resolves, the line is process-durable and every later process restart
 MUST observe it. Sudden power-loss survival depends on the backend's documented
 flush policy.
 
+<a id="ingest"></a>
+
 ### 11.4 Ingest
 
 The backend first reads or stages all incoming events, validates them,
@@ -571,6 +666,8 @@ failure before this point writes nothing.
 
 The operation is idempotent. Repeating it may rescan input but adds no
 second copy by `eventId`.
+
+<a id="damage-and-conflict"></a>
 
 ### 11.5 Damage and conflict
 
@@ -591,6 +688,8 @@ path and, within one segment, the first line offset. It reports every
 other content. This deterministic local choice is not conflict
 resolution at the vault level.
 
+<a id="portable-filestore"></a>
+
 ### 11.6 Portable FileStore
 
 `FileStore.list()` returns `config.json`, `keystore.json` and opaque
@@ -599,20 +698,26 @@ anything under `local/` or `import/`.
 
 `FileStore.write()` obeys singleton and unknown-file rules and refuses
 structural paths. Successful resolution is process-durable under
-`event-store.md` section 2.1; a pre-resolution process crash may leave the
+[event-store.md section 2.1](event-store.md#commit-and-durability-terminology); a pre-resolution process crash may leave the
 complete portable file or no accepted replacement, never a partially accepted
 file.
 
+<a id="snapshot-and-export"></a>
+
 ## 12. Snapshot and export
+
+<a id="snapshot"></a>
 
 ### 12.1 Snapshot
 
 A folder snapshot contains every portable file under `.estoc/` and omits
-`local/` and `import/` completely. It obeys `event-store.md` section 11.2's
+`local/` and `import/` completely. It obeys [event-store.md section 11.2](event-store.md#export)'s
 consistent-cut, retention and publication contract; a live recursive directory
 copy without the writer lock is not a conforming snapshot. Merely omitting
 `import/` cannot make an incomplete in-place import a complete source: recover
 it first or select a verified complete published generation.
+
+<a id="export-from-another-backend"></a>
 
 ### 12.2 Export from another backend
 
@@ -629,7 +734,11 @@ author is sufficient. It MUST NOT export `local/` or `import/`.
 The result must round-trip through the folder reader to the same event
 and byte sets.
 
+<a id="import-and-restore"></a>
+
 ## 13. Import and restore
+
+<a id="import-into-an-existing-vault"></a>
 
 ### 13.1 Import into an existing vault
 
@@ -643,11 +752,11 @@ Before writing, the importer MUST:
 6. validate every source DASL object considered for copying; and
 7. reject file/directory collisions.
 
-The importer follows `event-store.md` section 11.3 for preflight of the
+The importer follows [event-store.md section 11.3](event-store.md#import-into-an-existing-vault) for preflight of the
 prospective merged folds and required non-erased held objects, and for handling
 semantic conflicts.
 
-Under the writer lock required by `event-store.md` section 11.3, it then:
+Under the writer lock required by [event-store.md section 11.3](event-store.md#import-into-an-existing-vault), it then:
 
 1. stages the prospective event union without exposing it as complete;
 2. computes held roots over that union;
@@ -655,7 +764,7 @@ Under the writer lock required by `event-store.md` section 11.3, it then:
 4. keeps the target `config.json` and seed wrapping;
 5. copies unknown portable paths only when absent; and
 6. verifies completeness and publishes the merged portable view under
-   `event-store.md` section 11.3.
+   [event-store.md section 11.3](event-store.md#import-into-an-existing-vault).
 
 The reference backend MAY stage a complete portable view under `import/`.
 A backend using sibling generations outside `.estoc/` MUST
@@ -683,6 +792,8 @@ Importing the same source repeatedly is a no-op after the first
 successful union. A source containing bytes for a globally erased root
 does not revive the erased message.
 
+<a id="restore-into-an-empty-backend"></a>
+
 ### 13.2 Restore into an empty backend
 
 A restore accepts one valid version-3 snapshot and creates the portable
@@ -692,10 +803,12 @@ under the same publication rules, not part of the imported portable bytes.
 
 On first writable open, a new `replica_id` and `store_generation` are minted.
 All historical event authors remain as written. Before accepting new inbound,
-the writer completes recovery under `vault-events.md` section 16.1, including
+the writer completes recovery under [vault-events.md section 16.1](vault-events.md#open-the-writable-full-runtime), including
 after restart or deletion of `local/`.
 Because mediation and communication keys are vault-scoped, the runtime derives
 and resumes them after unlock using ordinary account-scoped mediation/pickup.
+
+<a id="exact-local-move"></a>
 
 ### 13.3 Exact local move
 
@@ -704,6 +817,8 @@ replica identity and local caches. It is conforming only when the source
 copy is no longer writable. Copying it and leaving both sides active is a
 fork; later ingest detects previously unseen events under the shared
 author.
+
+<a id="transfer-and-deferred-synchronization-boundary"></a>
 
 ## 14. Transfer and deferred synchronization boundary
 
@@ -720,17 +835,19 @@ Phase 1 transfers a vault by verified snapshot/export/import or an exact local
 move. Deferred `vault-sync/1.0` may later exchange encrypted immutable root,
 event and DASL objects without changing this folder format.
 
+<a id="concurrency-and-crash-behavior"></a>
+
 ## 15. Concurrency and crash behavior
 
 One writable folder generation requires writer-exclusive vault ownership
 for the lifetime of the writable open and operation serialization under
-`event-store.md` section 10. Typical ownership mechanisms are:
+[event-store.md section 10](event-store.md#vault-interface). Typical ownership mechanisms are:
 
 - a Web Lock for browser OPFS; or
 - one daemon/process lock for a disk folder.
 
 Multiple readers require complete-line event visibility and the cross-process
-object-read protection in `event-store.md` section 10, including for read-only
+object-read protection in [event-store.md section 10](event-store.md#vault-interface), including for read-only
 processes. Writer-exclusive ownership does not by itself protect those reads.
 
 For a disk folder, one concrete implementation has the daemon own the
@@ -762,13 +879,13 @@ ordinary brokered streams never hold that operation lock for their lifetime.
 
 A backend may instead implement the same cross-process lock/latch contract
 with shared coordination primitives, including protection established before
-writer startup, documented under `event-store.md` section 13. Without either
+writer startup, documented under [event-store.md section 13](event-store.md#backend-obligations). Without either
 form of protection it refuses live object reads or serves an isolated immutable
 snapshot. A read-only stream never times out its protection under
-`event-store.md` section 10.
+[event-store.md section 10](event-store.md#vault-interface).
 
 Within the active runtime, all workers MUST obey the operation serialization
-and writer-lock boundaries in `event-store.md` section 10.
+and writer-lock boundaries in [event-store.md section 10](event-store.md#vault-interface).
 
 Expected crash residue:
 
@@ -783,6 +900,8 @@ Expected crash residue:
 
 A backend that claims power-loss durability MUST flush directory and file
 metadata as required by its platform.
+
+<a id="versioning-and-boundaries"></a>
 
 ## 16. Versioning and boundaries
 
@@ -806,92 +925,119 @@ The following require a new folder/vault version:
 - adding a generic mutable portable-file merge rule; or
 - making `local/` portable.
 
+<a id="required-conformance-cases"></a>
+
 ## 17. Required conformance cases
 
-1. A newly created folder stores events under `events/<uuidv7>/`.
-2. The path author and event `author` must match.
-3. A portable snapshot contains no `local/` or `import/` member.
-4. Restoring a snapshot mints a new replica ID and store generation.
-5. Moving the complete folder preserves them only when no old writer
+
+<a id="layout-and-local-identity-vf-1-vf-8"></a>
+
+### Layout and local identity (VF-1–VF-8)
+
+1. <a id="vf-1"></a> A newly created folder stores events under `events/<uuidv7>/`.
+2. <a id="vf-2"></a> The path author and event `author` must match.
+3. <a id="vf-3"></a> A portable snapshot contains no `local/` or `import/` member.
+4. <a id="vf-4"></a> Restoring a snapshot mints a new replica ID and store generation.
+5. <a id="vf-5"></a> Moving the complete folder preserves them only when no old writer
    remains.
-6. A malformed `local/replica.json` is rejected rather than partially
+6. <a id="vf-6"></a> A malformed `local/replica.json` is rejected rather than partially
    repaired.
-7. No replica-creation event is required on open.
-8. `state/` has no reserved LWW behavior in version 3.
-9. Every stored JSONL record excluding its LF is byte-equal to
+7. <a id="vf-7"></a> No replica-creation event is required on open.
+8. <a id="vf-8"></a> `state/` has no reserved LWW behavior in version 3.
+
+<a id="event-segments-objects-and-interchange-vf-9-vf-17"></a>
+
+### Event segments, objects and interchange (VF-9–VF-17)
+
+9. <a id="vf-9"></a> Every stored JSONL record excluding its LF is byte-equal to
    `canonicalEventBytes(event)`; merely compact non-canonical JSON is
    rejected or canonicalized before storage.
-10. An incomplete JSONL fragment is skipped and not fused with the next
+10. <a id="vf-10"></a> An incomplete JSONL fragment is skipped and not fused with the next
     append.
-11. An ingest writes only decoded events, never copied source segments.
-12. Physical segment order does not affect `scan()`.
-13. An object filename/content mismatch or unsupported CID codec is damage.
-14. Export from a database and re-import to a folder preserves the event
+11. <a id="vf-11"></a> An ingest writes only decoded events, never copied source segments.
+12. <a id="vf-12"></a> Physical segment order does not affect `scan()`.
+13. <a id="vf-13"></a> An object filename/content mismatch or unsupported CID codec is damage.
+14. <a id="vf-14"></a> Export from a database and re-import to a folder preserves the event
     set and portable bytes.
-15. Unknown top-level portable files round-trip and are absent-only on
+15. <a id="vf-15"></a> Unknown top-level portable files round-trip and are absent-only on
     merge.
-16. An unknown entry inside a structural root is reported as damage.
-17. Import never copies source `local/` or `import/` from a nonconforming
+16. <a id="vf-16"></a> An unknown entry inside a structural root is reported as damage.
+17. <a id="vf-17"></a> Import never copies source `local/` or `import/` from a nonconforming
     archive and never executes a source recovery journal on the target.
-18. At-rest plaintext message content is not described as protected by
+
+<a id="privacy-and-recovery-material-vf-18-vf-26"></a>
+
+### Privacy and recovery material (VF-18–VF-26)
+
+18. <a id="vf-18"></a> At-rest plaintext message content is not described as protected by
     the vault passphrase.
-19. No mediator or sync operation consumes the folder as plaintext.
-20. A hosted full runtime can export an equivalent complete portable folder;
+19. <a id="vf-19"></a> No mediator or sync operation consumes the folder as plaintext.
+20. <a id="vf-20"></a> A hosted full runtime can export an equivalent complete portable folder;
     server-local database state is not the sole recoverable copy.
-21. Resolved peer DID document snapshots round-trip as event-referenced objects,
+21. <a id="vf-21"></a> Resolved peer DID document snapshots round-trip as event-referenced objects,
     not mutable document-publication state.
-22. A thin-client cache is not accepted as a complete vault folder.
-23. Historical author directories remain readable after restore or exact
+22. <a id="vf-22"></a> A thin-client cache is not accepted as a complete vault folder.
+23. <a id="vf-23"></a> Historical author directories remain readable after restore or exact
     move; phase 1 defines no mediator-driven author retirement.
-24. No persistent derived-key registry or key cache exists in `keystore.json`,
+24. <a id="vf-24"></a> No persistent derived-key registry or key cache exists in `keystore.json`,
     `local/` or another vault path; an unlocked runtime derives keys by exact
     name from the seed.
-25. Deferred vault sync is not presented as recovery material because it does
+25. <a id="vf-25"></a> Deferred vault sync is not presented as recovery material because it does
     not contain `seedJwe` or the seed.
-26. Before recovery is marked complete, an independent seed or complete
+26. <a id="vf-26"></a> Before recovery is marked complete, an independent seed or complete
     snapshot path is tested by deriving the exact anchor DID.
-27. A large raw object is exported as one exact `objects/<cid>` byte stream
+
+<a id="raw-objects-and-phase-boundary-vf-27-vf-31"></a>
+
+### Raw objects and phase boundary (VF-27–VF-31)
+
+27. <a id="vf-27"></a> A large raw object is exported as one exact `objects/<cid>` byte stream
     even when the backend stores private extents.
-28. No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
+28. <a id="vf-28"></a> No folder path exposes DAG-PB UnixFS metadata nodes, portable chunks or
     transport segments.
-29. A CID embedded in object content does not cause retention or fetching;
+29. <a id="vf-29"></a> A CID embedded in object content does not cause retention or fetching;
     only exact CIDs in the held-root set are retained.
-30. Phase 1 never sends `replica_id` to a mediator and does not require
+30. <a id="vf-30"></a> Phase 1 never sends `replica_id` to a mediator and does not require
     `vault-sync/1.0`.
-31. Raw CID filename and digest validation completes before import or
+31. <a id="vf-31"></a> Raw CID filename and digest validation completes before import or
     first entry into the owned `objects/` namespace; a later `open` follows the
-    verified-stream completion rules in `dasl-objects.md` section 6.3.
-32. A successful folder append or first object acceptance survives immediate
+    verified-stream completion rules in [dasl-objects.md section 6.3](dasl-objects.md#read-operations).
+
+<a id="durability-import-and-reader-protection-vf-32-vf-43"></a>
+
+### Durability, import and reader protection (VF-32–VF-43)
+
+32. <a id="vf-32"></a> A successful folder append or first object acceptance survives immediate
     process restart; sudden-power-loss safety remains a separately documented
     flush boundary.
-33. The writer lock serializes commits with the complete held-root fold and
+33. <a id="vf-33"></a> The writer lock serializes commits with the complete held-root fold and
     collection pass, including calls from different workers in one runtime.
-34. A successful `FileStore.write` survives immediate process restart; a
+34. <a id="vf-34"></a> A successful `FileStore.write` survives immediate process restart; a
     pre-resolution crash leaves the complete portable file or no accepted
     replacement, never a partial file.
-35. A snapshot holds the writer lock from selecting a consistent event/object/
+35. <a id="vf-35"></a> A snapshot holds the writer lock from selecting a consistent event/object/
     file cut through copying, verification and publication; erasure and
     collection wait until completion or abort.
-36. Crash during import exposes the previous usable view or a recoverably
+36. <a id="vf-36"></a> Crash during import exposes the previous usable view or a recoverably
     incomplete import. Deleting `local/` cannot bypass its publication barrier.
-37. Full import rejects missing non-erased held objects before publishing a
+37. <a id="vf-37"></a> Full import rejects missing non-erased held objects before publishing a
     complete view.
-38. Restore discovers unfinished pickup-ACKed inbound work without a local
+38. <a id="vf-38"></a> Restore discovers unfinished pickup-ACKed inbound work without a local
     queue.
-39. `import/` is excluded from FileStore, snapshots, exports, restore inputs
+39. <a id="vf-39"></a> `import/` is excluded from FileStore, snapshots, exports, restore inputs
     and opaque-file copying. A half-written staged object never travels as an
     unknown portable file.
-40. Writable open recovers a target-owned import under its writer lock before
+40. <a id="vf-40"></a> Writable open recovers a target-owned import under its writer lock before
     normal operations or GC, including after `local/` deletion. Unknown or
     damaged recovery journals block writable open.
-41. A source with an incomplete import cannot be made a complete snapshot by
+41. <a id="vf-41"></a> A source with an incomplete import cannot be made a complete snapshot by
     omitting `import/`; recover it or read a verified complete published
     generation. Read-only access never labels a partial generation complete.
-42. A read-only CLI and the active writer share object-read protection under
-    `event-store.md` section 10. Holding the disk writer's process lock alone
+42. <a id="vf-42"></a> A read-only CLI and the active writer share object-read protection under
+    [event-store.md section 10](event-store.md#vault-interface). Holding the disk writer's process lock alone
     cannot authorize an unprotected CLI stream; a brokered reader remains
     protected during collection and fails if its owning daemon exits.
-43. With no daemon, two read-only CLI processes in the section-15 ownership
+43. <a id="vf-43"></a> With no daemon, two read-only CLI processes in the section-15 ownership
     implementation can open and finish streams concurrently without creating
     or modifying files; one reader can also hold two streams. A later
     writable open waits or fails, including after only one stream or reader

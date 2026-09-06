@@ -1,5 +1,9 @@
 # replica-mediation/1.0
 
+<!-- suite-navigation:start -->
+[Suite guide](README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+<!-- suite-navigation:end -->
+
 Status: **deferred draft** — future multi-replica extension for DIDComm
 Messaging 2.1, Routing 2.0, Coordinate Mediation 3.0 and Message Pickup 3.0.
 It is not required or implemented by Estoc phase 1, which uses one active full
@@ -15,6 +19,39 @@ when, and only when, they appear in all capitals.
 > account and carries no `replica_id`. Once this extension is enabled for an
 > account, its replica-scoped rules are a clean break and account-global pickup
 > MUST NOT be mixed with them.
+
+<!-- reading-guide:start -->
+<a id="reading-guide"></a>
+
+**Reading guide**
+
+| Task | Read together |
+| --- | --- |
+| Understand the deferred extension | [Purpose](#what-it-is-for) → [Trust model](#terms-and-trust-model) → [Invariants](#invariants) |
+| Implement server behavior | [Replica lifecycle](#replica-lifecycle) → [Recipient control](#coordinate-mediation-profile) → [Fan-out](#routing-and-mailbox-storage-extension) → [Pickup](#message-pickup-3-0-replica-profile) → [Retention](#retention-and-replay) |
+| Handle limits and failures | [Quotas](#quotas-and-abuse-bounds) → [Security](#privacy-and-security) → [Problem reports](#problem-reports) |
+
+<details>
+<summary>Contents</summary>
+
+- [1. What it is for](#what-it-is-for)
+- [2. Dependencies](#dependencies)
+- [3. Terms and trust model](#terms-and-trust-model)
+- [4. Invariants](#invariants)
+- [5. Replica lifecycle](#replica-lifecycle)
+- [6. Coordinate Mediation profile](#coordinate-mediation-profile)
+- [7. Routing and mailbox storage extension](#routing-and-mailbox-storage-extension)
+- [8. Message Pickup 3.0 replica profile](#message-pickup-3-0-replica-profile)
+- [9. Retention and replay](#retention-and-replay)
+- [10. Quotas and abuse bounds](#quotas-and-abuse-bounds)
+- [11. Privacy and security](#privacy-and-security)
+- [12. Problem reports](#problem-reports)
+- [13. Required conformance cases](#required-conformance-cases)
+
+</details>
+<!-- reading-guide:end -->
+
+<a id="what-it-is-for"></a>
 
 ## 1. What it is for
 
@@ -39,9 +76,11 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Relationship formation and address-rotation policy belong to `rendezvous.md`.
+Relationship formation and address-rotation policy belong to [rendezvous.md](rendezvous.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
+
+<a id="dependencies"></a>
 
 ## 2. Dependencies
 
@@ -53,13 +92,15 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the relationship/address-policy profile in `rendezvous.md`; and
+- the relationship/address-policy profile in [rendezvous.md](rendezvous.md); and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
 A mediator implementing this document SHOULD disclose the
 `replica-mediation/1.0` protocol with Discover Features 2.0. Discovery is
 advisory; successful `register` is the authoritative capability check.
+
+<a id="terms-and-trust-model"></a>
 
 ## 3. Terms and trust model
 
@@ -100,6 +141,8 @@ and registering a new replica ID. Recovering from a hostile or lost full
 replica requires rotation of the affected root secret or communication identities and is
 outside this protocol.
 
+<a id="invariants"></a>
+
 ## 4. Invariants
 
 A conforming mediator MUST preserve all of the following:
@@ -125,6 +168,8 @@ A conforming mediator MUST preserve all of the following:
    an internal mailbox operation.
 10. Rendezvous and pairwise relationship DIDs receive the same per-replica
     delivery semantics; externally managed DID methods do not change them.
+
+<a id="replica-lifecycle"></a>
 
 ## 5. Replica lifecycle
 
@@ -158,6 +203,8 @@ new replica ID. A portable snapshot omits the source copy's active
 replica selection. An exact move MAY preserve a replica ID only when
 the implementation guarantees that the previous writer can no longer
 append events or acknowledge deliveries under that ID.
+
+<a id="register"></a>
 
 ### 5.1 `register`
 
@@ -198,6 +245,8 @@ On first registration the mediator MUST, in one transaction:
 Repeating the same request for an active replica is idempotent. The
 mediator MUST still repair any missing retained deliveries before
 replying. Re-registering a retired replica ID fails.
+
+<a id="registered"></a>
 
 ### 5.2 `registered`
 
@@ -245,6 +294,8 @@ Example:
   change for an existing active replica without being returned on a later
   authenticated registration response before enforcement.
 
+<a id="list"></a>
+
 ### 5.3 `list`
 
 Message type:
@@ -265,6 +316,8 @@ https://estoc.dev/replica-mediation/1.0/list
 
 The request MUST be authcrypted from the mediation account. It lists only
 replicas under that account.
+
+<a id="replicas"></a>
 
 ### 5.4 `replicas`
 
@@ -319,6 +372,8 @@ retire one or more explicit IDs rather than silently reusing or evicting an
 ID. An operator MAY recommend a review interval, but that recommendation is
 not a retirement authority.
 
+<a id="retire"></a>
+
 ### 5.5 `retire`
 
 Message type:
@@ -350,6 +405,8 @@ terminal all unacknowledged deliveries for that replica. It MUST NOT
 delete the underlying mailbox messages before their retention deadline.
 Repeating retirement is idempotent.
 
+<a id="retired"></a>
+
 ### 5.6 `retired`
 
 Message type:
@@ -375,6 +432,8 @@ https://estoc.dev/replica-mediation/1.0/retired
 `reason` is the retained reason when known and null when a legacy/operator
 retirement did not preserve one.
 
+<a id="client-re-incarnation-after-terminal-retirement"></a>
+
 ### 5.7 Client re-incarnation after terminal retirement
 
 If `register`, `list`, status, live delivery or another authenticated mediator
@@ -399,12 +458,16 @@ A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
-Local restore and exact-move rules are defined by `vault-folder.md`.
+Local restore and exact-move rules are defined by [vault-folder.md](vault-folder.md).
+
+<a id="portable-replica-events"></a>
 
 ### 5.8 Portable replica events
 
 These portable events are part of this deferred profile and are not required
 by phase 1.
+
+<a id="replica-label"></a>
 
 #### 5.8.1 `replica.label`
 
@@ -422,6 +485,8 @@ by phase 1.
 A label is encrypted vault metadata used to join a mediator's opaque
 replica list with a human-readable UI. The latest label per replica by
 canonical order wins. It is never sent to the mediator.
+
+<a id="replica-retired"></a>
 
 #### 5.8.2 `replica.retired`
 
@@ -461,6 +526,8 @@ local re-incarnation procedure in section 5.7 before any further append,
 pickup acknowledgment, live-delivery registration or outbound submission.
 The old author is not rewritten and pending old-author events remain valid.
 
+<a id="coordinate-mediation-profile"></a>
+
 ## 6. Coordinate Mediation profile
 
 The mediation account remains the one `recipient` in Coordinate Mediation
@@ -472,6 +539,8 @@ register their canonical Peer short forms. An externally managed `did:web`
 recipient may also be registered when its control proof and constrained
 resolution validate. The recipient-control proof is verified against an
 authentication method of the exact recipient DID.
+
+<a id="recipient-control-proof"></a>
 
 ### 6.1 Recipient-control proof
 
@@ -531,7 +600,11 @@ proof or resolution failure in one entry prevents applying every entry unless
 the surrounding Coordinate Mediation response explicitly reports per-entry
 atomic groups. Version 1.0 RECOMMENDS one atomic request.
 
+<a id="method-specific-resolution"></a>
+
 ### 6.2 Method-specific resolution
+
+<a id="peer-did-numalgo-4"></a>
 
 #### Peer DID numalgo 4
 
@@ -556,6 +629,8 @@ The long form is resolution material, never the stored recipient key. No
 network request is permitted for Peer DID resolution. A mismatched short form,
 invalid input document, key fragment mismatch or unresolved authentication key
 fails the entire update entry.
+
+<a id="did-web"></a>
 
 #### `did:web`
 
@@ -588,6 +663,8 @@ registration.
 client-provided document bytes MAY be used as a cache hint, but does not
 replace secure publication resolution.
 
+<a id="registration-state"></a>
+
 ### 6.3 Registration state
 
 A recipient DID has at most one active mediation account at a mediator.
@@ -610,7 +687,11 @@ and deliveries remain until expiry. A conforming `recipient-query` response
 SHOULD include active `registration_id` beside each recipient DID.
 
 
+<a id="routing-and-mailbox-storage-extension"></a>
+
 ## 7. Routing and mailbox storage extension
+
+<a id="inherited-phase-1-envelope-profile"></a>
 
 ### 7.1 Inherited phase-1 envelope profile
 
@@ -624,6 +705,8 @@ Enabling replica mediation MUST NOT weaken those rules. The extension changes
 only how one already accepted mailbox package is associated with delivery
 state. A local DASL CID remains absent from Routing 2.0 and is not disclosed to
 the mediator merely to deliver a package.
+
+<a id="atomic-fan-out"></a>
 
 ### 7.2 Atomic fan-out
 
@@ -639,12 +722,16 @@ delivery.
 Live delivery happens only after the transaction commits. A failed or lost live
 push changes no durable state.
 
+<a id="sender-visible-behavior"></a>
+
 ### 7.3 Sender-visible behavior
 
 The sender-visible behavior remains the phase-1 behavior: mediator or HTTP
 acceptance is only `submitted`, and ultimate delivery requires an authenticated
 application-level ACK. Replica fan-out is deliberately invisible to the
 sender.
+
+<a id="recipient-role-neutrality"></a>
 
 ### 7.4 Recipient-role neutrality
 
@@ -663,6 +750,8 @@ vault-scoped arrangement for metadata unlinkability. An externally managed
 DID resolved under section 6.2 uses the same mediator machinery, without a
 vault-side publisher.
 
+
+<a id="message-pickup-3-0-replica-profile"></a>
 
 ## 8. Message Pickup 3.0 replica profile
 
@@ -692,6 +781,8 @@ The replica MUST exist under the authenticated account and be active.
 Unknown or retired IDs fail and MUST NOT reveal another account's
 replicas.
 
+<a id="status"></a>
+
 ### 8.1 Status
 
 Example request:
@@ -715,6 +806,8 @@ to that recipient DID.
 
 The matching `status` body echoes `replica_id` and, when requested,
 `recipient_did`.
+
+<a id="delivery-request-and-delivery"></a>
 
 ### 8.2 Delivery request and delivery
 
@@ -762,6 +855,8 @@ mediator MAY suppress immediate repeated delivery for load control, but
 MUST eventually make every unacknowledged, unexpired delivery available
 again.
 
+<a id="messages-received"></a>
+
 ### 8.3 Messages received
 
 ```json
@@ -791,13 +886,12 @@ paths:
    process-durably appended the inbound vault observation; or
 2. **terminal pre-vault rejection** — it authenticated enough envelope and
    protocol state to classify the delivery safely under a profile such as
-   `rendezvous.md` sections 9.2–9.3 (recipient, syntax, authentication,
+   [rendezvous.md sections 9.2](rendezvous.md#hard-pre-vault-gate)–[9.3](rendezvous.md#integrity-checks-and-durable-receipt) (recipient, syntax, authentication,
    integrity and operational resource checks), recorded any bounded local
    diagnostic, and determined that the message MUST be discarded without `message.in`.
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
-portable message content. Recipient classification follows `rendezvous.md`
-sections 9.1–9.2's exact-key and lifecycle rules. A retired DID retained in
+portable message content. Recipient classification follows [rendezvous.md sections 9.1](rendezvous.md#deferred-delivery)–[9.2](rendezvous.md#hard-pre-vault-gate)'s exact-key and lifecycle rules. A retired DID retained in
 an existing local relationship history still receives eligible input normally;
 an unbound retired address or terminal bound-route dependency takes the terminal
 rejection path, independently of public/private allocation.
@@ -811,9 +905,9 @@ A delivery that cannot yet be decrypted for a recoverable reason despite an
 eligible exact local key, depends on missing recoverable local DID/route/sync
 state or required sender resolution still within that section's budget, has
 known pending membership or missing relationship evidence requiring pre-receipt
-deferral under `vault-events.md` section 12.1, or is otherwise not safely
+deferral under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence), or is otherwise not safely
 classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
-`rendezvous.md` section 9.1's retry rule: the wait consumes no sender-resolution
+[rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s retry rule: the wait consumes no sender-resolution
 budget and has no client retention cap. While local wait state is retained,
 mere redelivery does not retry; relevant evidence changes start a fresh bounded
 resolution sequence when needed, with waiting time excluded from its local
@@ -826,6 +920,8 @@ without allowing temporary local incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
 not prerequisites for pickup acknowledgment.
+
+<a id="live-delivery"></a>
 
 ### 8.4 Live delivery
 
@@ -842,6 +938,8 @@ version 1.0. It is an internal mailbox delivery connection authenticated under
 the mediation account; the external sender still addresses the recipient
 DID and never learns the replica ID. A live push never replaces the durable
 delivery row before `messages-received`.
+
+<a id="retention-and-replay"></a>
 
 ## 9. Retention and replay
 
@@ -868,12 +966,14 @@ At or after `expires_at`, the mediator MAY delete the message and every
 associated delivery. An inactive but unretired replica MUST NOT prevent
 expiry.
 
-Under `distributed-delivery.md` section 7, the sender's durable outbox stops
+Under [distributed-delivery.md section 7](distributed-delivery.md#submission-completion-and-expiration), the sender's durable outbox stops
 submission when `delivery.submitted` commits, independently of the ultimate
 recipient's ACK. Mediator expiry can therefore discard an already submitted
 message before the recipient receives it; it does not trigger sender retry.
 This deferred fanout protocol does not turn the mediator into a permanent
 archive or add an end-to-end delivery guarantee.
+
+<a id="quotas-and-abuse-bounds"></a>
 
 ## 10. Quotas and abuse bounds
 
@@ -904,6 +1004,8 @@ to hard storage caps. An authenticated administration or discovery response
 MAY expose current usage, but anonymous routing behavior SHOULD remain
 uniform enough not to become a precise account-existence oracle.
 
+
+<a id="privacy-and-security"></a>
 
 ## 11. Privacy and security
 
@@ -949,6 +1051,8 @@ is therefore that the mediator stores only a syntactically valid DIDComm
 encrypted-message envelope and never opens it, not that every byte of
 ciphertext was honestly produced from human-unreadable input.
 
+<a id="problem-reports"></a>
+
 ## 12. Problem reports
 
 Errors on authenticated request-response interactions use Problem Report
@@ -974,76 +1078,92 @@ Errors on authenticated request-response interactions use Problem Report
 A mediator MAY intentionally give no DIDComm problem report for an
 anonymous Routing 2.0 `forward`, so as not to create a route oracle.
 
+<a id="required-conformance-cases"></a>
+
 ## 13. Required conformance cases
 
 A conforming implementation demonstrates at least these cases:
 
-1. Two active replicas receive distinct delivery IDs for one stored
+
+<a id="fan-out-delivery-and-pickup-rm-1-rm-10"></a>
+
+### Fan-out, delivery and pickup (RM-1–RM-10)
+
+1. <a id="rm-1"></a> Two active replicas receive distinct delivery IDs for one stored
    ciphertext; A's ACK leaves B pending.
-2. A late replica obtains every unexpired retained message, including when all
+2. <a id="rm-2"></a> A late replica obtains every unexpired retained message, including when all
    older replicas ACKed.
-3. Concurrent replica registration and forwarding cannot omit the new
+3. <a id="rm-3"></a> Concurrent replica registration and forwarding cannot omit the new
    replica's delivery.
-4. Crash before durable normal acceptance produces no pickup ACK; crash after
+4. <a id="rm-4"></a> Crash before durable normal acceptance produces no pickup ACK; crash after
    commit may redeliver and converges logically.
-5. A safely classified terminal pre-vault rejection may be pickup-ACKed without
+5. <a id="rm-5"></a> A safely classified terminal pre-vault rejection may be pickup-ACKed without
    `message.in`, while recoverable local prerequisites and sender-resolution
-   unavailability within `rendezvous.md` section 5.1's budget remain pending.
-6. Repeating one `forward.id` with identical normalized bytes stores no second
+   unavailability within [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s budget remain pending.
+6. <a id="rm-6"></a> Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
-7. `recipient_did` actually filters status and delivery.
-8. A retired/unknown replica cannot inspect or ACK another replica's queue.
-9. With zero active replicas, ciphertext remains retained with zero deliveries;
+7. <a id="rm-7"></a> `recipient_did` actually filters status and delivery.
+8. <a id="rm-8"></a> A retired/unknown replica cannot inspect or ACK another replica's queue.
+9. <a id="rm-9"></a> With zero active replicas, ciphertext remains retained with zero deliveries;
    all pickup without a registered active `replica_id` fails and there is no
    account-global fallback.
-10. First later registration atomically creates retained deliveries before
+10. <a id="rm-10"></a> First later registration atomically creates retained deliveries before
    pickup is possible.
-11. Plain, signed-only, linked or structurally invalid inner attachments are
+
+<a id="envelope-privacy-quotas-and-recipient-control-rm-11-rm-19"></a>
+
+### Envelope privacy, quotas and recipient control (RM-11–RM-19)
+
+11. <a id="rm-11"></a> Plain, signed-only, linked or structurally invalid inner attachments are
     not persisted as mailbox messages.
-12. Database, object storage, logs and traces do not contain an application
+12. <a id="rm-12"></a> Database, object storage, logs and traces do not contain an application
     plaintext sentinel or content key.
-13. Replica protocol messages reveal no hardware/OS identifier or human label.
-14. Peer rendezvous, pairwise Peer and externally managed Web recipients receive
+13. <a id="rm-13"></a> Replica protocol messages reveal no hardware/OS identifier or human label.
+14. <a id="rm-14"></a> Peer rendezvous, pairwise Peer and externally managed Web recipients receive
     identical fan-out/ACK isolation without introducing vault publication state.
-15. Recipient, replica and delivery quotas fail atomically without partial
+15. <a id="rm-15"></a> Recipient, replica and delivery quotas fail atomically without partial
     state.
-16. Peer DID long-form material is decoded locally, its canonical short form
+16. <a id="rm-16"></a> Peer DID long-form material is decoded locally, its canonical short form
     exactly matches registration/proof payload, and proof key authorization
     verifies after normalization.
-17. `did:web` proof resolution uses only the constrained resolver and never
+17. <a id="rm-17"></a> `did:web` proof resolution uses only the constrained resolver and never
     unrestricted server-side URL fetching.
-18. No public document or application message uses replica ID as peer-visible
+18. <a id="rm-18"></a> No public document or application message uses replica ID as peer-visible
     recipient.
-19. Adding/removing a server full replica changes delivery rows only, not
+19. <a id="rm-19"></a> Adding/removing a server full replica changes delivery rows only, not
     recipient DIDs.
-20. Without an advertised inactivity policy, age alone never retires a
+
+<a id="replica-retirement-and-receive-recovery-rm-20-rm-23"></a>
+
+### Replica retirement and receive recovery (RM-20–RM-23)
+
+20. <a id="rm-20"></a> Without an advertised inactivity policy, age alone never retires a
     replica. With one, the server applies the exact disclosed bound and reason
     `inactivity-policy`.
-21. A local copy whose current ID is server-retired stops using it, atomically
+21. <a id="rm-21"></a> A local copy whose current ID is server-retired stops using it, atomically
     mints new replica/store-generation IDs, preserves old-author events,
     registers the fresh ID on every required mediation and obtains retained
     replay.
-22. A restore lists replicas and explicitly retires selected stale IDs rather
+22. <a id="rm-22"></a> A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.
-23. Recipient-key triage defers only an exact known local key-agreement method
+23. <a id="rm-23"></a> Recipient-key triage defers only an exact known local key-agreement method
     with a recoverable missing prerequisite. After local key recovery is
     authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
     and unbound retired DIDs use the terminal pre-vault ACK path and do not
     remain pending. A retired historical local address with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
-    resolution instead defers only within `rendezvous.md` section 5.1's budget.
+    resolution instead defers only within [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s budget.
     Definitive DNS/not-found, invalid-document, unsupported-method and
     SSRF-forbidden results, or sender-resolution budget exhaustion, use the
     terminal pre-vault ACK path under that section. Repeated delivery of the
     same replica-scoped ID shares one active sequence; missing recoverable
     local state cannot take that budget's terminal path.
     Known pending membership or missing relationship evidence preventing
-    receipt under vault-events.md section 12.1 also withholds pickup ACK,
-    using rendezvous.md section 9.1's evidence-change retry rule. This wait
+    receipt under [vault-events.md section 12.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
+    using [rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s evidence-change retry rule. This wait
     consumes no sender-resolution budget and has no client retention cap.
     While local wait state is retained, redelivery alone does not resolve
     again; relevant evidence changes start one fresh shared bounded sequence
     when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows rendezvous.md section
-    5.1's receive/authentication rule. Mediator expiry does not clear the pair
+    retention stop. Loss of local wait state follows [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
     claim.
