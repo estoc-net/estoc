@@ -30,20 +30,20 @@ retry timers, caches and traces are local state and do not appear here.
 
 **Reading guide**
 
-Each domain now places its event schemas and corresponding folds together.
+Each domain places its event schemas and corresponding folds together.
 Use the procedure column for the shared lifecycle and recovery operations.
 Shared vocabulary is in [section 3](#identity-seed-and-key-names); cross-document rule ownership is listed in
 the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 
 | Domain | Definitions and event schemas | Folds | Procedures |
 | --- | --- | --- | --- |
-| Identity and naming | [Identity, keys and identifier types](#identity-seed-and-key-names); [Identity label](#identity-label) | [Runtime author](#runtime-author-fold) | [Open runtime](vault-events.md#open-the-writable-full-runtime) |
-| Mediation, DIDs and routes | [Key evidence and resolved documents](#message-keys-and-peer-evidence); [Mediation, DID and route events](#mediation-communication-dids-and-routes) | [Mediation](#mediation-fold); [Routes, DIDs and keys](#route-did-and-key-fold) | [Establish mediation](vault-events.md#establish-mediation); [Create DID](vault-events.md#create-a-communication-did); [Disclose address](vault-events.md#disclose-an-address) |
-| Relationships and rotation | [Binding and both address transitions](#relationships-and-address-changes) | [Relationship and address index](#relationship-fold-and-address-index) | [Identity and binding policy](relationships.md#symmetric-relationship-identity); [Early privacy policy](relationships.md#early-private-address-policy-and-notifications); [Rotate local address](vault-events.md#rotate-a-local-relationship-address) |
-| Contacts and profiles | [Contact events](#contacts); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Relationship profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](vault-events.md#delete-a-contact) |
+| Identity and naming | [Identity, keys and identifier types](#identity-seed-and-key-names); [Identity label](#identity-label) | [Runtime author](#runtime-author-fold) | [Open runtime](#open-the-writable-full-runtime) |
+| Mediation, DIDs and routes | [Key evidence and resolved documents](#message-keys-and-peer-evidence); [Mediation, DID and route events](#mediation-communication-dids-and-routes) | [Mediation](#mediation-fold); [Routes, DIDs and keys](#route-did-and-key-fold) | [Establish mediation](#establish-mediation); [Create DID](#create-a-communication-did); [Disclose address](#disclose-an-address) |
+| Relationships and rotation | [Binding and both address transitions](#relationships-and-address-changes) | [Relationship and address index](#relationship-fold-and-address-index) | [Identity and binding policy](relationships.md#symmetric-relationship-identity); [Early privacy policy](relationships.md#early-private-address-policy-and-notifications); [Rotate local address](#rotate-a-local-relationship-address) |
+| Contacts and profiles | [Contact events](#contacts); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Relationship profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](#delete-a-contact) |
 | Messages and delivery | [Stored content](#stored-message-document); [Outbound events](#outbound-message-events); [Inbound events and witnesses](#inbound-message-events) | [Inbound execution](#inbound-message-and-execution-fold); [Outbound delivery](#outbound-message-and-delivery-fold) | [Send](distributed-delivery.md#send-an-ordinary-message); [Receive](distributed-delivery.md#receive-a-message); [Recover receipt](distributed-delivery.md#receive-recovery) |
 | Invitations | [Disclosure](#disclosure) | [Invitation consumption](#invitation-fold) | [Discovery](relationships.md#out-of-band-discovery); [Receipt integrity](relationships.md#integrity-checks-and-durable-receipt) |
-| Erasure and retention | [Erasure and held roots](#erasure-and-collection) | [Held-root rules](#held-roots) | [Erase message](vault-events.md#erase-a-message) |
+| Erasure and retention | [Erasure and held roots](#erasure-and-collection) | [Held-root rules](#held-roots) | [Erase message](#erase-a-message) |
 
 <details>
 <summary>Contents</summary>
@@ -473,11 +473,17 @@ relationships or contact/profile projections.
 
 <a id="peer-and-profile-observations"></a>
 
-### 4.3 Peer and profile observations
+<a id="43-peer-and-profile-observations"></a>
 
-Resolution and peer-transition observations retain exact cryptographic
-evidence. Profile observations name one relationship and their source message.
-These facts remain distinct from contact assignments and local DID entities.
+<a id="resolution-observations"></a>
+
+### 4.3 Resolution observations
+
+Resolution observations retain exact cryptographic evidence. Peer-transition
+observations follow the same rule in [section 6.4](#relationship-peertransitioned);
+profile observations name one relationship and their source message in
+[sections 7.3](#profile-nameclaimed)–[7.4](#profile-shared). These facts remain
+distinct from contact assignments and local DID entities.
 
 <a id="111-peerresolved"></a>
 

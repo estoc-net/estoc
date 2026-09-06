@@ -101,9 +101,19 @@ shorthand and case IDs so existing review references still identify the same rul
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
 
 Named section anchors support direct links without depending on a heading's
-displayed number. Keep those anchors and case identities when editing or
-reordering text. The section history below maps earlier numbered review references to their
-current locations. Code examples and derivation vectors live with their defining rule.
+displayed number. The section history below maps earlier numbered review
+references to their current locations. Code examples and derivation vectors
+live with their defining rule.
+
+<a id="editing-conventions"></a>
+
+## Editing conventions
+
+Keep named anchors and case identities when editing or reordering text.
+Compatibility anchors such as `<a id="142-mediation-fold"></a>` preserve links
+made from earlier numbered headings. Keep these aliases during routine edits;
+removing them requires a documented breaking change to historical references.
+Record moved and retitled numbered sections in the section history.
 
 <a id="section-history"></a>
 
@@ -115,7 +125,8 @@ use the filename that existed at the commit they reviewed.
 
 The vault-events domain reordering retains every named anchor and conformance
 case ID. This table maps section numbers from commit `a720fdf` to the current
-locations; numbers not listed are unchanged. Event schemas and folds remain
+locations; numbers not listed are unchanged. Retitled chapters with unchanged
+numbers are also listed. Event schemas and folds remain
 in `vault-events.md`, and runtime procedures remain together in that file.
 
 <details>
@@ -124,7 +135,10 @@ in `vault-events.md`, and runtime procedures remain together in that file.
 | Previous section | Current section | Topic |
 | --- | --- | --- |
 | 6 | [3.6](vault-events.md#identity-label) | identity.label |
-| 11 | [4.3](vault-events.md#peer-and-profile-observations) | Peer and profile observations |
+| 7 | [7](vault-events.md#contacts) | Contacts → Contacts and profiles (retitled) |
+| 9 | [9](vault-events.md#outbound-message-events) | Outbound message events → Outbound messages and delivery (retitled) |
+| 10 | [10](vault-events.md#inbound-message-events) | Inbound message events → Inbound messages and execution (retitled) |
+| 11 | [4.3](vault-events.md#resolution-observations) | Resolution observations (previously Peer and profile observations) |
 | 11.1 | [4.4](vault-events.md#peer-resolved) | peer.resolved |
 | 11.2 | [6.4](vault-events.md#relationship-peertransitioned) | relationship.peerTransitioned |
 | 11.3 | [7.3](vault-events.md#profile-nameclaimed) | profile.nameClaimed |

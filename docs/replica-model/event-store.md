@@ -30,7 +30,7 @@ deferred extensions:
 
 Dependency runs downward. [dasl-objects.md](dasl-objects.md) defines the object layer used
 here. [vault-folder.md](vault-folder.md) serializes this model. [vault-events.md](vault-events.md) defines
-payloads above it. The delivery, relationship, mediation and sync profiles use
+payloads above it. The delivery, mediation and sync protocols and the relationship profile use
 the event and object primitives but do not change their meaning.
 
 <!-- reading-guide:start -->

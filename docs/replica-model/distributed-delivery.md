@@ -684,7 +684,7 @@ Required ACK work left unfinished by a crash still follows [vault-events.md sect
 
 <a id="observation-ids-and-vectors"></a>
 
-### Observation IDs and vectors
+#### Observation IDs and vectors
 
 `peerPublicKey` below is derived from the observation's referenced
 `peer.resolved(peerResolutionEventId).peerPublicKey` under [vault-events.md section 4.1](vault-events.md#key-evidence);
@@ -741,7 +741,7 @@ form one observation group; differences are intent conflicts.
 
 <a id="execution-scope-and-commit-prerequisites"></a>
 
-### Execution scope and commit prerequisites
+#### Execution scope and commit prerequisites
 
 Automatic execution uses a stable **execution scope**, not an observation message ID.
 Its unique derived value is the carrier's **logical peer scope**
@@ -763,7 +763,7 @@ first, then derive and commit the effect; recovery resumes from that prefix.
 
 <a id="address-chains-and-observation-membership"></a>
 
-### Address chains and observation membership
+#### Address chains and observation membership
 
 `peerChain(R)` contains canonical DID/key authorizations from exactly:
 
@@ -809,7 +809,7 @@ reassigning their identities when a later conflict appears.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
-### Execution ID and immutable transcript
+#### Execution ID and immutable transcript
 
 ```text
 executionId = UUIDv5(
@@ -833,7 +833,7 @@ labels do not supply relationship identity.
 
 <a id="local-rotation-scope-vector"></a>
 
-#### Local-rotation scope vector
+##### Local-rotation scope vector
 
 Using the existing relationship, key and carrier fixture above, let two
 validated local transitions extend P0 to P1 and then P1 to P2, each with the
