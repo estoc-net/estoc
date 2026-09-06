@@ -941,9 +941,7 @@ logical response.
   "roots": ["bafkrei...body", "bafkrei...attachment"],
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "target": {
-      "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e"
-    },
+    "relationshipId": "35807a1e-3b8a-52f5-9580-29cd5265882e",
     "birth": null,
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "thid": null,
@@ -965,12 +963,12 @@ logical response.
 }
 ```
 
-`target` is the closed object `{ "relationshipId": "<R>" }`. A contact-send API
-selects one relationship before intent commit; an explicit address API
-must resolve the same address-pair identity before using this event. The target
-is immutable and cannot be changed by later preferences, contact merges or
-repacking. Anonymous or mediator control traffic does not acquire application
-relationship scope through a selected key pair.
+`relationshipId` is REQUIRED and non-null, stored directly in the payload.
+A contact-send API selects one relationship before intent commit; an explicit
+address API must resolve the same address-pair identity before using this
+event. `relationshipId` is immutable and cannot be changed by later preferences,
+contact merges or repacking. Anonymous or mediator control traffic does not
+acquire application relationship scope through a selected key pair.
 
 `birth` is REQUIRED and nullable. For a new address pair whose binding is not
 yet committed, it contains the offline selection:
@@ -983,7 +981,7 @@ yet committed, it contains the offline selection:
 ```
 
 The local DID must exist and be live. Canonicalize the exact selected peer
-spelling and derive `target.relationshipId` from the two birth addresses under
+spelling and derive `relationshipId` from the two birth addresses under
 `rendezvous.md` section 10. No online resolution is required to commit intent.
 Repeated unbound sends freeze the same selection. A known binding uses null;
 any non-null birth must agree with it. Missing evidence defers preparation,
@@ -991,13 +989,14 @@ and contradictory birth/binding evidence is a relationship conflict.
 
 `birth` is creation evidence, not an initial-message protocol or a pinned
 current sender. It remains unchanged if the same `R` later rotates either end.
-Both `target` and `birth` are portable metadata excluded from wire plaintext
-and message hashes, while still participating in full intent-event equality.
+Both `relationshipId` and `birth` are portable metadata excluded from wire
+plaintext and message hashes, while still participating in full intent-event
+equality.
 Before first package preparation, section 12.2 pins the peer document. Root
 addresses can send ordinary content without first receiving a reply or
 performing a rotation. Public/private allocation never gates send eligibility.
 
-For an automatic response, the target is exactly its carrier's derived `R`.
+For an automatic response, `relationshipId` is exactly its carrier's derived `R`.
 Preparation uses that `R`'s current local and peer ends; another relationship
 of the same contact cannot substitute. Apply `distributed-delivery.md` section
 8.1's local-sender gate under the intent-commit lock. Contact assignment and
@@ -1042,9 +1041,10 @@ A preparer emits `created_time`, `expires_time`, `thid` and `pthid` only when
 non-null; emits `please_ack` whenever `pleaseAck` is non-null; emits `ack` and
 `attachments` when non-empty; and expands `headers` at plaintext top level.
 
-More than one `message.out` under one `messageId` is allowed only when every field is
-identical. Reuse of one wire ID with a different intent projection is an intent
-conflict.
+More than one `message.out` under one `messageId` is allowed only when every field
+is identical. Different `relationshipId` or `birth` values conflict even when
+the intent hashes agree. Reuse of one wire ID with a different intent projection
+is an intent conflict.
 
 ### 9.3 `message.prepared`
 
@@ -1077,7 +1077,7 @@ Requirements:
 - `senderDidId` names a live local DID entity selected for the target under
   section 9.2's restrictions; for ordinary relationship traffic it is
   `currentLocalDidId(R)` under section 12.4 at preparation;
-- the package belongs to `message.out.target.relationshipId`; root or valid
+- the package belongs to `message.out.relationshipId`; root or valid
   rotated endpoint evidence must agree with that same `R`;
 - `localKeyName` is that entity's key-agreement key and authorizes the plaintext
   `from` under the exact spelling used by the package;
@@ -1217,16 +1217,19 @@ Sensitive strings remain in local trace; `code` is a stable non-secret value.
 }
 ```
 
-This event is appended only after an authenticated ultimate peer plaintext
-contains the outbound `messageId` in its explicit DIDComm `ack` array and every
-package-level address, transition and protocol-specific security precondition
-for that ACK has validated. Threading or a natural response without `ack` is insufficient.
-`ackMessageId` identifies the local inbound ACK-bearing observation.
-One valid carrier observation MUST witness `ackMessageId`, `ackWireMessageId`, `localKeyName`,
-the derived `peerPublicKey` and the explicit acknowledged value together. These keys
-identify the ACK carrier and may differ from the old outbound package's keys;
-section 14.8's historical local/peer-chain membership permits rotation between
-that package and its ACK.
+This event requires a complete observation witness under section 10.5.
+`ackMessageId` names the inbound observation group: candidates are committed
+`message.in` events with that `messageId`. Each witness's `wireMessageId`,
+`localKeyName` and derived `peerPublicKey` match this event's `ackWireMessageId`,
+`localKeyName` and `peerPublicKey`, respectively, and its explicit DIDComm `ack`
+array contains this event's outbound `messageId`. The witness must authenticate
+the ultimate peer and pass section 14.8's same-relationship, historical key-chain
+and package/proof checks, plus any protocol-specific security preconditions.
+Threading or a natural response without `ack` is insufficient.
+
+The keys identify the ACK carrier and may differ from the old outbound
+package's keys; section 14.8's historical local/peer-chain membership permits
+rotation between that package and its ACK.
 
 An acknowledgment supplies receipt information independently of the outbound's
 submission state. Duplicate observations are harmless. The earliest valid
@@ -1506,6 +1509,33 @@ relationship is never selected. Outbound membership is derived by section
 14.8. A threaded or natural response without an explicit `ack` array does not
 create that delivery observation.
 
+### 10.5 Complete observation witnesses
+
+For a claim about received evidence, its **complete observation witnesses** are
+all committed `message.in` candidates that each satisfy every per-observation
+requirement of the consuming schema or fold. Evaluate the required fields and
+their exact referenced evidence against one observation at a time. A check
+MUST NOT combine a field from one candidate with a field from another. The
+result is the set of all complete matches, independent of enumeration order.
+
+The consumer defines the candidate set and its required comparisons and
+validation. `ackMessageId` in section 9.7 and `messageId` in section 11.2 each
+restrict candidates to that observation message ID's group. Any complete
+matching duplicate can witness the claim; it does not pin a new exact event
+reference. Exact references already required by the schema must still match as specified.
+Rules for explicit `sourceEventId` references remain unchanged.
+
+This matching rule does not replace authentication, scope, historical
+membership, proof or group-validity checks. A matching candidate cannot clear
+a group conflict or bypass a missing-evidence deferral required by the
+consuming schema or fold. Incomplete evidence is not a proven mismatch merely
+because the candidate cannot yet enter the witness set.
+
+Subject to those checks, an existential claim requires at least one complete
+witness. If the consumer defines an aggregate, apply it to all qualifying
+witnesses, not only one selected for a lift. In particular, section 14.8
+aggregates ACK receipt time across duplicates and distinct ACK carriers.
+
 ## 11. Peer and profile observations
 
 Resolution and peer-transition observations retain exact cryptographic
@@ -1635,14 +1665,15 @@ inbound message.
   validated exact spelling under `rendezvous.md` section 5.1;
 - `priorResolutionEventId` names the exact `peer.resolved` event whose document and
   authentication method verify `fromPrior`;
-- `peerResolutionEventId` names the successor's exact `peer.resolved`, equal to the
-  selected carrier observation's `message.in.peerResolutionEventId`. That one
-  observation must also witness `messageId`, `peerPublicKey`, `localKeyName`, `presentedToDid` and
-  the exact `fromPrior`; and
-- `messageId` is the actual inbound message entity carrying the proof. Duplicate
-  observations of that message ID are interchangeable witnesses only when one exact
-  observation satisfies all carrier fields above together. Message ID equality alone
-  cannot substitute a different `peerResolutionEventId`, proof or local recipient key.
+- `peerResolutionEventId` names the successor's exact `peer.resolved`; and
+- `messageId` names the inbound observation group carrying the proof.
+
+Apply section 10.5 to committed observations with that `messageId`. Each
+complete witness must match this event's `peerResolutionEventId`, `localKeyName`
+and exact `fromPrior`; its derived `peerPublicKey` equals this event's
+`peerPublicKey`, and its `presentedDid` equals `presentedToDid`. The verification
+below uses that same complete witness and the named predecessor/successor
+snapshots.
 
 The verifier MUST use the named historical resolution snapshot. A network
 fetch of a newer `did:web` document is not a substitute unless the raw CID of
@@ -1772,7 +1803,7 @@ leave no profile fact; these events create no additional content hold.
 ```
 
 `sourceEventId` is the `eventId` of one exact committed `message.out` profile disclosure.
-Its immutable `target.relationshipId` MUST equal `relationshipId`, and its
+Its immutable `relationshipId` MUST equal this event's `relationshipId`, and its
 validated outbound membership follows section 14.8. Lift this observation only
 after that message ID has a committed valid `delivery.submitted`, recognizing the
 supported disclosure from readable source content under section 11.3's writer
@@ -2409,8 +2440,9 @@ protocol defines another display time.
 ### 14.8 Outbound message and delivery fold
 
 Group `message.out` by `messageId`. Multiple identical intent events are one logical
-outbound. Different fields under one `messageId` are a conflict, including local
-control fields excluded from the intent hash.
+outbound. Different fields under one `messageId` are a conflict, including
+`relationshipId`, `birth` and other local control fields excluded from the
+intent hash.
 
 An automatic message ID derives only from `effectKey`, so this same fold detects
 different intents under one key. A conflicted message ID retains all variants and
@@ -2436,7 +2468,7 @@ ACK lookup uses `(carrier.logicalPeerScope, wireMessageId)`. Before applying an 
 derive the candidate outbound's membership from non-conflicted portable
 evidence as follows.
 
-An application outbound belongs to its immutable `message.out.target.relationshipId`.
+An application outbound belongs to its immutable `message.out.relationshipId`.
 Its birth metadata, if present, must derive that `R`; its retained binding and
 every valid package must independently agree. A package uses a historical local
 address in `localChain(R)` and a peer DID/key authorized by one exact document
@@ -2451,6 +2483,14 @@ membership after retirement and erasure. Repacking preserves `R` and every
 previously emitted effect's identity. Raw key equality supplies no fallback scope.
 An ACK proves receipt, not remote contact approval or successful rotation.
 
+Apply section 10.5 to all committed `message.in` observations whose explicit
+`ack` names this outbound's `messageId`. Let `ackWitnesses` be the set of
+candidates that authenticate the ultimate peer, have a unique derived scope
+equal to the outbound's R, and pass the membership and proof checks above and
+any protocol-specific ACK security preconditions. This set includes all valid
+duplicates and distinct ACK carriers; it is not restricted to the group or
+witness selected for one `delivery.acknowledged` event.
+
 For a valid outbound:
 
 - `packages[]` is every consistent `message.prepared` by `packageId`;
@@ -2459,9 +2499,7 @@ For a valid outbound:
   `fromPrior` only under validated repack rules;
 - one package is inactive after `message.packageRetired` or a package-scoped
   terminal failure, while its skeleton remains historical evidence;
-- `acknowledged` is true if a valid authenticated inbound `ack` names the wire
-  ID on a validated peer-scoped continuation under the membership rules above,
-  the carrier has a unique derived scope, and all proof gates pass;
+- `acknowledged` is true exactly when `ackWitnesses` is non-empty;
 - `submitted` is true if any valid package has a committed
   `delivery.submitted` naming this exact `messageId` and `packageId`. Validation uses
   the retained intent/package skeletons; collecting or erasing an envelope,
@@ -2485,11 +2523,9 @@ For a valid outbound:
   received while `delivery.submitted` is absent does not synthesize completion;
   eligible submission may still resume.
 
-For receipt timing, consider all valid committed `message.in` observations
-whose explicit `ack` acknowledges this outbound under the scope and proof rules
-above. `receiptInstant` is the earliest parsed RFC 3339 `at` among those
-observations, including duplicates and distinct ACK carriers. `late` is true
-exactly when `acknowledged` is true, `expiresTime` is non-null, and
+For receipt timing, `receiptInstant` is the earliest parsed RFC 3339 `at` among
+all observations in `ackWitnesses`. `late` is true exactly when `acknowledged`
+is true, `expiresTime` is non-null, and
 `receiptInstant >= UnixEpoch + expiresTime seconds`; equality is late. It is
 false otherwise. The fold uses no current clock or `delivery.acknowledged.at`.
 This rule applies both to submitted messages and to expired unsubmitted
@@ -3162,8 +3198,8 @@ There is no migration requirement from an earlier event vocabulary.
     have one effect key and message ID. Different intent hashes conflict after any
     permutation of their union; both variants and their packages remain history,
     with preparation and submission suppressed.
-93. Equal effect keys and intent hashes with different targets still conflict.
-    Exact duplicate intents produce one logical outbound.
+93. Equal effect keys and intent hashes with different relationshipId values
+    still conflict. Exact duplicate intents produce one logical outbound.
 94. An automatic intent whose execution ID disagrees with its unique carrier
     group's derived ID, whose key disagrees with that ID or protocol tuple, or
     whose message ID disagrees with its key is invalid and cannot execute.
@@ -3206,10 +3242,12 @@ There is no migration requirement from an earlier event vocabulary.
      key or assigning a relationship to a contact does not prove authenticated
      inbound traffic. Anonymous, mediator and relationship-pending observations
      retain their key evidence without an application execution scope.
-103. message.out.target.relationshipId and nullable birth are immutable portable
-     metadata outside wire hashes. Birth selection permits offline queueing
-     and must agree with a later binding. Packages may follow valid rotations
-     without changing these fields.
+103. message.out stores required non-null relationshipId directly alongside
+     nullable birth. Both are immutable portable metadata outside wire hashes;
+     different values under the same messageId still conflict when intentHash
+     agrees. Birth selection permits offline queueing and must agree with a
+     later binding. Packages may follow valid rotations without changing these
+     fields.
 104. Every new address pair uses one common binding type. No first reply is
      required for ordinary sending. Queued births remain identifiable after
      reply, submission, erasure or restore without reconstructing
@@ -3397,3 +3435,17 @@ There is no migration requirement from an earlier event vocabulary.
      contact tombstone wins before lifting, recovery creates no new lift, even if
      bytes remain under another root. Retained skeletons preserve an existing
      valid sharing lift but msgType alone cannot create one after content erasure.
+138. ACK and peer-transition claims use complete observation witnesses under
+     section 10.5. If different candidates each match only part of a claim's
+     required fields or evidence, they cannot jointly witness it. Adding one
+     complete matching duplicate permits the claim once its other gates pass,
+     even when another duplicate event is absent. An exact resolution reference
+     cannot be replaced merely because another event has the same key or
+     document. Matching never clears a group conflict or bypasses a required
+     missing-evidence deferral; enumeration and import order select no winner.
+139. ACK receipt considers every valid complete carrier across duplicates and
+     distinct ACK-bearing message IDs in the same R. Selecting a later witness
+     for delivery.acknowledged cannot hide an earlier on-time receipt or change
+     late; an ineligible earlier observation cannot donate its timestamp.
+     Shuffled enumeration and event import produce the same receiptInstant and
+     late, independently of which eligible witness was used for lifting.

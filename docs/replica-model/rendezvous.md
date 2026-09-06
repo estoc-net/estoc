@@ -425,7 +425,7 @@ retire resources only when no other relationship or disclosure requires them.
 ## 8. Ordinary sending and birth selection
 
 `vault-events.md` section 9.2 owns the outbound schema. Every send freezes one
-`target.relationshipId`. A contact or address selection API determines that R
+`relationshipId`. A contact or address selection API determines that R
 under the writer lock before intent commit, using existing address histories
 first. For a new pair, nullable `birth` freezes the local DID entity and exact
 peer DID spelling, allowing an offline send before resolution. These birth
@@ -871,7 +871,8 @@ For a carrier from B1 to any retained local address A in R:
    be byte-identical to `iss`;
 4. require `sub` to equal the carrier's exact authenticated sender spelling,
    with a valid long form on first Peer-DID disclosure, and require the carrier
-   observation to witness all referenced key/document/proof fields;
+   to satisfy the witness rule in `vault-events.md` section 10.5 with that
+   document's section-11.2 requirements;
 5. commit `relationship.peerTransitioned` for that R before ACK/effect work,
    reusing a duplicate edge and surfacing incompatible successors or evidence
    as conflict;
