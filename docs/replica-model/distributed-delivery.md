@@ -223,7 +223,7 @@ The following table is normative. "Committed" means process-durable success.
 | Prepared package | `message.prepared` and its exact envelope | Submit that exact package |
 | Normal inbound | Objects, `message.in` and required channel evidence | Pickup-ACK, effect or peer ACK |
 | Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
-| Stable execution scope | Admission, initiator binding, relationship or pinned initial-package evidence under section 9 | Apply peer-scoped ACKs, freeze ACK targets, or run an eligible automatic effect |
+| Stable execution scope | Admission, initiator binding, relationship or pinned initial-package evidence under section 9 | Apply peer-scoped ACKs or run an eligible automatic effect |
 | Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Stop normal retry |
 | Replay submission paused | Unresolved hold or ordinary terminal delivery failure | Retain exact replay material but submit nothing automatically |
 | Replay closure | Process-durable `message.replayClosed` after deadline or erasure | Release replay-only exact envelope roots |
@@ -353,8 +353,9 @@ Writers SHOULD NOT emit duplicate targets. Readers preserve the accepted wire
 array exactly and apply deduplication only to receipt processing. Absent
 `please_ack` normalizes to null; absent `ack` normalizes to `[]`; absent
 `created_time` or `expires_time` normalizes to null; absent additional headers
-normalize to `{}`. ACK values are interpreted in oldest-to-newest receive
-order, never lexicographic order; this implements the ordering MUST in
+normalize to `{}`. The producer freezes and emits `ack` targets in
+oldest-to-newest receive order under section 8.1, never lexicographic order;
+this implements the ordering MUST in
 [DIDComm Messaging v2.1, ACKs](https://identity.foundation/didcomm-messaging/spec/v2.1/#acks).
 
 `headers` contains every permitted top-level DIDComm field not represented by
@@ -516,7 +517,7 @@ exists under section 11:
 1. If `X.pleaseAck == null`, create no ACK obligation.
 2. Expand `""` to `X.wireId`; retain the first occurrence of every target and
    ignore later duplicates.
-3. Derive `X.logicalPeerScope` under section 9 from committed evidence.
+3. Derive `X.logicalPeerScope` under section 9.
    Look up each requested wire ID only as `(X.logicalPeerScope, wireId)`. The
    current `X.wireId` is known by virtue of X's own derived scope. An older
    target is eligible only when it is conflict-free and derives to the exact
@@ -547,9 +548,11 @@ order, not a reconstruction of physical receive time across those copies.
 Import never rewrites an already frozen response or grants a new multi-writer
 execution guarantee.
 
-Before freezing the response it MUST have authenticated and validated X,
-accepted every retained object, process-durably appended `message.in`, and
-committed any non-conflicted channel evidence needed to address the response.
+Before proposing the response it MUST have authenticated and validated X,
+accepted every retained object and process-durably appended `message.in`.
+Any additional non-conflicted scope or channel evidence needed for the
+response MUST commit no later than the response intent; it may share that
+intent's atomic batch under section 9.
 
 The response thread follows X, not each older target:
 
@@ -711,9 +714,12 @@ validated evidence only. Mediation channels and anonymous observations have no
 application execution scope. Missing prerequisites defer processing;
 conflicting evidence cannot authorize another scope.
 
-During validation of a `Vault.commit`, scope and intent derivation may use its
-prospective atomic event set. Those facts become scope evidence only when the
-whole batch commits.
+Pre-commit validation of a `Vault.commit` may check the prospective atomic
+event set for consistent scopes and intents. This is validation of the proposed
+state, not committed scope evidence: no worker may apply ACKs or execute an
+effect from that view. A proposed admission result and its selected response
+may be validated together; their authority begins only when the whole batch
+commits. After failure, runtime derivation still uses only committed events.
 
 For relationship `R`, `peerChain(R)` is the historical set containing the
 responder's `relationship.established.peerKey` or the initiator's
@@ -725,18 +731,38 @@ route availability do not select a scope; current work eligibility is separate.
 
 | Observation | Required committed evidence | Derived scope |
 | --- | --- | --- |
-| Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. No effective result: no scope. |
+| Responder candidate addressed to a local rendezvous DID | The effective `relationship.admissionDecided` with `inboundMid == o.mid`, under `vault-events.md` section 14.4 | Accept: its deterministic relationship, even before materialization. Reject: exact channel `(o.myKey, o.peerKey)`. Undecided: no scope. Admission conflict: execution-scope conflict. |
 | Initiator handoff | Valid `relationship.initiatorBound` with `handoffMid == o.mid` | Its relationship |
 | Ordinary relationship traffic | Relationship `R` with `o.myKey == did/<R.ourDid>/key-agreement` and `o.peerKey` in `peerChain(R)` | That unique `R`; no match supplies no scope |
-| Initiator no-handoff problem report under `rendezvous.md` section 13 | `o.fromPrior == null`; a valid initial `message.prepared` has null `fromPrior`, exact `(o.myKey, o.peerKey)` and a pinned `peer.resolved(peerResolution)` validating that channel | Exact channel `(o.myKey, o.peerKey)` |
+| Initiator no-handoff problem report under `rendezvous.md` section 13 | `o.fromPrior == null` and `o.pleaseAck == null`; a valid initial `message.prepared` has null `fromPrior`, exact `(o.myKey, o.peerKey)` and a pinned `peer.resolved(peerResolution)` validating that channel; `o.msgType` is `https://didcomm.org/report-problem/2.0/problem-report` or a deterministic error type defined by that initial outbound's protocol, and the error message validates under its protocol | Exact channel `(o.myKey, o.peerKey)`, control-only: process explicit `ack`, without application handlers or automatic responses |
 
 Each row contributes at most one scope; multiple matching relationships are
 an execution-scope conflict. All applicable rows for one observation MUST agree.
-Then every valid observation in one MID group MUST derive the same scope.
-Missing evidence leaves the group deferred; incompatible scopes preserve
-history but suppress ACK processing and new effects, without selecting a row,
-observation or canonical winner. Only after these checks may groups join under
-`vault-events.md` section 14.7's transition-aware union.
+A row that does not apply contributes nothing. A valid no-handoff control row
+does not require an ordinary relationship match. If an applicable row lacks
+required evidence, or no row supplies a scope, the observation has no scope
+yet. For group consistency this is missing evidence, not a competing scope
+value.
+
+Apply the following rules to every valid observation in one MID group:
+
+1. Conflicting derivation evidence or two distinct derived scopes makes an
+   execution-scope conflict, even when another observation is unresolved.
+   In particular, a relationship scope and an effective reject's bootstrap
+   channel scope are incompatible; they are not separate executions.
+2. Otherwise, any observation with no scope leaves the whole group deferred.
+   This includes an undecided rendezvous candidate alongside an observation
+   already attributed to a relationship. The deferred observation cannot be
+   ignored to run the rest of the group.
+3. Only when every observation derives the same unique scope may the group
+   process ACKs or eligible effects and participate in `vault-events.md`
+   section 14.7's transition-aware union.
+
+Deferral and conflict preserve history but suppress ACK processing and new
+effects, without selecting a row, observation or canonical winner. A later
+observation may defer or conflict a previously executable group; already
+committed ACK results and emitted effects remain history and do not authorize
+an alternative execution identity.
 
 The execution identity is:
 
@@ -756,8 +782,9 @@ A message without a unique stable scope is **effect-deferred**. It MUST NOT
 execute under a provisional observation, contact or channel identity. A later
 verified alias reuses the relationship-derived execution ID; a conforming
 runtime never executes once per peer key and repairs it by choosing a smaller
-MID. All required scope evidence MUST commit before applying explicit ACKs,
-freezing ACK targets or running automatic effects.
+MID. All required scope evidence MUST commit before applying explicit ACKs or
+running automatic effects. An intent and its ACK targets may freeze in the
+same atomic commit as their scope evidence under the validation rule above.
 
 A conforming `empty/1.0/empty` pure ACK remains a durable control observation,
 but is excluded from thread display, unread counts, notifications and
@@ -805,7 +832,9 @@ For every account-scoped pickup or direct delivery:
 12. only after that unique derived logical peer scope exists, process explicit
     `ack` values into idempotent peer-scoped `delivery.acknowledged`;
 13. schedule eligible deterministic application effects through that execution
-    ID. Bootstrap admission itself follows `rendezvous.md` section 10.2 and is a local decision,
+    ID; the no-handoff control row permits only step 12, not application
+    handlers or automatic responses in steps 13–15. Bootstrap admission itself
+    follows `rendezvous.md` section 10.2 and is a local decision,
     not an application effect requiring a provisional execution identity;
 14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
@@ -875,18 +904,27 @@ effectKey = base64url(
 
 The key is unpadded base64url. It determines the outbound MID and wire ID under
 `vault-events.md` section 9.1. The effect's content is its `message.out` intent.
+That event retains the complete producing tuple under its section-9.2 schema;
+the stored `ordinal` is exactly `decimalOrdinal`, not a runtime-only counter.
 One key permits only one compatible intent under that document's section 14.8;
 payload validation MUST verify the execution ID against that carrier group,
-the key against its derived execution ID and producing protocol, and the MID
-against the key.
+the stored tuple and output intent against the producing protocol, the key
+against that tuple, and the MID against the key.
 
 Under the writer lock in `event-store.md` section 10, the runtime MUST derive
-the carrier's execution ID and look up the derived MID before freezing ACK
-targets, timing or other intent fields.
+the carrier's execution ID and check for an already-selected ACK-bearing
+response under `vault-events.md` section 14.8 before selecting an ACK response
+handler or tuple. If one exists, reuse it; a new handler or tuple cannot consume
+the carrier's ACK obligation again. Competing imported selections suppress
+response work under that fold.
+For each eligible effect, look up its derived MID before freezing ACK targets,
+timing or other intent fields.
 It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
 content erasure, replay closure, a later observation or a changed clock. If no
 intent exists, it commits the intent through `Vault.commit` before effects.
 Derivation, lookup and commit are one locked operation.
+For an atomic admission/response batch, these checks validate the proposed
+event set under section 9; outbound work still waits for the complete commit.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under `vault-events.md` section 14.8. Duplicate
 carriers use the existing package only while section 8.4 permits replay.
@@ -1105,3 +1143,17 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     intent before computing new ACK targets or timing. Concurrent local workers
     cannot commit different intents for that key, or change the ordinal to
     evade the conflict.
+53. A valid no-handoff Report Problem or protocol-defined deterministic error
+    with null `pleaseAck` derives only the pinned bootstrap control scope and
+    may process explicit ACKs. A basicmessage on those same keys, or an error
+    carrying `please_ack`, cannot obtain that scope. The control path runs no
+    application handler and produces no automatic response.
+54. Two observations with equal intent and the same `(peerKey, wireId)` arrive
+    at a relationship DID and a rendezvous DID. An undecided rendezvous
+    candidate defers the whole MID group. An effective accept deriving the
+    same relationship permits one execution; an effective reject derives an
+    incompatible channel and conflicts the whole group. Event order does not
+    select one observation, and previously emitted effects remain history.
+55. Prospective validation can check an atomic admission/response batch, but a
+    failed batch supplies no scope, committed intent, ACK result or executable
+    effect. Recovery derives work only from the committed event set.

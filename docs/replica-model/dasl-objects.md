@@ -200,6 +200,11 @@ interface ObjectStore {
 A backend MAY expose language-specific stream types as long as the observable
 semantics are equivalent.
 
+This is the backend object interface. In a full vault, `putRaw` and `putObject`
+are internal primitives for `Vault.commit` and validated import/restore, not
+standalone application operations. `event-store.md` section 10 defines the
+application-facing subset and the shared writer lock.
+
 Object acceptance uses the process-durable commit terminology in
 `event-store.md` section 2.1. If a put operation resolves, every later process
 restart over the same intact store generation MUST observe the complete
@@ -249,6 +254,10 @@ bytes as verified until the stream completes successfully.
 
 `read(cid, maxBytes)` MUST determine or bound the size before allocating more
 than `maxBytes`. Exceeding the bound is an error, not a truncated success.
+
+Object streams and bounded reads use the per-CID read-latch lifecycle in
+`event-store.md` section 10. Collection cannot unlink their bytes during the
+read, and a caller's stream lifetime does not hold the vault writer lock.
 
 ## 7. Event roots and retention
 
@@ -315,6 +324,10 @@ were retained only because their orphan grace period had not elapsed. Both
 arrays MUST contain canonical unique CIDs. Their order is not semantically
 significant. An implementation SHOULD return them in binary-CID byte order for
 deterministic diagnostics.
+
+An active read latch causes collection to skip that CID under `event-store.md`
+section 10. CIDs skipped because of read latches appear in neither output
+array. Release of the latch does not itself trigger unlink.
 
 The store MAY unlink an unkept object only after its documented orphan grace
 period. Grace covers abandoned writes after failure or crash. Live operations

@@ -1049,6 +1049,13 @@ package's resolution evidence. It does not bind or establish a relationship,
 alias peer keys, or waive any `from_prior` gate for handoff traffic. ACK lookup
 still follows `vault-events.md` section 14.8 and never uses wire ID alone.
 
+This control path is limited to the valid error messages without `please_ack`
+specified above; `distributed-delivery.md` section 9 defines its scope and
+excludes application handlers and automatic responses. A later relationship
+binding does not invalidate or reclassify a delayed no-handoff report's fixed
+control scope. Such a report can record receipt on its original bootstrap
+channel, but cannot reject or change an established relationship.
+
 After final reject, candidate content is erased as specified in section 9.3.
 Hard pre-vault rejection has no portable candidate to erase.
 

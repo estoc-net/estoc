@@ -650,7 +650,7 @@ type CommitObject = {
 
 interface Vault {
   readonly events: EventStore;
-  readonly objects: ObjectStore;
+  readonly objects: Omit<ObjectStore, "putRaw" | "putObject">;
   readonly files: FileStore;
 
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
@@ -660,6 +660,11 @@ interface Vault {
 `ByteSource` is defined by `dasl-objects.md`. Each supplied object names its
 expected raw CID; preparing a source in private temporary storage does not
 accept it into the portable object store.
+
+The object put primitives are backend-internal to `commit` and the validated
+import/restore paths. They are not exposed through `Vault.objects` for
+standalone application writes. Application preparation uses private temporary
+storage; accepting new objects and their local event references uses `commit`.
 
 `commit(objects, drafts)` holds the writer lock while validating all drafts,
 accepting supplied objects under `ObjectStore.putObject`'s rules, requiring
@@ -676,14 +681,30 @@ the same root checks and lock.
 
 Phase 1 MUST serialize operations over one writable vault generation with one
 vault-wide writer lock, across all handles and workers. The lock covers all
-event, object and portable-file mutations and object reads through stream
-completion or cancellation. Nested store calls share the enclosing operation's
-lock. A backend MAY use a transaction that provides the same serialization.
+event, object and portable-file mutations. Nested store calls share the
+enclosing operation's lock. A backend MAY use a transaction that provides the
+same serialization.
+
+Object reads use a per-CID read latch shared across all handles and workers of
+the storage generation. `open` briefly takes the writer lock to check object
+presence and register the latch before exposing a stream, then releases that
+lock. The latch remains until stream completion, failure or cancellation and
+is released on each of those paths. A CID remains latched while any of its
+reads is active. `read` uses the same protection. A slow or abandoned consumer
+therefore retains only the opened object's bytes; it MUST
+NOT hold the writer lock for the stream's lifetime. Reads nested inside a
+commit, import or export share its existing lock without shortening that
+operation's required boundary.
 
 `ingest` holds this lock from its target-state fork and duplicate checks through
 event acceptance. Collection acquires it before computing the current held-root
 set and holds it through physical unlink; a keep set computed before acquiring
-the lock MUST NOT be used. Full import and export hold it across the boundaries
+the lock MUST NOT be used. Collection MUST skip a CID with an active read latch
+without waiting for its reader; other eligible CIDs may be unlinked in that
+pass. Latch registration and the collector's latch check/unlink are serialized
+by the writer lock. Latches are local read protection, not portable retention
+references; after release or process exit, normal collection rules apply.
+Full import and export hold the writer lock across the boundaries
 defined in sections 11.2 and 11.3. Existing rules for serialized receipt
 allocation and admission finalization use this same lock.
 
@@ -952,3 +973,14 @@ A conforming implementation MUST pass at least these cases:
 26. Import/export never includes backend recovery metadata as portable files.
     Source recovery journals are not executed on the target, and omitting a
     journal cannot turn an incomplete source into a complete snapshot.
+27. A paused object stream does not block another handle's commit or portable
+    file write. Collection skips its CID without waiting and can collect an
+    unrelated eligible CID. Completion, failure and cancellation each release
+    the latch so a later pass can collect the now-unkept object.
+28. Racing `open` with collection either obtains a protected complete object
+    or returns null after unlink; it never exposes an unprotected stream.
+    When two streams read the same CID, ending one does not release the other's
+    protection.
+29. `Vault.objects` exposes no standalone put operation. Application object
+    preparation stays private until `commit` accepts it with its references;
+    validated import/restore uses the internal object primitives.

@@ -887,6 +887,9 @@ logical response.
     "intentHash": "<base64url-sha256>",
     "replayUntil": null,
     "executionId": null,
+    "handlerId": null,
+    "effectKind": null,
+    "ordinal": null,
     "effectKey": null
   }
 }
@@ -931,12 +934,19 @@ Requirements:
 - `intentHash` is computed under `distributed-delivery.md` section 5;
 - `replayUntil` is an Epoch-Seconds integer or null, controls only exact
   duplicate-response retention and is excluded from the wire and intent hash;
-- `executionId` and `effectKey` are both null for a user-authored send and both
-  non-null for an automatic effect;
-- an automatic intent's key validates under `distributed-delivery.md` section
-  11 and its `mid` equals the section-9.1 derivation;
-- `thid`, `pthid`, `expiresTime`, `replayUntil`, `executionId` and `effectKey`
-  are present with null when unused; and
+- `executionId`, `handlerId`, `effectKind`, `ordinal` and `effectKey` are all
+  null for a user-authored send and all non-null for an automatic effect;
+- `handlerId` and `effectKind` obey `distributed-delivery.md` section 11;
+  `ordinal` stores its `decimalOrdinal` as a canonical non-negative decimal
+  integer string (`"0"` for zero, otherwise digits without a leading zero);
+- an automatic intent stores the complete producing tuple. Validation checks
+  its execution ID against the carrier group, its tuple and intent against the
+  producing protocol, recomputes its key under `distributed-delivery.md`
+  section 11, and requires its `mid` to equal the section-9.1 derivation;
+- the five automatic-effect fields are portable effect metadata excluded from
+  the wire and intent hash; they still participate in full event equality;
+- `thid`, `pthid`, `expiresTime`, `replayUntil` and all five automatic-effect
+  fields are present with null when unused; and
 - appending this event requires no network, resolver, mediator or socket.
 
 A deterministic response that may have to replay exact bytes after duplicate
@@ -1923,8 +1933,8 @@ section 9 owns the executable observation-ID vectors.
 Before processing the handoff ACK or creating the confirmation effect, the
 initiator MUST complete the mutually consistent transition and initiator
 binding under `rendezvous.md` section 12. All missing locally produced facts in
-that sequence MUST commit in one `Vault.commit`. A known peer
-DID does not prove that the binding exists. Reopen and imported-prefix
+that sequence MUST commit in one `Vault.commit`. A known peer DID does not
+prove that the binding exists. Reopen and imported-prefix
 recovery reuse consistent facts and complete missing facts before effects.
 
 ## 13. Automatic effects
@@ -2207,6 +2217,9 @@ For each MID group:
 
 Derive scopes per observation and check row and MID-group consistency under
 `distributed-delivery.md` section 9 before union.
+An unresolved observation defers the whole group; derived relationship and
+channel scopes in the same MID group conflict under that rule. Neither case
+permits per-observation execution or ACK processing.
 
 Union authenticated MID groups into one logical message only when they have
 the same wire ID, resolve to the same unique validated relationship scope,
@@ -2237,6 +2250,20 @@ different intents under one key. A conflicted MID retains all variants and
 their package history, but MUST NOT prepare, submit or replay any variant;
 arrival order does not select a winner. Previously emitted effects remain
 history.
+
+Also group automatic outbounds with non-empty `ack` by `executionId`. Each
+execution permits at most one such logical outbound MID, across all handler
+IDs, effect kinds and ordinals. Exact duplicate intents count once. This
+selection remains consumed after erasure, expiry or replay closure because the
+intent skeleton remains history. Other protocol-defined effects with empty
+`ack` do not consume the selection.
+
+A local writer MUST reuse the selected ACK-bearing intent and reject an
+attempt to add another MID to that execution's selection, including within one
+batch. If import supplies distinct ACK-bearing MIDs for the same execution,
+retain all as an automatic-response conflict and suppress preparation,
+submission and replay of every competing response; arrival order selects no
+winner. Previously emitted responses remain history.
 
 ACK lookup uses `(carrier.logicalPeerScope, wireId)`. Before applying an ACK,
 derive the candidate outbound's membership from non-conflicted portable
@@ -2874,11 +2901,10 @@ There is no migration requirement from an earlier event vocabulary.
     linear history, and cross-author ties have deterministic recovery order.
 62. The initiator commits `relationship.initiatorBound` before the
     handoff-confirmation effect; restart immediately afterward reconstructs
-    the same relationship execution ID
-    from the seven-field binding and its matching DID, initial package,
-    resolution and handoff/transition evidence. Erasing message content or
-    learning a later peer rotation does not change those sources; missing
-    evidence defers processing and mismatched references conflict.
+    the same relationship execution ID from the seven-field binding and its
+    matching DID, initial package, resolution and handoff/transition evidence.
+    Erasing message content or learning a later peer rotation preserves those
+    sources. Missing evidence defers processing; mismatched references conflict.
 63. Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
     Detachment or DID/route retirement never selects a new execution scope.
@@ -2972,3 +2998,12 @@ There is no migration requirement from an earlier event vocabulary.
 94. An automatic intent whose execution ID disagrees with its unique carrier
     group's derived ID, whose key disagrees with that ID or protocol tuple, or
     whose MID disagrees with its key is invalid and cannot execute.
+95. Every automatic `message.out` retains `handlerId`, `effectKind` and the
+    canonical decimal `ordinal` with its execution ID and key. Reopen can
+    recompute the key from those fields; a missing or altered tuple component
+    cannot authorize work. A user-authored send has all five fields null.
+96. After an ACK-bearing response is frozen, a changed handler, effect kind or
+    ordinal cannot create another ACK-bearing MID for that execution, even
+    after erasure or replay closure. Importing competing response MIDs keeps
+    their history and suppresses all competing responses under every event
+    permutation; exact duplicates count once.
