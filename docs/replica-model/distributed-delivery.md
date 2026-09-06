@@ -341,24 +341,21 @@ relationship.
 ### 4.3 Receive a message
 
 1. Before authoritative key/route recovery, retain delivery pending without
-   pickup ACK. Then apply [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s exact-recipient
-   and lifecycle gate, equally for all communication addresses. While local
-   wait state is retained, a delivery already waiting for relationship evidence
-   stays pending on mere redelivery; resume authentication only on that
-   document's evidence-change retry. Loss of that state follows
-   [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s receive/authentication rule.
-2. Authenticate/decrypt the message, validate syntax and exact DID/key/long-form
-   consistency, and perform that document's [section-10.1](relationships.md#did-resolution-requirements) sender resolution with
-   its bounded unavailable-result retries. Safely terminal delivery is pickup-
-   ACKed without portable application input; recoverable prerequisites defer.
-3. Under the receive lock defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), find a
-   unique existing address-pair binding or a genuinely new live root pair.
-   Select the generic binding/transition evidence, apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s superseded-sender check, and check
-   invitation/relationship integrity. [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)'s known
-   pending membership blocks new proof-free receipt; omitting an unresolved
-   carrier's proof cannot create a new birth. Pre-receipt deferral required by
-   that section follows [relationships.md section 9.1](relationships.md#deferred-delivery), with no
-   `message.in` or pickup ACK while awaiting that evidence.
+   pickup ACK. Apply [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s
+   exact-recipient and lifecycle gate at every communication address. Enter or
+   resume authentication only as permitted by its [local wait state](relationships.md#deferred-delivery)
+   and [rules for loss of wait state](relationships.md#shared-accounting-and-lost-wait-state).
+2. Authenticate/decrypt, validate syntax and exact DID/key/long-form consistency,
+   and apply [sender resolution and its bounded retries](relationships.md#did-resolution-requirements).
+   Safely terminal delivery is pickup-ACKed without portable application input;
+   recoverable prerequisites defer.
+3. Under the [receive lock and pair-lookup rules](vault-events.md#receipt-and-relationship-evidence),
+   select the unique binding and transition evidence or a genuinely new live
+   root pair. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
+   superseded-sender and invitation/relationship-integrity checks. Required
+   pre-receipt evidence deferral follows [section 9.1](relationships.md#deferred-delivery),
+   with no `message.in` or pickup ACK; missing, pending or conflicting membership
+   cannot become a new birth.
 4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
    is needed, commit it separately and obtain its returned `eventId`; only then
    commit `message.in` referencing that binding, with retained content, hashes
@@ -558,12 +555,11 @@ validated changes of either end in the same R.
 
 ## 7. Submission completion and expiration
 
-[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) is the sole owner of submission completion and
-work eligibility. A worker checks that fold before preparation or submission.
-After a valid `delivery.submitted` commits for any package, it MUST NOT prepare,
-repackage or submit any package for that logical message ID again. This includes
-timer-driven work, reopen recovery and duplicate-triggered responses, even
-when no peer ACK ever arrives. A deliberate later send creates a new
+[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) defines submission completion and
+work eligibility for every trigger, including timers, reopen and duplicate
+responses. A worker checks that fold before preparation or submission; after
+any valid `delivery.submitted` commits for that outbound, it MUST NOT prepare,
+repackage or submit that logical message ID again. A deliberate later send creates a new
 `message.out` and wire ID.
 
 Before completion, an expired message receives a message-scoped terminal
@@ -578,12 +574,11 @@ may impose tighter limits; [relationships.md section 14](relationships.md#retry-
 defaults. Route recovery or a changed clock never reopens a submitted or
 terminally failed outbound.
 
-[vault-events.md section 12.3](vault-events.md#held-roots) is the sole normative envelope-retention rule.
-An unsubmitted, non-terminal package remains retained through unavailable
-routes and retryable resolution failures. Committed submission releases this
-outbound's envelope contribution without waiting for ACK or keeping bytes for
-later response replay. Event skeletons, message content and independent
-references retain their own lifetimes under that fold.
+Envelope collection uses [vault-events.md section 12.3](vault-events.md#held-roots)'s retention predicate,
+independently of scheduling eligibility. Submission releases this outbound's
+envelope contribution; ACK and duplicate-response replay add no retention.
+That definition also governs unavailable routes, retryable resolution failures
+and the separate lifetimes of content, skeletons and independent references.
 
 <a id="durable-end-to-end-acknowledgment"></a>
 
@@ -626,12 +621,10 @@ exists under section 11 and the sender gate above passes:
    same scope. A verified key transition may widen lookup only inside one
    relationship scope; unrelated relationships, unknown senders,
    conflicted targets and ambiguous scope attribution are omitted.
-4. Derive each target's `firstReceiptKey` under [vault-events.md section 10.2](vault-events.md#message-in) as the minimum complete `(integer receiptOrdinal, author)` tuple across
-   its valid observations and verified aliases. Sort targets ascending by that
-   key within X's scope, never by decimal-string, canonical-event or
-   `ChangeToken` order. Equal ordinals from different authors are valid and
-   compare by author; omit only targets affected by a receipt-integrity
-   conflict, not unrelated messages.
+4. Sort eligible targets ascending by [vault-events.md section 10.2](vault-events.md#message-in)'s
+   `firstReceiptKey`, omitting targets affected by its receipt-integrity conflict.
+   Use that complete-key order, never decimal-string, canonical-event or
+   `ChangeToken` order.
 5. Freeze that exact ordered array as `message.out.ack` in one deterministic
    natural response or one deterministic pure ACK associated with X's logical
    execution ID.
@@ -643,10 +636,8 @@ no target remains, the receiver creates no ACK-only effect. DIDComm message IDs
 are sender-scoped; wire-ID equality elsewhere in the vault is never sufficient
 evidence for an ACK target.
 
-This preserves actual first-receipt order in a linear writer history. After
-union of independently run copies, the same key supplies deterministic recovery
-order, not a reconstruction of physical receive time across those copies.
-Import never rewrites an already frozen response or grants a new multi-writer
+The [first-receipt definition](vault-events.md#message-in) governs ordering after history union;
+import never rewrites a frozen response or grants a new multi-writer
 execution guarantee.
 
 Before proposing the response it MUST have authenticated and validated X,
@@ -715,9 +706,9 @@ An authenticated plaintext acknowledges an outbound only when its explicit
 `ack` array names that outbound wire ID, the candidate outbound belongs to the
 same validated logical peer scope as the ACK-bearing carrier, and every
 package-level addressing, transition and protocol-specific proof gate has
-passed. [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) defines outbound membership using exact
-immutable `relationshipId`/`birth` references and validated binding/package
-evidence. Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`, never a
+passed. Apply [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s outbound
+membership and [section 10.5](vault-events.md#complete-observation-witnesses)'s complete-witness checks.
+Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`, never a
 vault-global wire-ID search. Threading, a natural response, transport acceptance,
 `please_ack` presence or a mediator receipt is insufficient without the
 explicit value.
@@ -1075,8 +1066,8 @@ A recommended inbound observation records both hashes and durable headers:
   may be submitted again.
 - After mediator acceptance but before `delivery.submitted`, retry reuses the
   exact package idempotently. Missing submission evidence does not prove that
-  no attempt occurred; the rendezvous attempt budget is runtime-local policy,
-  not a crash-persistent lifetime cap.
+  no attempt occurred; [relationships.md section 14](relationships.md#retry-replacement-and-address-rollover)
+  governs local attempt accounting and its permitted reset after restart/restore.
 - After `delivery.submitted` commits, restart, duplicate receipt and missing
   ACK never cause another submission or replacement package for that message ID.
 - At expiry before prepare or retry of an unsubmitted outbound, a

@@ -879,44 +879,35 @@ belonging to another replica have no effect. Processing the same list
 again is idempotent.
 
 A client may acknowledge a delivery through exactly one of two terminal
-paths:
+paths, using [distributed-delivery.md section 4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
+commit boundaries:
 
-1. **normal acceptance** — it decoded and authenticated the inner DIDComm
-   envelope, process-durably stored every retained object, and
-   process-durably appended the inbound vault observation; or
-2. **terminal pre-vault rejection** — it authenticated enough envelope and
-   protocol state to classify the delivery safely under a profile such as
-   [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt) (recipient, syntax, authentication,
-   integrity and operational resource checks), recorded any bounded local
-   diagnostic, and determined that the message MUST be discarded without `message.in`.
+1. **normal acceptance** — follow [section 4.3](distributed-delivery.md#receive-a-message)'s
+   authentication and dependent object/evidence/inbound commits before pickup ACK; or
+2. **terminal pre-vault rejection** — safely classify the delivery under a
+   profile such as [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt),
+   then pickup-ACK without `message.in`, ultimate peer ACK, contact, application
+   effect or portable message content; only a bounded local diagnostic may remain.
 
-The rejection path creates no ultimate peer ACK, contact, application effect or
-portable message content. Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s exact-key and lifecycle rules. A retired DID retained in
-an existing local relationship history still receives eligible input normally;
-an unbound retired address or terminal bound-route dependency takes the terminal
-rejection path, independently of public/private allocation.
-Unlock/recovery and concrete recoverable prerequisites defer without pickup
-ACK. Current sender authentication follows that document's [section 10.1](relationships.md#did-resolution-requirements),
-including its transient-unavailability classification, per-delivery budget
-and definitive terminal authentication failures. Budget exhaustion uses the
-terminal rejection path; retained chain membership cannot bypass that check.
+Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate),
+including eligible retired historical addresses. For an otherwise eligible
+recipient, apply that profile's
+[sender authentication](relationships.md#sender-authentication-freshness),
+[failure classification](relationships.md#resolution-failure-classification) and
+[bounded resolution](relationships.md#inbound-sender-resolution-budget) rules;
+retained chain membership cannot bypass current authentication.
 
-A delivery that cannot yet be decrypted for a recoverable reason despite an
-eligible exact local key, depends on missing recoverable local DID/route/sync
-state or required sender resolution still within that section's budget, has
-known pending membership or missing relationship evidence requiring pre-receipt
-deferral under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), or is otherwise not safely
-classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
-[relationships.md section 9.1](relationships.md#deferred-delivery)'s retry rule: the wait consumes no sender-resolution
-budget and has no client retention cap. While local wait state is retained,
-mere redelivery does not retry; relevant evidence changes start a fresh bounded
-resolution sequence when needed, with waiting time excluded from its local
-retention stop under that document's [section 10.1](relationships.md#did-resolution-requirements). Loss of local wait state
-follows that section's receive/authentication rule. Mediator expiry does not
-clear the pending pair claim.
-This distinction prevents terminal wrong-recipient or malformed input from
-redelivering forever
-without allowing temporary local incompleteness to lose mail.
+A delivery awaiting recoverable decryption, local DID/route/sync state,
+required sender resolution, or pre-receipt relationship evidence under
+[vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)
+MUST NOT be acknowledged while it remains deferred under
+[relationships.md section 9.1](relationships.md#deferred-delivery). A delivery that is otherwise
+not safely classifiable MUST NOT be acknowledged either. That profile's
+[wait definition](relationships.md#deferred-delivery) and
+[resolution-accounting rules](relationships.md#shared-accounting-and-lost-wait-state)
+govern redelivery, evidence-change retries and loss of local wait state.
+This profile's accounting key includes the named replica; its pickup ACK scope
+and idempotency remain as defined above.
 
 Business handlers, rendering, replica synchronization and read state are
 not prerequisites for pickup acknowledgment.

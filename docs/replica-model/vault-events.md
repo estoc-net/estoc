@@ -2516,12 +2516,11 @@ Requirements:
   is no DID-less authenticated-key fallback. A non-null reference supplies
   the authenticated peer key under [section 4.1](#key-evidence); its `localKeyName`, `did` and
   `presentedDid` match this observation. Sender authentication and evidence
-  reuse MUST satisfy
-  [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s freshness rule, including for duplicate
-  deliveries. Commit/reuse that event and document first, then use its returned
-  event ID in the separate inbound commit; later resolutions cannot replace
-  the reference. Committed observations recover from retained evidence without
-  new resolution. It is local
+  reuse MUST satisfy [relationships.md sender freshness](relationships.md#sender-authentication-freshness)
+  and [rules for duplicates and recovery](relationships.md#duplicate-authentication-and-historical-recovery).
+  Commit/reuse that event and document first, then use its returned event ID
+  in the separate inbound commit; later resolutions cannot replace the
+  reference. It is local
   evidence metadata, excluded from the message hashes;
 - `relationshipBindingEventId` is REQUIRED and nullable; it references the exact
   `relationship.bound` selected under [sections 6.1](#receipt-and-relationship-evidence) and [6.6](#relationship-fold-and-address-index). Obtain its `eventId`
@@ -2629,21 +2628,18 @@ conflict. The generic event store remains payload-opaque. Its [section 5.3](even
 does not prove that every historical author is fork-free.
 
 The active runtime appends this event only after retained objects are durable.
-Only then may it ACK the account-scoped mediator delivery. Recipient and
-sender-authentication triage for both rendezvous and ordinary relationship
-traffic follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate). Recoverable key/route state,
-unavailable required sender resolution within that document's [section 10.1](relationships.md#did-resolution-requirements)
-budget, or a relationship-evidence deferral required by [section 6.1](#receipt-and-relationship-evidence) produces
-no `message.in` and no pickup ACK. That evidence wait follows [relationships.md section 9.1](relationships.md#deferred-delivery): waiting consumes no sender-resolution budget; relevant evidence
-changes permit a fresh bounded resolution sequence under that document's
-[section 10.1](relationships.md#did-resolution-requirements), excluding waiting time from its local retention stop. Mere
-redelivery does not retry authentication while local wait state is retained;
-loss of that state follows that document's [section-10.1](relationships.md#did-resolution-requirements) receive/authentication
-rule. Carriers allowed to commit with a null binding under [section 6.1](#receipt-and-relationship-evidence) still
-follow durable receipt before pickup ACK. Exhausted sender-resolution budgets
-and safely classified terminal input MUST instead be pickup-ACKed without
-`message.in`; this exception cannot bypass durable receipt for input that
-passes the receive and integrity checks.
+Normal pickup ACK follows the dependent resolution, binding and inbound commits
+in [distributed-delivery.md section 4.3](distributed-delivery.md#receive-a-message).
+Pre-receipt deferrals follow [relationships.md section 9.1](relationships.md#deferred-delivery)
+and produce no `message.in` or pickup ACK. That definition and its linked
+[resolution-accounting rules](relationships.md#shared-accounting-and-lost-wait-state)
+govern wait/retry scheduling; [section 6.1](#receipt-and-relationship-evidence)
+governs missing relationship evidence and pending-pair claims. Carriers allowed
+to commit with a null binding still follow durable receipt before pickup ACK.
+Safely classified terminal input, including sender-resolution exhaustion,
+MUST instead be pickup-ACKed without `message.in` under
+[relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt).
+This exception cannot bypass durable receipt for input that passes those checks.
 
 <a id="duplicate-transition-and-conflict-rules"></a>
 

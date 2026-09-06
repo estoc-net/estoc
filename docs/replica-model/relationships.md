@@ -544,16 +544,12 @@ obligation; only existing eligible unfinished work may resume under
 [distributed-delivery.md section 8.4](distributed-delivery.md#duplicate-receipt-handling). Current sender authentication is still
 required for the delivery.
 
-For input passing these checks, commit or reuse the exact resolution first.
-When a new binding is needed, commit it in a separate `Vault.commit` and obtain
-its returned `eventId`; only then commit `message.in` with that `relationshipBindingEventId`
-and its other immutable evidence references. Keep the receive lock across
-these dependent commits, releasing it before network acknowledgment work.
-A crash after resolution or binding but before inbound commit leaves reusable
-evidence, consumes no invitation and creates no pickup or ultimate ACK.
-On redelivery, repeat authentication under [section 10.1](#did-resolution-requirements) and
-reuse the binding. Safely identified integrity rejection is terminal without
-new input or response effect.
+For input passing these checks, follow [distributed-delivery.md section 4.3](distributed-delivery.md#receive-a-message)
+steps 4–6 for separate dependent resolution/binding/inbound commits, pickup ACK
+and carried-proof verification. The receive lock spans those commits, not
+network ACK work. On redelivery after a pre-receipt crash, authenticate again
+under [section 10.1](#duplicate-authentication-and-historical-recovery) and reuse committed evidence.
+Safely identified integrity rejection is terminal without new input or response effect.
 
 Duplicates reuse known consistent identity. Eligible retired historical
 recipients may record late input for cleanup, but neither duplicates nor new
