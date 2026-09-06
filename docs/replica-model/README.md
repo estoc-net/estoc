@@ -21,7 +21,7 @@ bytes. A relationship keeps the identity of its original address pair as
 either end changes address. Sending records intent before network effects;
 committed submission ends sending work, while peer acknowledgment records
 receipt information. See the [vault model](vault-events.md#model),
-[relationship model](rendezvous.md#what-it-is-for) and
+[relationship model](relationships.md#what-it-is-for) and
 [commit boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
 | Layer | Documents | Responsibility |
@@ -29,11 +29,11 @@ receipt information. See the [vault model](vault-events.md#model),
 | Storage primitives | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event envelope, commit, store interfaces, exact object identity and bytes |
 | File representation | [Vault folder](vault-folder.md) | Reference folder backend, readable interchange and backup |
 | Portable application state | [Vault events](vault-events.md) | Event payloads, evidence validation, folds and held roots |
-| Runtime protocols and policy | [Delivery](distributed-delivery.md), [Relationships and addresses](rendezvous.md) | Sending, receipt, acknowledgment, relationship formation and address policy |
+| Runtime protocols and policy | [Delivery](distributed-delivery.md), [Relationships and addresses](relationships.md) | Sending, receipt, acknowledgment, relationship formation and address policy |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Future per-replica pickup and encrypted remote synchronization |
 
-The historical filename `rendezvous.md` now covers the relationship and address
-policy profile. It defines no Estoc rendezvous wire handshake.
+The relationship and address policy profile defines no Estoc rendezvous wire
+handshake. Public/rendezvous addresses remain a discovery concept in that profile.
 
 <a id="reading-paths"></a>
 
@@ -41,11 +41,11 @@ policy profile. It defines no Estoc rendezvous wire handshake.
 
 | Task | Suggested path |
 | --- | --- |
-| Understand the system | [Vault model](vault-events.md#model) → [relationship model](rendezvous.md#what-it-is-for) → [commit and ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
+| Understand the system | [Vault model](vault-events.md#model) → [relationship model](relationships.md#what-it-is-for) → [commit and ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity and ObjectStore](dasl-objects.md#reading-guide) → [EventStore and Vault](event-store.md#reading-guide) → [folder backend and interchange](vault-folder.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas and folds by domain](vault-events.md#reading-guide) → [open and recovery procedures](vault-events.md#procedures) |
-| Implement sending | [Send procedure](distributed-delivery.md#send-an-ordinary-message) → [address selection](rendezvous.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
-| Implement receiving | [Receive procedure](distributed-delivery.md#receive-a-message) → [resolution](rendezvous.md#did-resolution-requirements) and [receipt gates](rendezvous.md#uniform-receipt) → [binding evidence](vault-events.md#receipt-and-relationship-evidence) → [scope](distributed-delivery.md#address-chains-and-observation-membership) and [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
+| Implement sending | [Send procedure](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
+| Implement receiving | [Receive procedure](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) and [receipt gates](relationships.md#uniform-receipt) → [binding evidence](vault-events.md#receipt-and-relationship-evidence) → [scope](distributed-delivery.md#address-chains-and-observation-membership) and [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Implement backup and recovery | [Recovery material](vault-folder.md#recovery-material-and-product-requirement) → [snapshot and export](vault-folder.md#snapshot-and-export) → [import and restore](vault-folder.md#import-and-restore) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
 | Explore future replication | Read the phase-1 documents first, then [replica mediation](replica-mediation.md#reading-guide) and [vault sync](vault-sync.md#reading-guide). Neither extension is required for phase 1. |
 
@@ -63,15 +63,15 @@ This index records the existing division of responsibilities.
 | Process durability, writer lock and commit | [ES §2.1](event-store.md#commit-and-durability-terminology), [ES §10](event-store.md#vault-interface) | [DD commit boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table), [VE receive-lock scope](vault-events.md#receipt-and-relationship-evidence) |
 | Raw CID identity and ObjectStore | [DO §§3–6](dasl-objects.md#accepted-dasl-cids) | [VF object paths](vault-folder.md#dasl-object-paths), [ES object interface](event-store.md#objectstore) |
 | Folder bytes, import and restore | [VF](vault-folder.md#reading-guide) | [ES interchange contract](event-store.md#interchange) |
-| Vault-event fields, typed references and folds | [VE](vault-events.md#reading-guide) | [DD wire procedures](distributed-delivery.md#reading-guide), [RZ address policy](rendezvous.md#reading-guide) |
+| Vault-event fields, typed references and folds | [VE](vault-events.md#reading-guide) | [DD wire procedures](distributed-delivery.md#reading-guide), [RZ address policy](relationships.md#reading-guide) |
 | Stored message and attachment normalization | [VE §8](vault-events.md#stored-message-document) | [DD hash projections](distributed-delivery.md#canonical-projections-and-hashes) |
 | Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
 | Inbound observation IDs, execution scope and execution IDs | [DD §9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE inbound fold](vault-events.md#inbound-message-and-execution-fold) |
-| Relationship ID and default allocation IDs | [RZ §10](rendezvous.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
-| Binding evidence, pending-pair claims and address index | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](rendezvous.md#deferred-delivery), [DD scope validation](distributed-delivery.md#address-chains-and-observation-membership) |
-| Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ early-privacy policy](rendezvous.md#early-private-address-policy-and-notifications), [RZ peer changes](rendezvous.md#peer-address-changes) |
-| Resolution freshness, failures and bounded retry | [RZ §5.1](rendezvous.md#did-resolution-requirements) | [RZ local wait state](rendezvous.md#deferred-delivery), [DD receive procedure](distributed-delivery.md#receive-a-message) |
-| Receipt gates and default contact/address policy | [RZ §9](rendezvous.md#uniform-receipt), [RZ §10.2](rendezvous.md#binding-and-contact-policy), [RZ §11](rendezvous.md#early-private-address-policy-and-notifications) | [DD receipt ordering](distributed-delivery.md#receive-a-message), [VE contact fold](vault-events.md#contact-fold) |
+| Relationship ID and default allocation IDs | [RZ §10](relationships.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
+| Binding evidence, pending-pair claims and address index | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](relationships.md#deferred-delivery), [DD scope validation](distributed-delivery.md#address-chains-and-observation-membership) |
+| Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ early-privacy policy](relationships.md#early-private-address-policy-and-notifications), [RZ peer changes](relationships.md#peer-address-changes) |
+| Resolution freshness, failures and bounded retry | [RZ §5.1](relationships.md#did-resolution-requirements) | [RZ local wait state](relationships.md#deferred-delivery), [DD receive procedure](distributed-delivery.md#receive-a-message) |
+| Receipt gates and default contact/address policy | [RZ §9](relationships.md#uniform-receipt), [RZ §10.2](relationships.md#binding-and-contact-policy), [RZ §11](relationships.md#early-private-address-policy-and-notifications) | [DD receipt ordering](distributed-delivery.md#receive-a-message), [VE contact fold](vault-events.md#contact-fold) |
 | Send, receive and ACK procedure ordering | [DD §4.2](distributed-delivery.md#send-an-ordinary-message), [DD §8](distributed-delivery.md#durable-end-to-end-acknowledgment), [DD §9.1](distributed-delivery.md#receive-a-message) | [VE schemas and folds](vault-events.md#reading-guide) |
 | Complete observation witness matching | [VE §10.5](vault-events.md#complete-observation-witnesses) | [VE peer-transition evidence](vault-events.md#relationship-peertransitioned), [VE ACK aggregation](vault-events.md#outbound-message-and-delivery-fold) |
 | Submission completion, ACK receipt timing and outbound work eligibility | [VE §9.8](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD applying ACK](distributed-delivery.md#applying-ack) |
@@ -84,8 +84,10 @@ This index records the existing division of responsibilities.
 
 Each specification ends with required conformance cases grouped by topic.
 Existing case numbers are retained. A prefix identifies the document, so
-[RZ-42](rendezvous.md#rz-42) is the existing rendezvous case 42, and
+[RZ-42](relationships.md#rz-42) is case 42 in the relationship profile, and
 [VE-129](vault-events.md#ve-129) is vault-events case 129.
+The relationship profile retains its historical `RZ` prefix for section
+shorthand and case IDs so existing review references still identify the same rules.
 
 | Prefix | Cases | Status |
 | --- | --- | --- |
@@ -94,7 +96,7 @@ Existing case numbers are retained. A prefix identifies the document, so
 | VF | [Vault folder](vault-folder.md#required-conformance-cases) | Phase 1 |
 | VE | [Vault events](vault-events.md#required-conformance-cases) | Phase 1 |
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
-| RZ | [Relationships and addresses](rendezvous.md#required-conformance-cases) | Phase 1 |
+| RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
 | RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
 
@@ -106,6 +108,10 @@ current locations. Code examples and derivation vectors live with their defining
 <a id="section-history"></a>
 
 ## Section history
+
+`relationships.md` was previously named `rendezvous.md`. The filename change
+preserves its section numbers, named anchors and `RZ` case IDs. Earlier reviews
+use the filename that existed at the commit they reviewed.
 
 The vault-events domain reordering retains every named anchor and conformance
 case ID. This table maps section numbers from commit `a720fdf` to the current

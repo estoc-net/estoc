@@ -24,13 +24,13 @@ deferred extensions:
 | [vault-folder.md](vault-folder.md) | the readable `.estoc/` interchange serialization |
 | [vault-events.md](vault-events.md) | the meaning and folds of the vault's own event types |
 | [distributed-delivery.md](distributed-delivery.md) | vault-first send, packaging, retry and end-to-end acknowledgment |
-| [rendezvous.md](rendezvous.md) | Symmetric relationships, pinned resolution and early address-rotation policy |
+| [relationships.md](relationships.md) | Symmetric relationships, pinned resolution and early address-rotation policy |
 | [replica-mediation.md](replica-mediation.md) | **deferred:** mediator fan-out and per-replica pickup acknowledgment |
 | [vault-sync.md](vault-sync.md) | **deferred:** encrypted anti-entropy through an untrusted sync store |
 
 Dependency runs downward. [dasl-objects.md](dasl-objects.md) defines the object layer used
 here. [vault-folder.md](vault-folder.md) serializes this model. [vault-events.md](vault-events.md) defines
-payloads above it. The delivery, rendezvous, mediation and sync protocols use
+payloads above it. The delivery, relationship, mediation and sync profiles use
 the event and object primitives but do not change their meaning.
 
 <!-- reading-guide:start -->

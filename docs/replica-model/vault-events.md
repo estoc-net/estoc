@@ -39,10 +39,10 @@ the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 | --- | --- | --- | --- |
 | Identity and naming | [Identity, keys and identifier types](#identity-seed-and-key-names); [Identity label](#identity-label) | [Runtime author](#runtime-author-fold) | [Open runtime](vault-events.md#open-the-writable-full-runtime) |
 | Mediation, DIDs and routes | [Key evidence and resolved documents](#message-keys-and-peer-evidence); [Mediation, DID and route events](#mediation-communication-dids-and-routes) | [Mediation](#mediation-fold); [Routes, DIDs and keys](#route-did-and-key-fold) | [Establish mediation](vault-events.md#establish-mediation); [Create DID](vault-events.md#create-a-communication-did); [Disclose address](vault-events.md#disclose-an-address) |
-| Relationships and rotation | [Binding and both address transitions](#relationships-and-address-changes) | [Relationship and address index](#relationship-fold-and-address-index) | [Identity and binding policy](rendezvous.md#symmetric-relationship-identity); [Early privacy policy](rendezvous.md#early-private-address-policy-and-notifications); [Rotate local address](vault-events.md#rotate-a-local-relationship-address) |
+| Relationships and rotation | [Binding and both address transitions](#relationships-and-address-changes) | [Relationship and address index](#relationship-fold-and-address-index) | [Identity and binding policy](relationships.md#symmetric-relationship-identity); [Early privacy policy](relationships.md#early-private-address-policy-and-notifications); [Rotate local address](vault-events.md#rotate-a-local-relationship-address) |
 | Contacts and profiles | [Contact events](#contacts); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Relationship profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](vault-events.md#delete-a-contact) |
 | Messages and delivery | [Stored content](#stored-message-document); [Outbound events](#outbound-message-events); [Inbound events and witnesses](#inbound-message-events) | [Inbound execution](#inbound-message-and-execution-fold); [Outbound delivery](#outbound-message-and-delivery-fold) | [Send](distributed-delivery.md#send-an-ordinary-message); [Receive](distributed-delivery.md#receive-a-message); [Recover receipt](distributed-delivery.md#receive-recovery) |
-| Invitations | [Disclosure](#disclosure) | [Invitation consumption](#invitation-fold) | [Discovery](rendezvous.md#out-of-band-discovery); [Receipt integrity](rendezvous.md#integrity-checks-and-durable-receipt) |
+| Invitations | [Disclosure](#disclosure) | [Invitation consumption](#invitation-fold) | [Discovery](relationships.md#out-of-band-discovery); [Receipt integrity](relationships.md#integrity-checks-and-durable-receipt) |
 | Erasure and retention | [Erasure and held roots](#erasure-and-collection) | [Held-root rules](#held-roots) | [Erase message](vault-events.md#erase-a-message) |
 
 <details>
@@ -180,7 +180,7 @@ replica, domain owner or process location.
 Changing a communication DID's keys or embedded service creates another
 `did:peer:4` entity. A relationship continues through
 `relationship.localTransitioned` under [section 6.5](#relationship-localtransitioned); rendezvous replacement
-follows [rendezvous.md section 14](rendezvous.md#retry-replacement-and-address-rollover). There is no local
+follows [relationships.md section 14](relationships.md#retry-replacement-and-address-rollover). There is no local
 communication-key generation or key-generation selection. Store generations
 retain their separate storage meaning.
 
@@ -513,7 +513,7 @@ peer key.
 
 - `presentedDid` is the exact DID string supplied for resolution, preserved
   across any resolver-internal URL or DNS normalization.
-- `did` is the canonical DID used by folds under [rendezvous.md section 5.2](rendezvous.md#peer-did-numalgo-4-profile),
+- `did` is the canonical DID used by folds under [relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile),
   including its exact-string rule for `did:web`. For Peer DID numalgo 4 it is
   the short form; first disclosure keeps the long form in `presentedDid`.
 - `documentCid` names the raw DASL object containing exact RFC 8785 canonical
@@ -845,7 +845,7 @@ receipt while its bound route has no terminal dependency, including after DID
 retirement. This rule applies equally to publicly disclosed and privately
 allocated addresses. No renewed registration is required to drain retained
 deliveries. An unknown address pair cannot establish a new relationship on a
-retired local DID. [rendezvous.md section 9](rendezvous.md#uniform-receipt) owns the receive procedure.
+retired local DID. [relationships.md section 9](relationships.md#uniform-receipt) owns the receive procedure.
 
 Retain the key/document evidence and usable mediation needed by existing
 relationships. Their messages still scope through the historical local chain;
@@ -944,7 +944,7 @@ to exactly one DID entity. Both validated Peer spellings map to that entity,
 but a recipient fragment must still identify its exact key-agreement method.
 The map retains retired DIDs and DIDs whose routes retired for historical
 input and proof joins. Present liveness controls sending and desired
-registration; new receipt uses [section 5.5](#did-retired) and [rendezvous.md section 9.2](rendezvous.md#hard-pre-vault-gate)'s
+registration; new receipt uses [section 5.5](#did-retired) and [relationships.md section 9.2](relationships.md#hard-pre-vault-gate)'s
 eligibility rule for live and retained historical addresses.
 Ambiguous or inconsistent mapping is an integrity conflict and prevents
 cryptographic use.
@@ -980,7 +980,7 @@ an integrity conflict; arrival order chooses none. A later intent/sender
 conflict does not release a structurally valid committed consumption. No
 consumption event is necessary. A reusable disclosure remains available for
 new relationships while its DID is live; disclosure policy chooses which
-addresses to publish under [rendezvous.md section 6](rendezvous.md#out-of-band-discovery).
+addresses to publish under [relationships.md section 6](relationships.md#out-of-band-discovery).
 
 <a id="12-relationships-and-address-changes"></a>
 
@@ -992,7 +992,7 @@ A relationship is an unordered pair of birth addresses with a stable ID and
 two independently replaceable ends. Public, rendezvous and pairwise describe
 address allocation/disclosure policy, not different relationship types. The
 local perspective supplies `localDidId` and the peer end; it does not affect the ID.
-[rendezvous.md section 10](rendezvous.md#symmetric-relationship-identity) owns the symmetric ID derivation.
+[relationships.md section 10](relationships.md#symmetric-relationship-identity) owns the symmetric ID derivation.
 
 <a id="121-receipt-and-relationship-evidence"></a>
 
@@ -1001,7 +1001,7 @@ local perspective supplies `localDidId` and the peer end; it does not affect the
 ### 6.1 Receipt and relationship evidence
 
 The **receive lock** is the vault-wide writer lock of [event-store.md section 10](event-store.md#vault-interface), acquired by the receive operation as the enclosing operation after network
-resolution and authentication. Hold it from pair lookup and [rendezvous.md section 9.3](rendezvous.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
+resolution and authentication. Hold it from pair lookup and [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
 commits; nested `Vault.commit` calls share it. Release it before network work
 or waiting for missing evidence. Outbound birth preparation uses the same lock
 for its binding lookup, recheck and commit. This serializes the operations
@@ -1020,7 +1020,7 @@ irrespective of the recipient's allocation policy. Under the receive lock:
    pending membership, no missing relationship evidence as defined below and
    no conflicting membership, select a new binding under [section 6.2](#relationship-bound) using
    the actual recipient DID and authenticated sender resolution; and
-5. apply [rendezvous.md section 9.3](rendezvous.md#integrity-checks-and-durable-receipt)'s receive-time superseded-sender and
+5. apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s receive-time superseded-sender and
    integrity checks; commit/reuse the selected binding before freezing its
    returned `eventId` in `message.in.relationshipBindingEventId`, and freeze
    `peerTransitionEventId` under [section 10.2](#message-in). Commit receipt before ACK processing,
@@ -1033,7 +1033,7 @@ its eventual scope must come from the validated transition carrying that exact
 observation. Missing relationship evidence defers and conflicting matches
 suppress effects; neither permits a new birth-address fallback. A proof-free
 input lacking enough local history to choose its binding remains pending before
-durable receipt, without pickup ACK, under [rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s
+durable receipt, without pickup ACK, under [relationships.md section 9.1](relationships.md#deferred-delivery)'s
 relationship-evidence retry rule.
 
 **Missing relationship evidence** means a binding, rooted transition prefix,
@@ -1068,7 +1068,7 @@ an unrelated local address or authorize continuation there.
 Receipt and relationship formation do not require a contact, a reply, a private
 address or a completed rotation. A control message may establish a binding and
 process scoped ACKs without creating a contact or selecting a privacy reply.
-Application/contact policy is defined in [rendezvous.md sections 10.2](rendezvous.md#binding-and-contact-policy) and [11](rendezvous.md#early-private-address-policy-and-notifications).
+Application/contact policy is defined in [relationships.md sections 10.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications).
 One-use invitation integrity follows [section 5.8](#invitation-fold) at the receipt boundary.
 
 These immutable evidence references preserve a message's interpretation through
@@ -1101,7 +1101,7 @@ contact, local successor or acknowledgment.
 `localDidId` names a local communication DID. The exact referenced `peer.resolved`
 has `localKeyName == did/<localDidId>/key-agreement`; its canonical `did` supplies the
 other birth address. Both addresses are distinct. `relationshipId` equals
-section [10](rendezvous.md#symmetric-relationship-identity) of [rendezvous.md](rendezvous.md)'s derivation over their sorted canonical strings.
+section [10](relationships.md#symmetric-relationship-identity) of [relationships.md](relationships.md)'s derivation over their sorted canonical strings.
 The local DID's document and the peer resolution snapshot retain their exact
 presented spellings, key authorizations and routes. Every key-agreement key
 authorized by that peer document starts `peerChain(R)`; the selected transport
@@ -1124,7 +1124,7 @@ resolution references with the same canonical DID, exact document CID and
 root local DID are equivalent binding evidence; different selected keys within
 that same document do not conflict. Incompatible roots, local perspective or
 peer document CIDs for one `R` are a binding conflict. A fresh resolver result
-cannot replace the pin; section [5.1](rendezvous.md#did-resolution-requirements) of [rendezvous.md](rendezvous.md) governs new authentication
+cannot replace the pin; section [5.1](relationships.md#did-resolution-requirements) of [relationships.md](relationships.md) governs new authentication
 and preparation independently.
 
 The birth addresses and initial pin never change after rotation. Another
@@ -1154,7 +1154,7 @@ cryptographic identity, choose a current address or change `R`.
 An outbound selected through a contact commits this assignment with its intent,
 even if the birth binding still awaits resolution. On inbound, ordinary
 application policy assigns an existing selected contact or the deterministic
-contact ID in [rendezvous.md section 10.1](rendezvous.md#contact-ids); control input alone assigns none.
+contact ID in [relationships.md section 10.1](relationships.md#contact-ids); control input alone assigns none.
 The writer reuses an existing assignment under its lock. Equal assignments
 are duplicates; distinct contacts assigned to one `R` are a visible assignment
 conflict, not an arrival-order choice. One contact may hold many relationships.
@@ -1210,7 +1210,7 @@ inbound message.
 - `presentedToDid` is byte-for-byte equal to `from_prior.sub`, plaintext `from`
   and the DID portion of authcrypt `skid`; for Peer DID numalgo 4 it is the
   valid long form on first disclosure. Other supported peer DIDs use their
-  validated exact spelling under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements);
+  validated exact spelling under [relationships.md section 5.1](relationships.md#did-resolution-requirements);
 - `priorResolutionEventId` names the exact `peer.resolved` event whose document and
   authentication method verify `fromPrior`;
 - `peerResolutionEventId` names the successor's exact `peer.resolved`; and
@@ -1230,7 +1230,7 @@ material creates a retryable deferred state; an invalid signature, claim, key
 or long form is a conflict.
 
 For predecessor spelling comparison, canonicalize `presentedFromDid`/`iss` under
-[rendezvous.md section 5.2](rendezvous.md#peer-did-numalgo-4-profile) and require equality with `peer.resolved(priorResolutionEventId).did`.
+[relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile) and require equality with `peer.resolved(priorResolutionEventId).did`.
 Byte equality with `peer.resolved(priorResolutionEventId).presentedDid` is not required. Numalgo-4
 long/short equivalence requires validation of the long form and its derived
 short form; other supported methods use that section's canonicalization,
@@ -1320,7 +1320,7 @@ same scoped, directed predecessor-to-successor rule.
 `fromDidId` and `toDidId` are distinct local DID entity IDs, with no role test.
 The successor MUST NOT already occur in this relationship's local chain. The
 ordinary allocator uses a fresh UUIDv7; the early privacy policy MAY use the
-deterministic successor ID in [rendezvous.md section 10](rendezvous.md#symmetric-relationship-identity). A DID used by another
+deterministic successor ID in [relationships.md section 10](relationships.md#symmetric-relationship-identity). A DID used by another
 relationship is not, by itself, a chain conflict. The privacy allocator MUST
 avoid such reuse; imports still validate address-pair ambiguity, not exclusive
 DID ownership.
@@ -1350,13 +1350,13 @@ Its `iss` is the predecessor's exact long form, its protected `kid` uses that
 spelling and an authorized authentication method, `sub` is the successor's
 long form, and integer `iat` is sampled once at rotation. Validate the signature
 against the immutable predecessor document. First disclosure of a local
-address always supplies this pinned long form under [rendezvous.md section 5.2](rendezvous.md#peer-did-numalgo-4-profile). Subsequent short-form messages do not change the pin.
+address always supplies this pinned long form under [relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile). Subsequent short-form messages do not change the pin.
 
 `triggerEventId` is REQUIRED and nullable. It names the `eventId` of the exact committed
 `message.in` observation, not its shared `messageId`, selected when the automatic
 early-privacy policy starts this transition; that input must supply the
 predecessor confirmation and qualify under
-[rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications). A manual/local rotation uses null. This reference
+[relationships.md section 11](relationships.md#early-private-address-policy-and-notifications). A manual/local rotation uses null. This reference
 only recovers the notification effect; relationship identity and chain folding
 do not depend on a handoff response. Repeated edge evidence must agree on it.
 
@@ -1386,7 +1386,7 @@ falling back to a predecessor or another relationship.
 An unconfirmed successor with a terminal route and no retained confirming input
 still has no continuation recovery in this profile: no branch or rollback is
 authorized. A new relationship requires a new address pair. Temporary outages
-are not terminal. Notification uses an ordinary message under [rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications); the edge itself creates no wire-level handshake or ACK obligation.
+are not terminal. Notification uses an ordinary message under [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications); the edge itself creates no wire-level handshake or ACK obligation.
 
 <a id="144-relationship-fold-and-address-index"></a>
 
@@ -1461,7 +1461,7 @@ they do not merge protocol identities.
 
 ### 7.1 Contact IDs
 
-See [rendezvous.md section 10.1](rendezvous.md#contact-ids).
+See [relationships.md section 10.1](relationships.md#contact-ids).
 
 <a id="contact-event-schemas"></a>
 
@@ -1544,7 +1544,7 @@ This preference selects among relationship addresses already eligible under
 [sections 9.2](#message-out) and [7.6](#contact-fold). It cannot change an endpoint, roll back a rotation or
 move a message between relationships. A publicly disclosed local address may
 send normally; fresh private allocation is the default policy in
-[rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications). `relationship.contactAssigned` supplies the
+[relationships.md section 11](relationships.md#early-private-address-policy-and-notifications). `relationship.contactAssigned` supplies the
 relationship-to-contact decision independently of these address preferences.
 
 <a id="contact-peerdidadded"></a>
@@ -1813,10 +1813,10 @@ or choose a predecessor. Network resolution, online transport and observed
 registration are subsequent work, not prerequisites to offline intent commit.
 Contact deletion and assignment conflicts suppress new interaction. A fold
 cannot choose among competing address transitions by clock order. Privacy
-policy may schedule an early rotation under [rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications), but
+policy may schedule an early rotation under [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications), but
 neither relationship formation nor ordinary sending waits for that policy.
 
-For a same-DID key change under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements), derive a
+For a same-DID key change under [relationships.md section 5.1](relationships.md#did-resolution-requirements), derive a
 `peer-key-changed` diagnostic from the retained authenticated `message.in`,
 its exact `peer.resolved` evidence and the unique relationship identified by
 the local recipient DID and canonical peer DID. Show it in that relationship's
@@ -1836,7 +1836,7 @@ The contact view derives remote-error diagnostics from a conflict-free logical
 report with unique R scope. Match it to retained outbound packages in that
 same R, using the protocol's thread and authenticated peer-document evidence.
 Report Problem requires `report.pthid == (outbound.thid ?? outbound.messageId)` under
-[rendezvous.md section 13](rendezvous.md#remote-errors-and-integrity-failures). Other protocols use their own correlation rules.
+[relationships.md section 13](relationships.md#remote-errors-and-integrity-failures). Other protocols use their own correlation rules.
 Exactly one compatible outbound must match; dropping conflicted evidence cannot
 resolve ambiguity. The ACK array is never a rejected-message selector.
 
@@ -2039,7 +2039,7 @@ yet committed, it contains the offline selection:
 
 The local DID must exist and be live. Canonicalize the exact selected peer
 spelling and derive `relationshipId` from the two birth addresses under
-[rendezvous.md section 10](rendezvous.md#symmetric-relationship-identity). No online resolution is required to commit intent.
+[relationships.md section 10](relationships.md#symmetric-relationship-identity). No online resolution is required to commit intent.
 Repeated unbound sends freeze the same selection. A known binding uses null;
 any non-null birth must agree with it. Missing evidence defers preparation,
 and contradictory birth/binding evidence is a relationship conflict.
@@ -2148,7 +2148,7 @@ Requirements:
   Its `localKeyName` equals the package's local key and its canonical `did` matches
   `recipientDid`. It is non-null for every phase-1 package, including a
   retained numalgo-4 resolution. First-package freshness and
-  snapshot reuse follow [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements);
+  snapshot reuse follow [relationships.md section 5.1](relationships.md#did-resolution-requirements);
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
   a raw DASL CID; duplicate members or invalid I-JSON are rejected before
@@ -2250,7 +2250,7 @@ This event records only a terminal failure. `scope` is `package` or `message`.
   submission for the intent.
 - `code == "expired"` MUST be message-scoped.
 - `code == "peer-key-changed"` is message-scoped with `packageId == null`;
-  [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements) defines this failure before package preparation.
+  [relationships.md section 5.1](relationships.md#did-resolution-requirements) defines this failure before package preparation.
 
 Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
 belong only to local trace and retry policy. They MUST NOT append
@@ -2511,7 +2511,7 @@ Requirements:
   the authenticated peer key under [section 4.1](#key-evidence); its `localKeyName`, `did` and
   `presentedDid` match this observation. Sender authentication and evidence
   reuse MUST satisfy
-  [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s freshness rule, including for duplicate
+  [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s freshness rule, including for duplicate
   deliveries. Commit/reuse that event and document first, then use its returned
   event ID in the separate inbound commit; later resolutions cannot replace
   the reference. Committed observations recover from retained evidence without
@@ -2625,14 +2625,14 @@ does not prove that every historical author is fork-free.
 The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Recipient and
 sender-authentication triage for both rendezvous and ordinary relationship
-traffic follows [rendezvous.md sections 9.1](rendezvous.md#deferred-delivery)–[9.2](rendezvous.md#hard-pre-vault-gate). Recoverable key/route state,
-unavailable required sender resolution within that document's [section 5.1](rendezvous.md#did-resolution-requirements)
+traffic follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate). Recoverable key/route state,
+unavailable required sender resolution within that document's [section 5.1](relationships.md#did-resolution-requirements)
 budget, or a relationship-evidence deferral required by [section 6.1](#receipt-and-relationship-evidence) produces
-no `message.in` and no pickup ACK. That evidence wait follows [rendezvous.md section 9.1](rendezvous.md#deferred-delivery): waiting consumes no sender-resolution budget; relevant evidence
+no `message.in` and no pickup ACK. That evidence wait follows [relationships.md section 9.1](relationships.md#deferred-delivery): waiting consumes no sender-resolution budget; relevant evidence
 changes permit a fresh bounded resolution sequence under that document's
-[section 5.1](rendezvous.md#did-resolution-requirements), excluding waiting time from its local retention stop. Mere
+[section 5.1](relationships.md#did-resolution-requirements), excluding waiting time from its local retention stop. Mere
 redelivery does not retry authentication while local wait state is retained;
-loss of that state follows that document's [section-5.1](rendezvous.md#did-resolution-requirements) receive/authentication
+loss of that state follows that document's [section-5.1](relationships.md#did-resolution-requirements) receive/authentication
 rule. Carriers allowed to commit with a null binding under [section 6.1](#receipt-and-relationship-evidence) still
 follow durable receipt before pickup ACK. Exhausted sender-resolution budgets
 and safely classified terminal input MUST instead be pickup-ACKed without
@@ -2761,7 +2761,7 @@ For each message ID group:
 
 Derive scopes per observation and check row and message ID-group consistency under
 [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) before union.
-[rendezvous.md section 9.3](rendezvous.md#integrity-checks-and-durable-receipt) rejects new superseded-sender input at receive time;
+[relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt) rejects new superseded-sender input at receive time;
 committed observations are never re-evaluated against later transitions.
 Their historical scope and existing unfinished work do not depend on today's
 current peer end. This does not bypass the ordinary evidence/conflict checks.
@@ -2786,7 +2786,7 @@ A **control observation** is one of:
   empty body/attachments and headers permitted by the Empty protocol;
 - a valid protocol-correlated Empty response or Trust Ping `ping-response`
   in the same R, whether or not it carries a rotation proof; or
-- a valid no-response error under [rendezvous.md section 13](rendezvous.md#remote-errors-and-integrity-failures), with null
+- a valid no-response error under [relationships.md section 13](relationships.md#remote-errors-and-integrity-failures), with null
   `fromPrior` and `pleaseAck`, valid protocol content and authenticated R scope.
 
 Control input remains durable and may form a binding, validate a transition,
@@ -2799,7 +2799,7 @@ application input even when it is the first message.
 Classification is the same at every local address. A type string alone does
 not hide an invalid control message or make it executable. Empty, ping-response
 and Report Problem that fail these predicates still cannot trigger automatic
-contact creation or early-privacy rotation under [rendezvous.md section 11](rendezvous.md#early-private-address-policy-and-notifications).
+contact creation or early-privacy rotation under [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
 Valid generic receipt ACKs do not request further ACKs. Binding is independent
 of these display and automatic-response policies.
 
@@ -2815,8 +2815,8 @@ protocol defines another display time.
 
 [distributed-delivery.md section 11](distributed-delivery.md#automatic-effects) defines effect identity and commit ordering;
 [section 8.2](distributed-delivery.md#deterministic-pure-ack) there owns the pure-ACK vector. [Section 9.1](#ids) of this document defines
-outbound ID derivation. [rendezvous.md section 11.1](rendezvous.md#automatic-response-selection) owns the
-rotation-notification vectors; its [section 13](rendezvous.md#remote-errors-and-integrity-failures) defines remote error handling.
+outbound ID derivation. [relationships.md section 11.1](relationships.md#automatic-response-selection) owns the
+rotation-notification vectors; its [section 13](relationships.md#remote-errors-and-integrity-failures) defines remote error handling.
 
 <a id="15-erasure-and-collection"></a>
 
@@ -2941,8 +2941,8 @@ absence never authorizes collection elsewhere.
 
 ## 13. Procedures
 
-Address selection and binding are defined in [rendezvous.md sections 8](rendezvous.md#ordinary-sending-and-birth-selection) and
-[10.2](rendezvous.md#binding-and-contact-policy); all sending and receipt use [distributed-delivery.md sections 4.2](distributed-delivery.md#send-an-ordinary-message) and
+Address selection and binding are defined in [relationships.md sections 8](relationships.md#ordinary-sending-and-birth-selection) and
+[10.2](relationships.md#binding-and-contact-policy); all sending and receipt use [distributed-delivery.md sections 4.2](distributed-delivery.md#send-an-ordinary-message) and
 [9.1](distributed-delivery.md#receive-a-message). These wire procedures and the runtime procedures below
 define required ordering. Implementations may combine steps transactionally
 but may not reverse the durability boundaries. Every instruction to append
@@ -3022,7 +3022,7 @@ intent, not a half identity.
 
 1. choose a configured live route, creating it first when necessary;
 2. choose a fresh UUIDv7 entity ID, or the deterministic early-privacy ID under
-   [rendezvous.md section 10](rendezvous.md#symmetric-relationship-identity) when that policy applies;
+   [relationships.md section 10](relationships.md#symmetric-relationship-identity) when that policy applies;
 3. derive the fixed authentication and key-agreement keys;
 4. build and validate a Peer DID numalgo-4 document encoding those keys and route;
 5. commit `did.created` with canonical short form, long form and `boundRouteId`.
@@ -3031,7 +3031,7 @@ There is no role field. A committed ID reuses its exact keys, document and route
 after a crash; it cannot be recreated using a new route. A conflicting or retired
 entity cannot be silently replaced. Registration of a mediated recipient must
 be verified before disclosure. First disclosure uses the long form under
-[rendezvous.md section 5.2](rendezvous.md#peer-did-numalgo-4-profile). Address allocation may prefer another mediator to
+[relationships.md section 5.2](relationships.md#peer-did-numalgo-4-profile). Address allocation may prefer another mediator to
 reduce linkability, but route choice does not establish a relationship.
 
 <a id="164-disclose-an-address"></a>
@@ -3088,7 +3088,7 @@ same closure rule in every full copy.
 A late message durably received under [section 5.5](#did-retired) and attributed to that
 tombstoned contact requires the same idempotent cleanup procedure. It cannot
 resurrect the contact or authorize a new response. A terminal recipient under
-[rendezvous.md section 9.2](rendezvous.md#hard-pre-vault-gate) instead produces no new `message.in` to clean up.
+[relationships.md section 9.2](relationships.md#hard-pre-vault-gate) instead produces no new `message.in` to clean up.
 
 <a id="167-rotate-a-local-relationship-address"></a>
 
@@ -3100,7 +3100,7 @@ resurrect the contact or authorize a new response. A terminal recipient under
    binding, assignment, predecessor and confirmation evidence;
 2. choose a live configured route and create a fresh successor under [section 13.3](#create-a-communication-did); its route may differ from the predecessor's;
 3. sample the rotation instant once, sign the predecessor-to-successor proof,
-   and select the exact trigger only for section [11](rendezvous.md#early-private-address-policy-and-notifications) of [rendezvous.md](rendezvous.md)'s policy;
+   and select the exact trigger only for section [11](relationships.md#early-private-address-policy-and-notifications) of [relationships.md](relationships.md)'s policy;
 4. atomically commit the successor and `relationship.localTransitioned`,
    rechecking evidence under the lock; retire no predecessor or shared resource;
 5. verify the successor's recipient registration before disclosure and resume
@@ -3113,7 +3113,7 @@ the exact committed DID, route, proof and trigger. It cannot create another
 branch or regenerate `iat`. A manual/local rotation with null trigger SHOULD
 queue a new ordinary Trust Ping with `response_requested: true` when no other
 message will solicit qualifying input at the successor. Its response can
-supply exact-successor confirmation under [rendezvous.md section 11.4](rendezvous.md#confirmation-and-overlap).
+supply exact-successor confirmation under [relationships.md section 11.4](relationships.md#confirmation-and-overlap).
 That local send decision is durable and follows the same submitted boundary.
 The operation changes only one end of one `R`; public-to-private and later
 private-to-private changes execute this same procedure.
@@ -3330,8 +3330,8 @@ There is no migration requirement from an earlier event vocabulary.
 24. <a id="ve-24"></a> Unlock/recovery and recoverable exact-method prerequisites defer without
     pickup ACK. Missing/pending relationship evidence under [section 6.1](#receipt-and-relationship-evidence) also
     defers receipt when required by that section, without message.in or pickup
-    ACK; it retries on relevant evidence changes under [rendezvous.md section 9.1](rendezvous.md#deferred-delivery). The wait consumes no sender-resolution budget and has no local retention
-    timeout; retry uses [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s fresh bounded resolution
+    ACK; it retries on relevant evidence changes under [relationships.md section 9.1](relationships.md#deferred-delivery). The wait consumes no sender-resolution budget and has no local retention
+    timeout; retry uses [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s fresh bounded resolution
     sequence when needed, excluding waiting time from its local retention stop.
     Foreign/nonexistent/wrong-purpose methods, unbound retired
     addresses and terminal routes are terminal. A retired address in a bound
@@ -3392,7 +3392,7 @@ There is no migration requirement from an earlier event vocabulary.
 40. <a id="ve-40"></a> The receiver verifies a rotation's `iss` and protected `kid` against its
     binding's exact pinned predecessor snapshot and accepts any integer
     Epoch-Seconds `iat`; neither `iat` nor a fresh resolver result selects a
-    snapshot ([rendezvous.md section 12](rendezvous.md#peer-address-changes)).
+    snapshot ([relationships.md section 12](relationships.md#peer-address-changes)).
 41. <a id="ve-41"></a> Successor/edge evidence commits before disclosure and registration is
     verified before first disclosure. Exact notification intent and package
     commit before their network submission.
@@ -3636,7 +3636,7 @@ There is no migration requirement from an earlier event vocabulary.
      fresh resolution. Retry and permitted repack use retained evidence;
      neither an old snapshot nor a local TTL bypasses the new-message ID rule.
      Every new non-numalgo-4 inbound observation also requires current sender
-     authentication under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements); a chain member absent
+     authentication under [relationships.md section 5.1](relationships.md#did-resolution-requirements); a chain member absent
      from the current document fails, and unavailable resolution defers
      without pickup ACK only within that section's per-delivery budget.
      Exhaustion is terminal input with pickup ACK and no `message.in`, without
@@ -3758,7 +3758,7 @@ There is no migration requirement from an earlier event vocabulary.
      not resolution accounting survived; successful authentication rediscovers
      any still-pending pair and returns to the wait. A relevant evidence-change
      retry also gets one fresh bounded sequence when resolution is required,
-     under [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements) and its conformance case
+     under [relationships.md section 5.1](relationships.md#did-resolution-requirements) and its conformance case
      61. Mediator expiry removes only that delivery; a later delivery cannot
      bypass the retained pending claim.
 130. <a id="ve-130"></a> Given the same validated numalgo-4 long form L and short form S, every

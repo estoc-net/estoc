@@ -76,7 +76,7 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Relationship formation and address-rotation policy belong to [rendezvous.md](rendezvous.md).
+Relationship formation and address-rotation policy belong to [relationships.md](relationships.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
 
@@ -92,7 +92,7 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the relationship/address-policy profile in [rendezvous.md](rendezvous.md); and
+- the relationship/address-policy profile in [relationships.md](relationships.md); and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -886,12 +886,12 @@ paths:
    process-durably appended the inbound vault observation; or
 2. **terminal pre-vault rejection** — it authenticated enough envelope and
    protocol state to classify the delivery safely under a profile such as
-   [rendezvous.md sections 9.2](rendezvous.md#hard-pre-vault-gate)–[9.3](rendezvous.md#integrity-checks-and-durable-receipt) (recipient, syntax, authentication,
+   [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt) (recipient, syntax, authentication,
    integrity and operational resource checks), recorded any bounded local
    diagnostic, and determined that the message MUST be discarded without `message.in`.
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
-portable message content. Recipient classification follows [rendezvous.md sections 9.1](rendezvous.md#deferred-delivery)–[9.2](rendezvous.md#hard-pre-vault-gate)'s exact-key and lifecycle rules. A retired DID retained in
+portable message content. Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s exact-key and lifecycle rules. A retired DID retained in
 an existing local relationship history still receives eligible input normally;
 an unbound retired address or terminal bound-route dependency takes the terminal
 rejection path, independently of public/private allocation.
@@ -907,7 +907,7 @@ state or required sender resolution still within that section's budget, has
 known pending membership or missing relationship evidence requiring pre-receipt
 deferral under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), or is otherwise not safely
 classifiable MUST NOT be acknowledged. Relationship-evidence waits follow
-[rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s retry rule: the wait consumes no sender-resolution
+[relationships.md section 9.1](relationships.md#deferred-delivery)'s retry rule: the wait consumes no sender-resolution
 budget and has no client retention cap. While local wait state is retained,
 mere redelivery does not retry; relevant evidence changes start a fresh bounded
 resolution sequence when needed, with waiting time excluded from its local
@@ -1099,7 +1099,7 @@ A conforming implementation demonstrates at least these cases:
    commit may redeliver and converges logically.
 5. <a id="rm-5"></a> A safely classified terminal pre-vault rejection may be pickup-ACKed without
    `message.in`, while recoverable local prerequisites and sender-resolution
-   unavailability within [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s budget remain pending.
+   unavailability within [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s budget remain pending.
 6. <a id="rm-6"></a> Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
 7. <a id="rm-7"></a> `recipient_did` actually filters status and delivery.
@@ -1152,7 +1152,7 @@ A conforming implementation demonstrates at least these cases:
     and unbound retired DIDs use the terminal pre-vault ACK path and do not
     remain pending. A retired historical local address with a valid non-terminal
     bound route still receives eligible input; unavailable required sender
-    resolution instead defers only within [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s budget.
+    resolution instead defers only within [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s budget.
     Definitive DNS/not-found, invalid-document, unsupported-method and
     SSRF-forbidden results, or sender-resolution budget exhaustion, use the
     terminal pre-vault ACK path under that section. Repeated delivery of the
@@ -1160,10 +1160,10 @@ A conforming implementation demonstrates at least these cases:
     local state cannot take that budget's terminal path.
     Known pending membership or missing relationship evidence preventing
     receipt under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
-    using [rendezvous.md section 9.1](rendezvous.md#deferred-delivery)'s evidence-change retry rule. This wait
+    using [relationships.md section 9.1](relationships.md#deferred-delivery)'s evidence-change retry rule. This wait
     consumes no sender-resolution budget and has no client retention cap.
     While local wait state is retained, redelivery alone does not resolve
     again; relevant evidence changes start one fresh shared bounded sequence
     when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows [rendezvous.md section 5.1](rendezvous.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
+    retention stop. Loss of local wait state follows [relationships.md section 5.1](relationships.md#did-resolution-requirements)'s receive/authentication rule. Mediator expiry does not clear the pair
     claim.
