@@ -743,13 +743,18 @@ An independent reader MUST NOT bypass this coordination by directly opening
 `objects/<cid>` merely because no daemon is currently running.
 
 In this disk implementation, a read-only process without a daemon MUST acquire
-the same single-writer ownership used by writable open before checking object
-presence and opening `objects/<cid>`. It holds ownership until its last object
-stream completes, fails or is cancelled, or the owning process exits. The
-ownership primitive MUST be available without creating or modifying files,
-including `local/`; its identity MUST be shared by readers and future writers.
+the same ownership used by writable open, shared among readers and exclusive
+against a writer, before checking object presence and opening `objects/<cid>`.
+Independent readers MUST be able to share it. A reader may acquire it per stream
+or retain it across streams; no stream opens without ownership, and ownership
+protecting a stream cannot be released until that stream completes, fails or
+is cancelled, or its owning process exits. Ending one stream or reader does not
+release another's ownership. The ownership primitive MUST be available without
+creating or modifying files, including `local/`; its identity MUST be shared by
+readers and future writers.
 An advisory lock on the existing folder is one possible implementation. A
-writable open started meanwhile waits or fails before recovery or collection.
+writable open started meanwhile waits or fails at section 11.1 step 4 until
+every reader releases ownership.
 Checking for a daemon and then opening unprotected bytes is forbidden. If a
 writer wins ownership first, the reader uses its broker, waits or fails. The
 active daemon's per-operation lock is separate from this lifetime ownership;
@@ -886,10 +891,12 @@ The following require a new folder/vault version:
     `event-store.md` section 10. Holding the disk writer's process lock alone
     cannot authorize an unprotected CLI stream; a brokered reader remains
     protected during collection and fails if its owning daemon exits.
-43. With no daemon, a read-only CLI in the section-15 ownership implementation
-    opens two object streams without creating or modifying files. A later
-    writable open waits or fails, including after only one stream ends; both
-    streams can finish completely. Once the last stream completes, fails or
-    is cancelled, or the reader process exits, a new writer can acquire
+43. With no daemon, two read-only CLI processes in the section-15 ownership
+    implementation can open and finish streams concurrently without creating
+    or modifying files; one reader can also hold two streams. A later
+    writable open waits or fails, including after only one stream or reader
+    ends; all protected streams can finish completely. Once the last stream
+    completes, fails or is cancelled, or all remaining reader owners exit,
+    a new writer can acquire
     ownership and collect an otherwise eligible object. No collection overlaps
     an unprotected stream.
