@@ -30,7 +30,7 @@ This profile defines:
   plaintext, encrypted packages and mediator deliveries;
 - which DIDComm headers are frozen at intent time;
 - package preparation and valid repackaging;
-- submission, expiry and hold states, with independent peer-receipt information;
+- submission and expiry states, with independent peer-receipt information;
 - end-to-end durable receipt observations with DIDComm `please_ack` and `ack`;
 - duplicate and conflict handling across process restarts and future replicas;
 - the rendezvous bootstrap delivery profile; and
@@ -252,7 +252,7 @@ in `vault-events.md` section 14.8, regardless of its `pleaseAck` or `ack` arrays
 
 The active phase-1 runtime may later:
 
-1. stop when submitted, held, terminally failed, expired or conflicted under
+1. stop when submitted, terminally failed, expired or conflicted under
    `vault-events.md` section 14.8;
 2. fold target contact/channel;
 3. choose valid sender DID, peer DID/key and exact resolution evidence;
@@ -444,17 +444,15 @@ submission state or work eligibility.
 
 Eligible unsubmitted work may use local timers, backoff and recovery. Protocols
 may impose tighter limits; `rendezvous.md` section 14 defines initial-message
-defaults. A hold pauses work until released. Release, route recovery or a
-changed clock never reopens a submitted or terminally failed outbound.
-Future synchronization MUST NOT create a hold merely because another author
-produced the intent.
+defaults. Route recovery or a changed clock never reopens a submitted or
+terminally failed outbound.
 
 `vault-events.md` section 15.3 is the sole normative envelope-retention rule.
-An unsubmitted, non-terminal package remains retained through temporary holds
-or unavailable routes. Committed submission releases this outbound's envelope
-contribution without waiting for ACK or keeping bytes for later response
-replay. Event skeletons, message content and independent references retain
-their own lifetimes under that fold.
+An unsubmitted, non-terminal package remains retained through unavailable
+routes and retryable resolution failures. Committed submission releases this
+outbound's envelope contribution without waiting for ACK or keeping bytes for
+later response replay. Event skeletons, message content and independent
+references retain their own lifetimes under that fold.
 
 ## 8. Durable end-to-end acknowledgment
 
@@ -907,8 +905,6 @@ message.packageRetired            package no longer submitted
 delivery.submitted                transport accepted a package
 delivery.failed                   terminal package or message failure
 delivery.acknowledged             ultimate peer ACK named the wire ID
-delivery.held                     user or policy hold
-delivery.released                 release of one exact hold
 message.in                        durable inbound observation
 peer.transitioned                 DID continuation in one named relationship
 relationship.admissionDecided     local bootstrap admission decision
@@ -1101,9 +1097,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 48. After initial-package binding and restart, direct replies and later
     verified rotations reconstruct the same relationship execution ID; no
     handoff observation is required to start the scope.
-49. A held unsubmitted package survives GC and release with its exact envelope.
-    Committed submission or terminal failure releases its contribution under
-    the retention fold; releasing a hold cannot reopen submitted work.
+49. An unsubmitted package survives route unavailability and GC with its exact
+    envelope. Committed submission or terminal failure releases its contribution
+    under the retention fold; route recovery cannot reopen submitted work.
 50. Recovery completes missing initial bindings even without inbound
     traffic, and finds pickup-ACKed unfinished work without redelivery.
 51. A crash after an outcome-unknown transport call can reset the local retry

@@ -479,7 +479,7 @@ concurrently use the same local author.
 10. commit or reuse the initial-package binding under `vault-events.md` section
     12.5 before network submission; and
 11. submit against the pinned snapshot and recipient key with bounded retry
-    only while unsubmitted and permitted by expiry, hold and the rendezvous
+    only while unsubmitted and permitted by expiry and the rendezvous
     retry ceiling. A committed `delivery.submitted` completes this MID.
 
 The first message is the real Trust Ping or application message, not a custom
@@ -785,8 +785,8 @@ these steps. It cannot share the response-intent batch:
 7. only after all required local facts and response intent are committed,
    register responder pairwise DID canonical short form;
 8. prepare with long-form first-disclosure sender evidence; and
-9. submit with bounded retry only while unsubmitted and permitted by expiry
-   and hold. A committed `delivery.submitted` completes the response MID,
+9. submit with bounded retry only while unsubmitted and permitted by expiry.
+   A committed `delivery.submitted` completes the response MID,
    independently of handoff confirmation.
 
 The committed final admission result is the decision boundary; handoff intent
@@ -1179,8 +1179,8 @@ The common completion rule also applies to handoff, confirmation and rejection
 responses; missing ACK or a duplicate inbound never reopens a submitted MID.
 
 Expiry is frozen in `message.out` and MUST NOT be extended by retry or restart.
-No attempt is permitted at or after expiry, or while another hold, terminal
-failure or proof gate forbids it. An outcome-unknown attempt reuses the same
+No attempt is permitted at or after expiry, or while a terminal failure or
+proof gate forbids it. An outcome-unknown attempt reuses the same
 permitted exact package. Absence of `delivery.submitted` is not evidence that
 no transport call occurred, and mediator idempotency does not count attempts.
 A hard crash-persistent cap would require durable pre-call reservations and a

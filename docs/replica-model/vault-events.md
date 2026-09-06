@@ -1108,39 +1108,7 @@ append an expired failure merely because an already-submitted message later
 reaches expiry. A later user attempt requires a new `message.out` and wire ID.
 Sensitive strings remain in local trace; `code` is a stable non-secret value.
 
-### 9.7 `delivery.held`
-
-```json
-{
-  "type": "delivery.held",
-  "roots": [],
-  "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "because": "user"
-  }
-}
-```
-
-`because` is `user` or `policy`. A hold stops automatic preparation and
-submission vault-wide. There is no imported hold.
-
-### 9.8 `delivery.released`
-
-```json
-{
-  "type": "delivery.released",
-  "roots": [],
-  "data": {
-    "mid": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "hold": "019b2a78-76b3-7ea0-abd1-4cb3537c48fd"
-  }
-}
-```
-
-`hold` names one `delivery.held` event. A message remains held while at least
-one exact hold has no release; wall-clock ordering is irrelevant.
-
-### 9.9 `delivery.acknowledged`
+### 9.7 `delivery.acknowledged`
 
 ```json
 {
@@ -1926,7 +1894,7 @@ identity for the same wire ID. Binding says nothing about remote admission,
 receipt or application success.
 
 In this Bob-local example, the fingerprint used to derive `relationship` is
-Bob's own `k3j9n0m4x6q2w7c8v5p1d8s0fa`, not the remote Alice key. Sections 9.9
+Bob's own `k3j9n0m4x6q2w7c8v5p1d8s0fa`, not the remote Alice key. Sections 9.7
 and 11.2 use the schematic `<alice-pairwise-key-fingerprint>` for a remote
 successor key. These illustrative message IDs are not additional executable
 MID vectors; `distributed-delivery.md` section 9 owns those vectors.
@@ -2371,8 +2339,6 @@ For a valid outbound:
   `fromPrior` only under validated repack rules;
 - one package is inactive after `message.packageRetired` or a package-scoped
   terminal failure, while its skeleton remains historical evidence;
-- unresolved holds are exact `delivery.held` events not named by
-  `delivery.released`;
 - `acknowledged` is true if a valid authenticated inbound `ack` names the wire
   ID on a validated peer-scoped continuation under the membership rules above,
   the carrier has a unique derived scope, and all proof gates pass;
@@ -2385,10 +2351,10 @@ For a valid outbound:
   input, restore or missing ACK;
 - a message-scoped terminal failure, including expiry, permanently ends
   new automatic preparation/submission for that intent;
-- before submission, work additionally requires no unresolved hold, no message
-  terminal failure, unexpired timing, and valid available target/proof/content
-  evidence. Submitting a chosen package also requires that it is not retired
-  or terminally failed and its exact valid envelope remains available;
+- before submission, work additionally requires no message terminal failure,
+  unexpired timing, and valid available target/proof/content evidence.
+  Submitting a chosen package also requires that it is not retired or
+  terminally failed and its exact valid envelope remains available;
 - `pleaseAck` and `acknowledged` do not affect these work predicates. An ACK
   received while `delivery.submitted` is absent does not synthesize completion;
   eligible submission may still resume.
@@ -2409,7 +2375,6 @@ The displayed submission outcome has this precedence:
 ```text
 conflict
 submitted
-held
 expired-or-terminal-failure
 prepared
 queued
@@ -2417,12 +2382,12 @@ queued
 
 `acknowledged` and its optional late indicator are separate receipt information,
 not alternative submission outcomes. A missing ACK never downgrades a submitted
-message. A later failure or hold likewise does not erase evidence of submission.
+message. A later failure likewise does not erase evidence of submission.
 
 After restore or local trace loss, the fold uses only this portable evidence.
 An outbound with only `message.out` is `queued`, even if a previous runtime
-recorded retryable failures in its trace. Existing prepared, submitted, held,
-or terminal evidence keeps its stated precedence; receipt observations remain
+recorded retryable failures in its trace. Existing prepared, submitted or
+terminal evidence keeps its stated precedence; receipt observations remain
 independent.
 
 Expiry is an irreversible no-more-work boundary for an unsubmitted intent;
@@ -2531,7 +2496,7 @@ It releases this message's envelope contribution for every package. An ACK
 does not affect retention, including when an outcome-unknown transport attempt
 has no `delivery.submitted`.
 
-Holds, unavailable routes, retryable resolution failures and other reversible
+Unavailable routes, retryable resolution failures and other reversible
 scheduling conditions do not release an unsubmitted, non-terminal package.
 There is no separate response-replay retention contribution or closure event.
 After submission, even a duplicate inbound request cannot require these bytes
@@ -2544,7 +2509,7 @@ of a CID. Another independent non-erased reference may retain the same bytes.
 Conflicted evidence is not release authority: disputed package roots remain
 held until unambiguous release evidence or explicit erasure exists.
 
-Submission eligibility additionally checks current time, holds, addressing,
+Submission eligibility additionally checks current time, addressing,
 proof, route and available bytes. Scheduling eligibility is not a retention
 predicate.
 
@@ -2703,8 +2668,7 @@ Merge is event-store union by `eid`. It never:
 
 - rewrites an event;
 - removes another replica's decision;
-- treats another author as read-only history;
-- creates `delivery.held` because of authorship; or
+- treats another author as read-only history; or
 - adopts a segment as opaque state.
 
 After merge, every fold is recomputed from the union.
@@ -2981,9 +2945,8 @@ There is no migration requirement from an earlier event vocabulary.
     `206bcd7e-7320-5512-bbdb-a4d19331d58e` from their published inputs.
 67. Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
-68. An otherwise retained unsubmitted package survives hold, GC and release
-    with its exact bytes; route unavailability also does not release it.
-    Releasing a hold cannot reopen a submitted MID.
+68. An otherwise retained unsubmitted package survives route unavailability
+    and GC with its exact bytes. Route recovery cannot reopen a submitted MID.
 69. Retiring an unsubmitted package releases its delivery retention contribution
     without completing the MID. Retiring a submitted package does not undo the
     MID's committed submission evidence.
