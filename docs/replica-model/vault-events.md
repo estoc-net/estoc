@@ -487,7 +487,7 @@ does not erase retained messages.
 
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
-A phase-1 one-use OOB invitation MUST disclose a rendezvous DID; its final
+A phase-1 one-use OOB invitation MUST disclose a rendezvous DID; its
 durable bootstrap receipt consumes it under section 14.9.
 
 This is the permanent record that a DID was revealed for a purpose.
@@ -516,8 +516,8 @@ messages.
 
 For a rendezvous DID, retirement stops new input when `did.retired` commits.
 The writer rechecks DID liveness under the same lock as inbound commit; an
-input already committed remains eligible for relationship materialization
-and a response from its pairwise DID, subject to current contact tombstones,
+application candidate already committed remains eligible for relationship
+materialization and a response from its pairwise DID, subject to current contact tombstones,
 integrity and the pairwise DID's own lifecycle. Later deliveries to the retired
 rendezvous key, including duplicates, are terminal wrong-recipient input under
 `rendezvous.md` section 9. No timestamp cutoff or replay-time clock comparison
@@ -530,10 +530,15 @@ their handoff can use the retained rendezvous signing key and a live pairwise
 route. Emergency compromise policy may stop work sooner without rewriting
 historical input, invitation consumption or proof evidence.
 
-An envelope that still arrives for a retired relationship key may be durably
-recorded before lifecycle rules prevent further interaction. Retirement is
-not retroactive erasure: historical events, key derivation and contact-scoped
-transition evidence remain.
+An envelope arriving for a retired relationship key MUST still follow ordinary
+decryption, authentication and durable receipt when the recipient remains
+eligible under `rendezvous.md` section 9.2; a terminal bound-route dependency
+is not eligible, regardless of DID role. DID retirement alone stops sending
+from that DID and removes its desired registration, not receipt. Scope
+derivation is unchanged. Contact tombstones prohibit renewed interaction and
+require section 16.6's late-message cleanup. Retirement is not retroactive
+erasure: historical events, key derivation and contact-scoped transition
+evidence remain.
 
 ## 6. `identity.label`
 
@@ -1195,7 +1200,7 @@ See `distributed-delivery.md` section 9.
     "myKey": "did/019b2a54-05bd-74ef-b8ac-e8375cb776c2/key-agreement",
     "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
-    "peerResolution": "019b2a72-0626-7a87-a310-941fe4c1ce77",
+    "peerResolution": "019b2a71-4c18-760a-9017-b3e265aa89d0",
     "presentedDid": "did:peer:4zQm...short",
     "did": "did:peer:4zQm...short",
     "thid": null,
@@ -1231,9 +1236,12 @@ Requirements:
 - `peerResolution` is REQUIRED and names the exact `peer.resolved` used to
   authenticate the sender, or null only when no authenticated sender DID is
   available. Its `myKey`, `peerKey`, `did` and `presentedDid` match this
-  observation. Commit/reuse that event and document first, then use its returned
+  observation. Sender authentication and evidence reuse MUST satisfy
+  `rendezvous.md` section 5.1's freshness rule, including for duplicate
+  deliveries. Commit/reuse that event and document first, then use its returned
   event ID in the separate inbound commit; later resolutions cannot replace
-  the reference. It is local
+  the reference. Committed observations recover from retained evidence without
+  new resolution. It is local
   evidence metadata, excluded from the message hashes;
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
   Peer DID long form when first seen;
@@ -1319,15 +1327,13 @@ conflict. The generic event store remains payload-opaque. Its section 5.3
 does not prove that every historical author is fork-free.
 
 The active runtime appends this event only after retained objects are durable.
-Only then may it ACK the account-scoped mediator delivery. Ciphertext that
-cannot yet be decrypted or mapped to locally available key material produces
-no `message.in` and no pickup ACK; it remains a local deferred delivery and is
-retried after local state changes.
-
-The rendezvous pre-vault exception is defined in `rendezvous.md`: a safely
-classified hard rejection received through Message Pickup MUST be pickup-ACKed
-without `message.in`. That exception does not apply to admitted candidates or
-ordinary relationship traffic.
+Only then may it ACK the account-scoped mediator delivery. Recipient and
+sender-authentication triage for both rendezvous and ordinary relationship
+traffic follows `rendezvous.md` sections 9.1–9.2. Recoverable key/route state or
+unavailable required sender resolution produces no `message.in` and no pickup
+ACK. Safely classified terminal input MUST instead be pickup-ACKed without
+`message.in`; this exception cannot bypass durable receipt for input that
+passes the receive and integrity checks.
 
 ### 10.3 Duplicate, transition and conflict rules
 
@@ -1601,6 +1607,12 @@ under `rendezvous.md` section 10. Sender DID and exact document come from the
 input's `peerResolution`. These committed references supply scope before
 materialization; no separate receive-configuration reference is needed.
 
+Candidate scope does not imply permission to materialize. Only an application
+candidate under `rendezvous.md` section 10 can become an origin or select a
+handoff. Control observations under section 14.7 and other non-handoff input
+retain their scope but do not themselves create a contact or relationship DID;
+their ACK handling and recovery follow that same section-10 rule.
+
 Before a new input commit, the writer applies `rendezvous.md` section 9.3's
 integrity checks, including contact tombstones, sender-DID consistency and
 one-use availability, and rechecks the recipient DID's live receive state
@@ -1630,7 +1642,7 @@ allows committed candidates to finish under section 5.5.
     "id": "9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3",
     "contact": "5015e216-bc69-52d8-a7e1-c5c3c9a01254",
     "originInboundMid": "8fa18330-6cb7-5ff2-b9b8-603c0a568194",
-    "originResolution": "019b4d11-22d3-7fd0-82fb-f33864a75dd4",
+    "originResolution": "019b4d12-7e90-7622-bc67-3a624f0ec185",
     "originWireId": "019b4d12-090a-7c3b-92f7-ac2c51f50db4",
     "originCreatedTime": 1788442800,
     "peerKey": "z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis",
@@ -1651,7 +1663,8 @@ DID and route while remaining separate
 application messages.
 
 Before this event exists, the active phase-1 runtime selects the origin as the
-first durable, conflict-free candidate it is about to materialize. It records the
+first durable, conflict-free application candidate it is about to materialize
+under `rendezvous.md` section 10. It records the
 selected contact, local DID, origin, peer and handoff outbound,
 together with the origin's exact sender `originResolution` and compact
 `fromPrior`. Later candidates or duplicate observations cannot rewrite
@@ -1676,7 +1689,8 @@ Normative rules:
 - `id`, `contact` and `ourDid` satisfy `rendezvous.md` section 10's derivations
   using the referenced canonical rendezvous DID and `peerKey`;
 - `originWireId`, nullable `originCreatedTime`, `peerKey` and `theirDid` match
-  the origin `message.in`;
+  the origin `message.in`, which must be an application candidate eligible for
+  handoff selection under `rendezvous.md` section 10;
 - `originResolution` equals that selected observation's `peerResolution`.
   It pins one exact sender document even if another observation of the same
   MID later authenticates under a different document revision. All origin
@@ -1906,7 +1920,9 @@ The fold also maintains a reverse map from every local communication key name
 to exactly one DID entity. Both validated Peer spellings map to that entity,
 but a recipient fragment must still identify its exact key-agreement method.
 The map retains retired DIDs and DIDs whose routes retired for historical
-input and proof joins; present liveness controls new ingress and sending.
+input and proof joins. Present liveness controls sending and desired
+registration; new receipt uses section 5.5 and `rendezvous.md` section 9.2's
+eligibility rule, including its retired-relationship-DID exception.
 Ambiguous or inconsistent mapping is an integrity conflict and prevents
 cryptographic use.
 
@@ -1915,9 +1931,9 @@ cryptographic use.
 Rendezvous DIDs use the ordinary DID/route fold in section 14.3 and retirement
 under section 5.5. Durable input is joined to its immutable recipient DID and
 exact sender resolution under section 12.1, independently of present liveness.
-Deferral is allowed only for an exact known recipient method with a concrete
-recoverable dependency, or before unlock/recovery makes the key index
-authoritative. Terminal or foreign input follows `rendezvous.md` section 9.
+Receive deferral follows `rendezvous.md` section 9.1, including unavailable
+required sender resolution for an otherwise eligible exact recipient method.
+Terminal or foreign input follows its section 9.2.
 
 Every committed bootstrap candidate with consistent section-12.1 evidence
 derives its deterministic relationship scope. It has no pending or rejected
@@ -1941,7 +1957,9 @@ likewise preserve prior history and suppress affected new work; fold order
 does not choose an input to execute.
 
 Committed candidates recover without mediator redelivery, user review or an
-expiry check. Only protocol-supported automatic effects execute; unknown
+expiry check. Only application candidates materialize under `rendezvous.md`
+section 10; control and other non-handoff inputs retain that section's ACK-only
+rules on recovery. Only protocol-supported automatic effects execute; unknown
 application types remain stored and visible through ordinary message rules.
 Relationship termination uses contact and DID lifecycle operations.
 
@@ -2157,10 +2175,19 @@ processing rules, including the initial response's `ack` and any `please_ack`;
 no-handoff errors generate no automatic response. They are excluded from
 thread display, unread counts, notifications and application-content handlers.
 A no-handoff report's attempt
-diagnostic follows section 14.6. An admitted initial message, including Trust
-Ping `ping`, is not a control observation merely because it bootstraps a
-relationship; the rendezvous fold projects the candidate. A type name alone
+diagnostic follows section 14.6. A received initial application message,
+including Trust Ping `ping`, is not a control observation merely because it
+bootstraps a relationship; the rendezvous fold projects the candidate. A type name alone
 does not make an invalid Empty, handoff or error message a control observation.
+
+Receipt at a rendezvous DID does not override these rules: a control candidate
+never selects a handoff or becomes a relationship origin. The materialization
+and ACK rules in `rendezvous.md` section 10 also exclude unmatched or invalid
+Empty, `ping-response` and Report Problem input from handoff selection without
+classifying it as valid control or hiding it by type alone. Valid receipt ACK
+requests use the generic pure-ACK profile, subject to that section's existing
+relationship and lifecycle prerequisites; no-handoff errors still receive no
+response.
 
 A user-visible thread contains each remaining logical application message once,
 positioned by the earliest canonical observation unless its application
@@ -2454,8 +2481,9 @@ list when no new objects are needed; `Vault.events` is read-only.
    observation; cross-author ordinal reuse does not block open or import;
 7. recover missing bindings for prepared initial attempts identified under
    `rendezvous.md` section 8 and validated under section 12.3, then enumerate
-   committed inbound observations with unfinished materialization, transition, ACK
-   or protocol-defined deterministic effect work;
+   committed inbound observations with unfinished application candidate
+   materialization, transition, ACK or protocol-defined deterministic effect
+   work; control input never becomes a materialization trigger on recovery;
 8. idempotently reconcile those observations, relationship materialization,
    ordinary erasure closure and eligible unsubmitted outbound work from
    portable history;
@@ -2574,8 +2602,10 @@ same closure rule in every full copy.
 5. preserve a shared rendezvous DID unless separately retired; and
 6. run the locked held-root fold and collection under section 15.3.
 
-A late message attributed to that tombstoned contact requires the same
-idempotent cleanup procedure.
+A late message durably received under section 5.5 and attributed to that
+tombstoned contact requires the same idempotent cleanup procedure. It cannot
+resurrect the contact or authorize a new response. A terminal recipient under
+`rendezvous.md` section 9.2 instead produces no new `message.in` to clean up.
 
 ## 17. Merge, synchronization and restore
 
@@ -2727,8 +2757,8 @@ There is no migration requirement from an earlier event vocabulary.
     classification. This includes direct replies and subsequent-attempt handoff
     responses on an already bound relationship, with or without `from_prior`.
     Their explicit ACKs and eligible ACK requests still process; none enters
-    thread, unread counts, notifications or application-content handlers. An
-    admitted initial Trust Ping remains a candidate, not a control observation.
+    thread, unread counts, notifications or application-content handlers. A
+    received initial Trust Ping remains an application candidate.
 21. Pure ACK has `pleaseAck == null`; it completes when `delivery.submitted`
     commits under the common rule and creates no ACK loop.
 22. Duplicate receipt of a message whose requested IDs were already honored
@@ -2736,12 +2766,15 @@ There is no migration requirement from an earlier event vocabulary.
     intent. After that intent's `delivery.submitted`, it causes no resubmission
     or replacement effect.
 23. Account-scoped Pickup ACK follows durable message/object commit for
-    admitted traffic.
+    input passing receive and integrity checks.
 24. Unlock/recovery-incomplete input and an exact known local key-agreement
     method with a recoverable missing prerequisite remain unacknowledged;
     after key state is authoritative, foreign DIDs, nonexistent/wrong-purpose
-    local fragments and retired rendezvous DIDs are terminal
-    wrong-recipient input and do not remain pending.
+    local fragments, retired rendezvous DIDs and terminal bound-route
+    dependencies are terminal wrong-recipient input and do not remain pending.
+    A retired relationship DID with a valid non-terminal bound route still
+    receives normally with unchanged scope; a tombstoned contact requires
+    late-message erasure and cannot resume effects or be recreated.
 25. Safely classified hard pre-vault rejection is pickup-ACKed before any
     `message.in` and leaves only bounded local diagnostics.
 26. `peer.resolved` retains exact canonical document bytes under their raw CID,
@@ -2886,8 +2919,9 @@ There is no migration requirement from an earlier event vocabulary.
     scope; its validated pinned-document ACKs prove receipt, not remote
     admission. It generates no automatic response. A later rotation retains
     its historical scope and per-attempt diagnostic rules.
-79. A crash after candidate commit resumes materialization and eligible
-    response work from portable history without another decision or redelivery.
+79. A crash after an application candidate commits resumes materialization and
+    eligible response work from portable history without another decision or
+    redelivery.
 80. Distinct events sharing a receipt `(author, ordinal)` pair remain history
     with a projected receipt-integrity conflict, not a full-import failure.
     Only affected logical messages are excluded from newly frozen ACK targets.
@@ -3007,3 +3041,14 @@ There is no migration requirement from an earlier event vocabulary.
 108. First-package preparation for each new non-numalgo-4 outbound performs
      fresh resolution. Retry and permitted repack use retained evidence;
      neither an old snapshot nor a local TTL bypasses the new-MID rule.
+     Every new non-numalgo-4 inbound observation also requires current sender
+     authentication under `rendezvous.md` section 5.1; a chain member absent
+     from the current document fails, and unavailable resolution defers
+     without pickup ACK. Committed observations recover from their retained
+     evidence without new resolution or retroactive scope changes.
+109. Control candidates retain their derived relationship scope but select
+     no origin, handoff, contact or DID, including after restart. An otherwise
+     required ACK waits for an application candidate to create a usable
+     relationship DID, then uses the generic profile with `pleaseAck == null`.
+     No-handoff errors generate no response; unmatched or invalid Empty,
+     `ping-response` and Report Problem input cannot trigger materialization.

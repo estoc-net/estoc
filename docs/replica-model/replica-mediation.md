@@ -806,18 +806,18 @@ paths:
    diagnostic, and determined that the message MUST be discarded without `message.in`.
 
 The rejection path creates no ultimate peer ACK, contact, application effect or
-portable message content. Recipient classification follows the same exact-key
-rule as `rendezvous.md`: while unlock/recovery is incomplete, ownership is not
-classified; once the local key index is authoritative, a recipient is deferred
-only when its complete `kid` maps to a known local key-agreement method with a
-concrete recoverable prerequisite. A foreign DID, a locally controlled DID with
-a nonexistent or wrong-purpose fragment, a retired rendezvous DID or its
-terminal bound-route dependency, or a recipient set with no exact local
-key-agreement match is terminal
-wrong-recipient input and may use the rejection ACK path.
+portable message content. Recipient classification follows `rendezvous.md`
+sections 9.1–9.2's exact-key and lifecycle rules. A retired relationship DID
+alone still receives eligible input normally; a retired rendezvous DID or any
+DID with a terminal bound-route dependency uses the terminal rejection path.
+Unlock/recovery and concrete recoverable prerequisites defer without pickup
+ACK. Current sender authentication follows that document's section 5.1,
+including its unavailable-resolution deferral and terminal authentication
+failures; retained chain membership cannot bypass that check.
 
-A delivery that is genuinely undecryptable despite an exact live local key,
-depends on missing recoverable local DID/route/sync state, or is
+A delivery that cannot yet be decrypted for a recoverable reason despite an
+eligible exact local key, depends on missing recoverable local DID/route/sync
+state or unavailable required sender resolution, or is
 otherwise not safely classifiable MUST NOT be acknowledged. This distinction
 prevents terminal wrong-recipient or malformed input from redelivering forever
 without allowing temporary local incompleteness to lose mail.
@@ -1025,5 +1025,7 @@ A conforming implementation demonstrates at least these cases:
 23. Recipient-key triage defers only an exact known local key-agreement method
     with a recoverable missing prerequisite. After local key recovery is
     authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
-    and retired rendezvous DIDs may use the terminal pre-vault ACK path
-    and do not remain pending.
+    and retired rendezvous DIDs use the terminal pre-vault ACK path and do not
+    remain pending. A retired relationship DID with a valid non-terminal
+    bound route still receives eligible input; unavailable required sender
+    resolution instead defers under `rendezvous.md` section 5.1.

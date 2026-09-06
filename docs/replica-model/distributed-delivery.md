@@ -185,6 +185,10 @@ precise account- or recipient-existence oracle.
 
 ## 4. Vault-first sending and commit boundaries
 
+Every instruction to append an event in this document means
+`Vault.commit(objects, drafts)`, with an empty object list when none are new;
+`Vault.events` exposes reads only.
+
 A full vault runtime MUST be able to commit a send while DNS, DID resolution
 and every mediator are unavailable. Before required network work it records:
 
@@ -526,7 +530,11 @@ A natural response may carry the frozen `ack` array. If no deterministic
 natural response is available, use `https://didcomm.org/empty/1.0/empty`.
 Pure ACKs contain no `please_ack` and follow the same submission completion
 rule as every outbound; they are control observations under `vault-events.md`
-section 14.7.
+section 14.7. A control candidate at a rendezvous DID never selects a handoff
+response. Its permitted receipt ACK uses the generic profile only when an
+already materialized relationship supplies a usable local DID, under
+`rendezvous.md` section 10; the ACK request alone cannot materialize one.
+No-handoff errors retain their no-response rule.
 
 ### 8.2 Deterministic pure ACK
 
@@ -549,7 +557,9 @@ but it is not this generic profile: `rendezvous.md` freezes its timing,
 `please_ack`, `from_prior` and thread values before intent commit. One carrier
 MUST NOT create both a generic pure-ACK effect and a
 rendezvous handoff-Empty effect; selecting the handoff fallback consumes the
-carrier's ACK obligation.
+carrier's ACK obligation. Only an application candidate can select that
+fallback under `rendezvous.md` section 10; receiving a pure ACK at a rendezvous
+key does not turn it into a handoff trigger.
 
 The executable vector uses execution scope
 `{"relationship":"9e2aa6ec-7a8b-517c-8790-bb366cd5f0b3"}`, carrier wire ID
@@ -707,6 +717,9 @@ status. On the initiator, the peer's pinned rendezvous keys are members before
 any reply; on the responder, the origin sender document supplies the keys.
 Fresh unpinned resolution never extends this set. Verified transitions add
 successor document keys without removing historical scope evidence.
+Membership scopes authenticated observations; it does not authenticate a new
+delivery. Current sender authentication follows `rendezvous.md` section 5.1
+even when the presented key belongs to this historical set.
 
 Membership always checks DID and key from the same pinned or transition
 snapshot, not two unrelated entries. A reply under another authorized key in
@@ -787,31 +800,36 @@ For every account-scoped pickup or direct delivery:
    not yet authoritative, do not classify recipient ownership; keep the
    delivery pending without pickup ACK;
 2. once local key state is authoritative, inspect every recipient `kid` before
-   decryption. A delivery is deferred only when at least one `kid` maps to an
-   exact known local key-agreement method with a concrete recoverable
-   prerequisite that is not yet satisfied, such as pending bound-route
-   reconciliation. A foreign DID, a locally controlled DID with a
-   nonexistent or wrong-purpose fragment, a retired rendezvous DID or its
-   terminal bound-route dependency, or a set of recipient `kid` values with
-   no valid local key-agreement match
-   is terminal wrong-recipient input: safely classify it, pickup-ACK it when
-   mediated, and append no `message.in`, contact or response effect;
+   decryption and apply `rendezvous.md` sections 9.1–9.2's exact-key and
+   lifecycle classification. A retired relationship DID alone is not terminal
+   for receipt: eligible input is received and scoped normally, without
+   renewed registration. A retired rendezvous DID or any DID with a terminal
+   bound-route dependency is terminal. Safely classify terminal input,
+   pickup-ACK it when mediated, and append no `message.in`, contact or response
+   effect; recoverable prerequisites defer without pickup ACK;
 3. authenticate, decrypt and validate the complete innermost message,
    including the exact selected local key-agreement method, Peer DID long-form
-   and authcrypt sender evidence;
+   and authcrypt sender evidence. Apply `rendezvous.md` section 5.1's current
+   sender-resolution rule to every delivery; unavailable resolution defers
+   without pickup ACK, and unsupported methods or keys absent from the current
+   document fail its section 9.2 gate;
 4. when addressed to a rendezvous DID, run `rendezvous.md` section 10.2's
    receive and integrity checks; a safely classified terminal failure through Message Pickup
    MUST be pickup-ACKed without `message.in`;
-5. for admitted or ordinary traffic, derive channel, observation MID,
-   intent hash and exact plaintext hash;
+5. for input passing the receive and integrity checks, derive channel,
+   observation MID, intent hash and exact plaintext hash;
 6. prepare retained body/attachment objects and the stored message document;
-7. commit/reuse the exact `peer.resolved` and document first, then use its
-   returned event ID as `message.in.peerResolution` in a separate
+7. commit/reuse the exact `peer.resolved` and document under `rendezvous.md`
+   section 5.1's evidence-reuse rule first, then use its returned event ID as
+   `message.in.peerResolution` in a separate
    `Vault.commit` with the retained content, applicable contact attachment and
-   non-controversial observations.
-   For a rendezvous input, recipient liveness and integrity checks and both
-   commits share the writer lock; its `myKey` identifies the immutable local
-   rendezvous DID. Each complete channel key contains its peer public key;
+   non-controversial observations. For a first application candidate, bootstrap
+   attachment commits with materialization under that document's section 10.2;
+   a control candidate alone creates no contact. Recheck recipient eligibility
+   and retain the writer lock across both commits, including for duplicates.
+   A rendezvous input also performs its integrity checks under that lock;
+   its `myKey` identifies the immutable local rendezvous DID. Each complete
+   channel key contains its peer public key;
 8. only then ACK the account-scoped mediator delivery;
 9. before processing ACK values or continuation, validate every package-level
    proof; a handoff carrying `from_prior` requires exact pinned historical
@@ -829,8 +847,9 @@ For every account-scoped pickup or direct delivery:
 13. schedule eligible deterministic application effects through that execution
     ID under `vault-events.md` section 14.7's control-observation rules; the
     no-handoff error classification permits ACK processing in step 12 and
-    no automatic responses in steps 14–15. Bootstrap materialization follows
-    `rendezvous.md` section 10.2 using the already committed candidate scope;
+    no automatic responses in steps 14–15. Only application candidates enter
+    `rendezvous.md` section 10.2's materialization; control and other
+    non-handoff input follows its section 10 without creating a relationship;
 14. run the frozen peer-scoped ACK-target algorithm in
     `distributed-delivery.md` section 8; when at least one target is honored,
     append one deterministic protocol response or pure-ACK intent; and
@@ -857,10 +876,12 @@ the OOB invitation ID as `pthid` when applicable. An application protocol may
 instead send its real first message. There are no initial-specific type, size
 or lifetime limits, and receipt/materialization has no expiry deadline.
 
-After durable bootstrap receipt, the responder selects a deterministic
-handoff response: Trust Ping `ping-response`, a protocol-defined deterministic
-machine response, or Empty Message ACK. Human-authored content is ordinary
-later traffic.
+After durable receipt of an application bootstrap, the responder selects a
+deterministic handoff response: Trust Ping `ping-response`, a protocol-defined
+deterministic machine response, or Empty Message ACK. Human-authored content is ordinary
+later traffic. Control and other non-handoff candidates retain scope and
+follow `rendezvous.md` section 10's receipt-ACK rules without selecting a
+handoff or materializing a relationship.
 
 A local Estoc responder sends its first message from its relationship DID,
 with `from_prior`, eligible requested ACK targets and `please_ack: [""]`.
@@ -1086,7 +1107,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 27. Pure Empty ACK, valid initial-response Empty or `ping-response`, and
     no-handoff errors obey `vault-events.md` section 14.7, including replies to
     subsequent initial attempts on an already bound relationship. Validated
-    ACKs and eligible ACK requests still process.
+    ACKs and eligible ACK requests still process. Arrival at a rendezvous DID
+    never promotes control input to a handoff trigger; a permitted response
+    uses the generic pure-ACK profile from an existing usable relationship DID.
 28. Invalid `from_prior` prevents ACK processing and transition.
 29. Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
@@ -1094,7 +1117,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     `vault-events.md` section 14.8's committed observation-time rule for both
     submitted and expired messages, without changing submission outcome or
     restarting work. Already-submitted messages acquire no new expired failure.
-31. The default initial rendezvous message may be Trust Ping; an admitted
+31. The default initial rendezvous message may be Trust Ping; a received
     application message may be first without a custom wrapper.
 32. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
 33. A deterministic handoff response carries pairwise long-form sender
@@ -1187,4 +1210,8 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 60. A new non-numalgo-4 MID resolves and commits current recipient evidence
     before first preparation. Resolution failure leaves it retryable, and
     an unchanged online-revalidated document still creates new evidence.
-    Existing packages retry or repack using retained snapshots only.
+    Existing packages retry or repack using retained snapshots only. Each
+    inbound delivery instead authenticates against current sender resolution,
+    including duplicates; unavailable resolution defers without pickup ACK.
+    Reusing matching evidence requires a fresh document check. Recovery of
+    committed input uses its retained snapshot without another network lookup.
