@@ -286,11 +286,12 @@ policy; a fresh `peer.resolved` never extends `peerChain(R)`:
   remains retryable. An already prepared package continues to use its
   exact retained snapshot; it does not re-resolve to replace its key.
 - For an authenticated inbound addressed to any historical local address of `R`,
-  whose canonical sender DID is evidenced in `R` but whose key is outside
+  whose canonical sender DID equals `currentPeerDid(R)` but whose key is outside
   `peerChain(R)` and which carries no `from_prior`, preserve the observation
   and exact resolution evidence but derive no execution scope. Process no ACK
   or effect. Surface a `peer-key-changed` diagnostic under
   `vault-events.md` section 14.6 instead of silently waiting for more evidence.
+  A superseded sender node first follows section 9.3's receipt rule.
   Missing binding/chain evidence remains ordinary deferral; an invalid carried
   proof follows the existing conflict rule, not this no-proof path.
 - To restart without a valid peer rotation to a different DID, use an explicit
@@ -307,9 +308,22 @@ proof that a rotation is invalid.
 
 Every local communication address is a Peer DID numalgo 4. Both validated long
 and canonical short forms name one entity. Canonicalization validates the long
-form and uses its derived short form; supported non-Peer methods use their
-method-defined canonical DID, with no inferred aliases from names, common keys,
-resolver redirects or service endpoints.
+form and uses its derived short form. The retained resolution document follows
+`vault-events.md` section 11.1's fixed long-form representation, including when
+the presented DID is short. Supported non-Peer methods use their method-defined
+canonical DID, with no inferred aliases from names, common keys, resolver
+redirects or service endpoints.
+
+For `did:web` and any other supported method that defines no canonical form,
+the canonical DID is the exact presented string. Apply no case folding,
+percent-decoding, IDNA mapping or trailing-dot normalization to DID identity;
+spellings that differ in any byte are distinct DIDs. A resolver may perform
+the method's URL/DNS processing internally but MUST retain and compare the
+original DID string. For `did:web`, the returned document's `id` MUST equal
+that string byte-for-byte; do not rewrite a mismatching document to make it
+match. This fixes the comparison used by the
+[did:web resolution procedure](https://w3c-ccg.github.io/did-method-web/#read-resolve)
+without changing how it derives the fetch URL.
 
 First disclosure of any local address uses its long form, whether in OOB or
 plaintext `from`. Within each relationship, a root sender MUST use its long
@@ -435,8 +449,10 @@ Content remains application content regardless of whether a rotation is carried.
 
 1. Check submitted/expiry/conflict/lifecycle predicates before network work.
 2. Resolve the selected peer under section 5.1 and retain `peer.resolved`.
-3. For an unbound birth, commit the common `relationship.bound`. If a
-   reverse-direction incoming message has already bound that pair, reuse its
+3. Under the writer lock defined for receive and outbound binding operations
+   in `vault-events.md` section 12.1, recheck the pair and, for an unbound birth,
+   commit the common `relationship.bound`. If a reverse-direction incoming
+   message has already bound that pair, reuse its
    binding and pin; a fresh resolution controls key selection under section
    5.1 and does not propose a competing pin. Missing evidence defers and an
    existing binding/index conflict blocks preparation.
@@ -453,8 +469,8 @@ submission no duplicate, lost ACK or later address change reopens the MID.
 ### 9.1 Deferred delivery
 
 A mailbox delivery remains pending, with no pickup ACK and no `message.in`,
-only when recipient ownership cannot yet be safely classified or an exact
-known local receive key has a concrete recoverable receive prerequisite:
+only for the following unresolved prerequisites for safe classification,
+authentication or relationship selection:
 
 - the vault is locked, recovery is incomplete, or the local key index is not
   yet authoritative;
@@ -462,11 +478,18 @@ known local receive key has a concrete recoverable receive prerequisite:
   required key/document/route state is temporarily unavailable or route
   reconciliation is pending;
 - required historical evidence for that exact known method is temporarily
-  unavailable; or
+  unavailable;
 - current sender resolution is transiently unavailable under section 5.1 for an
   otherwise eligible local recipient and its per-delivery budget is not
-  exhausted. Exhaustion uses section 9.2's terminal path; the other deferrals
-  in this list have no sender-resolution budget.
+  exhausted; or
+- an authenticated delivery cannot select its binding or required transition
+  because its exact address pair has known pending membership or missing
+  relationship evidence under `vault-events.md` section 12.1. That section's
+  unresolved proof carriers allowed to commit with a null binding are not
+  blocked from durable receipt by this rule.
+
+Sender-resolution exhaustion uses section 9.2's terminal path; the other
+deferrals in this list have no sender-resolution budget.
 
 Once local key state is authoritative, the implementation MUST compare the
 complete recipient `kid`, including DID and method fragment/purpose. A foreign
@@ -479,9 +502,16 @@ history can still receive under section 9.2.
 
 A phase-1 runtime retries local-prerequisite deferrals after its local state
 changes. Sender-resolution deferrals follow section 5.1's scheduled bounded
-retry and terminal-exhaustion rules. A future sync-enabled runtime may sync
-and refold first. It MUST NOT treat a locked vault or incomplete recovery as
-proof that the recipient is foreign.
+retry and terminal-exhaustion rules. A relationship-evidence deferral retries
+when verification, import or recovery changes the evidence, reapplying the
+ordinary receive/authentication gates. Its wait has no sender-resolution
+budget or client retention cap; elapsed time alone never makes it terminal.
+Safe evidence selection permits receipt; a proven conflict or another safely
+classified terminal condition follows section 9.3. A mediator may independently
+expire the waiting delivery, but that does not clear the pair's pending claim
+or permit a new birth. A future sync-enabled runtime may sync and refold first.
+It MUST NOT treat a locked vault or incomplete recovery as proof that the
+recipient is foreign.
 
 ### 9.2 Hard pre-vault gate
 
@@ -536,23 +566,24 @@ rejection and hard abuse/resource limits are examples of this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
-After authentication, every local recipient follows `vault-events.md` sections
-12.1 and 14.4's pair lookup. A carried proof uses its predecessor only as a
-lookup hint until verified; a proof-free successor freezes its exact committed
-transition reference. A new proof-free pair binds actual canonical addresses,
+Network resolution and authentication finish before taking the receive lock
+defined in `vault-events.md` section 12.1. Under that lock, every local recipient
+follows that document's sections 12.1 and 14.4's pair lookup. A carried proof
+uses its predecessor only as a lookup hint until verified; a proof-free
+successor freezes its exact committed transition reference. A new proof-free
+pair binds actual canonical addresses,
 never a recipient role or selected sender key. New births at retired addresses
 are terminal. Known missing/conflicting membership cannot become a new birth.
 In particular, an unresolved committed proof carrier can keep its exact
 local/sender pair pending under `vault-events.md` section 12.1; a later
 proof-free input does not bypass that pending membership.
 
-Network resolution finishes before taking the writer lock. Under that lock,
-recheck exact recipient eligibility, binding/intent integrity, contact tombstones
+Recheck exact recipient eligibility, binding/intent integrity, contact tombstones
 for new interaction and one-use invitation availability. After authentication
 and pair lookup, apply this producer-time rule using the committed state at
 that instant: if the canonical authenticated sender is a node of the unique
 R's peer history other than `currentPeerDid(R)`, a delivery without an already
-committed observation of that sender DID/key and MID in R is terminal input
+committed observation with that observation MID in R is terminal input
 under section 9.2. Pickup-ACK it when mediated; create no `message.in`, contact,
 relationship, ultimate ACK or response effect, and at most a bounded local
 diagnostic. This applies with or without a carried proof and implements
@@ -572,9 +603,10 @@ For input passing these checks, commit or reuse the exact resolution first.
 When a new binding is needed, commit it in a separate `Vault.commit` and obtain
 its returned `eid`; only then commit `message.in` with that `relationshipBinding`
 and its other immutable evidence references. Keep the receive lock across
-these dependent commits. A crash after resolution or binding but before inbound
-commit leaves reusable evidence, consumes no invitation and creates no pickup
-or ultimate ACK. On redelivery, repeat authentication under section 5.1 and
+these dependent commits, releasing it before network acknowledgment work.
+A crash after resolution or binding but before inbound commit leaves reusable
+evidence, consumes no invitation and creates no pickup or ultimate ACK.
+On redelivery, repeat authentication under section 5.1 and
 reuse the binding. Safely identified integrity rejection is terminal without
 new input or response effect.
 
@@ -940,8 +972,8 @@ automatic resubmission of the completed MID.
 29. Repeated proof reuses its transition and pinned successor document; later resolution cannot enlarge authorized keys.
 30. Competing successors, cycles and an address pair claimed by distinct Rs are conflicts without automatic merge or event-order winner.
 31. Missing binding/transition references defer through partial import; a pending proof cannot fall back to a new relationship birth.
-32. A recognized same DID using an unpinned current key is retained as a no-scope diagnostic; no new R, ACK or effect is created.
-33. After B0-to-B1 commits in R, a new MID from B0 to any local address in R is terminal before message.in, with pickup ACK only. An existing B0 DID/key/MID follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
+32. A current peer DID using an unpinned current key is retained as a no-scope diagnostic; no new R, ACK or effect is created. A superseded sender first follows section 9.3.
+33. After B0-to-B1 commits in R, a new MID from B0 to any local address in R is terminal before message.in, with pickup ACK only. A matching committed observation MID in R follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
 34. One-use invitation is consumed by matching root-address receipt before contact/rotation work; continuation or matching pthid alone cannot consume it.
 35. Same-consumer invitation reuse is idempotent; different consumers conflict. Crash, detach, deletion and erasure never reopen it.
 36. A retired DID cannot create new relationships but can receive in existing histories while its route remains eligible, regardless of disclosure policy.
@@ -963,6 +995,8 @@ automatic resubmission of the completed MID.
 52. A remote problem report is displayed only beside a uniquely correlated outbound while its body is available; it changes no submission or relationship state.
 53. An unconfirmed successor with a terminal route cannot branch or roll back; temporary outage does not invoke this terminal limitation.
 54. Phase-1 operation needs no replica-mediation or vault-sync implementation and discloses no replica ID to peers.
-55. Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eid.
-56. A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A short-form predecessor pin and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
-57. An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt; restart and body erasure preserve that claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
+55. Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eid. One shared writer lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
+56. A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A predecessor pin whose presentedDid is short and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
+57. An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt without a client retention cap; restart, body erasure and mediator expiry preserve that pair claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
+58. Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under vault-events.md section 11.1, across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
+59. did:web:Bob.Example and did:web:bob.example remain distinct identity strings and birth-pair inputs. A returned document id matching only after host case folding fails; URL/DNS processing cannot rewrite either retained DID.

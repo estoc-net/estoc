@@ -785,12 +785,15 @@ documents and transition proofs.
    consistency, and perform that document's section-5.1 sender resolution with
    its bounded unavailable-result retries. Safely terminal delivery is pickup-
    ACKed without portable application input; recoverable prerequisites defer.
-3. Under the receive lock, find a unique existing address-pair binding or a
-   genuinely new live root pair. Select the generic binding/transition evidence,
-   apply that document's section-9.3 superseded-sender check, and check
+3. Under the receive lock defined in `vault-events.md` section 12.1, find a
+   unique existing address-pair binding or a genuinely new live root pair.
+   Select the generic binding/transition evidence, apply `rendezvous.md`
+   section 9.3's superseded-sender check, and check
    invitation/relationship integrity. `vault-events.md` section 12.1's known
    pending membership blocks new proof-free receipt; omitting an unresolved
-   carrier's proof cannot create a new birth.
+   carrier's proof cannot create a new birth. Pre-receipt deferral required by
+   that section follows `rendezvous.md` section 9.1, with no
+   `message.in` or pickup ACK while awaiting that evidence.
 4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
    is needed, commit it separately and obtain its returned `eid`; only then
    commit `message.in` referencing that binding, with retained content, hashes
@@ -1177,15 +1180,19 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     and ordinary intents repack while preserving their wire/execution IDs;
     submitted ones stay complete.
 67. After a peer edge commits, a new MID from the superseded node is terminal
-    before message.in, with pickup ACK only. An existing sender DID/key/MID
-    duplicate creates no new response obligation; ordinary unfinished work
+    before message.in, with pickup ACK only. A matching committed observation
+    MID in R creates no new response obligation; ordinary unfinished work
     remains recoverable. Later transitions and import order cannot retroactively
     remove scope from previously committed input.
 68. A new inbound binding commits before the message.in draft can reference
     its returned eid. Crash at that boundary leaves no receipt, invitation
     consumption or pickup ACK; reauthentication reuses the binding, including
-    when the incoming message is a pure ACK control observation.
+    when the incoming message is a pure ACK control observation. The enclosing
+    receive operation holds the shared writer lock across lookup and these
+    commits, excluding a competing outbound binding until it releases the lock.
 69. After an authenticated unknown-iss carrier commits, its exact local/sender
     pair remains pending for later proof-free input until predecessor evidence
     and the verified edge are available. No new birth or provisional scope
     bypasses that deferral; unrelated local pairs are unaffected by the claim.
+    The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
+    changes trigger retry; no local retention timeout clears the pending claim.

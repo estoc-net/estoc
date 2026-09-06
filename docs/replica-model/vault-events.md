@@ -480,6 +480,9 @@ does not erase retained messages.
 
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
+Here `data.did` is a local entity ID referencing `did.created.data.id`, not a
+DID string. This field and `contact.useDid.data.did` in section 7.2 are explicit
+naming exceptions; both retain the local UUID rather than a wire spelling.
 A one-use OOB invitation may disclose any live communication DID; matching
 root-address receipt consumes it under section 14.9.
 
@@ -612,8 +615,9 @@ Latest per `(cid, flag)` wins.
 ```
 
 This outbound preference associates one of our communication DID entities
-with the contact. `because` is `relationship`, `rendezvous`, `manual` or
-another documented policy value.
+with the contact. `data.did` is that entity's `did.created.data.id`, under
+section 5.4's naming exception. `because` is `relationship`, `rendezvous`,
+`manual` or another documented policy value.
 
 This preference selects among relationship addresses already eligible under
 sections 9.2 and 14.6. It cannot change an endpoint, roll back a rotation or
@@ -1357,12 +1361,16 @@ does not prove that every historical author is fork-free.
 The active runtime appends this event only after retained objects are durable.
 Only then may it ACK the account-scoped mediator delivery. Recipient and
 sender-authentication triage for both rendezvous and ordinary relationship
-traffic follows `rendezvous.md` sections 9.1–9.2. Recoverable key/route state or
+traffic follows `rendezvous.md` sections 9.1–9.2. Recoverable key/route state,
 unavailable required sender resolution within that document's section 5.1
-budget produces no `message.in` and no pickup ACK. Exhausted sender-resolution
-budgets and safely classified terminal input MUST instead be pickup-ACKed
-without `message.in`; this exception cannot bypass durable receipt for input that
-passes the receive and integrity checks.
+budget, or a relationship-evidence deferral required by section 12.1 produces
+no `message.in` and no pickup ACK. That evidence wait follows `rendezvous.md`
+section 9.1, independently of the sender-resolution budget. Carriers allowed
+to commit with a null binding under section 12.1 still follow durable receipt
+before pickup ACK. Exhausted sender-resolution budgets and safely classified
+terminal input MUST instead be pickup-ACKed
+without `message.in`; this exception cannot bypass durable receipt for input
+that passes the receive and integrity checks.
 
 ### 10.3 Duplicate, transition and conflict rules
 
@@ -1466,16 +1474,18 @@ kept distinct from contact decisions and from our own DID entities.
 This event is durable resolution evidence for one authenticated or selected
 peer key.
 
-- `presentedDid` is the exact DID string supplied by the peer or resolver.
-- `did` is the canonical DID used by folds. For Peer DID numalgo 4 it is the
-  short form; first disclosure keeps the long form in `presentedDid`.
+- `presentedDid` is the exact DID string supplied for resolution, preserved
+  across any resolver-internal URL or DNS normalization.
+- `did` is the canonical DID used by folds under `rendezvous.md` section 5.2,
+  including its exact-string rule for `did:web`. For Peer DID numalgo 4 it is
+  the short form; first disclosure keeps the long form in `presentedDid`.
 - `document` names the raw DASL object containing exact RFC 8785 canonical
   resolved DID document JSON. Its CID commits to those bytes.
 - the authenticated `peerKey` must be present under the named DID and exact
   document;
 - `authenticationKids` and `keyAgreementKids` enumerate all methods authorized
   for those purposes in the exact retained document, with references resolved
-  against its validated DID. They do not prove every listed key controlled the
+  against that document's `id`. They do not prove every listed key controlled the
   observed message; the key-agreement methods are historical chain evidence
   only when this snapshot is pinned by a relationship or verified transition
   under `distributed-delivery.md` section 9; and
@@ -1492,6 +1502,26 @@ For a `did:peer:4` first disclosure, the implementation decodes and validates
 `presentedDid`, derives `did` and the document locally, and stores both forms.
 A short form received before corresponding long-form resolution evidence is
 known cannot establish an authenticated relationship.
+
+For numalgo 4, let `L` be the retained validated long form and `S` its derived
+short form. `document` MUST store the
+[Peer DID Method's long-form resolution result](https://identity.foundation/peer-did-method-spec/#resolving-a-did)
+with optional reference expansion disabled. Starting from the decoded input
+document, set the root `id` to `L`; preserve its `alsoKnownAs` array (or start
+an empty array when absent) and append `S`; fill every omitted verification
+method `controller` with `L`, including methods embedded in verification
+relationships. Keep relative identifiers/references unchanged. Preserve all
+other input members and array order, including any `@context` and explicit
+external controllers; add nothing else. Serialize the result as UTF-8 RFC 8785
+JSON. This section owns the stored representation; a resolver's optional
+expansion, context injection or short-form output is not a storage choice.
+
+Later short-form lookup or receipt MUST reuse or reproduce those same document
+bytes and CID from `L`, even though `presentedDid` may now be `S`. New resolution
+events may record another presented spelling, selected key or local `myKey`;
+they do not produce a second document for the same numalgo-4 DID. Import
+validates this representation against `L`; it never repairs a pin by rewriting
+the retained bytes or CID. Method-ID comparison follows section 11.2.
 
 Equivalent duplicate observations are harmless. Same presented/canonical DID
 and document CID with incompatible contents is an integrity conflict.
@@ -1543,7 +1573,10 @@ inbound message.
   selected carrier observation's `message.in.peerResolution`. That one
   observation must also witness `mid`, `peerKey`, `myKey`, `presentedTo` and
   the exact `fromPrior`; and
-- `mid` is the actual inbound message entity carrying the proof.
+- `mid` is the actual inbound message entity carrying the proof. Duplicate
+  observations of that MID are interchangeable witnesses only when one exact
+  observation satisfies all carrier fields above together. MID equality alone
+  cannot substitute a different `peerResolution`, proof or local recipient key.
 
 The verifier MUST use the named historical resolution snapshot. A network
 fetch of a newer `did:web` document is not a substitute unless the raw CID of
@@ -1555,8 +1588,9 @@ For predecessor spelling comparison, canonicalize `presentedFrom`/`iss` under
 `rendezvous.md` section 5.2 and require equality with `priorResolution.did`.
 Byte equality with `priorResolution.presentedDid` is not required. Numalgo-4
 long/short equivalence requires validation of the long form and its derived
-short form; other supported methods use only their method-defined
-canonicalization, never inferred aliases from shared keys or service endpoints.
+short form; other supported methods use that section's canonicalization,
+including the exact-string fallback, never inferred aliases from shared keys
+or service endpoints.
 
 To match the protected `kid` to an authentication method authorized by the
 pinned document, resolve that document's relative method references against
@@ -1565,8 +1599,9 @@ DID URLs. All remaining components, including the method fragment, MUST match
 byte-for-byte. Verify the original JWT signing input using that pinned method's
 key. This comparison does not rewrite the JWT, either resolution's retained
 spellings, document bytes or CID, and never authorizes a key from a newer
-document. A valid long-form `iss`/`kid` can therefore verify against a retained
-short-form snapshot of the same numalgo-4 DID.
+document. A valid long-form `iss`/`kid` can therefore verify against a snapshot
+whose `presentedDid` is the short form of the same numalgo-4 DID; its stored
+document still uses section 11.1's long-form representation.
 
 `myKey` MUST be in
 `relationshipRecipientKeys(R)` under section 14.4. This includes every historical
@@ -1656,6 +1691,15 @@ local perspective supplies `ourDid` and the peer end; it does not affect the ID.
 
 ### 12.1 Receipt and relationship evidence
 
+The **receive lock** is the vault-wide writer lock of `event-store.md` section
+10, acquired by the receive operation as the enclosing operation after network
+resolution and authentication. Hold it from pair lookup and `rendezvous.md`
+section 9.3's checks through the dependent resolution, binding and receipt
+commits; nested `Vault.commit` calls share it. Release it before network work
+or waiting for missing evidence. Outbound birth preparation uses the same lock
+for its binding lookup, recheck and commit. This serializes the operations
+without making separate commits one crash-atomic batch.
+
 Every authenticated delivery uses the same relationship lookup,
 irrespective of the recipient's allocation policy. Under the receive lock:
 
@@ -1665,8 +1709,8 @@ irrespective of the recipient's allocation policy. Under the receive lock:
    section 11.2 must verify the proof before it authorizes any continuation;
 3. for proof-free input, select the unique existing binding and, for a peer
    successor, the committed transition that pins that successor document;
-4. only for a previously unknown address pair with no carried proof or known
-   pending membership as defined below, and no conflicting membership, select
+4. only for a previously unknown address pair with no carried proof, no known
+   pending membership as defined below and no conflicting membership, select
    a new binding under section 12.2 using the actual recipient DID and
    authenticated sender resolution; and
 5. apply `rendezvous.md` section 9.3's receive-time superseded-sender and
@@ -1681,7 +1725,9 @@ A new input with an unresolved carried proof may commit with a null binding;
 its eventual scope must come from the validated transition carrying that exact
 observation. Missing history defers and conflicting matches suppress effects;
 neither permits a new birth-address fallback. A proof-free input lacking enough
-local history to choose its binding remains pending before durable receipt.
+local history to choose its binding remains pending before durable receipt,
+without pickup ACK, under `rendezvous.md` section 9.1's relationship-evidence
+retry rule.
 
 **Known pending membership** means either incomplete evidence referenced by
 an existing binding/edge claim for the exact canonical `(local recipient DID,
@@ -1748,7 +1794,7 @@ selection under section 9.2. After resolution and before preparing/submitting
 its first package, commit this binding. For new inbound, authentication and
 `peer.resolved` commit first, then this binding in its own commit, then
 `message.in` referencing the binding's returned `eid`. Keep the receive lock
-across these dependent commits under `rendezvous.md` section 9.3. A crash after
+across these dependent commits under section 12.1. A crash after
 the binding commit leaves reusable binding evidence and no receipt; it consumes
 no invitation and creates no pickup ACK or ultimate ACK/effect work. A binding
 is local address and key evidence, not a claim that the peer received a message
@@ -2775,7 +2821,11 @@ There is no migration requirement from an earlier event vocabulary.
 23. Account-scoped Pickup ACK follows durable message/object commit for
     input passing receive and integrity checks.
 24. Unlock/recovery and recoverable exact-method prerequisites defer without
-    pickup ACK. Foreign/nonexistent/wrong-purpose methods, unbound retired
+    pickup ACK. Missing/pending relationship evidence under section 12.1 also
+    defers receipt when required by that section, without message.in or pickup
+    ACK; it retries on evidence changes under rendezvous.md section 9.1, with
+    no sender-resolution budget or local retention timeout.
+    Foreign/nonexistent/wrong-purpose methods, unbound retired
     addresses and terminal routes are terminal. A retired address in a bound
     local history still receives while its route is eligible; tombstoned
     contact input is cleaned up without new effects.
@@ -3119,7 +3169,7 @@ There is no migration requirement from an earlier event vocabulary.
      identical for every address.
 126. A new MID from a superseded peer node is terminal at receipt before
      message.in, with mediated pickup ACK and no ultimate ACK/effect. A recorded
-     sender DID/key/MID duplicate follows the normal integrity rules and
+     observation with the same MID in R follows the normal integrity rules and
      creates no new response obligation. Later transitions and import order
      do not invalidate previously committed observations or their unfinished
      work, and a shared DID still current in another R remains eligible there.
@@ -3127,14 +3177,35 @@ There is no migration requirement from an earlier event vocabulary.
      commits. The receipt references the returned binding eid; no draft may
      supply a pre-minted eid. Crash after binding consumes no invitation and
      creates no receipt ACK; recovery reuses that binding after authentication.
+     The enclosing receive operation holds the same vault-wide writer lock as
+     outbound preparation, so that preparation cannot insert another binding
+     between lookup and receipt. Whichever operation binds first supplies the
+     reused pin, even when concurrent did:web resolutions return different
+     document revisions. Resolver calls and network ACKs occur outside the lock.
 128. Confirmation at a shared public root in R_AB does not permit short-form
      root sending in R_BC before its own confirmation. Verify a long-form
-     iss/kid against a short-form pinned predecessor using only validated DID
-     equivalence and the same authorized method. A changed fragment, unrelated
-     DID, invalid long form or newer document's key fails; retained bytes and
-     CID stay unchanged.
+     iss/kid against a predecessor with short-form presentedDid using only
+     validated DID equivalence and the same authorized method. A changed
+     fragment, unrelated DID, invalid long form or newer document's key fails;
+     retained bytes and CID stay unchanged.
 129. A committed unknown-iss carrier with sub equal to its authenticated sender
      leaves its exact local/sender pair pending. Later proof-free input creates
      no binding, message.in or pickup ACK before predecessor recovery and edge
      verification. Restart and body erasure retain the claim; unrelated local
      pairs remain eligible, and restored incompatible evidence conflicts.
+     Time spent awaiting relationship evidence does not consume a resolver
+     budget or permit terminal ACK by timeout. Mediator expiry removes only
+     that delivery; a later delivery cannot bypass the retained pending claim.
+130. Given the same validated numalgo-4 long form L and short form S, every
+     stored resolution document uses id=L, preserves input alsoKnownAs entries
+     before appending S, fills omitted method controllers with L and leaves
+     relative references unchanged. Embedded methods, explicit external
+     controllers, array order and input contexts are preserved as in section
+     11.1. No resolver-added context or absolute-reference variant is stored.
+     Long/short receipt, restore and repeated proof processing reproduce one
+     RFC 8785 byte string and raw CID, without a spurious document conflict.
+131. For did:web and supported methods with no canonical form, did equals
+     the exact valid presentedDid. Host case, percent-encoding or trailing-dot
+     differences do not collapse R, pair lookup or predecessor comparison;
+     did:web resolution rejects any document id not byte-identical to the
+     presented DID. Import applies the same rule without rewriting evidence.

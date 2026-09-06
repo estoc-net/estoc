@@ -809,9 +809,13 @@ terminal rejection path; retained chain membership cannot bypass that check.
 
 A delivery that cannot yet be decrypted for a recoverable reason despite an
 eligible exact local key, depends on missing recoverable local DID/route/sync
-state or required sender resolution still within that section's budget, or is
-otherwise not safely classifiable MUST NOT be acknowledged. This distinction
-prevents terminal wrong-recipient or malformed input from redelivering forever
+state or required sender resolution still within that section's budget, has
+known pending membership or missing relationship evidence requiring pre-receipt
+deferral under `vault-events.md` section 12.1, or is otherwise not safely
+classifiable MUST NOT be acknowledged. Relationship-evidence waits follow `rendezvous.md`
+section 9.1's retry rule without a client retention cap; mediator expiry does
+not clear the pending pair claim. This distinction prevents terminal
+wrong-recipient or malformed input from redelivering forever
 without allowing temporary local incompleteness to lose mail.
 
 Business handlers, rendering, replica synchronization and read state are
@@ -1027,3 +1031,7 @@ A conforming implementation demonstrates at least these cases:
     terminal pre-vault ACK path under that section. Repeated delivery of the
     same replica-scoped ID shares one budget; missing recoverable local state
     cannot take that budget's terminal path.
+    Known pending membership or missing relationship evidence preventing
+    receipt under vault-events.md section 12.1 also withholds pickup ACK,
+    using rendezvous.md section 9.1's evidence-change retry rule. This wait has
+    no client retention cap, and mediator expiry does not clear the pair claim.
