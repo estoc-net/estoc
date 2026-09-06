@@ -114,7 +114,7 @@ immutable `boundRoute` under `vault-events.md` section 5.2. That document must
 support authenticated messages and signing `from_prior`. Recipient lifecycle
 is role-independent under section 9; sending and new births require a live DID.
 
-Before the first package is submitted, the initiator MUST durably retain:
+Before the first package is submitted, its sender MUST durably retain:
 
 - the exact presented peer DID;
 - the canonical peer DID;
@@ -137,13 +137,13 @@ mismatch. Failure to resolve safely is deferred or reported as
 A policy-forbidden fetch is a definitive failure; no failure falls back to an
 unrestricted fetch.
 
-For an external Web rendezvous target, the initiator pins the exact Web
+For an external Web rendezvous target, the sender pins the exact Web
 document revision before first submission and later verifies `from_prior`
 against that snapshot even when the currently published document has changed.
 Key IDs are taken from that exact authorized document, not synthesized from a
 vault key-generation naming convention.
 
-Remote initiators and responders may use either a public DID, including
+Remote senders may use either a public DID, including
 `did:web`, or a Peer DID. The receiver verifies the sender's exact DID spelling
 and authorized key-agreement method under its supported resolver; it MUST NOT
 require the peer to create a pairwise DID. An unsupported sender method fails
@@ -312,10 +312,13 @@ method-defined canonical DID, with no inferred aliases from names, common keys,
 resolver redirects or service endpoints.
 
 First disclosure of any local address uses its long form, whether in OOB or
-plaintext `from`. A root sender keeps using the long form until authenticated
-scoped input arrives at that exact address. A successor uses its long form and
-the frozen proof until its own confirmation. Later messages may use the short
-form; they do not rewrite the retained predecessor spelling. Application `to`,
+plaintext `from`. Within each relationship, a root sender MUST use its long
+form for every package until authenticated scoped input arrives at that exact
+address in that relationship. A successor uses its long form and the frozen
+proof until its own confirmation in that relationship. Confirmation in another
+relationship does not satisfy either condition, even for a shared public
+address. Later messages in the confirmed relationship may use the short form;
+they do not rewrite the retained predecessor spelling. Application `to`,
 Routing `forward.next` and mediator registration use the canonical short form
 once the peer document is known. Registration is verified before disclosure.
 
@@ -328,6 +331,9 @@ known long-form document fails authentication; it does not create a relationship
 
 The predecessor's exact first-disclosure long form is used for `from_prior.iss`
 and its protected authentication `kid`; `sub` uses the successor's long form.
+A receiver compares predecessor DID spellings and authentication-method IDs
+under `vault-events.md` section 11.2, using only the method's validated spelling
+equivalence and the pinned document. Exact wire spellings remain retained.
 A successor may bind another route or mediation for privacy. Neither changing
 transport preference nor choosing another service changes an existing DID.
 
@@ -429,8 +435,11 @@ Content remains application content regardless of whether a rotation is carried.
 
 1. Check submitted/expiry/conflict/lifecycle predicates before network work.
 2. Resolve the selected peer under section 5.1 and retain `peer.resolved`.
-3. For an unbound birth, commit the common `relationship.bound`; reuse any
-   compatible binding already created by a reverse-direction incoming message.
+3. For an unbound birth, commit the common `relationship.bound`. If a
+   reverse-direction incoming message has already bound that pair, reuse its
+   binding and pin; a fresh resolution controls key selection under section
+   5.1 and does not propose a competing pin. Missing evidence defers and an
+   existing binding/index conflict blocks preparation.
 4. Prepare a package in R using its current ends, required spelling and proof.
 5. Verify local recipient registration before first disclosure, submit, and
    commit `delivery.submitted` on acceptance.
@@ -495,7 +504,7 @@ receiving set under `vault-events.md` section 14.2 while its bound route
 remains configured, non-retired and conflict-free and the mediation is usable.
 Contact tombstones still apply under that document's section 16.6.
 
-For an exact local recipient that can be decrypted, the responder then checks
+For an exact local recipient that can be decrypted, the receiver then checks
 only conditions needed to classify the input safely before writing portable
 application state:
 
@@ -522,8 +531,8 @@ A safely classified hard rejection received through Message Pickup:
 
 Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
 an unbound retired recipient, a definitively unresolvable sender DID, exhaustion of
-section 5.1's sender-resolution budget and hard abuse/resource limits are
-examples of this gate.
+section 5.1's sender-resolution budget, section 9.3's superseded-sender
+rejection and hard abuse/resource limits are examples of this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
@@ -533,22 +542,48 @@ lookup hint until verified; a proof-free successor freezes its exact committed
 transition reference. A new proof-free pair binds actual canonical addresses,
 never a recipient role or selected sender key. New births at retired addresses
 are terminal. Known missing/conflicting membership cannot become a new birth.
+In particular, an unresolved committed proof carrier can keep its exact
+local/sender pair pending under `vault-events.md` section 12.1; a later
+proof-free input does not bypass that pending membership.
 
 Network resolution finishes before taking the writer lock. Under that lock,
 recheck exact recipient eligibility, binding/intent integrity, contact tombstones
-for new interaction and one-use invitation availability. Commit or reuse the
-exact resolution first, then commit a new binding when needed and `message.in`
-with its immutable evidence references. A crash between resolution and inbound
-commits consumes no invitation and creates no receipt ACK. Safely identified
-integrity rejection is terminal without new input or response effect.
+for new interaction and one-use invitation availability. After authentication
+and pair lookup, apply this producer-time rule using the committed state at
+that instant: if the canonical authenticated sender is a node of the unique
+R's peer history other than `currentPeerDid(R)`, a delivery without an already
+committed observation of that sender DID/key and MID in R is terminal input
+under section 9.2. Pickup-ACK it when mediated; create no `message.in`, contact,
+relationship, ultimate ACK or response effect, and at most a bounded local
+diagnostic. This applies with or without a carried proof and implements
+[DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation).
+Unresolved or conflicting lookup still follows the missing-evidence/conflict
+rules; another relationship sharing the old DID is not rejected merely for
+this R's rotation.
+
+A delivery matching such an existing MID group follows ordinary duplicate and
+integrity handling, including conflict recording for contradictory evidence.
+Matching only a wire ID or thread is insufficient. It creates no new response
+obligation; only existing eligible unfinished work may resume under
+`distributed-delivery.md` section 8.4. Current sender authentication is still
+required for the delivery.
+
+For input passing these checks, commit or reuse the exact resolution first.
+When a new binding is needed, commit it in a separate `Vault.commit` and obtain
+its returned `eid`; only then commit `message.in` with that `relationshipBinding`
+and its other immutable evidence references. Keep the receive lock across
+these dependent commits. A crash after resolution or binding but before inbound
+commit leaves reusable evidence, consumes no invitation and creates no pickup
+or ultimate ACK. On redelivery, repeat authentication under section 5.1 and
+reuse the binding. Safely identified integrity rejection is terminal without
+new input or response effect.
 
 Duplicates reuse known consistent identity. Eligible retired historical
 recipients may record late input for cleanup, but neither duplicates nor new
 receipts resurrect deleted contacts or restart submitted effects. Contradictory
-duplicates conflict. A newly delivered message from an already superseded peer
-address is ignored for new interaction under DIDComm rotation; retained receipts
-made before that change remain historical evidence and are not reauthenticated
-against today's address state during import.
+duplicates conflict. The superseded-sender check above is never reapplied to
+committed observations during fold, recovery or import; later transitions do
+not invalidate their historical scope or unfinished work.
 
 Durable `message.in` and its resolution/binding evidence precede pickup ACK.
 Carried proof verification and committed transition evidence precede explicit
@@ -601,9 +636,21 @@ early_private_did_id_A = 4734b126-9706-5c8f-b971-91a5afb9c1d4
 early_private_did_id_B = 30d9a3a6-0e65-52a4-a822-591a683bb1e6
 ```
 
-Run the relationship derivation for both `[A, B]` and `[B, A]` and require the
-same result. Keys selected from the same DID document do not change it. A
-different canonical DID pair yields a different birth. Only the birth uses
+This second identifier-only fixture puts the higher-sorting endpoint first:
+
+```text
+A = did:web:zoe.example
+B = did:web:amy.example
+RFC8785(["v1", lo, hi]) = ["v1","did:web:amy.example","did:web:zoe.example"]
+relationship_id        = 249fc438-75bc-53a9-904d-99d44edd6d23
+contact_id             = cbe762f9-132c-572d-bb0e-bc88efd1fb82
+early_private_did_id_A = 6d4670d0-42a0-5978-9030-072fd06f45f0
+early_private_did_id_B = 20d9f6a9-8383-5c09-8134-a52954217b3b
+```
+
+For each fixture, run the relationship derivation for both `[A, B]` and `[B, A]`
+and require its published result. Keys selected from the same DID document do
+not change it. A different canonical DID pair yields a different birth. Only the birth uses
 this formula: A0-to-A1 and B0-to-B1 transitions preserve the original R, even
 though deriving a new birth from `[A1, B1]` would give another value.
 
@@ -651,8 +698,10 @@ private address needs no change. No policy requires the peer to rotate.
 Under the writer lock, reuse any existing local transition. Otherwise select
 one eligible committed application observation with no already selected natural,
 pure-ACK or notification response, validate its exact-root
-confirmation, and atomically commit the deterministic successor and a normal
+confirmation, and atomically commit a fresh successor and a normal
 `relationship.localTransitioned` whose `trigger` references that observation.
+The allocation MAY use section 10's endpoint-specific deterministic ID under
+`vault-events.md` section 12.4; otherwise it uses a fresh UUIDv7.
 Route, proof and trigger are frozen by this commit. A retry reuses them.
 The public/reuse predicate is a producer policy choice evaluated there, not
 a fold-time test that can invalidate a committed edge. If an old input already
@@ -687,8 +736,8 @@ another early-privacy notification. A generic pure ACK never requests an ACK.
 Receipt of a notification may confirm a peer's transition and produce a
 permitted ACK; it is not a recursive handoff request.
 
-For the section-10 R and wire ID `019b4d12-090a-7c3b-92f7-ac2c51f50db4`, the
-Trust Ping notification vectors are:
+For the first section-10 fixture's R and wire ID
+`019b4d12-090a-7c3b-92f7-ac2c51f50db4`, the Trust Ping notification vectors are:
 
 ```text
 executionId = 148d31a6-66d0-5687-a1f1-2c2c75ac7817
@@ -729,6 +778,8 @@ another local historical address does not. Until confirmation, every new
 package from this end uses its long form and retained proof. Afterward, new
 packages omit the proof; exact prepared packages are not rewritten. Predecessor
 receipt routes overlap as specified in `vault-events.md` section 12.4.
+A manual rotation can solicit that input with the response-requesting ordinary
+Trust Ping in `vault-events.md` section 16.7.
 
 ## 12. Peer address changes
 
@@ -737,8 +788,10 @@ For a carrier from B1 to any retained local address A in R:
 1. authenticate the carrier and retain its exact sender resolution;
 2. use `(A, B0)` from `iss=B0` to find the unique candidate R, including its
    historical local addresses; known B1 alone does not excuse proof validation;
-3. verify the JWT against R's exact pinned/verified predecessor document, its
-   authorized authentication method and presented predecessor spelling;
+3. verify the JWT against R's exact pinned/verified predecessor document and
+   authorized authentication method, comparing predecessor spellings and method
+   IDs under `vault-events.md` section 11.2; the pinned `presentedDid` need not
+   be byte-identical to `iss`;
 4. require `sub` to equal the carrier's exact authenticated sender spelling,
    with a valid long form on first Peer-DID disclosure, and require the carrier
    observation to witness all referenced key/document/proof fields;
@@ -751,8 +804,15 @@ Missing historical documents defer verification; current network documents
 cannot replace them unless their canonical raw CID is identical. A proof is
 not a global DID alias. A shared public address, thread or contact name alone
 cannot identify R. Unmatched/missing proof evidence never bootstraps a new R
-from B1. Subsequent proof-free B1 input uses its saved binding and transition
-references, equally at root or successor local addresses.
+from B1. When an authenticated committed carrier's `iss` pair has no binding,
+its actual local/B1 pair is known pending membership under `vault-events.md`
+section 12.1. Later proof-free input to that same pair waits before durable
+receipt; it cannot silently create a replacement relationship. Recovery of the
+predecessor evidence and verification of the carried edge unlock that pair.
+Without that evidence it remains pending; this profile supplies no automatic
+restore fallback. The pending claim is not a global block on B1 at unrelated
+local addresses. Once verified, subsequent proof-free B1 input uses its saved
+binding and transition references, equally at root or successor local addresses.
 
 Changes to opposite ends commute. A crossed pair of rotations, A1-to-B0 and
 B1-to-A0, finds the same R through retained histories and independently updates
@@ -853,17 +913,17 @@ automatic resubmission of the completed MID.
 2. An external Web DID pins exact document bytes; a later network revision cannot replace historical proof evidence.
 3. No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire relationship ID.
 4. Public/public, public/pairwise and pairwise/pairwise address pairs all bind through the same event and receive path.
-5. Run the section-10 relationship vector in both directions and obtain the same R. Distinct canonical pairs differ.
+5. Run both section-10 relationship fixtures in both directions and obtain each published R, including the higher-sorting A fixture. Distinct canonical pairs differ.
 6. Peer long and short spellings normalize to one birth address. No shared key, endpoint, label or resolver alias merges distinct DIDs.
 7. Opposite first sends over the same address pair, before either reply is received, bind the same R and reuse contact assignment.
 8. A different selected key within one pinned peer document does not change R or create a second contact.
 9. Root public addresses can send ordinary content before a reply, private allocation or rotation confirmation.
 10. Offline birth intent commits without DNS or a mediator. Resolution later creates the common binding before its first package.
-11. An incoming binding that precedes preparation of an opposite queued birth is reused when roots and document agree; incompatible pins conflict.
+11. An incoming binding that precedes preparation of an opposite queued birth is reused without replacing its pin. Fresh resolution selects an already authorized key or follows section 5.1's failure rule; imported incompatible binding pins conflict.
 12. One shared address used with two different peers forms two Rs without exclusive-local-DID ownership conflict.
 13. A0-to-A1 in R_AB leaves R_AC and public disclosure of A0 unchanged. Pairwise allocation avoids reuse as policy.
 14. Birth R remains stable after either or both endpoints rotate; current-address derivation is never substituted.
-15. Early privacy rotation uses the ordinary local-transition event, deterministic endpoint-specific successor ID and frozen trigger.
+15. Early privacy rotation uses the ordinary local-transition event, a fresh successor with an optionally deterministic endpoint-specific ID, and a frozen trigger.
 16. A crash after successor/edge commit reuses the exact route, keys, JWT, iat and notification trigger.
 17. Missing optional private allocation does not prevent binding or a normal public-address reply.
 18. Normal Trust Ping selects ping-response; response_requested false is still received and may get an independent Empty rotation notification.
@@ -881,7 +941,7 @@ automatic resubmission of the completed MID.
 30. Competing successors, cycles and an address pair claimed by distinct Rs are conflicts without automatic merge or event-order winner.
 31. Missing binding/transition references defer through partial import; a pending proof cannot fall back to a new relationship birth.
 32. A recognized same DID using an unpinned current key is retained as a no-scope diagnostic; no new R, ACK or effect is created.
-33. A newly delivered message from a superseded peer address cannot restart interaction; historical committed receipts retain their identities.
+33. After B0-to-B1 commits in R, a new MID from B0 to any local address in R is terminal before message.in, with pickup ACK only. An existing B0 DID/key/MID follows duplicate handling without a new response obligation. A later B1-to-B2 never invalidates retained B1 input; another R in which B0 remains current still receives normally.
 34. One-use invitation is consumed by matching root-address receipt before contact/rotation work; continuation or matching pthid alone cannot consume it.
 35. Same-consumer invitation reuse is idempotent; different consumers conflict. Crash, detach, deletion and erasure never reopen it.
 36. A retired DID cannot create new relationships but can receive in existing histories while its route remains eligible, regardless of disclosure policy.
@@ -903,3 +963,6 @@ automatic resubmission of the completed MID.
 52. A remote problem report is displayed only beside a uniquely correlated outbound while its body is available; it changes no submission or relationship state.
 53. An unconfirmed successor with a terminal route cannot branch or roll back; temporary outage does not invoke this terminal limitation.
 54. Phase-1 operation needs no replica-mediation or vault-sync implementation and discloses no replica ID to peers.
+55. Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eid.
+56. A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A short-form predecessor pin and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
+57. An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt; restart and body erasure preserve that claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.

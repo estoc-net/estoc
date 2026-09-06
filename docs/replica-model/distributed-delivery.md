@@ -80,7 +80,7 @@ fan-out (`replica-mediation/1.0`), the rendezvous receive profile
   messages whose explicit ACK is requested. It is independent of local
   submission completion.
 - **Logical channel** — a local recipient key and authenticated peer key,
-  interpreted through contact-scoped DID transitions.
+  interpreted through relationship-scoped DID transitions.
 
 ```text
 one outbound message (mid = wire ID, intent hash)
@@ -259,7 +259,7 @@ The active phase-1 runtime may later:
    binding before preparation. Select that R's current sender and peer end,
    checking portable lifecycle, assignment and pinned/verified key evidence;
 
-4. attach our frozen contact-scoped `fromPrior` while our own DID rotation
+4. attach our frozen relationship-scoped `fromPrior` while our own DID rotation
    remains unconfirmed;
 5. construct complete plaintext by copying every intent-time header;
 6. compute plaintext hash, encrypt, and use `Vault.commit` for the exact
@@ -395,7 +395,7 @@ A preparer folds the target and selects:
 - exact `peer.resolved` evidence, fresh for the first package of each new
   non-numalgo-4 MID under `rendezvous.md` section 5.1;
 - one recipient route authorized by that evidence; and
-- any required contact-scoped `from_prior`.
+- any required relationship-scoped `from_prior`.
 
 It then constructs the complete innermost plaintext from durable intent.
 Version 3 emits:
@@ -423,7 +423,7 @@ Retrying an unsubmitted package reuses identical plaintext, normalized
 ciphertext bytes and package ID. While the logical outbound remains
 unsubmitted, a new package for it may change `from`, `to`,
 selected keys, peer resolution or `from_prior` only under a valid DID-entity
-selection or verified contact-scoped transition for the same logical target.
+selection or verified relationship-scoped transition for the same logical target.
 A local DID's keys and bound route never change in place; an external
 recipient's transport choice remains constrained by its resolution evidence.
 Every changed plaintext or encryption result requires a new package ID and
@@ -661,7 +661,7 @@ in `vault-events.md` section 9. Equal wire IDs chosen independently by different
 themselves a protocol violation; sender/relationship scope is part of logical
 identity and ACK lookup.
 
-A verified contact-scoped transition may cause observations with different
+A verified relationship-scoped transition may cause observations with different
 authenticated `peerKey` values and therefore different MIDs to represent one
 logical message. `vault-events.md` section 14.7 defines that second-stage merge. The original
 observation MIDs remain stored for audit and conflict detection.
@@ -703,7 +703,12 @@ historical set; current sender authentication remains a separate receive gate.
 
 The local history starts with `relationship.bound.ourDid` and extends through
 `relationship.localTransitioned`. `relationshipRecipientKeys(R)` includes that
-whole rooted history. Each valid observation must satisfy one of these rows:
+whole rooted history. For a new delivery, first apply `rendezvous.md` section
+9.3's producer-time superseded-sender check under the receive lock. The rows
+below validate immutable evidence of committed observations; they neither
+admit new traffic from a superseded peer node nor re-evaluate earlier receipts
+against a later rotation. Each valid committed observation must satisfy one
+of these rows:
 
 | Observation | Immutable evidence and authorization | Scope |
 | --- | --- | --- |
@@ -781,11 +786,18 @@ documents and transition proofs.
    its bounded unavailable-result retries. Safely terminal delivery is pickup-
    ACKed without portable application input; recoverable prerequisites defer.
 3. Under the receive lock, find a unique existing address-pair binding or a
-   genuinely new live root pair. Freeze the generic binding/transition evidence
-   and check invitation/relationship integrity under that document's section 9.3.
-4. Commit/reuse exact `peer.resolved` and its document first. Then commit a new
-   binding when needed and `message.in` with retained content, hashes and its
-   fresh receipt ordinal. Recheck recipient eligibility under the same lock.
+   genuinely new live root pair. Select the generic binding/transition evidence,
+   apply that document's section-9.3 superseded-sender check, and check
+   invitation/relationship integrity. `vault-events.md` section 12.1's known
+   pending membership blocks new proof-free receipt; omitting an unresolved
+   carrier's proof cannot create a new birth.
+4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
+   is needed, commit it separately and obtain its returned `eid`; only then
+   commit `message.in` referencing that binding, with retained content, hashes
+   and its fresh receipt ordinal. Hold the receive lock across these dependent
+   commits and recheck recipient eligibility. Crash after binding but before
+   receipt leaves reusable evidence, no invitation consumption and no receipt
+   ACK; redelivery repeats authentication and reuses the binding.
 5. Only after durable receipt, ACK the mediator delivery. A crash before this
    point leaves it pending or causes idempotent redelivery.
 6. Validate every carried rotation against its exact retained predecessor and
@@ -1052,8 +1064,10 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 32. No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
 33. Every unconfirmed local successor uses the same long-form sender and
     frozen from_prior rules, including the first public-to-private rotation.
-34. `from_prior.sub` equals plaintext `from` byte-for-byte; `from_prior.kid`
-    belongs to the exact `iss` spelling pinned from discovery.
+34. `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
+    `kid` has the exact `iss` DID portion. Predecessor method authorization uses
+    `vault-events.md` section 11.2's validated spelling comparison against the
+    pinned document, without requiring byte equality with presentedDid.
 35. Until exact-successor confirmation, every new package from that end
     carries its proof and long form. The root has no initial-handoff proof
     variant.
@@ -1162,3 +1176,16 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 66. Local and remote rotations commute across the two ends. Unsubmitted birth
     and ordinary intents repack while preserving their wire/execution IDs;
     submitted ones stay complete.
+67. After a peer edge commits, a new MID from the superseded node is terminal
+    before message.in, with pickup ACK only. An existing sender DID/key/MID
+    duplicate creates no new response obligation; ordinary unfinished work
+    remains recoverable. Later transitions and import order cannot retroactively
+    remove scope from previously committed input.
+68. A new inbound binding commits before the message.in draft can reference
+    its returned eid. Crash at that boundary leaves no receipt, invitation
+    consumption or pickup ACK; reauthentication reuses the binding, including
+    when the incoming message is a pure ACK control observation.
+69. After an authenticated unknown-iss carrier commits, its exact local/sender
+    pair remains pending for later proof-free input until predecessor evidence
+    and the verified edge are available. No new birth or provisional scope
+    bypasses that deferral; unrelated local pairs are unaffected by the claim.
