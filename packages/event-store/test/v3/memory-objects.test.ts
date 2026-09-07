@@ -1,11 +1,76 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_EXTENT_BYTES, DEFAULT_GRACE_MS, DEFAULT_MAX_OBJECT_BYTES, LatchRegistry, MemoryObjectStore, chunksOf, type Cid } from "../../src/v3/index.js";
+import {
+  DEFAULT_EXTENT_BYTES,
+  DEFAULT_GRACE_MS,
+  DEFAULT_MAX_OBJECT_BYTES,
+  LatchRegistry,
+  MemoryObjectStore,
+  chunksOf,
+  type Cid,
+  type ObjectStore,
+} from "../../src/v3/index.js";
 import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
 
 objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) => {
   const store = new MemoryObjectStore(options);
   return { store, corrupt: async (cid: Cid) => store.damage(cid) };
+});
+
+/**
+ * `inner` with its output streams cut into chunks of at most `n` bytes
+ * — for the first 256 chunks of each stream; 64 KiB after that, so a
+ * large object (DO-7) does not come out in millions — the latch
+ * untouched: a store that chunks its output otherwise than by extent,
+ * which the suite must accept just the same (r1-C).
+ */
+function rechunked(inner: ObjectStore, n: number): ObjectStore {
+  return {
+    putRaw: (source) => inner.putRaw(source),
+    putObject: (cid, source) => inner.putObject(cid, source),
+    read: (cid, max) => inner.read(cid, max),
+    stat: (cid) => inner.stat(cid),
+    has: (cid) => inner.has(cid),
+    list: () => inner.list(),
+    collect: (keep) => inner.collect(keep),
+    open: async (cid) => {
+      const stream = await inner.open(cid);
+      if (stream === null) return null;
+      const reader = stream.getReader();
+      let pending: Uint8Array = new Uint8Array(0);
+      let handed = 0;
+      return new ReadableStream<Uint8Array>(
+        {
+          pull: async (controller) => {
+            while (pending.length === 0) {
+              const { done, value } = await reader.read();
+              if (done) {
+                controller.close();
+                return;
+              }
+              pending = value;
+            }
+            const size = handed < 256 ? n : 64 * 1024;
+            handed += 1;
+            controller.enqueue(pending.slice(0, size));
+            pending = pending.subarray(size);
+          },
+          cancel: (reason) => reader.cancel(reason),
+        },
+        { highWaterMark: 0 }
+      );
+    },
+  };
+}
+
+objectStoreSuite("MemoryObjectStore, output in 2-byte chunks", async (options: OpenObjectOptions = {}) => {
+  const store = new MemoryObjectStore(options);
+  return { store: rechunked(store, 2), corrupt: async (cid: Cid) => store.damage(cid) };
+});
+
+objectStoreSuite("MemoryObjectStore, output in 3-byte chunks", async (options: OpenObjectOptions = {}) => {
+  const store = new MemoryObjectStore(options);
+  return { store: rechunked(store, 3), corrupt: async (cid: Cid) => store.damage(cid) };
 });
 
 describe("MemoryObjectStore", () => {
@@ -59,6 +124,47 @@ describe("MemoryObjectStore", () => {
     const { cid } = await store.putRaw(reusing());
     expect(cid).toBe(cidOf(want));
     expect(await store.read(cid, 12)).toEqual(want);
+  });
+
+  it("r1-A: a Buffer is a Uint8Array whose slice is a view — one put whole, one reused by a generator, one chunk handed out by a stream: none of them shares memory with what is held", async () => {
+    // Put whole, then the caller's Buffer rewritten.
+    const one = new MemoryObjectStore();
+    const hello = Buffer.from("hello");
+    expect((await one.putRaw(hello)).cid).toBe(HELLO_CID);
+    hello[0] = 0x48;
+    expect(await one.read(HELLO_CID, 5)).toEqual(new TextEncoder().encode("hello"));
+    // A generator refilling one 4-byte Buffer: 1s, then 2s, then 3s; an extent of 12 keeps all three in one extent.
+    const reusing = new MemoryObjectStore({ extentBytes: 12 });
+    const scratch = Buffer.alloc(4);
+    async function* refill(): AsyncIterable<Uint8Array> {
+      for (let i = 1; i <= 3; i++) {
+        scratch.fill(i);
+        yield scratch;
+      }
+    }
+    const want = Uint8Array.from([1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
+    expect((await reusing.putRaw(refill())).cid).toBe(cidOf(want));
+    expect(await reusing.read(cidOf(want), 12)).toEqual(want);
+    // A chunk from open() rewritten by its reader, the stream read to completion, then the object read again.
+    const reader = ((await one.open(HELLO_CID)) as ReadableStream<Uint8Array>).getReader();
+    const first = (await reader.read()).value as Uint8Array;
+    first[0] = 0x48;
+    expect((await reader.read()).done).toBe(true);
+    expect(await one.read(HELLO_CID, 5)).toEqual(new TextEncoder().encode("hello"));
+    expect(await one.has(HELLO_CID)).toBe(true);
+  });
+
+  it("r1-B: a put over a damaged object that nothing has read replaces its bytes; the old bytes' reader fails, the new bytes stay", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 2 });
+    const bytes = bytesOf(10, 5);
+    const cid = (await store.putRaw(bytes)).cid;
+    store.damage(cid);
+    expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 });
+    expect(await store.read(cid, 10)).toEqual(bytes);
+    store.damage(cid);
+    expect(await store.putRaw(chunked(bytes, [3, 3, 3]))).toEqual({ cid, codec: "raw", size: 10 });
+    expect(await store.read(cid, 10)).toEqual(bytes);
+    expect(await drain((await store.open(cid)) as ReadableStream<Uint8Array>)).toEqual({ bytes, chunks: 5 });
   });
 
   it("a stream pulls nothing until it is read: an opened, unread stream hands out no bytes and stays latched", async () => {

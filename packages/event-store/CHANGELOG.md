@@ -47,9 +47,13 @@
   byte order; the `ObjectStore` interface (§6); and `LatchRegistry`, the
   per-CID read latch of event-store.md §10, which the vault runtime will
   share. `MemoryObjectStore` holds an object in internal extents of a
-  chosen size (§5, DO-6); `putRaw`/`putObject` make it visible only
-  whole, a wrong digest being `DigestMismatch` with nothing exposed (§6.1–
-  6.2, DO-4); `open` streams pull-on-read under a latch released on
+  chosen size (§5, DO-6), each a copy in memory of its own — a `Buffer`
+  is a `Uint8Array` whose `slice` is a view, so nothing a source or a
+  reader holds is shared with the store (§12); `putRaw`/`putObject` make
+  it visible only whole, a wrong digest being `DigestMismatch` with
+  nothing exposed (§6.1–6.2, DO-4), and a put over a CID already held
+  holds the bytes verified now — one object still, sound again if what
+  was held had gone bad underneath; `open` streams pull-on-read under a latch released on
   completion, failure or cancel, and rehashes on the way out — a
   corrupted object fails its stream and leaves the accepted namespace as
   `DamagedObject` (§6.3, DO-16); `read` refuses an object over `maxBytes`

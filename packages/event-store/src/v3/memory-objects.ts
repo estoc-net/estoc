@@ -93,16 +93,15 @@ export class MemoryObjectStore implements ObjectStore {
 
   /**
    * The one step that makes an object visible (§6.1 step 4), synchronous
-   * and whole. An object already held keeps its bytes and has its
-   * orphan age renewed (§6.2).
+   * and whole. The bytes verified this time are the ones held from here
+   * on: an object already held is one object still (§6.2), with its
+   * orphan age renewed — and if what was held had gone bad underneath,
+   * it is now sound again. A stream open on the old bytes keeps reading
+   * them; should it find them damaged, `verified` sees they are no
+   * longer what is held and leaves the new ones alone.
    */
   private accept(cid: DaslCid, extents: Uint8Array[], size: number): ObjectInfo {
-    const have = this.held.get(cid.text);
-    if (have !== undefined) {
-      have.acceptedAt = this.now();
-    } else {
-      this.held.set(cid.text, { cid, extents, size, acceptedAt: this.now() });
-    }
+    this.held.set(cid.text, { cid, extents, size, acceptedAt: this.now() });
     return info(cid, size);
   }
 
@@ -124,7 +123,7 @@ export class MemoryObjectStore implements ObjectStore {
           if (extent !== undefined) {
             next += 1;
             hash.update(extent);
-            controller.enqueue(extent.slice()); // the store's bytes stay its own
+            controller.enqueue(new Uint8Array(extent)); // a copy: the store's bytes stay its own
             return;
           }
           if (!this.verified(held, hash.digest())) {
@@ -245,7 +244,10 @@ function bound(name: string, value: number): number {
  * is copied — the caller may reuse its buffer — into the extent being
  * filled, sealed when full; the last extent is whatever remains. No
  * more than one extent's worth of bytes is unsealed at a time, and
- * nothing is allocated ahead of the bytes that arrive.
+ * nothing is allocated ahead of the bytes that arrive. The copy is
+ * `new Uint8Array(view)`, never `slice()`: a `Buffer` is a `Uint8Array`
+ * whose `slice` is a view, and what the store holds must be memory of
+ * its own, or the source could rewrite an accepted object.
  */
 class Packer {
   private readonly sealed: Uint8Array[] = [];
@@ -258,7 +260,7 @@ class Packer {
     let at = 0;
     while (at < chunk.length) {
       const take = Math.min(this.extentBytes - this.filled, chunk.length - at);
-      this.parts.push(chunk.slice(at, at + take));
+      this.parts.push(new Uint8Array(chunk.subarray(at, at + take)));
       this.filled += take;
       at += take;
       if (this.filled === this.extentBytes) this.seal();
