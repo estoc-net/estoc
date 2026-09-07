@@ -203,13 +203,12 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       const [foreignEvent] = await foreign(authorN(2), c.now, [{ type: "t", data: { k: "x" } }]);
       await store.ingest([foreignEvent]);
       const query = async (filter: Filter): Promise<string[]> => ids(await all(store.scan(filter)));
-      const sorted = (events: Event[]): string[] => ids([...events].sort(compareEvents));
       expect(await query({})).toHaveLength(4);
-      expect(await query({ author: authorN(1) })).toEqual(ids([a, b, cEvent]));
+      expect(await query({ author: authorN(1) })).toEqual(sorted([a, b, cEvent]));
       expect(await query({ author: authorN(2) })).toEqual([foreignEvent?.eventId]);
       expect(await query({ type: "t" })).toEqual(sorted([a, b, foreignEvent as Event]));
       expect(await query({ type: "t", data: { k: "x" } })).toEqual(sorted([a, foreignEvent as Event]));
-      expect(await query({ data: { n: 1 } })).toEqual(ids([a, b]));
+      expect(await query({ data: { n: 1 } })).toEqual(sorted([a, b]));
       expect(await query({ data: { n: "1" } })).toEqual([cEvent.eventId]); // no coercion
       expect(await query({ data: { flag: null } })).toEqual([a.eventId]); // present and null
       expect(await query({ data: { missing: null } })).toEqual([]); // absent is not null
@@ -245,7 +244,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(outcome.rejected).toHaveLength(4);
       expect(outcome.rejected.map((r) => r.value)).toEqual([null, { ...three, extra: 1 }, { ...three, at: "2026-09-06T10:00:00Z" }, { ...three, eventId: "not-a-uuid" }]);
       for (const r of outcome.rejected) expect(r.error).toBeTypeOf("string");
-      expect(await all(store.scan())).toEqual([one, two, three]); // the held value of `two` is untouched
+      expect(await all(store.scan())).toEqual(([one, two, three] as Event[]).sort(compareEvents)); // the held value of `two` is untouched
       // a conflict inside one input, neither side held: the first seen is kept, the other reported
       const fresh = await open({ author: authorN(3), now: c.now });
       const [four] = await foreign(authorN(2), c.now, [{ type: "t", data: { n: 4 } }]);
@@ -263,6 +262,28 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       const [held] = await all(store.scan());
       expect(held).toEqual(event);
       expect(JSON.stringify(held)).toBe(JSON.stringify(JSON.parse(new TextDecoder().decode(new TextEncoder().encode(JSON.stringify(sortedDeep(event)))))));
+    });
+
+    it("r1-C: a local append is held, returned and scanned in the form its canonical bytes parse to — `-0` as 0, members in canonical order — the same as its ingest elsewhere", async () => {
+      const c = clock(T0);
+      const store = await open({ author: authorN(1), now: c.now });
+      const draft = { type: "t", data: { z: -0, a: 1, nested: { y: [2, { q: 1, p: 2 }], x: 1 } } };
+      const returned = await store.append(draft);
+      expect(Object.is(returned.data["z"], 0)).toBe(true);
+      expect(Object.keys(returned.data)).toEqual(["a", "nested", "z"]);
+      expect(Object.keys(returned)).toEqual(["at", "author", "data", "eventId", "roots", "type"]);
+      expect(Object.keys((returned.data["nested"] as { y: unknown[] }).y[1] as object)).toEqual(["p", "q"]);
+      const [scanned] = await all(store.scan());
+      const [changed] = await all((await store.changes()).events);
+      const other = await open({ author: authorN(2), now: c.now });
+      await other.ingest([reordered(returned)]);
+      const [ingested] = await all(other.scan());
+      for (const form of [scanned, changed, ingested]) {
+        expect(JSON.stringify(form)).toBe(JSON.stringify(returned));
+        expect(Object.is((form as Event).data["z"], 0)).toBe(true);
+      }
+      const batch = await store.appendAll([{ type: "t", data: { b: 1, a: -0 } }]);
+      expect(JSON.stringify(batch[0]?.data)).toBe('{"a":0,"b":1}');
     });
 
     it("ES-21: ingest checks `eventId` and `at` each on its own and never compares the UUID's embedded time with `at`", async () => {
@@ -320,6 +341,30 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       await expect(store.ingest(failing())).rejects.toThrow("transport broke");
       expect(await all(store.scan())).toEqual([]);
       expect(await store.ingest(events)).toMatchObject({ added: 2 });
+    });
+
+    it("r1-B: ingest classifies against what is held when it writes, not when it read: a write that lands while it reads is seen", async () => {
+      const c = clock(T0);
+      const store = await open({ author: authorN(1), now: c.now });
+      const [a] = await foreign(authorN(2), c.now, [{ type: "t", data: { v: "a" } }]);
+      const b = altered(a as Event); // same eventId, other content
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let readBoth!: () => void;
+      const read = new Promise<void>((resolve) => (readBoth = resolve));
+      async function* slow(): AsyncIterable<unknown> {
+        yield a;
+        yield b;
+        readBoth();
+        await gate; // the input is not finished; meanwhile another ingest lands `b`
+      }
+      const pending = store.ingest(slow());
+      await read;
+      expect(await store.ingest([b])).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
+      release();
+      const outcome = await pending;
+      expect(outcome).toEqual({ added: 0, duplicates: 1, conflicts: [{ eventId: a?.eventId, kept: b, rejected: a }], rejected: [] });
+      expect(await all(store.scan())).toEqual([b]);
     });
 
     it("ES-8: shuffling and repartitioning one event set changes no fold, and merge is commutative and idempotent", async () => {
@@ -382,9 +427,16 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       // a token of another generation, or no token at all, is refused
       const other = await open({ author: authorN(3), now: c.now });
       await other.append({ type: "t", data: {} });
-      const foreignToken = (await other.changes()).token;
+      const foreignToken = (await other.changes()).token; // a position below this store's count
       await expect(store.changes(undefined, foreignToken)).rejects.toBeInstanceOf(BadToken);
       await expect(other.changes(undefined, second.token)).rejects.toBeInstanceOf(BadToken);
+      // the same count of other events is another event set: its token places nowhere here
+      const twin = await open({ author: authorN(4), now: c.now });
+      await twin.ingest(await foreign(authorN(5), c.now, [{ type: "t" }, { type: "t" }, { type: "t" }, { type: "t" }]));
+      await twin.append({ type: "t", data: {} });
+      expect(await all(twin.scan())).toHaveLength(5);
+      await expect(store.changes(undefined, (await twin.changes()).token)).rejects.toBeInstanceOf(BadToken);
+      await expect(twin.changes(undefined, second.token)).rejects.toBeInstanceOf(BadToken);
       for (const junk of ["", "garbage", "{}", "[]", "null"]) {
         await expect(store.changes(undefined, junk), JSON.stringify(junk)).rejects.toBeInstanceOf(BadToken);
       }
@@ -420,13 +472,14 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       const successor = await open({ author: authorN(2), now: c.now });
       expect(await successor.ingest(history)).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
       const own = await successor.append({ type: "t", data: { n: 3 } });
-      expect(await all(successor.scan())).toEqual([...history, own]);
-      expect(await all(successor.scan({ author: authorN(1) }))).toEqual(history);
+      const canonical = [...history].sort(compareEvents); // one `at`: the order within it is the IDs', not the batch's
+      expect(await all(successor.scan())).toEqual([...canonical, own]);
+      expect(await all(successor.scan({ author: authorN(1) }))).toEqual(canonical);
       expect(await all(successor.scan({ author: authorN(2) }))).toEqual([own]);
       expect(await successor.ingest(history)).toMatchObject({ added: 0, duplicates: 2 });
       // the retired author's own copy, reopened as it was, still agrees on that history
       expect(await retired.ingest([own])).toMatchObject({ added: 1 });
-      expect(await all(retired.scan())).toEqual([...history, own]);
+      expect(await all(retired.scan())).toEqual([...canonical, own]);
     });
 
     it("damaged() and conflicting() resolve to lists, empty for a store nothing has touched", async () => {
@@ -440,6 +493,11 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
 
 function sortedIds(events: Event[]): string[] {
   return ids(events).sort();
+}
+
+/** IDs in canonical order: within one `at`, the IDs' own order, which need not be the order they were minted in (§4.2). */
+function sorted(events: Event[]): string[] {
+  return ids([...events].sort(compareEvents));
 }
 
 /** `value` with every object's members in RFC 8785 order, for comparing spellings. */

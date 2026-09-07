@@ -11,8 +11,11 @@ six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and
 its validation (§3.4, roots being raw DASL CIDs from `@estoc/dasl`),
 canonical order (§4.3), the `EventStore` interface (§5) and minting —
 `at` from the clock, `eventId` from `uuid`'s standard UUIDv7 generator
-(§4.2). No store yet. Everything below is version 2, which
-stays until the vault switches over.
+(§4.2); and the first store, `MemoryEventStore`, the reference the
+others are measured against — with `ForkedAuthor` and `BadToken`, and
+`test/v3/suite/`, the conformance suite every version-3 store runs.
+Everything below is version 2, which stays until the vault switches
+over.
 
 What is here is the **model**, the **seam**, and the **folder**:
 
