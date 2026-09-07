@@ -247,7 +247,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(new Set(infos.map((info) => info.cid)).size).toBe(1);
       });
 
-      it("DO-7: a large object streams in, streams out in more than one chunk, verifies, and a bounded read refuses before allocating", async () => {
+      it("DO-7: a large object streams in, streams out — in however many chunks the store chooses — verifies, and a bounded read refuses before allocating", async () => {
         const size = 8 * 1024 * 1024 + 1;
         const chunk = 64 * 1024;
         // The source is generated as it is pulled; nothing here holds the whole object.
@@ -261,16 +261,14 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const { store } = await open();
         expect(await store.putRaw(large())).toEqual({ cid: want, codec: "raw", size });
         const stream = await store.open(want);
+        // Read back incrementally, hashing as it comes; how the store chunks its output is its own (§5).
         const readBack = sha256.create();
-        let chunks = 0;
         let seen = 0;
         for await (const part of chunksOf(stream as ReadableStream<Uint8Array>)) {
           readBack.update(part);
-          chunks += 1;
           seen += part.length;
         }
         expect(seen).toBe(size);
-        expect(chunks).toBeGreaterThan(1);
         expect(rawCidFromDigest(readBack.digest()).text).toBe(want);
         await expect(store.read(want, size - 1)).rejects.toThrow(ObjectTooLarge);
         expect((await store.read(want, size))?.length).toBe(size);

@@ -175,6 +175,11 @@ objectStoreSuite("MemoryObjectStore, verifying before the first chunk", async (o
   return { store: verifyingFirst(store), corrupt: async (cid: Cid) => store.damage(cid) };
 });
 
+objectStoreSuite("MemoryObjectStore, 16 MiB extents unless told otherwise", async (options: OpenObjectOptions = {}) => {
+  const store = new MemoryObjectStore({ extentBytes: 16 << 20, ...options });
+  return { store, corrupt: async (cid: Cid) => store.damage(cid) };
+});
+
 objectStoreSuite("MemoryObjectStore, output in 2-byte chunks", async (options: OpenObjectOptions = {}) => {
   const store = new MemoryObjectStore(options);
   return { store: rechunked(store, 2), corrupt: async (cid: Cid) => store.damage(cid) };
@@ -221,6 +226,26 @@ describe("MemoryObjectStore", () => {
     const single = (await one.putRaw(chunked(bytes, [1, 2, 3]))).cid;
     expect((await drain((await one.open(single)) as ReadableStream<Uint8Array>)).chunks).toBe(1);
     expect((await drain((await one.open(EMPTY_CID)) ?? (await one.putRaw(new Uint8Array(0)), (await one.open(EMPTY_CID)) as ReadableStream<Uint8Array>))).chunks).toBe(0);
+  });
+
+  it("r3-A: a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
+    const size = 8 * 1024 * 1024 + 1;
+    const chunk = 64 * 1024;
+    async function* large(): AsyncIterable<Uint8Array> {
+      for (let at = 0; at < size; at += chunk) yield bytesOf(Math.min(chunk, size - at), at + 1);
+    }
+    for (const [extentBytes, chunks] of [
+      [1 << 20, 9],
+      [16 << 20, 1],
+      [size, 1],
+      [size - 1, 2],
+    ] as const) {
+      const store = new MemoryObjectStore({ extentBytes });
+      const { cid } = await store.putRaw(large());
+      const { chunks: got, bytes } = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
+      expect(got, `extent ${extentBytes}`).toBe(chunks);
+      expect(bytes.length, `extent ${extentBytes}`).toBe(size);
+    }
   });
 
   it("copies what a caller's source yields: reusing the buffer afterwards changes nothing held", async () => {
