@@ -11,7 +11,9 @@
  * same as DAG-CBOR's length-first order), no tag but 42, no simple value
  * but false/true/null, floats only as 64-bit finite non-negative-zero
  * values, valid UTF-8, no trailing bytes. A block that decodes here is a
- * block whose bytes are the only bytes its value can have.
+ * block whose bytes are the only bytes its value can have — and what it
+ * decodes to reserializes to those bytes: a float stays a float even when
+ * its value is an integer (CBOR/c-42 §2.2), a leading U+FEFF stays text.
  */
 
 import { cidFromBytes, compareBytes, type DaslCid } from "./cid.js";
@@ -25,13 +27,36 @@ export class Link {
 }
 
 /**
- * The DRISL data model. Integers beyond 2^53 come back as bigint. A map
+ * A 64-bit float kept as a float. A plain `number` that is a safe integer
+ * encodes as a CBOR integer, so an integral value that arrived as a float
+ * — `fb 3ff0…`, 1.0 — would reserialize as `01` if it came back as a
+ * `number`, and CBOR/c-42 §2.2 makes the two distinct types. The decoder
+ * hands such a value back as a `Float`, which encodes as the float it
+ * was; the encoder takes a `Float` over any finite number and writes it
+ * 64-bit. A float whose value is not an integer comes back as a plain
+ * `number`, since a `number` with that value encodes as a float anyway.
+ */
+export class Float {
+  constructor(readonly value: number) {
+    if (!Number.isFinite(value)) throw new Error("DRISL has no NaN or infinity");
+    if (Object.is(value, -0)) throw new Error("DRISL has no negative zero");
+  }
+  /** Diagnostic notation: an integral value with `.0`, so it reads as the float it is. */
+  toString(): string {
+    const s = String(this.value);
+    return Number.isInteger(this.value) && !s.includes("e") ? `${s}.0` : s;
+  }
+}
+
+/**
+ * The DRISL data model. Integers beyond 2^53 come back as bigint; a
+ * 64-bit float whose value is an integer comes back as a `Float`. A map
  * decodes to an object with no prototype (`Object.create(null)`), so
  * every key — `__proto__`, `constructor`, any string DRISL allows — is a
  * plain own property and nothing more; the encoder takes any object's
  * own enumerable string keys.
  */
-export type Drisl = null | boolean | number | bigint | string | Uint8Array | Link | Drisl[] | { [key: string]: Drisl };
+export type Drisl = null | boolean | number | bigint | string | Uint8Array | Link | Float | Drisl[] | { [key: string]: Drisl };
 
 /** Nesting deeper than this is refused, whatever the bytes claim. */
 export const MAX_DEPTH = 64;
@@ -116,12 +141,9 @@ function encodeValue(w: Writer, value: Drisl, depth: number): void {
     if (Number.isSafeInteger(value)) {
       return value >= 0 ? w.head(0, value) : w.head(1, -1 - value);
     }
-    if (!Number.isFinite(value)) throw new Error("DRISL has no NaN or infinity");
-    const buf = new DataView(new ArrayBuffer(8));
-    buf.setFloat64(0, value);
-    w.push(0xfb);
-    return w.bytes(new Uint8Array(buf.buffer));
+    return encodeFloat(w, value);
   }
+  if (value instanceof Float) return encodeFloat(w, value.value);
   if (typeof value === "bigint") {
     return value >= 0n ? w.head(0, value) : w.head(1, -1n - value);
   }
@@ -159,6 +181,14 @@ function encodeValue(w: Writer, value: Drisl, depth: number): void {
   throw new Error(`cannot encode ${typeof value} as DRISL`);
 }
 
+function encodeFloat(w: Writer, value: number): void {
+  if (!Number.isFinite(value)) throw new Error("DRISL has no NaN or infinity");
+  const buf = new DataView(new ArrayBuffer(8));
+  buf.setFloat64(0, value);
+  w.push(0xfb);
+  w.bytes(new Uint8Array(buf.buffer));
+}
+
 /** The one byte string a value has. */
 export function encodeDrisl(value: Drisl): Uint8Array {
   const w = new Writer();
@@ -168,7 +198,10 @@ export function encodeDrisl(value: Drisl): Uint8Array {
 
 /* ---------------------------------------------------------------- decode */
 
-const utf8Strict = new TextDecoder("utf-8", { fatal: true });
+// fatal: invalid UTF-8 throws. ignoreBOM: a leading U+FEFF is three bytes
+// of the text, not a byte-order mark for the decoder to strip — without
+// it "\uFEFFx" would decode to "x" and two distinct keys would collide.
+const utf8Strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 class Reader {
   at = 0;
@@ -281,7 +314,8 @@ class Reader {
         const f = view.getFloat64(0);
         if (!Number.isFinite(f)) throw new Error("DRISL has no NaN or infinity");
         if (Object.is(f, -0)) throw new Error("DRISL has no negative zero");
-        return f;
+        // an integral float would reserialize as an integer if it came back as a number
+        return Number.isSafeInteger(f) ? new Float(f) : f;
       }
       default:
         throw new Error(`major type ${major}`);

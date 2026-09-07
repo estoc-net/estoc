@@ -2,8 +2,9 @@
  * DASL CAR (https://dasl.ing/car.html): CARv1 over DASL CIDs. A header
  * — a length-prefixed DRISL map with `version: 1` and `roots`, an array
  * of CIDs — then blocks, each a length-prefixed `CID ‖ data` where the
- * CID is exactly the 36 bytes of a DASL CID. Lengths are unsigned
- * LEB128 varints. This is how a set of blocks travels as one file.
+ * CID is exactly the 36 bytes of a DASL CID. Lengths are multiformats
+ * unsigned varints, minimally encoded. This is how a set of blocks
+ * travels as one file.
  *
  * Reading checks every block against its name: a section whose 36 bytes
  * are not a DASL CID, or whose data does not hash to it, is not kept —
@@ -13,7 +14,7 @@
  */
 
 import { base32Encode, checkCid, CID_LENGTH, cidFromBytes, parseCid } from "./cid.js";
-import { decodeDrisl, encodeDrisl, Link, type Drisl } from "./drisl.js";
+import { decodeDrisl, encodeDrisl, Float, Link, type Drisl } from "./drisl.js";
 
 /** A CAR read back: what the header named, every block whose bytes match its CID, and what was dropped. */
 export interface Car {
@@ -96,9 +97,10 @@ function decodeHeader(bytes: Uint8Array): string[] {
   } catch (err) {
     throw new Error(`CAR header is not DRISL: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (typeof doc !== "object" || doc === null || Array.isArray(doc) || doc instanceof Uint8Array || doc instanceof Link) {
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc) || doc instanceof Uint8Array || doc instanceof Link || doc instanceof Float) {
     throw new Error("CAR header is not a map");
   }
+  // the integer 1: the float 1.0 decodes as a Float and is refused here
   if (doc["version"] !== 1) throw new Error(`CAR version ${String(doc["version"])} is not 1`);
   const roots = doc["roots"];
   if (!Array.isArray(roots) || !roots.every((root) => root instanceof Link)) throw new Error("CAR header roots are not CIDs");
@@ -122,7 +124,11 @@ function readVarint(bytes: Uint8Array, at: number): [number, number] {
     if (at >= bytes.length) throw new Error("truncated CAR");
     const b = bytes[at++] as number;
     n += (b & 0x7f) * shift;
-    if (b < 0x80) return [n, at];
+    if (b < 0x80) {
+      // minimal encoding: the only value whose last byte may be 0x00 is 0 itself
+      if (b === 0 && i > 0) throw new Error("CAR length not minimally encoded");
+      return [n, at];
+    }
     shift *= 128;
   }
   throw new Error("CAR length too long");

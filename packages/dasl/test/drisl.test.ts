@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as dagCbor from "@ipld/dag-cbor";
 import { CID } from "multiformats/cid";
-import { decodeDrisl, encodeDrisl, Link, parseCid, MAX_DEPTH } from "../src/index.js";
+import { decodeDrisl, encodeDrisl, Float, Link, parseCid, MAX_DEPTH } from "../src/index.js";
 
 const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 const bytes = (h: string) => new Uint8Array((h.match(/../g) ?? []).map((x) => parseInt(x, 16)));
@@ -181,5 +181,47 @@ describe("DRISL maps have no prototype", () => {
     expect(doc["constructor"]).toBe(1);
     expect(doc["hasOwnProperty"]).toBe(2);
     expect("toString" in doc).toBe(false);
+  });
+});
+
+describe("DRISL decodes to what reserializes to the same bytes", () => {
+  it("a leading U+FEFF is text, not a byte-order mark: strings keep it, and \"x\" and \"\\uFEFFx\" are two keys", () => {
+    expect(hex(encodeDrisl("\uFEFF"))).toBe("63efbbbf");
+    expect(decodeDrisl(bytes("63efbbbf"))).toBe("\uFEFF");
+    expect(decodeDrisl(encodeDrisl("\uFEFFhello"))).toBe("\uFEFFhello");
+    const encoded = encodeDrisl({ x: 1, "\uFEFFx": 2 });
+    const decoded = decodeDrisl(encoded) as { [key: string]: unknown };
+    expect(decoded["x"]).toBe(1);
+    expect(decoded["\uFEFFx"]).toBe(2);
+    expect(Object.keys(decoded)).toHaveLength(2);
+    expect(hex(encodeDrisl(decoded as never))).toBe(hex(encoded));
+  });
+
+  it("an integral 64-bit float comes back as a Float and reserializes as the float it was", () => {
+    for (const [encoded, value] of [["fb3ff0000000000000", 1], ["fb0000000000000000", 0], ["fbc000000000000000", -2]] as const) {
+      const back = decodeDrisl(bytes(encoded));
+      expect(back).toBeInstanceOf(Float);
+      expect((back as Float).value).toBe(value);
+      expect(hex(encodeDrisl(back))).toBe(encoded);
+    }
+    // past 2^53 a number is a float anyway, so it comes back as a number and still reserializes the same
+    expect(decodeDrisl(bytes("fb4340000000000000"))).toBe(2 ** 53);
+    expect(hex(encodeDrisl(decodeDrisl(bytes("fb4340000000000000"))))).toBe("fb4340000000000000");
+    // inside a document
+    const doc = decodeDrisl(bytes("a16176fb3ff0000000000000")) as { v: unknown };
+    expect(doc.v).toBeInstanceOf(Float);
+    expect(hex(encodeDrisl(doc as never))).toBe("a16176fb3ff0000000000000");
+    // a plain integral number is still an integer; only a Float forces the float form
+    expect(hex(encodeDrisl(1))).toBe("01");
+    expect(hex(encodeDrisl(new Float(1)))).toBe("fb3ff0000000000000");
+    expect(hex(encodeDrisl(new Float(100000)))).toBe("fb40f86a0000000000");
+    // a Float over a non-integral value is the same bytes as the number, and comes back as the number
+    expect(hex(encodeDrisl(new Float(1.5)))).toBe(hex(encodeDrisl(1.5)));
+    expect(decodeDrisl(encodeDrisl(new Float(1.5)))).toBe(1.5);
+    expect(String(new Float(1))).toBe("1.0");
+    expect(String(new Float(1.5))).toBe("1.5");
+    expect(() => new Float(Number.NaN)).toThrow(/NaN/);
+    expect(() => new Float(Number.NEGATIVE_INFINITY)).toThrow(/infinity/);
+    expect(() => new Float(-0)).toThrow(/negative zero/);
   });
 });

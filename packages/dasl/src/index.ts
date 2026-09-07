@@ -32,5 +32,5 @@ export {
   compareBytes,
   type DaslCid,
 } from "./cid.js";
-export { Link, encodeDrisl, decodeDrisl, MAX_DEPTH, type Drisl } from "./drisl.js";
+export { Link, Float, encodeDrisl, decodeDrisl, MAX_DEPTH, type Drisl } from "./drisl.js";
 export { encodeCar, decodeCar, type Car } from "./car.js";

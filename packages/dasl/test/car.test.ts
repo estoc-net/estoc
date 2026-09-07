@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CID } from "multiformats/cid";
 import { sha256 } from "multiformats/hashes/sha2";
-import { decodeCar, decodeDrisl, drislCid, encodeCar, encodeDrisl, Link, parseCid, rawCid } from "../src/index.js";
+import { decodeCar, decodeDrisl, drislCid, encodeCar, encodeDrisl, Float, Link, parseCid, rawCid } from "../src/index.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
 const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -90,6 +90,37 @@ describe("DASL CAR", () => {
     expect(none.blocks.size).toBe(0);
     const twice = concat(encodeCar([], new Map([[other, utf8("o")]])), section(parseCid(other).bytes, utf8("o")));
     expect((await decodeCar(twice)).blocks.size).toBe(1);
+  });
+
+  it("refuses a header whose version is the float 1.0: the integer 1 only", async () => {
+    const header = encodeDrisl({ roots: [], version: new Float(1) });
+    expect(hex(header)).toBe("a265726f6f7473806776657273696f6efb3ff0000000000000");
+    await expect(decodeCar(concat(varint(header.length), header))).rejects.toThrow(/version 1\.0 is not 1/);
+  });
+
+  it("refuses a length that is not minimally encoded, header or block; lengths across the one- and two-byte boundaries read back", async () => {
+    const empty = encodeCar([], new Map());
+    expect(empty[0]).toBeLessThan(0x80);
+    const overlongHeader = concat(new Uint8Array([(empty[0] as number) | 0x80, 0]), empty.subarray(1));
+    await expect(decodeCar(overlongHeader)).rejects.toThrow(/minimally/);
+    const data = utf8("x");
+    const cid = await rawCid(data);
+    const car = encodeCar([cid], new Map([[cid, data]]));
+    const offset = 1 + (car[0] as number);
+    expect(car[offset]).toBe(37);
+    const overlongBlock = concat(car.subarray(0, offset), new Uint8Array([37 | 0x80, 0]), car.subarray(offset + 1));
+    await expect(decodeCar(overlongBlock)).rejects.toThrow(/minimally/);
+    // a lone 0x00 is the minimal encoding of 0
+    await expect(decodeCar(new Uint8Array([0x00]))).rejects.toThrow(/empty/);
+    expect(hex(varint(127))).toBe("7f");
+    expect(hex(varint(128))).toBe("8001");
+    for (const size of [127 - 36, 128 - 36, 16383 - 36, 16384 - 36]) {
+      const big = new Uint8Array(size).fill(1);
+      const c = await rawCid(big);
+      const back = await decodeCar(encodeCar([c], new Map([[c, big]])));
+      expect(back.blocks.get(c)?.length).toBe(size);
+      expect(back.bad).toEqual([]);
+    }
   });
 
   it("encodeCar takes only DASL CIDs", async () => {
