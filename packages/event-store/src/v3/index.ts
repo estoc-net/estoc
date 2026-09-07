@@ -5,7 +5,8 @@
  * (§3.3), the six-field envelope and its validation (§3.4), identity,
  * time and canonical order (§4), the store interface (§5), and minting
  * — `at` from the clock, `eventId` from `uuid`'s standard UUIDv7
- * generator (§4.2). No store yet, and no event type.
+ * generator (§4.2); and the store in memory, the reference every other
+ * store is measured against. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -46,4 +47,6 @@ export {
 
 export { mint, type Minted } from "./mint.js";
 
-export { InvalidJson, InvalidEvent } from "./errors.js";
+export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
+
+export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken } from "./errors.js";

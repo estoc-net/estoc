@@ -17,6 +17,24 @@
   standard UUIDv7 generator — the profile asks nothing of the generator
   beyond RFC 9562 (§4.2). No store yet.
 
+- **`MemoryEventStore` v3 and the store suite** (v3 A03). The version-3
+  event store as a map in memory, under `@estoc/event-store/v3`: `append`
+  and `appendAll` validate every draft first and mint one `at` for the
+  batch (§5.1–5.2, ES-19/20/22); `ingest` reads its whole input before
+  writing, unions by `eventId`, counts duplicates under any serialization
+  by canonical bytes, keeps the held value on a conflict, and throws
+  `ForkedAuthor` — having added nothing — on an event of its own author
+  it does not hold (§5.3, ES-5/6/7), and classifies its input against
+  what is held under the writer lock, not before; what it holds,
+  appended or ingested, is the form the canonical bytes parse to,
+  frozen; `scan` sorts in canonical order and filters by equality
+  (§5.4, ES-9); `changes` tokens name one generation — the instance's
+  own, never given — one position and the event accepted before it, and
+  are refused otherwise with `BadToken` (§5.5, ES-11/12). `test/v3/
+  suite/eventStoreSuite(name, open)` is the conformance suite every
+  version-3 store runs — ES-1/5/6/7/8/9/11/12/16/19/20/21/22 — the folder
+  store next.
+
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block
   — under which nothing is known. `reachable` is its `reached`. For a
