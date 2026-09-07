@@ -1,6 +1,7 @@
 /**
- * @estoc/dasl — DASL (https://dasl.ing) with no dependency: sha-256 is
- * WebCrypto's; base32, CBOR and varints are a few dozen lines each.
+ * @estoc/dasl — DASL (https://dasl.ing). CIDs, multihashes, base32 and
+ * sha-256 are multiformats'; the DASL profile over them, the DRISL codec
+ * and CAR are here.
  *
  * - cid: DASL CIDs — CIDv1, sha-256, codec raw (0x55) or drisl (0x71),
  *   base32 lower, always 36 bytes, one canonical spelling;

@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./v3": {
+      "types": "./dist/v3/index.d.ts",
+      "default": "./dist/v3/index.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
@@ -43,19 +47,21 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/dasl": "workspace:^",
     "@ipld/dag-pb": "^4.1.7",
     "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",
     "ipfs-unixfs-importer": "^17.0.1",
+    "jsonc-parser": "^3.3.1",
     "multiformats": "^14.0.5",
     "uuid": "^11.1.1"
   },
   "devDependencies": {
     "@estoc/folder-object": "workspace:^",
     "@types/node": "^22.20.1",
-    "typescript": "~5.8.0",
-    "vitest": "^3.2.7",
     "esbuild": "^0.25.12",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "^1.62.1",
+    "typescript": "~5.8.0",
+    "vitest": "^3.2.7"
   }
 }

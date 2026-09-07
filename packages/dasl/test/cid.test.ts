@@ -16,7 +16,7 @@ describe("base32 lower (RFC 4648, no padding)", () => {
   it("rejects uppercase, padding, and non-zero trailing bits", () => {
     expect(() => base32Decode("MY")).toThrow(/base32/);
     expect(() => base32Decode("my======")).toThrow(/base32/);
-    expect(() => base32Decode("mz")).toThrow(/trailing/);
+    expect(() => base32Decode("mz")).toThrow(/base32/);
   });
 });
 
@@ -97,7 +97,7 @@ describe("dasl-objects.md", () => {
     expect(() => parseCid(`b${raw.slice(1).toUpperCase()}`)).toThrow(/base32/);
     // non-canonical base32: the last character carries three bits, the two below must be zero
     const last = ALPHABET.indexOf(raw[raw.length - 1]!);
-    expect(() => parseCid(raw.slice(0, -1) + ALPHABET[last | 1])).toThrow(/trailing/);
+    expect(() => parseCid(raw.slice(0, -1) + ALPHABET[last | 1])).toThrow(/base32/);
     // padding
     expect(() => parseCid(`${raw}=`)).toThrow(/base32/);
     // dag-pb (0x70) over the same digest

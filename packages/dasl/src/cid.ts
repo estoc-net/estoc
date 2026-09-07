@@ -2,10 +2,15 @@
  * DASL CIDs (https://dasl.ing/cid.html): CIDv1, sha-256, codec `raw`
  * (0x55, bare bytes) or `drisl` (0x71, a DRISL document), string form
  * multibase base32 lower (`b…`). Every DASL CID is exactly 36 bytes:
- * `01 <codec> 12 20 <32-byte digest>` — no varints to parse, no other
- * hash, no other base. The whole of what this format needs of CIDs, with
- * no dependency: sha-256 is WebCrypto's.
+ * `01 <codec> 12 20 <32-byte digest>`. CIDs, multihashes, base32 and
+ * sha-256 are multiformats'; this file is the DASL profile over them —
+ * which version, codecs, hash, base and spelling a DASL CID has, and
+ * the refusal of everything else.
  */
+
+import { base32 } from "multiformats/bases/base32";
+import { CID } from "multiformats/cid";
+import { sha256 } from "multiformats/hashes/sha2";
 
 /** multicodec `raw`: the CID names the sha-256 of exactly these bytes. */
 export const RAW_CODE = 0x55;
@@ -25,45 +30,25 @@ export interface DaslCid {
   readonly text: string;
 }
 
-const ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
-const LOOKUP = new Map<string, number>([...ALPHABET].map((c, i) => [c, i]));
-
 /** RFC 4648 base32, lowercase alphabet, no padding — the DASL string form's body. */
 export function base32Encode(bytes: Uint8Array): string {
-  let out = "";
-  let value = 0;
-  let bits = 0;
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += ALPHABET[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-      value &= (1 << bits) - 1;
-    }
-  }
-  if (bits > 0) out += ALPHABET[(value << (5 - bits)) & 31];
-  return out;
+  return base32.baseEncode(bytes);
 }
 
-/** The inverse; throws on a character outside the alphabet or non-zero trailing bits. */
+/**
+ * The inverse; throws unless `text` is the one spelling of its bytes:
+ * the lowercase alphabet only, no padding, zero trailing bits.
+ */
 export function base32Decode(text: string): Uint8Array {
-  const out: number[] = [];
-  let value = 0;
-  let bits = 0;
-  for (const c of text) {
-    const v = LOOKUP.get(c);
-    if (v === undefined) throw new Error(`not base32 lower: ${JSON.stringify(c)}`);
-    value = (value << 5) | v;
-    bits += 5;
-    if (bits >= 8) {
-      out.push((value >>> (bits - 8)) & 0xff);
-      bits -= 8;
-      value &= (1 << bits) - 1;
-    }
+  let bytes: Uint8Array;
+  try {
+    bytes = base32.baseDecode(text);
+  } catch (error) {
+    throw new Error(`not base32 lower: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (bits >= 5 || value !== 0) throw new Error("base32: non-canonical trailing bits");
-  return new Uint8Array(out);
+  // multiformats forgives `=` padding; DASL has none, and no other spelling either.
+  if (base32.baseEncode(bytes) !== text) throw new Error("not base32 lower: not the canonical spelling");
+  return bytes;
 }
 
 /** Decode the 36-byte binary form; throws unless it is exactly a DASL CID. */
@@ -74,8 +59,7 @@ export function cidFromBytes(bytes: Uint8Array): DaslCid {
   if (code !== RAW_CODE && code !== DRISL_CODE) throw new Error(`CID codec 0x${code.toString(16)} is neither raw nor drisl`);
   if (bytes[2] !== SHA256_CODE) throw new Error("CID hash is not sha-256");
   if (bytes[3] !== DIGEST_LENGTH) throw new Error("CID digest is not 32 bytes");
-  const copy = new Uint8Array(bytes);
-  return { code, digest: copy.subarray(4), bytes: copy, text: `b${base32Encode(copy)}` };
+  return fromCid(CID.decode(bytes));
 }
 
 /** Parse the string form; throws unless it is a DASL CID in its one canonical spelling. */
@@ -106,17 +90,10 @@ export function codecOf(text: string): number | null {
   }
 }
 
-async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>));
-}
-
 /** The CID that names `bytes` under `code`. */
 export async function cidOf(code: number, bytes: Uint8Array): Promise<DaslCid> {
   if (code !== RAW_CODE && code !== DRISL_CODE) throw new Error(`codec 0x${code.toString(16)} is neither raw nor drisl`);
-  const out = new Uint8Array(CID_LENGTH);
-  out.set([1, code, SHA256_CODE, DIGEST_LENGTH]);
-  out.set(await sha256(bytes), 4);
-  return cidFromBytes(out);
+  return fromCid(CID.create(1, code, await sha256.digest(bytes)));
 }
 
 /** The raw CID string of bare bytes (a file, a leaf). */
@@ -145,4 +122,12 @@ export function compareBytes(a: Uint8Array, b: Uint8Array): number {
     if (d !== 0) return d;
   }
   return a.length - b.length;
+}
+
+// A CID within the profile, in this package's shape. `bytes` is the CID's own
+// buffer (multiformats encodes afresh), so `digest` is a view into it, not into
+// whatever the caller passed.
+function fromCid(cid: CID): DaslCid {
+  const bytes = cid.bytes;
+  return { code: cid.code, digest: bytes.subarray(4), bytes, text: cid.toString(base32) };
 }

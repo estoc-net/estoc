@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`@estoc/event-store/v3`**: the version-3 event model of
+  `docs/replica-model/event-store.md`, built beside version 2 until the
+  vault switches over (v3 A02). RFC 8785 canonical JSON — `canonicalize`
+  and a `parseStrict` — jsonc-parser's scanner held to RFC 8259 — that
+  refuses a duplicate member, an unpaired surrogate, a noncharacter and a
+  number outside binary64 (§3.3); the six-field
+  envelope `eventId`/`at`/`author`/`type`/`roots`/`data` with
+  `validateEvent` and `validateDraft` (§3.4; `roots` are raw DASL CIDs
+  from `@estoc/dasl`); `atOf`/`isCanonicalAt` for the one canonical
+  millisecond spelling, `compareEvents` for `(at, eventId, author)`
+  (§4.2–4.3); the `EventStore` interface (§5); and `mint`, which reads
+  the clock once for `at` and takes `eventId` from the `uuid` package's
+  standard UUIDv7 generator — the profile asks nothing of the generator
+  beyond RFC 9562 (§4.2). No store yet.
+
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block
   — under which nothing is known. `reachable` is its `reached`. For a

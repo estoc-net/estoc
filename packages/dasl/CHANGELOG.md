@@ -11,8 +11,12 @@ package reads them yet.
 - DASL CIDs (`parseCid`, `cidFromBytes`, `cidOf`, `rawCid`, `drislCid`,
   `checkCid`, `codecOf`, `isDaslCid`): CIDv1, sha-256, codec raw (0x55)
   or drisl (0x71), 36 bytes, base32 lower in the one canonical spelling;
-  anything else — CIDv0, dag-pb, another hash, another base, uppercase —
-  is not a DASL CID.
+  anything else — CIDv0, dag-pb, another hash, another base, uppercase,
+  padding — is not a DASL CID. The CID, multihash, base32 and sha-256
+  machinery is `multiformats`', the package's one dependency; what is
+  here is the profile: the checks, and a round trip through the encoder
+  so that a spelling multiformats would forgive (base32 padding) is
+  refused.
 - DRISL (`encodeDrisl`, `decodeDrisl`, `Link`): the CBOR/c-42 profile.
   The encoder writes shortest forms, definite lengths, keys in bytewise
   order of their encoding, tag 42 over `0x00 ‖ CID`; the decoder refuses
