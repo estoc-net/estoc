@@ -168,6 +168,51 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "r2-A: copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
+    run: async (fresh) => {
+      // A Uint8Array whose `slice` is a view, as `Buffer.prototype.slice` is: what any backend is given in Node
+      class Viewing extends Uint8Array {
+        override slice(start?: number, end?: number): this {
+          return this.subarray(start, end) as this;
+        }
+      }
+      for (const method of ["write", "append"] as const) {
+        const b = await fresh();
+        const input = new Viewing([1, 2, 3]);
+        await b[method]("f", input);
+        input[0] = 9;
+        const read = (await b.read("f")) as Uint8Array;
+        same(Array.from(read), [1, 2, 3], `${method}: kept its own copy of a viewing input`);
+        read[1] = 8;
+        same(Array.from((await b.read("f")) as Uint8Array), [1, 2, 3], `${method}: handed out a copy`);
+        // a later append onto the file, then the input changed again: still nothing of the caller's is the file
+        await b.append("f", new Viewing([4]));
+        input[2] = 7;
+        same(Array.from((await b.read("f")) as Uint8Array), [1, 2, 3, 4], `${method}: the file after an append`);
+      }
+    },
+  },
+  {
+    name: "r3-A: refuses to write below a file or onto a directory, leaving both as they were",
+    run: async (fresh) => {
+      const b = await fresh();
+      await b.write("d/f", enc.encode("file"));
+      for (const method of ["write", "append"] as const) {
+        await rejects(b[method]("d/f/under", enc.encode("x")), /./, `${method} below a file`);
+        await rejects(b[method]("d/f/deeper/still", enc.encode("x")), /./, `${method} two below a file`);
+        await rejects(b[method]("d", enc.encode("x")), /./, `${method} onto a directory`);
+      }
+      same(text(await b.read("d/f")), "file", "the file is as it was");
+      same(await b.read("d"), null, "the directory is not a file");
+      same(await b.size("d/f/under"), null, "nothing landed below the file");
+      same(await b.list("d"), ["f"], "the directory holds what it held");
+      same(await b.dirs("d"), [], "no directory appeared under it");
+      // and beside them everything still works
+      await b.write("d/g", enc.encode("g"));
+      same((await b.list("d")).sort(), ["f", "g"], "a sibling write");
+    },
+  },
+  {
     name: "refuses what is not a plain relative path: .., ., a backslash, an absolute path, an empty segment",
     run: async (fresh) => {
       const b = await fresh();

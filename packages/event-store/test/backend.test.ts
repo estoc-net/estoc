@@ -24,6 +24,20 @@ afterAll(async () => {
 });
 
 describe("memory backend", () => {
+  it("r2-A: a Node Buffer written, first-appended or read is copied — `Buffer#slice` is a view, so the file would otherwise follow the caller's later writes", async () => {
+    for (const method of ["write", "append"] as const) {
+      const b = new MemoryBackend();
+      const input = Buffer.from([1, 2, 3]);
+      await b[method]("f", input);
+      input[0] = 9;
+      const read = (await b.read("f")) as Uint8Array;
+      expect(Array.from(read)).toEqual([1, 2, 3]);
+      read[1] = 8;
+      expect(Array.from((await b.read("f")) as Uint8Array)).toEqual([1, 2, 3]);
+      expect(b.files.get("f")).not.toBeInstanceOf(Buffer);
+    }
+  });
+
   it("dates a write by the clock it was given", async () => {
     const c = clock("2026-08-30T10:00:00Z");
     const b = new MemoryBackend({ clock: c.now });

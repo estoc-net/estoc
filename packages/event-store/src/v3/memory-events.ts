@@ -29,7 +29,7 @@ import {
   type Ingested,
 } from "./event.js";
 import { canonicalText, parseStrict } from "./jcs.js";
-import type { JsonObject } from "./json.js";
+import { deepFreeze, type JsonObject } from "./json.js";
 import { mint } from "./mint.js";
 
 export interface MemoryEventStoreOptions {
@@ -96,7 +96,7 @@ export class MemoryEventStore implements EventStore {
 
   /** Add an event this store does not hold: it is frozen and, from here on, what `scan` hands out. */
   private accept(event: Event, text: string): Event {
-    freeze(event);
+    deepFreeze(event);
     this.held.set(event.eventId, { event, text });
     this.accepted.push(event);
     return event;
@@ -213,12 +213,6 @@ export class MemoryEventStore implements EventStore {
 function canonical(value: unknown): Held {
   const text = canonicalText(validateEvent(value));
   return { event: parseStrict(text) as Event, text };
-}
-
-function freeze(value: unknown): void {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return;
-  Object.freeze(value);
-  for (const inner of Object.values(value)) freeze(inner);
 }
 
 async function* iterate<T>(items: T[]): AsyncIterable<T> {

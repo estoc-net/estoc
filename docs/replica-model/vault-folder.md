@@ -626,18 +626,21 @@ A writable open additionally:
 
 `scan(filter)`:
 
-1. walks every segment in `events/*/`, restricted to one author
-   directory when the filter specifies `author`;
+1. walks every segment in `events/*/` across all author directories;
 2. reads complete lines;
 3. validates envelope and path-author equality;
 4. records damaged lines;
-5. deduplicates by `eventId` and records conflicts;
+5. deduplicates globally by `eventId`, selects the accepted value using
+   section 11.5 and records conflicts;
 6. applies the equality filter;
 7. sorts by `(at, eventId, author)`; and
 8. yields accepted events.
 
-A filter reduces output, not necessarily I/O. Local indexes may optimize
-this without changing results.
+A filter reduces output, not necessarily I/O. An implementation MAY
+restrict reads to one author directory or use a local index only when
+doing so produces the same result as global deduplication followed by
+filtering. The requested filter MUST NOT affect which content is accepted
+for an `eventId`.
 
 <a id="append"></a>
 
@@ -687,6 +690,11 @@ folder reader keeps the content from the lexicographically first segment
 path and, within one segment, the first line offset. It reports every
 other content. This deterministic local choice is not conflict
 resolution at the vault level.
+
+For a fixed observed store state, this selection is independent of read
+filters. Whenever `scan()` or `changes()` yields an event, it MUST yield
+the accepted value selected by this rule, subject to its filter.
+`conflicting()` MUST identify that same value as `kept`.
 
 <a id="portable-filestore"></a>
 

@@ -24,3 +24,11 @@ export function isJsonObject(value: unknown): value is JsonObject {
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 }
+
+/** `value` and everything reachable from it frozen, and returned: what a store hands out cannot be edited into what it holds. */
+export function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const inner of Object.values(value)) deepFreeze(inner);
+  return value;
+}

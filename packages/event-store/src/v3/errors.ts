@@ -91,3 +91,18 @@ export class MissingRoot extends Error {
     this.name = "MissingRoot";
   }
 }
+
+/**
+ * A structural root of the folder that is not what the layout requires
+ * (vault-folder.md §3) — a file where `events/` belongs — met by a write:
+ * nothing was written. A read reports the same as `Damaged` at `where`.
+ */
+export class DamagedLayout extends Error {
+  constructor(
+    readonly where: string,
+    message: string
+  ) {
+    super(`${where}: ${message}`);
+    this.name = "DamagedLayout";
+  }
+}

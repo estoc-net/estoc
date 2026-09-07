@@ -217,6 +217,10 @@ describe("envelope validation (§3.4)", () => {
       ["r1-A: noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
       ["r1-B: lone surrogate in type", { type: cp(0xd800), data: {} }],
       ["r1-B: noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
+      ["a06 r1-D: eventId supplied", { type: "t", data: {}, eventId: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["a06 r1-D: at supplied", { type: "t", data: {}, at: "2026-09-07T10:00:00.000Z" }],
+      ["a06 r1-D: author supplied", { type: "t", data: {}, author: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["a06 r1-D: eventId supplied as undefined", { type: "t", data: {}, eventId: undefined }],
     ];
     for (const [what, value] of bad) {
       expect(() => validateDraft(value), what).toThrow(InvalidEvent);

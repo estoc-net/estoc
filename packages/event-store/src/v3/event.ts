@@ -201,17 +201,25 @@ export function validateEvent(value: unknown): Event {
   return value as Event;
 }
 
+/** What the store mints (§5.1 steps 2–4): a draft that carries one is refused, never silently re-minted (vault-folder.md §11.3). */
+const MINTED = ["eventId", "at", "author"] as const;
+
 /**
- * A draft that can become an event (§5.1 step 1): a non-empty `type`,
- * `roots` of raw CIDs or left out, and the whole — `type`, `roots`,
- * `data` under one root object, nested exactly as the event will be —
- * JCS-eligible, so that a draft this accepts makes an event
- * `validateEvent` accepts once `eventId`, `at` and `author` are added.
+ * A draft that can become an event (§5.1 step 1): none of `eventId`,
+ * `at` or `author`, which the store mints — an event handed back as a
+ * draft is refused, not quietly made a second event (vault-folder.md
+ * §11.3) — a non-empty `type`, `roots` of raw CIDs or left out, and the
+ * whole — `type`, `roots`, `data` under one root object, nested exactly
+ * as the event will be — JCS-eligible, so that a draft this accepts
+ * makes an event `validateEvent` accepts once the three are added.
  * Returns the draft normalized — `roots` always an array — as fresh
  * plain data the caller cannot reach.
  */
 export function validateDraft(draft: unknown): Required<Draft> {
   if (!isJsonObject(draft)) throw new InvalidEvent("a draft is an object");
+  for (const minted of MINTED) {
+    if (Object.hasOwn(draft, minted)) throw new InvalidEvent(`a draft does not carry ${minted}: the store mints it`);
+  }
   const { type, roots, data } = draft as Record<string, unknown>;
   checkType(type);
   if (roots !== undefined) checkRoots(roots);
