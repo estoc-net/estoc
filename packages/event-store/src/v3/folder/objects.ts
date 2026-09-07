@@ -12,10 +12,19 @@
  * A read streams the file back, rehashing on the way out; a file whose
  * bytes no longer spell its name fails the stream before completion,
  * is moved aside to `local/damaged/objects/`, and reads as absent from
- * then on (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age is
- * its file's modification time, which acceptance sets and repeating
- * acceptance renews (§9); `collect` unlinks exactly the unkept,
- * unlatched object files past grace (§8.3). What is in `objects/` and
+ * then on (§6.3, §8.2, DO-13, DO-16, VF-13) — moved aside only if its
+ * bytes, read again in the store's turn, still do not spell its name,
+ * so a put that has healed it meanwhile stands (r1-C). An object's
+ * orphan age counts from its acceptance, which the store records as
+ * the modification time of a stamp file, `local/accepted/objects/<cid>`,
+ * written in the same turn as the move into `objects/` and rewritten
+ * by repeating acceptance (§9): not the object file's own time, which
+ * a backend sets when the last chunk was written, however long the
+ * source then took to end or the store's turn to come (r1-D). An
+ * object with no stamp — `local/` deleted — is stamped by the first
+ * collection pass that sees it and counted young. `collect` unlinks
+ * exactly the unkept, unlatched objects past grace, with their stamps
+ * (§8.3). What is in `objects/` and
  * not an object path — a name that is not a raw DASL CID, a directory —
  * is reported as damage, listed as nothing, and left alone by
  * collection; `verify` reads every object and moves the mismatched
@@ -59,11 +68,13 @@ import { ESTOC_DIR, LOCAL_DIR, OBJECTS_DIR, objectPath } from "./layout.js";
 export const STAGING_DIR = `${LOCAL_DIR}/staging/objects`;
 /** Where damaged material is moved out of `objects/` (§9): under the same name, a numbered suffix when that is taken. */
 export const DAMAGED_DIR = `${LOCAL_DIR}/damaged/objects`;
+/** Where an object's acceptance is recorded (§8.3, r1-D): an empty file per CID whose modification time is when the object was last accepted. */
+export const ACCEPTED_DIR = `${LOCAL_DIR}/accepted/objects`;
 
 export interface FolderObjectStoreOptions {
   /** the layout's directory, relative to the backend's root; `.estoc` when left out */
   base?: string;
-  /** the wall clock in Unix milliseconds, against which a file's modification time is aged; default `Date.now`, pinned by tests together with the backend's clock */
+  /** the wall clock in Unix milliseconds, against which a stamp's modification time is aged; default `Date.now`, pinned by tests together with the backend's clock */
   now?: () => number;
   /** orphan grace (§8.3); default one hour */
   graceMs?: number;
@@ -144,9 +155,12 @@ export class FolderObjectStore implements ObjectStore {
    * object path in the store's turn. The backend makes the staging file
    * visible only once the source has ended and leaves nothing when it
    * throws, so a failure at any point leaves no object and no half of
-   * one (DO-4, DO-17). A move over an object already there is the same
-   * object, its bytes the ones verified now, its orphan age renewed
-   * (§6.2, §9).
+   * one (DO-4, DO-17). The stamp is written first, then the move: a
+   * crash between leaves a stamp with no object, which the next
+   * collection removes; the other order could leave an object whose
+   * age nothing records. A move over an object already there is the
+   * same object, its bytes the ones verified now, its orphan age
+   * renewed (§6.2, §9).
    */
   private async put(source: ByteSource, want: DaslCid | null): Promise<ObjectInfo> {
     await this.checkRoot(); // before a byte is read, and again before the move
@@ -165,6 +179,7 @@ export class FolderObjectStore implements ObjectStore {
         if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // steps 3–4: nothing accepted
         await this.serialise(async () => {
           await this.checkRoot();
+          await this.backend.write(this.at(stampPath(cid.text)), new Uint8Array(0));
           await this.backend.rename(this.at(staged), this.at(objectPath(cid.text)));
         });
       } catch (err) {
@@ -241,12 +256,11 @@ export class FolderObjectStore implements ObjectStore {
     const path = this.at(rel);
     const size = await this.backend.size(path);
     if (size === null) return null;
-    const modified = await this.backend.modified(path);
     const inner = await this.backend.open(path);
     if (inner === null) return null; // gone between the two looks: not this store's doing
     const release = this.latches.acquire(cid);
     try {
-      return { size, stream: this.verifying(cid, inner, { rel, size, modified }, release) };
+      return { size, stream: this.verifying(cid, inner, rel, size, release) };
     } catch (err) {
       release();
       await inner.cancel().catch(() => undefined);
@@ -257,15 +271,15 @@ export class FolderObjectStore implements ObjectStore {
   /**
    * The bytes of `inner` passed through and rehashed (§6.3): the stream
    * completes only when what came out spells `cid`; otherwise the file
-   * is moved aside — if it is still the file that was opened — and the
-   * stream fails with `DamagedObject` (§8.2, DO-16). Nothing is pulled
-   * from the file until read (highWaterMark 0).
+   * is moved aside — if what stands there still does not spell `cid` —
+   * and the stream fails with `DamagedObject` (§8.2, DO-16). Nothing is
+   * pulled from the file until read (highWaterMark 0).
    */
-  private verifying(cid: Cid, inner: ReadableStream<Uint8Array>, seen: Seen, release: () => void): ReadableStream<Uint8Array> {
+  private verifying(cid: Cid, inner: ReadableStream<Uint8Array>, rel: string, size: number, release: () => void): ReadableStream<Uint8Array> {
     const reader = inner.getReader();
     const hash = sha256.create();
     const want = rawCidOf(cid);
-    let size = 0;
+    let seen = 0;
     return new ReadableStream<Uint8Array>(
       {
         pull: async (controller) => {
@@ -273,16 +287,16 @@ export class FolderObjectStore implements ObjectStore {
             const { done, value } = await reader.read();
             if (!done) {
               hash.update(value);
-              size += value.length;
+              seen += value.length;
               controller.enqueue(value);
               return;
             }
-            if (size === seen.size && compareBytes(hash.digest(), want.digest) === 0) {
+            if (seen === size && compareBytes(hash.digest(), want.digest) === 0) {
               release();
               controller.close();
               return;
             }
-            await this.quarantine(seen);
+            await this.quarantine(cid, rel);
             release();
             controller.error(new DamagedObject(cid));
           } catch (err) {
@@ -302,24 +316,36 @@ export class FolderObjectStore implements ObjectStore {
 
   /**
    * The file a read found damaged moved out of `objects/` (§9, §8.2), in
-   * the store's turn, and only if it is still the file the read opened —
-   * the same size and modification time — so a put that has since
-   * replaced it with sound bytes is left alone (§6.2).
+   * the store's turn, and only if what stands at its path, read again
+   * now, still does not spell `cid`: a put that has since replaced it
+   * with sound bytes — of the same length, in the same clock tick, even
+   * — is left alone (§6.2, r1-C). Neither size nor modification time
+   * tells one file from another; the bytes do.
    */
-  private quarantine(seen: Seen): Promise<void> {
+  private quarantine(cid: Cid, rel: string): Promise<void> {
     return this.serialise(async () => {
-      const path = this.at(seen.rel);
-      if ((await this.backend.size(path)) !== seen.size || (await this.backend.modified(path)) !== seen.modified) return;
-      await this.aside(seen.rel);
+      const actual = await this.hashAt(rel);
+      if (actual === null || actual.text === cid) return;
+      await this.aside(rel);
     });
   }
 
-  /** `rel` moved to `local/damaged/objects/` under its own name, or that name with the first free numbered suffix. */
+  /** The raw CID the file at `rel` hashes to now, read whole and streamed; null when there is no file. */
+  private async hashAt(rel: string): Promise<DaslCid | null> {
+    const inner = await this.backend.open(this.at(rel));
+    if (inner === null) return null;
+    const hash = sha256.create();
+    for await (const chunk of chunksOf(inner)) hash.update(chunk);
+    return rawCidFromDigest(hash.digest());
+  }
+
+  /** `rel` moved to `local/damaged/objects/` under its own name, or that name with the first free numbered suffix; its stamp, if any, removed. */
   private async aside(rel: string): Promise<void> {
     const name = rel.slice(OBJECTS_DIR.length + 1);
     let target = `${DAMAGED_DIR}/${name}`;
     for (let n = 1; (await this.backend.size(this.at(target))) !== null; n++) target = `${DAMAGED_DIR}/${name}.${n}`;
     await this.backend.rename(this.at(rel), this.at(target));
+    if (isRawCid(name)) await this.backend.remove(this.at(stampPath(name)));
   }
 
   async stat(cid: Cid): Promise<ObjectInfo | null> {
@@ -390,12 +416,8 @@ export class FolderObjectStore implements ObjectStore {
       }
       for (const cid of walked.cids) {
         const rel = objectPath(cid);
-        const inner = await this.backend.open(this.at(rel));
-        if (inner === null) continue;
-        const hash = sha256.create();
-        for await (const chunk of chunksOf(inner)) hash.update(chunk);
-        const actual = rawCidFromDigest(hash.digest());
-        if (actual.text === cid) continue;
+        const actual = await this.hashAt(rel);
+        if (actual === null || actual.text === cid) continue;
         await this.aside(rel);
         found.push({ where: rel, error: `the bytes hash to ${actual.text}, not the name` });
       }
@@ -408,25 +430,36 @@ export class FolderObjectStore implements ObjectStore {
   async collect(keep: Iterable<Cid>): Promise<Collected> {
     // Every keep CID checked before anything is touched (§8.3); then, in
     // the store's turn: kept and latched objects are left alone and
-    // unlisted, unkept objects within grace are `young`, the rest go —
-    // and staging files a crash left, past grace, go with them (§12).
+    // unlisted, unkept objects within grace of their stamp are `young`,
+    // the rest go with their stamps — and stamps with no object, and
+    // staging files a crash left, past grace, go too (§12).
     const kept = new Set<string>();
     for (const cid of keep) kept.add(rawCidOf(cid).text);
     return this.serialise(async () => {
       const now = this.now();
       const unlinked: Cid[] = [];
       const young: Cid[] = [];
-      for (const cid of (await this.walk()).cids) {
+      const present = new Set((await this.walk()).cids);
+      for (const cid of present) {
         if (kept.has(cid) || this.latches.isLatched(cid)) continue;
-        const path = this.at(objectPath(cid));
-        const modified = await this.backend.modified(path);
-        if (modified === null) continue; // gone between the look and now: not this pass's doing
-        if (now - modified < this.graceMs) {
+        const stamp = this.at(stampPath(cid));
+        let acceptedAt = await this.backend.modified(stamp);
+        if (acceptedAt === null) {
+          // No record of when it was accepted — `local/` was deleted, or
+          // the file arrived by hand: stamped now, and young from here.
+          await this.backend.write(stamp, new Uint8Array(0));
+          acceptedAt = now;
+        }
+        if (now - acceptedAt < this.graceMs) {
           young.push(cid);
           continue;
         }
-        await this.backend.remove(path);
+        await this.backend.remove(this.at(objectPath(cid)));
+        await this.backend.remove(stamp);
         unlinked.push(cid);
+      }
+      for (const name of await this.backend.list(this.at(ACCEPTED_DIR))) {
+        if (!present.has(name as Cid)) await this.backend.remove(this.at(`${ACCEPTED_DIR}/${name}`));
       }
       // A put in flight is left whatever stands under its staging name —
       // the file itself, or the temp file a backend writes beside it,
@@ -443,11 +476,9 @@ export class FolderObjectStore implements ObjectStore {
   }
 }
 
-/** What a read saw of the file it opened, by which a later look can tell whether it is still that file. */
-interface Seen {
-  rel: string;
-  size: number;
-  modified: number | null;
+/** The stamp of `cid` (r1-D): `local/accepted/objects/<cid>`. */
+function stampPath(cid: string): string {
+  return `${ACCEPTED_DIR}/${cid}`;
 }
 
 function info(cid: DaslCid, size: number): ObjectInfo {

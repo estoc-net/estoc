@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open as fsOpen, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { FsBackend } from "../../../src/node.js";
 import {
+  ACCEPTED_DIR,
   DAMAGED_DIR,
   DamagedLayout,
   DamagedObject,
@@ -235,6 +236,61 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, DAMAGED_DIR)).toEqual([]);
     });
 
+    it("r1-C: a heal of the same length in the same clock tick, under a stream opened on the damaged bytes, stands — the stale stream may fail, the healed object is not moved aside", async () => {
+      const c = clock(T0);
+      const { backend, store } = await fresh({ now: c.now });
+      const cid = (await store.putRaw(HELLO)).cid;
+      await backend.write(`${BASE}/${objectPath(cid)}`, new TextEncoder().encode("jello")); // same length, wrong bytes
+      const stale = (await store.open(cid)) as ReadableStream<Uint8Array>;
+      await store.putObject(cid, HELLO); // healed: same size, same clock reading
+      let failed: unknown;
+      try {
+        await drain(stale);
+      } catch (err) {
+        failed = err;
+      }
+      if (failed !== undefined) expect(failed).toBeInstanceOf(DamagedObject);
+      expect(await store.has(cid)).toBe(true);
+      expectBytes(await store.read(cid, 5), HELLO);
+      expect(await namesUnder(backend, DAMAGED_DIR)).toEqual([]);
+      expect(await namesUnder(backend, "objects")).toEqual([cid]);
+    });
+
+    it("r1-D, §8.3: an object's age counts from its acceptance, recorded as local/accepted/objects/<cid>: written with the move, renewed by a repeat, removed with the object or when the object is gone; an object with no stamp is stamped and young", async () => {
+      const c = clock(T0);
+      const { backend, store, reopen } = await fresh({ now: c.now, graceMs: HOUR });
+      const cid = (await store.putRaw(bytesOf(10, 30))).cid;
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([cid]);
+      expect(await backend.modified(`${BASE}/${ACCEPTED_DIR}/${cid}`)).toBe(c.now());
+      c.advance(HOUR - 1);
+      await store.putObject(cid, bytesOf(10, 30));
+      expect(await backend.modified(`${BASE}/${ACCEPTED_DIR}/${cid}`)).toBe(c.now()); // renewed
+      c.advance(HOUR - 1);
+      expect(await reopen().collect([])).toEqual({ unlinked: [], young: [cid] });
+      c.advance(1);
+      expect(await reopen().collect([])).toEqual({ unlinked: [cid], young: [] });
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([]); // the stamp went with the object
+      // A stamp with no object — a crash between the stamp and the move — goes at the next pass.
+      await backend.write(`${BASE}/${ACCEPTED_DIR}/${HELLO_CID}`, new Uint8Array(0));
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([]);
+      // An object with no stamp — `local/` deleted — is stamped by the first pass that sees it, and young from then.
+      const orphan = (await store.putRaw(bytesOf(10, 31))).cid;
+      await backend.remove(`${BASE}/${ACCEPTED_DIR}/${orphan}`);
+      c.advance(100 * HOUR);
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [orphan] });
+      expect(await backend.modified(`${BASE}/${ACCEPTED_DIR}/${orphan}`)).toBe(c.now());
+      c.advance(HOUR - 1);
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [orphan] });
+      c.advance(1);
+      expect(await store.collect([])).toEqual({ unlinked: [orphan], young: [] });
+      // A kept object's stamp stays, whatever its age.
+      const kept = (await store.putRaw(bytesOf(10, 32))).cid;
+      c.advance(100 * HOUR);
+      expect(await store.collect([kept])).toEqual({ unlinked: [], young: [] });
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([kept]);
+    });
+
     it("VF-13, VF-16, DO-3, DO-15: an entry under objects/ that is not an object path is damage — reported, listed as nothing, left by collection, moved aside by verify", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: 0 });
@@ -344,6 +400,44 @@ describe("FolderObjectStore on disk", () => {
     }
     expect(seen).toBe(size);
     expect(chunks).toBeGreaterThan(1);
+  });
+
+  it("r1-A: a file handle that takes only part of each write is written until every byte is down; the file is the whole object", async () => {
+    const { store, root } = await overDisk();
+    const probe = await fsOpen(path.join(root as string, "probe"), "w");
+    type Write = (this: unknown, buffer: Uint8Array, ...rest: unknown[]) => Promise<{ bytesWritten: number }>;
+    const proto = Object.getPrototypeOf(probe) as { write: Write };
+    await probe.close();
+    const original = proto.write;
+    let calls = 0;
+    proto.write = function (this: unknown, buffer: Uint8Array, ...rest: unknown[]) {
+      calls += 1;
+      return original.call(this, buffer.subarray(0, Math.max(1, Math.floor(buffer.length / 2))), ...rest);
+    };
+    try {
+      const bytes = bytesOf(1_000, 40);
+      const info = await store.putRaw(chunked(bytes, [400, 600]));
+      expect(info).toEqual({ cid: cidOf(bytes), codec: "raw", size: 1_000 });
+      expectBytes(new Uint8Array(await readFile(path.join(root as string, BASE, "objects", info.cid))), bytes);
+      expect(calls).toBeGreaterThan(2);
+    } finally {
+      proto.write = original;
+    }
+  });
+
+  it("r1-D: with the platform's clock, an object whose source idled after its last chunk is young right after acceptance, and a reopened store reads the same acceptance", async () => {
+    const dir = await tempDir();
+    const backend = new FsBackend(dir);
+    const store = new FolderObjectStore(backend, { base: BASE, graceMs: 100 });
+    async function* idling(): AsyncIterable<Uint8Array> {
+      yield HELLO;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    const cid = (await store.putRaw(idling())).cid;
+    expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
+    expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [], young: [cid] });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [cid], young: [] });
   });
 
   it("DO-16 on disk: a byte flipped in the file behind the backend's back fails the read and moves the file aside", async () => {

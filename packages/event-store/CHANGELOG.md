@@ -161,12 +161,19 @@
   rehashing on the way out; a file whose bytes no longer spell its
   name fails the stream before completion, is moved to
   `local/damaged/objects/` — under a numbered suffix when the name is
-  taken, and only if it is still the file the read opened, so a put
-  that healed it meanwhile stands — and reads as absent from then on
-  (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age is its
-  file's modification time, which acceptance sets and repeating
-  acceptance renews (§9); `collect` unlinks exactly the unkept,
-  unlatched object files past grace (§8.3). What is in `objects/` and
+  taken, and only if its bytes, read again in the store's turn, still
+  do not spell its name, so a put that healed it meanwhile stands
+  whatever its length or clock tick (r1-C) — and reads as absent from
+  then on (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age
+  counts from its acceptance, recorded as the modification time of a
+  stamp file `local/accepted/objects/<cid>` written in the same turn
+  as the move into `objects/`, before it, and rewritten by repeating
+  acceptance (§9) — not the object file's own time, which a backend
+  sets at the last chunk, however long the source then idled (r1-D);
+  an object with no stamp is stamped by the first collection pass that
+  sees it and counted young, a stamp with no object is removed.
+  `collect` unlinks exactly the unkept, unlatched objects past grace,
+  with their stamps (§8.3). What is in `objects/` and
   not an object path — a name that is not a raw DASL CID, a directory,
   a file where the directory belongs — is reported by `damaged()`,
   listed as nothing, left alone by collection, and refused as
@@ -175,18 +182,24 @@
   misnamed aside and reports them. The `VaultBackend` gained three
   members for bytes too large to hold whole: `open(path)` streams a
   file out, `create(path, source)` streams one in and makes it visible
-  only once the source has ended — a source that throws leaves the
-  path as it was — and `rename(from, to)` moves a file into place over
-  whatever stood there; `MemoryBackend`, `FsBackend` (a sibling temp
-  file renamed into place; `open` through a file handle in 64 KiB
-  pieces) and `OpfsBackend` (`createWritable`, aborted on failure;
-  `File.stream()`; `FileSystemFileHandle.move()`, a copy where the
-  destination exists) all have them, and `FsBackend` takes a `clock`
+  only once the source has ended — nothing, not even an empty file,
+  stands at a fresh path before that, and a source that throws leaves
+  the path as it was — and `rename(from, to)` moves a file into place
+  over whatever stood there; `MemoryBackend`, `FsBackend` (a sibling
+  temp file renamed into place, each chunk written until every byte
+  is down, a write that makes no progress a failure (r1-A); `open`
+  through a file handle in 64 KiB pieces) and `OpfsBackend`
+  (`createWritable` over an existing file, aborted on failure; a temp
+  sibling and `FileSystemFileHandle.move()` for a fresh path, `move`
+  for `rename` too; a platform without `move` cannot fill a fresh
+  path whole and is refused before it is touched, `rename` over an
+  existing file still a copy through its writable (r1-B);
+  `File.stream()`) all have them, and `FsBackend` takes a `clock`
   that stamps written files, for tests that age a file by the clock
   they pin. The A04 `objectStoreSuite` runs over the folder store on
   `MemoryBackend` and `FsBackend`; a framework-free
   `folderObjectCases` runs over those and, in Chromium, over OPFS
-  (DO-5).
+  (DO-5), and `opfsCases` shows the platform without `move`.
 
 - **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
   first `append`, or handed back by `read`, was kept or returned as a

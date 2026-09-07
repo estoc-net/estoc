@@ -290,6 +290,34 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "r1-B: create to a fresh path shows nothing there — not even an empty file — until the source has ended",
+    run: async (fresh) => {
+      const b = await fresh();
+      let release!: () => void;
+      let started!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      async function* slow(): AsyncIterable<Uint8Array> {
+        yield enc.encode("half");
+        started();
+        await gate;
+        yield enc.encode("-done");
+      }
+      const create = b.create("o/fresh", slow());
+      await ready;
+      same(await b.size("o/fresh"), null, "nothing at the path while the source waits");
+      same(await b.read("o/fresh"), null, "nor to read");
+      release();
+      await create;
+      same(text(await b.read("o/fresh")), "half-done", "whole once the source has ended");
+      same((await b.list("o")).sort(), ["fresh"], "and nothing left beside it");
+    },
+  },
+  {
     name: "rename: moves a file, making parents, over an existing file whole; a missing source is an error",
     run: async (fresh) => {
       const b = await fresh();

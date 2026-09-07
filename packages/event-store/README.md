@@ -55,14 +55,20 @@ its bytes; a put streams into a staging file under `local/`, hashing
 as it goes, and moves it into `objects/` only once the whole stream has
 matched; a read streams the file back rehashing, and a file that no
 longer spells its name fails the stream, goes aside to
-`local/damaged/objects/`, and is absent from then on; an object's
-orphan age is its file's modification time; `collect` unlinks the
-unkept, unlatched objects past grace and sweeps abandoned staging;
+`local/damaged/objects/` — if a fresh look at its bytes still says so,
+so a put that healed it meanwhile stands — and is absent from then on;
+an object's orphan age counts from its acceptance, recorded as the
+modification time of a stamp file `local/accepted/objects/<cid>`
+written with the move; `collect` unlinks the unkept, unlatched objects
+past grace with their stamps and sweeps abandoned staging;
 `damaged()` reports what stands in `objects/` that is not an object
 path, `verify()` reads every object and moves the mismatched aside.
 For that the `VaultBackend` gained `open` (a file as a stream),
-`create` (a file from a stream, visible only whole) and `rename`
-(into place, over what was there), in all three backends. The vault
+`create` (a file from a stream, visible only whole — nothing at a
+fresh path until the source has ended) and `rename` (into place, over
+what was there), in all three backends; OPFS needs
+`FileSystemFileHandle.move()` for a fresh path and refuses one without
+it. The vault
 over it, `config.json` and the rest come next. Everything below is
 version 2, which stays until the vault switches over.
 

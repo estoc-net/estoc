@@ -94,7 +94,7 @@ export {
 export { splitLines, acceptedLength, endsClean, decodeLine, decodeSegment, encodeLines, type Line, type Decoded, type SegmentEvent, type SegmentRead } from "./folder/lines.js";
 export { DamagedReplica, mintReplica, parseReplica, encodeReplica, readReplica, openReplica, type Replica } from "./folder/replica.js";
 export { FolderEventStore, ROTATE_BYTES, type FolderEventStoreOptions } from "./folder/events.js";
-export { FolderObjectStore, STAGING_DIR, DAMAGED_DIR, type FolderObjectStoreOptions } from "./folder/objects.js";
+export { FolderObjectStore, STAGING_DIR, DAMAGED_DIR, ACCEPTED_DIR, type FolderObjectStoreOptions } from "./folder/objects.js";
 export type { VaultBackend } from "../backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
 
