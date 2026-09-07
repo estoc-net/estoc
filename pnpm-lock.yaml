@@ -196,6 +196,10 @@ importers:
         version: 3.2.7(@types/node@22.20.1)(terser@5.50.0)
 
   packages/dasl:
+    dependencies:
+      multiformats:
+        specifier: ^14.0.5
+        version: 14.0.5
     devDependencies:
       '@atcute/cbor':
         specifier: ^2.3.6
@@ -209,9 +213,6 @@ importers:
       '@types/node':
         specifier: ^22.13.5
         version: 22.20.1
-      multiformats:
-        specifier: ^14.0.5
-        version: 14.0.5
       typescript:
         specifier: ~5.8.0
         version: 5.8.3
