@@ -48,3 +48,38 @@ export class BadToken extends Error {
     this.name = "BadToken";
   }
 }
+
+/** A string that is not a canonical raw DASL CID (dasl-objects.md §3): the wrong version, codec, hash, digest length or spelling. Every store method checks its CID arguments first. */
+export class InvalidCid extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidCid";
+  }
+}
+
+/** `putObject` streamed bytes that do not hash to the CID it was given (dasl-objects.md §6.2): nothing was accepted. */
+export class DigestMismatch extends Error {
+  constructor(
+    readonly expected: string,
+    readonly actual: string
+  ) {
+    super(`bytes hash to ${actual}, not ${expected}`);
+    this.name = "DigestMismatch";
+  }
+}
+
+/** An object over the store's accepted-size bound, or a `read` whose object is larger than `maxBytes` (dasl-objects.md §6.3, §12): an error, never a truncation. */
+export class ObjectTooLarge extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ObjectTooLarge";
+  }
+}
+
+/** An accepted object whose bytes no longer hash to its CID, found by a read (dasl-objects.md §8.2, DO-16): the stream fails, and the object leaves the accepted namespace. */
+export class DamagedObject extends Error {
+  constructor(readonly cid: string) {
+    super(`the bytes held for ${cid} no longer hash to it`);
+    this.name = "DamagedObject";
+  }
+}

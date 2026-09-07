@@ -35,6 +35,31 @@
   version-3 store runs — ES-1/5/6/7/8/9/11/12/16/19/20/21/22 — the folder
   store next.
 
+- **`MemoryObjectStore` v3 and the object suite** (v3 A04). The object
+  model of `docs/replica-model/dasl-objects.md` under
+  `@estoc/event-store/v3`: `ByteSource` in its three shapes, unified by
+  `chunksOf`; `hashSource`, which hashes a source as it streams with
+  `@noble/hashes` (a new dependency) and stops at the chunk that crosses
+  the size bound; `rawCidOf`, the check every CID argument passes — a
+  CIDv0, an uppercase or padded spelling, a DRISL, dag-pb, BLAKE3 or
+  truncated identifier is `InvalidCid` from reader and writer alike (§3,
+  DO-3/15); `rawCidFromDigest`; `compareCids`/`sortCids` for binary-CID
+  byte order; the `ObjectStore` interface (§6); and `LatchRegistry`, the
+  per-CID read latch of event-store.md §10, which the vault runtime will
+  share. `MemoryObjectStore` holds an object in internal extents of a
+  chosen size (§5, DO-6); `putRaw`/`putObject` make it visible only
+  whole, a wrong digest being `DigestMismatch` with nothing exposed (§6.1–
+  6.2, DO-4); `open` streams pull-on-read under a latch released on
+  completion, failure or cancel, and rehashes on the way out — a
+  corrupted object fails its stream and leaves the accepted namespace as
+  `DamagedObject` (§6.3, DO-16); `read` refuses an object over `maxBytes`
+  before allocating (`ObjectTooLarge`); `collect(keep)` checks every keep
+  CID first, skips latched objects unlisted, reports unkept objects within
+  grace as `young` and unlinks the rest, both in binary-CID order (§8.3,
+  DO-10/11). `test/v3/suite/objectStoreSuite(name, open)` covers
+  DO-1/2/3/4/6/7/10/11/15/16 and the latch rules; the folder store runs
+  it next.
+
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block
   — under which nothing is known. `reachable` is its `reached`. For a

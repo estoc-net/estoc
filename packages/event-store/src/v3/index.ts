@@ -6,7 +6,9 @@
  * time and canonical order (§4), the store interface (§5), and minting
  * — `at` from the clock, `eventId` from `uuid`'s standard UUIDv7
  * generator (§4.2); and the store in memory, the reference every other
- * store is measured against. No event type.
+ * store is measured against. Beside it the object model of
+ * `dasl-objects.md`: raw DASL objects, the `ObjectStore` interface, the
+ * read latch, and the store in memory. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -49,4 +51,15 @@ export { mint, type Minted } from "./mint.js";
 
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
-export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken } from "./errors.js";
+export type { ByteSource, ObjectInfo, Collected, ObjectStore } from "./objects.js";
+export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource, LatchRegistry } from "./objects.js";
+
+export {
+  MemoryObjectStore,
+  type MemoryObjectStoreOptions,
+  DEFAULT_GRACE_MS,
+  DEFAULT_MAX_OBJECT_BYTES,
+  DEFAULT_EXTENT_BYTES,
+} from "./memory-objects.js";
+
+export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject } from "./errors.js";

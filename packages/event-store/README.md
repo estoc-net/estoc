@@ -14,6 +14,13 @@ canonical order (§4.3), the `EventStore` interface (§5) and minting —
 (§4.2); and the first store, `MemoryEventStore`, the reference the
 others are measured against — with `ForkedAuthor` and `BadToken`, and
 `test/v3/suite/`, the conformance suite every version-3 store runs.
+Beside it the object model of
+[`docs/replica-model/dasl-objects.md`](../../docs/replica-model/dasl-objects.md):
+raw DASL objects hashed as they stream (§4–5), the `ObjectStore`
+interface (§6), the per-CID read latch of event-store.md §10 as
+`LatchRegistry`, and `MemoryObjectStore`, the first store — with
+`InvalidCid`, `DigestMismatch`, `ObjectTooLarge` and `DamagedObject`,
+and `objectStoreSuite`, which the folder store runs next.
 Everything below is version 2, which stays until the vault switches
 over.
 
