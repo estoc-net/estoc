@@ -12,7 +12,7 @@
 import { InvalidEvent } from "../errors.js";
 import { canonicalEventBytes, validateEvent, type Damaged, type Event } from "../event.js";
 import { canonicalText, parseStrict } from "../jcs.js";
-import { concat, text, utf8 } from "./layout.js";
+import { concat, utf8 } from "./layout.js";
 
 const LF = 0x0a;
 
@@ -57,22 +57,25 @@ export interface Decoded {
 /**
  * The event one complete line holds (§6, §11.5): UTF-8, JSON, a valid
  * envelope, spelled canonically, and authored by `author` — the
- * directory's. Throws `InvalidEvent` naming the first rule broken; a
- * `TypeError` from the decoder on bytes that are not UTF-8 is wrapped.
+ * directory's. The bytes go to the parser as bytes and are compared as
+ * bytes: a byte order mark, which a text decoder would drop, is three
+ * bytes the canonical form does not have (r1-C). Throws `InvalidJson`
+ * or `InvalidEvent` naming the first rule broken.
  */
 export function decodeLine(bytes: Uint8Array, author: string): Decoded {
-  let line: string;
-  try {
-    line = text(bytes);
-  } catch {
-    throw new InvalidEvent("not UTF-8");
-  }
-  const value = parseStrict(line); // `InvalidJson` on bad syntax, a duplicate member, an unpaired surrogate, a number outside binary64
+  const value = parseStrict(bytes); // `InvalidJson` on bad UTF-8, a BOM, bad syntax, a duplicate member, an unpaired surrogate, a number outside binary64
   const event = validateEvent(value);
-  const canonical = canonicalText(event);
-  if (canonical !== line) throw new InvalidEvent("not the event's RFC 8785 canonical bytes");
+  const canonical = canonicalEventBytes(event);
+  if (!sameBytes(canonical, bytes)) throw new InvalidEvent("not the event's RFC 8785 canonical bytes");
   if (event.author !== author) throw new InvalidEvent(`author ${event.author} in a segment of ${author}`);
-  return { event: parseStrict(canonical) as Event, text: canonical };
+  const text = canonicalText(event);
+  return { event: parseStrict(text) as Event, text };
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /** What one line decoded to, and where. */

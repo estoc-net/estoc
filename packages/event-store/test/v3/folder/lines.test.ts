@@ -5,6 +5,7 @@ import {
   InvalidJson,
   acceptedLength,
   canonicalEventBytes,
+  concat,
   decodeLine,
   decodeSegment,
   encodeLines,
@@ -77,13 +78,35 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
   });
 
   it("§11.5: bad UTF-8, bad JSON, a non-object, a bad envelope and a duplicate member are each damage with their own reason", () => {
-    expect(() => decodeLine(new Uint8Array([0x7b, 0xff, 0x7d]), A1)).toThrow("not UTF-8");
+    expect(() => decodeLine(new Uint8Array([0x7b, 0xff, 0x7d]), A1)).toThrow(InvalidJson);
+    expect(() => decodeLine(new Uint8Array([0x7b, 0xff, 0x7d]), A1)).toThrow(/UTF-8/);
     expect(() => decodeLine(utf8("{"), A1)).toThrow(InvalidJson);
     expect(() => decodeLine(utf8("[1]"), A1)).toThrow(InvalidEvent);
     expect(() => decodeLine(utf8('"text"'), A1)).toThrow(InvalidEvent);
     expect(() => decodeLine(utf8(CANONICAL.replace('"type":"t"', '"type":""')), A1)).toThrow(InvalidEvent);
     expect(() => decodeLine(utf8(CANONICAL.replace('"data":{"a":"x","b":1}', '"data":{"a":"x","a":1}')), A1)).toThrow(InvalidJson);
     expect(() => decodeLine(utf8(CANONICAL.replace("Z\"", "\"")), A1)).toThrow(InvalidEvent);
+  });
+
+  it("r1-C: a byte order mark in front of a canonical line is three bytes the canonical form does not have — damage, on the first line and on any later one; U+FEFF inside a string value is content and stays", () => {
+    const BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
+    const withBom = concat([BOM, utf8(CANONICAL)]);
+    expect(() => decodeLine(withBom, A1)).toThrow(InvalidJson);
+    expect(decodeLine(utf8(CANONICAL), A1).event.eventId).toBe(ID);
+    const other = CANONICAL.replace(ID, uuidv7At(Date.UTC(2026, 8, 7, 11), 0x1));
+    const first = decodeSegment(concat([withBom, utf8(`\n${other}\n`)]), "s", A1);
+    expect(first.events.map((e) => e.n)).toEqual([2]);
+    expect(first.damaged.map((d) => d.where)).toEqual(["s:1"]);
+    expectBytes(first.damaged[0]?.bytes, withBom);
+    const later = decodeSegment(concat([utf8(`${CANONICAL}\n`), BOM, utf8(`${other}\n`)]), "s", A1);
+    expect(later.events.map((e) => e.n)).toEqual([1]);
+    expect(later.damaged.map((d) => d.where)).toEqual(["s:2"]);
+    // the character itself, inside a string, is what the event says: kept, and canonical as UTF-8
+    const feff = { ...EVENT, data: { a: "\ufeffx" } } as Event;
+    const line = canonicalEventBytes(feff);
+    expect([...line.subarray(0, 3)]).not.toEqual([...BOM]);
+    expect(decodeLine(line, A1).event.data).toEqual({ a: "\ufeffx" });
+    expect(text(line)).toContain("\ufeffx");
   });
 
   it("VF-2: the path confirms authorship and never supplies it — a canonical line under another author's directory is damage", () => {

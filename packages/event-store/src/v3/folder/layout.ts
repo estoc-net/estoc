@@ -89,13 +89,13 @@ export function kindOf(path: string): PathKind {
 }
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { fatal: true });
+const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export function utf8(text: string): Uint8Array {
   return encoder.encode(text);
 }
 
-/** `bytes` as text; throws `TypeError` on bytes that are not UTF-8. */
+/** `bytes` as text, a leading byte order mark kept as the character it is; throws `TypeError` on bytes that are not UTF-8. */
 export function text(bytes: Uint8Array): string {
   return decoder.decode(bytes);
 }

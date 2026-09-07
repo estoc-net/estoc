@@ -157,7 +157,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.damaged()).toEqual([]);
   });
 
-  it("VF-10: a fragment a crash left is skipped and reported, and the next append terminates it first so the two never fuse", async () => {
+  it("VF-10: a fragment a crash left is skipped and reported, and nothing is ever appended after it — the next append starts a fresh segment, so the two never fuse", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -166,20 +166,89 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     const whole = await bytesAt(backend, rel as string);
     // the process died mid-line: half of a second event is on disk
     const fragment = utf8('{"at":"2026-09-07T10:00:00.000Z","author":"');
-    await backend.write(`${BASE}/${rel}`, new Uint8Array([...whole, ...fragment]));
+    const torn = new Uint8Array([...whole, ...fragment]);
+    await backend.write(`${BASE}/${rel}`, torn);
     const reopened = await openOver(backend, { now: c.now });
     expect(await all(reopened.scan())).toEqual([first]);
     expect((await reopened.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:2`, "incomplete final fragment"]]);
     const second = await reopened.append({ type: "t", data: { n: 2 } });
-    const bytes = await bytesAt(backend, rel as string);
-    expectBytes(bytes, new Uint8Array([...whole, ...fragment, 0x0a, ...encodeLines([second])]));
+    expectBytes(await bytesAt(backend, rel as string), torn); // the torn segment is left exactly as it was
+    const segments = await segmentsOf(backend);
+    expect(segments).toHaveLength(2);
+    expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([second]));
     expect(await all(reopened.scan())).toEqual([first, second]);
-    // the fragment, now a terminated line, remains reportable damage of another kind
-    const damaged = await reopened.damaged();
-    expect(damaged.map((d) => d.where)).toEqual([`${rel}:2`]);
-    expect(damaged[0]?.error).not.toBe("incomplete final fragment");
-    // and a store that sees the healed file fresh agrees
-    expect(await all((await openOver(backend)).scan())).toEqual([first, second]);
+    // the fragment remains what it is, reportable damage (§8.1), here and on a fresh open
+    for (const view of [reopened, await openOver(backend)]) {
+      expect((await view.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:2`, "incomplete final fragment"]]);
+      expect(await all(view.scan())).toEqual([first, second]);
+    }
+    const third = await reopened.append({ type: "t", data: { n: 3 } });
+    expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([second, third]));
+    expect(await segmentsOf(backend)).toHaveLength(2);
+  });
+
+  it("r1-B: a fragment that happens to be a complete canonical event without its LF stays damage — a later append never terminates it into an accepted event", async () => {
+    const backend = new MemoryBackend();
+    const c = clock(T0);
+    const other = await openOver(new MemoryBackend(), { author: authorN(1), now: c.now });
+    const [unfinished] = await other.appendAll([{ type: "t", data: { n: 0 } }]);
+    // the process died between the last byte of the JSON and the LF
+    const rel = segmentPath(authorN(1), EARLY(1));
+    await backend.write(`${BASE}/${rel}`, canonicalEventBytes(unfinished as Event));
+    const store = await openOver(backend, { author: authorN(1), now: c.now });
+    expect(await all(store.scan())).toEqual([]);
+    expect((await store.damaged()).map((d) => d.error)).toEqual(["incomplete final fragment"]);
+    const after = await store.append({ type: "t", data: { n: 1 } });
+    expect(await all(store.scan())).toEqual([after]);
+    expect((await store.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:1`, "incomplete final fragment"]]);
+    expectBytes(await bytesAt(backend, rel), canonicalEventBytes(unfinished as Event));
+    const again = await openOver(backend, { now: c.now });
+    expect(await all(again.scan())).toEqual([after]);
+    expect((await again.damaged()).map((d) => d.error)).toEqual(["incomplete final fragment"]);
+    // the same bytes, a token: the fragment counts nothing
+    const { token } = await again.changes();
+    expect((JSON.parse(token) as { segments: Record<string, number> }).segments[rel]).toBe(0);
+  });
+
+  it("r1-A: an append the backend fails midway leaves a fragment the same instance never appends after — the next append lands whole in a fresh segment, and a reopen reads it", async () => {
+    class Faulty extends MemoryBackend {
+      failAfter: number | null = null;
+      override async append(path: string, bytes: Uint8Array): Promise<void> {
+        if (this.failAfter !== null) {
+          const n = this.failAfter;
+          this.failAfter = null;
+          await super.append(path, bytes.subarray(0, n));
+          throw new Error("simulated ENOSPC after a partial append");
+        }
+        await super.append(path, bytes);
+      }
+    }
+    const backend = new Faulty();
+    const c = clock(T0);
+    const store = await openOver(backend, { author: authorN(1), now: c.now });
+    const first = await store.append({ type: "first", data: {} });
+    const [rel] = await segmentsOf(backend);
+    const before = await bytesAt(backend, rel as string);
+    backend.failAfter = 35;
+    await expect(store.append({ type: "failed", data: {} })).rejects.toThrow("simulated ENOSPC");
+    const torn = await bytesAt(backend, rel as string);
+    expect(torn.length).toBe(before.length + 35);
+    const succeeded = await store.append({ type: "succeeded", data: {} });
+    expectBytes(await bytesAt(backend, rel as string), torn); // untouched
+    const segments = await segmentsOf(backend);
+    expect(segments).toHaveLength(2);
+    expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([succeeded]));
+    for (const view of [store, await openOver(backend, { now: c.now })]) {
+      expect((await all(view.scan())).map((e) => e.type)).toEqual(["first", "succeeded"]);
+      expect((await view.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:2`, "incomplete final fragment"]]);
+    }
+    expect(first.type).toBe("first");
+    // a failure that wrote nothing leaves the segment clean, and the next append stays in it
+    backend.failAfter = 0;
+    await expect(store.append({ type: "failed", data: {} })).rejects.toThrow("simulated ENOSPC");
+    const next = await store.append({ type: "next", data: {} });
+    expect(await segmentsOf(backend)).toHaveLength(2);
+    expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([succeeded, next]));
   });
 
   it("VF-11: ingest writes decoded, reserialized events into one fresh segment per author minted here, never a copied source segment", async () => {
@@ -249,6 +318,24 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await all((await openOver(backend)).scan())).toEqual(expected);
     expect(await store.damaged()).toEqual([]);
     expect(await store.conflicting()).toEqual([]);
+  });
+
+  it("r1 question: one eventId under two author directories — the accepted content is chosen over every segment, and a filter only narrows it: scan({author}) and changes({author}) never expose the rejected content", async () => {
+    const backend = new MemoryBackend();
+    const c = clock(T0);
+    const store = await openOver(backend, { author: authorN(3), now: c.now });
+    const a = await openOver(new MemoryBackend(), { author: authorN(1), now: c.now });
+    const [asA] = await a.appendAll([{ type: "t", data: { by: "a" } }]);
+    const asB = { ...(asA as Event), author: authorN(2), data: { by: "b" } } as Event; // the same ID, valid under B's directory
+    await backend.write(`${BASE}/${segmentPath(authorN(1), SEG(1))}`, encodeLines([asA as Event]));
+    await backend.write(`${BASE}/${segmentPath(authorN(2), SEG(2))}`, encodeLines([asB]));
+    expect(await all(store.scan())).toEqual([asA]);
+    expect(await all(store.scan({ author: authorN(1) }))).toEqual([asA]);
+    expect(await all(store.scan({ author: authorN(2) }))).toEqual([]);
+    expect(await all(store.scan({ data: { by: "b" } }))).toEqual([]);
+    expect(await all((await store.changes({ author: authorN(2) })).events)).toEqual([]);
+    expect(await all((await store.changes({ author: authorN(1) })).events)).toEqual([asA]);
+    expect(await store.conflicting()).toEqual([{ eventId: asA?.eventId, kept: asA, rejected: asB, source: `${segmentPath(authorN(2), SEG(2))}:1` }]);
   });
 
   it("§11.5: two contents under one eventId keep the lexicographically first segment path, then the first line, and report every other", async () => {

@@ -99,6 +99,46 @@
   failure, so no latch outlives a failed read. Tests: ES-3, ES-27,
   ES-28, ES-29, ES-30, DO-8, DO-18, DO-19.
 
+- **Folder layout and the folder event store** (v3 A06). The folder of
+  vault-folder.md, so far its events, under `@estoc/event-store/v3`:
+  `kindOf(path)` and the root names of the layout (§3) — an entry
+  inside a structural root that is not the layout's is damage, a
+  top-level path outside every root an opaque portable file (VF-16);
+  segment lines (§6, §8, §11.5) — `decodeLine` accepts exactly
+  `canonicalEventBytes(event)`, parsed and compared as bytes, so bad
+  UTF-8, a byte order mark, bad JSON, a non-canonical spelling, a bad
+  envelope or an author the directory does not confirm is damage
+  reported by `<path>:<line>` (VF-2, VF-9), `decodeSegment` reads a
+  segment's complete lines and reports a trailing fragment without
+  joining it to anything (VF-10), `encodeLines` writes them (ES-10);
+  `local/replica.json` (§10.1) — `mintReplica`, `parseReplica`
+  (exactly two members, both canonical UUIDv7; otherwise
+  `DamagedReplica`, never a partial repair, VF-6), `readReplica`,
+  `openReplica` (minted and written on first writable open, no event
+  appended, VF-7); and `FolderEventStore` over the version-2
+  `VaultBackend`, its author and generation the replica file's. It
+  writes only under its own author directory: `append` to the newest
+  segment when that ends in LF, to a fresh one when a crash or a failed
+  write left a fragment — nothing is ever appended after a fragment, so
+  it stays reportable damage whatever it spells (§8.1, VF-10) — and to
+  a fresh one past `rotateBytes`; `appendAll` as a fresh segment
+  written whole; `ingest` as one fresh segment per incoming author of
+  decoded, reserialized events, nothing on `ForkedAuthor` (§8.2,
+  VF-11). It reads every segment whatever the filter, confirms each
+  line's author against its directory, keeps the first content per
+  `eventId` by path order then line offset and reports every other
+  with its `source` (§11.5), takes nothing from physical order (VF-12),
+  and reports unknown entries under `events/`; `changes` tokens name
+  the store generation and every segment's accepted length and are
+  refused for another generation, a missing or shorter segment, a
+  position inside a line or an unrecognized shape (§10.3).
+  `validateDraft` now refuses a draft carrying `eventId`, `at` or
+  `author` — an event handed back as a draft is refused, not re-minted
+  (vault-folder.md §11.3) — for every store. `deepFreeze` is exported.
+  The A03 `eventStoreSuite` runs over the folder store on
+  `MemoryBackend` and `FsBackend`; folder tests cover
+  VF-1/2/6/7/9/10/11/12/16 and ES-10.
+
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block
   — under which nothing is known. `reachable` is its `reached`. For a

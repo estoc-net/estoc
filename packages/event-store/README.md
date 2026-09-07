@@ -29,8 +29,27 @@ same vault sharing the held lock; `collect(keep)`, the keep set a
 function called only under the lock; and `ingest`. `MemoryVault` is
 the three memory stores under one runtime; `Runtime` builds the same
 over any three. Portable files (§8.1) are `FileStore`, `checkPath`
-and `MemoryFileStore`. Everything below is version 2, which stays
-until the vault switches over.
+and `MemoryFileStore`. And the folder of
+[`docs/replica-model/vault-folder.md`](../../docs/replica-model/vault-folder.md),
+so far its events: the layout (§3) as `kindOf(path)` — config,
+keystore, segment, object, import, local, damage, or opaque — with the
+root names beside it; segment lines (§6, §8) as `decodeLine`,
+`decodeSegment` and `encodeLines`, a line being exactly
+`canonicalEventBytes(event)` and an LF, everything else damage by
+position; `local/replica.json` (§10.1) as `openReplica`, which reads
+the replica identity or mints and writes it, refusing a partial or
+malformed file as `DamagedReplica`; and `FolderEventStore` over the
+version-2 `VaultBackend` (`MemoryBackend`, `OpfsBackend`, `FsBackend`),
+which writes only under `events/<replica_id>/` — an append to its
+newest LF-terminated segment, a fresh segment after a fragment or for
+a batch, one fresh segment per author on `ingest` — and reads every
+segment whatever the filter, keeping the first content per `eventId`
+by path then line and reporting the rest, with change tokens naming
+the store generation and every segment's accepted length (§10.3).
+A writable open, for now, is `openReplica` then `new
+FolderEventStore(backend, replica, { base: ".estoc" })`; the vault
+over it, `objects/`, `config.json` and the rest come next. Everything
+below is version 2, which stays until the vault switches over.
 
 What is here is the **model**, the **seam**, and the **folder**:
 

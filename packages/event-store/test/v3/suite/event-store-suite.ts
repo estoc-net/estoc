@@ -127,6 +127,25 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await all(broken.scan())).toEqual([]);
     });
 
+    it("a06 r1-D: a draft carrying eventId, at or author is refused — never re-minted as a second event — and the whole batch with it", async () => {
+      const c = clock(T0);
+      const store = await open({ author: authorN(1), now: c.now });
+      const held = await store.append({ type: "t", data: { n: 1 } });
+      const carrying: unknown[] = [
+        held, // an event handed back as a draft
+        { type: "t", data: {}, eventId: held.eventId },
+        { type: "t", data: {}, at: T0 },
+        { type: "t", data: {}, author: authorN(1) },
+        { type: "t", data: {}, author: authorN(2) },
+        { type: "t", data: {}, eventId: "supplied-by-caller" },
+      ];
+      for (const [i, draft] of carrying.entries()) {
+        await expect(store.append(draft as never), `draft #${i}`).rejects.toBeInstanceOf(InvalidEvent);
+        await expect(store.appendAll([{ type: "t", data: {} }, draft as never]), `batch with draft #${i}`).rejects.toBeInstanceOf(InvalidEvent);
+      }
+      expect(await all(store.scan())).toEqual([held]);
+    });
+
     it("ES-19: one appendAll of 5000 drafts in one millisecond — one `at`, 5000 distinct IDs, input order back", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });

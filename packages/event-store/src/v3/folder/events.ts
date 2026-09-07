@@ -5,8 +5,10 @@
  * `events/`, segments of JSONL in it, each complete line exactly one
  * event's RFC 8785 canonical bytes and an LF (VF-9). This store writes
  * only under its own replica's directory (§8.1) — appends to its newest
- * segment, healing a fragment a crash left first (VF-10), a batch as a
- * fresh segment written whole (§8.1) — and, for `ingest`, one fresh
+ * segment when that ends in LF, starts a fresh one when a crash or a
+ * failed write left a fragment there, so nothing is ever appended after
+ * a fragment (VF-10), a batch as a fresh segment written whole (§8.1) —
+ * and, for `ingest`, one fresh
  * segment per incoming author, of decoded and reserialized events, never
  * a copied source segment (§8.2, VF-11). Reads walk every segment, take
  * nothing from physical order (§8.3, VF-12), confirm each line's author
@@ -47,7 +49,7 @@ import { comparePaths } from "../files.js";
 import { canonicalText, parseStrict } from "../jcs.js";
 import { deepFreeze, type JsonObject } from "../json.js";
 import { mint } from "../mint.js";
-import { ESTOC_DIR, EVENTS_DIR, authorDir, isSegmentName, kindOf, segmentPath, utf8 } from "./layout.js";
+import { ESTOC_DIR, EVENTS_DIR, authorDir, isSegmentName, kindOf, segmentPath } from "./layout.js";
 import { decodeSegment, encodeLines, endsClean, type Decoded, type SegmentRead } from "./lines.js";
 import type { Replica } from "./replica.js";
 
@@ -126,26 +128,20 @@ export class FolderEventStore implements EventStore {
   // ---- reading -----------------------------------------------------------
 
   /**
-   * The segments under `events/` (§11.2 step 1), or under one author's
-   * directory, in path order; and every entry that is not one — a file
-   * beside the author directories, a directory that is not an author's,
-   * a name in an author directory that is not a segment's, a directory
-   * where a segment belongs — as damage (§3, VF-16).
+   * The segments under `events/` (§11.2 step 1), in path order; and every
+   * entry that is not one — a file beside the author directories, a
+   * directory that is not an author's, a name in an author directory that
+   * is not a segment's, a directory where a segment belongs — as damage
+   * (§3, VF-16).
    */
-  private async walk(only?: AuthorId): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[] }> {
+  private async walk(): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[] }> {
     const damaged: Damaged[] = [];
     const segments: { rel: string; author: AuthorId }[] = [];
     const events = this.at(EVENTS_DIR);
-    let authors: string[];
-    if (only === undefined) {
-      authors = await this.backend.dirs(events);
-      for (const name of await this.backend.list(events)) {
-        damaged.push({ where: `${EVENTS_DIR}/${name}`, error: "a file where an author directory belongs" });
-      }
-    } else {
-      authors = (await this.backend.dirs(events)).filter((name) => name === only);
+    for (const name of await this.backend.list(events)) {
+      damaged.push({ where: `${EVENTS_DIR}/${name}`, error: "a file where an author directory belongs" });
     }
-    for (const name of authors) {
+    for (const name of await this.backend.dirs(events)) {
       const dir = `${EVENTS_DIR}/${name}`;
       if (!isAuthorId(name)) {
         damaged.push({ where: dir, error: "not an author directory: the name is not a canonical UUIDv7" });
@@ -172,8 +168,8 @@ export class FolderEventStore implements EventStore {
    * already held reported as a conflict naming where it was found
    * (§11.5). Nothing is taken from segment name or position (§8.3).
    */
-  private async readAll(only?: AuthorId): Promise<Read> {
-    const walked = await this.walk(only);
+  private async readAll(): Promise<Read> {
+    const walked = await this.walk();
     const read: Read = { segments: [], held: new Map(), damaged: walked.damaged, conflicts: [] };
     for (const { rel, author } of walked.segments) {
       const bytes = await this.backend.read(this.at(rel));
@@ -194,10 +190,14 @@ export class FolderEventStore implements EventStore {
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
-    // Read in the store's turn, restricted to one author directory when the
-    // filter names one (§11.2 step 1); sorted here (§8.3), over what the
-    // read found: a write during the walk is not yielded.
-    const read = await this.serialise(() => this.readAll(filter?.author));
+    // Read in the store's turn — the whole of `events/`, whatever the
+    // filter: which content an ID is accepted under is decided over every
+    // segment (§11.5) and only then filtered, so a filter never exposes a
+    // content `scan()` rejects (event-store.md §5.4; the reading of §11.2
+    // step 1 that restricts I/O is taken only as far as it changes no
+    // result). Sorted here (§8.3), over what the read found: a write
+    // during the walk is not yielded.
+    const read = await this.serialise(() => this.readAll());
     const events = [...read.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) yield event;
@@ -223,7 +223,15 @@ export class FolderEventStore implements EventStore {
       const held = canonical({ eventId: eventIds[0], at, author: this.author, type: clean.type, roots: clean.roots, data: clean.data });
       const open = await this.openSegment();
       const line = encodeLines([held.event]);
-      await this.backend.append(this.at(open.rel), line);
+      try {
+        await this.backend.append(this.at(open.rel), line);
+      } catch (err) {
+        // The backend may have written part of the line (r1-A). The segment
+        // is no longer one to append to: forget it, so the next append reads
+        // the tail afresh and, finding it unterminated, leaves it behind.
+        this.open = null;
+        throw err;
+      }
       open.bytes += line.length;
       return deepFreeze(held.event) as Event<D>;
     });
@@ -253,27 +261,19 @@ export class FolderEventStore implements EventStore {
 
   /**
    * The segment this instance appends to (§8.1): the newest under its
-   * own author directory the first time — terminated first when a crash
-   * left it ending mid-line, so the fragment can never fuse with the next
-   * event (VF-10); it stays reportable damage — a fresh one when there is
-   * none, and a fresh one once the open one is long enough.
+   * own author directory when it ends in LF; a fresh one when there is
+   * none, when the newest ends mid-line — a crash or a failed write left
+   * a fragment there, and nothing is ever appended after a fragment, so
+   * it can never fuse with the next event and stays what it is, reportable
+   * damage, whatever its bytes happen to spell (VF-10, r1-B) — and a fresh
+   * one once the open one is long enough.
    */
   private async openSegment(): Promise<{ rel: string; bytes: number }> {
     if (this.open === null) {
       const dir = authorDir(this.author);
       const newest = (await this.backend.list(this.at(dir))).filter(isSegmentName).sort(comparePaths).at(-1);
-      if (newest === undefined) {
-        this.open = { rel: this.freshSegment(this.author), bytes: 0 };
-      } else {
-        const rel = `${dir}/${newest}`;
-        const bytes = (await this.backend.read(this.at(rel))) ?? new Uint8Array(0);
-        let length = bytes.length;
-        if (!endsClean(bytes)) {
-          await this.backend.append(this.at(rel), utf8("\n"));
-          length += 1;
-        }
-        this.open = { rel, bytes: length };
-      }
+      const bytes = newest === undefined ? null : await this.backend.read(this.at(`${dir}/${newest}`));
+      this.open = bytes === null || !endsClean(bytes) ? { rel: this.freshSegment(this.author), bytes: 0 } : { rel: `${dir}/${newest}`, bytes: bytes.length };
     }
     if (this.open.bytes >= this.rotateBytes) this.open = { rel: this.freshSegment(this.author), bytes: 0 };
     return this.open;
