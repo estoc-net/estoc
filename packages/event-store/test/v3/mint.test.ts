@@ -75,7 +75,7 @@ describe("mint", () => {
     expect(mint(0, () => 1000)).toEqual({ t: 1000, at: atOf(1000), eventIds: [] });
   });
 
-  // Last: it leaves the generator's process-wide timestamp in the future.
+  // Last: it leaves the module instance's generator timestamp in the future.
   it("ES-20: when the wall clock itself rolls back, the generator still mints distinct IDs without following it — and, being `uuid`, still in mint order", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const t = Date.UTC(2100, 0, 1);
