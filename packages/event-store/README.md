@@ -3,6 +3,16 @@
 The vault as an event store: the code form of
 [`docs/event-store.md`](../../docs/event-store.md).
 
+**Version 3 is being built beside this**, under `@estoc/event-store/v3`,
+as the code form of
+[`docs/replica-model/event-store.md`](../../docs/replica-model/event-store.md):
+so far the RFC 8785 canonical JSON and strict parser (§3.3), the
+six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and
+its validation (§3.4, roots being raw DASL CIDs from `@estoc/dasl`),
+canonical order (§4.3), the `EventStore` interface (§5) and the UUIDv7
+allocator (§4.2). No store yet. Everything below is version 2, which
+stays until the vault switches over.
+
 What is here is the **model**, the **seam**, and the **folder**:
 
 - the event — envelope (`eid`, `at`, `author`, `type`, `blobs`) plus

@@ -15,6 +15,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./v3": {
+      "types": "./dist/v3/index.d.ts",
+      "default": "./dist/v3/index.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
@@ -43,6 +47,7 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/dasl": "workspace:^",
     "@ipld/dag-pb": "^4.1.7",
     "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",

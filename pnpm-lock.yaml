@@ -240,6 +240,9 @@ importers:
 
   packages/event-store:
     dependencies:
+      '@estoc/dasl':
+        specifier: workspace:^
+        version: link:../dasl
       '@ipld/dag-pb':
         specifier: ^4.1.7
         version: 4.1.7
