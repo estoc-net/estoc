@@ -155,8 +155,10 @@ export class FolderObjectStore implements ObjectStore {
    * with none wanted, whatever it is — the staging file moved to its
    * object path in the store's turn. The backend makes the staging file
    * visible only once the source has ended and leaves nothing when it
-   * throws, so a failure at any point leaves no object and no half of
-   * one (DO-4, DO-17). The stamp is written after the move, never
+   * throws, so a failure before the move leaves no object and no half
+   * of one (DO-4, DO-17); a failure after it — the stamp's write — has
+   * accepted the object, whole and unstamped, an orphan under grace,
+   * and is still reported. The stamp is written after the move, never
    * before it: a stamp records a completed acceptance, and whatever
    * time passes between the two backend calls must not count against
    * the object (r2-A). Any stamp from an earlier acceptance of the same
@@ -190,7 +192,9 @@ export class FolderObjectStore implements ObjectStore {
           await this.backend.write(stamp, new Uint8Array(0));
         });
       } catch (err) {
-        // The staging file is whole but goes nowhere: removed now, not left for the sweep.
+        // A staging file still standing is whole but goes nowhere:
+        // removed now, not left for the sweep. After the move there is
+        // none, and the object stays.
         await this.backend.remove(this.at(staged)).catch(() => undefined);
         throw err;
       }
