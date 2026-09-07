@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { BadToken, MemoryEventStore } from "../../src/v3/index.js";
+import { BadToken, MemoryEventStore, type Event } from "../../src/v3/index.js";
 import { eventStoreSuite, type OpenOptions } from "./suite/event-store-suite.js";
-import { all, authorN, clock } from "./suite/helpers.js";
+import { all, altered, authorN, clock } from "./suite/helpers.js";
 
 eventStoreSuite("MemoryEventStore", async (options: OpenOptions = {}) => new MemoryEventStore(options));
 
@@ -57,6 +57,30 @@ describe("MemoryEventStore", () => {
     await expect(store.changes(undefined, twinToken)).rejects.toBeInstanceOf(BadToken);
     expect(await all((await store.changes(undefined, token)).events)).toEqual([]);
     expect(await all((await store.changes(undefined, forge({ seq: 0, last: null }))).events)).toEqual([one]);
+  });
+
+  it("r1-B: ingest reads its input outside the lock and classifies inside it: a write that lands while it reads is seen", async () => {
+    const c = clock("2026-09-06T10:00:00.000Z");
+    const store = new MemoryEventStore({ author: authorN(1), now: c.now });
+    const [a] = await new MemoryEventStore({ author: authorN(2), now: c.now }).appendAll([{ type: "t", data: { v: "a" } }]);
+    const b = altered(a as Event); // same eventId, other content
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let readBoth!: () => void;
+    const read = new Promise<void>((resolve) => (readBoth = resolve));
+    async function* slow(): AsyncIterable<unknown> {
+      yield a;
+      yield b;
+      readBoth();
+      await gate; // the input is not finished; meanwhile another ingest lands `b`
+    }
+    const pending = store.ingest(slow());
+    await read;
+    expect(await store.ingest([b])).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
+    release();
+    const outcome = await pending;
+    expect(outcome).toEqual({ added: 0, duplicates: 1, conflicts: [{ eventId: a?.eventId, kept: b, rejected: a }], rejected: [] });
+    expect(await all(store.scan())).toEqual([b]);
   });
 
   it("scan walks a snapshot: an append during the walk is not yielded, and a later scan has it", async () => {

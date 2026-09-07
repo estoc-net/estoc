@@ -343,28 +343,38 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await store.ingest(events)).toMatchObject({ added: 2 });
     });
 
-    it("r1-B: ingest classifies against what is held when it writes, not when it read: a write that lands while it reads is seen", async () => {
+    it("r1-B: two ingests racing on one eventId with two contents land as one legal serialization — one content held, every reported conflict names it as kept", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const [a] = await foreign(authorN(2), c.now, [{ type: "t", data: { v: "a" } }]);
       const b = altered(a as Event); // same eventId, other content
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => (release = resolve));
-      let readBoth!: () => void;
-      const read = new Promise<void>((resolve) => (readBoth = resolve));
       async function* slow(): AsyncIterable<unknown> {
+        // an input that completes on its own, taking a few turns: whichever
+        // ingest a store serialises first is the store's choice (§10, §13)
         yield a;
+        await new Promise((resolve) => setTimeout(resolve, 5));
         yield b;
-        readBoth();
-        await gate; // the input is not finished; meanwhile another ingest lands `b`
       }
-      const pending = store.ingest(slow());
-      await read;
-      expect(await store.ingest([b])).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
-      release();
-      const outcome = await pending;
-      expect(outcome).toEqual({ added: 0, duplicates: 1, conflicts: [{ eventId: a?.eventId, kept: b, rejected: a }], rejected: [] });
-      expect(await all(store.scan())).toEqual([b]);
+      const [first, second] = await Promise.all([store.ingest(slow()), store.ingest([b])]);
+      const held = await all(store.scan());
+      expect(held).toHaveLength(1);
+      expect([a, b]).toContainEqual(held[0]);
+      expect(first.added + second.added).toBe(1);
+      expect(first.rejected).toEqual([]);
+      expect(second.rejected).toEqual([]);
+      for (const outcome of [first, second]) {
+        for (const conflict of outcome.conflicts) {
+          expect(conflict.eventId).toBe(a?.eventId);
+          expect(conflict.kept).toEqual(held[0]); // a conflict is against what is held, never against what lost
+          expect([a, b]).toContainEqual(conflict.rejected);
+          expect(conflict.rejected).not.toEqual(held[0]);
+        }
+      }
+      // the two legal outcomes, and nothing else
+      const slowFirst = first.added === 1 && first.conflicts.length === 1 && second.conflicts.length === 1 && second.duplicates === 0;
+      const fastFirst = second.added === 1 && second.conflicts.length === 0 && first.duplicates === 1 && first.conflicts.length === 1;
+      expect(slowFirst || fastFirst).toBe(true);
+      expect(held[0]).toEqual(slowFirst ? a : b);
     });
 
     it("ES-8: shuffling and repartitioning one event set changes no fold, and merge is commutative and idempotent", async () => {
