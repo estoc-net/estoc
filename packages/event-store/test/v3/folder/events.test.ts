@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { FsBackend } from "../../../src/node.js";
 import {
   BadToken,
+  DamagedLayout,
   FolderEventStore,
   ForkedAuthor,
   MemoryBackend,
@@ -441,6 +442,49 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
         const { token, events } = await over.changes();
         expect(await all(events)).toEqual([]);
         expect(JSON.parse(token)).toEqual({ generation: over.generation, segments: {} });
+      }
+    });
+  }
+
+  for (const [name, fresh] of [
+    ["MemoryBackend", async (): Promise<VaultBackend> => new MemoryBackend()],
+    ["FsBackend", async (): Promise<VaultBackend> => new FsBackend(await tempDir())],
+  ] as const) {
+    it(`r3-A (${name}): with a file where events/ belongs, append, appendAll and ingest are refused as DamagedLayout at "events" before anything lands — no segment, the file untouched, and the read still reports it`, async () => {
+      const c = clock(T0);
+      const other = await openOver(new MemoryBackend(), { author: authorN(2), now: c.now });
+      const [foreign] = await other.appendAll([{ type: "t", data: { n: 1 } }]);
+      for (const bytes of [utf8("this path is a file"), new Uint8Array(0)]) {
+        const backend = await fresh();
+        await backend.write(`${BASE}/events`, bytes);
+        const store = await openOver(backend, { author: authorN(1), now: c.now });
+        const attempts: (() => Promise<unknown>)[] = [
+          () => store.append({ type: "t", data: { n: 1 } }),
+          () => store.appendAll([{ type: "t", data: { n: 1 } }, { type: "t", data: { n: 2 } }]),
+          () => store.ingest([foreign]),
+        ];
+        for (const attempt of attempts) {
+          let err: unknown;
+          try {
+            await attempt();
+          } catch (e) {
+            err = e;
+          }
+          expect(err).toBeInstanceOf(DamagedLayout);
+          expect((err as DamagedLayout).where).toBe("events");
+          expect((err as Error).message).toBe("events: a file where the events directory belongs");
+        }
+        // nothing landed: the file is as it was, no segment anywhere, and a read still says what is wrong
+        expectBytes(await backend.read(`${BASE}/events`), bytes);
+        expect(await backend.size(`${BASE}/events`)).toBe(bytes.length);
+        expect(await backend.dirs(`${BASE}/events`)).toEqual([]);
+        if (backend instanceof MemoryBackend) expect([...backend.files.keys()].filter((k) => k.endsWith(".jsonl"))).toEqual([]);
+        expect(await all(store.scan())).toEqual([]);
+        expect(await all((await openOver(backend, { author: authorN(1), now: c.now })).scan())).toEqual([]);
+        expect(await store.damaged()).toEqual([{ where: "events", error: "a file where the events directory belongs" }]);
+        // an empty batch and an ingest that adds nothing need no root: nothing to write, nothing refused
+        expect(await store.appendAll([])).toEqual([]);
+        expect(await store.ingest([])).toEqual({ added: 0, duplicates: 0, conflicts: [], rejected: [] });
       }
     });
   }

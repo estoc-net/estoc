@@ -47,7 +47,9 @@ segment whatever the filter, keeping the first content per `eventId`
 by path then line and reporting the rest, with change tokens naming
 the store generation and every segment's accepted length (§10.3).
 A writable open, for now, is `openReplica` then `new
-FolderEventStore(backend, replica, { base: ".estoc" })`; the vault
+FolderEventStore(backend, replica, { base: ".estoc" })`; a file
+standing where `events/` belongs is reported by every read and refuses
+every write as `DamagedLayout`; the vault
 over it, `objects/`, `config.json` and the rest come next. Everything
 below is version 2, which stays until the vault switches over.
 

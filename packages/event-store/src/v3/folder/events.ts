@@ -27,7 +27,7 @@
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
-import { BadToken, ForkedAuthor } from "../errors.js";
+import { BadToken, DamagedLayout, ForkedAuthor } from "../errors.js";
 import {
   compareEvents,
   isAuthorId,
@@ -87,6 +87,9 @@ interface Frontier {
   segments: Record<string, number>;
 }
 
+/** What a file where `events/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses (r2-B, r3-A). */
+const EVENTS_IS_A_FILE = "a file where the events directory belongs";
+
 /** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
 type Input = { held: Decoded } | { rejected: { value: unknown; error: string } };
 
@@ -141,10 +144,9 @@ export class FolderEventStore implements EventStore {
     const events = this.at(EVENTS_DIR);
     // The root itself first (§3, §11.1 step 3): a backend answers `list`
     // and `dirs` with [] for a file as for nothing there, so a file where
-    // `events/` belongs would read as an empty store; asked as a file, it
-    // has a size and nothing there has none (r2-B).
-    if ((await this.backend.size(events)) !== null) {
-      damaged.push({ where: EVENTS_DIR, error: "a file where the events directory belongs" });
+    // `events/` belongs would read as an empty store (r2-B).
+    if (await this.rootIsAFile()) {
+      damaged.push({ where: EVENTS_DIR, error: EVENTS_IS_A_FILE });
       return { segments, damaged };
     }
     for (const name of await this.backend.list(events)) {
@@ -168,6 +170,23 @@ export class FolderEventStore implements EventStore {
     segments.sort((a, b) => comparePaths(a.rel, b.rel));
     damaged.sort((a, b) => comparePaths(a.where, b.where));
     return { segments, damaged };
+  }
+
+  /** Whether a file stands where `events/` belongs: asked as a file, it has a size, and a directory or nothing there has none. */
+  private async rootIsAFile(): Promise<boolean> {
+    return (await this.backend.size(this.at(EVENTS_DIR))) !== null;
+  }
+
+  /**
+   * Before the first byte of a write (r3-A): a file where `events/`
+   * belongs is not a place to write a segment. A backend over a flat map
+   * would take the write, and every read would then skip what it wrote;
+   * one over a file system would fail in its own words. Either way the
+   * write must not be acknowledged, so it is refused here, by position,
+   * before anything lands — the same damage a read reports.
+   */
+  private async checkRoot(): Promise<void> {
+    if (await this.rootIsAFile()) throw new DamagedLayout(EVENTS_DIR, EVENTS_IS_A_FILE);
   }
 
   /**
@@ -227,6 +246,7 @@ export class FolderEventStore implements EventStore {
   async append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>> {
     const clean = validateDraft(draft); // checked before the store's turn; the backend never sees `eventId`, `at` or `author` from the draft (§11.3)
     return this.serialise(async () => {
+      await this.checkRoot();
       const { at, eventIds } = mint(1, this.now);
       const held = canonical({ eventId: eventIds[0], at, author: this.author, type: clean.type, roots: clean.roots, data: clean.data });
       const open = await this.openSegment();
@@ -249,6 +269,7 @@ export class FolderEventStore implements EventStore {
     const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands (§5.2)
     if (clean.length === 0) return [];
     return this.serialise(async () => {
+      await this.checkRoot();
       // One clock reading and one `at` for the batch (event-store.md §5.2, ES-22).
       const { at, eventIds } = mint(clean.length, this.now);
       const held = clean.map((draft, i) =>
@@ -339,6 +360,7 @@ export class FolderEventStore implements EventStore {
         else list.push(incoming.event);
       }
       if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
+      if (byAuthor.size > 0) await this.checkRoot(); // only a write is refused: an input of duplicates alone adds nothing and needs no root
       for (const [author, added] of [...byAuthor].sort(([a], [b]) => comparePaths(a, b))) {
         await this.backend.write(this.at(this.freshSegment(author)), encodeLines(added));
         outcome.added += added.length;

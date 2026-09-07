@@ -138,7 +138,9 @@
   The A03 `eventStoreSuite` runs over the folder store on
   `MemoryBackend` and `FsBackend`; folder tests cover
   VF-1/2/6/7/9/10/11/12/16 and ES-10. A file where `events/` itself
-  belongs is damage at `events`, not an empty store (§3, §11.1);
+  belongs is damage at `events`, not an empty store (§3, §11.1), and
+  `append`, `appendAll` and an `ingest` with something to add are
+  refused there as `DamagedLayout` before anything lands;
   vault-folder.md §11.2 and §11.5 and event-store.md §5.4 now say what
   the store does — the accepted content per `eventId` is chosen over
   every author directory, and a filter only narrows the result.
@@ -147,7 +149,9 @@
   first `append`, or handed back by `read`, was kept or returned as a
   view onto the same memory — `Buffer#slice` is not a copy — so writing
   into it afterwards changed the stored file without a write. Every
-  backend's suite now checks with a view-slicing input.
+  backend's suite now checks with a view-slicing input. It also refuses,
+  as a file system does, a write below a file or onto a directory,
+  instead of taking either into its flat map.
 
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block

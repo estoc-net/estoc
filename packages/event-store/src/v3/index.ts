@@ -96,4 +96,4 @@ export { FolderEventStore, ROTATE_BYTES, type FolderEventStoreOptions } from "./
 export type { VaultBackend } from "../backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
 
-export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject, MissingRoot } from "./errors.js";
+export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject, MissingRoot, DamagedLayout } from "./errors.js";
