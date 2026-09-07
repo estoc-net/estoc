@@ -3,7 +3,9 @@
  * it: `canonicalize` turns a JSON value into the one byte string that
  * stands for its content; `parseStrict` reads JSON text back the way
  * §3.3 requires — refusing a duplicate member, an unpaired surrogate and
- * a number outside binary64, which `JSON.parse` would let through.
+ * a number outside binary64, which `JSON.parse` would let through. The
+ * syntax is jsonc-parser's scanner, held to RFC 8259; the value is built
+ * here, where those refusals live.
  *
  * Canonical form (RFC 8785 §3): no insignificant whitespace; object
  * members sorted by the UTF-16 code units of their names; arrays in
@@ -13,8 +15,10 @@
  * equal.
  */
 
+import { printParseErrorCode, visit } from "jsonc-parser";
+
 import { InvalidJson } from "./errors.js";
-import { isJsonObject, type JsonValue } from "./json.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./json.js";
 
 /**
  * Nesting deeper than this is refused by both directions. Not a rule of
@@ -122,9 +126,13 @@ export function compareCodeUnits(a: string, b: string): number {
  * Parse JSON text under event-store.md §3.3: RFC 8259 syntax, exactly;
  * valid UTF-8 with no byte-order mark; no duplicate member name; no
  * unpaired surrogate or noncharacter in a name or value, escaped or
- * not; every number a finite binary64.
- * What comes back is plain data — a member named `__proto__` is an own
- * property, as `JSON.parse` would make it. Throws `InvalidJson`.
+ * not; every number a finite binary64; nesting within `MAX_DEPTH`.
+ * jsonc-parser scans the text — comments and trailing commas refused,
+ * whitespace only the four of RFC 8259, a control character or a bad
+ * escape in a string an error — and the visitor below builds the value,
+ * refusing what a scanner cannot see. What comes back is plain data — a
+ * member named `__proto__` is an own property, as `JSON.parse` would
+ * make it. Throws `InvalidJson`.
  */
 export function parseStrict(input: Uint8Array | string): JsonValue {
   let text: string;
@@ -137,198 +145,75 @@ export function parseStrict(input: Uint8Array | string): JsonValue {
       throw new InvalidJson("not valid UTF-8");
     }
   }
-  const parser = new Parser(text);
-  parser.skipWhitespace();
-  const value = parser.value(0);
-  parser.skipWhitespace();
-  if (parser.pos !== text.length) parser.fail("trailing characters");
-  return value;
-}
 
-const WHITESPACE = new Set([0x20, 0x09, 0x0a, 0x0d]);
-const NUMBER = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
-const ESCAPES = new Map<string, string>([
-  ['"', '"'],
-  ["\\", "\\"],
-  ["/", "/"],
-  ["b", "\b"],
-  ["f", "\f"],
-  ["n", "\n"],
-  ["r", "\r"],
-  ["t", "\t"],
-]);
+  let root: JsonValue | undefined;
+  // The containers still open, innermost last; `key` is the member name a value is about to fill.
+  const open: { readonly value: JsonValue[] | JsonObject; key: string | null }[] = [];
 
-class Parser {
-  pos = 0;
-  constructor(readonly text: string) {}
+  const fail = (offset: number, what: string): never => {
+    throw new InvalidJson(`${what} at offset ${offset}`);
+  };
+  const place = (value: JsonValue): void => {
+    const parent = open[open.length - 1];
+    if (parent === undefined) root = value;
+    else if (Array.isArray(parent.value)) parent.value.push(value);
+    else Object.defineProperty(parent.value, parent.key as string, { value, enumerable: true, writable: true, configurable: true });
+  };
+  const begin = (offset: number, value: JsonValue[] | JsonObject): void => {
+    if (open.length >= MAX_DEPTH) fail(offset, `nested deeper than ${MAX_DEPTH}`);
+    place(value);
+    open.push({ value, key: null });
+  };
+  const end = (): void => {
+    open.pop();
+  };
 
-  fail(what: string): never {
-    throw new InvalidJson(`${what} at offset ${this.pos}`);
-  }
-
-  skipWhitespace(): void {
-    while (this.pos < this.text.length && WHITESPACE.has(this.text.charCodeAt(this.pos))) this.pos++;
-  }
-
-  value(depth: number): JsonValue {
-    const c = this.text[this.pos];
-    switch (c) {
-      case "{":
-        return this.object(depth);
-      case "[":
-        return this.array(depth);
-      case '"':
-        return this.string();
-      case "t":
-        return this.literal("true", true);
-      case "f":
-        return this.literal("false", false);
-      case "n":
-        return this.literal("null", null);
-      case undefined:
-        return this.fail("unexpected end");
-      default:
-        return this.number();
-    }
-  }
-
-  literal<T extends JsonValue>(word: string, value: T): T {
-    if (!this.text.startsWith(word, this.pos)) this.fail("unexpected token");
-    this.pos += word.length;
-    return value;
-  }
-
-  number(): number {
-    NUMBER.lastIndex = this.pos;
-    const match = NUMBER.exec(this.text);
-    if (match === null) this.fail("unexpected token");
-    const value = Number(match[0]);
-    if (!Number.isFinite(value)) this.fail(`${match[0]} is outside binary64`);
-    this.pos += match[0].length;
-    return value;
-  }
-
-  string(): string {
-    // this.text[this.pos] === '"'
-    let pos = this.pos + 1;
-    const parts: string[] = [];
-    let start = pos;
-    for (;;) {
-      if (pos >= this.text.length) {
-        this.pos = pos;
-        this.fail("unterminated string");
-      }
-      const code = this.text.charCodeAt(pos);
-      if (code === 0x22) {
-        parts.push(this.text.slice(start, pos));
-        const value = parts.join("");
-        const fault = forbiddenIn(value);
-        if (fault !== null) this.fail(fault);
-        this.pos = pos + 1;
-        return value;
-      }
-      if (code < 0x20) {
-        this.pos = pos;
-        this.fail("control character in string");
-      }
-      if (code !== 0x5c) {
-        pos++;
-        continue;
-      }
-      parts.push(this.text.slice(start, pos));
-      this.pos = pos + 1;
-      const escape = this.text[this.pos];
-      if (escape === "u") {
-        const unit = this.hex4(this.pos + 1);
-        this.pos += 5;
-        if (unit >= 0xd800 && unit <= 0xdbff) {
-          if (this.text[this.pos] !== "\\" || this.text[this.pos + 1] !== "u") this.fail("unpaired surrogate escape");
-          const low = this.hex4(this.pos + 2);
-          if (low < 0xdc00 || low > 0xdfff) this.fail("unpaired surrogate escape");
-          this.pos += 6;
-          parts.push(String.fromCharCode(unit, low));
-        } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-          this.fail("unpaired surrogate escape");
-        } else {
-          parts.push(String.fromCharCode(unit));
+  visit(
+    text,
+    {
+      onObjectBegin: (offset) => begin(offset, {}),
+      onObjectProperty: (name, offset) => {
+        const fault = forbiddenIn(name);
+        if (fault !== null) fail(offset, fault);
+        const parent = open[open.length - 1] as { value: JsonObject; key: string | null };
+        if (Object.hasOwn(parent.value, name)) fail(offset, `duplicate member ${JSON.stringify(name)}`);
+        parent.key = name;
+      },
+      onObjectEnd: end,
+      onArrayBegin: (offset) => begin(offset, []),
+      onArrayEnd: end,
+      onLiteralValue: (value: unknown, offset, length) => {
+        if (typeof value === "string") {
+          const fault = forbiddenIn(value);
+          if (fault !== null) fail(offset, fault);
+        } else if (typeof value === "number" && !Number.isFinite(value)) {
+          fail(offset, `${text.slice(offset, offset + length)} is outside binary64`);
         }
-      } else {
-        const mapped = escape === undefined ? undefined : ESCAPES.get(escape);
-        if (mapped === undefined) this.fail("bad escape");
-        parts.push(mapped);
-        this.pos += 1;
-      }
-      pos = this.pos;
-      start = pos;
-    }
-  }
-
-  hex4(at: number): number {
-    const digits = this.text.slice(at, at + 4);
-    if (!/^[0-9a-fA-F]{4}$/.test(digits)) {
-      this.pos = at;
-      this.fail("bad unicode escape");
-    }
-    return parseInt(digits, 16);
-  }
-
-  array(depth: number): JsonValue[] {
-    if (depth >= MAX_DEPTH) this.fail(`nested deeper than ${MAX_DEPTH}`);
-    this.pos++; // [
-    const out: JsonValue[] = [];
-    this.skipWhitespace();
-    if (this.text[this.pos] === "]") {
-      this.pos++;
-      return out;
-    }
-    for (;;) {
-      this.skipWhitespace();
-      out.push(this.value(depth + 1));
-      this.skipWhitespace();
-      const c = this.text[this.pos];
-      if (c === ",") {
-        this.pos++;
-        continue;
-      }
-      if (c === "]") {
-        this.pos++;
-        return out;
-      }
-      this.fail("expected , or ]");
-    }
-  }
-
-  object(depth: number): { [field: string]: JsonValue } {
-    if (depth >= MAX_DEPTH) this.fail(`nested deeper than ${MAX_DEPTH}`);
-    this.pos++; // {
-    const out: { [field: string]: JsonValue } = {};
-    this.skipWhitespace();
-    if (this.text[this.pos] === "}") {
-      this.pos++;
-      return out;
-    }
-    for (;;) {
-      this.skipWhitespace();
-      if (this.text[this.pos] !== '"') this.fail("expected a member name");
-      const key = this.string();
-      if (Object.hasOwn(out, key)) this.fail(`duplicate member ${JSON.stringify(key)}`);
-      this.skipWhitespace();
-      if (this.text[this.pos] !== ":") this.fail("expected :");
-      this.pos++;
-      this.skipWhitespace();
-      const value = this.value(depth + 1);
-      Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
-      this.skipWhitespace();
-      const c = this.text[this.pos];
-      if (c === ",") {
-        this.pos++;
-        continue;
-      }
-      if (c === "}") {
-        this.pos++;
-        return out;
-      }
-      this.fail("expected , or }");
-    }
-  }
+        place(value as JsonValue);
+      },
+      onError: (code, offset) => fail(offset, SYNTAX[printParseErrorCode(code)] ?? "bad syntax"),
+    },
+    { disallowComments: true, allowTrailingComma: false, allowEmptyContent: false }
+  );
+  return root as JsonValue;
 }
+
+/** jsonc-parser's error codes, in the words the errors here use. */
+const SYNTAX: Record<string, string> = {
+  InvalidSymbol: "unexpected token",
+  InvalidNumberFormat: "bad number",
+  PropertyNameExpected: "expected a member name",
+  ValueExpected: "expected a value",
+  ColonExpected: "expected :",
+  CommaExpected: "expected ,",
+  CloseBraceExpected: "expected }",
+  CloseBracketExpected: "expected ]",
+  EndOfFileExpected: "trailing characters",
+  InvalidCommentToken: "comment",
+  UnexpectedEndOfComment: "comment",
+  UnexpectedEndOfString: "unterminated string",
+  UnexpectedEndOfNumber: "bad number",
+  InvalidUnicode: "bad unicode escape",
+  InvalidEscapeCharacter: "bad escape",
+  InvalidCharacter: "control character in string",
+};

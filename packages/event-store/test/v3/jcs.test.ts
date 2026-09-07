@@ -265,7 +265,7 @@ describe("strict parsing", () => {
   });
 
   it("says where", () => {
-    expect(() => parseStrict('{"a":1,"a":2}')).toThrow(/duplicate member "a" at offset 10/);
+    expect(() => parseStrict('{"a":1,"a":2}')).toThrow(/duplicate member "a" at offset 7/);
     expect(() => parseStrict("[1 2]")).toThrow(/at offset 3/);
   });
 
