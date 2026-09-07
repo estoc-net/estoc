@@ -23,20 +23,3 @@ export class InvalidEvent extends Error {
     this.name = "InvalidEvent";
   }
 }
-
-/**
- * The UUIDv7 allocator cannot mint the IDs asked of it within the
- * sampled millisecond (event-store.md §4.2): the counter would overflow.
- * Nothing was allocated; the append or batch fails before it commits.
- * The allocator neither wraps nor moves the embedded timestamp forward.
- */
-export class CounterExhausted extends Error {
-  constructor(
-    readonly t: number,
-    readonly requested: number,
-    readonly room: number
-  ) {
-    super(`cannot mint ${requested} UUIDv7 at t=${t}: ${room} left in the counter`);
-    this.name = "CounterExhausted";
-  }
-}

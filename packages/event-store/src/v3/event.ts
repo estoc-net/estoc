@@ -18,9 +18,9 @@ export type EventId = string & { readonly __eventId: unique symbol };
 export type AuthorId = string & { readonly __authorId: unique symbol };
 
 export type Event<D extends JsonObject = JsonObject> = {
-  /** minted by the appending store with `at`; the deduplication key */
+  /** minted by the appending store from a standard UUIDv7 generator; the deduplication key */
   eventId: EventId;
-  /** RFC 3339 UTC, exactly `YYYY-MM-DDTHH:mm:ss.sssZ`, from the same clock reading as `eventId` */
+  /** RFC 3339 UTC, exactly `YYYY-MM-DDTHH:mm:ss.sssZ`: the wall clock as the appending store read it */
   at: string;
   /** the local replica that appended it (§4.1) */
   author: AuthorId;
@@ -91,12 +91,12 @@ export interface Ingested {
 export interface EventStore {
   /** Author assigned to every locally appended event. */
   readonly author: AuthorId;
-  /** One local event: validates the draft, samples the clock once, mints `eventId` and `at`, writes and returns it (§5.1). */
+  /** One local event: validates the draft, reads the clock for `at`, mints `eventId`, writes and returns it (§5.1). */
   append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>>;
   /**
    * Several local events as one all-or-nothing write (§5.2): every draft
-   * validated first, one clock sample and one `at` for the batch, IDs
-   * in input order, which is the batch's canonical order.
+   * validated first, one clock reading and one `at` for the batch, IDs
+   * minted in input order, which is the batch's canonical order.
    */
   appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]>;
   /**

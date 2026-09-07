@@ -195,7 +195,7 @@ type Event<D extends JsonObject = JsonObject> = {
 | field | meaning |
 | --- | --- |
 | `eventId` | canonical UUIDv7, minted by the appending store; event identity and deduplication key |
-| `at` | RFC 3339 UTC timestamp obtained with the `eventId` |
+| `at` | RFC 3339 UTC wall-clock reading taken by the appending store at the append |
 | `author` | canonical UUIDv7 identifying the local replica that appended the event |
 | `type` | non-empty event-type string |
 | `roots` | complete list of retained object roots, always present, `[]` when none |
@@ -348,46 +348,48 @@ policy are deferred `replica.*` events defined in [replica-mediation.md section 
 
 ### 4.2 Event ID and timestamp
 
-The store mints `eventId` and `at` as part of a local append. It obtains one
-integer Unix-millisecond clock reading `t`, embeds exactly `t` in the UUIDv7
-`unix_ts_ms` field, and formats the same `t` as
+The store mints `eventId` and `at` as part of a local append.
+
+`eventId` comes from a standard RFC 9562 UUIDv7 generator. This profile adds
+no requirement of its own to that generator: how it fills `rand_a` and
+`rand_b`, whether and how it counts within a millisecond, what it does when a
+counter is full and what it does when the wall clock moves backwards are the
+generator's, within RFC 9562. A generator that holds its embedded timestamp
+across a rollback, or advances it to make room for another ID, is behaving as
+RFC 9562 section 6.2 allows.
+
+`at` is one integer Unix-millisecond wall-clock reading `t`, formatted as
 `YYYY-MM-DDTHH:mm:ss.sssZ`. A sub-millisecond clock is truncated to the integer
-millisecond before both values are produced. Leap-second spelling (`ss == 60`),
-omitted fractional seconds and any precision other than three digits are
-rejected.
+millisecond. Leap-second spelling (`ss == 60`), omitted fractional seconds and
+any precision other than three digits are rejected.
 
-The writer MUST serialize UUIDv7 allocation. Within one writer runtime, during
-an interval without clock rollback, IDs minted with equal `t` MUST compare in
-mint order. Separate appends and `appendAll` share this allocator state;
-independently randomizing ordering-significant bits for each ID is insufficient.
+The UUID's `unix_ts_ms` and `at` are two observations of the same wall clock,
+usually of the same millisecond, but nothing requires them to be equal: the
+generator may have moved its timestamp, and the store reads the clock for `at`
+on its own. `at` is the event's time; the embedded timestamp is the
+generator's.
 
-The generator MUST follow RFC 9562. Section 6.2 method 1 or method 2 counters,
-including a counter spanning `rand_a` and part of `rand_b`, MAY be used. This
-profile assigns no fixed counter layout and MUST NOT be implemented with an
-assumed 4096-event limit. Counter exhaustion MUST NOT wrap or produce an
-out-of-order ID; allocation must fail before any part of the append or batch
-commits.
-
-Repeated generation within one millisecond, including an `appendAll` containing
-more than 4096 events, MUST produce distinct UUIDs while preserving the sampled
-`t` in every UUID. A generator MUST NOT advance the embedded UUID timestamp
-merely to create room for another ID because that would break the local
-`eventId`/`at` writer contract. If its chosen generation strategy cannot produce the
-requested unique IDs for that timestamp, it MUST fail before committing the
-append or batch.
+The writer MUST serialize UUIDv7 generation: separate appends and `appendAll`
+draw from one generator. Within one writer runtime, IDs MUST compare in mint
+order; the RFC 9562 section 6.2 counter a standard generator keeps is what
+provides it. This is what lets a batch sharing one `at` be in canonical order
+by input order (section 5.2) and back-to-back appends within one millisecond
+sort as appended. No mint-order guarantee spans a clock rollback or a runtime
+restart.
 
 If the wall clock moves backwards, a later local append uses the newly sampled,
-possibly smaller, `t` for both `eventId` and `at`. The generator still MUST avoid a
-UUID collision, including when rollback revisits a previously used millisecond.
-The mint-order guarantee does not span a rollback or runtime restart. This
-profile neither clamps wall time nor introduces a hybrid logical clock.
-Canonical order matches input order within one `appendAll`, but is not a
-vault-wide append or causal order.
+possibly smaller, `t` for `at`; its `eventId` is still distinct from every ID
+minted before, as RFC 9562 requires of the generator. This profile neither
+clamps wall time nor introduces a hybrid logical clock. Canonical order matches
+input order within one `appendAll`, but is not a vault-wide append or causal
+order.
+
+If the generator cannot produce an ID, the append or batch fails before any
+part of it commits (sections 5.1 and 5.2).
 
 Reader and ingest validation check canonical UUIDv7 syntax and canonical `at`
 syntax independently. They MUST NOT compare the UUID's embedded timestamp with
-`at`; equality of those values is a writer-generation contract for locally
-appended events, not an acceptance rule for imported immutable history.
+`at`: the two are separate observations even for a locally appended event.
 
 An `eventId` is trusted to be globally unique. It encodes no subject,
 contact, message, author or permission. A caller that needs the minted
@@ -516,8 +518,8 @@ its runtime. Portable application code uses the section-10 vault interface.
 
 1. validates that `draft.type`, `draft.roots` and `draft.data` can form a
    valid event;
-2. obtains one clock reading;
-3. mints a UUIDv7 `eventId` and RFC 3339 UTC `at` from it;
+2. reads the wall clock once and formats it as `at` (section 4.2);
+3. mints a UUIDv7 `eventId` from the generator of section 4.2;
 4. sets `author` to the store's current author;
 5. treats omitted `roots` as `[]`; and
 6. writes and returns the complete event.
@@ -539,10 +541,10 @@ concurrent handles and workers in the same runtime.
 `appendAll` is one all-or-nothing logical append. It MUST validate every
 draft before writing any event. It then:
 
-- obtains one common integer-millisecond clock sample and assigns the matching
-  common `at`;
-- mints one distinct UUIDv7 per draft in input order, each embedding that same
-  sampled millisecond and obeying section 4.2's monotonic allocation rule;
+- reads the wall clock once and assigns that one `at` to every event of the
+  batch;
+- mints one distinct UUIDv7 per draft in input order from the generator of
+  section 4.2, so the IDs sort in input order;
 - returns events in input order, which is also this batch's canonical order;
 - assigns the current author to every event; and
 - commits the entire batch at one process-durable success boundary.
@@ -1132,15 +1134,16 @@ A conforming implementation MUST pass at least these cases:
 18. <a id="es-18"></a> Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
 19. <a id="es-19"></a> More than 4096 events may be appended in one same-millisecond `appendAll`;
-    IDs are distinct, embed the unchanged sample and sort in input order.
-    Back-to-back separate appends with the same sample also sort in mint order.
-20. <a id="es-20"></a> After clock rollback, a local writer uses the newly sampled earlier
-    millisecond in both `eventId` and `at` while avoiding collision. No mint-order
-    guarantee spans rollback or restart; a batch still uses one common sample.
+    IDs are distinct and sort in input order. Back-to-back separate appends
+    within one millisecond also sort in mint order.
+20. <a id="es-20"></a> After clock rollback, a local writer's `at` follows the newly sampled
+    earlier millisecond and its `eventId` collides with nothing minted before;
+    the UUID's embedded timestamp need not follow. No mint-order guarantee spans
+    rollback or restart; a batch still shares one `at`.
 21. <a id="es-21"></a> Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
-22. <a id="es-22"></a> Counter exhaustion fails before any event in the append or batch commits;
-    it neither wraps the counter nor advances only the UUID timestamp.
+22. <a id="es-22"></a> A failure to mint an ID fails the append or batch before any event in it
+    commits; the store never accepts a proper subset.
 
 <a id="import-collection-and-reader-protection-es-23-es-32"></a>
 

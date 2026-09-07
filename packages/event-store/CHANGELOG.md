@@ -12,11 +12,10 @@
   `validateEvent` and `validateDraft` (§3.4; `roots` are raw DASL CIDs
   from `@estoc/dasl`); `atOf`/`isCanonicalAt` for the one canonical
   millisecond spelling, `compareEvents` for `(at, eventId, author)`
-  (§4.2–4.3); the `EventStore` interface (§5); and `Uuidv7Allocator`,
-  which mints `eventId` and `at` from one clock sample, keeps mint order
-  within a millisecond with a 42-bit counter, and fails with
-  `CounterExhausted` rather than wrap or move the timestamp (§4.2). No
-  store yet.
+  (§4.2–4.3); the `EventStore` interface (§5); and `mint`, which reads
+  the clock once for `at` and takes `eventId` from the `uuid` package's
+  standard UUIDv7 generator — the profile asks nothing of the generator
+  beyond RFC 9562 (§4.2). No store yet.
 
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block

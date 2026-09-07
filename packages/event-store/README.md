@@ -9,8 +9,9 @@ as the code form of
 so far the RFC 8785 canonical JSON and strict parser (§3.3), the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and
 its validation (§3.4, roots being raw DASL CIDs from `@estoc/dasl`),
-canonical order (§4.3), the `EventStore` interface (§5) and the UUIDv7
-allocator (§4.2). No store yet. Everything below is version 2, which
+canonical order (§4.3), the `EventStore` interface (§5) and minting —
+`at` from the clock, `eventId` from `uuid`'s standard UUIDv7 generator
+(§4.2). No store yet. Everything below is version 2, which
 stays until the vault switches over.
 
 What is here is the **model**, the **seam**, and the **folder**:
