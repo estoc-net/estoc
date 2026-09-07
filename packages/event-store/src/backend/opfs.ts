@@ -1,4 +1,4 @@
-import { segmentsOf, type VaultBackend } from "./types.js";
+import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./types.js";
 
 /**
  * A vault inside the Origin Private File System, rooted at any directory
@@ -27,6 +27,12 @@ import { segmentsOf, type VaultBackend } from "./types.js";
  * `createWritable()` is what this needs from the platform; browsers that
  * only offer OPFS through sync access handles in workers are not served
  * by this adapter yet — the constructor says so up front.
+ *
+ * Ownership (vault-folder.md §15) is a Web Lock, exclusive, named for
+ * this directory's place under the origin's storage root and the name
+ * given, asked for with `ifAvailable` so a held lock refuses at once;
+ * the browser releases it when the holding page goes away. No file is
+ * made.
  */
 export class OpfsBackend implements VaultBackend {
   constructor(private readonly root: FileSystemDirectoryHandle) {
@@ -200,6 +206,53 @@ export class OpfsBackend implements VaultBackend {
       }
     }
     return names;
+  }
+
+  async own(path: string): Promise<Ownership> {
+    segmentsOf(path);
+    const locks = (navigator as { locks?: LockManager }).locks;
+    if (locks === undefined || typeof locks.request !== "function") throw new Error("Web Locks are not available here: a vault cannot be owned");
+    const name = await this.lockName(path);
+    let free!: () => void;
+    const freed = new Promise<void>((resolve) => {
+      free = resolve;
+    });
+    let granted!: (held: boolean) => void;
+    const grant = new Promise<boolean>((resolve) => {
+      granted = resolve;
+    });
+    // The lock is held for as long as the callback runs: until `release`.
+    const request = locks.request(name, { ifAvailable: true }, async (lock) => {
+      granted(lock !== null);
+      if (lock !== null) await freed;
+    });
+    request.catch(() => granted(false));
+    if (!(await grant)) {
+      await request.catch(() => undefined);
+      throw new VaultOwned(path, "another page holds it");
+    }
+    let released = false;
+    return {
+      release: async () => {
+        if (released) return;
+        released = true;
+        free();
+        await request;
+      },
+    };
+  }
+
+  /** The lock's name: where this directory stands under the origin's storage root, and the path within it. */
+  private async lockName(path: string): Promise<string> {
+    let where = this.root.name;
+    try {
+      const storage = await navigator.storage.getDirectory();
+      const rel = await storage.resolve(this.root);
+      if (rel !== null) where = rel.join("/");
+    } catch {
+      // not under the storage root, or no `resolve`: the handle's own name is what there is
+    }
+    return `estoc-vault:${where}:${segmentsOf(path).join("/")}`;
   }
 }
 

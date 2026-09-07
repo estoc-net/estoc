@@ -1,7 +1,7 @@
 import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { segmentsOf, type VaultBackend } from "../backend/types.js";
+import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "../backend/types.js";
 
 /**
  * A vault in a folder on disk. Whole-file writes go to a sibling temp file
@@ -33,6 +33,9 @@ export interface FsBackendOptions {
 
 /** How much of a file one pull of `open` reads. */
 const READ_CHUNK = 64 * 1024;
+
+/** The pid files this process holds right now, by absolute path. */
+const owned = new Set<string>();
 
 export class FsBackend implements VaultBackend {
   private readonly clock: (() => Date) | null;
@@ -222,6 +225,49 @@ export class FsBackend implements VaultBackend {
       }
       throw err;
     }
+  }
+
+  /**
+   * The pid file at `p`, taken exclusively (`wx`); a live holder is
+   * `VaultOwned`, a dead one is cleared and the take tried again. Two
+   * takers clearing the same stale file race on the `wx` and one loses
+   * to the other's live pid, which is the right answer.
+   */
+  async own(p: string): Promise<Ownership> {
+    const file = this.at(p);
+    if (owned.has(file)) throw new VaultOwned(p, "this process holds it already");
+    for (;;) {
+      await mkdir(path.dirname(file), { recursive: true });
+      try {
+        await writeFile(file, `${process.pid}\n`, { flag: "wx" });
+        break;
+      } catch (err) {
+        if ((err as { code?: string }).code !== "EEXIST") throw err;
+      }
+      const pid = Number((await readFile(file, "utf8").catch(() => "")).trim());
+      if (Number.isInteger(pid) && pid !== process.pid && alive(pid)) throw new VaultOwned(p, `process ${pid} holds it`);
+      await rm(file, { force: true }); // stale: whoever wrote it is gone, or was this process before it restarted
+    }
+    owned.add(file);
+    let released = false;
+    return {
+      release: async () => {
+        if (released) return;
+        released = true;
+        owned.delete(file);
+        await rm(file, { force: true });
+      },
+    };
+  }
+}
+
+/** Whether a process with this pid exists: signal 0 reaches it, or is refused for being someone else's. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as { code?: string }).code === "EPERM";
   }
 }
 

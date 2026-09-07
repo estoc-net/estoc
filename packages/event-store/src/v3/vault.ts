@@ -298,17 +298,33 @@ export class Runtime implements VaultRuntime {
   readonly vault: Vault;
   private readonly held: HeldView;
 
+  /**
+   * `guard` runs as each operation asks for the lock, before it queues:
+   * a runtime that can be closed throws from it once it is, so nothing
+   * queued after the close runs on a folder another process may own by
+   * then. An operation already inside the lock is not asked again.
+   */
   constructor(
     readonly author: AuthorId,
     readonly generation: string,
-    readonly stores: Stores
+    readonly stores: Stores,
+    private readonly guard: () => void = () => undefined
   ) {
     this.held = new HeldView(stores);
-    this.vault = new View(stores, (op) => this.lock.run(op));
+    this.vault = new View(stores, (op) => this.enter(op));
+  }
+
+  private enter<T>(op: () => Promise<T>): Promise<T> {
+    try {
+      this.guard();
+    } catch (err) {
+      return Promise.reject(err); // a refusal is a rejection, as every other failure of the operation is
+    }
+    return this.lock.run(op);
   }
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
-    return this.lock.run(() => op(this.held));
+    return this.enter(() => op(this.held));
   }
 
   collect(keep: KeepUnderLock): Promise<Collected> {
@@ -316,6 +332,7 @@ export class Runtime implements VaultRuntime {
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
+    this.guard(); // inside an async function: a throw here is this promise's rejection
     const read = await readAll(events);
     return this.locked(() => ingestRead(this.stores.events, read));
   }

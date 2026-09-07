@@ -59,6 +59,30 @@ export interface VaultBackend {
    * `from`.
    */
   rename(from: string, to: string): Promise<void>;
+  /**
+   * Take exclusive ownership of the name `path` — a path under the
+   * vault root that the backend may or may not make a file of — or
+   * throw `VaultOwned` at once when another holder has it; never wait.
+   * Ownership is a process's: it ends at `release`, or when the
+   * process holding it is gone.
+   */
+  own(path: string): Promise<Ownership>;
+}
+
+/** Ownership taken by `own`: released once; releasing again does nothing. */
+export interface Ownership {
+  release(): Promise<void>;
+}
+
+/** `own` found the name held by another holder (vault-folder.md §15, §11.1 step 4): nothing was taken. */
+export class VaultOwned extends Error {
+  constructor(
+    readonly path: string,
+    detail: string
+  ) {
+    super(`${path} is owned elsewhere: ${detail}`);
+    this.name = "VaultOwned";
+  }
 }
 
 /**

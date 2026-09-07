@@ -338,6 +338,25 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "own: exclusive under one name — a second take is VaultOwned, refused at once; release lets the next take it; releasing twice is fine; another name is another vault",
+    run: async (fresh) => {
+      const b = await fresh();
+      const first = await b.own(".estoc/local/owner.pid");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "a second take while the first holds");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "and again: nothing waits, nothing is stolen");
+      const other = await b.own("other/local/owner.pid");
+      await other.release();
+      await first.release();
+      await first.release();
+      const second = await b.own(".estoc/local/owner.pid");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "the second holds now");
+      await second.release();
+      const third = await b.own(".estoc/local/owner.pid");
+      await third.release();
+      await rejects(b.own("../owner"), /relative|segment/, "a name outside the root");
+    },
+  },
+  {
     name: "refuses what is not a plain relative path: .., ., a backslash, an absolute path, an empty segment",
     run: async (fresh) => {
       const b = await fresh();

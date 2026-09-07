@@ -106,3 +106,60 @@ export class DamagedLayout extends Error {
     this.name = "DamagedLayout";
   }
 }
+
+/** The folder is not a version-3 vault this reader opens (vault-folder.md §4, §5, §16): no `config.json`, another format or version, a member the closed set does not have, a keystore of another shape. Nothing was written. */
+export class NotAVault extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotAVault";
+  }
+}
+
+/** The seed in hand does not derive this vault's anchor DID (vault-folder.md §4): the wrong seed for this vault. Refused before ownership is taken or any local state made. */
+export class AnchorMismatch extends Error {
+  constructor(
+    readonly expected: string,
+    readonly derived: string
+  ) {
+    super(`the seed derives ${derived}, not this vault's anchor ${expected}: wrong seed for this vault`);
+    this.name = "AnchorMismatch";
+  }
+}
+
+/**
+ * `import/` holds recovery state (vault-folder.md §3, §11.1, VF-40): an
+ * import this backend has not finished or cannot recognize. A writable
+ * open is blocked until it is completed or rolled back; a read-only open
+ * reports it rather than present what `events/` and `objects/` hold as a
+ * complete vault. `entries` names what stands under `import/`.
+ */
+export class PendingImport extends Error {
+  constructor(readonly entries: string[]) {
+    super(`import/ holds recovery state (${entries.join(", ")}): the import must be completed or rolled back before the vault is opened`);
+    this.name = "PendingImport";
+  }
+}
+
+/** A write on a vault opened read-only (vault-folder.md §11.1): nothing was written. */
+export class ReadOnlyVault extends Error {
+  constructor(what: string) {
+    super(`${what}: the vault is open read-only`);
+    this.name = "ReadOnlyVault";
+  }
+}
+
+/** An object stream asked of a read-only open that holds no ownership (vault-folder.md §15, event-store.md §10): refused rather than served unprotected against a collector. */
+export class Unprotected extends Error {
+  constructor(readonly cid: string) {
+    super(`${cid}: a read-only open without ownership serves no object stream; open with ownership, or through the writer's broker`);
+    this.name = "Unprotected";
+  }
+}
+
+/** An operation on a vault after `close` (vault-folder.md §15): ownership is released, and another process may hold the folder by now. */
+export class VaultClosed extends Error {
+  constructor() {
+    super("the vault is closed");
+    this.name = "VaultClosed";
+  }
+}

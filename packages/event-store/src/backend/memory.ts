@@ -1,4 +1,4 @@
-import { segmentsOf, type VaultBackend } from "./types.js";
+import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./types.js";
 
 export interface MemoryBackendOptions {
   /** the clock `modified` reads; the wall clock when left out */
@@ -25,6 +25,8 @@ const STREAM_CHUNK = 64 * 1024;
 export class MemoryBackend implements VaultBackend {
   readonly files = new Map<string, Uint8Array>();
   private readonly times = new Map<string, number>();
+  /** the names owned right now: one backend instance is one folder, so one set is its whole world */
+  private readonly owned = new Set<string>();
   private readonly clock: () => Date;
 
   constructor(options: MemoryBackendOptions = {}) {
@@ -181,5 +183,20 @@ export class MemoryBackend implements VaultBackend {
       }
     }
     return { files, dirs: [...dirs] };
+  }
+
+  /** Ownership as a name in a set: exclusive within this instance, which is the folder. Makes no file. */
+  async own(path: string): Promise<Ownership> {
+    const key = this.key(path);
+    if (this.owned.has(key)) throw new VaultOwned(path, "another holder in this process has it");
+    this.owned.add(key);
+    let released = false;
+    return {
+      release: async () => {
+        if (released) return;
+        released = true;
+        this.owned.delete(key);
+      },
+    };
   }
 }
