@@ -380,3 +380,66 @@ describe("MemoryObjectStore", () => {
     expectBytes(await store.read(cid, 30), bytes);
   });
 });
+
+/** `globalThis[name]` replaced by a Proxy whose `construct` may throw, for the length of `run` (fault injection, r2-A). */
+async function withConstructFault<T>(name: "Uint8Array" | "ReadableStream", shouldThrow: (args: unknown[]) => boolean, run: () => Promise<T>): Promise<T> {
+  const Real = globalThis[name] as unknown as new (...args: unknown[]) => unknown;
+  (globalThis as Record<string, unknown>)[name] = new Proxy(Real, {
+    construct: (target, args, newTarget) => {
+      if (shouldThrow(args)) throw new RangeError(`injected: new ${name}(...)`);
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
+  try {
+    return await run();
+  } finally {
+    (globalThis as Record<string, unknown>)[name] = Real;
+  }
+}
+
+describe("MemoryObjectStore open releases the latch on every failure (event-store.md §10, r2-A)", () => {
+  const T0 = "2026-09-07T10:00:00.000Z";
+
+  async function orphaned(): Promise<{ store: MemoryObjectStore; cid: Cid; bytes: Uint8Array }> {
+    const store = new MemoryObjectStore({ now: () => new Date(T0).getTime(), graceMs: 0 });
+    const bytes = new TextEncoder().encode("hello");
+    const { cid } = await store.putRaw(bytes);
+    return { store, cid, bytes };
+  }
+
+  it("a chunk copy that throws fails the stream with that error, releases the latch, and the object is collectable", async () => {
+    const { store, cid, bytes } = await orphaned();
+    const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
+    expect(store.latches.count(cid)).toBe(1);
+    const reader = stream.getReader();
+    await withConstructFault(
+      "Uint8Array",
+      (args) => args.length === 1 && args[0] instanceof Uint8Array && args[0].length === bytes.length,
+      async () => {
+        await expect(reader.read()).rejects.toThrow(/injected/);
+      }
+    );
+    reader.releaseLock();
+    await expect(stream.cancel()).rejects.toThrow(/injected/); // an errored stream: cancel rejects, and releases nothing — the store already did
+    expect(store.latches.count(cid)).toBe(0);
+    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+  });
+
+  it("a stream that cannot be built rejects open, releases the latch, and holds another reader's latch on the same CID", async () => {
+    const { store, cid, bytes } = await orphaned();
+    const other = (await store.open(cid)) as ReadableStream<Uint8Array>;
+    expect(store.latches.count(cid)).toBe(1);
+    await withConstructFault(
+      "ReadableStream",
+      () => true,
+      async () => {
+        await expect(store.open(cid)).rejects.toThrow(/injected/);
+      }
+    );
+    expect(store.latches.count(cid)).toBe(1);
+    expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
+    expectBytes((await drain(other)).bytes, bytes);
+    expect(store.latches.count(cid)).toBe(0);
+    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+  });
+});

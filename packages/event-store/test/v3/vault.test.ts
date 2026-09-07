@@ -295,6 +295,28 @@ describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () 
     expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
   });
 
+  it("r2-A a read whose stream fails copying a chunk keeps the error, leaves no latch, and the object is collectable", async () => {
+    const { vault, now } = open({ graceMs: 0 });
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
+    now.advance(HOUR);
+    // Fault injection: copying the one 5-byte extent throws; the output buffer `new Uint8Array(5)` and everything else go through.
+    const Real = globalThis.Uint8Array;
+    globalThis.Uint8Array = new Proxy(Real, {
+      construct: (target, args, newTarget) => {
+        if (args.length === 1 && args[0] instanceof Real && args[0].length === 5) throw new RangeError("injected: chunk copy");
+        return Reflect.construct(target, args, newTarget);
+      },
+    }) as typeof Uint8Array;
+    try {
+      await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(/injected: chunk copy/);
+    } finally {
+      globalThis.Uint8Array = Real;
+    }
+    expect(vault.latches.latched()).toEqual([]);
+    expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
+  });
+
   it("read holds no latch once done, and no lock while draining", async () => {
     const { vault } = open();
     const v = vault.vault;
