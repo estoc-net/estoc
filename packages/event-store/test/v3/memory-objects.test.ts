@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DamagedObject,
   DEFAULT_EXTENT_BYTES,
   DEFAULT_GRACE_MS,
   DEFAULT_MAX_OBJECT_BYTES,
@@ -10,7 +11,7 @@ import {
   type Cid,
   type ObjectStore,
 } from "../../src/v3/index.js";
-import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
+import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, join, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
 
 objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) => {
   const store = new MemoryObjectStore(options);
@@ -26,13 +27,7 @@ objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) =>
  */
 function rechunked(inner: ObjectStore, n: number): ObjectStore {
   return {
-    putRaw: (source) => inner.putRaw(source),
-    putObject: (cid, source) => inner.putObject(cid, source),
-    read: (cid, max) => inner.read(cid, max),
-    stat: (cid) => inner.stat(cid),
-    has: (cid) => inner.has(cid),
-    list: () => inner.list(),
-    collect: (keep) => inner.collect(keep),
+    ...passthrough(inner),
     open: async (cid) => {
       const stream = await inner.open(cid);
       if (stream === null) return null;
@@ -62,6 +57,122 @@ function rechunked(inner: ObjectStore, n: number): ObjectStore {
     },
   };
 }
+
+/**
+ * `inner` with each output stream closed together with its last chunk:
+ * the inner stream is read one chunk ahead, so its verification and
+ * EOF come before the last chunk is handed out, and the outer stream
+ * closes on that same pull. The outer stream holds a latch of its own
+ * in the store's registry until it closes, fails or is cancelled. A
+ * store that completes with the last chunk rather than on the read
+ * after it, which the suite must accept just the same (r2-A).
+ */
+function closingOnLast(inner: MemoryObjectStore): ObjectStore {
+  return {
+    ...passthrough(inner),
+    open: async (cid) => {
+      const stream = await inner.open(cid);
+      if (stream === null) return null;
+      const release = inner.latches.acquire(cid);
+      const reader = stream.getReader();
+      let ahead = await reader.read().catch((err: unknown) => {
+        release();
+        throw err;
+      });
+      return new ReadableStream<Uint8Array>(
+        {
+          pull: async (controller) => {
+            if (ahead.done) {
+              release();
+              controller.close();
+              return;
+            }
+            const chunk = ahead.value;
+            try {
+              ahead = await reader.read();
+            } catch (err) {
+              release();
+              controller.error(err);
+              return;
+            }
+            controller.enqueue(chunk);
+            if (ahead.done) {
+              release();
+              controller.close();
+            }
+          },
+          cancel: async (reason) => {
+            release();
+            await reader.cancel(reason);
+          },
+        },
+        { highWaterMark: 0 }
+      );
+    },
+  };
+}
+
+/**
+ * `inner` with every object verified before a byte of it is handed
+ * out: `open` reads the inner stream to its end once — its check — and
+ * throws `DamagedObject` from `open` itself if that fails; otherwise it
+ * opens the object again and passes it through. A latch of the outer
+ * stream's own covers the gap between the two. A store that does not
+ * verify lazily, which the suite must accept just the same (r2-B).
+ */
+function verifyingFirst(inner: MemoryObjectStore): ObjectStore {
+  return {
+    ...passthrough(inner),
+    open: async (cid) => {
+      const check = await inner.open(cid);
+      if (check === null) return null;
+      const release = inner.latches.acquire(cid);
+      try {
+        for await (const _ of chunksOf(check)) {
+          // read to the end: the verification
+        }
+        const stream = (await inner.open(cid)) as ReadableStream<Uint8Array>;
+        const reader = stream.getReader();
+        return new ReadableStream<Uint8Array>(
+          {
+            pull: async (controller) => {
+              const { done, value } = await reader.read();
+              if (done) controller.close();
+              else controller.enqueue(value);
+            },
+            cancel: (reason) => reader.cancel(reason),
+          },
+          { highWaterMark: 0 }
+        );
+      } finally {
+        release();
+      }
+    },
+  };
+}
+
+function passthrough(inner: ObjectStore): ObjectStore {
+  return {
+    putRaw: (source) => inner.putRaw(source),
+    putObject: (cid, source) => inner.putObject(cid, source),
+    open: (cid) => inner.open(cid),
+    read: (cid, max) => inner.read(cid, max),
+    stat: (cid) => inner.stat(cid),
+    has: (cid) => inner.has(cid),
+    list: () => inner.list(),
+    collect: (keep) => inner.collect(keep),
+  };
+}
+
+objectStoreSuite("MemoryObjectStore, closing with the last chunk", async (options: OpenObjectOptions = {}) => {
+  const store = new MemoryObjectStore(options);
+  return { store: closingOnLast(store), corrupt: async (cid: Cid) => store.damage(cid) };
+});
+
+objectStoreSuite("MemoryObjectStore, verifying before the first chunk", async (options: OpenObjectOptions = {}) => {
+  const store = new MemoryObjectStore(options);
+  return { store: verifyingFirst(store), corrupt: async (cid: Cid) => store.damage(cid) };
+});
 
 objectStoreSuite("MemoryObjectStore, output in 2-byte chunks", async (options: OpenObjectOptions = {}) => {
   const store = new MemoryObjectStore(options);
@@ -165,6 +276,44 @@ describe("MemoryObjectStore", () => {
     expect(await store.putRaw(chunked(bytes, [3, 3, 3]))).toEqual({ cid, codec: "raw", size: 10 });
     expect(await store.read(cid, 10)).toEqual(bytes);
     expect(await drain((await store.open(cid)) as ReadableStream<Uint8Array>)).toEqual({ bytes, chunks: 5 });
+  });
+
+  it("r2-A: this store completes on the read after the last chunk, not with it — every byte handed out, the object is still latched until the reader sees the end", async () => {
+    const store = new MemoryObjectStore({ graceMs: 0, extentBytes: 4 });
+    const bytes = bytesOf(10, 6);
+    const cid = (await store.putRaw(bytes)).cid;
+    const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
+    const parts: Uint8Array[] = [];
+    for (let i = 0; i < 3; i++) parts.push((await reader.read()).value as Uint8Array);
+    expect(join(parts)).toEqual(bytes);
+    expect(store.latches.count(cid)).toBe(1);
+    expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
+    expect((await reader.read()).done).toBe(true);
+    expect(store.latches.count(cid)).toBe(0);
+    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+  });
+
+  it("r2-B: this store verifies lazily — a damaged chunk goes out before the failure; a put that repairs the object meanwhile is left alone by the old reader's failure", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const bytes = bytesOf(10, 7);
+    const cid = (await store.putRaw(bytes)).cid;
+    store.damage(cid);
+    const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
+    const first = (await reader.read()).value as Uint8Array;
+    expect(first).not.toEqual(bytes.slice(0, 4)); // the damaged chunk, out before anything checked it
+    await store.putObject(cid, bytes);
+    let failed: unknown;
+    try {
+      for (;;) {
+        if ((await reader.read()).done) break;
+      }
+    } catch (err) {
+      failed = err;
+    }
+    expect(failed).toBeInstanceOf(DamagedObject);
+    expect(store.latches.count(cid)).toBe(0);
+    expect(await store.has(cid)).toBe(true);
+    expect(await store.read(cid, 10)).toEqual(bytes);
   });
 
   it("a stream pulls nothing until it is read: an opened, unread stream hands out no bytes and stays latched", async () => {

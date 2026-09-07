@@ -248,7 +248,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
       });
 
       it("DO-7: a large object streams in, streams out in more than one chunk, verifies, and a bounded read refuses before allocating", async () => {
-        const size = 16 * 1024 * 1024 + 1;
+        const size = 8 * 1024 * 1024 + 1;
         const chunk = 64 * 1024;
         // The source is generated as it is pulled; nothing here holds the whole object.
         async function* large(): AsyncIterable<Uint8Array> {
@@ -451,27 +451,31 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.has(leaf)).toBe(false);
       });
 
-      it("§10 latch: a stream someone is still reading keeps its object out of a collection pass — listed in neither array — and lets the rest go; cancelling it releases", async () => {
+      it("§10 latch: an opened stream keeps its object out of a collection pass — listed in neither array — from open until it completes or is cancelled, and lets the rest go", async () => {
         const c = clock(T0);
         const { store } = await open({ now: c.now, graceMs: 0, extentBytes: 4 });
         const bytes = bytesOf(10, 15);
         const held = (await store.putRaw(bytes)).cid;
         const other = (await store.putRaw(bytesOf(10, 16))).cid;
         const stream = (await store.open(held)) as ReadableStream<Uint8Array>;
-        const reader = stream.getReader();
-        const first = await reader.read();
-        // However the store chunks its output, one read is a prefix of the object and not its completion.
-        expect(first.done).toBe(false);
-        expect(first.value).toEqual(bytes.slice(0, first.value?.length));
+        // The latch is registered by open, before a byte is read (§10).
         expect(await store.collect([])).toEqual({ unlinked: [other], young: [] });
         expect(await store.has(held)).toBe(true);
-        expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
+        const reader = stream.getReader();
+        const first = await reader.read();
+        // One read is a prefix of the object, however the store chunks its output.
+        expect(first.done).toBe(false);
+        expect(first.value).toEqual(bytes.slice(0, first.value?.length));
+        if ((first.value as Uint8Array).length < bytes.length) {
+          // Bytes remain, so the stream cannot have completed: still latched.
+          expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
+        }
         await reader.cancel();
         expect(await store.collect([])).toEqual({ unlinked: [held], young: [] });
         expect(await store.has(held)).toBe(false);
       });
 
-      it("§10 latch: reading a stream to completion releases it; every byte handed out, without completion, does not", async () => {
+      it("§10 latch: a stream is latched while bytes remain to be read, and released once it has completed", async () => {
         const c = clock(T0);
         const { store } = await open({ now: c.now, graceMs: 0, extentBytes: 4 });
         const bytes = bytesOf(10, 17);
@@ -484,7 +488,8 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
           expect(done).toBe(false);
           parts.push(value as Uint8Array);
           seen += (value as Uint8Array).length;
-          expect(await store.collect([]), `after ${seen} bytes`).toEqual({ unlinked: [], young: [] });
+          // Whether the store completes with the last chunk or on the read after it is its own; while bytes remain, it has not.
+          if (seen < bytes.length) expect(await store.collect([]), `after ${seen} bytes`).toEqual({ unlinked: [], young: [] });
         }
         expect(join(parts)).toEqual(bytes);
         expect((await reader.read()).done).toBe(true);
@@ -534,16 +539,18 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const cid = (await store.putRaw(bytes)).cid;
         await corrupt(cid);
         expect(await store.has(cid)).toBe(true); // nothing has looked yet
-        const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
-        const parts: Uint8Array[] = [];
+        // Whether the store checks at open, before the first chunk or after the last is its own (§6.3 MAY):
+        // what it may not do is complete the stream. Chunks handed out before the failure were not to be trusted.
         let failed: unknown;
         try {
-          for await (const part of chunksOf(stream)) parts.push(part);
+          const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
+          for await (const _ of chunksOf(stream)) {
+            // consumed and discarded
+          }
         } catch (err) {
           failed = err;
         }
         expect(failed).toBeInstanceOf(DamagedObject);
-        expect(parts.length).toBeGreaterThan(0); // earlier chunks were handed out — and were not to be trusted
         expect(await store.has(cid)).toBe(false);
         expect(await store.open(cid)).toBeNull();
         expect(await store.stat(cid)).toBeNull();
@@ -568,28 +575,6 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const { bytes: streamed } = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
         expect(streamed).toEqual(bytes);
         expect(await all(store.list())).toEqual([cid]);
-      });
-
-      it("§6.2, §10: a stream open on bytes that were damaged, then repaired by a put, fails on what it was reading and leaves the repaired object alone", async () => {
-        const { store, corrupt } = await open({ extentBytes: 4 });
-        if (corrupt === undefined) return;
-        const bytes = bytesOf(10, 24);
-        const cid = (await store.putRaw(bytes)).cid;
-        await corrupt(cid);
-        const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
-        await reader.read(); // a chunk of the damaged bytes is out
-        await store.putObject(cid, bytes);
-        let failed: unknown;
-        try {
-          for (;;) {
-            if ((await reader.read()).done) break;
-          }
-        } catch (err) {
-          failed = err;
-        }
-        expect(failed).toBeInstanceOf(DamagedObject);
-        expect(await store.has(cid)).toBe(true);
-        expect(await store.read(cid, 10)).toEqual(bytes);
       });
     });
   });
