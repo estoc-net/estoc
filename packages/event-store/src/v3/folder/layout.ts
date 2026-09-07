@@ -36,6 +36,11 @@ export function segmentPath(author: string, segment: string): string {
   return `${EVENTS_DIR}/${author}/${segment}${SEGMENT_SUFFIX}`;
 }
 
+/** The object path of `cid` (§9): `objects/<cid>`, the CID as given. */
+export function objectPath(cid: string): string {
+  return `${OBJECTS_DIR}/${cid}`;
+}
+
 /** The author directory of `author` (§6): `events/<author>`. */
 export function authorDir(author: string): string {
   return `${EVENTS_DIR}/${author}`;

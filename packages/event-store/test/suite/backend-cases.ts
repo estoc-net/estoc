@@ -43,6 +43,36 @@ async function rejects(work: Promise<unknown>, pattern: RegExp, what: string): P
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** `n` deterministic bytes from `seed`. */
+function bytesOf(n: number, seed: number): Uint8Array {
+  const out = new Uint8Array(n);
+  let s = (seed >>> 0) || 1;
+  for (let i = 0; i < n; i++) {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    out[i] = s & 0xff;
+  }
+  return out;
+}
+
+/** `bytes` as a source of chunks of `size` (the last takes the rest). */
+async function* chunks(bytes: Uint8Array, size: number): AsyncIterable<Uint8Array> {
+  for (let at = 0; at < bytes.length; at += size) yield bytes.slice(at, Math.min(at + size, bytes.length));
+}
+
+/** Everything `stream` yields, as numbers; a stream that is null fails. */
+async function drain(stream: ReadableStream<Uint8Array> | null): Promise<number[]> {
+  if (stream === null) throw new Error("expected a stream, got null");
+  const reader = stream.getReader();
+  const out: number[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return out;
+    for (const byte of value as Uint8Array) out.push(byte);
+  }
+}
+
 export const backendCases: BackendCase[] = [
   {
     name: "reads null for a missing file and [] for a missing dir",
@@ -210,6 +240,73 @@ export const backendCases: BackendCase[] = [
       // and beside them everything still works
       await b.write("d/g", enc.encode("g"));
       same((await b.list("d")).sort(), ["f", "g"], "a sibling write");
+    },
+  },
+  {
+    name: "open: streams a file's bytes, null for a missing file or a directory, and a cancel is not an error",
+    run: async (fresh) => {
+      const b = await fresh();
+      same(await b.open("nope"), null, "open a missing file");
+      await b.write("d/f", enc.encode("file"));
+      same(await b.open("d"), null, "open a directory");
+      same(await b.open("d/f/under"), null, "open under a file");
+      const large = bytesOf(200 * 1024 + 7, 1);
+      await b.write("d/large", large);
+      same(await drain(await b.open("d/large")), [...large], "the bytes streamed, whole");
+      same(await drain(await b.open("d/f")), [...enc.encode("file")], "a small file");
+      await b.write("d/empty", new Uint8Array(0));
+      same(await drain(await b.open("d/empty")), [], "an empty file");
+      const stream = (await b.open("d/large")) as ReadableStream<Uint8Array>;
+      const reader = stream.getReader();
+      const first = await reader.read();
+      same(first.done, false, "a first chunk");
+      await reader.cancel();
+      same(await b.size("d/large"), large.length, "the file is untouched by a cancel");
+    },
+  },
+  {
+    name: "create: writes every chunk of a source in order, replaces, and a source that throws leaves what was there",
+    run: async (fresh) => {
+      const b = await fresh();
+      const bytes = bytesOf(150 * 1024 + 3, 2);
+      await b.create("o/new", chunks(bytes, 7_001));
+      same([...((await b.read("o/new")) as Uint8Array)], [...bytes], "created from chunks");
+      await b.create("o/new", chunks(enc.encode("replaced"), 3));
+      same(text(await b.read("o/new")), "replaced", "replaced whole");
+      async function* failing(): AsyncIterable<Uint8Array> {
+        yield enc.encode("half");
+        throw new Error("source gone");
+      }
+      await rejects(b.create("o/new", failing()), /source gone/, "the source's error");
+      same(text(await b.read("o/new")), "replaced", "the old file stands");
+      await rejects(b.create("o/fresh", failing()), /source gone/, "the source's error, fresh path");
+      same(await b.read("o/fresh"), null, "nothing landed where there was nothing");
+      same((await b.list("o")).sort(), ["new"], "no residue is listed beside it");
+      await b.create("o/empty", chunks(new Uint8Array(0), 1));
+      same(await b.size("o/empty"), 0, "an empty source makes an empty file");
+      await b.write("o/f", enc.encode("f"));
+      await rejects(b.create("o/f/under", chunks(enc.encode("x"), 1)), /./, "create below a file");
+      same(text(await b.read("o/f")), "f", "the file in the way is as it was");
+    },
+  },
+  {
+    name: "rename: moves a file, making parents, over an existing file whole; a missing source is an error",
+    run: async (fresh) => {
+      const b = await fresh();
+      const bytes = bytesOf(100 * 1024 + 1, 3);
+      await b.write("staging/x", bytes);
+      await b.rename("staging/x", "objects/deep/y");
+      same(await b.read("staging/x"), null, "the source is gone");
+      same([...((await b.read("objects/deep/y")) as Uint8Array)], [...bytes], "the target has the bytes");
+      same(await b.list("staging"), [], "nothing left in the source directory");
+      await b.write("staging/z", enc.encode("new"));
+      await b.rename("staging/z", "objects/deep/y");
+      same(text(await b.read("objects/deep/y")), "new", "replaced over an existing file");
+      same(await b.read("staging/z"), null, "and the source is gone");
+      same((await b.list("objects/deep")).sort(), ["y"], "one file there");
+      await rejects(b.rename("staging/nope", "objects/w"), /./, "no source");
+      same(await b.read("objects/w"), null, "nothing appeared");
+      await rejects(b.rename("staging/../x", "objects/w"), /unsafe/, "an unsafe source path");
     },
   },
   {

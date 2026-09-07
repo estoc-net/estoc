@@ -145,6 +145,49 @@
   the store does — the accepted content per `eventId` is chosen over
   every author directory, and a filter only narrows the result.
 
+- **The folder object store** (v3 A07). `FolderObjectStore` under
+  `@estoc/event-store/v3`, the object side of vault-folder.md §9 and
+  dasl-objects.md §10 over the same `VaultBackend`: one file per
+  accepted object, `objects/<cid>`, flat, holding exactly the resource
+  bytes — no extent directory, no chunk, no metadata node (VF-27,
+  VF-28). A put streams its source into a staging file under
+  `local/staging/objects/`, hashing as it goes and holding one chunk
+  at a time (§5), refuses the chunk that crosses `maxObjectBytes`, and
+  only once the whole stream has matched — the CID given, or the one
+  computed — moves the file into `objects/` in one step (§6.1, §6.2,
+  VF-31); a source that fails or mismatches leaves nothing, a crash
+  leaves a staging file that is not an object and is swept once past
+  grace (DO-4, DO-12, DO-17, §12). A read streams the file back,
+  rehashing on the way out; a file whose bytes no longer spell its
+  name fails the stream before completion, is moved to
+  `local/damaged/objects/` — under a numbered suffix when the name is
+  taken, and only if it is still the file the read opened, so a put
+  that healed it meanwhile stands — and reads as absent from then on
+  (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age is its
+  file's modification time, which acceptance sets and repeating
+  acceptance renews (§9); `collect` unlinks exactly the unkept,
+  unlatched object files past grace (§8.3). What is in `objects/` and
+  not an object path — a name that is not a raw DASL CID, a directory,
+  a file where the directory belongs — is reported by `damaged()`,
+  listed as nothing, left alone by collection, and refused as
+  `DamagedLayout` by every put when it is the root itself (§3, VF-16);
+  `verify()` reads every object whole, moves the mismatched and the
+  misnamed aside and reports them. The `VaultBackend` gained three
+  members for bytes too large to hold whole: `open(path)` streams a
+  file out, `create(path, source)` streams one in and makes it visible
+  only once the source has ended — a source that throws leaves the
+  path as it was — and `rename(from, to)` moves a file into place over
+  whatever stood there; `MemoryBackend`, `FsBackend` (a sibling temp
+  file renamed into place; `open` through a file handle in 64 KiB
+  pieces) and `OpfsBackend` (`createWritable`, aborted on failure;
+  `File.stream()`; `FileSystemFileHandle.move()`, a copy where the
+  destination exists) all have them, and `FsBackend` takes a `clock`
+  that stamps written files, for tests that age a file by the clock
+  they pin. The A04 `objectStoreSuite` runs over the folder store on
+  `MemoryBackend` and `FsBackend`; a framework-free
+  `folderObjectCases` runs over those and, in Chromium, over OPFS
+  (DO-5).
+
 - **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
   first `append`, or handed back by `read`, was kept or returned as a
   view onto the same memory — `Buffer#slice` is not a copy — so writing

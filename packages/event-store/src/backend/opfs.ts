@@ -11,6 +11,14 @@ import { segmentsOf, type VaultBackend } from "./types.js";
  * partial last line, which the folder store reports and heals.
  * `modified` is the file's `lastModified`, which a rewrite renews.
  *
+ * A streamed `create` is one `createWritable()` too, closed once the
+ * source has ended and aborted — the swap file discarded, the original
+ * kept — when it throws. `open` is the file's own `stream()`. `rename`
+ * is `FileSystemFileHandle.move()` where the platform has it and the
+ * destination is free; onto an existing file, or without `move`, it is
+ * a copy through `createWritable()` — atomic on close, as every write
+ * here is — and a removal of the source.
+ *
  * `createWritable()` is what this needs from the platform; browsers that
  * only offer OPFS through sync access handles in workers are not served
  * by this adapter yet — the constructor says so up front.
@@ -86,6 +94,66 @@ export class OpfsBackend implements VaultBackend {
     } finally {
       await writable.close();
     }
+  }
+
+  async open(path: string): Promise<ReadableStream<Uint8Array> | null> {
+    const handle = await this.file(path, false);
+    if (handle === null) {
+      return null;
+    }
+    return (await handle.getFile()).stream() as ReadableStream<Uint8Array>;
+  }
+
+  async create(path: string, source: AsyncIterable<Uint8Array>): Promise<void> {
+    // Getting the handle with `create` makes an empty file where there
+    // was none; a source that then throws must not leave it there.
+    const existed = (await this.file(path, false)) !== null;
+    const handle = (await this.file(path, true)) as FileSystemFileHandle;
+    const writable = await handle.createWritable();
+    try {
+      for await (const chunk of source) {
+        await writable.write(chunk as unknown as ArrayBufferView<ArrayBuffer>);
+      }
+    } catch (err) {
+      await writable.abort().catch(() => undefined);
+      if (!existed) await this.remove(path).catch(() => undefined);
+      throw err;
+    }
+    await writable.close();
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const source = await this.file(from, false);
+    if (source === null) {
+      throw new Error(`no such file: ${JSON.stringify(from)}`);
+    }
+    const segments = segmentsOf(to);
+    const name = segments.pop() as string;
+    const dir = (await this.dir(segments, true)) as FileSystemDirectoryHandle;
+    const move = (source as { move?: (dir: FileSystemDirectoryHandle, name: string) => Promise<void> }).move;
+    if (typeof move === "function" && (await this.file(to, false)) === null) {
+      try {
+        await move.call(source, dir, name);
+        return;
+      } catch {
+        // not movable there — copied below
+      }
+    }
+    const target = await dir.getFileHandle(name, { create: true });
+    const writable = await target.createWritable();
+    try {
+      const reader = ((await source.getFile()).stream() as ReadableStream<Uint8Array>).getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value as unknown as ArrayBufferView<ArrayBuffer>);
+      }
+    } catch (err) {
+      await writable.abort().catch(() => undefined);
+      throw err;
+    }
+    await writable.close();
+    await this.remove(from);
   }
 
   async remove(path: string): Promise<void> {
