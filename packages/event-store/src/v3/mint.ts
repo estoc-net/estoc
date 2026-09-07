@@ -5,11 +5,12 @@
  * profile asks nothing of that generator beyond RFC 9562 (D-1): its
  * counter, what it does when the counter is full and what it does when
  * the clock moves backwards are its own. `uuid`'s `v7()`, called without
- * options, keeps one process-wide state — a counter seeded at random on
- * each new millisecond and an embedded timestamp that never moves
- * backwards — so IDs minted in one process compare in mint order, which
- * is what §5.2 needs: a batch sharing one `at` is in canonical order by
- * input order.
+ * options, keeps state in its own module instance — a counter seeded at
+ * random on each new millisecond and an embedded timestamp that never
+ * moves backwards — so IDs from one instance of the module compare in
+ * mint order. That is `uuid`'s property, which the tests record; the
+ * profile neither requires nor promises it (D-2): a batch is returned in
+ * input order, and canonical order is §4.3's.
  *
  * `at` and the UUID's `unix_ts_ms` are two observations of the wall
  * clock: usually the same millisecond, never required to be. `at` comes

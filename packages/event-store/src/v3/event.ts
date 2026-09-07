@@ -96,7 +96,8 @@ export interface EventStore {
   /**
    * Several local events as one all-or-nothing write (§5.2): every draft
    * validated first, one clock reading and one `at` for the batch, IDs
-   * minted in input order, which is the batch's canonical order.
+   * minted and events returned in input order; canonical order (§4.3)
+   * need not match it.
    */
   appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]>;
   /**

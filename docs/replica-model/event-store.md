@@ -369,20 +369,17 @@ generator may have moved its timestamp, and the store reads the clock for `at`
 on its own. `at` is the event's time; the embedded timestamp is the
 generator's.
 
-The writer MUST serialize UUIDv7 generation: separate appends and `appendAll`
-draw from one generator. Within one writer runtime, IDs MUST compare in mint
-order; the RFC 9562 section 6.2 counter a standard generator keeps is what
-provides it. This is what lets a batch sharing one `at` be in canonical order
-by input order (section 5.2) and back-to-back appends within one millisecond
-sort as appended. No mint-order guarantee spans a clock rollback or a runtime
-restart.
+Separate appends and `appendAll` draw from one generator under the writer
+lock of section 10. Monotonicity within a millisecond — IDs comparing in mint
+order — is a property of the selected generator, which RFC 9562 section 6.2
+describes how to obtain; it is not a conformance requirement of this profile.
 
 If the wall clock moves backwards, a later local append uses the newly sampled,
 possibly smaller, `t` for `at`; its `eventId` is still distinct from every ID
 minted before, as RFC 9562 requires of the generator. This profile neither
-clamps wall time nor introduces a hybrid logical clock. Canonical order matches
-input order within one `appendAll`, but is not a vault-wide append or causal
-order.
+clamps wall time nor introduces a hybrid logical clock. Canonical order
+(section 4.3) is not a vault-wide append or causal order, and need not match
+input order within one `appendAll`.
 
 If the generator cannot produce an ID, the append or batch fails before any
 part of it commits (sections 5.1 and 5.2).
@@ -543,9 +540,10 @@ draft before writing any event. It then:
 
 - reads the wall clock once and assigns that one `at` to every event of the
   batch;
-- mints one distinct UUIDv7 per draft in input order from the generator of
-  section 4.2, so the IDs sort in input order;
-- returns events in input order, which is also this batch's canonical order;
+- mints one distinct UUIDv7 per draft, in input order, from the generator of
+  section 4.2;
+- returns events in input order; canonical order remains the tuple of section
+  4.3 and need not match it;
 - assigns the current author to every event; and
 - commits the entire batch at one process-durable success boundary.
 
@@ -1134,12 +1132,11 @@ A conforming implementation MUST pass at least these cases:
 18. <a id="es-18"></a> Process-durable success is distinguished from the backend's separately
     documented sudden-power-loss boundary.
 19. <a id="es-19"></a> More than 4096 events may be appended in one same-millisecond `appendAll`;
-    IDs are distinct and sort in input order. Back-to-back separate appends
-    within one millisecond also sort in mint order.
+    every ID is distinct and the batch comes back in input order.
 20. <a id="es-20"></a> After clock rollback, a local writer's `at` follows the newly sampled
     earlier millisecond and its `eventId` collides with nothing minted before;
-    the UUID's embedded timestamp need not follow. No mint-order guarantee spans
-    rollback or restart; a batch still shares one `at`.
+    the UUID's embedded timestamp need not follow. A batch still shares one
+    `at`.
 21. <a id="es-21"></a> Ingest validates UUIDv7 and `at` independently and does not reject immutable
     history merely because their encoded timestamps differ.
 22. <a id="es-22"></a> A failure to mint an ID fails the append or batch before any event in it
