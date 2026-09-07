@@ -83,3 +83,11 @@ export class DamagedObject extends Error {
     this.name = "DamagedObject";
   }
 }
+
+/** A draft root `commit` was given that names no present accepted object (event-store.md §10, DO-8): nothing was appended. */
+export class MissingRoot extends Error {
+  constructor(readonly cid: string) {
+    super(`root ${cid} is not a present accepted object`);
+    this.name = "MissingRoot";
+  }
+}

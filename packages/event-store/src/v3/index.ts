@@ -8,7 +8,9 @@
  * generator (§4.2); and the store in memory, the reference every other
  * store is measured against. Beside it the object model of
  * `dasl-objects.md`: raw DASL objects, the `ObjectStore` interface, the
- * read latch, and the store in memory. No event type.
+ * read latch, and the store in memory. Portable files (§8.1) and the
+ * vault itself (§10): the interfaces, the writer lock, the held view,
+ * and the vault in memory. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -62,4 +64,10 @@ export {
   DEFAULT_EXTENT_BYTES,
 } from "./memory-objects.js";
 
-export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject } from "./errors.js";
+export type { FileStore } from "./files.js";
+export { OWNED_ROOTS, checkPath, checkFilePath, isOwnedPath, ancestorsOf, comparePaths, MemoryFileStore } from "./files.js";
+
+export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores } from "./vault.js";
+export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
+
+export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject, MissingRoot } from "./errors.js";
