@@ -14,7 +14,7 @@
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
-export { isJsonObject, isJsonPrimitive } from "./json.js";
+export { isJsonObject, isJsonPrimitive, deepFreeze } from "./json.js";
 
 export { canonicalize, canonicalText, parseStrict, forbiddenIn, compareCodeUnits, MAX_DEPTH } from "./jcs.js";
 
@@ -70,5 +70,30 @@ export { OWNED_ROOTS, checkPath, checkFilePath, isOwnedPath, ancestorsOf, compar
 
 export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores } from "./vault.js";
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
+
+export {
+  ESTOC_DIR,
+  CONFIG_FILE,
+  KEYSTORE_FILE,
+  EVENTS_DIR,
+  OBJECTS_DIR,
+  IMPORT_DIR,
+  LOCAL_DIR,
+  REPLICA_FILE,
+  isSegmentName,
+  segmentPath,
+  authorDir,
+  kindOf,
+  type PathKind,
+  utf8,
+  text,
+  prettyJson,
+  concat,
+} from "./folder/layout.js";
+export { splitLines, acceptedLength, endsClean, decodeLine, decodeSegment, encodeLines, type Line, type Decoded, type SegmentEvent, type SegmentRead } from "./folder/lines.js";
+export { DamagedReplica, mintReplica, parseReplica, encodeReplica, readReplica, openReplica, type Replica } from "./folder/replica.js";
+export { FolderEventStore, ROTATE_BYTES, type FolderEventStoreOptions } from "./folder/events.js";
+export type { VaultBackend } from "../backend/types.js";
+export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
 
 export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject, MissingRoot } from "./errors.js";
