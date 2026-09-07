@@ -14,6 +14,7 @@ import {
   sortCids,
   type Cid,
 } from "../../src/v3/index.js";
+import { expectBytes } from "./suite/helpers.js";
 import { BAD_CIDS, EMPTY_CID, HELLO_CID, bytesOf, chunked, join, streamOf } from "./suite/object-store-suite.js";
 
 const HELLO = new TextEncoder().encode("hello");
@@ -66,7 +67,7 @@ describe("chunksOf and hashSource (dasl-objects.md §5, §6.1)", () => {
   it("takes the three shapes and yields the same chunks; a whole Uint8Array is one chunk", async () => {
     const bytes = bytesOf(100, 1);
     expect(await collect(chunksOf(bytes))).toEqual([bytes]);
-    expect(join(await collect(chunksOf(chunked(bytes, [30, 30]))))).toEqual(bytes);
+    expectBytes(join(await collect(chunksOf(chunked(bytes, [30, 30])))), bytes);
     expect(await collect(chunksOf(streamOf([bytes.slice(0, 40), bytes.slice(40)])))).toEqual([bytes.slice(0, 40), bytes.slice(40)]);
   });
 
@@ -119,7 +120,7 @@ describe("chunksOf and hashSource (dasl-objects.md §5, §6.1)", () => {
     expect(cid.text).toBe(rawCidFromDigest(sha256(bytes)).text);
     expect(size).toBe(10_000);
     expect(seen.map((c) => c.length)).toEqual([3_000, 3_000, 3_000, 1_000]);
-    expect(join(seen)).toEqual(bytes);
+    expectBytes(join(seen), bytes);
     expect((await hashSource(new Uint8Array(0), 0, () => undefined)).cid.text).toBe(EMPTY_CID);
   });
 

@@ -1,3 +1,5 @@
+import { expect } from "vitest";
+
 import type { AuthorId, Event, EventId } from "../../../src/v3/index.js";
 
 /** A clock in Unix milliseconds the test moves by hand. */
@@ -81,4 +83,20 @@ export function altered(event: Event): Event {
 /** `event` under another `eventId`, everything else the same. */
 export function renamed(event: Event, eventId: string): Event {
   return { ...event, eventId: eventId as EventId };
+}
+
+/**
+ * `expect(actual).toEqual(expected)` for bytes. vitest's deep equality walks
+ * a typed array element by element — over a second for 100 KiB, more than
+ * CI's timeout for a MiB — where a byte compare is instant; and a mismatch
+ * names the first byte that differs, which the diff of a MiB never would.
+ * `message` goes to both assertions, as `expect`'s own would.
+ */
+export function expectBytes(actual: Uint8Array | null | undefined, expected: Uint8Array, message?: string): void {
+  expect(actual, message).toBeInstanceOf(Uint8Array);
+  const got = actual as Uint8Array;
+  expect(got.length, `${message ? `${message}: ` : ""}byte length`).toBe(expected.length);
+  let at = 0;
+  while (at < got.length && got[at] === expected[at]) at += 1;
+  expect(at, `${message ? `${message}: ` : ""}bytes differ at offset ${at}: ${got[at]} here, ${expected[at]} expected`).toBe(got.length);
 }

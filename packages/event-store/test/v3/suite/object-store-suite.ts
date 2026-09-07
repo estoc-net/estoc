@@ -14,7 +14,7 @@ import {
   type Cid,
   type ObjectStore,
 } from "../../../src/v3/index.js";
-import { clock, partition, shuffle } from "./helpers.js";
+import { clock, expectBytes, partition, shuffle } from "./helpers.js";
 
 export interface OpenObjectOptions {
   /** the wall clock in Unix milliseconds, for orphan age */
@@ -150,10 +150,10 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(info).toEqual({ cid: EMPTY_CID, codec: "raw", size: 0 });
         expect(await store.has(EMPTY_CID)).toBe(true);
         expect(await store.stat(EMPTY_CID)).toEqual(info);
-        expect(await store.read(EMPTY_CID, 0)).toEqual(new Uint8Array(0));
+        expectBytes(await store.read(EMPTY_CID, 0), new Uint8Array(0));
         const stream = await store.open(EMPTY_CID);
         expect(stream).not.toBeNull();
-        expect((await drain(stream as ReadableStream<Uint8Array>)).bytes).toEqual(new Uint8Array(0));
+        expectBytes((await drain(stream as ReadableStream<Uint8Array>)).bytes, new Uint8Array(0));
         expect(await all(store.list())).toEqual([EMPTY_CID]);
       });
 
@@ -162,7 +162,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.putRaw(HELLO)).toEqual({ cid: HELLO_CID, codec: "raw", size: 5 });
         const { store: other } = await open();
         expect(await other.putObject(HELLO_CID, HELLO)).toEqual({ cid: HELLO_CID, codec: "raw", size: 5 });
-        expect(await other.read(HELLO_CID, 5)).toEqual(HELLO);
+        expectBytes(await other.read(HELLO_CID, 5), HELLO);
       });
 
       it("DO-1: one shot, every chunking, an async iterable and a ReadableStream give one CID and the exact bytes back", async () => {
@@ -175,12 +175,12 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
           const { store } = await open();
           const info = await store.putRaw(chunked(bytes, sizes));
           expect(info, `chunking ${i}`).toEqual({ cid: want, codec: "raw", size: bytes.length });
-          expect(await store.read(want, bytes.length), `chunking ${i}`).toEqual(bytes);
+          expectBytes(await store.read(want, bytes.length), bytes, `chunking ${i}`);
           const { store: viaStream } = await open();
           const parts = partition([...bytes], sizes).map((p) => Uint8Array.from(p));
           expect((await viaStream.putObject(want, streamOf(parts))).cid, `stream ${i}`).toBe(want);
           const stream = await viaStream.open(want);
-          expect((await drain(stream as ReadableStream<Uint8Array>)).bytes, `stream ${i}`).toEqual(bytes);
+          expectBytes((await drain(stream as ReadableStream<Uint8Array>)).bytes, bytes, `stream ${i}`);
         }
       });
 
@@ -241,8 +241,8 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
           infos.push(await store.putRaw(chunked(bytes, [30_000, 30_000])));
           expect(await store.stat(want), `extent ${extentBytes}`).toEqual({ cid: want, codec: "raw", size: bytes.length });
           const stream = await store.open(want);
-          expect((await drain(stream as ReadableStream<Uint8Array>)).bytes, `extent ${extentBytes}`).toEqual(bytes);
-          expect(await store.read(want, bytes.length), `extent ${extentBytes}`).toEqual(bytes);
+          expectBytes((await drain(stream as ReadableStream<Uint8Array>)).bytes, bytes, `extent ${extentBytes}`);
+          expectBytes(await store.read(want, bytes.length), bytes, `extent ${extentBytes}`);
         }
         expect(new Set(infos.map((info) => info.cid)).size).toBe(1);
       });
@@ -301,15 +301,15 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.putRaw(chunked(bytes, [1, 1]))).toEqual({ cid, codec: "raw", size: 3_000 });
         expect(await all(store.list())).toEqual([cid]);
         await expect(store.putObject(cid, bytesOf(3_000, 6))).rejects.toThrow(DigestMismatch);
-        expect(await store.read(cid, 3_000)).toEqual(bytes);
+        expectBytes(await store.read(cid, 3_000), bytes);
       });
 
       it("§6.3: read refuses an object larger than maxBytes and a bound that is not a non-negative integer; an absent object is null", async () => {
         const { store } = await open();
         await store.putRaw(HELLO);
         await expect(store.read(HELLO_CID, 4)).rejects.toThrow(ObjectTooLarge);
-        expect(await store.read(HELLO_CID, 5)).toEqual(HELLO);
-        expect(await store.read(HELLO_CID, 6)).toEqual(HELLO);
+        expectBytes(await store.read(HELLO_CID, 5), HELLO);
+        expectBytes(await store.read(HELLO_CID, 6), HELLO);
         for (const bad of [-1, 1.5, NaN, Infinity]) {
           await expect(store.read(HELLO_CID, bad)).rejects.toThrow(RangeError);
         }
@@ -328,7 +328,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         read.fill(0);
         const { bytes: streamed } = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
         streamed.fill(0);
-        expect(await store.read(cid, 100)).toEqual(bytes);
+        expectBytes(await store.read(cid, 100), bytes);
       });
 
       it("§12: what is held is the store's own memory — a source's buffer rewritten after put, a generator reusing one buffer, a streamed chunk rewritten by its reader change nothing", async () => {
@@ -340,7 +340,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const { store: a } = await open({ extentBytes: 5 });
         expect((await a.putRaw(arena.subarray(20, 44))).cid).toBe(cid);
         arena.fill(0xff);
-        expect(await a.read(cid, 24)).toEqual(bytes);
+        expectBytes(await a.read(cid, 24), bytes);
         // Chunked, every chunk a view into one buffer the generator refills.
         const scratch = new Uint8Array(8);
         async function* reusing(): AsyncIterable<Uint8Array> {
@@ -352,7 +352,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const { store: b } = await open({ extentBytes: 5 });
         expect((await b.putObject(cid, reusing())).cid).toBe(cid);
         scratch.fill(0);
-        expect(await b.read(cid, 24)).toEqual(bytes);
+        expectBytes(await b.read(cid, 24), bytes);
         // Streamed out, the chunk the reader was handed rewritten before the next read.
         const reader = ((await b.open(cid)) as ReadableStream<Uint8Array>).getReader();
         for (;;) {
@@ -360,7 +360,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
           if (done) break;
           (value as Uint8Array).fill(0xee);
         }
-        expect(await b.read(cid, 24)).toEqual(bytes);
+        expectBytes(await b.read(cid, 24), bytes);
         expect(await all(b.list())).toEqual([cid]);
       });
 
@@ -392,7 +392,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.collect([kept])).toEqual({ unlinked: [], young: [] });
         c.advance(100 * HOUR);
         expect(await store.collect([kept])).toEqual({ unlinked: [], young: [] });
-        expect(await store.read(kept, 10)).toEqual(bytesOf(10, 11));
+        expectBytes(await store.read(kept, 10), bytesOf(10, 11));
       });
 
       it("§8.3: an unkept object within grace when kept elsewhere is untouched; with no keep set at all, everything past grace goes", async () => {
@@ -465,7 +465,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const first = await reader.read();
         // One read is a prefix of the object, however the store chunks its output.
         expect(first.done).toBe(false);
-        expect(first.value).toEqual(bytes.slice(0, first.value?.length));
+        expectBytes(first.value, bytes.slice(0, first.value?.length));
         if ((first.value as Uint8Array).length < bytes.length) {
           // Bytes remain, so the stream cannot have completed: still latched.
           expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
@@ -491,7 +491,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
           // Whether the store completes with the last chunk or on the read after it is its own; while bytes remain, it has not.
           if (seen < bytes.length) expect(await store.collect([]), `after ${seen} bytes`).toEqual({ unlinked: [], young: [] });
         }
-        expect(join(parts)).toEqual(bytes);
+        expectBytes(join(parts), bytes);
         expect((await reader.read()).done).toBe(true);
         expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
       });
@@ -512,7 +512,7 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const c = clock(T0);
         const { store } = await open({ now: c.now, graceMs: 0 });
         const cid = (await store.putRaw(bytesOf(10, 19))).cid;
-        expect(await store.read(cid, 10)).toEqual(bytesOf(10, 19));
+        expectBytes(await store.read(cid, 10), bytesOf(10, 19));
         expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
       });
 
@@ -569,11 +569,11 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         const cid = (await store.putRaw(bytes)).cid;
         await corrupt(cid);
         expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 });
-        expect(await store.read(cid, 10)).toEqual(bytes);
+        expectBytes(await store.read(cid, 10), bytes);
         await corrupt(cid);
         expect(await store.putRaw(bytes)).toEqual({ cid, codec: "raw", size: 10 });
         const { bytes: streamed } = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
-        expect(streamed).toEqual(bytes);
+        expectBytes(streamed, bytes);
         expect(await all(store.list())).toEqual([cid]);
       });
     });
