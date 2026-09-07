@@ -13,6 +13,12 @@
  * Whole-file writes are atomic in the sense a crash never leaves a
  * half-written file where a good one was; appends may leave a cut-short
  * last line, which the folder store reports and heals (§5).
+ *
+ * Three members are for bytes too large to hold whole (dasl-objects.md
+ * §5): `open` streams a file out, `create` streams one in and makes it
+ * visible only once its source has ended — a source that throws leaves
+ * the path as it was — and `rename` moves a file into place, replacing
+ * what stood there, so a file can be written before its name is known.
  */
 export interface VaultBackend {
   /** File contents, or null if there is no such file (a directory is not one). */
@@ -31,6 +37,28 @@ export interface VaultBackend {
   list(dir: string): Promise<string[]>;
   /** Names of the directories directly inside `dir`, unsorted; [] if missing or a file. */
   dirs(dir: string): Promise<string[]>;
+  /**
+   * A file's contents as a stream of chunks, or null if there is no such
+   * file (a directory is not one). The bytes are the file's as of the
+   * open, as far as the platform can promise; cancelling the stream
+   * releases whatever it holds.
+   */
+  open(path: string): Promise<ReadableStream<Uint8Array> | null>;
+  /**
+   * Replace (or create) a file with every chunk of `source`, in order,
+   * creating parent directories as needed. Nothing is visible at `path`
+   * until `source` has ended: a crash midway, or a source that throws,
+   * leaves the file that was there, or none — never a part. A source
+   * that throws is rethrown.
+   */
+  create(path: string, source: AsyncIterable<Uint8Array>): Promise<void>;
+  /**
+   * Move the file at `from` to `to`, creating parent directories as
+   * needed and replacing any file at `to` whole: at every moment `to`
+   * holds the old file, or the new one. Throws if there is no file at
+   * `from`.
+   */
+  rename(from: string, to: string): Promise<void>;
 }
 
 /**
