@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidJson, MAX_DEPTH, canonicalText, canonicalize, parseStrict } from "../../src/v3/index.js";
+import { InvalidJson, MAX_DEPTH, canonicalText, canonicalize, forbiddenIn, parseStrict } from "../../src/v3/index.js";
 
 const utf8 = new TextEncoder();
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
@@ -125,6 +125,12 @@ describe("RFC 8785 canonicalization", () => {
       ["a lone high surrogate", cp(0xd83d)],
       ["a lone low surrogate", `x${cp(0xde02)}`],
       ["a lone surrogate in a member name", { [cp(0xd800)]: 1 }],
+      ["a noncharacter U+FDD0", cp(0xfdd0)],
+      ["a noncharacter U+FDEF in a member name", { [cp(0xfdef)]: 1 }],
+      ["a noncharacter U+FFFE", `a${cp(0xfffe)}b`],
+      ["a noncharacter U+FFFF", [cp(0xffff)]],
+      ["a noncharacter U+1FFFE", cp(0xd83f, 0xdffe)],
+      ["a noncharacter U+10FFFF", { x: cp(0xdbff, 0xdfff) }],
     ];
     for (const [what, value] of bad) {
       expect(() => canonicalize(value), what).toThrow(InvalidJson);
@@ -138,6 +144,16 @@ describe("RFC 8785 canonicalization", () => {
     let ok: unknown = 1;
     for (let i = 0; i < MAX_DEPTH; i++) ok = [ok];
     expect(() => canonicalize(ok)).not.toThrow();
+  });
+
+  it("r1-A: keeps what I-JSON allows next to a noncharacter", () => {
+    expect(canonicalText(cp(0xfdcf, 0xfdf0, 0xfffd))).toBe(`"${cp(0xfdcf, 0xfdf0, 0xfffd)}"`);
+    expect(canonicalText(cp(0xdbff, 0xdffd))).toBe(`"${cp(0xdbff, 0xdffd)}"`); // U+10FFFD, last non-noncharacter
+    expect(canonicalText("😂")).toBe('"😂"');
+    expect(forbiddenIn("plain")).toBeNull();
+    expect(forbiddenIn(cp(0xfdd0))).toBe("noncharacter U+FDD0");
+    expect(forbiddenIn(cp(0xdbff, 0xdfff))).toBe("noncharacter U+10FFFF");
+    expect(forbiddenIn(cp(0xde02))).toBe("unpaired surrogate U+DE02");
   });
 
   it("does not normalize Unicode and writes -0 as 0", () => {
@@ -159,6 +175,8 @@ describe("strict parsing", () => {
       b: {},
     });
     expect(parseStrict(utf8.encode('"€😂"'))).toBe("€😂");
+    expect(parseStrict(`"${u("d83d")}${u("de02")}${u("fdcf")}${u("fdf0")}${u("fffd")}"`)).toBe(cp(0xd83d, 0xde02, 0xfdcf, 0xfdf0, 0xfffd));
+    expect(parseStrict(new Uint8Array([0x22, 0xf4, 0x8f, 0xbf, 0xbd, 0x22]))).toBe(cp(0xdbff, 0xdffd)); // U+10FFFD
     expect(parseStrict("[]")).toEqual([]);
     expect(parseStrict("12345678901234567890")).toBe(12345678901234567000);
     expect(parseStrict("1e308")).toBe(1e308);
@@ -180,6 +198,14 @@ describe("strict parsing", () => {
       ["high surrogate escape then high", `"${u("d800")}${u("d800")}"`],
       ["lone surrogate in a string", `"${cp(0xd83d)}"`],
       ["lone surrogate in a name", `{"${cp(0xdc00)}":1}`],
+      ["noncharacter escape U+FDD0", `"${u("fdd0")}"`],
+      ["noncharacter escape U+FFFE in a name", `{"${u("fffe")}":1}`],
+      ["noncharacter escape pair U+10FFFF", `"${u("dbff")}${u("dfff")}"`],
+      ["noncharacter escape pair U+1FFFE", `{"x":["${u("d83f")}${u("dffe")}"]}`],
+      ["raw noncharacter U+FDEF", `"${cp(0xfdef)}"`],
+      ["raw noncharacter U+FFFF in a name", `{"${cp(0xffff)}":1}`],
+      ["noncharacter U+FDD0 in UTF-8", new Uint8Array([0x22, 0xef, 0xb7, 0x90, 0x22])],
+      ["noncharacter U+10FFFF in UTF-8", new Uint8Array([0x22, 0xf4, 0x8f, 0xbf, 0xbf, 0x22])],
       ["surrogate encoded in UTF-8", new Uint8Array([0x22, 0xed, 0xa0, 0x80, 0x22])],
       ["invalid UTF-8", new Uint8Array([0x22, 0xc3, 0x22])],
       ["overlong UTF-8", new Uint8Array([0x22, 0xc0, 0xaf, 0x22])],

@@ -81,7 +81,10 @@ export class Uuidv7Allocator {
   /**
    * `n` IDs from one clock sample, in mint order (§5.2). Throws
    * `CounterExhausted`, having minted nothing, when they do not fit in
-   * the sampled millisecond. `mint(0)` samples nothing and mints nothing.
+   * the sampled millisecond. `mint(0)` still samples the clock — it
+   * returns `t` and `at` — but draws no randomness and leaves the
+   * counter untouched; whether an empty batch touches the clock at all
+   * is the store's rule (§5.2), not this one's.
    */
   mint(n: number): Minted {
     if (!Number.isInteger(n) || n < 0) throw new RangeError(`cannot mint ${String(n)} IDs`);

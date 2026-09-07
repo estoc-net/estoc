@@ -10,7 +10,7 @@
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
 export { isJsonObject, isJsonPrimitive } from "./json.js";
 
-export { canonicalize, canonicalText, parseStrict, compareCodeUnits, MAX_DEPTH } from "./jcs.js";
+export { canonicalize, canonicalText, parseStrict, forbiddenIn, compareCodeUnits, MAX_DEPTH } from "./jcs.js";
 
 export type {
   Cid,

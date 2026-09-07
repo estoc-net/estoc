@@ -23,8 +23,11 @@ import { isJsonObject, type JsonValue } from "./json.js";
  */
 export const MAX_DEPTH = 1000;
 
-// A high surrogate with no low after it, or a low with no high before it.
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+// What I-JSON (RFC 7493 §2.1) keeps out of a member name or string value: a
+// surrogate code point — with the `u` flag a proper pair reads as one
+// supplementary code point, so `Cs` is exactly the unpaired ones — and a
+// noncharacter, U+FDD0–U+FDEF and the last two code points of every plane.
+const FORBIDDEN = /[\p{Cs}\p{Noncharacter_Code_Point}]/u;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -91,8 +94,18 @@ function write(value: unknown, out: string[], stack: object[], path: string): vo
 }
 
 function quote(text: string, path: string): string {
-  if (LONE_SURROGATE.test(text)) throw new InvalidJson(`${path}: unpaired surrogate`);
+  const fault = forbiddenIn(text);
+  if (fault !== null) throw new InvalidJson(`${path}: ${fault}`);
   return JSON.stringify(text);
+}
+
+/** Why `text` is not an I-JSON string, or null when it is one. */
+export function forbiddenIn(text: string): string | null {
+  const match = FORBIDDEN.exec(text);
+  if (match === null) return null;
+  const code = match[0].codePointAt(0) as number;
+  const kind = code >= 0xd800 && code <= 0xdfff ? "unpaired surrogate" : "noncharacter";
+  return `${kind} U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
 function describe(value: object): string {
@@ -108,7 +121,8 @@ export function compareCodeUnits(a: string, b: string): number {
 /**
  * Parse JSON text under event-store.md §3.3: RFC 8259 syntax, exactly;
  * valid UTF-8 with no byte-order mark; no duplicate member name; no
- * unpaired surrogate, escaped or not; every number a finite binary64.
+ * unpaired surrogate or noncharacter in a name or value, escaped or
+ * not; every number a finite binary64.
  * What comes back is plain data — a member named `__proto__` is an own
  * property, as `JSON.parse` would make it. Throws `InvalidJson`.
  */
@@ -123,7 +137,6 @@ export function parseStrict(input: Uint8Array | string): JsonValue {
       throw new InvalidJson("not valid UTF-8");
     }
   }
-  if (LONE_SURROGATE.test(text)) throw new InvalidJson("unpaired surrogate");
   const parser = new Parser(text);
   parser.skipWhitespace();
   const value = parser.value(0);
@@ -208,8 +221,11 @@ class Parser {
       const code = this.text.charCodeAt(pos);
       if (code === 0x22) {
         parts.push(this.text.slice(start, pos));
+        const value = parts.join("");
+        const fault = forbiddenIn(value);
+        if (fault !== null) this.fail(fault);
         this.pos = pos + 1;
-        return parts.join("");
+        return value;
       }
       if (code < 0x20) {
         this.pos = pos;

@@ -18,8 +18,10 @@ import {
   validateEvent,
   type AuthorId,
   type Cid,
+  type Draft,
   type Event,
   type EventId,
+  type JsonObject,
 } from "../../src/v3/index.js";
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
@@ -212,9 +214,35 @@ describe("envelope validation (§3.4)", () => {
       ["a drisl root", { type: "t", roots: [DRISL_EMPTY_MAP], data: {} }],
       ["ES-4: undefined member", { type: "t", data: { a: undefined } }],
       ["ES-4: lone surrogate", { type: "t", data: { a: "\ude02" } }],
+      ["r1-A: noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
+      ["r1-B: lone surrogate in type", { type: cp(0xd800), data: {} }],
+      ["r1-B: noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
     ];
     for (const [what, value] of bad) {
       expect(() => validateDraft(value), what).toThrow(InvalidEvent);
+    }
+  });
+
+  it("r1-B: a draft it accepts makes an event validateEvent accepts, to the last level of nesting", () => {
+    const wrapped = (levels: number) => {
+      let data: JsonObject = {};
+      for (let i = 0; i < levels; i++) data = { x: data };
+      return data;
+    };
+    const complete = (draft: Required<Draft>): Event => ({
+      eventId: base.eventId,
+      at: base.at,
+      author: base.author,
+      ...draft,
+    });
+    // root object + data + 998 wrappers = 1000 containers deep: the limit, allowed
+    const deepest = validateDraft({ type: "t", data: wrapped(998) });
+    expect(() => validateEvent(complete(deepest))).not.toThrow();
+    // one more is over the limit for the event, so the draft is refused too
+    expect(() => validateDraft({ type: "t", data: wrapped(999) })).toThrow(/deeper/);
+    expect(() => validateEvent(complete({ type: "t", roots: [], data: wrapped(999) }))).toThrow(/deeper/);
+    for (const draft of [{ type: "t", data: {} }, { type: "a.b", roots: [RAW_HELLO as Cid], data: { n: [1, { s: "😂" }] } }]) {
+      expect(() => validateEvent(complete(validateDraft(draft)))).not.toThrow();
     }
   });
 });

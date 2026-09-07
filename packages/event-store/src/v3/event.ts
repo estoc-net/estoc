@@ -202,7 +202,10 @@ export function validateEvent(value: unknown): Event {
 
 /**
  * A draft that can become an event (§5.1 step 1): a non-empty `type`,
- * `roots` of raw CIDs or left out, `data` a JCS-eligible object.
+ * `roots` of raw CIDs or left out, and the whole — `type`, `roots`,
+ * `data` under one root object, nested exactly as the event will be —
+ * JCS-eligible, so that a draft this accepts makes an event
+ * `validateEvent` accepts once `eventId`, `at` and `author` are added.
  * Returns the draft normalized — `roots` always an array — as fresh
  * plain data the caller cannot reach.
  */
@@ -212,8 +215,9 @@ export function validateDraft(draft: unknown): Required<Draft> {
   checkType(type);
   if (roots !== undefined) checkRoots(roots);
   if (!isJsonObject(data)) throw new InvalidEvent("data is not a JSON object");
-  checkJcs(data);
-  return { type, roots: roots === undefined ? [] : [...roots], data: structuredClone(data) };
+  const normalized: Required<Draft> = { type, roots: roots === undefined ? [] : [...roots], data };
+  checkJcs(normalized);
+  return structuredClone(normalized);
 }
 
 function checkType(type: unknown): asserts type is string {

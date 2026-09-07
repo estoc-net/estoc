@@ -6,7 +6,7 @@
   `docs/replica-model/event-store.md`, built beside version 2 until the
   vault switches over (v3 A02). RFC 8785 canonical JSON — `canonicalize`
   and a `parseStrict` that refuses a duplicate member, an unpaired
-  surrogate and a number outside binary64 (§3.3); the six-field
+  surrogate, a noncharacter and a number outside binary64 (§3.3); the six-field
   envelope `eventId`/`at`/`author`/`type`/`roots`/`data` with
   `validateEvent` and `validateDraft` (§3.4; `roots` are raw DASL CIDs
   from `@estoc/dasl`); `atOf`/`isCanonicalAt` for the one canonical
