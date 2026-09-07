@@ -7,7 +7,7 @@
 
 import { RAW_CODE, codecOf } from "@estoc/dasl";
 import { InvalidEvent, InvalidJson } from "./errors.js";
-import { canonicalText, canonicalize } from "./jcs.js";
+import { canonicalText, canonicalize, parseStrict } from "./jcs.js";
 import { isJsonObject, isJsonPrimitive, type JsonObject, type JsonPrimitive } from "./json.js";
 
 /** A validated canonical raw DASL CID string (dasl-objects.md §3, §6): the brand says it was checked. */
@@ -239,6 +239,18 @@ function checkJcs(value: unknown): void {
     if (err instanceof InvalidJson) throw new InvalidEvent(`not I-JSON: ${err.message}`);
     throw err;
   }
+}
+
+/**
+ * `value` as an accepted event is held (§5.3, §5.4): validated, then
+ * the form its canonical bytes parse to — member order, `-0` and all —
+ * as fresh data of its own, sharing nothing with `value`. What a store
+ * fixes each input of `ingest` to before it asks the source for the
+ * next, so a source that reuses one working object between yields is
+ * read as it yielded. Throws `InvalidEvent` or `InvalidJson`.
+ */
+export function canonicalEvent(value: unknown): Event {
+  return parseStrict(canonicalText(validateEvent(value))) as Event;
 }
 
 /** `UTF8(RFC8785(event))` (§3.3): the sole content-equality representation of an event. */

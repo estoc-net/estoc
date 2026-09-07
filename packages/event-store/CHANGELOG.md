@@ -64,6 +64,41 @@
   DO-1/2/3/4/6/7/10/11/15/16 and the latch rules; the folder store runs
   it next.
 
+- **`Vault` v3 and the vault in memory** (v3 A05). The vault interface
+  of event-store.md §10 under `@estoc/event-store/v3`: `Vault` — events
+  to read (`scan`/`changes`/`damaged`/`conflicting`, nothing else),
+  objects to read (no put, no collection), portable files, and
+  `commit(objects, drafts)`, which under the writer lock validates every
+  draft and every CID before reading a byte, accepts each object under
+  `putObject`'s rules, requires every draft root — new or reused — to be
+  present (`MissingRoot` otherwise), and appends one all-or-nothing
+  batch (§10, §5.2, ES-3, DO-8); `VaultRuntime` — `author`,
+  `generation`, the `vault`, `locked(op)`, `collect(keep)` and `ingest`
+  — what a host opens and application code never sees; `Held`, the
+  view an operation holding the lock works through, so a read nested in
+  a commit, an import or an export shares the lock instead of waiting
+  for itself, with `ingest`, `collect` and nested `locked`;
+  `KeepUnderLock`, the keep set as a function called only once the pass
+  holds the lock (§10, DO-19); `WriterLock`, the vault-wide lock for one
+  process; `Runtime`, the lock, facade and held view over any three
+  stores; and `MemoryVault`, the three memory stores under one runtime
+  and one `LatchRegistry`. Through the facade a read of events, object
+  metadata or files takes no lock; `open` takes it for the presence
+  check and latch registration and releases it before the stream is
+  consumed; `read` is `open` drained outside the lock, refused before
+  allocation over `maxBytes`. Portable files, version 3 (§8.1,
+  vault-folder.md §2, §7.1, §11.6): the `FileStore` interface,
+  `checkPath` (no NUL, no backslash, no empty, `.` or `..` component,
+  Unicode compared by code point, never normalized), the six owned roots
+  a file store refuses to write, and `MemoryFileStore`; `checkPath`
+  also refuses an unpaired surrogate, which no UTF-8 folder could hold.
+  `ingest` fixes each input — a canonical copy, or a rejection with its
+  error — before asking the source for the next (`canonicalEvent`,
+  exported), so a source that reuses one object between yields is read
+  as it yielded; a bounded `read` cancels the stream it opened on any
+  failure, so no latch outlives a failed read. Tests: ES-3, ES-27,
+  ES-28, ES-29, ES-30, DO-8, DO-18, DO-19.
+
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block
   — under which nothing is known. `reachable` is its `reached`. For a

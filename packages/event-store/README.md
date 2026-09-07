@@ -20,9 +20,17 @@ raw DASL objects hashed as they stream (§4–5), the `ObjectStore`
 interface (§6), the per-CID read latch of event-store.md §10 as
 `LatchRegistry`, and `MemoryObjectStore`, the first store — with
 `InvalidCid`, `DigestMismatch`, `ObjectTooLarge` and `DamagedObject`,
-and `objectStoreSuite`, which the folder store runs next.
-Everything below is version 2, which stays until the vault switches
-over.
+and `objectStoreSuite`, which the folder store runs next. Over both,
+the vault (§10): `Vault` — events to read, objects to read, portable
+files, and `commit(objects, drafts)`, the one way a local event is
+written — and `VaultRuntime`, what a host opens: `locked(op)`, the
+vault-wide writer lock, whose operation works through `Held`, the
+same vault sharing the held lock; `collect(keep)`, the keep set a
+function called only under the lock; and `ingest`. `MemoryVault` is
+the three memory stores under one runtime; `Runtime` builds the same
+over any three. Portable files (§8.1) are `FileStore`, `checkPath`
+and `MemoryFileStore`. Everything below is version 2, which stays
+until the vault switches over.
 
 What is here is the **model**, the **seam**, and the **folder**:
 

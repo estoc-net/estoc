@@ -113,33 +113,48 @@ export class MemoryObjectStore implements ObjectStore {
     // nothing until read (highWaterMark 0), rehashes each extent on the
     // way out, and releases the latch when it completes, fails or is
     // cancelled (event-store.md §10; §6.3).
+    // The latch is this method's from here until the stream ends, and
+    // every way it can end releases it: completion, damage, cancel, and
+    // any failure — building the stream, copying a chunk — which
+    // releases before the stream fails, since an errored stream runs no
+    // `cancel` and a caller can release nothing on its behalf (§10).
     const release = this.latches.acquire(cid);
-    const hash = sha256.create();
-    let next = 0;
-    return new ReadableStream<Uint8Array>(
-      {
-        pull: (controller) => {
-          const extent = held.extents[next];
-          if (extent !== undefined) {
-            next += 1;
-            hash.update(extent);
-            controller.enqueue(new Uint8Array(extent)); // a copy: the store's bytes stay its own
-            return;
-          }
-          if (!this.verified(held, hash.digest())) {
+    try {
+      const hash = sha256.create();
+      let next = 0;
+      return new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) => {
+            try {
+              const extent = held.extents[next];
+              if (extent !== undefined) {
+                next += 1;
+                hash.update(extent);
+                controller.enqueue(new Uint8Array(extent)); // a copy: the store's bytes stay its own
+                return;
+              }
+              if (!this.verified(held, hash.digest())) {
+                release();
+                controller.error(new DamagedObject(cid));
+                return;
+              }
+              release();
+              controller.close();
+            } catch (err) {
+              release();
+              controller.error(err);
+            }
+          },
+          cancel: () => {
             release();
-            controller.error(new DamagedObject(cid));
-            return;
-          }
-          release();
-          controller.close();
+          },
         },
-        cancel: () => {
-          release();
-        },
-      },
-      { highWaterMark: 0 }
-    );
+        { highWaterMark: 0 }
+      );
+    } catch (err) {
+      release();
+      throw err;
+    }
   }
 
   async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
