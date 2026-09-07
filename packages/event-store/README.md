@@ -59,7 +59,7 @@ longer spells its name fails the stream, goes aside to
 so a put that healed it meanwhile stands — and is absent from then on;
 an object's orphan age counts from its acceptance, recorded as the
 modification time of a stamp file `local/accepted/objects/<cid>`
-written with the move; `collect` unlinks the unkept, unlatched objects
+written once the move has completed; `collect` unlinks the unkept, unlatched objects
 past grace with their stamps and sweeps abandoned staging;
 `damaged()` reports what stands in `objects/` that is not an object
 path, `verify()` reads every object and moves the mismatched aside.

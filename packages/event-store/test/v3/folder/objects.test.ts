@@ -291,6 +291,57 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([kept]);
     });
 
+    it("r2-A: the stamp records a completed acceptance — a move that takes longer than grace leaves the object young; a crash before the stamp, on a first or a repeated acceptance, leaves it of unknown age, stamped and young at the next pass", async () => {
+      const c = clock(T0);
+      const { backend, store } = await fresh({ now: c.now, graceMs: HOUR });
+      // The move itself takes longer than grace: the clock moves on inside `rename`.
+      const slowMove = new Proxy(backend, {
+        get: (target, key, receiver) => {
+          if (key !== "rename") return Reflect.get(target, key, receiver) as unknown;
+          return async (from: string, to: string): Promise<void> => {
+            c.advance(2 * HOUR);
+            await target.rename(from, to);
+          };
+        },
+      });
+      const slow = new FolderObjectStore(slowMove, storeOptions({ now: c.now, graceMs: HOUR }));
+      const cid = (await slow.putRaw(bytesOf(10, 50))).cid;
+      expect(await backend.modified(`${BASE}/${ACCEPTED_DIR}/${cid}`)).toBe(c.now()); // stamped when the move had completed
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
+      c.advance(HOUR - 1);
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
+      c.advance(1);
+      expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+      // The stamp's write fails after the move: the object stands, unstamped, and is young at the next pass.
+      let failStamp = false;
+      const stampFails = new Proxy(backend, {
+        get: (target, key, receiver) => {
+          if (key !== "write") return Reflect.get(target, key, receiver) as unknown;
+          return async (path: string, data: Uint8Array): Promise<void> => {
+            if (failStamp && path.startsWith(`${BASE}/${ACCEPTED_DIR}/`)) throw new Error("stamp lost");
+            await target.write(path, data);
+          };
+        },
+      });
+      const fragile = new FolderObjectStore(stampFails, storeOptions({ now: c.now, graceMs: HOUR }));
+      failStamp = true;
+      await expect(fragile.putRaw(bytesOf(10, 51))).rejects.toThrow("stamp lost");
+      failStamp = false;
+      const orphan = cidOf(bytesOf(10, 51));
+      expect(await store.has(orphan)).toBe(true);
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([]);
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [orphan] });
+      expect(await backend.modified(`${BASE}/${ACCEPTED_DIR}/${orphan}`)).toBe(c.now());
+      // A repeated acceptance whose stamp is lost: the old stamp was removed before the move, so the object is not judged by it.
+      c.advance(2 * HOUR);
+      failStamp = true;
+      await expect(fragile.putObject(orphan, bytesOf(10, 51))).rejects.toThrow("stamp lost");
+      failStamp = false;
+      expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([]);
+      expect(await store.collect([])).toEqual({ unlinked: [], young: [orphan] });
+      expect(await store.has(orphan)).toBe(true);
+    });
+
     it("VF-13, VF-16, DO-3, DO-15: an entry under objects/ that is not an object path is damage — reported, listed as nothing, left by collection, moved aside by verify", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: 0 });
@@ -434,6 +485,26 @@ describe("FolderObjectStore on disk", () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
     const cid = (await store.putRaw(idling())).cid;
+    expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
+    expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [], young: [cid] });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [cid], young: [] });
+  });
+
+  it("r2-A: with the platform's clock, a move that waits longer than grace before completing leaves the object young right after acceptance, in this store and a reopened one", async () => {
+    const dir = await tempDir();
+    const backend = new FsBackend(dir);
+    const slowMove = new Proxy(backend, {
+      get: (target, key, receiver) => {
+        if (key !== "rename") return Reflect.get(target, key, receiver) as unknown;
+        return async (from: string, to: string): Promise<void> => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          await target.rename(from, to);
+        };
+      },
+    });
+    const store = new FolderObjectStore(slowMove, { base: BASE, graceMs: 100 });
+    const cid = (await store.putRaw(HELLO)).cid;
     expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
     expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [], young: [cid] });
     await new Promise((resolve) => setTimeout(resolve, 150));

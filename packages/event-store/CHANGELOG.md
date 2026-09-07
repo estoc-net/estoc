@@ -166,12 +166,14 @@
   whatever its length or clock tick (r1-C) — and reads as absent from
   then on (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age
   counts from its acceptance, recorded as the modification time of a
-  stamp file `local/accepted/objects/<cid>` written in the same turn
-  as the move into `objects/`, before it, and rewritten by repeating
-  acceptance (§9) — not the object file's own time, which a backend
-  sets at the last chunk, however long the source then idled (r1-D);
-  an object with no stamp is stamped by the first collection pass that
-  sees it and counted young, a stamp with no object is removed.
+  stamp file `local/accepted/objects/<cid>` written once the move into
+  `objects/` has completed — any earlier stamp of the CID removed
+  before the move — and rewritten by repeating acceptance (§9): not
+  the object file's own time, which a backend sets at the last chunk,
+  however long the source then idled or the move took (r1-D, r2-A);
+  an object with no stamp — a crash before it, `local/` deleted — is
+  of unknown age, stamped by the first collection pass that sees it
+  and counted young; a stamp with no object is removed.
   `collect` unlinks exactly the unkept, unlatched objects past grace,
   with their stamps (§8.3). What is in `objects/` and
   not an object path — a name that is not a raw DASL CID, a directory,

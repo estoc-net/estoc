@@ -17,11 +17,12 @@
  * so a put that has healed it meanwhile stands (r1-C). An object's
  * orphan age counts from its acceptance, which the store records as
  * the modification time of a stamp file, `local/accepted/objects/<cid>`,
- * written in the same turn as the move into `objects/` and rewritten
+ * written once the move into `objects/` has completed and rewritten
  * by repeating acceptance (§9): not the object file's own time, which
  * a backend sets when the last chunk was written, however long the
- * source then took to end or the store's turn to come (r1-D). An
- * object with no stamp — `local/` deleted — is stamped by the first
+ * source then took to end, the store's turn to come, or the move to
+ * run (r1-D, r2-A). An object with no stamp — `local/` deleted, a
+ * crash before the stamp — is of unknown age: stamped by the first
  * collection pass that sees it and counted young. `collect` unlinks
  * exactly the unkept, unlatched objects past grace, with their stamps
  * (§8.3). What is in `objects/` and
@@ -155,12 +156,16 @@ export class FolderObjectStore implements ObjectStore {
    * object path in the store's turn. The backend makes the staging file
    * visible only once the source has ended and leaves nothing when it
    * throws, so a failure at any point leaves no object and no half of
-   * one (DO-4, DO-17). The stamp is written first, then the move: a
-   * crash between leaves a stamp with no object, which the next
-   * collection removes; the other order could leave an object whose
-   * age nothing records. A move over an object already there is the
-   * same object, its bytes the ones verified now, its orphan age
-   * renewed (§6.2, §9).
+   * one (DO-4, DO-17). The stamp is written after the move, never
+   * before it: a stamp records a completed acceptance, and whatever
+   * time passes between the two backend calls must not count against
+   * the object (r2-A). Any stamp from an earlier acceptance of the same
+   * CID is removed before the move, so at no point does an object stand
+   * with a stamp older than its acceptance; an object with no stamp —
+   * a crash between the move and the stamp, or after the removal — is
+   * of unknown age, and `collect` stamps it and counts it young. A
+   * move over an object already there is the same object, its bytes
+   * the ones verified now, its orphan age renewed (§6.2, §9).
    */
   private async put(source: ByteSource, want: DaslCid | null): Promise<ObjectInfo> {
     await this.checkRoot(); // before a byte is read, and again before the move
@@ -179,8 +184,10 @@ export class FolderObjectStore implements ObjectStore {
         if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // steps 3–4: nothing accepted
         await this.serialise(async () => {
           await this.checkRoot();
-          await this.backend.write(this.at(stampPath(cid.text)), new Uint8Array(0));
+          const stamp = this.at(stampPath(cid.text));
+          await this.backend.remove(stamp);
           await this.backend.rename(this.at(staged), this.at(objectPath(cid.text)));
+          await this.backend.write(stamp, new Uint8Array(0));
         });
       } catch (err) {
         // The staging file is whole but goes nowhere: removed now, not left for the sweep.
@@ -445,8 +452,9 @@ export class FolderObjectStore implements ObjectStore {
         const stamp = this.at(stampPath(cid));
         let acceptedAt = await this.backend.modified(stamp);
         if (acceptedAt === null) {
-          // No record of when it was accepted — `local/` was deleted, or
-          // the file arrived by hand: stamped now, and young from here.
+          // No record of when its acceptance completed — `local/` was
+          // deleted, a crash came before the stamp, the file arrived by
+          // hand: of unknown age, so stamped now, and young from here.
           await this.backend.write(stamp, new Uint8Array(0));
           acceptedAt = now;
         }
