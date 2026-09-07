@@ -247,6 +247,9 @@ importers:
       '@ipld/dag-pb':
         specifier: ^4.1.7
         version: 4.1.7
+      '@noble/hashes':
+        specifier: ^1.8.0
+        version: 1.8.0
       fflate:
         specifier: ^0.8.2
         version: 0.8.3

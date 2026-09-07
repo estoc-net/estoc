@@ -49,6 +49,7 @@
   "dependencies": {
     "@estoc/dasl": "workspace:^",
     "@ipld/dag-pb": "^4.1.7",
+    "@noble/hashes": "^1.8.0",
     "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",
     "ipfs-unixfs-importer": "^17.0.1",
