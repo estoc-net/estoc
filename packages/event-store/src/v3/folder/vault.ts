@@ -6,14 +6,17 @@
  * A read-only open validates the path shape, `config.json` and the
  * structural roots, creates no `local/` and alters no `import/`; it
  * takes no ownership unless asked, and without ownership it serves no
- * object stream (§15: unprotected reads are refused, not served). A
+ * object stream (§15: unprotected reads are refused, not served); its
+ * object store moves nothing, so a file found not to spell its name is
+ * reported and dropped from the reader's view, never quarantined. A
  * writable open additionally validates `keystore.json` by shape,
  * compares the anchor the caller derived from the unlocked seed with
  * the one `config.json` fixes, takes writer-exclusive ownership through
  * the backend before creating any local state, refuses while `import/`
  * holds recovery state, then reads or mints `local/replica.json` and
  * opens the event store as that replica (§11.1 steps 1–6). `close`
- * releases ownership; every operation after it is refused.
+ * refuses every new operation, lets the accepted ones run out, fails
+ * the object streams still alive, and only then releases ownership.
  *
  * Unlocking the seed is not this module's: the caller hands in the
  * anchor DID it derived (`@estoc/keystore`, under the fixed name). This
@@ -117,6 +120,22 @@ async function checkImport(backend: VaultBackend, base: string): Promise<void> {
   if (entries.length > 0) throw new PendingImport(entries);
 }
 
+/**
+ * A folder `create` may lay a vault in (r1-F): nothing under `base` but
+ * what ownership itself makes under `local/`. Anything else — a config
+ * or keystore, a segment, an object, `import/` state, an opaque file,
+ * other `local/` state — is refused as `NotAVault`, naming the first
+ * path found, and nothing is written.
+ */
+async function checkEmpty(backend: VaultBackend, base: string): Promise<void> {
+  const prefix = `${base}/`;
+  for (const path of await walk(backend, base)) {
+    const rel = path.slice(prefix.length);
+    if (rel.startsWith(`${OWNER_FILE}`)) continue;
+    throw new NotAVault(`${base} is not an empty folder: ${rel} is there; a vault is created in an empty folder, never over one`);
+  }
+}
+
 function eventOptions(options: FolderVaultOptions, base: string): FolderEventStoreOptions {
   return {
     base,
@@ -191,32 +210,37 @@ export class FolderVault extends Runtime {
 
   /**
    * Lay down a new vault in an empty folder and open it: the keystore
-   * checked by shape before anything is written, ownership taken first
-   * — so two creates of one folder are excluded, not detected after
-   * — then `keystore.json`, then `config.json`, which is what makes it
-   * a vault; a crash between the two leaves no vault rather than a
-   * headless one. An existing `config.json` is refused before and after
-   * ownership.
+   * and the anchor checked — the anchor by the same parser an open uses
+   * (r1-H) — before anything is taken or written; the folder required
+   * empty of everything but ownership's own files, before and again
+   * after ownership is taken (r1-F): an existing `keystore.json`, a
+   * segment, an object, recovery state under `import/`, an opaque file
+   * or leftover `local/` state is refused with every byte left as it
+   * was — a folder that holds a seed wrapper is not one to lay a new
+   * vault over, and a partial vault is recovered or cleared on purpose,
+   * never overwritten by the next create. Ownership taken first excludes
+   * a second create rather than detecting it. Then `keystore.json`, then
+   * `config.json`, which is what makes it a vault; a crash between the
+   * two leaves no vault rather than a headless one. Every step after
+   * ownership releases it on failure.
    */
   static async create(backend: VaultBackend, options: CreateOptions): Promise<FolderVault> {
     const base = options.base ?? ESTOC_DIR;
     checkKeystore(options.keystore, KEYSTORE_FILE);
-    if (typeof options.anchor !== "string" || !options.anchor.startsWith("did:key:")) throw new NotAVault("anchor is not a did:key");
-    const exists = async (): Promise<void> => {
-      if ((await backend.size(`${base}/${CONFIG_FILE}`)) !== null) throw new NotAVault(`${base}/${CONFIG_FILE} exists already`);
-    };
-    await exists();
+    if (typeof options.anchor !== "string") throw new NotAVault("anchor is not a did:key");
+    const bytes = encodeConfig(options.anchor);
+    const config = parseConfig(bytes, CONFIG_FILE);
     await checkRoots(backend, base);
+    await checkEmpty(backend, base);
     const ownership = await backend.own(`${base}/${OWNER_FILE}`);
     try {
-      await exists();
+      await checkEmpty(backend, base);
       await backend.write(`${base}/${KEYSTORE_FILE}`, options.keystore);
-      await backend.write(`${base}/${CONFIG_FILE}`, encodeConfig(options.anchor));
+      await backend.write(`${base}/${CONFIG_FILE}`, bytes);
     } catch (err) {
       await ownership.release();
       throw err;
     }
-    const config = parseConfig(encodeConfig(options.anchor));
     return FolderVault.openOwned(backend, base, config, ownership, options);
   }
 
@@ -255,7 +279,12 @@ export class FolderVault extends Runtime {
     if (this.state.closed) throw new VaultClosed();
     let have = this.owners.get(owner);
     if (have === undefined) {
-      have = new LocalOwner(this.backend, `${this.base}/${LOCAL_DIR}/${owner}`, localOptions(this.options));
+      have = new LocalOwner(this.backend, `${this.base}/${LOCAL_DIR}/${owner}`, {
+        ...localOptions(this.options),
+        guard: () => {
+          if (this.state.closed) throw new VaultClosed();
+        },
+      });
       this.owners.set(owner, have);
     }
     return have;
@@ -285,14 +314,22 @@ export class FolderVault extends Runtime {
   }
 
   /**
-   * Release the folder (§15): after the operations already holding the
-   * lock have run, and before any queued after this call — which are
-   * refused. Ownership is released once; a second close does nothing.
+   * Release the folder (§15): new operations are refused from this call
+   * on — the runtime's, and every local owner's, cache's and trace
+   * handle's (r1-D) — then what was already accepted runs out: the
+   * operations holding or queued for the writer lock, the local work
+   * queued on each owner; then every object stream still alive is
+   * failed with `VaultClosed` and its latch released, and no stream
+   * opens after (r1-C); and only then is ownership released, so that
+   * nothing of this runtime still reads or writes a folder another
+   * process may own by then. Once; a second close does nothing.
    */
   async close(): Promise<void> {
     if (this.state.closed) return;
     this.state.closed = true;
     await this.lock.run(async () => undefined);
+    await Promise.all([...this.owners.values()].map((owner) => owner.settle()));
+    await this.stores.objects.close();
     await this.ownership.release();
   }
 }
@@ -378,7 +415,7 @@ export class FolderReader {
       const latches = new LatchRegistry();
       const stores = {
         events: new FolderEventStore(backend, nobody, eventOptions(options, base)),
-        objects: new FolderObjectStore(backend, objectOptions(options, base, latches)),
+        objects: new FolderObjectStore(backend, { ...objectOptions(options, base, latches), readOnly: true }),
         files: new FolderFileStore(backend, base),
       };
       return new FolderReader(backend, base, config, ownership, stores);
@@ -399,10 +436,11 @@ export class FolderReader {
     return found.sort((a, b) => comparePaths(a.where, b.where));
   }
 
-  /** Release ownership, if any; reads after this are refused. */
+  /** Reads after this are refused; every object stream still alive is failed and no more open (r1-C); then ownership, if any, is released. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    await this.stores.objects.close();
     if (this.ownership !== null) await this.ownership.release();
   }
 }

@@ -29,10 +29,10 @@ import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./typ
  * by this adapter yet — the constructor says so up front.
  *
  * Ownership (vault-folder.md §15) is a Web Lock, exclusive, named for
- * this directory's place under the origin's storage root and the name
- * given, asked for with `ifAvailable` so a held lock refuses at once;
- * the browser releases it when the holding page goes away. No file is
- * made.
+ * the one path from the origin's storage root through this directory
+ * to the name given, asked for with `ifAvailable` so a held lock
+ * refuses at once; the browser releases it when the holding page goes
+ * away. No file is made.
  */
 export class OpfsBackend implements VaultBackend {
   constructor(private readonly root: FileSystemDirectoryHandle) {
@@ -242,17 +242,19 @@ export class OpfsBackend implements VaultBackend {
     };
   }
 
-  /** The lock's name: where this directory stands under the origin's storage root, and the path within it. */
+  /**
+   * The lock's name: the one path from the origin's storage root through
+   * this directory to `path`, whatever handle and base it was reached
+   * by (r1-B) — two backends over one place, one rooted higher with a
+   * deeper base, name the same lock. A directory the storage root cannot
+   * place is refused ownership: there is no name for it that another
+   * opener would agree on.
+   */
   private async lockName(path: string): Promise<string> {
-    let where = this.root.name;
-    try {
-      const storage = await navigator.storage.getDirectory();
-      const rel = await storage.resolve(this.root);
-      if (rel !== null) where = rel.join("/");
-    } catch {
-      // not under the storage root, or no `resolve`: the handle's own name is what there is
-    }
-    return `estoc-vault:${where}:${segmentsOf(path).join("/")}`;
+    const storage = await navigator.storage.getDirectory();
+    const rel = typeof storage.resolve === "function" ? await storage.resolve(this.root) : null;
+    if (rel === null) throw new Error("this directory is not under the origin's storage root: a vault there cannot be owned");
+    return `estoc-vault:/${[...rel, ...segmentsOf(path)].join("/")}`;
   }
 }
 

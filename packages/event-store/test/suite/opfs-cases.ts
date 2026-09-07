@@ -44,8 +44,28 @@ async function withoutMove<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** What only OPFS can show: the platform without `move()`, where a fresh destination cannot be filled whole (r1-B). */
+/** What only OPFS can show: the platform without `move()`, where a fresh destination cannot be filled whole (r1-B of A07); ownership named by one path whatever handle reaches it (r1-B of A08). */
 export const opfsCases: { name: string; run: (fresh: () => Promise<OpfsBackend>) => Promise<void> }[] = [
+  {
+    name: "A08 r1-B: one place reached through two root handles and bases names one lock — the second take is refused, and served once the first releases",
+    run: async () => {
+      const storage = await navigator.storage.getDirectory();
+      const outer = await storage.getDirectoryHandle(`alias-${Math.random().toString(16).slice(2)}`, { create: true });
+      const nested = await outer.getDirectoryHandle("nested", { create: true });
+      const { OpfsBackend: Backend } = await import("../../src/backend/opfs.js");
+      const high = new Backend(outer);
+      const low = new Backend(nested);
+      const held = await high.own("nested/.estoc/local/owner.pid");
+      await rejects(low.own(".estoc/local/owner.pid"), /owned elsewhere/, "the same place through a deeper root");
+      await rejects(high.own("nested/.estoc/local/owner.pid"), /owned elsewhere/, "the same place through the same root");
+      const other = await low.own(".estoc/local/other.pid");
+      await other.release();
+      await held.release();
+      const taken = await low.own(".estoc/local/owner.pid");
+      await rejects(high.own("nested/.estoc/local/owner.pid"), /owned elsewhere/, "held through the deeper root now");
+      await taken.release();
+    },
+  },
   {
     name: "r1-B: without move(), create to a fresh path and rename to a fresh path refuse before touching it; rename over an existing file still works",
     run: async (fresh) => {

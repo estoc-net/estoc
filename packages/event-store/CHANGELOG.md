@@ -203,6 +203,61 @@
   `folderObjectCases` runs over those and, in Chromium, over OPFS
   (DO-5), and `opfsCases` shows the platform without `move`.
 
+- **The folder vault** (v3 A08). `FolderVault` under
+  `@estoc/event-store/v3`, the vault of vault-folder.md §11.1 and §15
+  over the three folder stores. `FolderVault.openWritable(backend, {
+  anchor })` reads `config.json` under its closed member set — format
+  `estoc`, the integer 3, `identity.anchor.{key,did}` and nothing
+  else, another version refused in words that name the one this
+  reader opens (§4, §16) — checks `keystore.json` by shape, `{ version:
+  3, seedJwe }` and nothing else, a derived-key cache refused (§5,
+  VF-24), compares the anchor DID the caller derived from the unlocked
+  seed with the config's (`AnchorMismatch`), takes writer-exclusive
+  ownership through the backend before creating any local state,
+  refuses while anything stands under `import/` (`PendingImport`,
+  VF-40), reads or mints `local/replica.json`, and opens the event
+  store as that replica (VF-1, VF-4, VF-5, VF-6, VF-7, ES-14).
+  `FolderVault.create` checks the keystore and the anchor — by the
+  same parser an open uses (r1-H) — before anything is taken or
+  written, requires the folder empty of everything but ownership's own
+  files, before and again after ownership is taken, so a seed wrapper,
+  a segment, recovery state, an opaque file or leftover local state is
+  refused with every byte left as it was (r1-F), then writes
+  `keystore.json` and `config.json`. `close` refuses every new
+  operation, lets the accepted ones run out — the writer lock's, and
+  each local owner's — fails every object stream still alive with
+  `VaultClosed`, releasing its latch, and only then releases ownership
+  (r1-C, r1-D); every local owner, cache and trace handle checks the
+  vault's guard on each call (r1-D). `FolderReader.open` is the
+  read-only open: no `local/` created, `files.write` refused as
+  `ReadOnlyVault`, object streams served only with `ownership:
+  "exclusive"` and otherwise refused as `Unprotected` (§15), over an
+  object store that puts nothing, collects nothing and moves nothing —
+  a file found not to spell its name is reported and dropped from the
+  reader's view, never quarantined (r1-E). `local(owner)` is this
+  copy's `options.json`, `cache/` and trace streams under
+  `local/<owner>/` (§10.2), ported from version 2 with `eventId` for
+  `eid`, trace lines canonical JSON read by the strict parser and
+  segments named at the store's clock. `FolderFileStore` reads
+  `config.json`, `keystore.json` and opaque paths, writes opaque paths
+  only, and lists nothing under `local/` or `import/` (§11.6, VF-39).
+  `damaged()` reports what every structural root holds that the layout
+  does not define (VF-16); `portablePaths()` is what a snapshot copies.
+  The `VaultBackend` gained `own(path)`: ownership of a name, exclusive
+  against every holder in every process reaching the folder, refused
+  at once as `VaultOwned` — `FsBackend` a pid file holding `<pid>
+  <token>`, created whole by claim file and hard link, read back, a
+  live holder refused, a stale one — dead, empty, garbage — reclaimed
+  by moving it aside and checking what moved, a holder moved by
+  mistake given its name back, this process's takes recorded
+  synchronously so two cannot both pass, release only while the file
+  is still this take's (r1-A, r1-G); `OpfsBackend` a Web Lock named for
+  the one path from the origin's storage root to the name, so one place
+  reached through two handles and bases is one lock (r1-B), and a
+  directory the storage root cannot place refused; `MemoryBackend` a
+  set. `Runtime` takes a `guard` run as each operation asks for the
+  lock.
+
 - **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
   first `append`, or handed back by `read`, was kept or returned as a
   view onto the same memory — `Buffer#slice` is not a copy — so writing

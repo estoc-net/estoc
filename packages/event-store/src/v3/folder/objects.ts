@@ -47,7 +47,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
-import { DamagedLayout, DamagedObject, DigestMismatch, ObjectTooLarge } from "../errors.js";
+import { DamagedLayout, DamagedObject, DigestMismatch, ObjectTooLarge, ReadOnlyVault, VaultClosed } from "../errors.js";
 import { isRawCid, type Cid, type Damaged } from "../event.js";
 import { comparePaths } from "../files.js";
 import { DEFAULT_GRACE_MS, DEFAULT_MAX_OBJECT_BYTES } from "../memory-objects.js";
@@ -83,6 +83,13 @@ export interface FolderObjectStoreOptions {
   maxObjectBytes?: number;
   /** the latch registry to share with other handles over the same objects; a fresh one when left out */
   latches?: LatchRegistry;
+  /**
+   * A store that changes nothing under `objects/` or `local/` (r1-E):
+   * no put, no collection, and a file found not to spell its name is
+   * not moved aside but remembered, and absent from this store's view
+   * from then on — the bytes stay where a writable open will judge them.
+   */
+  readOnly?: boolean;
 }
 
 /** What a file where `objects/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses. */
@@ -103,6 +110,13 @@ export class FolderObjectStore implements ObjectStore {
   private readonly maxObjectBytes: number;
   /** the staging files puts are streaming into right now, which no sweep touches */
   private readonly staging = new Set<string>();
+  private readonly readOnly: boolean;
+  /** what a read-only store found damaged (r1-E): left in place, and out of its view */
+  private readonly excluded = new Set<Cid>();
+  /** the verifying streams alive right now, each as the function that fails it (r1-C) */
+  private readonly live = new Set<() => void>();
+  /** set by `close`: no stream opens after it, and none survives it */
+  private closed = false;
   /** operations run one at a time: the writer lock of event-store.md §10, as far as one store needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -115,6 +129,27 @@ export class FolderObjectStore implements ObjectStore {
     this.graceMs = bound("graceMs", options.graceMs ?? DEFAULT_GRACE_MS);
     this.maxObjectBytes = bound("maxObjectBytes", options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES);
     this.latches = options.latches ?? new LatchRegistry();
+    this.readOnly = options.readOnly ?? false;
+  }
+
+  /** Whether this store may change the folder: a read-only store's puts and collection are refused (r1-E). */
+  private writable(what: string): void {
+    if (this.readOnly) throw new ReadOnlyVault(what);
+  }
+
+  /**
+   * End this store's part in the folder (r1-C): in the store's turn, so
+   * every `open` already queued has registered its stream first, every
+   * live stream is failed with `VaultClosed` — its latch released, its
+   * file closed — and no stream opens after. What a caller holds by
+   * then is an errored stream, whose next read rejects. A closed store
+   * still answers `stat`, `has`, `list` and `damaged`.
+   */
+  async close(): Promise<void> {
+    await this.serialise(async () => {
+      this.closed = true;
+      for (const fail of [...this.live]) fail();
+    });
   }
 
   private serialise<T>(work: () => Promise<T>): Promise<T> {
@@ -170,6 +205,8 @@ export class FolderObjectStore implements ObjectStore {
    * the ones verified now, its orphan age renewed (§6.2, §9).
    */
   private async put(source: ByteSource, want: DaslCid | null): Promise<ObjectInfo> {
+    this.writable("put");
+    if (this.closed) throw new VaultClosed();
     await this.checkRoot(); // before a byte is read, and again before the move
     const staged = `${STAGING_DIR}/${v7()}`;
     this.staging.add(staged);
@@ -185,6 +222,7 @@ export class FolderObjectStore implements ObjectStore {
       try {
         if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // steps 3–4: nothing accepted
         await this.serialise(async () => {
+          if (this.closed) throw new VaultClosed();
           await this.checkRoot();
           const stamp = this.at(stampPath(cid.text));
           await this.backend.remove(stamp);
@@ -230,7 +268,8 @@ export class FolderObjectStore implements ObjectStore {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
     // Size checked and stream latched in the store's turn; the bytes come out after it (§6.3).
     const opened = await this.serialise(async () => {
-      const size = await this.backend.size(this.at(objectPath(cid)));
+      if (this.closed) throw new VaultClosed();
+      const size = this.excluded.has(cid) ? null : await this.backend.size(this.at(objectPath(cid)));
       if (size === null) return null;
       if (size > maxBytes) throw new ObjectTooLarge(`${cid} is ${size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
       return this.openHeld(cid);
@@ -263,6 +302,8 @@ export class FolderObjectStore implements ObjectStore {
    * behalf.
    */
   private async openHeld(cid: Cid): Promise<{ stream: ReadableStream<Uint8Array>; size: number } | null> {
+    if (this.closed) throw new VaultClosed();
+    if (this.excluded.has(cid)) return null;
     const rel = objectPath(cid);
     const path = this.at(rel);
     const size = await this.backend.size(path);
@@ -291,34 +332,53 @@ export class FolderObjectStore implements ObjectStore {
     const hash = sha256.create();
     const want = rawCidOf(cid);
     let seen = 0;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    // Every way the stream ends runs `done` once: the latch goes, the file
+    // closes, and the store forgets the stream (r1-C).
+    let ended = false;
+    const done = (): void => {
+      if (ended) return;
+      ended = true;
+      this.live.delete(fail);
+      release();
+      reader.cancel().catch(() => undefined);
+    };
+    const fail = (): void => {
+      done();
+      controller.error(new VaultClosed());
+    };
+    this.live.add(fail);
     return new ReadableStream<Uint8Array>(
       {
-        pull: async (controller) => {
+        start: (c) => {
+          controller = c;
+        },
+        pull: async (c) => {
           try {
-            const { done, value } = await reader.read();
-            if (!done) {
+            const { done: over, value } = await reader.read();
+            if (ended) return; // failed by `close` while the read was pending: the error stands
+            if (!over) {
               hash.update(value);
               seen += value.length;
-              controller.enqueue(value);
+              c.enqueue(value);
               return;
             }
             if (seen === size && compareBytes(hash.digest(), want.digest) === 0) {
-              release();
-              controller.close();
+              done();
+              c.close();
               return;
             }
             await this.quarantine(cid, rel);
-            release();
-            controller.error(new DamagedObject(cid));
+            done();
+            c.error(new DamagedObject(cid));
           } catch (err) {
-            release();
-            await reader.cancel().catch(() => undefined);
-            controller.error(err);
+            if (ended) return;
+            done();
+            c.error(err);
           }
         },
-        cancel: async () => {
-          release();
-          await reader.cancel().catch(() => undefined);
+        cancel: () => {
+          done();
         },
       },
       { highWaterMark: 0 }
@@ -337,7 +397,8 @@ export class FolderObjectStore implements ObjectStore {
     return this.serialise(async () => {
       const actual = await this.hashAt(rel);
       if (actual === null || actual.text === cid) return;
-      await this.aside(rel);
+      if (this.readOnly) this.excluded.add(cid); // remembered, not moved (r1-E)
+      else await this.aside(rel);
     });
   }
 
@@ -361,13 +422,13 @@ export class FolderObjectStore implements ObjectStore {
 
   async stat(cid: Cid): Promise<ObjectInfo | null> {
     const parsed = rawCidOf(cid);
-    const size = await this.serialise(() => this.backend.size(this.at(objectPath(cid))));
+    const size = await this.serialise(async () => (this.excluded.has(cid) ? null : this.backend.size(this.at(objectPath(cid)))));
     return size === null ? null : info(parsed, size);
   }
 
   async has(cid: Cid): Promise<boolean> {
     rawCidOf(cid);
-    return (await this.serialise(() => this.backend.size(this.at(objectPath(cid))))) !== null;
+    return (await this.serialise(async () => (this.excluded.has(cid) ? null : this.backend.size(this.at(objectPath(cid)))))) !== null;
   }
 
   async *list(): AsyncIterable<Cid> {
@@ -392,8 +453,9 @@ export class FolderObjectStore implements ObjectStore {
     }
     const dir = this.at(OBJECTS_DIR);
     for (const name of await this.backend.list(dir)) {
-      if (isRawCid(name)) walked.cids.push(name);
-      else walked.damaged.push({ where: objectPath(name), error: "not an object path: the name is not a canonical raw DASL CID" });
+      if (!isRawCid(name)) walked.damaged.push({ where: objectPath(name), error: "not an object path: the name is not a canonical raw DASL CID" });
+      else if (this.excluded.has(name)) walked.damaged.push({ where: objectPath(name), error: "the bytes do not hash to the name" });
+      else walked.cids.push(name);
     }
     for (const name of await this.backend.dirs(dir)) {
       walked.damaged.push({ where: objectPath(name), error: "a directory where an object belongs" });
@@ -423,13 +485,15 @@ export class FolderObjectStore implements ObjectStore {
       const found: Damaged[] = [];
       for (const damage of walked.damaged) {
         found.push(damage);
+        if (this.readOnly) continue; // reported, left where it is (r1-E)
         if (damage.where !== OBJECTS_DIR && (await this.backend.size(this.at(damage.where))) !== null) await this.aside(damage.where);
       }
       for (const cid of walked.cids) {
         const rel = objectPath(cid);
         const actual = await this.hashAt(rel);
         if (actual === null || actual.text === cid) continue;
-        await this.aside(rel);
+        if (this.readOnly) this.excluded.add(cid);
+        else await this.aside(rel);
         found.push({ where: rel, error: `the bytes hash to ${actual.text}, not the name` });
       }
       return found.sort((a, b) => comparePaths(a.where, b.where));
@@ -439,6 +503,7 @@ export class FolderObjectStore implements ObjectStore {
   // ---- collection --------------------------------------------------------
 
   async collect(keep: Iterable<Cid>): Promise<Collected> {
+    this.writable("collect");
     // Every keep CID checked before anything is touched (§8.3); then, in
     // the store's turn: kept and latched objects are left alone and
     // unlisted, unkept objects within grace of their stamp are `young`,
@@ -447,6 +512,7 @@ export class FolderObjectStore implements ObjectStore {
     const kept = new Set<string>();
     for (const cid of keep) kept.add(rawCidOf(cid).text);
     return this.serialise(async () => {
+      if (this.closed) throw new VaultClosed();
       const now = this.now();
       const unlinked: Cid[] = [];
       const young: Cid[] = [];

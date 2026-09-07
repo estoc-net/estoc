@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   AnchorMismatch,
   DamagedLayout,
+  DamagedObject,
   DamagedReplica,
   FolderReader,
   FolderVault,
@@ -115,21 +116,47 @@ describe("FolderVault.create (vault-folder.md §4, §5, §11.1)", () => {
     await vault.close();
   });
 
-  it("refuses a keystore of the wrong shape, an anchor that is not a did:key, and an existing vault — before writing anything", async () => {
+  it("r1-H: refuses a keystore of the wrong shape and an anchor the config parser would refuse — before ownership is taken or anything written — and an existing vault", async () => {
     const backend = new MemoryBackend();
     await expect(FolderVault.create(backend, { anchor: DID, keystore: utf8(JSON.stringify({ version: 3, seedJwe: JWE, keys: [] })) })).rejects.toThrow(NotAVault);
-    await expect(FolderVault.create(backend, { anchor: "did:web:example.com", keystore: KEYSTORE })).rejects.toThrow(NotAVault);
+    for (const anchor of ["did:web:example.com", "did:key:", "", 7 as unknown as string]) {
+      await expect(FolderVault.create(backend, { anchor, keystore: KEYSTORE }), JSON.stringify(anchor)).rejects.toThrow(NotAVault);
+    }
     expect(paths(backend)).toEqual([]);
+    const held = await backend.own(`${BASE}/${OWNER_FILE}`); // nothing leaked
+    await held.release();
     const vault = await created(backend);
     await vault.close();
-    await expect(created(backend)).rejects.toThrow(/exists already/);
+    await expect(created(backend)).rejects.toThrow(/not an empty folder/);
     expectBytes(backend.files.get(`${BASE}/keystore.json`), KEYSTORE);
+  });
+
+  it("r1-F: refuses a folder that is not empty — a seed wrapper, recovery state, a segment, an opaque file, leftover local state — leaving every byte as it was and ownership free", async () => {
+    const previous = utf8(JSON.stringify({ version: 3, seedJwe: "e30.BB.BB.BB.BB" }));
+    const residues: [string, Record<string, Uint8Array>][] = [
+      ["a seed wrapper and an import journal", { [`${BASE}/keystore.json`]: previous, [`${BASE}/import/job/journal.json`]: utf8("{}") }],
+      ["a seed wrapper alone", { [`${BASE}/keystore.json`]: previous }],
+      ["a segment", { [`${BASE}/events/${authorN(1)}/${authorN(2)}.jsonl`]: utf8("") }],
+      ["an object", { [`${BASE}/objects/${HELLO_CID}`]: HELLO }],
+      ["an opaque file", { [`${BASE}/notes.txt`]: utf8("hi") }],
+      ["leftover local state", { [`${BASE}/local/replica.json`]: utf8("{}") }],
+      ["leftover local owner state", { [`${BASE}/local/agent/options.json`]: utf8("{}") }],
+    ];
+    for (const [what, files] of residues) {
+      const backend = new MemoryBackend();
+      for (const [path, bytes] of Object.entries(files)) backend.files.set(path, bytes);
+      const before = [...backend.files.entries()].map(([path, bytes]) => [path, [...bytes]]);
+      await expect(created(backend), what).rejects.toThrow(/not an empty folder/);
+      expect([...backend.files.entries()].map(([path, bytes]) => [path, [...bytes]]), what).toEqual(before);
+      const held = await backend.own(`${BASE}/${OWNER_FILE}`);
+      await held.release();
+    }
   });
 
   it("two creates of one folder are excluded by ownership: the loser writes nothing", async () => {
     const backend = new MemoryBackend();
     const first = await created(backend);
-    await expect(FolderVault.create(backend, { anchor: OTHER_DID, keystore: KEYSTORE })).rejects.toThrow(/exists already/);
+    await expect(FolderVault.create(backend, { anchor: OTHER_DID, keystore: KEYSTORE })).rejects.toThrow(/not an empty folder/);
     // and with config.json not yet there — ownership held by another create in flight
     const empty = new MemoryBackend();
     const held = await empty.own(`${BASE}/${OWNER_FILE}`);
@@ -212,6 +239,106 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     expect(await all(vault.stores.events.scan())).toHaveLength(1);
   });
 
+  for (const mode of ["writer", "reader"] as const) {
+    it(`r1-C (${mode}): close fails every object stream still alive and releases its latch before ownership goes, so the next writer collects nothing a stream was reading`, async () => {
+      const backend = new MemoryBackend();
+      const vault = await created(backend, { graceMs: 0 });
+      await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
+      if (mode === "reader") await vault.close();
+      const owner = mode === "writer" ? vault : await FolderReader.open(backend, { ownership: "exclusive" });
+      const objects = mode === "writer" ? vault.vault.objects : (owner as FolderReader).objects;
+      const stream = (await objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
+      const reader = stream.getReader();
+      expect(owner.stores.objects.latches.count(HELLO_CID)).toBe(1);
+      await owner.close();
+      expect(owner.stores.objects.latches.count(HELLO_CID)).toBe(0);
+      await expect(reader.read()).rejects.toThrow(VaultClosed);
+      // the folder is free, and nothing of the old runtime reads it: collection takes the object
+      const next = await FolderVault.openWritable(backend, { anchor: DID, graceMs: 0 });
+      expect((await next.collect(() => [])).unlinked).toEqual([HELLO_CID]);
+      await next.close();
+      // a stream half consumed fails at its next read too
+      const again = await created(new MemoryBackend(), { graceMs: 0 });
+      await again.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
+      const half = (await again.vault.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
+      const halfReader = half.getReader();
+      expect((await halfReader.read()).done).toBe(false);
+      await again.close();
+      await expect(halfReader.read()).rejects.toThrow(VaultClosed);
+      expect(again.stores.objects.latches.latched()).toEqual([]);
+    });
+  }
+
+  it("r1-C: an open queued behind the operation holding the lock when close is called still runs, registers its stream, and is failed before ownership goes", async () => {
+    const backend = new MemoryBackend();
+    const vault = await created(backend, { graceMs: 0 });
+    await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
+    const g = gate();
+    const world = new TextEncoder().encode("world");
+    const commit = vault.vault.commit([{ cid: cidOf(world), source: gated(world, g) }], []);
+    await tick();
+    const opening = vault.vault.objects.open(HELLO_CID); // queued behind the commit
+    const closing = vault.close();
+    await tick();
+    expect(await settled(opening)).toBe(false);
+    expect(await settled(closing)).toBe(false);
+    await expect(vault.vault.objects.open(HELLO_CID)).rejects.toThrow(VaultClosed); // queued after close: refused
+    g.open();
+    await commit;
+    const stream = (await opening) as ReadableStream<Uint8Array>;
+    await closing;
+    await expect(stream.getReader().read()).rejects.toThrow(VaultClosed);
+    expect(vault.stores.objects.latches.latched()).toEqual([]);
+    const next = await FolderVault.openWritable(backend, { anchor: DID, graceMs: 0 });
+    expect((await next.collect(() => [])).unlinked).toEqual([HELLO_CID, cidOf(world)].sort());
+    await next.close();
+  });
+
+  it("r1-D: a local owner, cache or trace handle taken before close refuses every operation after it, and close waits for the local work accepted before", async () => {
+    const backend = new MemoryBackend();
+    const g = gate();
+    let gating = true;
+    const slow = new Proxy(backend, {
+      get(target, prop, receiver) {
+        if (prop !== "write") return Reflect.get(target, prop, receiver);
+        return async (path: string, bytes: Uint8Array) => {
+          if (gating && path.endsWith("/options.json")) await g.wait;
+          return target.write(path, bytes);
+        };
+      },
+    }) as MemoryBackend;
+    const vault = await FolderVault.create(slow, { anchor: DID, keystore: KEYSTORE });
+    const local = vault.local("agent");
+    const cache = local.cache;
+    const trace = local.trace("wire");
+    const inFlight = local.writeOptions({ accepted: true }); // accepted before close: runs out before ownership goes
+    await tick();
+    const closing = vault.close();
+    await tick();
+    expect(await settled(closing)).toBe(false);
+    await expect(backend.own(`${BASE}/${OWNER_FILE}`)).rejects.toThrow(VaultOwned); // still held while the write runs
+    const event = { eventId: authorN(1), at: "2026-09-07T10:00:00.000Z", type: "wire.out", data: {} };
+    await expect(local.writeOptions({ obsolete: true })).rejects.toThrow(VaultClosed);
+    await expect(local.readOptions()).rejects.toThrow(VaultClosed);
+    await expect(cache.write("x", utf8(""))).rejects.toThrow(VaultClosed);
+    await expect(cache.read("x")).rejects.toThrow(VaultClosed);
+    await expect(cache.list()).rejects.toThrow(VaultClosed);
+    await expect(cache.remove("x")).rejects.toThrow(VaultClosed);
+    await expect(cache.clear()).rejects.toThrow(VaultClosed);
+    await expect(trace.append(event)).rejects.toThrow(VaultClosed);
+    await expect(all(trace.scan())).rejects.toThrow(VaultClosed);
+    await expect(trace.prune({ keepMs: 0, capBytes: 0 })).rejects.toThrow(VaultClosed);
+    expect(() => local.trace("other")).toThrow(VaultClosed);
+    expect(() => local.cache).toThrow(VaultClosed);
+    g.open();
+    gating = false;
+    await inFlight;
+    await closing;
+    const next = await FolderVault.openWritable(backend, { anchor: DID });
+    expect(await next.local("agent").readOptions()).toEqual({ accepted: true });
+    await next.close();
+  });
+
   it("VF-40: anything under import/ blocks a writable open and a read-only open alike, with ownership released; an empty import/ is nothing pending", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
@@ -247,7 +374,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     backend.files.delete(`${BASE}/config.json`);
     backend.files.set(`${BASE}/config.json/x`, config);
     await expect(FolderVault.openWritable(backend, { anchor: DID })).rejects.toThrow(/no .estoc\/config.json/);
-    await expect(created(backend)).rejects.toThrow(/exists already|is a directory|not a directory/);
+    await expect(created(backend)).rejects.toThrow(/not an empty folder/);
   });
 
   it("VF-6: a malformed local/replica.json is DamagedReplica, never repaired, and ownership is released", async () => {
@@ -444,6 +571,36 @@ describe("FolderReader (vault-folder.md §11.1, §15)", () => {
     await owning.close();
     const writer = await FolderVault.openWritable(source, { anchor: DID });
     await writer.close();
+  });
+
+  it("r1-E: an object whose bytes do not spell its name fails the read and leaves the reader's view, but nothing in the folder moves or changes", async () => {
+    const source = new MemoryBackend();
+    const vault = await created(source);
+    await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await vault.close();
+    const backend = copied(source, true);
+    backend.files.set(`${BASE}/objects/${HELLO_CID}`, utf8("wrong"));
+    backend.files.set(`${BASE}/objects/not-a-cid`, utf8(""));
+    const snapshot = (): [string, number[]][] => [...backend.files.entries()].map(([path, bytes]): [string, number[]] => [path, [...bytes]]).sort();
+    const before = snapshot();
+    const reader = await FolderReader.open(backend, { ownership: "exclusive" });
+    expect(await reader.objects.has(HELLO_CID)).toBe(true);
+    await expect(reader.objects.read(HELLO_CID, 1024)).rejects.toThrow(DamagedObject);
+    expect(snapshot()).toEqual(before);
+    expect(await reader.objects.has(HELLO_CID)).toBe(false);
+    expect(await reader.objects.stat(HELLO_CID)).toBeNull();
+    expect(await reader.objects.open(HELLO_CID)).toBeNull();
+    expect(await reader.objects.read(HELLO_CID, 1024)).toBeNull();
+    expect(await all(reader.objects.list())).toEqual([]);
+    expect((await reader.damaged()).map((d) => d.where)).toEqual([`objects/${HELLO_CID}`, "objects/not-a-cid"]);
+    // verify on a read-only store reports and excludes, and moves nothing either
+    const other = await FolderReader.open(copied(backend, true), { ownership: "exclusive" });
+    expect((await other.stores.objects.verify()).map((d) => d.where)).toEqual([`objects/${HELLO_CID}`, "objects/not-a-cid"]);
+    expect(await other.objects.has(HELLO_CID)).toBe(false);
+    expect(snapshot()).toEqual(before);
+    expect(reader.stores.objects.latches.latched()).toEqual([]);
+    await other.close();
+    await reader.close();
   });
 
   it("refuses what a writable open refuses of the format, and needs no keystore to read", async () => {

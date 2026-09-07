@@ -100,6 +100,8 @@ export interface LocalOptions {
   rotate?: Rotation;
   /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
   now?: () => number;
+  /** throws once the vault this owner belongs to is closed (r1-D): checked as each operation is called, before it queues */
+  guard?: () => void;
 }
 
 /** The millisecond a UUIDv7-named segment was minted at: its first 48 bits. */
@@ -121,6 +123,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   private readonly serial = new WriterLock();
   private readonly rotate: Rotation;
   private readonly now: () => number;
+  private readonly guard: () => void;
   private open: { path: string; bytes: number; since: number } | null = null;
   private lastDamaged: Damaged[] = [];
 
@@ -131,6 +134,12 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   ) {
     this.rotate = options.rotate ?? DEFAULT_ROTATION;
     this.now = options.now ?? Date.now;
+    this.guard = options.guard ?? (() => undefined);
+  }
+
+  /** Resolves once everything queued so far has run: what a close waits for (r1-D). */
+  settle(): Promise<void> {
+    return this.serial.run(async () => undefined);
   }
 
   private async segments(): Promise<string[]> {
@@ -138,6 +147,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   }
 
   async append(event: LocalEvent): Promise<void> {
+    this.guard();
     if (!isLocalEvent(event)) throw new InvalidEvent("not a local event: eventId, at, type, data and nothing else");
     const line = utf8(`${canonicalText(event)}\n`);
     return this.serial.run(async () => {
@@ -152,6 +162,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   }
 
   async *scan(filter?: LocalFilter): AsyncIterable<LocalEvent> {
+    this.guard();
     // read in the stream's turn, so that a scan in flight finishes before a prune removes the segments
     const events = await this.serial.run(async () => {
       const found: LocalEvent[] = [];
@@ -195,6 +206,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
    * empties the stream. Reads names and sizes, never contents.
    */
   async prune(policy: RetentionPolicy): Promise<PruneReport> {
+    this.guard();
     return this.serial.run(async () => {
       const report: PruneReport = { byKeep: 0, byCap: 0, bytesFreed: 0 };
       const horizon = this.now() - policy.keepMs - this.rotate.ms;
@@ -242,20 +254,32 @@ export interface LocalCache {
  * One owner's local state (§10.2): `options.json`, `cache/`, and a trace
  * stream per name under `trace/`. The directory is the owner's —
  * `local/agent` for the application — and nothing here is a fact of the
- * vault. Writes and reads of one owner run one at a time.
+ * vault. Writes and reads of one owner run one at a time; every
+ * operation, on the owner or on a cache or trace handle taken from it,
+ * checks the vault's guard as it is called, and `settle` waits for what
+ * was accepted before (r1-D).
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();
   private readonly serial = new WriterLock();
+  private readonly guard: () => void;
 
   constructor(
     private readonly backend: VaultBackend,
     readonly dir: string,
     private readonly options: LocalOptions = {}
-  ) {}
+  ) {
+    this.guard = options.guard ?? (() => undefined);
+  }
+
+  /** Resolves once everything queued on the owner and its trace streams so far has run: what a close waits for (r1-D). */
+  async settle(): Promise<void> {
+    await Promise.all([this.serial.run(async () => undefined), ...[...this.traces.values()].map((trace) => trace.settle())]);
+  }
 
   /** What this copy was told: a JSON object, or null when nothing was. */
   async readOptions(): Promise<JsonObject | null> {
+    this.guard();
     const bytes = await this.serial.run(() => this.backend.read(`${this.dir}/options.json`));
     if (bytes === null) return null;
     let parsed: unknown;
@@ -269,38 +293,51 @@ export class LocalOwner {
   }
 
   async writeOptions(options: JsonObject): Promise<void> {
+    this.guard();
     if (!isJsonObject(options)) throw new TypeError("options is a JSON object");
     const bytes = prettyJson(options);
     return this.serial.run(() => this.backend.write(`${this.dir}/options.json`, bytes));
   }
 
   get cache(): LocalCache {
+    this.guard();
+    const guard = this.guard;
     const base = `${this.dir}/cache`;
     const at = (path: string): string => `${base}/${checkPath(path)}`;
     const backend = this.backend;
+    // every method async, so that the guard's throw is a rejection like any other failure; and checked on every call, not once at the getter (r1-D)
     return {
       read: async (path) => {
+        guard();
         const file = at(path);
         return this.serial.run(() => backend.read(file));
       },
       write: async (path, bytes) => {
+        guard();
         const file = at(path);
         return this.serial.run(() => backend.write(file, bytes));
       },
-      list: async () => this.serial.run(async () => (await walk(backend, base)).map((path) => path.slice(base.length + 1)).sort(comparePaths)),
+      list: async () => {
+        guard();
+        return this.serial.run(async () => (await walk(backend, base)).map((path) => path.slice(base.length + 1)).sort(comparePaths));
+      },
       remove: async (path) => {
+        guard();
         const file = at(path);
         return this.serial.run(() => backend.remove(file));
       },
-      clear: async () =>
-        this.serial.run(async () => {
+      clear: async () => {
+        guard();
+        return this.serial.run(async () => {
           for (const path of await walk(backend, base)) await backend.remove(path);
-        }),
+        });
+      },
     };
   }
 
   /** One trace stream, by name, under `trace/<stream>/`; the owner divides its trace as it likes. */
   trace(stream: string): FolderLocalEventStore {
+    this.guard();
     checkPath(stream);
     let store = this.traces.get(stream);
     if (store === undefined) {
