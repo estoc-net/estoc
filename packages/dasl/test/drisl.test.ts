@@ -122,7 +122,7 @@ describe("DRISL decode — strict: exactly one byte string per value", () => {
     expect(decodeDrisl(bytes("81".repeat(MAX_DEPTH) + "80"))).toBeTruthy();
   });
 
-  it("integers beyond 2^53 come back as bigint, within it as number", () => {
+  it("integers outside the safe range come back as bigint (±2^53 included), within it as number", () => {
     expect(decodeDrisl(bytes("1b0020000000000000"))).toBe(2n ** 53n);
     expect(decodeDrisl(bytes("1b001fffffffffffff"))).toBe(Number.MAX_SAFE_INTEGER);
     expect(decodeDrisl(bytes("3b001fffffffffffff"))).toBe(-(2n ** 53n));
@@ -197,14 +197,14 @@ describe("DRISL decodes to what reserializes to the same bytes", () => {
     expect(hex(encodeDrisl(decoded as never))).toBe(hex(encoded));
   });
 
-  it("an integral 64-bit float comes back as a Float and reserializes as the float it was", () => {
+  it("a 64-bit float in the safe-integer range comes back as a Float and reserializes as the float it was; past it, a number", () => {
     for (const [encoded, value] of [["fb3ff0000000000000", 1], ["fb0000000000000000", 0], ["fbc000000000000000", -2]] as const) {
       const back = decodeDrisl(bytes(encoded));
       expect(back).toBeInstanceOf(Float);
       expect((back as Float).value).toBe(value);
       expect(hex(encodeDrisl(back))).toBe(encoded);
     }
-    // past 2^53 a number is a float anyway, so it comes back as a number and still reserializes the same
+    // at or past 2^53 a number is a float anyway, so it comes back as a number and still reserializes the same
     expect(decodeDrisl(bytes("fb4340000000000000"))).toBe(2 ** 53);
     expect(hex(encodeDrisl(decodeDrisl(bytes("fb4340000000000000"))))).toBe("fb4340000000000000");
     // inside a document

@@ -28,13 +28,15 @@ export class Link {
 
 /**
  * A 64-bit float kept as a float. A plain `number` that is a safe integer
- * encodes as a CBOR integer, so an integral value that arrived as a float
- * — `fb 3ff0…`, 1.0 — would reserialize as `01` if it came back as a
+ * encodes as a CBOR integer, so a float whose value is a safe integer —
+ * `fb 3ff0…`, 1.0 — would reserialize as `01` if it came back as a
  * `number`, and CBOR/c-42 §2.2 makes the two distinct types. The decoder
  * hands such a value back as a `Float`, which encodes as the float it
  * was; the encoder takes a `Float` over any finite number and writes it
- * 64-bit. A float whose value is not an integer comes back as a plain
- * `number`, since a `number` with that value encodes as a float anyway.
+ * 64-bit. Any other finite float — a fraction, or an integral value at or
+ * past 2^53, outside `Number.isSafeInteger` — comes back as a plain
+ * `number`, since a `number` with that value encodes as a 64-bit float
+ * anyway. The boundary is `Number.isSafeInteger` on both sides.
  */
 export class Float {
   constructor(readonly value: number) {
@@ -49,8 +51,11 @@ export class Float {
 }
 
 /**
- * The DRISL data model. Integers beyond 2^53 come back as bigint; a
- * 64-bit float whose value is an integer comes back as a `Float`. A map
+ * The DRISL data model. An integer outside the safe range — below
+ * `Number.MIN_SAFE_INTEGER` or above `Number.MAX_SAFE_INTEGER`, so ±2^53
+ * itself included — comes back as bigint; a 64-bit float whose value is
+ * a safe integer comes back as a `Float`, any other finite float as a
+ * `number`. A map
  * decodes to an object with no prototype (`Object.create(null)`), so
  * every key — `__proto__`, `constructor`, any string DRISL allows — is a
  * plain own property and nothing more; the encoder takes any object's
@@ -135,7 +140,7 @@ function encodeValue(w: Writer, value: Drisl, depth: number): void {
   if (value === false) return w.push(0xf4);
   if (typeof value === "number") {
     // A safe integer is an integer; anything else a number holds (a
-    // fraction, or an integral value past 2^53 that a double cannot
+    // fraction, or an integral value at or past 2^53 that a double cannot
     // count exactly) is a 64-bit float — cborg's rule too, so the bytes
     // agree with @ipld/dag-cbor. Exact large integers are bigints.
     if (Number.isSafeInteger(value)) {
@@ -314,7 +319,7 @@ class Reader {
         const f = view.getFloat64(0);
         if (!Number.isFinite(f)) throw new Error("DRISL has no NaN or infinity");
         if (Object.is(f, -0)) throw new Error("DRISL has no negative zero");
-        // an integral float would reserialize as an integer if it came back as a number
+        // a float in the safe-integer range would reserialize as an integer if it came back as a number
         return Number.isSafeInteger(f) ? new Float(f) : f;
       }
       default:

@@ -23,9 +23,11 @@ package reads them yet.
   `MAX_DEPTH`). A decoded map has no prototype, so any key DRISL allows
   — `__proto__` included — is a plain own property, and a document the
   encoder writes decodes back to itself. What the decoder accepts
-  reserializes to the same bytes: an integral 64-bit float comes back as
-  a `Float`, not as an integer (CBOR/c-42 §2.2), and a leading U+FEFF in
-  a text string is content, not a byte-order mark to strip.
+  reserializes to the same bytes: a 64-bit float whose value is a safe
+  integer comes back as a `Float`, not as an integer (CBOR/c-42 §2.2),
+  while any other finite float is a plain `number`; an integer outside
+  the safe range (±2^53 included) comes back as a `bigint`; a leading
+  U+FEFF in a text string is content, not a byte-order mark to strip.
 - DASL CAR (`encodeCar`, `decodeCar`): CARv1 whose header is a DRISL map
   `{roots, version: 1}` — the integer 1, not the float 1.0 — and whose
   every block is named by exactly the 36 bytes of a DASL CID; a block
