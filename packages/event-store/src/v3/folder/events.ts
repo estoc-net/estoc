@@ -129,15 +129,24 @@ export class FolderEventStore implements EventStore {
 
   /**
    * The segments under `events/` (§11.2 step 1), in path order; and every
-   * entry that is not one — a file beside the author directories, a
-   * directory that is not an author's, a name in an author directory that
-   * is not a segment's, a directory where a segment belongs — as damage
-   * (§3, VF-16).
+   * entry that is not one — a file where `events/` itself belongs, a file
+   * beside the author directories, a directory that is not an author's, a
+   * name in an author directory that is not a segment's, a directory where
+   * a segment belongs — as damage (§3, VF-16). An absent `events/` is an
+   * empty store; a file there is not.
    */
   private async walk(): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[] }> {
     const damaged: Damaged[] = [];
     const segments: { rel: string; author: AuthorId }[] = [];
     const events = this.at(EVENTS_DIR);
+    // The root itself first (§3, §11.1 step 3): a backend answers `list`
+    // and `dirs` with [] for a file as for nothing there, so a file where
+    // `events/` belongs would read as an empty store; asked as a file, it
+    // has a size and nothing there has none (r2-B).
+    if ((await this.backend.size(events)) !== null) {
+      damaged.push({ where: EVENTS_DIR, error: "a file where the events directory belongs" });
+      return { segments, damaged };
+    }
     for (const name of await this.backend.list(events)) {
       damaged.push({ where: `${EVENTS_DIR}/${name}`, error: "a file where an author directory belongs" });
     }
@@ -191,12 +200,11 @@ export class FolderEventStore implements EventStore {
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
     // Read in the store's turn — the whole of `events/`, whatever the
-    // filter: which content an ID is accepted under is decided over every
-    // segment (§11.5) and only then filtered, so a filter never exposes a
-    // content `scan()` rejects (event-store.md §5.4; the reading of §11.2
-    // step 1 that restricts I/O is taken only as far as it changes no
-    // result). Sorted here (§8.3), over what the read found: a write
-    // during the walk is not yielded.
+    // filter (§11.2 step 1): which content an ID is accepted under is
+    // decided over every segment (§11.5) and only then filtered, so a
+    // filter never exposes a content `scan()` rejects (event-store.md
+    // §5.4). Sorted here (§8.3), over what the read found: a write during
+    // the walk is not yielded.
     const read = await this.serialise(() => this.readAll());
     const events = [...read.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {

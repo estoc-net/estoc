@@ -137,7 +137,17 @@
   (vault-folder.md §11.3) — for every store. `deepFreeze` is exported.
   The A03 `eventStoreSuite` runs over the folder store on
   `MemoryBackend` and `FsBackend`; folder tests cover
-  VF-1/2/6/7/9/10/11/12/16 and ES-10.
+  VF-1/2/6/7/9/10/11/12/16 and ES-10. A file where `events/` itself
+  belongs is damage at `events`, not an empty store (§3, §11.1);
+  vault-folder.md §11.2 and §11.5 and event-store.md §5.4 now say what
+  the store does — the accepted content per `eventId` is chosen over
+  every author directory, and a filter only narrows the result.
+
+- **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
+  first `append`, or handed back by `read`, was kept or returned as a
+  view onto the same memory — `Buffer#slice` is not a copy — so writing
+  into it afterwards changed the stored file without a write. Every
+  backend's suite now checks with a view-slicing input.
 
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block

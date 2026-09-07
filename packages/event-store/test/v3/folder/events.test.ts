@@ -391,6 +391,60 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.damaged()).toHaveLength(6);
   });
 
+  it("r2-A: a segment loaded from a Node Buffer is the store's own bytes — the caller writing into its buffer afterwards changes no event, and the memory backend holds no Buffer", async () => {
+    const backend = new MemoryBackend();
+    const c = clock(T0);
+    const other = await openOver(new MemoryBackend(), { author: authorN(2), now: c.now });
+    const [event] = await other.appendAll([{ type: "t", data: { n: 1 } }]);
+    const rel = segmentPath(authorN(2), SEG(1));
+    const input = Buffer.from(encodeLines([event as Event]));
+    await backend.write(`${BASE}/${rel}`, input);
+    const store = await openOver(backend, { author: authorN(1), now: c.now });
+    const before = await all(store.scan());
+    const { token } = await store.changes();
+    input[input.indexOf('"n":1') + 4] = 0x32; // the caller's buffer now spells n: 2
+    expect(await all(store.scan())).toEqual(before);
+    expect((await all(store.scan()))[0]?.data).toEqual({ n: 1 });
+    expect(await all((await store.changes(undefined, token)).events)).toEqual([]);
+    expect(await store.damaged()).toEqual([]);
+    expectBytes(await bytesAt(backend, rel), encodeLines([event as Event]));
+    // what the store reads back is a copy too: writing into it changes nothing in the folder
+    const read = await bytesAt(backend, rel);
+    read[0] = 0x20;
+    expectBytes(await bytesAt(backend, rel), encodeLines([event as Event]));
+  });
+
+  for (const [name, fresh] of [
+    ["MemoryBackend", async (): Promise<VaultBackend> => new MemoryBackend()],
+    ["FsBackend", async (): Promise<VaultBackend> => new FsBackend(await tempDir())],
+  ] as const) {
+    it(`r2-B (${name}): a file where events/ belongs is damage at "events", never an empty store; an absent events/ is an empty store; a directory is read`, async () => {
+      // absent: nothing to read, nothing wrong
+      const absent = await fresh();
+      const store = await openOver(absent, { author: authorN(1), now: clock(T0).now });
+      expect(await all(store.scan())).toEqual([]);
+      expect(await store.damaged()).toEqual([]);
+      expect(await absent.size(`${BASE}/events`)).toBeNull();
+      // a directory: read as one
+      const own = await store.append({ type: "t", data: {} });
+      expect(await all(store.scan())).toEqual([own]);
+      expect(await store.damaged()).toEqual([]);
+      // a file, with bytes or empty: damage, by the root's own path, and no event
+      for (const bytes of [utf8("this path is a file"), new Uint8Array(0)]) {
+        const backend = await fresh();
+        await backend.write(`${BASE}/events`, bytes);
+        expect(await backend.size(`${BASE}/events`)).toBe(bytes.length);
+        const over = await openOver(backend, { author: authorN(1), now: clock(T0).now });
+        expect(await all(over.scan())).toEqual([]);
+        expect(await over.damaged()).toEqual([{ where: "events", error: "a file where the events directory belongs" }]);
+        expect(await over.conflicting()).toEqual([]);
+        const { token, events } = await over.changes();
+        expect(await all(events)).toEqual([]);
+        expect(JSON.parse(token)).toEqual({ generation: over.generation, segments: {} });
+      }
+    });
+  }
+
   it("§8.1: append reuses the newest segment under its author, rotates past rotateBytes, and appendAll always writes a fresh segment whole", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);

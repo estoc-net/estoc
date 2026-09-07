@@ -616,6 +616,10 @@ The filter is equality only:
 There are no range, join, full-text or nested-field semantics in this
 interface. Such views are folds and indexes above the store.
 
+For a fixed observed store state, `scan(filter)` MUST yield the same
+events, in the same order, as applying that equality filter to the output
+of `scan()`. A filter MUST NOT expose a rejected conflicting value.
+
 <a id="changes"></a>
 
 ### 5.5 `changes`

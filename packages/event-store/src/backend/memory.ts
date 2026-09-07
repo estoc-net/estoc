@@ -10,6 +10,13 @@ export interface MemoryBackendOptions {
  * (a zip, a JSON blob) unpacks into before it is written somewhere real.
  * `modified` is the clock at the last write, so a test that pins the
  * clock can age a blob past its grace.
+ *
+ * What comes in is copied and what goes out is a copy, by `new
+ * Uint8Array(bytes)`, which copies whatever typed array it is given: a
+ * Node `Buffer` is a `Uint8Array` whose `slice` is a view onto the same
+ * memory, so `bytes.slice()` would have kept the caller's buffer as the
+ * stored file, and a later write into it would have changed the file
+ * with no write here (r2-A).
  */
 export class MemoryBackend implements VaultBackend {
   readonly files = new Map<string, Uint8Array>();
@@ -30,12 +37,12 @@ export class MemoryBackend implements VaultBackend {
 
   async read(path: string): Promise<Uint8Array | null> {
     const data = this.files.get(this.key(path));
-    return data === undefined ? null : data.slice();
+    return data === undefined ? null : new Uint8Array(data);
   }
 
   async write(path: string, data: Uint8Array): Promise<void> {
     const key = this.key(path);
-    this.files.set(key, data.slice());
+    this.files.set(key, new Uint8Array(data));
     this.touch(key);
   }
 
@@ -43,7 +50,7 @@ export class MemoryBackend implements VaultBackend {
     const key = this.key(path);
     const existing = this.files.get(key);
     if (existing === undefined) {
-      this.files.set(key, data.slice());
+      this.files.set(key, new Uint8Array(data));
     } else {
       const joined = new Uint8Array(existing.length + data.length);
       joined.set(existing);

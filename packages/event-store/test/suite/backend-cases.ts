@@ -168,6 +168,31 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "r2-A: copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
+    run: async (fresh) => {
+      // A Uint8Array whose `slice` is a view, as `Buffer.prototype.slice` is: what any backend is given in Node
+      class Viewing extends Uint8Array {
+        override slice(start?: number, end?: number): this {
+          return this.subarray(start, end) as this;
+        }
+      }
+      for (const method of ["write", "append"] as const) {
+        const b = await fresh();
+        const input = new Viewing([1, 2, 3]);
+        await b[method]("f", input);
+        input[0] = 9;
+        const read = (await b.read("f")) as Uint8Array;
+        same(Array.from(read), [1, 2, 3], `${method}: kept its own copy of a viewing input`);
+        read[1] = 8;
+        same(Array.from((await b.read("f")) as Uint8Array), [1, 2, 3], `${method}: handed out a copy`);
+        // a later append onto the file, then the input changed again: still nothing of the caller's is the file
+        await b.append("f", new Viewing([4]));
+        input[2] = 7;
+        same(Array.from((await b.read("f")) as Uint8Array), [1, 2, 3, 4], `${method}: the file after an append`);
+      }
+    },
+  },
+  {
     name: "refuses what is not a plain relative path: .., ., a backslash, an absolute path, an empty segment",
     run: async (fresh) => {
       const b = await fresh();
