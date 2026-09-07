@@ -43,6 +43,7 @@ export {
   MAX_T,
   validateEvent,
   validateDraft,
+  canonicalEvent,
   canonicalEventBytes,
   compareEvents,
   matches,

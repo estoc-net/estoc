@@ -20,15 +20,21 @@ export interface FileStore {
 /** The structural roots of vault-folder.md §3, which a file store never writes (§7.1). */
 export const OWNED_ROOTS: readonly string[] = Object.freeze(["config.json", "keystore.json", "events", "objects", "import", "local"]);
 
+/** A UTF-16 code unit that is not part of a pair: a string holding one has no UTF-8 form. */
+const UNPAIRED_SURROGATE = /\p{Cs}/u;
+
 /**
  * A conforming relative path (vault-folder.md §2): `/`-separated,
  * non-empty components, none `.` or `..`, no NUL, no backslash, not
- * absolute. Returns `path`; throws otherwise. Unicode is allowed and
- * compared by code point, never case-folded or normalized.
+ * absolute, and UTF-8 — so no unpaired surrogate, which no folder or
+ * archive could hold as the name it was given. Returns `path`; throws
+ * otherwise. Unicode is allowed and compared by code point, never
+ * case-folded or normalized.
  */
 export function checkPath(path: string): string {
   if (typeof path !== "string" || path === "") throw new Error(`not a path: ${JSON.stringify(path)}`);
   if (path.includes("\0") || path.includes("\\")) throw new Error(`not a conforming path (NUL or backslash): ${JSON.stringify(path)}`);
+  if (UNPAIRED_SURROGATE.test(path)) throw new Error(`not a UTF-8 path (unpaired surrogate): ${JSON.stringify(path)}`);
   if (path.startsWith("/")) throw new Error(`not a relative path: ${JSON.stringify(path)}`);
   for (const component of path.split("/")) {
     if (component === "" || component === "." || component === "..") throw new Error(`not a relative path: ${JSON.stringify(path)}`);

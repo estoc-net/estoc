@@ -273,6 +273,28 @@ describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () 
     expect(vault.latches.latched()).toEqual([]);
   });
 
+  it("r1-B a read whose output buffer cannot be allocated cancels the stream it opened: no latch is left behind", async () => {
+    const { vault, now } = open({ graceMs: 0 });
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
+    now.advance(HOUR);
+    // Fault injection: `new Uint8Array(5)` — the one allocation `read` makes for this object — throws; every other construction goes through.
+    const Real = globalThis.Uint8Array;
+    globalThis.Uint8Array = new Proxy(Real, {
+      construct: (target, args, newTarget) => {
+        if (args.length === 1 && args[0] === 5) throw new RangeError("Array buffer allocation failed");
+        return Reflect.construct(target, args, newTarget);
+      },
+    }) as typeof Uint8Array;
+    try {
+      await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(RangeError);
+    } finally {
+      globalThis.Uint8Array = Real;
+    }
+    expect(vault.latches.latched()).toEqual([]);
+    expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
+  });
+
   it("read holds no latch once done, and no lock while draining", async () => {
     const { vault } = open();
     const v = vault.vault;
@@ -576,6 +598,53 @@ describe("VaultRuntime.ingest (event-store.md §5.3, §10)", () => {
     const forked = { ...(own as Event), eventId: (foreign as Event).eventId.replace(/.$/, "f") };
     await expect(vault.ingest([forked])).rejects.toThrow(ForkedAuthor);
     expect((await all(vault.vault.events.scan())).length).toBe(2);
+  });
+
+  it("r1-A reads each input as it was yielded: a source reusing one object between yields loses nothing, on both paths", async () => {
+    const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
+    const [first, second] = (await other.vault.commit([], [draft([], { n: 1 }), draft([], { n: 2 })])) as [Event, Event];
+    async function* reused(): AsyncIterable<unknown> {
+      const value = structuredClone(first);
+      yield value;
+      Object.assign(value, structuredClone(second));
+      yield value;
+    }
+    const direct = await new MemoryVault({ author: authorN(3) }).ingest(reused());
+    expect(direct).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
+    const held = await new MemoryVault({ author: authorN(3) }).locked((h) => h.ingest(reused()));
+    expect(held).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
+    // the same ID under two contents, through one reused object: a conflict, not a duplicate
+    async function* conflicting(): AsyncIterable<unknown> {
+      const value = structuredClone(first);
+      yield value;
+      value.data = { n: 3 };
+      yield value;
+    }
+    const conflicted = await new MemoryVault({ author: authorN(3) }).ingest(conflicting());
+    expect(conflicted.added).toBe(1);
+    expect(conflicted.conflicts.map((c) => [c.eventId, c.kept.data, c.rejected.data])).toEqual([[first.eventId, { n: 1 }, { n: 3 }]]);
+    // what the store holds is the runtime's own copy: mutating the source afterwards changes nothing
+    const vault = new MemoryVault({ author: authorN(3) });
+    const value = structuredClone(first);
+    await vault.ingest([value]);
+    (value.data as { n: number }).n = 99;
+    expect((await all(vault.vault.events.scan()))[0]?.data).toEqual({ n: 1 });
+  });
+
+  it("r1-A an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
+    const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
+    const [good] = await other.vault.commit([], [draft()]);
+    async function* mixed(): AsyncIterable<unknown> {
+      const bad = { ...(good as Event), at: "yesterday" };
+      yield bad;
+      bad.at = (good as Event).at; // mended after the fact: too late, it was read as it was yielded
+      yield { ...(good as Event), data: { n: -0 } }; // a canonical form of its own: -0 becomes 0
+      yield 42;
+    }
+    const outcome = await new MemoryVault({ author: authorN(3) }).ingest(mixed());
+    expect(outcome.added).toBe(1);
+    expect(outcome.rejected.map((r) => r.error)).toEqual(["at is not a canonical RFC 3339 UTC millisecond", "an event is a JSON object"]);
+    expect(outcome.rejected[1]?.value).toBe(42);
   });
 
   it("the held view ingests too, for import and restore", async () => {

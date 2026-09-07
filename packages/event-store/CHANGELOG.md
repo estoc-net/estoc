@@ -90,8 +90,14 @@
   vault-folder.md §2, §7.1, §11.6): the `FileStore` interface,
   `checkPath` (no NUL, no backslash, no empty, `.` or `..` component,
   Unicode compared by code point, never normalized), the six owned roots
-  a file store refuses to write, and `MemoryFileStore`. Tests: ES-3,
-  ES-27, ES-28, ES-29, ES-30, DO-8, DO-18, DO-19.
+  a file store refuses to write, and `MemoryFileStore`; `checkPath`
+  also refuses an unpaired surrogate, which no UTF-8 folder could hold.
+  `ingest` fixes each input — a canonical copy, or a rejection with its
+  error — before asking the source for the next (`canonicalEvent`,
+  exported), so a source that reuses one object between yields is read
+  as it yielded; a bounded `read` cancels the stream it opened on any
+  failure, so no latch outlives a failed read. Tests: ES-3, ES-27,
+  ES-28, ES-29, ES-30, DO-8, DO-18, DO-19.
 
 - **`reach(roots, get)`**: the walk `reachable` makes, also saying what
   it asked for and did not find — a root, or a link of a reached block

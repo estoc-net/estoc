@@ -10,7 +10,7 @@
  */
 
 import { MissingRoot, ObjectTooLarge } from "./errors.js";
-import { validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested } from "./event.js";
+import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested, type Rejected } from "./event.js";
 import { MemoryFileStore, type FileStore } from "./files.js";
 import type { JsonObject } from "./json.js";
 import { MemoryEventStore } from "./memory-events.js";
@@ -196,14 +196,23 @@ class View implements Vault {
       return stream === null ? null : { stream, size: info.size };
     });
     if (opened === null) return null;
-    const out = new Uint8Array(opened.size);
-    let at = 0;
-    for await (const chunk of chunksOf(opened.stream)) {
-      if (at + chunk.length > out.length) throw new ObjectTooLarge(`${cid} streamed more than its ${opened.size} bytes`);
-      out.set(chunk, at);
-      at += chunk.length;
+    // From here the stream is this method's to end: whatever fails —
+    // the allocation, the stream itself — cancels it, so its latch is
+    // released on every failure path (§10), not only the ones inside
+    // the iteration.
+    try {
+      const out = new Uint8Array(opened.size);
+      let at = 0;
+      for await (const chunk of chunksOf(opened.stream)) {
+        if (at + chunk.length > out.length) throw new ObjectTooLarge(`${cid} streamed more than its ${opened.size} bytes`);
+        out.set(chunk, at);
+        at += chunk.length;
+      }
+      return out;
+    } catch (err) {
+      await opened.stream.cancel().catch(() => undefined);
+      throw err;
     }
-    return out;
   }
 
   commit<D extends JsonObject>(objects: CommitObject[], drafts: Draft<D>[]): Promise<Event<D>[]> {
@@ -233,7 +242,7 @@ class HeldView extends View implements Held {
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    return this.stores.events.ingest(await readAll(events));
+    return ingestRead(this.stores.events, await readAll(events));
   }
 
   async collect(keep: KeepUnderLock): Promise<Collected> {
@@ -245,11 +254,37 @@ class HeldView extends View implements Held {
   }
 }
 
-/** The input of `ingest`, read whole (§5.3): its validation is its own, and a slow source should not hold the vault. */
-async function readAll(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<unknown[]> {
-  const read: unknown[] = [];
-  for await (const value of events) read.push(value);
+/** The input of `ingest`, read whole: the events fixed in canonical form, and the inputs that were not events, with why. */
+interface Read {
+  events: Event[];
+  rejected: Rejected[];
+}
+
+/**
+ * The input of `ingest`, read whole before the lock is taken (§5.3):
+ * its validation is its own, and a slow source should not hold the
+ * vault. Each input is fixed — validated and copied into canonical
+ * form, or recorded as rejected with its error — before the source is
+ * asked for the next, so a source that reuses one object between
+ * yields is read as it yielded, and what reaches the store is the
+ * runtime's own data, which nothing outside can change.
+ */
+async function readAll(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Read> {
+  const read: Read = { events: [], rejected: [] };
+  for await (const value of events) {
+    try {
+      read.events.push(canonicalEvent(value));
+    } catch (err) {
+      read.rejected.push({ value, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
   return read;
+}
+
+/** Ingest what `readAll` read: the events to the store, under the lock the caller holds; the rejected reported with the store's own. */
+async function ingestRead(events: EventStore, read: Read): Promise<Ingested> {
+  const outcome = await events.ingest(read.events);
+  return read.rejected.length === 0 ? outcome : { ...outcome, rejected: [...read.rejected, ...outcome.rejected] };
 }
 
 /**
@@ -282,7 +317,7 @@ export class Runtime implements VaultRuntime {
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     const read = await readAll(events);
-    return this.locked((held) => held.ingest(read));
+    return this.locked(() => ingestRead(this.stores.events, read));
   }
 }
 

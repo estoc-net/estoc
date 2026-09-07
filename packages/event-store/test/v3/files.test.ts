@@ -18,6 +18,17 @@ describe("checkPath (vault-folder.md §2)", () => {
     }
   });
 
+  it("r1-C rejects an unpaired surrogate anywhere, and keeps a paired one", () => {
+    const high = String.fromCharCode(0xd800);
+    const low = String.fromCharCode(0xdc01);
+    for (const path of [high, low, `notes/${high}.txt`, `notes/${low}.txt`, `${high}/a`, `a/b${low}c`, `${low}${high}`]) {
+      expect(() => checkPath(path), JSON.stringify(path)).toThrow(/unpaired surrogate/);
+    }
+    for (const path of ["\u{1F600}", "notes/\u{1F600}.txt", `${high}${low}`, "a/\u{10FFFF}"]) {
+      expect(checkPath(path), JSON.stringify(path)).toBe(path);
+    }
+  });
+
   it("does not normalize or case-fold: `Config.json` and `config.json` are two paths", () => {
     expect(isOwnedPath("config.json")).toBe(true);
     expect(isOwnedPath("Config.json")).toBe(false);
@@ -100,6 +111,20 @@ describe("MemoryFileStore (event-store.md §8.1, vault-folder.md §11.6)", () =>
     await expect(files.read("../x")).rejects.toThrow();
     await expect(files.write("a/../b", bytes("x"))).rejects.toThrow();
     expect(await files.list()).toEqual([]);
+  });
+
+  it("r1-C refuses a path with an unpaired surrogate on read and write alike; an astral character is a name like any other", async () => {
+    const files = new MemoryFileStore();
+    const high = String.fromCharCode(0xd800);
+    const low = String.fromCharCode(0xdc01);
+    for (const path of [`notes/${high}.txt`, `notes/${low}.txt`]) {
+      await expect(files.write(path, bytes("x")), JSON.stringify(path)).rejects.toThrow(/unpaired surrogate/);
+      await expect(files.read(path), JSON.stringify(path)).rejects.toThrow(/unpaired surrogate/);
+    }
+    await files.write("notes/\u{1F600}.txt", bytes("smile"));
+    await files.write("notes/\uFFFD.txt", bytes("replacement"));
+    expectBytes(await files.read("notes/\u{1F600}.txt"), bytes("smile"));
+    expect(await files.list()).toEqual(["notes/\uFFFD.txt", "notes/\u{1F600}.txt"]);
   });
 
   it("refuses to make one name both a file and a directory", async () => {
