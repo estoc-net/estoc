@@ -30,7 +30,8 @@ import { own } from "./ownership.js";
  * worker until its process exits — or, naming this thread, while the
  * process's origin is this incarnation's; stale and reclaimed
  * otherwise, judged from the disk alone, with no advisory file lock
- * (decision 5 of the v3 plan).
+ * (decision 5 of the v3 plan); and withdrawn whole when the take is
+ * over, whether released or failed.
  */
 export interface FsBackendOptions {
   /**

@@ -5,55 +5,31 @@
  *
  * The file holds one line, `<pid> <thread> <origin> <token>`: the
  * process and thread that took it — Node workers share a pid and differ
- * in thread id — the millisecond the process began, and a token
- * for this one take. It is created whole and atomically, written to a
- * claim file beside it and hard-linked into place, so no taker ever sees
- * an empty file of this module's making, then read back, since
- * the name may have changed hands meanwhile.
+ * in thread id — the millisecond the process began, and a token for
+ * this one take. It is created whole and atomically (`take`) and read
+ * back, since the name may have changed hands meanwhile.
  *
- * A record — a holder's line, a claim, a marker — is judged live from
- * the disk alone; no memory of this module's decides it, since a copy
- * of the module in another realm of this thread has no share in that
- * memory. A record naming another process is live while that
- * process is. One naming this process and another thread is live while
- * this process is: a worker's record outlives the worker until the
- * process exits, or that thread reclaims it. One naming this very
- * thread is live when its origin is this process's — the platform's
- * `performance.timeOrigin`, fixed when the process began and the same
- * in every realm and copy — and a previous incarnation's otherwise:
- * left by a process that died and whose pid came round again. So two
- * takes in one thread cannot both pass, whichever copy each came
- * through, and a file naming a live holder refuses the
- * taker at once.
+ * Three rules hold the rest together, each kept where named:
  *
- * Nothing is removed from the name after a read: what stands there
- * may have changed between the read and the removal. A file is
- * taken off the name only by moving it aside — atomically, under a
- * marker naming the mover — and what moved is then judged: exactly the
- * stale file seen, or stale anyway (dead, previous incarnation, not a
- * holder's line at all: empty, garbage), and it is removed with the
- * marker; a live holder's file that got there meanwhile, and it
- * is given its name back, linked back once the name is free, since a
- * taker that finds a marker beside the name it just took gives the
- * name up — the same way — and looks again. The marker stands until
- * that has happened: a restore that runs out of patience — a taker
- * stalled between its take and its look, longer than the budget —
- * leaves the marker in place and fails the mover's take, so the moved
- * holder's record still bars every taker; the next sweep by this
- * thread, or by anyone once the mover is gone, tries again. A file at
- * the name that is itself stale is taken off it the same way, and a
- * marker gone from under a restore was removed by the one entitled to:
- * the holder withdrawing, or a sweep that found the holder dead.
+ * - A record is judged live from the disk alone (`isLive`): no memory
+ *   of this module's decides it, since a copy of the module in another
+ *   realm of this thread has no share in that memory.
+ * - Nothing is removed from the name after a read (`evict`): what
+ *   stands there may have changed in between. A file leaves the name
+ *   only by an atomic move under a marker naming the mover, and what
+ *   moved is then judged; a live holder's file moved by mistake is
+ *   given its name back (`restore`), and the marker stands, barring
+ *   every taker, until it has been.
+ * - A take that is over is withdrawn (`withdraw`): a holder releasing,
+ *   a taker giving the name up, or failing once it had published its
+ *   line, leaves nothing of that line behind — at the name, under any
+ *   marker, or with a restore about to put it back.
  *
- * A holder withdraws — releasing, or giving up a name it took beside a
- * marker — by taking its own line off the name the same way, and off
- * every marker holding it, until a pass finds it nowhere: a restore
- * racing the withdrawal cannot then leave the line standing. The pid is
- * read for liveness only, never as an identity (ES-15).
+ * The pid is read for liveness only, never as an identity (ES-15).
  */
 
 import { randomBytes } from "node:crypto";
-import { link, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, link, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { threadId } from "node:worker_threads";
@@ -71,8 +47,16 @@ export const ATTEMPTS = 200;
 const ORIGIN = Math.floor(performance.timeOrigin);
 /** One holder's line: a positive pid, a thread id, the process's origin and the take's token. */
 const HOLDER = /^([1-9][0-9]{0,9}) ([0-9]{1,9}) ([1-9][0-9]{0,15}) ([0-9a-f]{16})\n?$/;
-/** A marker's or claim's name beside the pid file: `<pid file>.<kind>.<pid>.<thread>.<origin>.<token>`. */
-const SIDECAR = /^(reclaim|claim)\.([1-9][0-9]{0,9})\.([0-9]{1,9})\.([1-9][0-9]{0,15})\.([0-9a-f]{16})$/;
+/** A sidecar's name beside the pid file: `<pid file>.<kind>.<pid>.<thread>.<origin>.<token>`. */
+const SIDECAR = /^(reclaim|claim|withdraw)\.([1-9][0-9]{0,9})\.([0-9]{1,9})\.([1-9][0-9]{0,15})\.([0-9a-f]{16})$/;
+
+/**
+ * What stands beside the pid file: a `claim` is a take's line on its
+ * way to the name; a `reclaim` marker holds a file moved off the name
+ * until it is judged or given back; a `withdraw` notice says the take
+ * named is over, so a restore about to put its line back drops it.
+ */
+type Kind = "reclaim" | "claim" | "withdraw";
 
 /**
  * The markers this copy of the module is moving files under right now,
@@ -83,13 +67,14 @@ const SIDECAR = /^(reclaim|claim)\.([1-9][0-9]{0,9})\.([0-9]{1,9})\.([1-9][0-9]{
  */
 const working = new Set<string>();
 
+/** Whom a record names, and which take. */
 interface Who {
   pid: number;
   thread: number;
   origin: number;
+  token: string;
 }
 
-/** What a move of a file off the name came to. */
 type Moved = "removed" | "kept" | "stuck";
 
 const STUCK = "a holder moved aside could not be given its name back in time; its record stands aside, and bars every taker until it is";
@@ -98,45 +83,57 @@ const STUCK = "a holder moved aside could not be given its name back in time; it
  * The pid file at `real` (a real path, its directory made) taken as the
  * module comment says; `shown` is the name the caller gave, for
  * messages. `attempts` bounds the take's retries and each restore's.
+ * A take that fails once its line has been at the name withdraws the
+ * line before throwing, since the disk would otherwise hold this
+ * thread as a live holder that no one can release.
  */
 export async function own(real: string, shown: string, attempts = ATTEMPTS): Promise<Ownership> {
-  const token = randomBytes(8).toString("hex");
-  const line = `${process.pid} ${threadId} ${ORIGIN} ${token}\n`;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    await sweep(real, attempts);
-    if (!(await take(real, line, token))) {
-      const holder = await readHolder(real);
-      if (holder === null) continue; // absent now: take it
-      if (holder !== line) {
-        const who = holderOf(holder);
-        if (who !== null && isLive(who)) throw new VaultOwned(shown, `${describe(who)} holds it`);
-        // Stale: dead, a previous incarnation, unreadable. Off the name by a move and a look at what moved.
-        if ((await evict(real, holder, attempts)) === "stuck") throw new VaultOwned(shown, STUCK);
+  const me: Who = { pid: process.pid, thread: threadId, origin: ORIGIN, token: randomBytes(8).toString("hex") };
+  const line = lineOf(me);
+  let published = false;
+  try {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await sweep(real, attempts);
+      if (await take(real, me)) {
+        published = true;
+      } else {
+        const holder = await readHolder(real);
+        if (holder === null) continue; // absent now: take it
+        if (holder !== line) {
+          const who = holderOf(holder);
+          if (who !== null && isLive(who)) throw new VaultOwned(shown, `${describe(who)} holds it`);
+          // Stale: dead, a previous incarnation, unreadable. Off the name by a move and a look at what moved.
+          if ((await evict(real, holder, attempts)) === "stuck") throw new VaultOwned(shown, STUCK);
+          await sleep(backoff(attempt));
+          continue;
+        }
+        // This take's own line stands at the name: a mover took it aside by mistake and gave it back.
+      }
+      // Taken; but a reclaim in flight beside it may be about to give the name back to a holder it moved: give it up and look again.
+      if (await reclaiming(real)) {
+        if ((await withdraw(real, me, attempts)) === "stuck") throw new VaultOwned(shown, STUCK);
+        published = false;
         await sleep(backoff(attempt));
         continue;
       }
-      // This take's own line stands at the name: a mover took it aside by mistake and gave it back.
+      if ((await readHolder(real)) !== line) continue; // gone or changed hands between the take and the look: try again
+      return held(real, me);
     }
-    // Taken; but a reclaim in flight beside it may be about to give the name back to a holder it moved: give it up and look again.
-    if (await reclaiming(real)) {
-      if ((await withdraw(real, line, attempts)) === "stuck") throw new VaultOwned(shown, STUCK);
-      await sleep(backoff(attempt));
-      continue;
-    }
-    if ((await readHolder(real)) !== line) continue; // gone or changed hands between the take and the look: try again
-    return held(real, line);
+    throw new VaultOwned(shown, "could not settle who holds it");
+  } catch (err) {
+    if (published) await withdraw(real, me, attempts);
+    throw err;
   }
-  throw new VaultOwned(shown, "could not settle who holds it");
 }
 
-/** The ownership of a take that succeeded: released by withdrawing this take's line — from the name, and from any marker holding it. */
-function held(real: string, line: string): Ownership {
+/** The ownership of a take that succeeded: released by withdrawing the take's line. */
+function held(real: string, me: Who): Ownership {
   let released = false;
   return {
     release: async () => {
       if (released) return;
       released = true;
-      await withdraw(real, line, ATTEMPTS);
+      await withdraw(real, me, ATTEMPTS);
     },
   };
 }
@@ -180,13 +177,16 @@ function backoff(attempt: number): number {
   return Math.min(2 + attempt * 2, 50);
 }
 
+function lineOf(who: Who): string {
+  return `${who.pid} ${who.thread} ${who.origin} ${who.token}\n`;
+}
+
 /** Who a holder's line names, or null when the line is not a holder's — empty, garbage, another format. */
 function holderOf(line: string): Who | null {
   const m = HOLDER.exec(line);
-  return m === null ? null : { pid: Number(m[1]), thread: Number(m[2]), origin: Number(m[3]) };
+  return m === null ? null : { pid: Number(m[1]), thread: Number(m[2]), origin: Number(m[3]), token: m[4] as string };
 }
 
-/** Whether a holder's line is stale: not a holder's at all, or naming a holder that is not live. */
 function stale(line: string): boolean {
   const who = holderOf(line);
   return who === null || !isLive(who);
@@ -216,22 +216,28 @@ function noLinks(err: unknown): boolean {
   return code === "EPERM" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EXDEV" || code === "EINVAL";
 }
 
-/** A fresh sidecar name of `kind` beside `real`, naming this thread and incarnation. */
-function sidecar(real: string, kind: "reclaim" | "claim", token = randomBytes(8).toString("hex")): string {
-  return `${real}.${kind}.${process.pid}.${threadId}.${ORIGIN}.${token}`;
+function sidecar(real: string, kind: Kind, who: Who): string {
+  return `${real}.${kind}.${who.pid}.${who.thread}.${who.origin}.${who.token}`;
+}
+
+/** A fresh marker name beside `real`, naming this thread and incarnation. */
+function marker(real: string): string {
+  return sidecar(real, "reclaim", { pid: process.pid, thread: threadId, origin: ORIGIN, token: randomBytes(8).toString("hex") });
 }
 
 /**
- * Create the pid file whole at `real` with `line`, only if absent: written
- * to a claim file beside it and hard-linked into place, the claim then
- * removed. Where the file system has no hard links, an exclusive create
- * and a write — the window between them is this taker's own to lose,
- * since an empty file reads as stale and a reclaimed take fails its
- * read-back. True when the name was taken now, false when something
- * stood there.
+ * Create the pid file whole at `real` with `me`'s line, only if absent:
+ * written to a claim file beside it and hard-linked into place, the
+ * claim then removed, so no taker ever sees an empty file of this
+ * module's making. Where the file system has no hard links, an
+ * exclusive create and a write — the window between them is this
+ * taker's own to lose, since an empty file reads as stale and a
+ * reclaimed take fails its read-back. True when the name was taken
+ * now, false when something stood there.
  */
-async function take(real: string, line: string, token: string): Promise<boolean> {
-  const claim = sidecar(real, "claim", token);
+async function take(real: string, me: Who): Promise<boolean> {
+  const line = lineOf(me);
+  const claim = sidecar(real, "claim", me);
   await writeFile(claim, line, { flag: "wx" });
   try {
     await link(claim, real);
@@ -259,39 +265,48 @@ async function take(real: string, line: string, token: string): Promise<boolean>
  * a live holder's file other than `expected` stands there — left as it
  * is — or got there between the look and the move and was given its
  * name back; `stuck` when that could not be done within
- * `attempts`: the marker then stands.
+ * `attempts`: a marker then stands.
  */
 async function evict(real: string, expected: string, attempts: number): Promise<Moved> {
   const standing = await readHolder(real);
   if (standing === null || (standing !== expected && !stale(standing))) return "kept";
-  const marker = sidecar(real, "reclaim");
-  working.add(marker);
+  const aside = marker(real);
+  working.add(aside);
   try {
     try {
-      await rename(real, marker);
+      await rename(real, aside);
     } catch (err) {
       if (isMissing(err)) return "kept"; // someone else took it off the name first
       throw err;
     }
-    const moved = await readHolder(marker);
+    const moved = await readHolder(aside);
     if (moved === null || moved === expected || stale(moved)) {
-      await rm(marker, { force: true });
+      await rm(aside, { force: true });
       return "removed";
     }
-    return (await restore(marker, attempts)) ? "kept" : "stuck";
+    return (await restore(aside, attempts)) ? "kept" : "stuck";
   } finally {
-    working.delete(marker);
+    working.delete(aside);
   }
 }
 
 /**
- * Take this holder's `line` off the name and off every marker holding
- * it — a mover that took it aside by mistake may be giving it back
- * meanwhile — until a pass finds it nowhere. `stuck` when a live file
- * of someone else's, moved on the way, could not be given its name
- * back in time.
+ * Take `me`'s line off the name and off every marker holding it — a
+ * mover that took it aside by mistake may be giving it back meanwhile —
+ * until a pass finds it nowhere. A notice of the withdrawal stands
+ * beside the name throughout: a restore that had already looked for it
+ * when it linked the line back looks again afterwards, and takes the
+ * line off the name itself, keeping its marker until it has, so a pass
+ * that finds no marker holding the line has no restore left to fear.
+ * The notice goes with the last pass; `stuck` — a live file of someone
+ * else's, moved on the way, could not be given its name back in time —
+ * leaves it standing, and the sweep removes it once this process is
+ * gone.
  */
-async function withdraw(real: string, line: string, attempts: number): Promise<"done" | "stuck"> {
+async function withdraw(real: string, me: Who, attempts: number): Promise<"done" | "stuck"> {
+  const line = lineOf(me);
+  const notice = sidecar(real, "withdraw", me);
+  await writeFile(notice, "");
   for (;;) {
     const moved = await evict(real, line, attempts);
     if (moved === "stuck") return "stuck";
@@ -302,7 +317,22 @@ async function withdraw(real: string, line: string, attempts: number): Promise<"
         found = true;
       }
     }
-    if (!found) return "done";
+    if (!found) break;
+  }
+  await rm(notice, { force: true });
+  return "done";
+}
+
+/** Whether the take that wrote `line` is being withdrawn: its notice stands beside `real`. */
+async function withdrawing(real: string, line: string): Promise<boolean> {
+  const who = holderOf(line);
+  if (who === null) return false;
+  try {
+    await access(sidecar(real, "withdraw", who));
+    return true;
+  } catch (err) {
+    if (isMissing(err)) return false;
+    throw err;
   }
 }
 
@@ -313,22 +343,22 @@ async function withdraw(real: string, line: string, attempts: number): Promise<"
  * that found the holder dead: nothing left to restore). While a live
  * taker's file stands at the name, wait for it to give the name up; a
  * stale file there is taken off it by a move and a look at what moved,
- * on the budget left. False when the name was not free within
- * `attempts`: the marker stands.
+ * on the budget left. A line whose holder is withdrawing it is taken
+ * off the name again once linked, and the marker goes only then.
+ * False when the name was not free within `attempts`, or a file moved
+ * on the way could not be given its name back: a marker then stands.
  */
 export async function restore(marker: string, attempts = ATTEMPTS): Promise<boolean> {
   const real = marker.slice(0, marker.lastIndexOf(".reclaim."));
+  const moved = await readHolder(marker);
+  if (moved === null) return true;
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       await link(marker, real);
-      await rm(marker, { force: true });
-      return true;
     } catch (err) {
       const code = codeOf(err);
       if (isMissing(err)) return true; // the marker is gone: whoever removed it had nothing left to restore
       if (code === "EEXIST") {
-        const moved = await readHolder(marker);
-        if (moved === null) return true;
         const standing = await readHolder(real);
         if (standing === moved) {
           await rm(marker, { force: true }); // another restore linked it back already
@@ -343,23 +373,25 @@ export async function restore(marker: string, attempts = ATTEMPTS): Promise<bool
       }
       if (!noLinks(err)) throw err;
       await rename(marker, real); // no hard links: the file goes back by rename, which cannot wait for the name to be free
-      return true;
     }
+    let given = true;
+    if (await withdrawing(real, moved)) given = (await evict(real, moved, attempts - attempt)) !== "stuck";
+    await rm(marker, { force: true });
+    return given;
   }
   return false;
 }
 
-/** Whether a reclaim marker stands beside `real`. */
 async function reclaiming(real: string): Promise<boolean> {
   return (await sidecars(real)).some((s) => s.kind === "reclaim");
 }
 
 interface Sidecar extends Who {
   file: string;
-  kind: "reclaim" | "claim";
+  kind: Kind;
 }
 
-/** The claim and reclaim files beside `real`, with the process, thread and origin that made each. */
+/** The sidecars beside `real`, with the process, thread, origin and token each names. */
 async function sidecars(real: string): Promise<Sidecar[]> {
   const name = path.basename(real);
   let names: string[];
@@ -374,26 +406,27 @@ async function sidecars(real: string): Promise<Sidecar[]> {
     if (!entry.startsWith(`${name}.`)) continue;
     const m = SIDECAR.exec(entry.slice(name.length + 1));
     if (m !== null) {
-      found.push({ file: path.join(path.dirname(real), entry), kind: m[1] as "reclaim" | "claim", pid: Number(m[2]), thread: Number(m[3]), origin: Number(m[4]) });
+      found.push({ file: path.join(path.dirname(real), entry), kind: m[1] as Kind, pid: Number(m[2]), thread: Number(m[3]), origin: Number(m[4]), token: m[5] as string });
     }
   }
   return found;
 }
 
 /**
- * What a mover or taker that is gone left beside `real` — dead, or a
- * previous incarnation — and what this thread left on purpose: a claim
- * is removed; a marker holding a live holder's file is that holder's
- * name given back, any other marker is removed. A sidecar this copy is
- * working on, and a live process's or another thread's, is its own. A
- * marker of this very thread not in hand stands from a restore that
- * gave up, or is another copy's, in flight; either way the
- * same steps serve, and are safe beside that copy's own.
+ * What a mover, taker or withdrawer that is gone left beside `real` —
+ * dead, or a previous incarnation — and what this thread left on
+ * purpose: a claim or notice is removed; a marker holding a live
+ * holder's file is that holder's name given back, any other marker is
+ * removed. A sidecar this copy is working on, and a live process's or
+ * another thread's, is its own. A marker of this very thread not in
+ * hand stands from a restore that gave up, or is another copy's, in
+ * flight; either way the same steps serve, and are safe beside that
+ * copy's own.
  */
 async function sweep(real: string, attempts: number): Promise<void> {
   for (const side of await sidecars(real)) {
     if (working.has(side.file)) continue;
-    if (side.kind === "claim") {
+    if (side.kind !== "reclaim") {
       if (!isLive(side)) await rm(side.file, { force: true });
       continue;
     }

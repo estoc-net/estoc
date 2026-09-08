@@ -265,9 +265,15 @@
   stale file — dead, a previous incarnation, empty, garbage — is
   taken off it only by moving it aside under a marker and judging
   what moved, a live holder's file moved by mistake given its name
-  back; a holder withdraws — releasing, or giving up a name taken
-  beside a marker — by taking its own line off the name the same way
-  and off every marker holding it, until a pass finds it nowhere.
+  back; a take that is over is withdrawn — a holder releasing, a
+  taker giving up a name taken beside a marker, or failing once its
+  line had been at the name — by taking its own line off the name the
+  same way and off every marker holding it, until a pass finds it
+  nowhere, under a notice of the withdrawal beside the name that a
+  restore looks for once it has linked the line back, taking it off
+  again and keeping its marker until it has, so a withdrawal that
+  finds no marker holding its line has no restore left to fear, and
+  a failed take leaves nothing that bars the next.
   A restore that cannot give a moved holder its name
   back within its budget — a taker stalled between its take and its
   look — leaves the marker standing and fails the mover's take, so
