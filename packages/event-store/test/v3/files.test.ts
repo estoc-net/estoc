@@ -18,7 +18,7 @@ describe("checkPath (vault-folder.md §2)", () => {
     }
   });
 
-  it("r1-C rejects an unpaired surrogate anywhere, and keeps a paired one", () => {
+  it("rejects an unpaired surrogate anywhere, and keeps a paired one", () => {
     const high = String.fromCharCode(0xd800);
     const low = String.fromCharCode(0xdc01);
     for (const path of [high, low, `notes/${high}.txt`, `notes/${low}.txt`, `${high}/a`, `a/b${low}c`, `${low}${high}`]) {
@@ -113,7 +113,7 @@ describe("MemoryFileStore (event-store.md §8.1, vault-folder.md §11.6)", () =>
     expect(await files.list()).toEqual([]);
   });
 
-  it("r1-C refuses a path with an unpaired surrogate on read and write alike; an astral character is a name like any other", async () => {
+  it("refuses a path with an unpaired surrogate on read and write alike; an astral character is a name like any other", async () => {
     const files = new MemoryFileStore();
     const high = String.fromCharCode(0xd800);
     const low = String.fromCharCode(0xdc01);

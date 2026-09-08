@@ -24,7 +24,7 @@ objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) =>
  * — for the first 256 chunks of each stream; 64 KiB after that, so a
  * large object (DO-7) does not come out in millions — the latch
  * untouched: a store that chunks its output otherwise than by extent,
- * which the suite must accept just the same (r1-C).
+ * which the suite must accept just the same.
  */
 function rechunked(inner: ObjectStore, n: number): ObjectStore {
   return {
@@ -66,7 +66,7 @@ function rechunked(inner: ObjectStore, n: number): ObjectStore {
  * closes on that same pull. The outer stream holds a latch of its own
  * in the store's registry until it closes, fails or is cancelled. A
  * store that completes with the last chunk rather than on the read
- * after it, which the suite must accept just the same (r2-A).
+ * after it, which the suite must accept just the same.
  */
 function closingOnLast(inner: MemoryObjectStore): ObjectStore {
   return {
@@ -119,7 +119,7 @@ function closingOnLast(inner: MemoryObjectStore): ObjectStore {
  * throws `DamagedObject` from `open` itself if that fails; otherwise it
  * opens the object again and passes it through. A latch of the outer
  * stream's own covers the gap between the two. A store that does not
- * verify lazily, which the suite must accept just the same (r2-B).
+ * verify lazily, which the suite must accept just the same.
  */
 function verifyingFirst(inner: MemoryObjectStore): ObjectStore {
   return {
@@ -228,7 +228,7 @@ describe("MemoryObjectStore", () => {
     expect((await drain((await one.open(EMPTY_CID)) ?? (await one.putRaw(new Uint8Array(0)), (await one.open(EMPTY_CID)) as ReadableStream<Uint8Array>))).chunks).toBe(0);
   });
 
-  it("r3-A: a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
+  it("a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
     const size = 8 * 1024 * 1024 + 1;
     const chunk = 64 * 1024;
     async function* large(): AsyncIterable<Uint8Array> {
@@ -263,7 +263,7 @@ describe("MemoryObjectStore", () => {
     expectBytes(await store.read(cid, 12), want);
   });
 
-  it("r1-A: a Buffer is a Uint8Array whose slice is a view — one put whole, one reused by a generator, one chunk handed out by a stream: none of them shares memory with what is held", async () => {
+  it("a Buffer is a Uint8Array whose slice is a view — one put whole, one reused by a generator, one chunk handed out by a stream: none of them shares memory with what is held", async () => {
     // Put whole, then the caller's Buffer rewritten.
     const one = new MemoryObjectStore();
     const hello = Buffer.from("hello");
@@ -291,7 +291,7 @@ describe("MemoryObjectStore", () => {
     expect(await one.has(HELLO_CID)).toBe(true);
   });
 
-  it("r1-B: a put over a damaged object that nothing has read replaces its bytes; the old bytes' reader fails, the new bytes stay", async () => {
+  it("a put over a damaged object that nothing has read replaces its bytes; the old bytes' reader fails, the new bytes stay", async () => {
     const store = new MemoryObjectStore({ extentBytes: 2 });
     const bytes = bytesOf(10, 5);
     const cid = (await store.putRaw(bytes)).cid;
@@ -306,7 +306,7 @@ describe("MemoryObjectStore", () => {
     expect(streamed.chunks).toBe(5);
   });
 
-  it("r2-A: this store completes on the read after the last chunk, not with it — every byte handed out, the object is still latched until the reader sees the end", async () => {
+  it("this store completes on the read after the last chunk, not with it — every byte handed out, the object is still latched until the reader sees the end", async () => {
     const store = new MemoryObjectStore({ graceMs: 0, extentBytes: 4 });
     const bytes = bytesOf(10, 6);
     const cid = (await store.putRaw(bytes)).cid;
@@ -321,7 +321,7 @@ describe("MemoryObjectStore", () => {
     expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
   });
 
-  it("r2-B: this store verifies lazily — a damaged chunk goes out before the failure; a put that repairs the object meanwhile is left alone by the old reader's failure", async () => {
+  it("this store verifies lazily — a damaged chunk goes out before the failure; a put that repairs the object meanwhile is left alone by the old reader's failure", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const bytes = bytesOf(10, 7);
     const cid = (await store.putRaw(bytes)).cid;
@@ -381,7 +381,7 @@ describe("MemoryObjectStore", () => {
   });
 });
 
-/** `globalThis[name]` replaced by a Proxy whose `construct` may throw, for the length of `run` (fault injection, r2-A). */
+/** `globalThis[name]` replaced by a Proxy whose `construct` may throw, for the length of `run` (fault injection). */
 async function withConstructFault<T>(name: "Uint8Array" | "ReadableStream", shouldThrow: (args: unknown[]) => boolean, run: () => Promise<T>): Promise<T> {
   const Real = globalThis[name] as unknown as new (...args: unknown[]) => unknown;
   (globalThis as Record<string, unknown>)[name] = new Proxy(Real, {
@@ -397,7 +397,7 @@ async function withConstructFault<T>(name: "Uint8Array" | "ReadableStream", shou
   }
 }
 
-describe("MemoryObjectStore open releases the latch on every failure (event-store.md §10, r2-A)", () => {
+describe("MemoryObjectStore open releases the latch on every failure (event-store.md §10)", () => {
   const T0 = "2026-09-07T10:00:00.000Z";
 
   async function orphaned(): Promise<{ store: MemoryObjectStore; cid: Cid; bytes: Uint8Array }> {

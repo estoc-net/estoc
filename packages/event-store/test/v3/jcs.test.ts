@@ -146,7 +146,7 @@ describe("RFC 8785 canonicalization", () => {
     expect(() => canonicalize(ok)).not.toThrow();
   });
 
-  it("r1-A: keeps what I-JSON allows next to a noncharacter", () => {
+  it("keeps what I-JSON allows next to a noncharacter", () => {
     expect(canonicalText(cp(0xfdcf, 0xfdf0, 0xfffd))).toBe(`"${cp(0xfdcf, 0xfdf0, 0xfffd)}"`);
     expect(canonicalText(cp(0xdbff, 0xdffd))).toBe(`"${cp(0xdbff, 0xdffd)}"`); // U+10FFFD, last non-noncharacter
     expect(canonicalText("😂")).toBe('"😂"');

@@ -273,7 +273,7 @@ describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () 
     expect(vault.latches.latched()).toEqual([]);
   });
 
-  it("r1-B a read whose output buffer cannot be allocated cancels the stream it opened: no latch is left behind", async () => {
+  it("a read whose output buffer cannot be allocated cancels the stream it opened: no latch is left behind", async () => {
     const { vault, now } = open({ graceMs: 0 });
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
@@ -295,7 +295,7 @@ describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () 
     expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
   });
 
-  it("r2-A a read whose stream fails copying a chunk keeps the error, leaves no latch, and the object is collectable", async () => {
+  it("a read whose stream fails copying a chunk keeps the error, leaves no latch, and the object is collectable", async () => {
     const { vault, now } = open({ graceMs: 0 });
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
@@ -622,7 +622,7 @@ describe("VaultRuntime.ingest (event-store.md §5.3, §10)", () => {
     expect((await all(vault.vault.events.scan())).length).toBe(2);
   });
 
-  it("r1-A reads each input as it was yielded: a source reusing one object between yields loses nothing, on both paths", async () => {
+  it("reads each input as it was yielded: a source reusing one object between yields loses nothing, on both paths", async () => {
     const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
     const [first, second] = (await other.vault.commit([], [draft([], { n: 1 }), draft([], { n: 2 })])) as [Event, Event];
     async function* reused(): AsyncIterable<unknown> {
@@ -653,7 +653,7 @@ describe("VaultRuntime.ingest (event-store.md §5.3, §10)", () => {
     expect((await all(vault.vault.events.scan()))[0]?.data).toEqual({ n: 1 });
   });
 
-  it("r1-A an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
+  it("an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
     const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
     const [good] = await other.vault.commit([], [draft()]);
     async function* mixed(): AsyncIterable<unknown> {

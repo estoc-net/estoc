@@ -24,7 +24,7 @@ afterAll(async () => {
 });
 
 describe("memory backend", () => {
-  it("r2-A: a Node Buffer written, first-appended or read is copied — `Buffer#slice` is a view, so the file would otherwise follow the caller's later writes", async () => {
+  it("a Node Buffer written, first-appended or read is copied — `Buffer#slice` is a view, so the file would otherwise follow the caller's later writes", async () => {
     for (const method of ["write", "append"] as const) {
       const b = new MemoryBackend();
       const input = Buffer.from([1, 2, 3]);

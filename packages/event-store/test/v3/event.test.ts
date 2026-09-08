@@ -214,20 +214,20 @@ describe("envelope validation (§3.4)", () => {
       ["a drisl root", { type: "t", roots: [DRISL_EMPTY_MAP], data: {} }],
       ["ES-4: undefined member", { type: "t", data: { a: undefined } }],
       ["ES-4: lone surrogate", { type: "t", data: { a: "\ude02" } }],
-      ["r1-A: noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
-      ["r1-B: lone surrogate in type", { type: cp(0xd800), data: {} }],
-      ["r1-B: noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
-      ["a06 r1-D: eventId supplied", { type: "t", data: {}, eventId: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
-      ["a06 r1-D: at supplied", { type: "t", data: {}, at: "2026-09-07T10:00:00.000Z" }],
-      ["a06 r1-D: author supplied", { type: "t", data: {}, author: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
-      ["a06 r1-D: eventId supplied as undefined", { type: "t", data: {}, eventId: undefined }],
+      ["noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
+      ["lone surrogate in type", { type: cp(0xd800), data: {} }],
+      ["noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
+      ["eventId supplied", { type: "t", data: {}, eventId: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["at supplied", { type: "t", data: {}, at: "2026-09-07T10:00:00.000Z" }],
+      ["author supplied", { type: "t", data: {}, author: "019b2a43-4a56-7c0f-862f-194c0c4124a0" }],
+      ["eventId supplied as undefined", { type: "t", data: {}, eventId: undefined }],
     ];
     for (const [what, value] of bad) {
       expect(() => validateDraft(value), what).toThrow(InvalidEvent);
     }
   });
 
-  it("r1-B: a draft it accepts makes an event validateEvent accepts, to the last level of nesting", () => {
+  it("a draft it accepts makes an event validateEvent accepts, to the last level of nesting", () => {
     const wrapped = (levels: number) => {
       let data: JsonObject = {};
       for (let i = 0; i < levels; i++) data = { x: data };

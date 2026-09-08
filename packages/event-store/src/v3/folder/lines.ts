@@ -59,7 +59,7 @@ export interface Decoded {
  * envelope, spelled canonically, and authored by `author` — the
  * directory's. The bytes go to the parser as bytes and are compared as
  * bytes: a byte order mark, which a text decoder would drop, is three
- * bytes the canonical form does not have (r1-C). Throws `InvalidJson`
+ * bytes the canonical form does not have. Throws `InvalidJson`
  * or `InvalidEvent` naming the first rule broken.
  */
 export function decodeLine(bytes: Uint8Array, author: string): Decoded {

@@ -88,7 +88,7 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(() => decodeLine(utf8(CANONICAL.replace("Z\"", "\"")), A1)).toThrow(InvalidEvent);
   });
 
-  it("r1-C: a byte order mark in front of a canonical line is three bytes the canonical form does not have — damage, on the first line and on any later one; U+FEFF inside a string value is content and stays", () => {
+  it("a byte order mark in front of a canonical line is three bytes the canonical form does not have — damage, on the first line and on any later one; U+FEFF inside a string value is content and stays", () => {
     const BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
     const withBom = concat([BOM, utf8(CANONICAL)]);
     expect(() => decodeLine(withBom, A1)).toThrow(InvalidJson);

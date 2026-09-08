@@ -87,7 +87,7 @@ interface Frontier {
   segments: Record<string, number>;
 }
 
-/** What a file where `events/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses (r2-B, r3-A). */
+/** What a file where `events/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses. */
 const EVENTS_IS_A_FILE = "a file where the events directory belongs";
 
 /** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
@@ -144,7 +144,7 @@ export class FolderEventStore implements EventStore {
     const events = this.at(EVENTS_DIR);
     // The root itself first (§3, §11.1 step 3): a backend answers `list`
     // and `dirs` with [] for a file as for nothing there, so a file where
-    // `events/` belongs would read as an empty store (r2-B).
+    // `events/` belongs would read as an empty store.
     if (await this.rootIsAFile()) {
       damaged.push({ where: EVENTS_DIR, error: EVENTS_IS_A_FILE });
       return { segments, damaged };
@@ -178,7 +178,7 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * Before the first byte of a write (r3-A): a file where `events/`
+   * Before the first byte of a write: a file where `events/`
    * belongs is not a place to write a segment. A backend over a flat map
    * would take the write, and every read would then skip what it wrote;
    * one over a file system would fail in its own words. Either way the
@@ -254,7 +254,7 @@ export class FolderEventStore implements EventStore {
       try {
         await this.backend.append(this.at(open.rel), line);
       } catch (err) {
-        // The backend may have written part of the line (r1-A). The segment
+        // The backend may have written part of the line. The segment
         // is no longer one to append to: forget it, so the next append reads
         // the tail afresh and, finding it unterminated, leaves it behind.
         this.open = null;
@@ -294,7 +294,7 @@ export class FolderEventStore implements EventStore {
    * none, when the newest ends mid-line — a crash or a failed write left
    * a fragment there, and nothing is ever appended after a fragment, so
    * it can never fuse with the next event and stays what it is, reportable
-   * damage, whatever its bytes happen to spell (VF-10, r1-B) — and a fresh
+   * damage, whatever its bytes happen to spell (VF-10) — and a fresh
    * one once the open one is long enough.
    */
   private async openSegment(): Promise<{ rel: string; bytes: number }> {

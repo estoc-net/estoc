@@ -2,14 +2,14 @@
  * Minting for a local append (event-store.md §4.2, §5.1–5.2): `at` is
  * one reading of the wall clock, spelled canonically; `eventId` is what
  * the `uuid` package's standard RFC 9562 UUIDv7 generator gives. The
- * profile asks nothing of that generator beyond RFC 9562 (D-1): its
+ * profile asks nothing of that generator beyond RFC 9562: its
  * counter, what it does when the counter is full and what it does when
  * the clock moves backwards are its own. `uuid`'s `v7()`, called without
  * options, keeps state in its own module instance — a counter seeded at
  * random on each new millisecond and an embedded timestamp that never
  * moves backwards — so IDs from one instance of the module compare in
  * mint order. That is `uuid`'s property, which the tests record; the
- * profile neither requires nor promises it (D-2): a batch is returned in
+ * profile neither requires nor promises it: a batch is returned in
  * input order, and canonical order is §4.3's.
  *
  * `at` and the UUID's `unix_ts_ms` are two observations of the wall

@@ -127,7 +127,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await all(broken.scan())).toEqual([]);
     });
 
-    it("a06 r1-D: a draft carrying eventId, at or author is refused — never re-minted as a second event — and the whole batch with it", async () => {
+    it("a draft carrying eventId, at or author is refused — never re-minted as a second event — and the whole batch with it", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const held = await store.append({ type: "t", data: { n: 1 } });
@@ -283,7 +283,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(JSON.stringify(held)).toBe(JSON.stringify(JSON.parse(new TextDecoder().decode(new TextEncoder().encode(JSON.stringify(sortedDeep(event)))))));
     });
 
-    it("r1-C: a local append is held, returned and scanned in the form its canonical bytes parse to — `-0` as 0, members in canonical order — the same as its ingest elsewhere", async () => {
+    it("a local append is held, returned and scanned in the form its canonical bytes parse to — `-0` as 0, members in canonical order — the same as its ingest elsewhere", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const draft = { type: "t", data: { z: -0, a: 1, nested: { y: [2, { q: 1, p: 2 }], x: 1 } } };
@@ -362,7 +362,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await store.ingest(events)).toMatchObject({ added: 2 });
     });
 
-    it("r1-B: two ingests racing on one eventId with two contents land as one legal serialization — one content held, every reported conflict names it as kept", async () => {
+    it("two ingests racing on one eventId with two contents land as one legal serialization — one content held, every reported conflict names it as kept", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const [a] = await foreign(authorN(2), c.now, [{ type: "t", data: { v: "a" } }]);

@@ -188,7 +188,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await segmentsOf(backend)).toHaveLength(2);
   });
 
-  it("r1-B: a fragment that happens to be a complete canonical event without its LF stays damage — a later append never terminates it into an accepted event", async () => {
+  it("a fragment that happens to be a complete canonical event without its LF stays damage — a later append never terminates it into an accepted event", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const other = await openOver(new MemoryBackend(), { author: authorN(1), now: c.now });
@@ -211,7 +211,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect((JSON.parse(token) as { segments: Record<string, number> }).segments[rel]).toBe(0);
   });
 
-  it("r1-A: an append the backend fails midway leaves a fragment the same instance never appends after — the next append lands whole in a fresh segment, and a reopen reads it", async () => {
+  it("an append the backend fails midway leaves a fragment the same instance never appends after — the next append lands whole in a fresh segment, and a reopen reads it", async () => {
     class Faulty extends MemoryBackend {
       failAfter: number | null = null;
       override async append(path: string, bytes: Uint8Array): Promise<void> {
@@ -321,7 +321,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.conflicting()).toEqual([]);
   });
 
-  it("r1 question: one eventId under two author directories — the accepted content is chosen over every segment, and a filter only narrows it: scan({author}) and changes({author}) never expose the rejected content", async () => {
+  it("one eventId under two author directories — the accepted content is chosen over every segment, and a filter only narrows it: scan({author}) and changes({author}) never expose the rejected content", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(3), now: c.now });
@@ -392,7 +392,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.damaged()).toHaveLength(6);
   });
 
-  it("r2-A: a segment loaded from a Node Buffer is the store's own bytes — the caller writing into its buffer afterwards changes no event, and the memory backend holds no Buffer", async () => {
+  it("a segment loaded from a Node Buffer is the store's own bytes — the caller writing into its buffer afterwards changes no event, and the memory backend holds no Buffer", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const other = await openOver(new MemoryBackend(), { author: authorN(2), now: c.now });
@@ -419,7 +419,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     ["MemoryBackend", async (): Promise<VaultBackend> => new MemoryBackend()],
     ["FsBackend", async (): Promise<VaultBackend> => new FsBackend(await tempDir())],
   ] as const) {
-    it(`r2-B (${name}): a file where events/ belongs is damage at "events", never an empty store; an absent events/ is an empty store; a directory is read`, async () => {
+    it(`${name}: a file where events/ belongs is damage at "events", never an empty store; an absent events/ is an empty store; a directory is read`, async () => {
       // absent: nothing to read, nothing wrong
       const absent = await fresh();
       const store = await openOver(absent, { author: authorN(1), now: clock(T0).now });
@@ -450,7 +450,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     ["MemoryBackend", async (): Promise<VaultBackend> => new MemoryBackend()],
     ["FsBackend", async (): Promise<VaultBackend> => new FsBackend(await tempDir())],
   ] as const) {
-    it(`r3-A (${name}): with a file where events/ belongs, append, appendAll and ingest are refused as DamagedLayout at "events" before anything lands — no segment, the file untouched, and the read still reports it`, async () => {
+    it(`${name}: with a file where events/ belongs, append, appendAll and ingest are refused as DamagedLayout at "events" before anything lands — no segment, the file untouched, and the read still reports it`, async () => {
       const c = clock(T0);
       const other = await openOver(new MemoryBackend(), { author: authorN(2), now: c.now });
       const [foreign] = await other.appendAll([{ type: "t", data: { n: 1 } }]);

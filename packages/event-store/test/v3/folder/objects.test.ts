@@ -236,7 +236,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, DAMAGED_DIR)).toEqual([]);
     });
 
-    it("r1-C: a heal of the same length in the same clock tick, under a stream opened on the damaged bytes, stands — the stale stream may fail, the healed object is not moved aside", async () => {
+    it("a heal of the same length in the same clock tick, under a stream opened on the damaged bytes, stands — the stale stream may fail, the healed object is not moved aside", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now });
       const cid = (await store.putRaw(HELLO)).cid;
@@ -256,7 +256,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, "objects")).toEqual([cid]);
     });
 
-    it("r1-D, §8.3: an object's age counts from its acceptance, recorded as local/accepted/objects/<cid>: written with the move, renewed by a repeat, removed with the object or when the object is gone; an object with no stamp is stamped and young", async () => {
+    it("§8.3: an object's age counts from its acceptance, recorded as local/accepted/objects/<cid>: written with the move, renewed by a repeat, removed with the object or when the object is gone; an object with no stamp is stamped and young", async () => {
       const c = clock(T0);
       const { backend, store, reopen } = await fresh({ now: c.now, graceMs: HOUR });
       const cid = (await store.putRaw(bytesOf(10, 30))).cid;
@@ -291,7 +291,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([kept]);
     });
 
-    it("r2-A: the stamp records a completed acceptance — a move that takes longer than grace leaves the object young; a crash before the stamp, on a first or a repeated acceptance, leaves it of unknown age, stamped and young at the next pass", async () => {
+    it("the stamp records a completed acceptance — a move that takes longer than grace leaves the object young; a crash before the stamp, on a first or a repeated acceptance, leaves it of unknown age, stamped and young at the next pass", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: HOUR });
       // The move itself takes longer than grace: the clock moves on inside `rename`.
@@ -453,7 +453,7 @@ describe("FolderObjectStore on disk", () => {
     expect(chunks).toBeGreaterThan(1);
   });
 
-  it("r1-A: a file handle that takes only part of each write is written until every byte is down; the file is the whole object", async () => {
+  it("a file handle that takes only part of each write is written until every byte is down; the file is the whole object", async () => {
     const { store, root } = await overDisk();
     const probe = await fsOpen(path.join(root as string, "probe"), "w");
     type Write = (this: unknown, buffer: Uint8Array, ...rest: unknown[]) => Promise<{ bytesWritten: number }>;
@@ -476,7 +476,7 @@ describe("FolderObjectStore on disk", () => {
     }
   });
 
-  it("r1-D: with the platform's clock, an object whose source idled after its last chunk is young right after acceptance, and a reopened store reads the same acceptance", async () => {
+  it("with the platform's clock, an object whose source idled after its last chunk is young right after acceptance, and a reopened store reads the same acceptance", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
     const store = new FolderObjectStore(backend, { base: BASE, graceMs: 100 });
@@ -491,7 +491,7 @@ describe("FolderObjectStore on disk", () => {
     expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [cid], young: [] });
   });
 
-  it("r2-A: with the platform's clock, a move that waits longer than grace before completing leaves the object young right after acceptance, in this store and a reopened one", async () => {
+  it("with the platform's clock, a move that waits longer than grace before completing leaves the object young right after acceptance, in this store and a reopened one", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
     const slowMove = new Proxy(backend, {
