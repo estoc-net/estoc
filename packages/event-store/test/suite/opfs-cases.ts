@@ -2,7 +2,7 @@
  * What only OPFS can show, as cases run in a browser by
  * `../browser/opfs-entry.ts`: the platform without
  * `FileSystemFileHandle.move()`, where a fresh destination cannot be
- * filled whole (r1-B). No test framework is imported here, and nothing
+ * filled whole. No test framework is imported here, and nothing
  * runs at import time, so `../opfs.test.ts` can name the cases in Node.
  */
 
@@ -44,10 +44,10 @@ async function withoutMove<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** What only OPFS can show: the platform without `move()`, where a fresh destination cannot be filled whole (r1-B of A07); ownership named by one path whatever handle reaches it (r1-B of A08). */
+/** What only OPFS can show: the platform without `move()`, where a fresh destination cannot be filled whole; ownership named by one path whatever handle reaches it. */
 export const opfsCases: { name: string; run: (fresh: () => Promise<OpfsBackend>) => Promise<void> }[] = [
   {
-    name: "A08 r1-B: one place reached through two root handles and bases names one lock — the second take is refused, and served once the first releases",
+    name: "one place reached through two root handles and bases names one lock — the second take is refused, and served once the first releases",
     run: async () => {
       const storage = await navigator.storage.getDirectory();
       const outer = await storage.getDirectoryHandle(`alias-${Math.random().toString(16).slice(2)}`, { create: true });
@@ -67,7 +67,7 @@ export const opfsCases: { name: string; run: (fresh: () => Promise<OpfsBackend>)
     },
   },
   {
-    name: "r1-B: without move(), create to a fresh path and rename to a fresh path refuse before touching it; rename over an existing file still works",
+    name: "without move(), create to a fresh path and rename to a fresh path refuse before touching it; rename over an existing file still works",
     run: async (fresh) => {
       const b = await fresh();
       await b.write("o/existing", enc.encode("old"));
@@ -89,7 +89,7 @@ export const opfsCases: { name: string; run: (fresh: () => Promise<OpfsBackend>)
     },
   },
   {
-    name: "r1-B: a rename or create to a fresh path whose move() fails leaves no file at the destination",
+    name: "a rename or create to a fresh path whose move() fails leaves no file at the destination",
     run: async (fresh) => {
       const b = await fresh();
       await b.write("s/src", enc.encode("src"));

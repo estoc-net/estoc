@@ -115,7 +115,7 @@ export class FsBackend implements VaultBackend {
       const handle = await open(tmp, "wx");
       try {
         for await (const chunk of source) {
-          // A write may take fewer bytes than offered (r1-A): the rest
+          // A write may take fewer bytes than offered: the rest
           // is offered again until the chunk is down, and no progress
           // at all is a failure, never a shorter file.
           let at = 0;

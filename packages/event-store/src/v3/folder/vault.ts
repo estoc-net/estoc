@@ -121,7 +121,7 @@ async function checkImport(backend: VaultBackend, base: string): Promise<void> {
 }
 
 /**
- * A folder `create` may lay a vault in (r1-F): nothing under `base` but
+ * A folder `create` may lay a vault in: nothing under `base` but
  * what ownership itself makes under `local/`. Anything else — a config
  * or keystore, a segment, an object, `import/` state, an opaque file,
  * other `local/` state — is refused as `NotAVault`, naming the first
@@ -211,9 +211,9 @@ export class FolderVault extends Runtime {
   /**
    * Lay down a new vault in an empty folder and open it: the keystore
    * and the anchor checked — the anchor by the same parser an open uses
-   * (r1-H) — before anything is taken or written; the folder required
+   * — before anything is taken or written; the folder required
    * empty of everything but ownership's own files, before and again
-   * after ownership is taken (r1-F): an existing `keystore.json`, a
+   * after ownership is taken: an existing `keystore.json`, a
    * segment, an object, recovery state under `import/`, an opaque file
    * or leftover `local/` state is refused with every byte left as it
    * was — a folder that holds a seed wrapper is not one to lay a new
@@ -316,11 +316,11 @@ export class FolderVault extends Runtime {
   /**
    * Release the folder (§15): new operations are refused from this call
    * on — the runtime's, and every local owner's, cache's and trace
-   * handle's (r1-D) — then what was already accepted runs out: the
+   * handle's — then what was already accepted runs out: the
    * operations holding or queued for the writer lock, the local work
    * queued on each owner; then every object stream still alive is
    * failed with `VaultClosed` and its latch released, and no stream
-   * opens after (r1-C); and only then is ownership released, so that
+   * opens after; and only then is ownership released, so that
    * nothing of this runtime still reads or writes a folder another
    * process may own by then. Once; a second close does nothing.
    */
@@ -436,7 +436,7 @@ export class FolderReader {
     return found.sort((a, b) => comparePaths(a.where, b.where));
   }
 
-  /** Reads after this are refused; every object stream still alive is failed and no more open (r1-C); then ownership, if any, is released. */
+  /** Reads after this are refused; every object stream still alive is failed and no more open; then ownership, if any, is released. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;

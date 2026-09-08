@@ -14,14 +14,14 @@
  * is moved aside to `local/damaged/objects/`, and reads as absent from
  * then on (§6.3, §8.2, DO-13, DO-16, VF-13) — moved aside only if its
  * bytes, read again in the store's turn, still do not spell its name,
- * so a put that has healed it meanwhile stands (r1-C). An object's
+ * so a put that has healed it meanwhile stands. An object's
  * orphan age counts from its acceptance, which the store records as
  * the modification time of a stamp file, `local/accepted/objects/<cid>`,
  * written once the move into `objects/` has completed and rewritten
  * by repeating acceptance (§9): not the object file's own time, which
  * a backend sets when the last chunk was written, however long the
  * source then took to end, the store's turn to come, or the move to
- * run (r1-D, r2-A). An object with no stamp — `local/` deleted, a
+ * run. An object with no stamp — `local/` deleted, a
  * crash before the stamp — is of unknown age: stamped by the first
  * collection pass that sees it and counted young. `collect` unlinks
  * exactly the unkept, unlatched objects past grace, with their stamps
@@ -69,7 +69,7 @@ import { ESTOC_DIR, LOCAL_DIR, OBJECTS_DIR, objectPath } from "./layout.js";
 export const STAGING_DIR = `${LOCAL_DIR}/staging/objects`;
 /** Where damaged material is moved out of `objects/` (§9): under the same name, a numbered suffix when that is taken. */
 export const DAMAGED_DIR = `${LOCAL_DIR}/damaged/objects`;
-/** Where an object's acceptance is recorded (§8.3, r1-D): an empty file per CID whose modification time is when the object was last accepted. */
+/** Where an object's acceptance is recorded (§8.3): an empty file per CID whose modification time is when the object was last accepted. */
 export const ACCEPTED_DIR = `${LOCAL_DIR}/accepted/objects`;
 
 export interface FolderObjectStoreOptions {
@@ -84,7 +84,7 @@ export interface FolderObjectStoreOptions {
   /** the latch registry to share with other handles over the same objects; a fresh one when left out */
   latches?: LatchRegistry;
   /**
-   * A store that changes nothing under `objects/` or `local/` (r1-E):
+   * A store that changes nothing under `objects/` or `local/`:
    * no put, no collection, and a file found not to spell its name is
    * not moved aside but remembered, and absent from this store's view
    * from then on — the bytes stay where a writable open will judge them.
@@ -111,9 +111,9 @@ export class FolderObjectStore implements ObjectStore {
   /** the staging files puts are streaming into right now, which no sweep touches */
   private readonly staging = new Set<string>();
   private readonly readOnly: boolean;
-  /** what a read-only store found damaged (r1-E): left in place, and out of its view */
+  /** what a read-only store found damaged: left in place, and out of its view */
   private readonly excluded = new Set<Cid>();
-  /** the verifying streams alive right now, each as the function that fails it (r1-C) */
+  /** the verifying streams alive right now, each as the function that fails it */
   private readonly live = new Set<() => void>();
   /** set by `close`: no stream opens after it, and none survives it */
   private closed = false;
@@ -132,13 +132,13 @@ export class FolderObjectStore implements ObjectStore {
     this.readOnly = options.readOnly ?? false;
   }
 
-  /** Whether this store may change the folder: a read-only store's puts and collection are refused (r1-E). */
+  /** Whether this store may change the folder: a read-only store's puts and collection are refused. */
   private writable(what: string): void {
     if (this.readOnly) throw new ReadOnlyVault(what);
   }
 
   /**
-   * End this store's part in the folder (r1-C): in the store's turn, so
+   * End this store's part in the folder: in the store's turn, so
    * every `open` already queued has registered its stream first, every
    * live stream is failed with `VaultClosed` — its latch released, its
    * file closed — and no stream opens after. What a caller holds by
@@ -146,7 +146,7 @@ export class FolderObjectStore implements ObjectStore {
    * still answers `stat`, `has`, `list` and `damaged`; nothing that
    * changes the folder runs in a turn after this one — a quarantine
    * queued behind it does nothing, `verify` is refused — so once the
-   * close has returned, the folder is the next owner's alone (r2-B).
+   * close has returned, the folder is the next owner's alone.
    */
   async close(): Promise<void> {
     await this.serialise(async () => {
@@ -199,7 +199,7 @@ export class FolderObjectStore implements ObjectStore {
    * and is still reported. The stamp is written after the move, never
    * before it: a stamp records a completed acceptance, and whatever
    * time passes between the two backend calls must not count against
-   * the object (r2-A). Any stamp from an earlier acceptance of the same
+   * the object. Any stamp from an earlier acceptance of the same
    * CID is removed before the move, so at no point does an object stand
    * with a stamp older than its acceptance; an object with no stamp —
    * a crash between the move and the stamp, or after the removal — is
@@ -337,7 +337,7 @@ export class FolderObjectStore implements ObjectStore {
     let seen = 0;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     // Every way the stream ends runs `done` once: the latch goes, the file
-    // closes, and the store forgets the stream (r1-C).
+    // closes, and the store forgets the stream.
     let ended = false;
     const done = (): void => {
       if (ended) return;
@@ -393,18 +393,18 @@ export class FolderObjectStore implements ObjectStore {
    * the store's turn, and only if what stands at its path, read again
    * now, still does not spell `cid`: a put that has since replaced it
    * with sound bytes — of the same length, in the same clock tick, even
-   * — is left alone (§6.2, r1-C). Neither size nor modification time
+   * — is left alone (§6.2). Neither size nor modification time
    * tells one file from another; the bytes do. Nothing after `close`:
    * a quarantine a stream queued behind the close runs in a turn the
    * store no longer owns the folder in — the next writer may hold it
-   * and have put the object back — and does nothing (r2-B).
+   * and have put the object back — and does nothing.
    */
   private quarantine(cid: Cid, rel: string): Promise<void> {
     return this.serialise(async () => {
       if (this.closed) return;
       const actual = await this.hashAt(rel);
       if (actual === null || actual.text === cid) return;
-      if (this.readOnly) this.excluded.add(cid); // remembered, not moved (r1-E)
+      if (this.readOnly) this.excluded.add(cid); // remembered, not moved
       else await this.aside(rel);
     });
   }
@@ -488,12 +488,12 @@ export class FolderObjectStore implements ObjectStore {
    */
   async verify(): Promise<Damaged[]> {
     return this.serialise(async () => {
-      if (this.closed) throw new VaultClosed(); // it moves files: not in a turn after the folder was given up (r2-B)
+      if (this.closed) throw new VaultClosed(); // it moves files: not in a turn after the folder was given up
       const walked = await this.walk();
       const found: Damaged[] = [];
       for (const damage of walked.damaged) {
         found.push(damage);
-        if (this.readOnly) continue; // reported, left where it is (r1-E)
+        if (this.readOnly) continue; // reported, left where it is
         if (damage.where !== OBJECTS_DIR && (await this.backend.size(this.at(damage.where))) !== null) await this.aside(damage.where);
       }
       for (const cid of walked.cids) {
@@ -562,7 +562,7 @@ export class FolderObjectStore implements ObjectStore {
   }
 }
 
-/** The stamp of `cid` (r1-D): `local/accepted/objects/<cid>`. */
+/** The stamp of `cid`: `local/accepted/objects/<cid>`. */
 function stampPath(cid: string): string {
   return `${ACCEPTED_DIR}/${cid}`;
 }

@@ -15,7 +15,7 @@ import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./typ
  * too, closed once the source has ended and aborted — the swap file
  * discarded, the original kept — when it throws. Over a path with no
  * file, getting a handle would make an empty file visible before the
- * source has ended (r1-B), so the source is written to a temp sibling
+ * source has ended, so the source is written to a temp sibling
  * and moved into place by `FileSystemFileHandle.move()`, which is atomic
  * and replaces a file at the destination. `rename` is `move` too. Where
  * the platform has no `move`, a fresh destination cannot be filled
@@ -123,7 +123,7 @@ export class OpfsBackend implements VaultBackend {
     }
     // No file there yet: written beside its place under a temp name and
     // moved in whole, so nothing stands at `path` until the source has
-    // ended (r1-B). Without `move` there is no way to do that.
+    // ended. Without `move` there is no way to do that.
     const segments = segmentsOf(path);
     const name = segments.pop() as string;
     const dir = (await this.dir(segments, true)) as FileSystemDirectoryHandle;
@@ -153,7 +153,7 @@ export class OpfsBackend implements VaultBackend {
     }
     // No `move`: a file already at the destination can be replaced whole
     // through its own writable, which is atomic on close; a fresh
-    // destination cannot be, and is refused untouched (r1-B).
+    // destination cannot be, and is refused untouched.
     const target = await this.file(to, false);
     if (target === null) throw noMove(`rename to ${JSON.stringify(to)}`);
     await fill(target, streamChunks((await source.getFile()).stream() as ReadableStream<Uint8Array>));
@@ -245,7 +245,7 @@ export class OpfsBackend implements VaultBackend {
   /**
    * The lock's name: the one path from the origin's storage root through
    * this directory to `path`, whatever handle and base it was reached
-   * by (r1-B) — two backends over one place, one rooted higher with a
+   * by — two backends over one place, one rooted higher with a
    * deeper base, name the same lock. A directory the storage root cannot
    * place is refused ownership: there is no name for it that another
    * opener would agree on.

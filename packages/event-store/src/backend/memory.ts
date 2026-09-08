@@ -16,8 +16,8 @@ export interface MemoryBackendOptions {
  * Node `Buffer` is a `Uint8Array` whose `slice` is a view onto the same
  * memory, so `bytes.slice()` would have kept the caller's buffer as the
  * stored file, and a later write into it would have changed the file
- * with no write here (r2-A). And a write lands only where a file system
- * would let it: not below a file, not onto a directory (r3-A).
+ * with no write here. And a write lands only where a file system
+ * would let it: not below a file, not onto a directory.
  */
 /** How much of a file one pull of `open` hands out. */
 const STREAM_CHUNK = 64 * 1024;
@@ -42,7 +42,7 @@ export class MemoryBackend implements VaultBackend {
   }
 
   /**
-   * A key a write may land on, as a file system would judge it (r3-A):
+   * A key a write may land on, as a file system would judge it:
    * no file on the way down — `a/b` cannot be written while `a` is a
    * file — and not a directory itself — `a` cannot be written while
    * `a/b` exists. A flat map would take either; a disk refuses both.

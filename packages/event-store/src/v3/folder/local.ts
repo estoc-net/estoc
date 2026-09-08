@@ -100,7 +100,7 @@ export interface LocalOptions {
   rotate?: Rotation;
   /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
   now?: () => number;
-  /** throws once the vault this owner belongs to is closed (r1-D): checked as each operation is called, before it queues */
+  /** throws once the vault this owner belongs to is closed: checked as each operation is called, before it queues */
   guard?: () => void;
 }
 
@@ -137,7 +137,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
     this.guard = options.guard ?? (() => undefined);
   }
 
-  /** Resolves once everything queued so far has run: what a close waits for (r1-D). */
+  /** Resolves once everything queued so far has run: what a close waits for. */
   settle(): Promise<void> {
     return this.serial.run(async () => undefined);
   }
@@ -257,7 +257,7 @@ export interface LocalCache {
  * vault. Writes and reads of one owner run one at a time; every
  * operation, on the owner or on a cache or trace handle taken from it,
  * checks the vault's guard as it is called, and `settle` waits for what
- * was accepted before (r1-D).
+ * was accepted before.
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();
@@ -272,7 +272,7 @@ export class LocalOwner {
     this.guard = options.guard ?? (() => undefined);
   }
 
-  /** Resolves once everything queued on the owner and its trace streams so far has run: what a close waits for (r1-D). */
+  /** Resolves once everything queued on the owner and its trace streams so far has run: what a close waits for. */
   async settle(): Promise<void> {
     await Promise.all([this.serial.run(async () => undefined), ...[...this.traces.values()].map((trace) => trace.settle())]);
   }
@@ -305,7 +305,7 @@ export class LocalOwner {
     const base = `${this.dir}/cache`;
     const at = (path: string): string => `${base}/${checkPath(path)}`;
     const backend = this.backend;
-    // every method async, so that the guard's throw is a rejection like any other failure; and checked on every call, not once at the getter (r1-D)
+    // every method async, so that the guard's throw is a rejection like any other failure; and checked on every call, not once at the getter
     return {
       read: async (path) => {
         guard();

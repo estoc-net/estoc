@@ -116,7 +116,7 @@ describe("FolderVault.create (vault-folder.md §4, §5, §11.1)", () => {
     await vault.close();
   });
 
-  it("r1-H: refuses a keystore of the wrong shape and an anchor the config parser would refuse — before ownership is taken or anything written — and an existing vault", async () => {
+  it("refuses a keystore of the wrong shape and an anchor the config parser would refuse — before ownership is taken or anything written — and an existing vault", async () => {
     const backend = new MemoryBackend();
     await expect(FolderVault.create(backend, { anchor: DID, keystore: utf8(JSON.stringify({ version: 3, seedJwe: JWE, keys: [] })) })).rejects.toThrow(NotAVault);
     for (const anchor of ["did:web:example.com", "did:key:", "", 7 as unknown as string]) {
@@ -131,7 +131,7 @@ describe("FolderVault.create (vault-folder.md §4, §5, §11.1)", () => {
     expectBytes(backend.files.get(`${BASE}/keystore.json`), KEYSTORE);
   });
 
-  it("r1-F: refuses a folder that is not empty — a seed wrapper, recovery state, a segment, an opaque file, leftover local state — leaving every byte as it was and ownership free", async () => {
+  it("refuses a folder that is not empty — a seed wrapper, recovery state, a segment, an opaque file, leftover local state — leaving every byte as it was and ownership free", async () => {
     const previous = utf8(JSON.stringify({ version: 3, seedJwe: "e30.BB.BB.BB.BB" }));
     const residues: [string, Record<string, Uint8Array>][] = [
       ["a seed wrapper and an import journal", { [`${BASE}/keystore.json`]: previous, [`${BASE}/import/job/journal.json`]: utf8("{}") }],
@@ -240,7 +240,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
   });
 
   for (const mode of ["writer", "reader"] as const) {
-    it(`r1-C (${mode}): close fails every object stream still alive and releases its latch before ownership goes, so the next writer collects nothing a stream was reading`, async () => {
+    it(`${mode}: close fails every object stream still alive and releases its latch before ownership goes, so the next writer collects nothing a stream was reading`, async () => {
       const backend = new MemoryBackend();
       const vault = await created(backend, { graceMs: 0 });
       await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
@@ -269,7 +269,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     });
   }
 
-  it("r1-C: an open queued behind the operation holding the lock when close is called still runs, registers its stream, and is failed before ownership goes", async () => {
+  it("an open queued behind the operation holding the lock when close is called still runs, registers its stream, and is failed before ownership goes", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend, { graceMs: 0 });
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
@@ -294,7 +294,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await next.close();
   });
 
-  it("r2-B: a quarantine a damaged stream queues behind close does nothing — the next writer's object, put back sound, stays; verify after close is refused", async () => {
+  it("a quarantine a damaged stream queues behind close does nothing — the next writer's object, put back sound, stays; verify after close is refused", async () => {
     const backend = new MemoryBackend();
     const renames: string[] = [];
     let holdStat: ReturnType<typeof gate> | null = null;
@@ -352,7 +352,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await next.close();
   });
 
-  it("r1-D: a local owner, cache or trace handle taken before close refuses every operation after it, and close waits for the local work accepted before", async () => {
+  it("a local owner, cache or trace handle taken before close refuses every operation after it, and close waits for the local work accepted before", async () => {
     const backend = new MemoryBackend();
     const g = gate();
     let gating = true;
@@ -631,7 +631,7 @@ describe("FolderReader (vault-folder.md §11.1, §15)", () => {
     await writer.close();
   });
 
-  it("r1-E: an object whose bytes do not spell its name fails the read and leaves the reader's view, but nothing in the folder moves or changes", async () => {
+  it("an object whose bytes do not spell its name fails the read and leaves the reader's view, but nothing in the folder moves or changes", async () => {
     const source = new MemoryBackend();
     const vault = await created(source);
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);

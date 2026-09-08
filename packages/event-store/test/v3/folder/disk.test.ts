@@ -47,7 +47,7 @@ const LINE = /^([1-9][0-9]*) ([0-9]+) ([1-9][0-9]*) ([0-9a-f]{16})\n$/;
 const DEAD = 4194305;
 /** A pid that is alive and not this process: the test runner's parent. */
 const LIVE = process.ppid;
-/** When this process began, as the module stamps its records (r3-B): read here on its own, not through the module. */
+/** When this process began, as the module stamps its records: read here on its own, not through the module. */
 const ORIGIN = Math.floor(performance.timeOrigin);
 /** When some other process began: any origin, since only this thread's records are checked against this process's. */
 const AGO = 1700000000000;
@@ -78,7 +78,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     await again.release();
   });
 
-  it("r1-A: two takes racing in one process have exactly one winner, whichever backend instance each came through", async () => {
+  it("two takes racing in one process have exactly one winner, whichever backend instance each came through", async () => {
     for (let round = 0; round < 5; round++) {
       const dir = await tempDir();
       const attempts = await Promise.allSettled([new FsBackend(dir).own(LOCK), new FsBackend(dir).own(LOCK), new FsBackend(dir).own(LOCK)]);
@@ -105,7 +105,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     await taken.release();
   });
 
-  it("r1-G: an empty file, garbage, or another format is not a live holder: reclaimed and taken over", async () => {
+  it("an empty file, garbage, or another format is not a live holder: reclaimed and taken over", async () => {
     for (const residue of ["", "not a pid\n", "0 0 0123456789abcdef\n", `${process.pid}\n`, "-1 0 0123456789abcdef\n", `${LIVE}\n`, `${LIVE} 0123456789abcdef\n`, `${process.pid} 0123456789abcdef\n`, `${process.pid} ${threadId} 0123456789abcdef\n`, `${LIVE} 0 0 0123456789abcdef\n`]) {
       const dir = await tempDir();
       const file = path.join(dir, ".estoc", "local", "owner.pid");
@@ -118,7 +118,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     }
   });
 
-  it("r1-A, r3-B: a file naming this thread with another origin is a previous incarnation's, stale; one with this process's origin is live — written by hand, with no memory of it anywhere — as is one naming another thread of this process, whichever origin", async () => {
+  it("a file naming this thread with another origin is a previous incarnation's, stale; one with this process's origin is live — written by hand, with no memory of it anywhere — as is one naming another thread of this process, whichever origin", async () => {
     const dir = await tempDir();
     const file = path.join(dir, ".estoc", "local", "owner.pid");
     await mkdir(path.dirname(file), { recursive: true });
@@ -126,11 +126,11 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     const taken = await new FsBackend(dir).own(LOCK);
     expect(await ownerFile(dir)).toBe((await ownerFile(dir)).replace(LINE, `${process.pid} ${threadId} ${ORIGIN} $4\n`)); // this incarnation's stamp
     await taken.release();
-    // r3-B: this thread's, this incarnation's: live by the disk's word alone
+    // this thread's, this incarnation's: live by the disk's word alone
     await writeFile(file, `${process.pid} ${threadId} ${ORIGIN} 0123456789abcdef\n`);
     await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
     expect(await ownerFile(dir)).toBe(`${process.pid} ${threadId} ${ORIGIN} 0123456789abcdef\n`);
-    // r2-A: one naming another thread of this process is that thread's, live while the process is — its origin is not this thread's to check
+    // one naming another thread of this process is that thread's, live while the process is — its origin is not this thread's to check
     for (const origin of [ORIGIN, ORIGIN - 1]) {
       await writeFile(file, `${process.pid} ${threadId + 1000} ${origin} 0123456789abcdef\n`);
       await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`thread ${threadId + 1000} of this process holds it`));
@@ -139,7 +139,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     await rm(file);
   });
 
-  it("r1-A: release removes the file only while it is still this take's; a name that changed hands is left alone", async () => {
+  it("release removes the file only while it is still this take's; a name that changed hands is left alone", async () => {
     const dir = await tempDir();
     const file = path.join(dir, ".estoc", "local", "owner.pid");
     const held = await new FsBackend(dir).own(LOCK);
@@ -151,7 +151,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     await rm(file);
   });
 
-  it("r1-A: what a reclaimer or taker that died left beside the file is swept — a marker holding a live holder's file gives that holder its name back", async () => {
+  it("what a reclaimer or taker that died left beside the file is swept — a marker holding a live holder's file gives that holder its name back", async () => {
     const dir = await tempDir();
     const local = path.join(dir, ".estoc", "local");
     await mkdir(local, { recursive: true });
@@ -208,7 +208,7 @@ beforeAll(async () => {
 /** The bundle loaded into this thread by the platform's own `require`, which the test runner's loader does not stand in for. */
 const loadCopy = (): { FsBackend: typeof FsBackend } => createRequire(import.meta.url)(bundle) as { FsBackend: typeof FsBackend };
 
-describe("ownership across threads and module copies (r2-A)", () => {
+describe("ownership across threads and module copies", () => {
 
   /** A worker that takes `lock` in `dir` through the bundled copy on "take", reports the outcome, and releases on "release". */
   function worker(dir: string): { take: () => Promise<string>; release: () => Promise<void> } {
@@ -251,7 +251,7 @@ describe("ownership across threads and module copies (r2-A)", () => {
     };
   }
 
-  it("r2-A: a worker of this process — same pid, its own thread and module copy — is refused what this thread holds, and this thread what a worker holds", async () => {
+  it("a worker of this process — same pid, its own thread and module copy — is refused what this thread holds, and this thread what a worker holds", async () => {
     const dir = await tempDir();
     const held = await new FsBackend(dir).own(LOCK);
     const line = await ownerFile(dir);
@@ -266,7 +266,7 @@ describe("ownership across threads and module copies (r2-A)", () => {
     expect(await localEntries(dir)).toEqual([]);
   });
 
-  it("r2-A: two workers of this process exclude each other", async () => {
+  it("two workers of this process exclude each other", async () => {
     const dir = await tempDir();
     const first = worker(dir);
     const second = worker(dir);
@@ -278,7 +278,7 @@ describe("ownership across threads and module copies (r2-A)", () => {
     expect(await localEntries(dir)).toEqual([]);
   });
 
-  it("r2-A, r3-B: a second copy of the module in this thread: what one copy holds the disk refuses the other, and a take through either has one winner", async () => {
+  it("a second copy of the module in this thread: what one copy holds the disk refuses the other, and a take through either has one winner", async () => {
     const dir = await tempDir();
     const copy = loadCopy();
     const held = await new FsBackend(dir).own(LOCK);
@@ -291,7 +291,7 @@ describe("ownership across threads and module copies (r2-A)", () => {
   });
 });
 
-describe("a reclaim that cannot give a moved holder its name back (r2-C)", () => {
+describe("a reclaim that cannot give a moved holder its name back", () => {
   /** The name and its directory, made; `attempts` small so a stalled taker exhausts a restore within the test. */
   async function place(): Promise<{ real: string; local: string }> {
     const dir = await tempDir();
@@ -302,7 +302,7 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
   const W = `${LIVE} 0 ${AGO} 1111111111111111\n`; // a live holder, moved aside
   const T = `${LIVE} 7 ${AGO} 2222222222222222\n`; // a live taker's file, standing at the name and not given up
 
-  it("r2-C: a restore that runs out of patience leaves the marker — the moved holder's record — in place; a taker meanwhile sees the live file, and one after the taker gave up is barred by the marker until the restore completes", async () => {
+  it("a restore that runs out of patience leaves the marker — the moved holder's record — in place; a taker meanwhile sees the live file, and one after the taker gave up is barred by the marker until the restore completes", async () => {
     const { real, local } = await place();
     const marker = `${real}.reclaim.${DEAD}.0.${AGO}.3333333333333333`;
     await writeFile(marker, W);
@@ -320,7 +320,7 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     expect(await readFile(real, "utf8")).toBe(W);
   });
 
-  it("r2-C: the reclaimer whose restore gave up fails its take with the marker standing, and its next take — the marker its own, no longer in flight — restores first", async () => {
+  it("the reclaimer whose restore gave up fails its take with the marker standing, and its next take — the marker its own, no longer in flight — restores first", async () => {
     const { real, local } = await place();
     const stale = `${DEAD} 0 ${AGO} 4444444444444444\n`;
     await writeFile(real, stale);
@@ -338,7 +338,7 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     expect(await readFile(real, "utf8")).toBe(W);
   });
 
-  it("r2-C: a stale file at the name — a taker that died, a previous incarnation — is taken off it by the restore, which then completes; a marker gone from under it, or already linked back, is done", async () => {
+  it("a stale file at the name — a taker that died, a previous incarnation — is taken off it by the restore, which then completes; a marker gone from under it, or already linked back, is done", async () => {
     const { real, local } = await place();
     const marker = `${real}.reclaim.${DEAD}.0.${AGO}.6666666666666666`;
     await writeFile(marker, W);
@@ -357,7 +357,7 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     expect((await readdir(local)).sort()).toEqual(["owner.pid"]);
   });
 
-  it("r2-C: a holder displaced by a reclaimer that gave up still releases: its line goes from the marker, and from the name if a restore put it back meanwhile", async () => {
+  it("a holder displaced by a reclaimer that gave up still releases: its line goes from the marker, and from the name if a restore put it back meanwhile", async () => {
     const { real, local } = await place();
     const held = await own(real, LOCK, 3);
     const line = await readFile(real, "utf8");
@@ -377,11 +377,11 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
   });
 });
 
-describe("a stale file at the name, taken off it by two sweepers at once (r3-A)", () => {
+describe("a stale file at the name, taken off it by two sweepers at once", () => {
   /** `node:fs/promises` as the bundled copy sees it: the platform's one module object, whose methods the bundle looks up at each call. */
   const fsp = createRequire(import.meta.url)("node:fs/promises") as typeof import("node:fs/promises");
 
-  it("r3-A: a sweeper that read a dead taker's file at the name and is held up before taking it off finds, when it goes on, a live holder's there — given its name back by the other sweeper meanwhile — and leaves it standing: what moved is judged, not what was read", async () => {
+  it("a sweeper that read a dead taker's file at the name and is held up before taking it off finds, when it goes on, a live holder's there — given its name back by the other sweeper meanwhile — and leaves it standing: what moved is judged, not what was read", async () => {
     const dir = await tempDir();
     const local = path.join(dir, ".estoc", "local");
     await mkdir(local, { recursive: true });
@@ -428,8 +428,8 @@ describe("a stale file at the name, taken off it by two sweepers at once (r3-A)"
   });
 });
 
-describe("ownership across realms of one thread (r3-B)", () => {
-  it("r3-B: a copy of the module in another realm of this thread — its own global object; the platform's process, require and modules — is refused what this realm holds, and this realm what it holds: the disk says who, not memory", async () => {
+describe("ownership across realms of one thread", () => {
+  it("a copy of the module in another realm of this thread — its own global object; the platform's process, require and modules — is refused what this realm holds, and this realm what it holds: the disk says who, not memory", async () => {
     const dir = await tempDir();
     const realm = { module: { exports: {} as { FsBackend: typeof FsBackend } }, exports: {}, require: createRequire(import.meta.url), process, Buffer, setTimeout, clearTimeout, ReadableStream };
     realm.exports = realm.module.exports;

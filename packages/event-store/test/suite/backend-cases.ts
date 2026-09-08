@@ -198,7 +198,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r2-A: copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
+    name: "copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
     run: async (fresh) => {
       // A Uint8Array whose `slice` is a view, as `Buffer.prototype.slice` is: what any backend is given in Node
       class Viewing extends Uint8Array {
@@ -223,7 +223,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r3-A: refuses to write below a file or onto a directory, leaving both as they were",
+    name: "refuses to write below a file or onto a directory, leaving both as they were",
     run: async (fresh) => {
       const b = await fresh();
       await b.write("d/f", enc.encode("file"));
@@ -290,7 +290,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r1-B: create to a fresh path shows nothing there — not even an empty file — until the source has ended",
+    name: "create to a fresh path shows nothing there — not even an empty file — until the source has ended",
     run: async (fresh) => {
       const b = await fresh();
       let release!: () => void;

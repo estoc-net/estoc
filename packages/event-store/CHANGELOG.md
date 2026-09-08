@@ -163,14 +163,14 @@
   `local/damaged/objects/` — under a numbered suffix when the name is
   taken, and only if its bytes, read again in the store's turn, still
   do not spell its name, so a put that healed it meanwhile stands
-  whatever its length or clock tick (r1-C) — and reads as absent from
+  whatever its length or clock tick — and reads as absent from
   then on (§6.3, §8.2, DO-13, DO-16, VF-13). An object's orphan age
   counts from its acceptance, recorded as the modification time of a
   stamp file `local/accepted/objects/<cid>` written once the move into
   `objects/` has completed — any earlier stamp of the CID removed
   before the move — and rewritten by repeating acceptance (§9): not
   the object file's own time, which a backend sets at the last chunk,
-  however long the source then idled or the move took (r1-D, r2-A);
+  however long the source then idled or the move took;
   an object with no stamp — a crash before it, `local/` deleted — is
   of unknown age, stamped by the first collection pass that sees it
   and counted young; a stamp with no object is removed.
@@ -189,13 +189,13 @@
   the path as it was — and `rename(from, to)` moves a file into place
   over whatever stood there; `MemoryBackend`, `FsBackend` (a sibling
   temp file renamed into place, each chunk written until every byte
-  is down, a write that makes no progress a failure (r1-A); `open`
+  is down, a write that makes no progress a failure; `open`
   through a file handle in 64 KiB pieces) and `OpfsBackend`
   (`createWritable` over an existing file, aborted on failure; a temp
   sibling and `FileSystemFileHandle.move()` for a fresh path, `move`
   for `rename` too; a platform without `move` cannot fill a fresh
   path whole and is refused before it is touched, `rename` over an
-  existing file still a copy through its writable (r1-B);
+  existing file still a copy through its writable;
   `File.stream()`) all have them, and `FsBackend` takes a `clock`
   that stamps written files, for tests that age a file by the clock
   they pin. The A04 `objectStoreSuite` runs over the folder store on
@@ -218,26 +218,26 @@
   VF-40), reads or mints `local/replica.json`, and opens the event
   store as that replica (VF-1, VF-4, VF-5, VF-6, VF-7, ES-14).
   `FolderVault.create` checks the keystore and the anchor — by the
-  same parser an open uses (r1-H) — before anything is taken or
+  same parser an open uses — before anything is taken or
   written, requires the folder empty of everything but ownership's own
   files, before and again after ownership is taken, so a seed wrapper,
   a segment, recovery state, an opaque file or leftover local state is
-  refused with every byte left as it was (r1-F), then writes
+  refused with every byte left as it was, then writes
   `keystore.json` and `config.json`. `close` refuses every new
   operation, lets the accepted ones run out — the writer lock's, and
   each local owner's — fails every object stream still alive with
-  `VaultClosed`, releasing its latch, and only then releases ownership
-  (r1-C, r1-D); nothing that changes the folder runs in a store turn
+  `VaultClosed`, releasing its latch, and only then releases ownership;
+  nothing that changes the folder runs in a store turn
   after the close — a quarantine a damaged stream queued behind it
   does nothing, `verify` is refused — so the folder is the next
-  owner's alone once close has returned (r2-B); every local owner,
-  cache and trace handle checks the vault's guard on each call (r1-D). `FolderReader.open` is the
+  owner's alone once close has returned; every local owner,
+  cache and trace handle checks the vault's guard on each call. `FolderReader.open` is the
   read-only open: no `local/` created, `files.write` refused as
   `ReadOnlyVault`, object streams served only with `ownership:
   "exclusive"` and otherwise refused as `Unprotected` (§15), over an
   object store that puts nothing, collects nothing and moves nothing —
   a file found not to spell its name is reported and dropped from the
-  reader's view, never quarantined (r1-E). `local(owner)` is this
+  reader's view, never quarantined. `local(owner)` is this
   copy's `options.json`, `cache/` and trace streams under
   `local/<owner>/` (§10.2), ported from version 2 with `eventId` for
   `eid`, trace lines canonical JSON read by the strict parser and
@@ -252,32 +252,31 @@
   <thread> <origin> <token>` (`src/node/ownership.ts`), created whole
   by claim file and hard link, read back, a live holder refused — a
   record is judged live from the disk alone, by no memory of the
-  module's, since a copy in another realm of the thread shares none
-  (r3-B): live while the process it names is, a Node worker's
+  module's, since a copy in another realm of the thread shares none:
+  live while the process it names is, a Node worker's
   included, since workers share a pid and differ in thread id, and a
   worker's record outlives the worker until its process exits; one
   naming this very thread is live while its origin — the millisecond
   the process began, `performance.timeOrigin`, the same in every
   realm and copy — is this incarnation's, and a previous
-  incarnation's otherwise, stale (r2-A, r3-B); so two takes in one
-  thread cannot both pass, whichever copy each came through (r1-A,
-  r2-A). Nothing is removed from the name after a read (r3-A): a
+  incarnation's otherwise, stale; so two takes in one
+  thread cannot both pass, whichever copy each came through. Nothing
+  is removed from the name after a read: a
   stale file — dead, a previous incarnation, empty, garbage — is
   taken off it only by moving it aside under a marker and judging
   what moved, a live holder's file moved by mistake given its name
   back; a holder withdraws — releasing, or giving up a name taken
   beside a marker — by taking its own line off the name the same way
-  and off every marker holding it, until a pass finds it nowhere
-  (r1-A, r1-G). A restore that cannot give a moved holder its name
+  and off every marker holding it, until a pass finds it nowhere.
+  A restore that cannot give a moved holder its name
   back within its budget — a taker stalled between its take and its
   look — leaves the marker standing and fails the mover's take, so
   the moved holder's record bars every taker until a later sweep
   completes it; a stale taker's file at the name is taken off it by
-  the restore the same way, and a marker gone from under it is done
-  (r2-C, r3-A);
+  the restore the same way, and a marker gone from under it is done;
   `OpfsBackend` a Web Lock named for
   the one path from the origin's storage root to the name, so one place
-  reached through two handles and bases is one lock (r1-B), and a
+  reached through two handles and bases is one lock, and a
   directory the storage root cannot place refused; `MemoryBackend` a
   set. `Runtime` takes a `guard` run as each operation asks for the
   lock.
