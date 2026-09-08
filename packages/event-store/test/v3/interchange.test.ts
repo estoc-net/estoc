@@ -4,7 +4,7 @@
  * empty backend, on the memory backend and on disk.
  */
 
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -18,6 +18,7 @@ import {
   MemoryBackend,
   MemoryVault,
   NotAVault,
+  PendingImport,
   VaultOwned,
   canonicalEventBytes,
   encodeConfig,
@@ -32,6 +33,7 @@ import {
   type Draft,
   type Event,
   type Held,
+  type Ownership,
   type VaultBackend,
   type VaultRuntime,
 } from "../../src/v3/index.js";
@@ -116,6 +118,151 @@ class GatedBackend extends MemoryBackend {
     return super.create(path, source);
   }
 }
+
+/** A destination that lets another laying fill the folder between an operation's empty check and its taking ownership. */
+class DelayedOwnership extends MemoryBackend {
+  readonly arrived = gate();
+  readonly resume = gate();
+  private delayed = false;
+  override async own(path: string): Promise<Ownership> {
+    if (!this.delayed) {
+      this.delayed = true;
+      (await this.arrived).open();
+      await (await this.resume).wait;
+    }
+    return super.own(path);
+  }
+}
+
+class RefusingCreate extends MemoryBackend {
+  override async create(): Promise<void> {
+    throw new Error("the destination cannot create a file");
+  }
+}
+
+/** A destination whose `create` pulls one chunk and then fails, the source left where it was. */
+class PullingOnceCreate extends MemoryBackend {
+  override async create(_path: string, source: AsyncIterable<Uint8Array>): Promise<void> {
+    await source[Symbol.asyncIterator]().next();
+    throw new Error("the destination failed after one chunk");
+  }
+}
+
+/** A source whose `open` counts the streams it hands out and the cancellations they get back. */
+class WatchingOpen extends MemoryBackend {
+  opened = 0;
+  cancelled = 0;
+  constructor(from: MemoryBackend) {
+    super();
+    for (const [key, bytes] of from.files) this.files.set(key, bytes);
+  }
+  override async open(path: string): Promise<ReadableStream<Uint8Array> | null> {
+    const bytes = await this.read(path);
+    if (bytes === null) return null;
+    this.opened += 1;
+    let sent = false;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull: (controller) => {
+          if (sent) controller.close();
+          else {
+            sent = true;
+            controller.enqueue(bytes);
+          }
+        },
+        cancel: () => {
+          this.cancelled += 1;
+        },
+      },
+      { highWaterMark: 0 }
+    );
+  }
+}
+
+/** A destination whose clock fails once `config.json` has landed: the publication's write rejects with its bytes in place. */
+function failingAtPublication(): MemoryBackend {
+  const into: MemoryBackend = new MemoryBackend({
+    clock: () => {
+      if (into.files.has(`${BASE}/config.json`)) throw new Error("the clock failed after the publication landed");
+      return new Date();
+    },
+  });
+  return into;
+}
+
+/** A destination that cannot take back `config.json` once written, and fails its clock once, as `failingAtPublication` does. */
+class KeepingConfig extends MemoryBackend {
+  constructor() {
+    const laid: { files?: Map<string, Uint8Array>; failed: boolean } = { failed: false };
+    super({
+      clock: () => {
+        if (!laid.failed && laid.files?.has(`${BASE}/config.json`)) {
+          laid.failed = true;
+          throw new Error("the clock failed after the publication landed");
+        }
+        return new Date();
+      },
+    });
+    laid.files = this.files;
+  }
+  override async remove(path: string): Promise<void> {
+    if (path === `${BASE}/config.json`) throw new Error("config.json cannot be removed");
+    return super.remove(path);
+  }
+}
+
+describe("laying a vault down", () => {
+  it("a publication whose write rejects after its bytes landed is withdrawn first, and only then the rest: the destination is left empty, not a config.json over nothing", async () => {
+    const runtime = memoryVault();
+    await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const exportedInto = failingAtPublication();
+    await expect(exportVault(runtime, exportedInto, { heldRoots: allRoots })).rejects.toThrow(/after the publication landed/);
+    expect(paths(exportedInto)).toEqual([]);
+    const from = new MemoryBackend();
+    await exportVault(runtime, from, { heldRoots: allRoots });
+    const restoredInto = failingAtPublication();
+    await expect(restoreFolder(from, restoredInto, { heldRoots: allRoots })).rejects.toThrow(/after the publication landed/);
+    expect(paths(restoredInto)).toEqual([]);
+    await expect(FolderVault.openWritable(restoredInto, { anchor: DID })).rejects.toThrow(NotAVault);
+  });
+
+  it("when the publication cannot be withdrawn, nothing else is taken back either: everything was written before it, so what stands is a complete vault", async () => {
+    const runtime = memoryVault();
+    const [event] = await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const into = new KeepingConfig();
+    await expect(exportVault(runtime, into, { heldRoots: allRoots })).rejects.toThrow(/after the publication landed/);
+    expect(paths(into)).toContain("config.json");
+    expect(paths(into)).toContain(`objects/${HELLO_CID}`);
+    const opened = await FolderVault.openWritable(into, { anchor: DID });
+    expect(ids(await all(opened.vault.events.scan()))).toEqual(ids([event as Event]));
+    expectBytes(await opened.vault.objects.read(HELLO_CID, 1024), HELLO);
+    expect(await opened.damaged()).toEqual([]);
+    await opened.close();
+  });
+
+  it("a destination another laying filled between the empty check and ownership is refused and left as it stands, every byte, for an export and for a restore", async () => {
+    const runtime = memoryVault();
+    await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const from = new MemoryBackend();
+    await exportVault(runtime, from, { heldRoots: allRoots });
+    const bytesOf = (backend: MemoryBackend): Record<string, number[]> => Object.fromEntries([...backend.files].map(([p, b]) => [p, Array.from(b)]));
+    for (const operation of ["export", "restore"] as const) {
+      const into = new DelayedOwnership();
+      const delayed = operation === "export" ? exportVault(runtime, into, { heldRoots: allRoots }) : restoreFolder(from, into, { heldRoots: allRoots });
+      const settled = delayed.then(() => null, (err: unknown) => err);
+      await (await into.arrived).wait;
+      expect(await restoreFolder(from, into, { heldRoots: allRoots }), operation).toEqual({ events: 1, objects: 1, files: 2 });
+      const before = bytesOf(into);
+      (await into.resume).open();
+      expect(await settled, operation).toBeInstanceOf(NotAVault);
+      expect(bytesOf(into), operation).toEqual(before);
+      const opened = await FolderVault.openWritable(into, { anchor: DID });
+      expect((await all(opened.vault.events.scan())).length, operation).toBe(1);
+      expectBytes(await opened.vault.objects.read(HELLO_CID, 1024), HELLO);
+      await opened.close();
+    }
+  });
+});
 
 describe("exportVault", () => {
   it("writes a vault in memory as a portable folder that a folder vault opens: every event's canonical bytes, one segment per author, every object, every portable file, and a fresh replica", async () => {
@@ -274,6 +421,34 @@ describe("exportVault", () => {
 
     await expect(exportVault(new MemoryVault(), new MemoryBackend(), { heldRoots: () => [] })).rejects.toThrow(/no config.json/);
   });
+
+  it("checks config.json and keystore.json as a restore would before writing anything: a vault with no keystore, a config of another shape or a keystore of another shape is refused, since what it published would not restore", async () => {
+    const cases: [string, ConstructorParameters<typeof MemoryVault>[0], RegExp][] = [
+      ["no keystore", { config: CONFIG }, /no keystore.json/],
+      ["a config of another shape", { config: utf8("{}"), keystore: KEYSTORE }, /config.json: format/],
+      ["a keystore of another shape", { config: CONFIG, keystore: utf8("{}") }, /keystore.json has no/],
+    ];
+    for (const [name, options, error] of cases) {
+      const runtime = new MemoryVault(options);
+      await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+      const into = new MemoryBackend();
+      await expect(exportVault(runtime, into, { heldRoots: allRoots }), name).rejects.toThrow(NotAVault);
+      await expect(exportVault(runtime, into, { heldRoots: allRoots }), name).rejects.toThrow(error);
+      expect(paths(into), name).toEqual([]);
+    }
+  });
+
+  it("ends the object stream it opened when the destination fails before pulling from it, or midway: the latch is released and the object collectable, nothing held", async () => {
+    const runtime = memoryVault({ graceMs: 0 });
+    await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
+    for (const into of [new RefusingCreate(), new PullingOnceCreate()]) {
+      await expect(exportVault(runtime, into, { heldRoots: allRoots })).rejects.toThrow(/the destination/);
+      expect(runtime.latches.count(HELLO_CID)).toBe(0);
+      expect(paths(into)).toEqual([]);
+    }
+    expect((await runtime.collect(() => [])).unlinked).toEqual([HELLO_CID]);
+    expect(await runtime.vault.objects.has(HELLO_CID)).toBe(false);
+  });
 });
 
 describe("restoreFolder", () => {
@@ -290,7 +465,7 @@ describe("restoreFolder", () => {
   it("copies every portable byte of a valid snapshot into an empty backend, config.json last, and the result opens as a new replica with the same events, objects and files", async () => {
     const { from, events } = await exported();
     const into = new MemoryBackend();
-    expect(await restoreFolder(from, into)).toEqual({ events: 4, objects: 3, files: 4 });
+    expect(await restoreFolder(from, into, { heldRoots: allRoots })).toEqual({ events: 4, objects: 3, files: 4 });
     expect(paths(into)).toEqual(paths(from));
     for (const rel of paths(from)) expectBytes(into.files.get(`${BASE}/${rel}`), from.files.get(`${BASE}/${rel}`) as Uint8Array, rel);
     const opened = await FolderVault.openWritable(into, { anchor: DID });
@@ -308,15 +483,9 @@ describe("restoreFolder", () => {
     for (const rel of paths(from).filter((p) => kindOf(p) !== "segment")) expectBytes(again.files.get(`${BASE}/${rel}`), from.files.get(`${BASE}/${rel}`) as Uint8Array, rel);
   });
 
-  it("never copies the source's local/ or import/ — a replica file, an owner's options, a recovery journal, a half-staged object — and never reads them", async () => {
-    const { from } = await exported();
-    const half = new Uint8Array([1, 2, 3]);
-    await from.write(`${BASE}/local/replica.json`, utf8(`{"replica_id":"${authorN(1)}","store_generation":"${authorN(2)}"}`));
-    await from.write(`${BASE}/local/agent/options.json`, utf8("{}"));
-    await from.write(`${BASE}/import/${SEG(1)}/journal.json`, utf8('{"do":"harm"}'));
-    await from.write(`${BASE}/import/${SEG(1)}/staged/objects/${WORLD_CID}`, half);
-    const reads: string[] = [];
-    const watched = new Proxy(from, {
+  /** `backend` with every `read` and `open` recorded in `reads`. */
+  function watching(backend: MemoryBackend, reads: string[]): VaultBackend {
+    return new Proxy(backend, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
         if (prop === "read" || prop === "open") {
@@ -328,21 +497,108 @@ describe("restoreFolder", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
+  }
+
+  it("never copies the source's local/ — a replica file, an owner's options — and never reads it", async () => {
+    const { from } = await exported();
+    await from.write(`${BASE}/local/replica.json`, utf8(`{"replica_id":"${authorN(1)}","store_generation":"${authorN(2)}"}`));
+    await from.write(`${BASE}/local/agent/options.json`, utf8("{}"));
+    const reads: string[] = [];
     const into = new MemoryBackend();
-    expect(await restoreFolder(watched, into)).toEqual({ events: 4, objects: 3, files: 4 });
-    expect(paths(into).some((p) => p.startsWith("local/") || p.startsWith("import/"))).toBe(false);
-    expect(reads.some((p) => p.includes("/local/") || p.includes("/import/"))).toBe(false);
+    expect(await restoreFolder(watching(from, reads), into, { heldRoots: allRoots })).toEqual({ events: 4, objects: 3, files: 4 });
+    expect(paths(into).some((p) => p.startsWith("local/"))).toBe(false);
+    expect(reads.some((p) => p.includes("/local/"))).toBe(false);
     const opened = await FolderVault.openWritable(into, { anchor: DID });
     expect(opened.replica.replica_id).not.toBe(authorN(1));
     await opened.close();
   });
 
+  it("refuses a source with anything under import/ — a journal it does not know, one left mid-publication, staging alone — without reading it or writing anything: what the source's owner has not finished is not a snapshot", async () => {
+    const half = new Uint8Array([1, 2, 3]);
+    const cases: [string, (from: MemoryBackend) => Promise<void>][] = [
+      ["an unknown journal", (from) => from.write(`${BASE}/import/${SEG(1)}/journal.json`, utf8('{"do":"harm"}'))],
+      ["a journal left mid-publication", (from) => from.write(`${BASE}/import/pending/journal.json`, utf8('{"state":"publishing"}'))],
+      ["staging alone", (from) => from.write(`${BASE}/import/${SEG(1)}/staged/objects/${WORLD_CID}`, half)],
+    ];
+    for (const [name, twist] of cases) {
+      const { from } = await exported();
+      await twist(from);
+      await expect(FolderVault.openWritable(from, { anchor: DID }), name).rejects.toThrow(PendingImport);
+      const reads: string[] = [];
+      const into = new MemoryBackend();
+      await expect(restoreFolder(watching(from, reads), into, { heldRoots: allRoots }), name).rejects.toThrow(PendingImport);
+      expect(paths(into), name).toEqual([]);
+      expect(reads.some((p) => p.includes("/import/")), name).toBe(false);
+      await expect(FolderVault.openWritable(into, { anchor: DID }), name).rejects.toThrow(NotAVault);
+    }
+  });
+
+  /** A fold for these tests: an event's roots are held unless a `test.release` event names that event in `data.of`; another event naming the same root keeps it. */
+  async function retained(held: Held): Promise<Cid[]> {
+    const events = await all(held.events.scan());
+    const released = new Set(events.filter((e) => e.type === "test.release").map((e) => (e.data as { of: string }).of));
+    return events.filter((e) => !released.has(e.eventId)).flatMap((e) => e.roots);
+  }
+
+  it("requires every held root of the source's event set, as the fold computes it, to be among the source's objects: a missing root of an event of unknown type, or one another event still holds, refuses the source with nothing written; a root the fold has released may be gone", async () => {
+    const source = async (drafts: (roots: Draft[]) => Draft[]): Promise<MemoryBackend> => {
+      const runtime = memoryVault();
+      const held = await runtime.vault.commit(
+        [
+          { cid: HELLO_CID, source: HELLO },
+          { cid: WORLD_CID, source: WORLD },
+        ],
+        [{ type: "future.retained", roots: [HELLO_CID], data: {} }, draft([WORLD_CID])]
+      );
+      await runtime.vault.commit([], drafts(held));
+      const from = new MemoryBackend();
+      await exportVault(runtime, from, { heldRoots: retained });
+      return from;
+    };
+
+    const unknown = await source(() => []);
+    await dropObject(unknown, HELLO_CID);
+    const into = new MemoryBackend();
+    await expect(restoreFolder(unknown, into, { heldRoots: retained })).rejects.toMatchObject({ problems: [{ where: `objects/${HELLO_CID}`, error: "a held root is not present" }] });
+    expect(paths(into)).toEqual([]);
+
+    const released = await source(([, world]) => [{ type: "test.release", roots: [], data: { of: (world as Event).eventId } }]);
+    await dropObject(released, WORLD_CID);
+    const restored = new MemoryBackend();
+    expect(await restoreFolder(released, restored, { heldRoots: retained })).toEqual({ events: 3, objects: 1, files: 2 });
+    expect(paths(restored)).toContain(`objects/${HELLO_CID}`);
+    expect(paths(restored)).not.toContain(`objects/${WORLD_CID}`);
+
+    const stillHeld = await source(([, world]) => [{ type: "test.release", roots: [], data: { of: (world as Event).eventId } }, draft([WORLD_CID], { again: true })]);
+    await dropObject(stillHeld, WORLD_CID);
+    const refused = new MemoryBackend();
+    await expect(restoreFolder(stillHeld, refused, { heldRoots: retained })).rejects.toMatchObject({ problems: [{ where: `objects/${WORLD_CID}`, error: "a held root is not present" }] });
+    expect(paths(refused)).toEqual([]);
+  });
+
+  async function dropObject(from: MemoryBackend, cid: Cid): Promise<void> {
+    await from.remove(`${BASE}/objects/${cid}`);
+    expect(paths(from)).not.toContain(`objects/${cid}`);
+  }
+
+  it("cancels the source stream it opened when the destination fails before pulling from it, and when the copy fails midway", async () => {
+    const { from } = await exported();
+    const watched = new WatchingOpen(from);
+    await expect(restoreFolder(watched, new RefusingCreate(), { heldRoots: allRoots })).rejects.toThrow(/cannot create/);
+    expect(watched.opened).toBe(1);
+    expect(watched.cancelled).toBe(1);
+    const midway = new WatchingOpen(from);
+    await expect(restoreFolder(midway, new PullingOnceCreate(), { heldRoots: allRoots })).rejects.toThrow(/after one chunk/);
+    expect(midway.opened).toBe(1);
+    expect(midway.cancelled).toBe(1);
+  });
+
   it("refuses what is not a valid snapshot before writing anything: no config, another version, no or malformed keystore, an entry inside a structural root, a misfiled or non-canonical line, a fragment, a conflict", async () => {
     const empty = new MemoryBackend();
-    await expect(restoreFolder(empty, new MemoryBackend())).rejects.toThrow(NotAVault);
+    await expect(restoreFolder(empty, new MemoryBackend(), { heldRoots: allRoots })).rejects.toThrow(NotAVault);
     const v2 = new MemoryBackend();
     await v2.write(`${BASE}/config.json`, utf8(JSON.stringify({ format: "estoc", version: 2, identity: { anchor: { did: DID, key: "x" } } })));
-    await expect(restoreFolder(v2, new MemoryBackend())).rejects.toThrow(/version/);
+    await expect(restoreFolder(v2, new MemoryBackend(), { heldRoots: allRoots })).rejects.toThrow(/version/);
 
     const cases: [string, (from: MemoryBackend) => Promise<void>, string][] = [
       ["no keystore", async (from) => from.remove(`${BASE}/keystore.json`), "keystore.json"],
@@ -391,7 +647,7 @@ describe("restoreFolder", () => {
       const { from } = await exported();
       await twist(from);
       const into = new MemoryBackend();
-      const err = await restoreFolder(from, into).catch((e: unknown) => e);
+      const err = await restoreFolder(from, into, { heldRoots: allRoots }).catch((e: unknown) => e);
       expect(err, name).toBeInstanceOf(InvalidSnapshot);
       expect(`${(err as InvalidSnapshot).problems.map((p) => `${p.where}: ${p.error}`).join("\n")}`, name).toContain(where);
       expect(paths(into), name).toEqual([]);
@@ -402,7 +658,7 @@ describe("restoreFolder", () => {
     const { from } = await exported();
     await from.write(`${BASE}/objects/${HELLO_CID}`, WORLD);
     const into = new MemoryBackend();
-    await expect(restoreFolder(from, into)).rejects.toMatchObject({ problems: [{ where: `objects/${HELLO_CID}`, error: "the bytes do not hash to the name" }] });
+    await expect(restoreFolder(from, into, { heldRoots: allRoots })).rejects.toMatchObject({ problems: [{ where: `objects/${HELLO_CID}`, error: "the bytes do not hash to the name" }] });
     expect(paths(into)).toEqual([]);
     await expect(FolderVault.openWritable(into, { anchor: DID })).rejects.toThrow(NotAVault);
   });
@@ -412,13 +668,13 @@ describe("restoreFolder", () => {
     await from.write(`${BASE}/attachments/2026/a.bin`, BIG);
     const taken = new MemoryBackend();
     await taken.write(`${BASE}/local/agent/options.json`, utf8("{}"));
-    await expect(restoreFolder(from, taken)).rejects.toThrow(NotAVault);
+    await expect(restoreFolder(from, taken, { heldRoots: allRoots })).rejects.toThrow(NotAVault);
     expect(paths(taken)).toEqual(["local/agent/options.json"]);
     const owned = new MemoryBackend();
     const holder = await owned.own(`${BASE}/local/owner.pid`);
-    await expect(restoreFolder(from, owned)).rejects.toThrow(VaultOwned);
+    await expect(restoreFolder(from, owned, { heldRoots: allRoots })).rejects.toThrow(VaultOwned);
     await holder.release();
-    expect(await restoreFolder(from, owned)).toEqual({ events: 4, objects: 3, files: 5 });
+    expect(await restoreFolder(from, owned, { heldRoots: allRoots })).toEqual({ events: 4, objects: 3, files: 5 });
     expectBytes(owned.files.get(`${BASE}/attachments/2026/a.bin`), BIG);
   });
 
@@ -430,7 +686,7 @@ describe("restoreFolder", () => {
     await exportVault(runtime, from, { heldRoots: allRoots, base: "vault-a" });
     expect(paths(from, "vault-a")).toContain("config.json");
     const into = new MemoryBackend();
-    await restoreFolder(from, into, { fromBase: "vault-a", base: "vault-b" });
+    await restoreFolder(from, into, { heldRoots: allRoots, fromBase: "vault-a", base: "vault-b" });
     expect(paths(into, "vault-b")).toEqual(paths(from, "vault-a"));
     const opened = await FolderVault.openWritable(into, { anchor: DID, base: "vault-b" });
     expect((await all(opened.vault.events.scan())).length).toBe(4);
@@ -461,13 +717,28 @@ describe("on disk", () => {
     expect(await readdir(path.join(exportedDir, BASE, "local")).catch(() => [])).toEqual([]);
     const restoredDir = await tempDir();
     const third = new FsBackend(restoredDir);
-    expect(await restoreFolder(into, third)).toEqual({ events: 4, objects: 3, files: 4 });
+    expect(await restoreFolder(into, third, { heldRoots: allRoots })).toEqual({ events: 4, objects: 3, files: 4 });
     expect(await readdir(path.join(restoredDir, BASE, "local")).catch(() => [])).toEqual([]);
     const opened = await FolderVault.openWritable(third, { anchor: DID });
     expect((await all(opened.vault.events.scan())).map((e) => canonicalEventBytes(e))).toEqual(events.map((e) => canonicalEventBytes(e)));
     expectBytes(await opened.vault.objects.read(BIG_CID, BIG.length), BIG);
     expect(await opened.vault.files.list()).toEqual(["config.json", "keystore.json", "notes.txt", "state/settings.json"]);
     await opened.close();
+  });
+
+  it("refuses a source with a directory the layout does not define in a structural root, an empty one included — which a walk of the files alone would pass over — with nothing written", async () => {
+    const dir = await tempDir();
+    const from = new FsBackend(dir);
+    await from.write(`${BASE}/config.json`, CONFIG);
+    await from.write(`${BASE}/keystore.json`, KEYSTORE);
+    await mkdir(path.join(dir, BASE, "events", "not-an-author"), { recursive: true });
+    await mkdir(path.join(dir, BASE, "events", authorN(1), "nested"), { recursive: true });
+    await mkdir(path.join(dir, BASE, "objects", "not-an-object"), { recursive: true });
+    const into = new MemoryBackend();
+    const err = await restoreFolder(from, into, { heldRoots: allRoots }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(InvalidSnapshot);
+    expect((err as InvalidSnapshot).problems.map((p) => p.where)).toEqual([`events/${authorN(1)}/nested`, "events/not-an-author", "objects/not-an-object"]);
+    expect(paths(into)).toEqual([]);
   });
 
   it("a restore that fails on disk leaves no config.json behind", async () => {
@@ -478,7 +749,7 @@ describe("on disk", () => {
     await from.write(`${BASE}/objects/${HELLO_CID}`, WORLD);
     const dir = await tempDir();
     const into: VaultBackend = new FsBackend(dir);
-    await expect(restoreFolder(from, into)).rejects.toThrow(InvalidSnapshot);
+    await expect(restoreFolder(from, into, { heldRoots: allRoots })).rejects.toThrow(InvalidSnapshot);
     expect(await into.read(`${BASE}/config.json`)).toBeNull();
     expect(await into.read(`${BASE}/keystore.json`)).toBeNull();
     expect(await into.read(`${BASE}/objects/${HELLO_CID}`)).toBeNull();

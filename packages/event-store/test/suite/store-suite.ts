@@ -362,7 +362,7 @@ export function storeSuite(name: string, open: OpenStore): void {
       await expect(store.changes(undefined, own)).resolves.toBeDefined();
     });
 
-    it("principle 6 at the store: shuffled = same, merge commutes, incremental = full", async () => {
+    it("at the store: shuffled = same, merge commutes, incremental = full", async () => {
       const c = clock("2026-08-30T10:00:00.000Z");
       const sets = await Promise.all(
         ["aaaaaa", "bbbbbb", "cccccc"].map(async (self) => {

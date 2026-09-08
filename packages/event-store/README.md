@@ -81,7 +81,7 @@ required empty, `local/replica.json` read or minted, the stores opened
 as that replica. What comes back is a `Runtime`: `vault` for
 application code, `locked`, `collect`, `ingest`, plus `local(owner)` —
 `options.json`, `cache/` and trace streams under `local/<owner>/` —
-`damaged()`, `portablePaths()` and `close()`, which refuses every new
+`damaged()` and `close()`, which refuses every new
 operation, lets the accepted ones run out, fails the object streams
 still alive, and only then releases ownership — nothing of the old
 runtime touches the folder after that; every handle taken from the
@@ -106,7 +106,30 @@ a new record; a disk without hard links, a USB stick, gets the same by
 exclusive create and rename — a Web Lock in OPFS, a set in memory;
 a held name is `VaultOwned` at once, and waiting is the host's. Unlocking the seed is not this package's: the caller
 derives the anchor with `@estoc/keystore` and hands it in.
-Interchange — snapshot, export, restore, import — comes next.
+Interchange (§11): `exportVault(runtime, into, { heldRoots })` writes
+any runtime's vault — in memory or over a folder — as a portable
+folder into an empty backend, under the writer lock from selecting
+the cut to publication: every event rendered afresh as canonical
+bytes, one segment per author; every portable file; every present
+object through the store's verified stream; `config.json` and
+`keystore.json` checked as a restore would; and the held roots,
+computed by the fold handed in under that same lock, each required
+present and sound, or the export aborts unpublished. `restoreFolder(
+from, into, { heldRoots })` reads a portable folder into an empty
+backend, the portable half only — never `local/`, never `import/`,
+and a source with anything under `import/` refused as `PendingImport`
+— validated whole before a byte is written: config, keystore shape,
+every structural root holding only what the layout defines, every
+segment line under its author, no conflict, and every held root of
+that event set, as the fold computes it, among the source's objects;
+objects are verified as they stream. Both own the destination while
+laying it down, as `create` does, and publish by writing `config.json`
+last; a failure withdraws what the run wrote, its publication first,
+so what an interrupted run leaves is not a vault, and when the
+publication cannot be withdrawn everything is left standing, since it
+was all written before it. A destination another laying filled between
+the check and ownership is refused and left untouched. Import into an
+existing vault and the zip form come next.
 Everything below is
 version 2, which stays until the vault switches over.
 

@@ -393,7 +393,7 @@ describe("import: preflight", () => {
   });
 });
 
-describe("import: events (rule 1)", () => {
+describe("import: events", () => {
   it("ingests every line of every store, counts what is here already, reports damage and a device without its device.minted", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
     const { vault: source } = await populated(c.now);
@@ -424,7 +424,7 @@ describe("import: events (rule 1)", () => {
   });
 });
 
-describe("import: blobs (rule 2)", () => {
+describe("import: blobs", () => {
   it("copies a block iff a held root reaches it and it is sound; repairs damage here; reports damage there", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
     const { vault: source, big } = await populated(c.now);
@@ -488,7 +488,7 @@ describe("import: blobs (rule 2)", () => {
   });
 });
 
-describe("import: files (rule 3)", () => {
+describe("import: files", () => {
   it("leaves config.json, unions the key cache by name over this seed, copies unknown paths when absent, never overwrites, never touches local/", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
     const { vault: source } = await populated(c.now);
