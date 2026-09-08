@@ -143,7 +143,10 @@ export class FolderObjectStore implements ObjectStore {
    * live stream is failed with `VaultClosed` — its latch released, its
    * file closed — and no stream opens after. What a caller holds by
    * then is an errored stream, whose next read rejects. A closed store
-   * still answers `stat`, `has`, `list` and `damaged`.
+   * still answers `stat`, `has`, `list` and `damaged`; nothing that
+   * changes the folder runs in a turn after this one — a quarantine
+   * queued behind it does nothing, `verify` is refused — so once the
+   * close has returned, the folder is the next owner's alone (r2-B).
    */
   async close(): Promise<void> {
     await this.serialise(async () => {
@@ -347,11 +350,11 @@ export class FolderObjectStore implements ObjectStore {
       done();
       controller.error(new VaultClosed());
     };
-    this.live.add(fail);
     return new ReadableStream<Uint8Array>(
       {
         start: (c) => {
-          controller = c;
+          controller = c; // registered only once there is a controller to fail: a construction that throws leaves nothing for `close` to find
+          this.live.add(fail);
         },
         pull: async (c) => {
           try {
@@ -391,10 +394,14 @@ export class FolderObjectStore implements ObjectStore {
    * now, still does not spell `cid`: a put that has since replaced it
    * with sound bytes — of the same length, in the same clock tick, even
    * — is left alone (§6.2, r1-C). Neither size nor modification time
-   * tells one file from another; the bytes do.
+   * tells one file from another; the bytes do. Nothing after `close`:
+   * a quarantine a stream queued behind the close runs in a turn the
+   * store no longer owns the folder in — the next writer may hold it
+   * and have put the object back — and does nothing (r2-B).
    */
   private quarantine(cid: Cid, rel: string): Promise<void> {
     return this.serialise(async () => {
+      if (this.closed) return;
       const actual = await this.hashAt(rel);
       if (actual === null || actual.text === cid) return;
       if (this.readOnly) this.excluded.add(cid); // remembered, not moved (r1-E)
@@ -481,6 +488,7 @@ export class FolderObjectStore implements ObjectStore {
    */
   async verify(): Promise<Damaged[]> {
     return this.serialise(async () => {
+      if (this.closed) throw new VaultClosed(); // it moves files: not in a turn after the folder was given up (r2-B)
       const walked = await this.walk();
       const found: Damaged[] = [];
       for (const damage of walked.damaged) {

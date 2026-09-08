@@ -294,6 +294,64 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await next.close();
   });
 
+  it("r2-B: a quarantine a damaged stream queues behind close does nothing — the next writer's object, put back sound, stays; verify after close is refused", async () => {
+    const backend = new MemoryBackend();
+    const renames: string[] = [];
+    let holdStat: ReturnType<typeof gate> | null = null;
+    const controlled = new Proxy(backend, {
+      get(target, key, receiver) {
+        if (key === "size") {
+          return async (file: string) => {
+            if (holdStat !== null && file === `${BASE}/objects/${HELLO_CID}`) {
+              const g = holdStat;
+              holdStat = null;
+              await g.wait;
+            }
+            return target.size(file);
+          };
+        }
+        if (key === "rename") {
+          return (from: string, to: string) => {
+            renames.push(from);
+            return target.rename(from, to);
+          };
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const first = await created(controlled, { graceMs: 0 });
+    await first.vault.commit([{ cid: HELLO_CID, source: HELLO }], []);
+    await backend.write(`${BASE}/objects/${HELLO_CID}`, utf8("wrong")); // damaged behind the store's back
+    const reader = ((await first.vault.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>).getReader();
+    expect((await reader.read()).done).toBe(false);
+    // the store's turn is held by a stat; close queues behind it, and the stream's end — the digest mismatch — queues its quarantine behind close
+    const g = gate();
+    holdStat = g;
+    const stat = first.vault.objects.stat(HELLO_CID);
+    await tick();
+    const closing = first.close();
+    await tick(); // the vault's close has reached the store: its close is queued behind the stat
+    const lastRead = reader.read().then(
+      () => "resolved",
+      (err: Error) => err.name
+    );
+    await tick();
+    g.open();
+    await stat;
+    await closing;
+    expect(await lastRead).toBe("VaultClosed");
+    // the folder is the next writer's: it puts the object back sound and commits a reference to it
+    const next = await FolderVault.openWritable(backend, { anchor: DID, graceMs: 0 });
+    await next.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await tick();
+    expect(await next.vault.objects.has(HELLO_CID)).toBe(true);
+    expectBytes(await next.vault.objects.read(HELLO_CID, 100), HELLO);
+    expect(paths(backend).filter((p) => p.includes("/damaged/"))).toEqual([]);
+    expect(renames.filter((p) => p === `${BASE}/objects/${HELLO_CID}`)).toEqual([]); // the old runtime moved nothing after its close
+    await expect(first.stores.objects.verify()).rejects.toThrow(VaultClosed);
+    await next.close();
+  });
+
   it("r1-D: a local owner, cache or trace handle taken before close refuses every operation after it, and close waits for the local work accepted before", async () => {
     const backend = new MemoryBackend();
     const g = gate();

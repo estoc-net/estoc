@@ -227,8 +227,11 @@
   operation, lets the accepted ones run out — the writer lock's, and
   each local owner's — fails every object stream still alive with
   `VaultClosed`, releasing its latch, and only then releases ownership
-  (r1-C, r1-D); every local owner, cache and trace handle checks the
-  vault's guard on each call (r1-D). `FolderReader.open` is the
+  (r1-C, r1-D); nothing that changes the folder runs in a store turn
+  after the close — a quarantine a damaged stream queued behind it
+  does nothing, `verify` is refused — so the folder is the next
+  owner's alone once close has returned (r2-B); every local owner,
+  cache and trace handle checks the vault's guard on each call (r1-D). `FolderReader.open` is the
   read-only open: no `local/` created, `files.write` refused as
   `ReadOnlyVault`, object streams served only with `ownership:
   "exclusive"` and otherwise refused as `Unprotected` (§15), over an
@@ -246,12 +249,25 @@
   The `VaultBackend` gained `own(path)`: ownership of a name, exclusive
   against every holder in every process reaching the folder, refused
   at once as `VaultOwned` — `FsBackend` a pid file holding `<pid>
-  <token>`, created whole by claim file and hard link, read back, a
-  live holder refused, a stale one — dead, empty, garbage — reclaimed
-  by moving it aside and checking what moved, a holder moved by
-  mistake given its name back, this process's takes recorded
-  synchronously so two cannot both pass, release only while the file
-  is still this take's (r1-A, r1-G); `OpfsBackend` a Web Lock named for
+  <thread> <token>` (`src/node/ownership.ts`), created whole by claim
+  file and hard link, read back, a live holder refused — a record is
+  live while the process it names is, a Node worker's included, since
+  workers share a pid and differ in thread id; only one naming this
+  very thread that this thread has no memory of is a previous
+  incarnation's, stale (r2-A) — a stale one — dead, empty, garbage —
+  reclaimed by moving it aside and checking what moved, a holder
+  moved by mistake given its name back, this thread's takes and
+  sidecars recorded synchronously in one registry shared by every
+  copy of the module the thread loads, so two takes cannot both pass
+  whichever copy each came through (r1-A, r2-A), release only while
+  the record is still this take's — at the name, or aside under a
+  marker (r1-A, r1-G). A restore that cannot give a moved holder its
+  name back within its budget — a taker stalled between its take and
+  its look — leaves the marker standing and fails the reclaimer's
+  take, so the moved holder's record bars every taker until a later
+  sweep completes it; a stale taker's file at the name is removed by
+  the restore, and a marker gone from under it is done (r2-C);
+  `OpfsBackend` a Web Lock named for
   the one path from the origin's storage root to the name, so one place
   reached through two handles and bases is one lock (r1-B), and a
   directory the storage root cannot place refused; `MemoryBackend` a

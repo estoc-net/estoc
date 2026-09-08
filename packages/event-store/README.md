@@ -83,16 +83,19 @@ application code, `locked`, `collect`, `ingest`, plus `local(owner)` —
 `options.json`, `cache/` and trace streams under `local/<owner>/` —
 `damaged()`, `portablePaths()` and `close()`, which refuses every new
 operation, lets the accepted ones run out, fails the object streams
-still alive and only then releases ownership; every handle taken
-from the vault, local ones included, refuses after close.
+still alive, and only then releases ownership — nothing of the old
+runtime touches the folder after that; every handle taken from the
+vault, local ones included, refuses after close.
 `FolderReader.open(backend, { ownership })` is the read-only open:
 events, files and object metadata to read, no `local/` created, no
 write; object streams only with `ownership: "exclusive"` — the same
 ownership a writer takes, so a writer waits or fails meanwhile — and
 refused as unprotected without it, over an object store that moves
-nothing. `backend.own(path)` is a pid file on disk, a Web Lock in
-OPFS, a set in memory; a held name is `VaultOwned` at once, and waiting
-is the host's. Unlocking the seed is not this package's: the caller
+nothing. `backend.own(path)` is a pid file on disk — `<pid> <thread>
+<token>`, live while the process and thread it names are, a Node
+worker's as much as another process's — a Web Lock in OPFS, a set in
+memory; a held name is `VaultOwned` at once, and waiting is the
+host's. Unlocking the seed is not this package's: the caller
 derives the anchor with `@estoc/keystore` and hands it in.
 Interchange — snapshot, export, restore, import — comes next.
 Everything below is
