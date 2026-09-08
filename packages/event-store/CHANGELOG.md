@@ -267,24 +267,30 @@
   what moved, a live holder's file moved by mistake given its name
   back; a take that is over is withdrawn — a holder releasing, a
   taker giving up a name taken beside a marker or moved off it by a
-  mover's mistake, or failing at any point after its claim was
-  written — by taking its own line off every marker holding it and
-  then off the name the same way, in that order, until a pass finds
-  it nowhere, and its claim with it, under a notice of the withdrawal
-  beside the name
-  that a restore looks for once the line is back at the name, by its
-  own link or another restore's of the same marker, taking it off
-  again and keeping its marker until it has, so a withdrawal that
-  finds no marker holding its line has no restore left to fear; and
-  every try is a new line with its own token, so a restore still
-  expecting the old one can never mistake the next for it, and a
-  failed take leaves nothing that bars the next. Where the disk has
-  no hard links — a USB stick, a network mount — a take is an
-  exclusive create and a restore a rename, which takes the marker
-  away in the instant the line reaches the name: a withdrawal that
-  looked at the name first could then find the line in neither place,
-  which is why it looks at the markers first, and a restore whose
-  marker is gone by the time it moves has nothing left to restore.
+  mover's mistake, or failing at any point after its line reached the
+  name — under a notice of the withdrawal beside the name: every copy
+  of its line in sight, at the name, under a marker, in the claim a
+  failed take left, is gathered as a `gone` copy of the take, pass
+  after pass, and the copies are dropped, and the notice with them,
+  only once they are all the links the file's inode has — a count
+  that is exact whatever moves between two looks, where no order of
+  looking at the name and the markers could be, since a restore
+  moves a line one way and a reclaim the other. A restore that meets
+  the notice hands the line over instead of giving it the name — from
+  its marker before the link, off the name again after — and never
+  drops a copy that could be the last; a pass that finds the line
+  nowhere looks at the markers once more before believing it taken by
+  hand, since after the notice a line leaves the name only for a
+  marker and a marker only for a copy in the withdrawal's hands. So no
+  restore can leave the line at the name with nothing to release it,
+  however it interleaves with the withdrawal; every try is a new line
+  with its own token, so a restore still expecting the old one can
+  never mistake the next for it, and a failed take leaves nothing that
+  bars the next. Where the disk has no hard links — a USB stick, a
+  network mount — a take is an exclusive create and a restore a
+  rename, which takes the marker away in the instant the line reaches
+  the name; a restore whose marker is gone by the time it moves has
+  nothing left to restore.
   A restore that cannot give a moved holder its name
   back within its budget — a taker stalled between its take and its
   look — leaves the marker standing and fails the mover's take, so

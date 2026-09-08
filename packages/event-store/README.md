@@ -99,10 +99,11 @@ while the origin is this incarnation of the process's, so the disk
 alone says who holds it, whatever copy of the module in whatever
 realm asks; nothing is removed from the name after a read, only moved
 aside and judged by what moved, and a take that is over — released,
-given up, or failed — leaves nothing of its record behind, the next
-take a new record; a disk without hard links, a USB stick, gets the
-same by exclusive create and rename — a Web Lock in OPFS, a set in
-memory;
+given up, or failed — gathers every copy of its record, and drops them
+only once the file's link count says no copy stands elsewhere, so a
+reclaim in flight can never put a released record back, the next take
+a new record; a disk without hard links, a USB stick, gets the same by
+exclusive create and rename — a Web Lock in OPFS, a set in memory;
 a held name is `VaultOwned` at once, and waiting is the host's. Unlocking the seed is not this package's: the caller
 derives the anchor with `@estoc/keystore` and hands it in.
 Interchange — snapshot, export, restore, import — comes next.
