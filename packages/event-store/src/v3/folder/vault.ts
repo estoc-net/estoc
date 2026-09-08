@@ -12,8 +12,9 @@
  * writable open additionally validates `keystore.json` by shape,
  * compares the anchor the caller derived from the unlocked seed with
  * the one `config.json` fixes, takes writer-exclusive ownership through
- * the backend before creating any local state, refuses while `import/`
- * holds recovery state, then reads or mints `local/replica.json` and
+ * the backend before creating any local state, finishes or rolls back
+ * whatever import `import/` records — and refuses over one it does not
+ * understand — then reads or mints `local/replica.json` and
  * opens the event store as that replica. `close`
  * refuses every new operation, lets the accepted ones run out, fails
  * the object streams still alive, and only then releases ownership.
@@ -24,8 +25,7 @@
  */
 
 import type { Ownership, VaultBackend } from "../../backend/types.js";
-import { walk } from "../../backend/types.js";
-import { AnchorMismatch, DamagedLayout, NotAVault, PendingImport, ReadOnlyVault, Unprotected, VaultClosed } from "../errors.js";
+import { AnchorMismatch, NotAVault, ReadOnlyVault, Unprotected, VaultClosed } from "../errors.js";
 import type { Cid, Damaged } from "../event.js";
 import { comparePaths, type FileStore } from "../files.js";
 import { LatchRegistry } from "../objects.js";
@@ -33,14 +33,13 @@ import { Runtime, type VaultEvents, type VaultObjects } from "../vault.js";
 import { encodeConfig, parseConfig, type Config } from "./config.js";
 import { FolderEventStore, type FolderEventStoreOptions } from "./events.js";
 import { FolderFileStore } from "./files.js";
+import { checkImport, recoverImports } from "./import.js";
 import { checkKeystore } from "./keystore.js";
-import { CONFIG_FILE, ESTOC_DIR, IMPORT_DIR, KEYSTORE_FILE, LOCAL_DIR } from "./layout.js";
+import { CONFIG_FILE, ESTOC_DIR, KEYSTORE_FILE, LOCAL_DIR } from "./layout.js";
 import { LocalOwner, type LocalOptions, type Rotation } from "./local.js";
 import { FolderObjectStore, type FolderObjectStoreOptions } from "./objects.js";
 import { mintReplica, openReplica, type Replica } from "./replica.js";
-
-/** Where ownership is named: under `local/`, this copy's own; on disk, the writer's pid file. */
-export const OWNER_FILE = `${LOCAL_DIR}/owner.pid`;
+import { OWNER_FILE, checkEmpty, checkRoots, layoutDamage, readConfig } from "./roots.js";
 
 export interface FolderVaultOptions {
   /** the layout's directory, relative to the backend's root; `.estoc` when left out */
@@ -78,63 +77,6 @@ export interface OpenReadOnlyOptions extends FolderVaultOptions {
    * refuse object streams as unprotected.
    */
   ownership?: "exclusive" | "none";
-}
-
-/** What the folder holds that the layout does not define, from every root, in path order. */
-export async function layoutDamage(backend: VaultBackend, base: string): Promise<Damaged[]> {
-  const damaged: Damaged[] = [];
-  for (const file of [CONFIG_FILE, KEYSTORE_FILE]) {
-    const at = `${base}/${file}`;
-    if ((await backend.list(at)).length > 0 || (await backend.dirs(at)).length > 0) damaged.push({ where: file, error: `a directory where ${file} belongs` });
-  }
-  for (const dir of [IMPORT_DIR, LOCAL_DIR]) {
-    if ((await backend.size(`${base}/${dir}`)) !== null) damaged.push({ where: dir, error: `a file where the ${dir} directory belongs` });
-  }
-  return damaged;
-}
-
-/** A file where `import/` or `local/` belongs is refused before ownership is taken or anything written. */
-async function checkRoots(backend: VaultBackend, base: string): Promise<void> {
-  for (const damage of await layoutDamage(backend, base)) {
-    if (damage.where === IMPORT_DIR || damage.where === LOCAL_DIR) throw new DamagedLayout(damage.where, damage.error);
-  }
-}
-
-/** `config.json` read and checked; `NotAVault` when it is not there. */
-async function readConfig(backend: VaultBackend, base: string): Promise<Config> {
-  const bytes = await backend.read(`${base}/${CONFIG_FILE}`);
-  if (bytes === null) throw new NotAVault(`no ${base}/${CONFIG_FILE}: not a vault`);
-  return parseConfig(bytes, CONFIG_FILE);
-}
-
-/**
- * Whatever stands under `import/` blocks the open: this
- * version records no import there yet, so anything found is an import
- * another backend or version left unfinished, or damage — either way
- * not something to open over. An empty or absent `import/` is nothing
- * pending.
- */
-export async function checkImport(backend: VaultBackend, base: string): Promise<void> {
-  const dir = `${base}/${IMPORT_DIR}`;
-  const entries = [...(await backend.list(dir)), ...(await backend.dirs(dir))].sort(comparePaths);
-  if (entries.length > 0) throw new PendingImport(entries);
-}
-
-/**
- * A folder a vault may be laid in — by `create`, or by a restore or an
- * export: nothing under `base` but what ownership itself makes under
- * `local/`. Anything else — a config or keystore, a segment, an object,
- * `import/` state, an opaque file, other `local/` state — is refused as
- * `NotAVault`, naming the first path found, and nothing is written.
- */
-export async function checkEmpty(backend: VaultBackend, base: string): Promise<void> {
-  if ((await backend.size(base)) !== null) throw new NotAVault(`${base} is a file, not a folder to lay a vault in`);
-  const prefix = `${base}/`;
-  for (const path of await walk(backend, base)) {
-    const rel = path.slice(prefix.length);
-    if (rel.startsWith(`${OWNER_FILE}`)) continue;
-    throw new NotAVault(`${base} is not an empty folder: ${rel} is there; a vault is created in an empty folder, never over one`);
-  }
 }
 
 function eventOptions(options: FolderVaultOptions, base: string): FolderEventStoreOptions {
@@ -178,7 +120,8 @@ export class FolderVault extends Runtime {
   private readonly state: { closed: boolean };
 
   private constructor(
-    private readonly backend: VaultBackend,
+    /** the bytes under the vault: what `importFolder` stages its barrier in */
+    readonly backend: VaultBackend,
     readonly base: string,
     readonly config: Config,
     readonly replica: Replica,
@@ -197,10 +140,10 @@ export class FolderVault extends Runtime {
 
   /**
    * A writable open: `config.json`, `keystore.json` by shape,
-   * the anchor compared, ownership taken, `import/` checked, the replica
-   * read or minted, the stores opened as it — in that order, each step
-   * before the next touches anything, and ownership released on any
-   * failure after it was taken.
+   * the anchor compared, ownership taken, the import `import/` records
+   * finished or rolled back, the replica read or minted, the stores
+   * opened as it — in that order, each step before the next touches
+   * anything, and ownership released on any failure after it was taken.
    */
   static async openWritable(backend: VaultBackend, options: OpenWritableOptions): Promise<FolderVault> {
     const base = options.base ?? ESTOC_DIR;
@@ -256,10 +199,16 @@ export class FolderVault extends Runtime {
     return config;
   }
 
-  /** What a writable open does once it holds ownership: `import/`, the replica, the stores; ownership released on a failure. */
+  /**
+   * What a writable open does once it holds ownership: the import
+   * recorded under `import/` finished or rolled back — before the
+   * replica is read and before any store opens, so that nothing of this
+   * runtime, collection included, sees a partial union — then the
+   * replica, then the stores; ownership released on a failure.
+   */
   private static async openOwned(backend: VaultBackend, base: string, config: Config, ownership: Ownership, options: OpenWritableOptions): Promise<FolderVault> {
     try {
-      await checkImport(backend, base);
+      await recoverImports(backend, base);
       const replica = await openReplica(backend, base, options.mint ?? mintReplica);
       const latches = new LatchRegistry();
       const stores = {

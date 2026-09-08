@@ -185,6 +185,20 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
+    name: "removes an empty directory, and refuses one with entries",
+    run: async (fresh) => {
+      const b = await fresh();
+      await b.write(".estoc/import/job/staged/a", enc.encode("x"));
+      await rejects(b.remove(".estoc/import/job"), /./, "removing a directory with entries");
+      same(text(await b.read(".estoc/import/job/staged/a")), "x", "the entry stands");
+      await b.remove(".estoc/import/job/staged/a");
+      await b.remove(".estoc/import/job/staged");
+      await b.remove(".estoc/import/job");
+      same(await b.dirs(".estoc/import"), [], "the directory is gone");
+      await b.remove(".estoc/import/job");
+    },
+  },
+  {
     name: "hands back copies, not its own buffers",
     run: async (fresh) => {
       const b = await fresh();

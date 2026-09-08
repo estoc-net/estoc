@@ -513,23 +513,30 @@ describe("restoreFolder", () => {
     await opened.close();
   });
 
-  it("refuses a source with anything under import/ — a journal it does not know, one left mid-publication, staging alone — without reading it or writing anything: what the source's owner has not finished is not a snapshot", async () => {
+  it("refuses a source with anything under import/ — a journal it does not know, one in a directory not an import's, staging alone — without reading it or writing anything: what the source's owner has not finished is not a snapshot, whether or not that owner's writable open could recover it", async () => {
     const half = new Uint8Array([1, 2, 3]);
-    const cases: [string, (from: MemoryBackend) => Promise<void>][] = [
-      ["an unknown journal", (from) => from.write(`${BASE}/import/${SEG(1)}/journal.json`, utf8('{"do":"harm"}'))],
-      ["a journal left mid-publication", (from) => from.write(`${BASE}/import/pending/journal.json`, utf8('{"state":"publishing"}'))],
-      ["staging alone", (from) => from.write(`${BASE}/import/${SEG(1)}/staged/objects/${WORLD_CID}`, half)],
+    const cases: [string, (from: MemoryBackend) => Promise<void>, "blocks" | "recovers"][] = [
+      ["an unknown journal", (from) => from.write(`${BASE}/import/${SEG(1)}/journal.json`, utf8('{"do":"harm"}')), "blocks"],
+      ["a journal in a directory not an import's", (from) => from.write(`${BASE}/import/pending/journal.json`, utf8('{"state":"publishing"}')), "blocks"],
+      ["staging alone", (from) => from.write(`${BASE}/import/${SEG(1)}/staged/objects/${WORLD_CID}`, half), "recovers"],
     ];
-    for (const [name, twist] of cases) {
+    for (const [name, twist, open] of cases) {
       const { from } = await exported();
       await twist(from);
-      await expect(FolderVault.openWritable(from, { anchor: DID }), name).rejects.toThrow(PendingImport);
       const reads: string[] = [];
       const into = new MemoryBackend();
       await expect(restoreFolder(watching(from, reads), into, { heldRoots: allRoots }), name).rejects.toThrow(PendingImport);
       expect(paths(into), name).toEqual([]);
       expect(reads.some((p) => p.includes("/import/")), name).toBe(false);
       await expect(FolderVault.openWritable(into, { anchor: DID }), name).rejects.toThrow(NotAVault);
+      if (open === "blocks") await expect(FolderVault.openWritable(from, { anchor: DID }), name).rejects.toThrow(PendingImport);
+      else {
+        // staging that never reached a journal is an import that never began publishing: the owner's writable open rolls it back
+        const owner = await FolderVault.openWritable(from, { anchor: DID });
+        await owner.close();
+        expect(paths(from).some((p) => p.startsWith("import/")), name).toBe(false);
+        expect(await restoreFolder(from, new MemoryBackend(), { heldRoots: allRoots }), name).toEqual({ events: 4, objects: 3, files: 4 });
+      }
     }
   });
 

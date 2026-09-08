@@ -304,6 +304,75 @@
   set. `Runtime` takes a `guard` run as each operation asks for the
   lock.
 
+- **Interchange** (v3 A09). `exportVault(runtime, into, { heldRoots })`
+  writes any runtime's vault — in memory or over a folder — as a
+  portable folder into an empty backend, under the writer lock from
+  selecting the cut to publication: every event rendered afresh as
+  canonical bytes, one segment per author; every portable file; every
+  present object through the store's verified stream; `config.json`
+  and `keystore.json` checked as a restore would; and the held roots,
+  computed by the fold handed in under that same lock, each required
+  present and sound, or the export aborts unpublished.
+  `restoreFolder(from, into, { heldRoots })` reads a portable folder
+  into an empty backend, the portable half only — never `local/`,
+  never `import/`, a source with anything under `import/` refused as
+  `PendingImport` — validated whole before a byte is written: config,
+  keystore shape, every structural root holding only what the layout
+  defines, every segment line under its author, no conflict, every
+  held root of that event set among the source's objects; objects are
+  verified as they stream. Both own the destination while laying it
+  down and publish by writing `config.json` last; a failure withdraws
+  what the run wrote, its publication first, and leaves everything
+  standing when the publication cannot be withdrawn; a destination
+  another laying filled between the check and ownership is refused
+  untouched. `MemoryVault` takes `config` and `keystore` so that a
+  vault in memory can be exported. New errors `IncompleteSnapshot` and
+  `InvalidSnapshot`.
+
+- **Import into an existing vault, and the barrier under `import/`**
+  (v3 A10). `importFolder(vault, from, { heldRoots })` merges a portable
+  folder of the same vault — the same anchor, or `AnchorMismatch` —
+  into an open `FolderVault`, under its writer lock from the first look
+  at the target to publication. Everything is decided before a byte is
+  written: the source read and validated as a restore reads it; the
+  target's event set required whole; every source event a duplicate,
+  a conflict — the target's kept and the source's reported — or new,
+  unless its author is this replica's, which is `ForkedAuthor` and
+  writes nothing; the held roots of the merged set computed by the
+  fold, each required to have bytes in the target already or among the
+  source's objects, which are the objects copied and the only ones; a
+  source file copied when the target has nothing at its path, left
+  when it has, and refused when it would land on a directory or under
+  a file of the target; the target's config and keystore never
+  touched; a root with bytes nowhere, or a collision, is
+  `IncompleteImport`. The writes go through the barrier: every item
+  — one fresh segment per incoming author, each object verified as it
+  streams, each file — staged under `import/<uuidv7>/staged/` at the
+  path it will have; then `journal.json` written beside them naming
+  them all; then each moved to its place, objects before the segments
+  that name them; then the journal and the directory removed. A
+  writable open, once it holds ownership and before any store opens,
+  finishes an import whose journal it finds — items still staged
+  moved, ones already at their place left — and rolls back staging
+  that never reached a journal, whatever became of `local/`
+  meanwhile; a read-only open takes up neither and reports both as
+  `PendingImport`. Whatever under `import/` is neither state — a file
+  at the top, a directory not named by a UUIDv7, a journal that does
+  not parse or names paths of another shape, a staged file the
+  journal does not name, an item found neither staged nor published —
+  blocks the writable open as `PendingImport`, with `detail` saying
+  what, and nothing under `import/` touched. A failure before the
+  journal rolls the staging back; one after it leaves the import the
+  next open's to finish and closes the runtime, since what it would go
+  on reading might be the union half published. Importing the same
+  folder again adds nothing and writes nothing. `VaultBackend.remove`
+  now removes an empty directory too, and refuses one with entries —
+  `FsBackend` by `rmdir`, `OpfsBackend` as `removeEntry` always did,
+  `MemoryBackend` by the files under the name — so a finished import
+  leaves no directory behind. `FolderVault.backend` is public; the
+  folder's shared checks (`OWNER_FILE`, `checkEmpty`, `layoutDamage`)
+  moved to `folder/roots.ts`.
+
 - **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
   first `append`, or handed back by `read`, was kept or returned as a
   view onto the same memory — `Buffer#slice` is not a copy — so writing

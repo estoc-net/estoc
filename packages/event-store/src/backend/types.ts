@@ -27,7 +27,7 @@ export interface VaultBackend {
   write(path: string, data: Uint8Array): Promise<void>;
   /** Append to a file, creating it (and parents) if missing. */
   append(path: string, data: Uint8Array): Promise<void>;
-  /** Delete a file; deleting a missing file is not an error. */
+  /** Delete a file, or an empty directory; deleting a missing path is not an error, and a directory with entries is refused. */
   remove(path: string): Promise<void>;
   /** Size of a file in bytes without reading it, or null if there is no such file (a directory is not one). */
   size(path: string): Promise<number | null>;

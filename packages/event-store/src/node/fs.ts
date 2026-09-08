@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 
@@ -188,7 +188,13 @@ export class FsBackend implements VaultBackend {
   }
 
   async remove(p: string): Promise<void> {
-    await rm(this.at(p), { force: true });
+    const file = this.at(p);
+    try {
+      await rm(file, { force: true });
+    } catch (err) {
+      if (!isDirectory(err)) throw err;
+      await rmdir(file); // an empty directory goes; one with entries is refused in the platform's words
+    }
   }
 
   async size(p: string): Promise<number | null> {
@@ -259,7 +265,8 @@ function isMissing(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** The path names a directory where a file was asked for. */
+/** The path names a directory where a file was asked for: `EISDIR` from a read, `ERR_FS_EISDIR` from a non-recursive `rm`. */
 function isDirectory(err: unknown): boolean {
-  return (err as { code?: string }).code === "EISDIR";
+  const code = (err as { code?: string }).code;
+  return code === "EISDIR" || code === "ERR_FS_EISDIR";
 }

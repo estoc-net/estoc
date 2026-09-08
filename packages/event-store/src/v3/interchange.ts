@@ -19,16 +19,17 @@ import { v7 } from "uuid";
 import type { Ownership, VaultBackend } from "../backend/types.js";
 import { walk } from "../backend/types.js";
 import { DamagedObject, IncompleteSnapshot, InvalidSnapshot, NotAVault } from "./errors.js";
-import { isAuthorId, type AuthorId, type Cid, type Damaged, type Event } from "./event.js";
+import { isAuthorId, type AuthorId, type Cid, type Damaged, type Event, type EventId } from "./event.js";
 import { canonicalText } from "./jcs.js";
 import { checkPath, comparePaths } from "./files.js";
 import { rawCidFromDigest, rawCidOf, sortCids } from "./objects.js";
 import { MemoryVault, type Held, type KeepUnderLock, type VaultRuntime } from "./vault.js";
-import { parseConfig } from "./folder/config.js";
+import { parseConfig, type Config } from "./folder/config.js";
 import { checkKeystore } from "./folder/keystore.js";
 import { CONFIG_FILE, ESTOC_DIR, EVENTS_DIR, KEYSTORE_FILE, OBJECTS_DIR, authorDir, kindOf, objectPath, segmentPath } from "./folder/layout.js";
+import { checkImport } from "./folder/import.js";
 import { decodeSegment, encodeLines } from "./folder/lines.js";
-import { OWNER_FILE, checkEmpty, checkImport, layoutDamage } from "./folder/vault.js";
+import { OWNER_FILE, checkEmpty, layoutDamage } from "./folder/roots.js";
 
 /** What an export or a restore wrote, counted. */
 export interface Copied {
@@ -121,7 +122,12 @@ async function withdraw(into: VaultBackend, base: string, written: string[], pub
  * leaves the stream, and whatever it holds open or latched, untouched
  * otherwise.
  */
-async function copy(lay: Lay, rel: string, stream: ReadableStream<Uint8Array>, through: (chunks: AsyncIterable<Uint8Array>) => AsyncIterable<Uint8Array> = (chunks) => chunks): Promise<void> {
+export async function copy(
+  lay: Pick<Lay, "create">,
+  rel: string,
+  stream: ReadableStream<Uint8Array>,
+  through: (chunks: AsyncIterable<Uint8Array>) => AsyncIterable<Uint8Array> = (chunks) => chunks
+): Promise<void> {
   const reader = stream.getReader();
   try {
     await lay.create(rel, through(chunksFrom(reader)));
@@ -263,7 +269,7 @@ async function select(held: Held, heldRoots: KeepUnderLock): Promise<Cut> {
   return { config, files, events: new Map([...events].sort(([a], [b]) => comparePaths(a, b))), count, objects: sortCids(objects), roots };
 }
 
-function message(err: unknown): string {
+export function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -308,8 +314,14 @@ export interface RestoreOptions {
 export async function restoreFolder(from: VaultBackend, into: VaultBackend, options: RestoreOptions): Promise<Copied> {
   const base = options.base ?? ESTOC_DIR;
   const fromBase = options.fromBase ?? ESTOC_DIR;
-  const source = await preflight(from, fromBase, options.heldRoots);
-  return laying(into, base, source.config, async (lay) => {
+  const source = await readSource(from, fromBase);
+  const present = new Set(source.objects);
+  const problems: Damaged[] = [];
+  for (const root of await rootsOf(source.events, options.heldRoots)) {
+    if (!present.has(root)) problems.push({ where: objectPath(root), error: "a held root is not present" });
+  }
+  if (problems.length > 0) throw new InvalidSnapshot(problems);
+  return laying(into, base, source.configBytes, async (lay) => {
     await lay.write(KEYSTORE_FILE, source.keystore);
     for (const [rel, bytes] of source.segments) await lay.write(rel, bytes);
     for (const rel of source.opaque) await copy(lay, rel, await opened(from, `${fromBase}/${rel}`, rel));
@@ -317,24 +329,43 @@ export async function restoreFolder(from: VaultBackend, into: VaultBackend, opti
       const rel = objectPath(cid);
       await copy(lay, rel, await opened(from, `${fromBase}/${rel}`, rel), (chunks) => verifying(cid, rel, chunks));
     }
-    return { events: source.events, objects: source.objects.length, files: 2 + source.opaque.length };
+    return { events: source.events.length, objects: source.objects.length, files: 2 + source.opaque.length };
   });
 }
 
-/** The source as `preflight` read it: what to write, the objects still to verify while copied. */
-interface Source {
-  config: Uint8Array;
+/** A portable folder as `readSource` read it: validated whole, its objects still to be verified as they are copied. */
+export interface Source {
+  config: Config;
+  /** `config.json` as the source spells it */
+  configBytes: Uint8Array;
   keystore: Uint8Array;
+  /** every segment's path and bytes, in path order */
   segments: [string, Uint8Array][];
-  events: number;
+  /** every distinct event the segments hold, by eventId, in the order found */
+  events: Event[];
+  /** each event's canonical text, by eventId */
+  texts: Map<EventId, string>;
+  /** every object's CID, in binary-CID order */
   objects: Cid[];
+  /** every opaque portable path, in path order */
   opaque: string[];
 }
 
-async function preflight(from: VaultBackend, fromBase: string, heldRoots: KeepUnderLock): Promise<Source> {
-  const config = await from.read(`${fromBase}/${CONFIG_FILE}`);
-  if (config === null) throw new NotAVault(`no ${fromBase}/${CONFIG_FILE}: not a vault`);
-  parseConfig(config, CONFIG_FILE);
+/**
+ * A portable folder under `fromBase` in `from`, read and validated
+ * whole: `config.json` parsed, `import/` required empty, `keystore.json`
+ * checked by shape; every structural root holding only what the layout
+ * defines, an empty directory that is not one included; every path
+ * conforming; every segment decoded whole, each line its event's
+ * canonical bytes under the directory's author, a fragment or a
+ * conflict refused. Nothing under `local/` or `import/` is read.
+ * Throws `NotAVault`, `PendingImport` or `InvalidSnapshot` naming every
+ * problem found; the objects' bytes are not read here.
+ */
+export async function readSource(from: VaultBackend, fromBase: string): Promise<Source> {
+  const configBytes = await from.read(`${fromBase}/${CONFIG_FILE}`);
+  if (configBytes === null) throw new NotAVault(`no ${fromBase}/${CONFIG_FILE}: not a vault`);
+  const config = parseConfig(configBytes, CONFIG_FILE);
   await checkImport(from, fromBase);
   const problems: Damaged[] = [];
   const keystore = await from.read(`${fromBase}/${KEYSTORE_FILE}`);
@@ -346,11 +377,10 @@ async function preflight(from: VaultBackend, fromBase: string, heldRoots: KeepUn
       problems.push({ where: KEYSTORE_FILE, error: message(err) });
     }
   }
-  const source: Source = { config, keystore: keystore ?? new Uint8Array(), segments: [], events: 0, objects: [], opaque: [] };
+  const source: Source = { config, configBytes, keystore: keystore ?? new Uint8Array(), segments: [], events: [], texts: new Map(), objects: [], opaque: [] };
   const misplaced = await misplacedDirectories(from, fromBase);
   problems.push(...misplaced);
-  const events: Event[] = [];
-  const seen = new Map<string, string>();
+  const { events, texts: seen } = source;
   const prefix = `${fromBase}/`;
   for (const path of await walk(from, fromBase)) {
     const rel = path.slice(prefix.length);
@@ -395,12 +425,6 @@ async function preflight(from: VaultBackend, fromBase: string, heldRoots: KeepUn
     }
   }
   if (problems.length > 0) throw new InvalidSnapshot(problems);
-  const present = new Set(source.objects);
-  for (const root of await rootsOf(events, heldRoots)) {
-    if (!present.has(root)) problems.push({ where: objectPath(root), error: "a held root is not present" });
-  }
-  if (problems.length > 0) throw new InvalidSnapshot(problems);
-  source.events = seen.size;
   source.objects = sortCids(source.objects);
   source.opaque.sort(comparePaths);
   return source;
@@ -426,24 +450,31 @@ async function misplacedDirectories(from: VaultBackend, fromBase: string): Promi
   return damaged.sort((a, b) => comparePaths(a.where, b.where));
 }
 
-async function rootsOf(events: Event[], heldRoots: KeepUnderLock): Promise<Cid[]> {
+/** The held roots of `events` as the fold computes them, over the set held as a vault in memory, in binary-CID order. */
+export async function rootsOf(events: Event[], heldRoots: KeepUnderLock): Promise<Cid[]> {
   const vault = new MemoryVault();
   await vault.ingest(events);
   return vault.locked(async (held) => sortCids([...(await heldRoots(held))].map((cid) => rawCidOf(cid).text as Cid)));
 }
 
-async function opened(from: VaultBackend, path: string, rel: string): Promise<ReadableStream<Uint8Array>> {
+/** The source's file at `path` as a stream; a file gone since the listing is the source's problem, named by `rel`. */
+export async function opened(from: VaultBackend, path: string, rel: string): Promise<ReadableStream<Uint8Array>> {
   const stream = await from.open(path);
   if (stream === null) throw new InvalidSnapshot([{ where: rel, error: "gone between the source's listing and its reading" }]);
   return stream;
 }
 
-/** `chunks` passed through, hashed; the object refused at its end when the bytes do not spell `cid`, so that `create` leaves nothing. */
-async function* verifying(cid: Cid, rel: string, chunks: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> {
+/** `chunks` passed through, hashed; the object refused at its end — with what `refuse` makes of the problem — when the bytes do not spell `cid`, so that `create` leaves nothing. */
+export async function* verifying(
+  cid: Cid,
+  rel: string,
+  chunks: AsyncIterable<Uint8Array>,
+  refuse: (problem: Damaged) => Error = (problem) => new InvalidSnapshot([problem])
+): AsyncIterable<Uint8Array> {
   const hash = sha256.create();
   for await (const chunk of chunks) {
     hash.update(chunk);
     yield chunk;
   }
-  if (rawCidFromDigest(hash.digest()).text !== cid) throw new InvalidSnapshot([{ where: rel, error: "the bytes do not hash to the name" }]);
+  if (rawCidFromDigest(hash.digest()).text !== cid) throw refuse({ where: rel, error: "the bytes do not hash to the name" });
 }

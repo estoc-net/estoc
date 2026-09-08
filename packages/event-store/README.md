@@ -76,9 +76,10 @@ and `FolderVault.openWritable(backend, { anchor })` opens one: `config.json`
 under its closed member set (another version refused in words a user
 can read), `keystore.json` by shape, the anchor DID the caller derived
 from the unlocked seed compared with the config's, ownership taken
-through `backend.own` before any local state is made, `import/`
-required empty, `local/replica.json` read or minted, the stores opened
-as that replica. What comes back is a `Runtime`: `vault` for
+through `backend.own` before any local state is made, the import
+`import/` records finished or rolled back — one it does not understand
+refused as `PendingImport` — `local/replica.json` read or minted, the
+stores opened as that replica. What comes back is a `Runtime`: `vault` for
 application code, `locked`, `collect`, `ingest`, plus `local(owner)` —
 `options.json`, `cache/` and trace streams under `local/<owner>/` —
 `damaged()` and `close()`, which refuses every new
@@ -128,8 +129,30 @@ last; a failure withdraws what the run wrote, its publication first,
 so what an interrupted run leaves is not a vault, and when the
 publication cannot be withdrawn everything is left standing, since it
 was all written before it. A destination another laying filled between
-the check and ownership is refused and left untouched. Import into an
-existing vault and the zip form come next.
+the check and ownership is refused and left untouched.
+`importFolder(vault, from, { heldRoots })` merges a portable folder of
+the same vault — the same anchor — into an open folder vault, under
+its writer lock from the first look at the target to publication,
+everything decided before a byte is written: the source validated as a
+restore validates it; each of its events a duplicate, a conflict the
+target wins and reports, or new — this replica's own author over an
+event it did not write is `ForkedAuthor`; the held roots of the merged
+set computed by the fold, each required to have bytes in the target or
+among the source's objects, which are the only objects copied; a
+source file copied only where the target has nothing, and refused
+where it would land on a directory or under a file; the target's
+config and keystore never touched. The writes go through the barrier
+under `import/<uuidv7>/`: every item staged at the path it will have,
+then a journal naming them all, then each moved to its place — objects
+before the segments that name them — then the journal and the
+directory gone. A writable open finishes an import whose journal it
+finds and rolls back staging that never reached one, before any store
+opens and whatever became of `local/`; a read-only open takes up
+neither and reports both; anything under `import/` that is neither
+state blocks the writable open, untouched, as `PendingImport` saying
+what it found. A failure after the journal closes the runtime, since
+what it would go on reading might be the union half published: the
+next open finishes the import. The zip form comes next.
 Everything below is
 version 2, which stays until the vault switches over.
 
