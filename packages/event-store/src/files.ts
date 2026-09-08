@@ -1,7 +1,7 @@
 /**
  * Files: everything in a vault that is neither an event nor a blob,
- * named by path. The paths are the folder's the store carries what it
- * does not understand.
+ * named by path. The paths are the folder's: the store carries what
+ * it does not understand.
  */
 
 import { isStoreDir, kindOf } from "./folder/layout.js";

@@ -403,7 +403,7 @@ function forksIn(self: string, held: Map<string, Event>, incoming: Event[]): Eve
 }
 
 /**
- * Rule 2: a block absent here — a damaged one is absent — and present
+ * A block absent here — a damaged one is absent — and present
  * in the source is copied iff a held root reaches it, walking the
  * blocks either copy holds, and iff it passes the check; one that does
  * not is damage in the source, reported. Damage is absent on the walk

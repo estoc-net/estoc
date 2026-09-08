@@ -111,7 +111,7 @@ for (const [name, fresh] of [
   ["over MemoryBackend", overMemory],
   ["over FsBackend", overDisk],
 ] as const) {
- describe(`FolderObjectStore ${name}`, () => {
+  describe(`FolderObjectStore ${name}`, () => {
     it("an accepted object is one file, objects/<cid>, holding exactly its bytes — nothing else under objects/, nothing left in staging", async () => {
       const { backend, store } = await fresh();
       const bytes = bytesOf(300 * 1024 + 11, 1);

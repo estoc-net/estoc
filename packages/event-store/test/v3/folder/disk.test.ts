@@ -454,8 +454,8 @@ describe("a take that is over leaves nothing of its line behind", () => {
   type Gate = { paused: Promise<void>; letGo: () => void };
   const originals = { readFile: fsp.readFile, rename: fsp.rename, link: fsp.link, rm: fsp.rm };
 
-  /** The copy's `nth` call of `op` that `where` picks, held up — before it runs, after it ran, or after it failed — until let go. */
-  function holdUp(op: Op, when: "before" | "after" | "failed", where: (from: string, to: string) => boolean, nth = 1): Gate {
+  /** The copy's `nth` call of `op` that `where` picks, held up — before it runs, after it ran, after it failed, or after it settled either way — until let go. */
+  function holdUp(op: Op, when: "before" | "after" | "failed" | "settled", where: (from: string, to: string) => boolean, nth = 1): Gate {
     const original = fsp[op] as (...args: unknown[]) => Promise<unknown>;
     let letGo = (): void => undefined;
     const goOn = new Promise<void>((resolve) => {
@@ -478,13 +478,13 @@ describe("a take that is over leaves nothing of its line behind", () => {
       try {
         result = await original(...args);
       } catch (err) {
-        if (when === "failed") {
+        if (when === "failed" || when === "settled") {
           hit();
           await goOn;
         }
         throw err;
       }
-      if (when === "after") {
+      if (when === "after" || when === "settled") {
         hit();
         await goOn;
       }
@@ -502,8 +502,14 @@ describe("a take that is over leaves nothing of its line behind", () => {
     return { dir, real, local };
   }
   const isMarker = (from: string, to: string): boolean => from.includes(".reclaim.") && to.endsWith("owner.pid");
+  /** The copy's disk has no hard links from here: what a USB stick, or a network mount, refuses. */
+  const noLinks = (): void => {
+    fsp.link = async () => {
+      throw Object.assign(new Error("EOPNOTSUPP: operation not supported, link"), { code: "EOPNOTSUPP" });
+    };
+  };
 
-  it("a holder whose line a reclaimer moved by mistake releases while the restore is between its look at the name and its link: the line is not left at the name — the restore finds the notice of the withdrawal and takes it off again — and the reclaimer, then anyone, can take the name", async () => {
+  it("a holder whose line a reclaimer moved by mistake releases — the marker found, not yet removed — while the restore is about to link: the line is not left at the name — the restore finds the notice of the withdrawal and takes it off again — and the reclaimer, then anyone, can take the name", async () => {
     const { dir, real, local } = await place();
     const copy = loadCopy();
     try {
@@ -518,15 +524,15 @@ describe("a take that is over leaves nothing of its line behind", () => {
       const [marker] = await localEntries(dir);
       expect(marker).toMatch(/^owner\.pid\.reclaim\./);
       expect(await readFile(path.join(local, marker as string), "utf8")).toBe(wLine);
-      const miss = holdUp("readFile", "failed", (from) => from === real);
-      const release = w.release(); // W's withdrawal: its notice is written, its look at the name finds nothing there
-      await miss.paused;
+      const drop = holdUp("rm", "before", (from) => from === path.join(local, marker as string));
+      const release = w.release(); // W's withdrawal: its notice is written, the marker holding its line found and about to be removed
+      await drop.paused;
       expect(await localEntries(dir)).toEqual([marker, `owner.pid.withdraw.${wLine.replace(LINE, "$1.$2.$3.$4")}`]);
       put.letGo(); // R links W's line back, finds the notice, takes the line off again, and takes the free name
       const held = await r;
       const rLine = await readFile(real, "utf8");
       expect(rLine).not.toBe(wLine);
-      miss.letGo(); // W's look, that found nothing, is handed back: nothing holds its line, and the notice goes
+      drop.letGo(); // W's removal finds the marker gone; its look at the name finds R's line there: nothing holds its own, and the notice goes
       await release;
       expect(await localEntries(dir)).toEqual(["owner.pid"]);
       expect(await readFile(real, "utf8")).toBe(rLine);
@@ -599,15 +605,15 @@ describe("a take that is over leaves nothing of its line behind", () => {
       await put.paused;
       const [marker] = await localEntries(dir);
       expect(await readFile(path.join(local, marker as string), "utf8")).toBe(aLine);
-      const miss = holdUp("readFile", "failed", (from) => from === real);
-      took.letGo(); // A sees R's marker and gives the name up: its notice is written, its look at the name finds nothing there
-      await miss.paused;
+      const drop = holdUp("rm", "before", (from) => from === path.join(local, marker as string));
+      took.letGo(); // A sees R's marker and gives the name up: its notice is written, the marker holding its line found and about to be removed
+      await drop.paused;
       expect(await localEntries(dir)).toEqual([marker, `owner.pid.withdraw.${aLine.replace(LINE, "$1.$2.$3.$4")}`]);
       const late = holdUp("rename", "before", (from) => from === real);
       put.letGo(); // R links A's line back, finds the notice, reads the line at the name and is held before taking it off
       await late.paused;
       expect(await readFile(real, "utf8")).toBe(aLine);
-      miss.letGo(); // A's withdrawal finds its line at the name and under R's marker, takes both off, and A takes the name again — as a new line
+      drop.letGo(); // A's withdrawal finds the marker gone and its line at the name, takes it off, and A takes the name again — as a new line
       const held = await a;
       const again = await readFile(real, "utf8");
       expect(again).not.toBe(aLine);
@@ -633,9 +639,9 @@ describe("a take that is over leaves nothing of its line behind", () => {
       const wLine = await readFile(real, "utf8");
       const marker = `${real}.reclaim.${DEAD}.0.${AGO}.cccccccccccccccc`; // a reclaimer moved W's live file aside by its stale reading, and died
       await rename(real, marker);
-      const miss = holdUp("readFile", "failed", (from) => from === real);
-      const release = w.release(); // W's notice is written; its look at the name finds nothing there
-      await miss.paused;
+      const drop = holdUp("rm", "before", (from) => from === marker);
+      const release = w.release(); // W's notice is written; the marker holding its line is found, and about to be removed
+      await drop.paused;
       const linked = holdUp("link", "after", (from, to) => from === marker && to === real);
       const s1 = new copy.FsBackend(dir).own(LOCK); // S1's sweep links W's line back, and is held before its look for the notice
       void s1.catch(() => undefined);
@@ -645,7 +651,7 @@ describe("a take that is over leaves nothing of its line behind", () => {
       const s2Line = await readFile(real, "utf8");
       expect(s2Line).not.toBe(wLine);
       expect(await localEntries(dir)).toEqual(["owner.pid", `owner.pid.withdraw.${wLine.replace(LINE, "$1.$2.$3.$4")}`]);
-      miss.letGo(); // W's withdrawal finds its line nowhere, and is done
+      drop.letGo(); // W's removal finds the marker gone already, and its line nowhere: done
       await release;
       linked.letGo(); // S1 finds no notice left, and is refused by S2
       await expect(s1).rejects.toThrow(/this thread of this process holds it/);
@@ -675,6 +681,111 @@ describe("a take that is over leaves nothing of its line behind", () => {
       expect((await readFile(real, "utf8")).split(" ")[0]).toBe(String(process.pid));
       await held.release();
       expect(await localEntries(dir)).toEqual([]);
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
+
+  it("where the file system has no hard links a take is an exclusive create and a restore a rename: taken, refused, released with nothing left; a live holder's line a dead reclaimer moved aside is given back by the next take's sweep, which the line then refuses", async () => {
+    const { dir, real } = await place();
+    const copy = loadCopy();
+    try {
+      noLinks();
+      const w = await new copy.FsBackend(dir).own(LOCK);
+      const wLine = await readFile(real, "utf8");
+      expect(wLine).toMatch(LINE);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+      await rename(real, `${real}.reclaim.${DEAD}.0.${AGO}.cccccccccccccccc`); // a reclaimer moved W's live file aside by its stale reading, and died
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+      expect(await readFile(real, "utf8")).toBe(wLine);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await w.release();
+      expect(await localEntries(dir)).toEqual([]);
+      await (await new copy.FsBackend(dir).own(LOCK)).release();
+      expect(await localEntries(dir)).toEqual([]);
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
+
+  it("a holder releasing while a reclaimer without hard links is about to give its line back by a rename — which takes the marker away as the line reaches the name — finds the line whichever side of the rename its withdrawal runs, since it looks at the markers before the name: here the marker goes first, the rename finds nothing to move, and nothing of the holder is left; the reclaimer takes the name", async () => {
+    const { dir, real, local } = await place();
+    const copy = loadCopy();
+    try {
+      noLinks();
+      const move = holdUp("rename", "before", (from) => from === real);
+      const r = new copy.FsBackend(dir).own(LOCK);
+      await move.paused; // R has read the dead taker's file and is about to take it off the name
+      const w = await new copy.FsBackend(dir).own(LOCK); // W takes the dead file off itself, and the name
+      const wLine = await readFile(real, "utf8");
+      const put = holdUp("rename", "before", isMarker);
+      move.letGo(); // R's move takes W's live file by its stale reading; R sees what moved and sets out to give it back, by a rename
+      await put.paused;
+      const [marker] = await localEntries(dir);
+      expect(marker).toMatch(/^owner\.pid\.reclaim\./);
+      expect(await readFile(path.join(local, marker as string), "utf8")).toBe(wLine);
+      const miss = holdUp("readFile", "failed", (from) => from === real);
+      const release = w.release(); // W's withdrawal: its notice written, the marker holding its line found and removed, its look at the name finds nothing there
+      await miss.paused;
+      const notice = `owner.pid.withdraw.${wLine.replace(LINE, "$1.$2.$3.$4")}`;
+      expect(await localEntries(dir)).toEqual([notice]);
+      const renamed = holdUp("rename", "settled", isMarker);
+      put.letGo(); // R's rename finds no marker left to move
+      await renamed.paused;
+      expect(await localEntries(dir)).toEqual([notice]);
+      miss.letGo(); // W's look at the name, that found nothing, is handed back: the line is nowhere, and the notice goes
+      await release;
+      expect(await localEntries(dir)).toEqual([]);
+      renamed.letGo(); // R: nothing left to restore, and the name is free
+      const held = await r;
+      const rLine = await readFile(real, "utf8");
+      expect(rLine).not.toBe(wLine);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+      await held.release();
+      expect(await localEntries(dir)).toEqual([]);
+      await (await new copy.FsBackend(dir).own(LOCK)).release();
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
+
+  it("the other side of that rename: the holder's withdrawal has found the marker and is about to remove it when the reclaimer's rename gives the line back — the marker gone, the line at the name — and the withdrawal's look at the name, after its look at the markers, finds it there and takes it off; nothing of the holder is left, the reclaimer takes the name", async () => {
+    const { dir, real, local } = await place();
+    const copy = loadCopy();
+    try {
+      noLinks();
+      const move = holdUp("rename", "before", (from) => from === real);
+      const r = new copy.FsBackend(dir).own(LOCK);
+      await move.paused;
+      const w = await new copy.FsBackend(dir).own(LOCK);
+      const wLine = await readFile(real, "utf8");
+      const put = holdUp("rename", "before", isMarker);
+      move.letGo();
+      await put.paused;
+      const [marker] = await localEntries(dir);
+      expect(await readFile(path.join(local, marker as string), "utf8")).toBe(wLine);
+      const drop = holdUp("rm", "before", (from) => from === path.join(local, marker as string));
+      const release = w.release(); // W's withdrawal: its notice written, the marker holding its line found and about to be removed
+      await drop.paused;
+      const notice = `owner.pid.withdraw.${wLine.replace(LINE, "$1.$2.$3.$4")}`;
+      expect(await localEntries(dir)).toEqual([marker, notice]);
+      const renamed = holdUp("rename", "after", isMarker);
+      put.letGo(); // R's rename gives W's line back, and the marker goes with it
+      await renamed.paused;
+      expect(await localEntries(dir)).toEqual(["owner.pid", notice]);
+      expect(await readFile(real, "utf8")).toBe(wLine);
+      drop.letGo(); // W's removal finds the marker gone; its look at the name finds its line, and takes it off: nowhere now, and the notice goes
+      await release;
+      expect(await localEntries(dir)).toEqual([]);
+      renamed.letGo(); // R finds no notice left and nothing at the name: its restore is done, and the name is free
+      const held = await r;
+      expect(await readFile(real, "utf8")).not.toBe(wLine);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await held.release();
+      expect(await localEntries(dir)).toEqual([]);
+      await (await new copy.FsBackend(dir).own(LOCK)).release();
     } finally {
       Object.assign(fsp, originals);
     }

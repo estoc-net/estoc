@@ -82,7 +82,7 @@ export class MemoryObjectStore implements ObjectStore {
     const want = rawCidOf(cid); // the CID checked before a byte is read
     const packer = new Packer(this.extentBytes);
     const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
-    if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text); // steps 3–4: nothing accepted
+    if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text); // nothing accepted
     return this.accept(want, packer.extents(), got.size);
   }
 
@@ -157,7 +157,7 @@ export class MemoryObjectStore implements ObjectStore {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
     const held = this.held.get(cid);
     if (held === undefined) return null;
- if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
+    if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
     const release = this.latches.acquire(cid);
     try {
       const out = new Uint8Array(held.size);

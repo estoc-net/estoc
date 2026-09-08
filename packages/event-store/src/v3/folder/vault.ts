@@ -47,7 +47,7 @@ export interface FolderVaultOptions {
   base?: string;
   /** the wall clock in Unix milliseconds, for `at`, orphan age and trace rotation; default `Date.now`, pinned by tests together with the backend's clock */
   now?: () => number;
-  /** how long an object may stand unreferenced by any event before it is an orphan; default one hour */
+  /** the least age since acceptance an object no event keeps must have before `collect` removes it; default one hour */
   graceMs?: number;
   /** the largest object a commit accepts; default 1 GiB */
   maxObjectBytes?: number;

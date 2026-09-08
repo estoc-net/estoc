@@ -1,7 +1,7 @@
 /**
  * This copy's own: an owner's options, cache and trace under
- * `local/<owner>/`. The trace is the `LocalEventStore` of over
- * segments, pruned whole segments at a time.
+ * `local/<owner>/`. The trace is the `LocalEventStore` over segments,
+ * pruned whole segments at a time.
  */
 
 import type { VaultBackend } from "../backend/types.js";

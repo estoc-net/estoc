@@ -77,7 +77,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
- const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
+    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
     if (clean.length === 0) return [];
     return this.serialise(() => {
       // One clock reading and one `at` for the batch; a throw from the clock

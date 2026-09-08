@@ -168,7 +168,7 @@ describe("FolderVault.create", () => {
 });
 
 describe("FolderVault.openWritable", () => {
-  it("steps 1–3 before step 4: no config, another version, no keystore, a keystore of another shape, or the wrong seed — each refused with nothing taken and nothing written", async () => {
+  it("no config, another version, no keystore, a keystore of another shape, or the wrong seed — each refused with nothing taken and nothing written", async () => {
     const fresh = new MemoryBackend();
     await expect(FolderVault.openWritable(fresh, { anchor: DID })).rejects.toThrow(NotAVault);
     expect(paths(fresh)).toEqual([]);

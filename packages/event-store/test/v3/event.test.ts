@@ -62,7 +62,7 @@ describe("identity", () => {
     expect(() => timestampOf("nope")).toThrow(InvalidEvent);
   });
 
- it("accepts as a root only a canonical raw DASL CID", async () => {
+  it("accepts as a root only a canonical raw DASL CID", async () => {
     expect(await rawCid(new TextEncoder().encode("hello"))).toBe(RAW_HELLO);
     expect(await rawCid(new Uint8Array())).toBe(RAW_EMPTY);
     expect(await drislCid(new Uint8Array([0xa0]))).toBe(DRISL_EMPTY_MAP);
@@ -273,7 +273,7 @@ describe("canonical bytes and order", () => {
     expect(canonicalEventBytes(laterAt)).not.toEqual(canonicalEventBytes(base));
   });
 
- it("orders by at, then eventId, then author", () => {
+  it("orders by at, then eventId, then author", () => {
     const e = (at: string, eventId: string, author: string): Event => ({
       ...base,
       at,
@@ -290,7 +290,7 @@ describe("canonical bytes and order", () => {
     expect(compareEvents(d, c)).toBeGreaterThan(0);
   });
 
- it("filters by equality on author, type and top-level data fields", () => {
+  it("filters by equality on author, type and top-level data fields", () => {
     const event: Event = { ...base, data: { n: 1, s: "x", z: null, o: { k: 1 }, a: [1], f: false } };
     expect(matches(event)).toBe(true);
     expect(matches(event, {})).toBe(true);

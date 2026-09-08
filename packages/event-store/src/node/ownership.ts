@@ -97,7 +97,7 @@ export async function own(real: string, shown: string, attempts = ATTEMPTS): Pro
   try {
     for (let attempt = 0; attempt < attempts; attempt++) {
       await sweep(real, attempts);
-      taking = whoAmI();
+      taking = freshWho();
       if (!(await take(real, taking))) {
         taking = null; // the claim went with the take: the line is nowhere
         const holder = await readHolder(real);
@@ -123,8 +123,7 @@ export async function own(real: string, shown: string, attempts = ATTEMPTS): Pro
   }
 }
 
-/** This thread of this incarnation, with a token for one take. */
-function whoAmI(): Who {
+function freshWho(): Who {
   return { pid: process.pid, thread: threadId, origin: ORIGIN, token: randomBytes(8).toString("hex") };
 }
 
@@ -224,7 +223,7 @@ function sidecar(real: string, kind: Kind, who: Who): string {
 
 /** A fresh marker name beside `real`, naming this thread and incarnation. */
 function marker(real: string): string {
-  return sidecar(real, "reclaim", whoAmI());
+  return sidecar(real, "reclaim", freshWho());
 }
 
 /**
@@ -293,8 +292,8 @@ async function evict(real: string, expected: string, attempts: number): Promise<
 }
 
 /**
- * Take `me`'s line off the name and off every marker holding it — a
- * mover that took it aside by mistake may be giving it back meanwhile —
+ * Take `me`'s line off every marker holding it — a mover that took it
+ * aside by mistake may be giving it back meanwhile — and off the name,
  * until a pass finds it nowhere, and remove its claim, which a take
  * that failed may have left. A notice of the withdrawal stands beside
  * the name throughout: a restore that had already looked for it when
@@ -311,15 +310,19 @@ async function withdraw(real: string, me: Who, attempts: number): Promise<"done"
   const notice = sidecar(real, "withdraw", me);
   await writeFile(notice, "");
   for (;;) {
-    const moved = await evict(real, line, attempts);
-    if (moved === "stuck") return "stuck";
-    let found = moved === "removed";
+    // The markers before the name, never the other way round: where the file system has no hard links a restore
+    // gives the line back by a rename, which takes the marker away in the instant the line reaches the name, and
+    // a pass that had looked at the name first would then find it in neither place.
+    let found = false;
     for (const side of await sidecars(real)) {
       if (side.kind === "reclaim" && (await readHolder(side.file)) === line) {
         await rm(side.file, { force: true });
         found = true;
       }
     }
+    const moved = await evict(real, line, attempts);
+    if (moved === "stuck") return "stuck";
+    if (moved === "removed") found = true;
     if (!found) break;
   }
   await rm(sidecar(real, "claim", me), { force: true });
@@ -350,9 +353,13 @@ async function withdrawing(real: string, line: string): Promise<boolean> {
  * on the budget left. A line whose holder is withdrawing it is taken
  * off the name again once it is there — linked back by this restore or
  * by another of the same marker — and the marker goes only then: a
- * marker that stands is a restore not yet done with the line.
- * False when the name was not free within `attempts`, or a file moved
- * on the way could not be given its name back: a marker then stands.
+ * marker that stands is a restore not yet done with the line. Where
+ * the file system has no hard links the file goes back by a rename,
+ * which cannot wait for the name to be free and takes the marker with
+ * it; the line is then at the name, where a withdrawal looks after the
+ * markers. False when the name was not free within `attempts`, or a
+ * file moved on the way could not be given its name back: a marker
+ * then stands.
  */
 export async function restore(marker: string, attempts = ATTEMPTS): Promise<boolean> {
   const real = marker.slice(0, marker.lastIndexOf(".reclaim."));
@@ -377,7 +384,12 @@ export async function restore(marker: string, attempts = ATTEMPTS): Promise<bool
         // Another restore of this marker linked the line back already; what is owed to the line is still owed here.
       } else {
         if (!noLinks(err)) throw err;
-        await rename(marker, real); // no hard links: the file goes back by rename, which cannot wait for the name to be free
+        try {
+          await rename(marker, real);
+        } catch (renaming) {
+          if (isMissing(renaming)) return true; // the marker is gone: whoever removed it had nothing left to restore
+          throw renaming;
+        }
       }
     }
     let given = true;

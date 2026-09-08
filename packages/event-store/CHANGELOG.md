@@ -268,16 +268,23 @@
   back; a take that is over is withdrawn — a holder releasing, a
   taker giving up a name taken beside a marker or moved off it by a
   mover's mistake, or failing at any point after its claim was
-  written — by taking its own line off the name the same way, off
-  every marker holding it, until a pass finds it nowhere, and its
-  claim with it, under a notice of the withdrawal beside the name
+  written — by taking its own line off every marker holding it and
+  then off the name the same way, in that order, until a pass finds
+  it nowhere, and its claim with it, under a notice of the withdrawal
+  beside the name
   that a restore looks for once the line is back at the name, by its
   own link or another restore's of the same marker, taking it off
   again and keeping its marker until it has, so a withdrawal that
   finds no marker holding its line has no restore left to fear; and
   every try is a new line with its own token, so a restore still
   expecting the old one can never mistake the next for it, and a
-  failed take leaves nothing that bars the next.
+  failed take leaves nothing that bars the next. Where the disk has
+  no hard links — a USB stick, a network mount — a take is an
+  exclusive create and a restore a rename, which takes the marker
+  away in the instant the line reaches the name: a withdrawal that
+  looked at the name first could then find the line in neither place,
+  which is why it looks at the markers first, and a restore whose
+  marker is gone by the time it moves has nothing left to restore.
   A restore that cannot give a moved holder its name
   back within its budget — a taker stalled between its take and its
   look — leaves the marker standing and fails the mover's take, so

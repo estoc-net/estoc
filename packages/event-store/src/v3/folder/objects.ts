@@ -218,7 +218,7 @@ export class FolderObjectStore implements ObjectStore {
       );
       const { cid, size } = hashed as { cid: DaslCid; size: number };
       try {
-        if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // steps 3–4: nothing accepted
+        if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // nothing accepted
         await this.serialise(async () => {
           if (this.closed) throw new VaultClosed();
           await this.checkRoot();

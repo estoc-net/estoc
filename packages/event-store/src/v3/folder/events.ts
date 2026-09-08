@@ -242,7 +242,7 @@ export class FolderEventStore implements EventStore {
   // ---- writing -----------------------------------------------------------
 
   async append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>> {
- const clean = validateDraft(draft); // checked before the store's turn; the backend never sees `eventId`, `at` or `author` from the draft
+    const clean = validateDraft(draft); // checked before the store's turn; the backend never sees `eventId`, `at` or `author` from the draft
     return this.serialise(async () => {
       await this.checkRoot();
       const { at, eventIds } = mint(1, this.now);
@@ -264,7 +264,7 @@ export class FolderEventStore implements EventStore {
   }
 
   async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
- const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
+    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
     if (clean.length === 0) return [];
     return this.serialise(async () => {
       await this.checkRoot();

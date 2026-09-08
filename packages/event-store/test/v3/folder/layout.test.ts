@@ -12,7 +12,7 @@ describe("layout", () => {
     expect(REPLICA_FILE).toBe("local/replica.json");
   });
 
- it("a segment is <uuidv7>.jsonl, lowercase, and nothing else", () => {
+  it("a segment is <uuidv7>.jsonl, lowercase, and nothing else", () => {
     expect(isSegmentName(`${SEG}.jsonl`)).toBe(true);
     for (const bad of [SEG, `${SEG}.json`, `${SEG.toUpperCase()}.jsonl`, `${SEG.replace("-7", "-4")}.jsonl`, ".jsonl", `x${SEG}.jsonl`, `${SEG}.jsonl.tmp`]) {
       expect(isSegmentName(bad), bad).toBe(false);
@@ -53,7 +53,7 @@ describe("layout", () => {
     for (const path of damage) expect(kindOf(path), path).toBe("damage");
   });
 
- it("a JSON file is pretty-printed and ends in LF", () => {
+  it("a JSON file is pretty-printed and ends in LF", () => {
     expect(text(prettyJson({ a: 1, b: [1, 2] }))).toBe('{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}\n');
   });
 });

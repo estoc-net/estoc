@@ -581,7 +581,7 @@ describe("FolderEventStore", () => {
     expect(fresh.generation).not.toBe(store.generation);
     expect(fresh.author).not.toBe(store.author);
     await expect(fresh.changes(undefined, delta.token)).rejects.toBeInstanceOf(BadToken);
- expect(ids(await all(fresh.scan())).sort()).toEqual(ids([a, b,...foreign]).sort()); // the history is all still there, under its authors
+    expect(ids(await all(fresh.scan())).sort()).toEqual(ids([a, b, ...foreign]).sort()); // the history is all still there, under its authors
   });
 
   it("changes(): a line copied in by hand under an ID already held is no gain; what is yielded is the content the store holds", async () => {
