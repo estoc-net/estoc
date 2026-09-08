@@ -81,13 +81,21 @@ export function comparePaths(a: string, b: string): number {
 
 /**
  * The file store as a map in memory: the reference for the interface,
- * and what the vault in memory carries. Bytes in and out are copies —
+ * and what the vault in memory carries. The two singletons are given at
+ * construction, when the vault has them, and reach `read` and `list`
+ * as in a folder. Bytes in and out are copies —
  * what is held is the store's own. Nothing persists, so the
  * process-durable half of a file write's promise is vacuous here; the
  * whole-file half is not: a write is one synchronous replacement.
  */
 export class MemoryFileStore implements FileStore {
   private readonly files = new Map<string, Uint8Array>();
+
+  /** `singletons`: `config.json` and `keystore.json` as the vault they belong to fixed them — read and listed, never written through the store. */
+  constructor(singletons: { config?: Uint8Array; keystore?: Uint8Array } = {}) {
+    if (singletons.config !== undefined) this.files.set("config.json", new Uint8Array(singletons.config));
+    if (singletons.keystore !== undefined) this.files.set("keystore.json", new Uint8Array(singletons.keystore));
+  }
 
   async read(path: string): Promise<Uint8Array | null> {
     checkPath(path);

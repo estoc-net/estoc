@@ -11,7 +11,9 @@
  * writer lock, the held view, and the vault in memory. And the folder:
  * the layout, the segments, the replica, the three folder stores, this
  * copy's local state, and the vault over them, opened for writing under
- * the backend's ownership or for reading. No event type.
+ * the backend's ownership or for reading. And interchange: any vault
+ * exported as a portable folder under its writer lock, and a portable
+ * folder restored into an empty backend. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -125,6 +127,7 @@ export {
   type OpenReadOnlyOptions,
   type CreateOptions,
 } from "./folder/vault.js";
+export { exportVault, restoreFolder, type Copied, type Exported, type ExportOptions, type RestoreOptions } from "./interchange.js";
 export type { VaultBackend, Ownership } from "../backend/types.js";
 export { VaultOwned } from "../backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
@@ -146,4 +149,6 @@ export {
   ReadOnlyVault,
   Unprotected,
   VaultClosed,
+  IncompleteSnapshot,
+  InvalidSnapshot,
 } from "./errors.js";

@@ -500,7 +500,6 @@ describe("FolderVault.openWritable", () => {
     expectBytes(await vault.vault.files.read("config.json"), backend.files.get(`${BASE}/config.json`) as Uint8Array);
     await expect(vault.vault.files.write("config.json", utf8("{}"))).rejects.toThrow(/owned by the layout/);
     await expect(vault.vault.files.write("local/agent/options.json", utf8("{}"))).rejects.toThrow(/owned by the layout/);
-    expect(await vault.portablePaths()).toEqual(["config.json", "keystore.json", "notes.txt", "state/settings.json"]);
     await vault.close();
   });
 
@@ -580,7 +579,7 @@ describe("FolderVault.openWritable", () => {
     await agent.writeOptions({ a: 1 });
     await agent.trace("wire").append({ eventId: authorN(1), at: "2026-09-07T10:00:00.000Z", type: "wire.out", data: {} });
     expect(paths(backend).filter((p) => p.startsWith(`${BASE}/local/agent/`)).map((p) => p.split("/").slice(3, 5).join("/"))).toEqual(["options.json", "trace/wire"]);
-    expect(await vault.portablePaths()).toEqual(["config.json", "keystore.json"]);
+    expect(await vault.vault.files.list()).toEqual(["config.json", "keystore.json"]);
     for (const name of ["Agent", "agent/x", "", "1st", "local"]) {
       if (name === "local") continue;
       expect(() => vault.local(name), name).toThrow(/not a local owner name/);

@@ -34,7 +34,7 @@ import { encodeConfig, parseConfig, type Config } from "./config.js";
 import { FolderEventStore, type FolderEventStoreOptions } from "./events.js";
 import { FolderFileStore } from "./files.js";
 import { checkKeystore } from "./keystore.js";
-import { CONFIG_FILE, ESTOC_DIR, IMPORT_DIR, KEYSTORE_FILE, LOCAL_DIR, kindOf } from "./layout.js";
+import { CONFIG_FILE, ESTOC_DIR, IMPORT_DIR, KEYSTORE_FILE, LOCAL_DIR } from "./layout.js";
 import { LocalOwner, type LocalOptions, type Rotation } from "./local.js";
 import { FolderObjectStore, type FolderObjectStoreOptions } from "./objects.js";
 import { mintReplica, openReplica, type Replica } from "./replica.js";
@@ -121,13 +121,14 @@ async function checkImport(backend: VaultBackend, base: string): Promise<void> {
 }
 
 /**
- * A folder `create` may lay a vault in: nothing under `base` but
- * what ownership itself makes under `local/`. Anything else — a config
- * or keystore, a segment, an object, `import/` state, an opaque file,
- * other `local/` state — is refused as `NotAVault`, naming the first
- * path found, and nothing is written.
+ * A folder a vault may be laid in — by `create`, or by a restore or an
+ * export: nothing under `base` but what ownership itself makes under
+ * `local/`. Anything else — a config or keystore, a segment, an object,
+ * `import/` state, an opaque file, other `local/` state — is refused as
+ * `NotAVault`, naming the first path found, and nothing is written.
  */
-async function checkEmpty(backend: VaultBackend, base: string): Promise<void> {
+export async function checkEmpty(backend: VaultBackend, base: string): Promise<void> {
+  if ((await backend.size(base)) !== null) throw new NotAVault(`${base} is a file, not a folder to lay a vault in`);
   const prefix = `${base}/`;
   for (const path of await walk(backend, base)) {
     const rel = path.slice(prefix.length);
@@ -294,18 +295,6 @@ export class FolderVault extends Runtime {
   async damaged(): Promise<Damaged[]> {
     const found = [...(await layoutDamage(this.backend, this.base)), ...(await this.stores.events.damaged()), ...(await this.stores.objects.damaged())];
     return found.sort((a, b) => comparePaths(a.where, b.where));
-  }
-
-  /** Every portable path: what a snapshot copies — never `local/` or `import/`. In code-point order. */
-  async portablePaths(): Promise<string[]> {
-    const prefix = `${this.base}/`;
-    return (await walk(this.backend, this.base))
-      .map((path) => path.slice(prefix.length))
-      .filter((path) => {
-        const kind = kindOf(path);
-        return kind !== "local" && kind !== "import";
-      })
-      .sort(comparePaths);
   }
 
   /** Is this vault still open? */
