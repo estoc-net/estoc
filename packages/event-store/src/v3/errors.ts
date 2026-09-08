@@ -162,3 +162,24 @@ export class VaultClosed extends Error {
     this.name = "VaultClosed";
   }
 }
+
+/** An export could not select a complete cut: damage or a conflict in the event set, or a held root missing or damaged; nothing was published. */
+export class IncompleteSnapshot extends Error {
+  constructor(readonly problems: { where: string; error: string }[]) {
+    super(`the export is incomplete and was not published: ${describe(problems)}`);
+    this.name = "IncompleteSnapshot";
+  }
+}
+
+/** A restore's source is not a valid version-3 snapshot; nothing was published. */
+export class InvalidSnapshot extends Error {
+  constructor(readonly problems: { where: string; error: string }[]) {
+    super(`not a valid snapshot: ${describe(problems)}`);
+    this.name = "InvalidSnapshot";
+  }
+}
+
+function describe(problems: { where: string; error: string }[]): string {
+  const shown = problems.slice(0, 3).map((p) => `${p.where}: ${p.error}`);
+  return problems.length > 3 ? `${shown.join("; ")}; and ${problems.length - 3} more` : shown.join("; ");
+}

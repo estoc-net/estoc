@@ -351,6 +351,10 @@ export interface MemoryVaultOptions {
   maxObjectBytes?: number;
   /** the size of the internal extents an object is held in; default 1 MiB */
   extentBytes?: number;
+  /** `config.json`, when this vault is to be exported as a folder: read through `files`, never written */
+  config?: Uint8Array;
+  /** `keystore.json`, likewise */
+  keystore?: Uint8Array;
 }
 
 /**
@@ -377,7 +381,11 @@ export class MemoryVault extends Runtime {
       ...(options.maxObjectBytes === undefined ? {} : { maxObjectBytes: options.maxObjectBytes }),
       ...(options.extentBytes === undefined ? {} : { extentBytes: options.extentBytes }),
     });
-    super(events.author, events.generation, { events, objects, files: new MemoryFileStore() });
+    const files = new MemoryFileStore({
+      ...(options.config === undefined ? {} : { config: options.config }),
+      ...(options.keystore === undefined ? {} : { keystore: options.keystore }),
+    });
+    super(events.author, events.generation, { events, objects, files });
     this.latches = latches;
   }
 }
