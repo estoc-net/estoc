@@ -1,12 +1,11 @@
 /**
- * The version-3 event store as a map in memory (event-store.md §5): the
- * reference for the interface's semantics, what the vault folds are
- * tested on, and the store `eventStoreSuite` is first run against.
- * Nothing persists, so the process-durable half of §2.1 is vacuous here;
- * `damaged()` and `conflicting()` are empty by construction (§5.6), as a
- * database's are. Every event held — appended or ingested — is kept in
- * the form its canonical bytes parse to (§5.4) and frozen, so what is
- * handed out is what was accepted, the same from every store.
+ * The version-3 event store as a map in memory: the reference for the interface's
+ * semantics, what the vault folds are tested on, and the store `eventStoreSuite` is
+ * first run against. Nothing persists, so the process-durable half of the store's
+ * promise is vacuous here; `damaged()` and `conflicting()` are empty by construction,
+ * as a database's are. Every event held — appended or ingested — is kept in the form
+ * its canonical bytes parse to and frozen, so what is handed out is what was accepted,
+ * the same from every store.
  */
 
 import { v7 } from "uuid";
@@ -33,16 +32,16 @@ import { deepFreeze, type JsonObject } from "./json.js";
 import { mint } from "./mint.js";
 
 export interface MemoryEventStoreOptions {
-  /** the author this store appends as (§4.1); a fresh UUIDv7 when left out */
+  /** the author this store appends as; a fresh UUIDv7 when left out */
   author?: AuthorId;
-  /** the wall clock in Unix milliseconds (§4.2); default `Date.now`, pinned by tests */
+  /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
   now?: () => number;
 }
 
 /** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
 type Read = { held: Held } | { rejected: { value: unknown; error: string } };
 
-/** One accepted event and the canonical text it is equal by (§3.3). */
+/** One accepted event and the canonical text it is equal by. */
 interface Held {
   event: Event;
   text: string;
@@ -50,14 +49,14 @@ interface Held {
 
 export class MemoryEventStore implements EventStore {
   readonly author: AuthorId;
-  /** the store generation its tokens name (§5.5): this instance, and no other, so minted here and never given */
+  /** the store generation its tokens name: this instance, and no other, so minted here and never given */
   readonly generation: string;
   private readonly now: () => number;
   /** every event held, by `eventId` */
   private readonly held = new Map<EventId, Held>();
   /** the same events in the order they were accepted; an index into it is what a token names */
   private readonly accepted: Event[] = [];
-  /** writes run one at a time: the writer lock of §10, as far as one store in memory needs it */
+  /** writes run one at a time: the vault's writer lock, as far as one store in memory needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(options: MemoryEventStoreOptions = {}) {
@@ -78,14 +77,14 @@ export class MemoryEventStore implements EventStore {
   }
 
   async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
-    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands (§5.2)
+ const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
     if (clean.length === 0) return [];
     return this.serialise(() => {
       // One clock reading and one `at` for the batch; a throw from the clock
-      // or the generator lands before any event does (§4.2, ES-22).
+      // or the generator lands before any event does.
       const { at, eventIds } = mint(clean.length, this.now);
       // Every event of the batch is brought to the form its canonical
-      // bytes parse to (§5.4) before any is accepted, so what append
+      // bytes parse to before any is accepted, so what append
       // returns is what scan and another store's ingest hand out.
       const held = clean.map((draft, i) =>
         canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data })
@@ -103,8 +102,8 @@ export class MemoryEventStore implements EventStore {
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    // Read everything first (§5.3): validation and canonical form are
-    // the input's own and need no lock. Then, under the writer lock (§10),
+    // Read everything first: validation and canonical form are
+    // the input's own and need no lock. Then, under the writer lock,
     // classify each input against what is held — duplicate, conflict,
     // new — in input order, check for a fork, and only then accept; so the
     // outcome names what was actually held when the decision was made,
@@ -153,7 +152,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
-    // The store sorts (§4.3), over a snapshot: a write during the walk is not yielded.
+    // The store sorts, over a snapshot: a write during the walk is not yielded.
     const events = [...this.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) yield event;
@@ -167,12 +166,12 @@ export class MemoryEventStore implements EventStore {
     return { token: this.token(to), events: iterate(events) };
   }
 
-  /** The frontier at `seq`: this generation, the position, and the ID accepted last before it, which names the event set (§5.5). */
+  /** The frontier at `seq`: this generation, the position, and the ID accepted last before it, which names the event set. */
   private token(seq: number): ChangeToken {
     return JSON.stringify({ generation: this.generation, seq, last: seq === 0 ? null : this.accepted[seq - 1]?.eventId });
   }
 
-  /** The position a token names, or a throw (§5.5): another generation's, malformed, past what is held, or of another event set. */
+  /** The position a token names, or a throw: another generation's, malformed, past what is held, or of another event set. */
   private place(token: ChangeToken): number {
     let parsed: unknown;
     try {
@@ -204,11 +203,11 @@ export class MemoryEventStore implements EventStore {
 }
 
 /**
- * A value as an accepted event would be held: validated (§3.4), then
- * the form its canonical bytes parse to — member order, `-0` and all —
- * with that canonical text, so two serializations of one event are one
- * (ES-5) and a local append reads back as its ingest elsewhere would.
- * Throws `InvalidEvent` or `InvalidJson`.
+ * A value as an accepted event would be held: validated, then the form
+ * its canonical bytes parse to — member order, `-0` and all — with that
+ * canonical text, so two serializations of one event are one and a
+ * local append reads back as its ingest elsewhere would. Throws
+ * `InvalidEvent` or `InvalidJson`.
  */
 function canonical(value: unknown): Held {
   const text = canonicalText(validateEvent(value));

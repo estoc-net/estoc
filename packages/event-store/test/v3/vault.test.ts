@@ -62,7 +62,7 @@ async function settled(p: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-/** Every root of every event in the vault: the type-independent keep set (dasl-objects.md §7 rule 5). */
+/** Every root of every event in the vault: the type-independent keep set. */
 async function rootsOf(held: Held): Promise<Cid[]> {
   const roots: Cid[] = [];
   for await (const event of held.events.scan()) roots.push(...event.roots);
@@ -104,8 +104,8 @@ describe("WriterLock", () => {
   });
 });
 
-describe("Vault facade (event-store.md §10)", () => {
-  it("ES-29 exposes only the read half of the stores; every local write is a commit", async () => {
+describe("Vault facade", () => {
+  it("exposes only the read half of the stores; every local write is a commit", async () => {
     const { vault } = open();
     const v = vault.vault;
     expect(Object.keys(v.events).sort()).toEqual(["changes", "conflicting", "damaged", "scan"]);
@@ -132,7 +132,7 @@ describe("Vault facade (event-store.md §10)", () => {
   });
 });
 
-describe("Vault.commit (event-store.md §10, dasl-objects.md §8.1)", () => {
+describe("Vault.commit", () => {
   it("accepts the objects, checks the roots, appends the batch under one `at`, in input order", async () => {
     const { vault } = open();
     const v = vault.vault;
@@ -165,7 +165,7 @@ describe("Vault.commit (event-store.md §10, dasl-objects.md §8.1)", () => {
     expect((await all(v.events.scan())).length).toBe(2);
   });
 
-  it("DO-8 an object that fails verification appends nothing; objects accepted before it stay, orphans under grace", async () => {
+  it("an object that fails verification appends nothing; objects accepted before it stay, orphans under grace", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await expect(
@@ -185,7 +185,7 @@ describe("Vault.commit (event-store.md §10, dasl-objects.md §8.1)", () => {
     expect(await vault.collect(rootsOf)).toEqual({ unlinked: [HELLO_CID], young: [] });
   });
 
-  it("DO-8 a root absent after acceptance appends nothing: the supplied objects are checked, the drafts' roots are what count", async () => {
+  it("a root absent after acceptance appends nothing: the supplied objects are checked, the drafts' roots are what count", async () => {
     const { vault } = open();
     const v = vault.vault;
     await expect(v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([WORLD_CID])])).rejects.toThrow(MissingRoot);
@@ -217,7 +217,7 @@ describe("Vault.commit (event-store.md §10, dasl-objects.md §8.1)", () => {
     expect(await all(v.events.scan())).toEqual([]);
   });
 
-  it("ES-3 the batch is all or nothing: an invalid draft anywhere in it commits none", async () => {
+  it("the batch is all or nothing: an invalid draft anywhere in it commits none", async () => {
     const { vault } = open();
     const v = vault.vault;
     await expect(v.commit([], [draft(), draft(), { type: "x", roots: ["nope" as Cid], data: {} }])).rejects.toThrow(InvalidEvent);
@@ -249,7 +249,7 @@ describe("Vault.commit (event-store.md §10, dasl-objects.md §8.1)", () => {
   });
 });
 
-describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () => {
+describe("Vault.objects reads", () => {
   it("read refuses an object over maxBytes before reading it, returns null for an absent one, and checks the CID first", async () => {
     const { vault } = open();
     const v = vault.vault;
@@ -331,8 +331,8 @@ describe("Vault.objects reads (event-store.md §10, dasl-objects.md §6.3)", () 
   });
 });
 
-describe("latch and collection (event-store.md §10)", () => {
-  it("ES-27 a paused stream blocks no commit or file write; collection skips its CID, collects another, and takes it once the stream ends", async () => {
+describe("latch and collection", () => {
+  it("a paused stream blocks no commit or file write; collection skips its CID, collects another, and takes it once the stream ends", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit(
@@ -363,7 +363,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expect(await v.objects.has(WORLD_CID)).toBe(false);
   });
 
-  it("ES-27 failure and cancellation each release the latch", async () => {
+  it("failure and cancellation each release the latch", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit(
@@ -391,7 +391,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expect(await v.objects.has(WORLD_CID)).toBe(false);
   });
 
-  it("ES-28 open before collection gets the whole protected object; open after gets null; one stream ending does not release another's", async () => {
+  it("open before collection gets the whole protected object; open after gets null; one stream ending does not release another's", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
@@ -408,7 +408,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expect(await v.objects.open(HELLO_CID)).toBeNull();
   });
 
-  it("ES-28 open and collection racing serialize on the lock: the stream is protected or null, never unprotected", async () => {
+  it("open and collection racing serialize on the lock: the stream is protected or null, never unprotected", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
@@ -433,7 +433,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expectBytes((await drain((await stream) as ReadableStream<Uint8Array>)).bytes, HELLO);
   });
 
-  it("ES-30 an abandoned stream stays latched across idle time and passes; a paused one resumes to completion", async () => {
+  it("an abandoned stream stays latched across idle time and passes; a paused one resumes to completion", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit([{ cid: WORLD_CID, source: chunked(WORLD, [2, 2]) }], [draft()]);
@@ -456,7 +456,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expect(await vault.collect(rootsOf)).toEqual({ unlinked: [WORLD_CID], young: [] });
   });
 
-  it("DO-18 collection waits for a commit paused between object acceptance and event append, past grace; the event then retains the object", async () => {
+  it("collection waits for a commit paused between object acceptance and event append, past grace; the event then retains the object", async () => {
     const { vault, now } = open({ graceMs: 0 });
     const v = vault.vault;
     const g = gate();
@@ -486,7 +486,7 @@ describe("latch and collection (event-store.md §10)", () => {
     expect(await v.objects.has(WORLD_CID)).toBe(true);
   });
 
-  it("DO-19 the keep set is computed after the lock is acquired and held through unlink; a commit issued meanwhile starts after the pass", async () => {
+  it("the keep set is computed after the lock is acquired and held through unlink; a commit issued meanwhile starts after the pass", async () => {
     const { vault, now } = open({ graceMs: 0 });
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
@@ -530,7 +530,7 @@ describe("latch and collection (event-store.md §10)", () => {
   });
 });
 
-describe("the held view (event-store.md §10: nested calls share the lock)", () => {
+describe("the held view (nested calls share the lock)", () => {
   it("an operation under the lock can commit, open, read, write and nest without waiting for itself", async () => {
     const { vault } = open();
     const v = vault.vault;
@@ -601,7 +601,7 @@ describe("the held view (event-store.md §10: nested calls share the lock)", () 
   });
 });
 
-describe("VaultRuntime.ingest (event-store.md §5.3, §10)", () => {
+describe("VaultRuntime.ingest", () => {
   it("ingests another replica's events under the lock; its own unseen event is ForkedAuthor", async () => {
     const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
     const [foreign] = await other.vault.commit([], [draft([], { from: "other" })]);

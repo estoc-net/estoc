@@ -1,5 +1,5 @@
 /**
- * JSON as event-store.md §3 restricts it — I-JSON (RFC 7493): objects,
+ * JSON as the event format restricts it — I-JSON (RFC 7493): objects,
  * arrays, strings, finite binary64 numbers, booleans and null. The
  * types here are what an event is made of; whether a value in hand is
  * one of them, with no duplicate member, no unpaired surrogate and no

@@ -29,7 +29,7 @@ export type OpenStore = (options?: OpenOptions) => Promise<EventStore>;
 const RAW_HELLO = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
 const T0 = "2026-09-06T10:00:00.000Z";
 
-/** A fold any store must make the same of (§2 rule 3): IDs in canonical order, a count per type and per author. */
+/** A fold any store must make the same of: IDs in canonical order, a count per type and per author. */
 interface Folded {
   order: string[];
   perType: Record<string, number>;
@@ -48,11 +48,11 @@ function fold(events: Event[]): Folded {
 }
 
 /**
- * The conformance suite of event-store.md §5 over one `EventStore`,
- * whatever it is made of: what a store in memory, a folder and a
- * database must all agree on. `open` gives the suite fresh stores, each
- * its own generation. Durability across a process restart (ES-1's
- * second half, ES-2, ES-3) is a backend's to show with its own tests.
+ * The conformance suite over one `EventStore`, whatever it is made of:
+ * what a store in memory, a folder and a database must all agree on.
+ * `open` gives the suite fresh stores, each its own generation.
+ * Durability across a process restart is a backend's to show with its
+ * own tests.
  */
 export function eventStoreSuite(name: string, open: OpenStore): void {
   /** Events of another replica, made honestly: appended by a store that is that author, then read back. */
@@ -62,7 +62,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
   }
 
   describe(`${name}: EventStore`, () => {
-    it("ES-1: append mints the six-field envelope — `at` from the store's clock, `author` the store's own — and hands back the whole event", async () => {
+    it("append mints the six-field envelope — `at` from the store's clock, `author` the store's own — and hands back the whole event", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       expect(store.author).toBe(authorN(1));
@@ -96,7 +96,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(stored?.roots).toEqual([]);
     });
 
-    it("ES-22: a draft that cannot become an event, or a clock that cannot be read, fails the append or the whole batch before anything lands", async () => {
+    it("a draft that cannot become an event, or a clock that cannot be read, fails the append or the whole batch before anything lands", async () => {
       const store = await open();
       const bad: unknown[] = [
         { type: "", data: {} },
@@ -146,7 +146,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await all(store.scan())).toEqual([held]);
     });
 
-    it("ES-19: one appendAll of 5000 drafts in one millisecond — one `at`, 5000 distinct IDs, input order back", async () => {
+    it("one appendAll of 5000 drafts in one millisecond — one `at`, 5000 distinct IDs, input order back", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const before = await store.append({ type: "t", data: { n: -1 } });
@@ -174,7 +174,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await all(store.scan())).toEqual([]);
     });
 
-    it("ES-20: after the clock rolls back `at` follows it, every ID is still distinct and a batch shares one `at`", async () => {
+    it("after the clock rolls back `at` follows it, every ID is still distinct and a batch shares one `at`", async () => {
       const c = clock(T0);
       const store = await open({ now: c.now });
       const first = await store.append({ type: "t", data: {} });
@@ -191,7 +191,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(ids(await all(store.scan()))).toEqual(ids([first, back, ...batch].sort(compareEvents)));
     });
 
-    it("ES-9: scan yields canonical order — (at, eventId, author) — whatever order events were written in", async () => {
+    it("scan yields canonical order — (at, eventId, author) — whatever order events were written in", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       c.set("2026-09-06T12:00:00.000Z");
@@ -239,7 +239,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       }
     });
 
-    it("ES-5, ES-6: ingest counts each of its four outcomes — added, duplicate under another serialization, conflict with the held value kept, rejected — and stores only the added", async () => {
+    it("ingest counts each of its four outcomes — added, duplicate under another serialization, conflict with the held value kept, rejected — and stores only the added", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const [one, two, three] = await foreign(authorN(2), c.now, [{ type: "t", data: { n: 1 } }, { type: "t", data: { n: 2 } }, { type: "t", data: { n: 3 } }]);
@@ -273,7 +273,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await all(fresh.scan())).toEqual([altered(four as Event)]);
     });
 
-    it("ES-5: what ingest hands back later is the event its canonical bytes parse to, whatever serialization arrived", async () => {
+    it("what ingest hands back later is the event its canonical bytes parse to, whatever serialization arrived", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const [event] = await foreign(authorN(2), c.now, [{ type: "t", data: { z: 1, a: [1, { y: 2, x: 3 }] } }]);
@@ -305,7 +305,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(JSON.stringify(batch[0]?.data)).toBe('{"a":0,"b":1}');
     });
 
-    it("ES-21: ingest checks `eventId` and `at` each on its own and never compares the UUID's embedded time with `at`", async () => {
+    it("ingest checks `eventId` and `at` each on its own and never compares the UUID's embedded time with `at`", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const [event] = await foreign(authorN(2), c.now, [{ type: "t", data: {} }]);
@@ -327,7 +327,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(bad.rejected).toHaveLength(5);
     });
 
-    it("ES-7: an event of this store's own author it does not hold with identical content is a fork — ForkedAuthor, nothing added", async () => {
+    it("an event of this store's own author it does not hold with identical content is a fork — ForkedAuthor, nothing added", async () => {
       const c = clock(T0);
       const mine = await open({ author: authorN(1), now: c.now });
       const own = await mine.append({ type: "t", data: { n: 1 } });
@@ -369,7 +369,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       const b = altered(a as Event); // same eventId, other content
       async function* slow(): AsyncIterable<unknown> {
         // an input that completes on its own, taking a few turns: whichever
-        // ingest a store serialises first is the store's choice (§10, §13)
+        // ingest a store serialises first is the store's choice
         yield a;
         await new Promise((resolve) => setTimeout(resolve, 5));
         yield b;
@@ -396,7 +396,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(held[0]).toEqual(slowFirst ? a : b);
     });
 
-    it("ES-8: shuffling and repartitioning one event set changes no fold, and merge is commutative and idempotent", async () => {
+    it("shuffling and repartitioning one event set changes no fold, and merge is commutative and idempotent", async () => {
       const c = clock(T0);
       const sources = await Promise.all(
         [2, 3, 4].map(async (n, i) => {
@@ -434,7 +434,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(await x.ingest(everything)).toEqual({ added: 0, duplicates: 12, conflicts: [], rejected: [] });
     });
 
-    it("ES-11: changes() returns the complete local delta after its token — each event once, the filter applied — and rejects a token it cannot place", async () => {
+    it("changes() returns the complete local delta after its token — each event once, the filter applied — and rejects a token it cannot place", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       const empty = await store.changes();
@@ -471,7 +471,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       }
     });
 
-    it("ES-12: no token is ever needed — a fold from scan() equals one from changes() without a token, before and after a refused token", async () => {
+    it("no token is ever needed — a fold from scan() equals one from changes() without a token, before and after a refused token", async () => {
       const c = clock(T0);
       const store = await open({ author: authorN(1), now: c.now });
       await store.append({ type: "t", data: { n: 1 } });
@@ -490,7 +490,7 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(refolded.order).toHaveLength(5);
     });
 
-    it("ES-16: events of a retired replica are immutable history: a successor author ingests them, scans them under the old author, and appends as itself", async () => {
+    it("events of a retired replica are immutable history: a successor author ingests them, scans them under the old author, and appends as itself", async () => {
       const c = clock(T0);
       const retired = await open({ author: authorN(1), now: c.now });
       const history = await retired.appendAll([
@@ -524,7 +524,7 @@ function sortedIds(events: Event[]): string[] {
   return ids(events).sort();
 }
 
-/** IDs in canonical order: within one `at`, the IDs' own order, which need not be the order they were minted in (§4.2). */
+/** IDs in canonical order: within one `at`, the IDs' own order, which need not be the order they were minted in. */
 function sorted(events: Event[]): string[] {
   return ids([...events].sort(compareEvents));
 }

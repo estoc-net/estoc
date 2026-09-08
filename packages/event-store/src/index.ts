@@ -1,5 +1,5 @@
 /**
- * @estoc/event-store — the vault as an event store (docs/event-store.md).
+ * @estoc/event-store — the vault as an event store.
  *
  * The event and its envelope, canonical order, the filter; the three
  * store interfaces (events, blobs, files) and their in-memory forms; the
@@ -65,7 +65,7 @@ export { checkPath, MemoryFileStore, type FileStore } from "./files.js";
 
 export { compareLocalEvents, isLocalEvent, matchesLocal, type LocalEvent, type LocalFilter, type LocalEventStore } from "./local.js";
 
-// ---- the folder (vault-folder.md) ---------------------------------------
+// ---- the folder ----------------------------------------------------------
 
 export { walk, segmentsOf, VaultOwned, type VaultBackend, type Ownership } from "./backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "./backend/memory.js";
@@ -103,7 +103,7 @@ export { folderStore, type FolderStore, type FolderStoreOptions } from "./folder
 export { FORMAT, VERSION, readConfig } from "./folder/config.js";
 export { FolderVault, DEVICE_MINTED, type ExtensionStore, type OpenVaultOptions } from "./folder/vault.js";
 
-// ---- interchange (event-store.md §10) -------------------------------------
+// ---- interchange -------------------------------------
 
 export {
   CONFIG_PATH,

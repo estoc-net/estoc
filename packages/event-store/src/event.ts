@@ -1,7 +1,7 @@
 /**
- * The event (event-store.md §2), its identity, time and order (§3), and
- * the store interface (§4). The model, with no store behind it: what a
- * folder, a database or a map in memory must all agree on.
+ * The event, its identity, time and order, and the store interface. The
+ * model, with no store behind it: what a folder, a database or a map in
+ * memory must all agree on.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -9,7 +9,7 @@ import { isCid } from "./cid.js";
 import { InvalidEvent } from "./errors.js";
 import { isJsonObject, isJsonPrimitive, jsonClean, type JsonObject, type JsonPrimitive } from "./json.js";
 
-/** A CIDv1, sha-256, codec raw or dag-pb, base32 lower (§5). */
+/** A CIDv1, sha-256, codec raw or dag-pb, base32 lower. */
 export type Cid = string;
 
 export type Event<D extends JsonObject = JsonObject> = {
@@ -17,9 +17,9 @@ export type Event<D extends JsonObject = JsonObject> = {
   eid: string;
   /** RFC 3339 UTC */
   at: string;
-  /** the authoring device (§3) */
+  /** the authoring device */
   author: string;
-  /** the event type, a non-empty string; `vault-events.md` names the vault's own */
+  /** the event type, a non-empty string; the vault's own types are the vault's to name */
   type: string;
   /** every root the event references, `[]` for none; checked, never read, here */
   blobs: Cid[];
@@ -51,13 +51,13 @@ export interface Conflict {
   other: Event;
 }
 
-/** A value `ingest` could not read as an event (§2.4). */
+/** A value `ingest` could not read as an event. */
 export interface Rejected {
   event: unknown;
   error: string;
 }
 
-/** Bytes a serialization holds that could not be read as an event (§4.5). */
+/** Bytes a serialization holds that could not be read as an event. */
 export interface DamagedLine {
   /** where in the store's own terms, e.g. `<segment path>:<line number>` */
   where: string;
@@ -71,12 +71,12 @@ export interface Ingested {
   duplicates: number;
   /** same eid, different content: the store keeps what it had */
   conflicts: Conflict[];
-  /** failed envelope validation (§2.4) */
+  /** failed envelope validation */
   rejected: Rejected[];
 }
 
 export interface EventStore {
-  /** Which device this store appends as (§3). */
+  /** Which device this store appends as. */
   readonly self: string;
   /** This device's own event. The store mints eid and at, sets author = self, returns the whole event. */
   append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>>;
@@ -84,13 +84,13 @@ export interface EventStore {
    * Several of this device's events as one write: every draft validated before anything
    * lands — one bad draft and nothing is written — then minted in input order at one
    * instant, one `at` for the batch and eids monotone within it. Across a crash of the
-   * process the batch lands whole or not at all (§4.1).
+   * process the batch lands whole or not at all.
    */
   appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]>;
   /**
    * Events from elsewhere (a backup, another store, another device). Union by eid.
    * Reads its whole input before writing; throws ForkedSelf, having written nothing,
-   * on an event of `self` it does not already hold (§4.2).
+   * on an event of `self` it does not already hold.
    */
   ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
   /** Every event matching `filter`, in canonical order. */
@@ -118,7 +118,7 @@ export function isUuidv7(value: unknown): value is string {
   return typeof value === "string" && UUIDV7.test(value);
 }
 
-/** A device id: 6 characters of lowercase RFC 4648 base32 (§3). */
+/** A device id: 6 characters of lowercase RFC 4648 base32. */
 export function isDeviceId(value: unknown): value is string {
   return typeof value === "string" && DEVICE_ID.test(value);
 }
@@ -158,7 +158,7 @@ export function atKey(at: string): string {
   return `${at.slice(0, dot + 1)}${at.slice(dot + 1, -1).padEnd(9, "0")}Z`;
 }
 
-/** Canonical order (§3): by `at`, then `(eid, author)`. Total over distinct events. */
+/** Canonical order: by `at`, then `(eid, author)`. Total over distinct events. */
 export function compareEvents(a: Pick<Event, "at" | "eid" | "author">, b: Pick<Event, "at" | "eid" | "author">): number {
   const ka = atKey(a.at);
   const kb = atKey(b.at);
@@ -174,7 +174,7 @@ export function compareEvents(a: Pick<Event, "at" | "eid" | "author">, b: Pick<E
   return 0;
 }
 
-/** A fresh device id: 30 random bits, base32 lower (§3). Not secret. */
+/** A fresh device id: 30 random bits, base32 lower. Not secret. */
 export function mintDeviceId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   let id = "";
@@ -184,7 +184,7 @@ export function mintDeviceId(): string {
   return id;
 }
 
-/** A fresh instance id (§3): names this copy of a store to the tokens it issues. */
+/** A fresh instance id: names this copy of a store to the tokens it issues. */
 export function mintInstance(): string {
   return crypto.randomUUID();
 }
@@ -224,8 +224,8 @@ export class EidMinter {
 const ENVELOPE = ["eid", "at", "author", "type", "blobs", "data"] as const;
 
 /**
- * The event `value` is, or a throw (§2.4): a JSON object of exactly the
- * six fields, each well formed; `data` a JSON object, opaque beyond that.
+ * The event `value` is, or a throw: a JSON object of exactly the six
+ * fields, each well formed; `data` a JSON object, opaque beyond that.
  * Does not copy: the caller cleans (`jsonClean`) before storing.
  */
 export function validateEvent(value: unknown): Event {
@@ -299,7 +299,7 @@ export function cleanDraft<D extends JsonObject>(draft: Draft<D>): { type: strin
 
 // ---- filter ------------------------------------------------------------
 
-/** Whether `event` matches `filter` (§4.3): equality on the fields named, `undefined` no constraint. */
+/** Whether `event` matches `filter`: equality on the fields named, `undefined` no constraint. */
 export function matches(event: Event, filter?: Filter): boolean {
   if (filter === undefined) {
     return true;
@@ -313,7 +313,7 @@ export function matches(event: Event, filter?: Filter): boolean {
   return matchesData(event.data, filter.data);
 }
 
-/** The `data` half of a filter, shared with the local store's (§7.2). */
+/** The `data` half of a filter, shared with the local store's. */
 export function matchesData(data: JsonObject, wanted?: { [field: string]: JsonPrimitive | undefined }): boolean {
   if (wanted === undefined) {
     return true;

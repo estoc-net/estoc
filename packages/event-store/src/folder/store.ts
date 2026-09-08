@@ -1,8 +1,8 @@
 /**
- * One folder store — the vault's, or an extension's — over a backend
- * (vault-folder.md §9): its event store and blob store, sharing one
- * serialisation. What `FolderVault` opens per store; also what a test,
- * or an export that renders into a backend, opens without a vault.
+ * One folder store — the vault's, or an extension's — over a backend:
+ * its event store and blob store, sharing one serialisation. What
+ * `FolderVault` opens per store; also what a test, or an export that
+ * renders into a backend, opens without a vault.
  */
 
 import type { VaultBackend } from "../backend/types.js";
@@ -16,7 +16,7 @@ import { Serial, type StoreContext } from "./serial.js";
 export interface FolderStoreOptions {
   /** the store's directory, relative to the vault root; `.estoc` when left out */
   base?: string;
-  /** where a damaged block is moved aside to (§8); `.estoc/local/damaged/blobs` when left out */
+  /** where a damaged block is moved aside to; `.estoc/local/damaged/blobs` when left out */
   aside?: string;
   /** the device this store appends as; minted when left out */
   self?: string;
@@ -26,9 +26,9 @@ export interface FolderStoreOptions {
   store?: string;
   clock?: () => Date;
   graceMs?: number;
-  /** the writer's own rotation (§5); `ROTATE_BYTES` when left out */
+  /** the writer's own rotation; `ROTATE_BYTES` when left out */
   rotateBytes?: number;
-  /** throws once `dispose` has been called on the store (§3.1) */
+  /** throws once `dispose` has been called on the store */
   guard?: () => void;
   /** throws once the disposal has run in the store's chain */
   alive?: () => void;

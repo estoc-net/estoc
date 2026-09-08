@@ -1,10 +1,9 @@
 /**
- * `config.json`, version 3 (vault-folder.md §4): the one file that says
- * what the folder is and whose it is. The member set is closed —
- * `format`, `version`, `identity.anchor.{key,did}` and nothing else — and
- * a reader refuses any other spelling before it writes or interprets a
- * byte (§16). Immutable after creation: written once by `create`, never
- * through `FileStore` (§7.1).
+ * `config.json`, version 3: the one file that says what the folder is and
+ * whose it is. The member set is closed — `format`, `version`,
+ * `identity.anchor.{key,did}` and nothing else — and a reader refuses any
+ * other spelling before it writes or interprets a byte. Immutable after
+ * creation: written once by `create`, never through `FileStore`.
  */
 
 import { NotAVault } from "../errors.js";
@@ -14,10 +13,10 @@ import { CONFIG_FILE, prettyJson, text } from "./layout.js";
 
 export const FORMAT = "estoc";
 export const VERSION = 3;
-/** The one key name the anchor derives under (§4): fixed by the format. */
+/** The one key name the anchor derives under: fixed by the format. */
 export const ANCHOR_KEY = "anchor";
 
-/** What `config.json` holds (§4). */
+/** What `config.json` holds. */
 export interface Config {
   format: typeof FORMAT;
   version: typeof VERSION;
@@ -35,7 +34,7 @@ function closed(value: unknown, where: string, members: readonly string[]): Reco
   return value;
 }
 
-/** `bytes` as JSON, strictly (§2): UTF-8, no duplicate member; `NotAVault` naming `path` otherwise. */
+/** `bytes` as JSON, strictly: UTF-8, no duplicate member; `NotAVault` naming `path` otherwise. */
 export function parseJsonFile(bytes: Uint8Array, path: string): unknown {
   try {
     return parseStrict(text(bytes));
@@ -45,11 +44,11 @@ export function parseJsonFile(bytes: Uint8Array, path: string): unknown {
 }
 
 /**
- * The config `bytes` spell (§4), or `NotAVault`: format `estoc`, the
- * integer 3 — every other version is refused in words a user can read
- * (§16) — and an anchor under the key `anchor` whose DID is a `did:key`,
- * the form the fixed anchor derivation yields. Whether the DID is this
- * seed's is a writable open's to check.
+ * The config `bytes` spell, or `NotAVault`: format `estoc`, the integer
+ * 3 — every other version is refused in words a user can read — and an
+ * anchor under the key `anchor` whose DID is a `did:key`, the form the
+ * fixed anchor derivation yields. Whether the DID is this seed's is a
+ * writable open's to check.
  */
 export function parseConfig(bytes: Uint8Array, path = CONFIG_FILE): Config {
   const value = parseJsonFile(bytes, path);
@@ -70,7 +69,7 @@ export function parseConfig(bytes: Uint8Array, path = CONFIG_FILE): Config {
   return { format: FORMAT, version: VERSION, identity: { anchor: { key: ANCHOR_KEY, did } } };
 }
 
-/** The file as `create` writes it (§2, §4): pretty-printed, the members in the order the specification draws them. */
+/** The file as `create` writes it: pretty-printed, the members in a fixed order. */
 export function encodeConfig(did: string): Uint8Array {
   return prettyJson({ format: FORMAT, version: VERSION, identity: { anchor: { key: ANCHOR_KEY, did } } });
 }

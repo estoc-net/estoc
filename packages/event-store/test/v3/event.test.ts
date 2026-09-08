@@ -36,7 +36,7 @@ const base: Event = {
   data: { contactId: "019b2a45-8381-793f-943c-f5d806fd5ca2", name: "Alice" },
 };
 
-// dasl-objects.md §4.2 vectors
+// the raw DASL CID vectors
 const RAW_HELLO = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq";
 const RAW_EMPTY = "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku";
 const DRISL_EMPTY_MAP = "bafyreigbtj4x7ip5legnfznufuopl4sg4knzc2cof6duas4b3q2fy6swua";
@@ -62,7 +62,7 @@ describe("identity", () => {
     expect(() => timestampOf("nope")).toThrow(InvalidEvent);
   });
 
-  it("accepts as a root only a canonical raw DASL CID (dasl-objects.md §3)", async () => {
+ it("accepts as a root only a canonical raw DASL CID", async () => {
     expect(await rawCid(new TextEncoder().encode("hello"))).toBe(RAW_HELLO);
     expect(await rawCid(new Uint8Array())).toBe(RAW_EMPTY);
     expect(await drislCid(new Uint8Array([0xa0]))).toBe(DRISL_EMPTY_MAP);
@@ -80,7 +80,7 @@ describe("identity", () => {
   });
 });
 
-describe("time (ES-17)", () => {
+describe("time", () => {
   it("accepts exactly YYYY-MM-DDTHH:mm:ss.sssZ naming a real UTC instant", () => {
     expect(isCanonicalAt("2026-08-30T10:00:00.123Z")).toBe(true);
     expect(isCanonicalAt("2024-02-29T00:00:00.000Z")).toBe(true);
@@ -137,7 +137,7 @@ describe("time (ES-17)", () => {
   });
 });
 
-describe("envelope validation (§3.4)", () => {
+describe("envelope validation", () => {
   it("returns the value, typed, when the eight rules hold", () => {
     expect(validateEvent(base)).toBe(base);
     expect(validateEvent({ ...base, roots: [RAW_HELLO], data: {} })).toBeDefined();
@@ -170,14 +170,14 @@ describe("envelope validation (§3.4)", () => {
       ["data an array", { ...base, data: [] }, /data is not a JSON object/],
       ["data null", { ...base, data: null }, /data is not a JSON object/],
       ["data a string", { ...base, data: "x" }, /data is not a JSON object/],
-      ["ES-4: undefined in data", { ...base, data: { a: undefined } }, /not I-JSON/],
-      ["ES-4: NaN in data", { ...base, data: { a: NaN } }, /not I-JSON/],
-      ["ES-4: Infinity in data", { ...base, data: { a: [Infinity] } }, /not I-JSON/],
-      ["ES-4: a bigint in data", { ...base, data: { a: 1n } }, /not I-JSON/],
-      ["ES-4: a lone surrogate in data", { ...base, data: { a: cp(0xd800) } }, /not I-JSON/],
-      ["ES-4: a lone surrogate in a name", { ...base, data: { "\udc00": 1 } }, /not I-JSON/],
-      ["ES-4: a Date in data", { ...base, data: { a: new Date(0) } }, /not I-JSON/],
-      ["ES-4: a lone surrogate in type", { ...base, type: "\ud800" }, /not I-JSON/],
+      ["undefined in data", { ...base, data: { a: undefined } }, /not I-JSON/],
+      ["NaN in data", { ...base, data: { a: NaN } }, /not I-JSON/],
+      ["Infinity in data", { ...base, data: { a: [Infinity] } }, /not I-JSON/],
+      ["a bigint in data", { ...base, data: { a: 1n } }, /not I-JSON/],
+      ["a lone surrogate in data", { ...base, data: { a: cp(0xd800) } }, /not I-JSON/],
+      ["a lone surrogate in a name", { ...base, data: { "\udc00": 1 } }, /not I-JSON/],
+      ["a Date in data", { ...base, data: { a: new Date(0) } }, /not I-JSON/],
+      ["a lone surrogate in type", { ...base, type: "\ud800" }, /not I-JSON/],
     ];
     for (const [what, value, message] of cases) {
       expect(() => validateEvent(value), what).toThrow(InvalidEvent);
@@ -185,7 +185,7 @@ describe("envelope validation (§3.4)", () => {
     }
   });
 
-  it("ES-21: checks eventId and at independently and never compares their timestamps", () => {
+  it("checks eventId and at independently and never compares their timestamps", () => {
     // the UUID says 1000 ms after the epoch; `at` says 2026 — immutable history is not rejected for it
     const event = { ...base, eventId: "00000000-03e8-7000-8000-000000000000" };
     expect(timestampOf(event.eventId)).not.toBe(Date.parse(event.at));
@@ -212,8 +212,8 @@ describe("envelope validation (§3.4)", () => {
       ["data an array", { type: "t", data: [] }],
       ["roots not an array", { type: "t", roots: RAW_HELLO, data: {} }],
       ["a drisl root", { type: "t", roots: [DRISL_EMPTY_MAP], data: {} }],
-      ["ES-4: undefined member", { type: "t", data: { a: undefined } }],
-      ["ES-4: lone surrogate", { type: "t", data: { a: "\ude02" } }],
+      ["undefined member", { type: "t", data: { a: undefined } }],
+      ["lone surrogate", { type: "t", data: { a: "\ude02" } }],
       ["noncharacter", { type: "t", data: { a: cp(0xfdd0) } }],
       ["lone surrogate in type", { type: cp(0xd800), data: {} }],
       ["noncharacter in type", { type: `t${cp(0xffff)}`, data: {} }],
@@ -252,7 +252,7 @@ describe("envelope validation (§3.4)", () => {
 });
 
 describe("canonical bytes and order", () => {
-  it("ES-5/ES-6: content equality is byte equality of the RFC 8785 form, whatever the member order", () => {
+  it("content equality is byte equality of the RFC 8785 form, whatever the member order", () => {
     const reordered: Event = {
       data: { name: "Alice", contactId: base.data.contactId as string },
       roots: [],
@@ -273,7 +273,7 @@ describe("canonical bytes and order", () => {
     expect(canonicalEventBytes(laterAt)).not.toEqual(canonicalEventBytes(base));
   });
 
-  it("orders by at, then eventId, then author (§4.3)", () => {
+ it("orders by at, then eventId, then author", () => {
     const e = (at: string, eventId: string, author: string): Event => ({
       ...base,
       at,
@@ -290,7 +290,7 @@ describe("canonical bytes and order", () => {
     expect(compareEvents(d, c)).toBeGreaterThan(0);
   });
 
-  it("filters by equality on author, type and top-level data fields (§5.4)", () => {
+ it("filters by equality on author, type and top-level data fields", () => {
     const event: Event = { ...base, data: { n: 1, s: "x", z: null, o: { k: 1 }, a: [1], f: false } };
     expect(matches(event)).toBe(true);
     expect(matches(event, {})).toBe(true);

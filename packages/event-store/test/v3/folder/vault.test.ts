@@ -52,7 +52,7 @@ function paths(backend: MemoryBackend, base = BASE): string[] {
   return [...backend.files.keys()].filter((p) => p.startsWith(`${base}/`)).sort();
 }
 
-/** Every path of `from` copied into a fresh backend, `local/` and `import/` left out when `portable`: what a snapshot and restore do (§12.1, §13.2), by hand. */
+/** Every path of `from` copied into a fresh backend, `local/` and `import/` left out when `portable`: what a snapshot and restore do, by hand. */
 function copied(from: MemoryBackend, portable: boolean): MemoryBackend {
   const to = new MemoryBackend();
   for (const [path, bytes] of from.files) {
@@ -94,8 +94,8 @@ async function settled(p: Promise<unknown>): Promise<boolean> {
   return done;
 }
 
-describe("FolderVault.create (vault-folder.md §4, §5, §11.1)", () => {
-  it("VF-1, VF-7: lays down keystore.json then config.json, mints local/replica.json, appends no event, and writes events under events/<replica_id>/", async () => {
+describe("FolderVault.create", () => {
+  it("lays down keystore.json then config.json, mints local/replica.json, appends no event, and writes events under events/<replica_id>/", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     expect(paths(backend)).toEqual([`${BASE}/config.json`, `${BASE}/keystore.json`, `${BASE}/local/replica.json`]); // ownership in memory makes no file
@@ -167,7 +167,7 @@ describe("FolderVault.create (vault-folder.md §4, §5, §11.1)", () => {
   });
 });
 
-describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
+describe("FolderVault.openWritable", () => {
   it("steps 1–3 before step 4: no config, another version, no keystore, a keystore of another shape, or the wrong seed — each refused with nothing taken and nothing written", async () => {
     const fresh = new MemoryBackend();
     await expect(FolderVault.openWritable(fresh, { anchor: DID })).rejects.toThrow(NotAVault);
@@ -201,7 +201,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await again.close();
   });
 
-  it("§15: ownership is exclusive — a second writable open, or an exclusive read-only open, is VaultOwned until close; after close the vault refuses everything", async () => {
+  it("ownership is exclusive — a second writable open, or an exclusive read-only open, is VaultOwned until close; after close the vault refuses everything", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     await expect(FolderVault.openWritable(backend, { anchor: DID })).rejects.toThrow(VaultOwned);
@@ -397,7 +397,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await next.close();
   });
 
-  it("VF-40: anything under import/ blocks a writable open and a read-only open alike, with ownership released; an empty import/ is nothing pending", async () => {
+  it("anything under import/ blocks a writable open and a read-only open alike, with ownership released; an empty import/ is nothing pending", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     await vault.close();
@@ -415,7 +415,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await again.close();
   });
 
-  it("§3: a file where import/ or local/ belongs is DamagedLayout, refused before ownership; a directory where config.json belongs is no vault", async () => {
+  it("a file where import/ or local/ belongs is DamagedLayout, refused before ownership; a directory where config.json belongs is no vault", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     await vault.close();
@@ -435,7 +435,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await expect(created(backend)).rejects.toThrow(/not an empty folder/);
   });
 
-  it("VF-6: a malformed local/replica.json is DamagedReplica, never repaired, and ownership is released", async () => {
+  it("a malformed local/replica.json is DamagedReplica, never repaired, and ownership is released", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     await vault.close();
@@ -448,7 +448,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await fresh.close();
   });
 
-  it("VF-4, ES-14, VF-23: the portable half restored elsewhere opens as a new replica and generation, keeps every old author's events, and writes under the new author", async () => {
+  it("the portable half restored elsewhere opens as a new replica and generation, keeps every old author's events, and writes under the new author", async () => {
     const source = new MemoryBackend();
     const vault = await created(source);
     const [old] = await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -466,13 +466,13 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     expect(fresh?.author).toBe(restored.replica.replica_id);
     expect(paths(target).filter((p) => p.includes("/events/")).map((p) => p.split("/")[2]).sort()).toEqual([vault.replica.replica_id, restored.replica.replica_id].sort());
     await restored.close();
-    // the same snapshot restored on a third machine is a third replica: nothing of the machine names it (ES-15)
+    // the same snapshot restored on a third machine is a third replica: nothing of the machine names it
     const third = await FolderVault.openWritable(copied(source, true), { anchor: DID });
     expect(third.replica.replica_id).not.toBe(restored.replica.replica_id);
     await third.close();
   });
 
-  it("VF-5, §13.3: the whole folder moved, local/ included, keeps the replica; copied and left active on both sides it is a fork, which ingest detects", async () => {
+  it("the whole folder moved, local/ included, keeps the replica; copied and left active on both sides it is a fork, which ingest detects", async () => {
     const source = new MemoryBackend();
     const vault = await created(source);
     await vault.vault.commit([], [draft()]);
@@ -490,7 +490,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await moved.close();
   });
 
-  it("VF-8, §7: state/ is an opaque path like any other; files reach config.json and keystore.json to read, never to write; local/ and import/ are never listed", async () => {
+  it("state/ is an opaque path like any other; files reach config.json and keystore.json to read, never to write; local/ and import/ are never listed", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     await vault.vault.files.write("state/settings.json", utf8("{}"));
@@ -504,7 +504,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await vault.close();
   });
 
-  it("VF-16: an entry the layout does not define inside a structural root is reported as damage, from every root, in path order", async () => {
+  it("an entry the layout does not define inside a structural root is reported as damage, from every root, in path order", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     backend.files.set(`${BASE}/events/stray.txt`, utf8(""));
@@ -523,7 +523,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await vault.close();
   });
 
-  it("VF-33: the writer lock serializes a commit, the held-root fold and the collection pass — the keep set is computed after the commit it waited for", async () => {
+  it("the writer lock serializes a commit, the held-root fold and the collection pass — the keep set is computed after the commit it waited for", async () => {
     const c = clock("2026-09-07T10:00:00Z");
     const backend = new MemoryBackend({ clock: () => new Date(c.now()) });
     const vault = await created(backend, { now: c.now, graceMs: HOUR });
@@ -572,7 +572,7 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
     await vault.close();
   });
 
-  it("§10.2: local(owner) is this copy's own under local/<owner>/, never portable, and an owner name is a lowercase word", async () => {
+  it("local(owner) is this copy's own under local/<owner>/, never portable, and an owner name is a lowercase word", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);
     const agent = vault.local("agent");
@@ -589,8 +589,8 @@ describe("FolderVault.openWritable (vault-folder.md §11.1)", () => {
   });
 });
 
-describe("FolderReader (vault-folder.md §11.1, §15)", () => {
-  it("VF-3: opens the portable half alone, creates no local/, and reads events, files and object metadata; writes are ReadOnlyVault", async () => {
+describe("FolderReader", () => {
+  it("opens the portable half alone, creates no local/, and reads events, files and object metadata; writes are ReadOnlyVault", async () => {
     const source = new MemoryBackend();
     const vault = await created(source);
     const [event] = await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -612,7 +612,7 @@ describe("FolderReader (vault-folder.md §11.1, §15)", () => {
     await expect(all(reader.events.scan())).rejects.toThrow(VaultClosed);
   });
 
-  it("§15: without ownership an object stream is refused as unprotected; with exclusive ownership it is served, and a writer meanwhile is VaultOwned", async () => {
+  it("without ownership an object stream is refused as unprotected; with exclusive ownership it is served, and a writer meanwhile is VaultOwned", async () => {
     const source = new MemoryBackend();
     const vault = await created(source);
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);

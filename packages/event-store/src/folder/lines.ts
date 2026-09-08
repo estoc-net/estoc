@@ -1,7 +1,7 @@
 /**
- * Lines of a segment (vault-folder.md §4, §9.5): each is one event or
- * damage. A line is whole only when terminated; the fragment a crash
- * leaves is reported, never fused with what follows.
+ * Lines of a segment: each is one event or damage. A line is whole only
+ * when terminated; the fragment a crash leaves is reported, never fused
+ * with what follows.
  */
 
 import { InvalidEvent } from "../errors.js";
@@ -28,7 +28,7 @@ export function splitLines(bytes: Uint8Array): Line[] {
   return lines;
 }
 
-/** `decodeEvent(path, line)` of §4: the event, its envelope checked and its `author` held against the directory's `dev`. */
+/** `decodeEvent(path, line)`: the event, its envelope checked and its `author` held against the directory's `dev`. */
 export function decodeEvent(line: string, dev: string): Event {
   let parsed: unknown;
   try {
@@ -43,7 +43,7 @@ export function decodeEvent(line: string, dev: string): Event {
   return deepFreeze(event);
 }
 
-/** A trace line (event-store.md §7.2): the local event's shape and nothing more. */
+/** A trace line: the local event's shape and nothing more. */
 export function decodeLocalEvent(line: string): LocalEvent {
   let parsed: unknown;
   try {

@@ -1,17 +1,15 @@
 /**
- * `@estoc/event-store/v3` — the version-3 event model of
- * `docs/replica-model/event-store.md`, built beside version 2 until the
- * vault switches over: RFC 8785 canonical JSON and the strict parser
- * (§3.3), the six-field envelope and its validation (§3.4), identity,
- * time and canonical order (§4), the store interface (§5), and minting
- * — `at` from the clock, `eventId` from `uuid`'s standard UUIDv7
- * generator (§4.2); and the store in memory, the reference every other
- * store is measured against. Beside it the object model of
- * `dasl-objects.md`: raw DASL objects, the `ObjectStore` interface, the
- * read latch, and the store in memory. Portable files (§8.1) and the
- * vault itself (§10): the interfaces, the writer lock, the held view,
- * and the vault in memory. And the folder (vault-folder.md): the
- * layout, the segments, the replica, the three folder stores, this
+ * `@estoc/event-store/v3` — the version-3 event model of the replica
+ * model, built beside version 2 until the vault switches over: RFC 8785
+ * canonical JSON and the strict parser, the six-field envelope and its
+ * validation, identity, time and canonical order, the store interface,
+ * and minting — `at` from the clock, `eventId` from `uuid`'s standard
+ * UUIDv7 generator; and the store in memory, the reference every other
+ * store is measured against. Beside it the object model: raw DASL
+ * objects, the `ObjectStore` interface, the read latch, and the store
+ * in memory. Portable files and the vault itself: the interfaces, the
+ * writer lock, the held view, and the vault in memory. And the folder:
+ * the layout, the segments, the replica, the three folder stores, this
  * copy's local state, and the vault over them, opened for writing under
  * the backend's ownership or for reading. No event type.
  */

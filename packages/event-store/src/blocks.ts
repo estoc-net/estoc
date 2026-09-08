@@ -1,8 +1,8 @@
 /**
- * Blocks of the `unixfs-v1-2025` profile (event-store.md §5.1): naming
- * bytes, checking a block against its name, reading a file back from its
- * blocks, and walking what a root reaches. Pure: every store's blob side
- * is these over its own bytes.
+ * Blocks of the `unixfs-v1-2025` profile: naming bytes, checking a block
+ * against its name, reading a file back from its blocks, and walking
+ * what a root reaches. Pure: every store's blob side is these over its
+ * own bytes.
  */
 
 import * as dagPB from "@ipld/dag-pb";
@@ -22,9 +22,9 @@ export type GetBlock = (cid: string) => Promise<Uint8Array | null>;
 const NODE_KINDS = ["file", "directory", "hamt-sharded-directory"] as const;
 
 /**
- * The three checks of §5.1, or a throw: `cid` is a profile name; `bytes`
- * hash to it and a raw block is at most 1 MiB; a dag-pb block decodes as
- * a node the profile makes (`decodeNode`). Not a closure check.
+ * The three checks of a block, or a throw: `cid` is a profile name; `bytes`
+ * hash to it and a raw block is at most 1 MiB; a dag-pb block decodes as a
+ * node the profile makes (`decodeNode`). Not a closure check.
  */
 export async function checkBlock(cid: string, bytes: Uint8Array): Promise<CID> {
   const parsed = parseCid(cid);

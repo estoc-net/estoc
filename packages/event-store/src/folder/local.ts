@@ -1,7 +1,7 @@
 /**
- * This copy's own (vault-folder.md §7): an owner's options, cache and
- * trace under `local/<owner>/`. The trace is the `LocalEventStore` of
- * event-store.md §7.2 over segments, pruned whole segments at a time.
+ * This copy's own: an owner's options, cache and trace under
+ * `local/<owner>/`. The trace is the `LocalEventStore` of over
+ * segments, pruned whole segments at a time.
  */
 
 import type { VaultBackend } from "../backend/types.js";
@@ -15,7 +15,7 @@ import { isSegmentName, jsonLine, prettyJson, text } from "./layout.js";
 import { decodeLocalEvent, decodeSegment } from "./lines.js";
 import { Serial } from "./serial.js";
 
-/** What a stream keeps (§7.2): lines this old, this many bytes; 0 turns it off. */
+/** What a stream keeps: lines this old, this many bytes; 0 turns it off. */
 export interface RetentionPolicy {
   /** how long a line is kept, in milliseconds; 0 keeps nothing (and prune drops what is there) */
   keepMs: number;
@@ -48,7 +48,7 @@ export const DEFAULT_ROTATION: Rotation = { bytes: 1024 * 1024, ms: 24 * 60 * 60
 export interface FolderLocalEventStoreOptions {
   rotate?: Rotation;
   clock?: () => Date;
-  /** throws once the store's owner is being disposed of (vault-folder.md §3.1): checked as an operation is called */
+  /** throws once the store's owner is being disposed of: checked as an operation is called */
   guard?: () => void;
   /** throws once the disposal has run: checked as an operation's turn comes */
   alive?: () => void;
@@ -192,7 +192,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   }
 }
 
-/** Rebuildable files an owner keeps (§7.1): read, write, list, drop — any of it, any time. */
+/** Rebuildable files an owner keeps: read, write, list, drop — any of it, any time. */
 export interface LocalCache {
   read(path: string): Promise<Uint8Array | null>;
   write(path: string, bytes: Uint8Array): Promise<void>;
@@ -203,15 +203,15 @@ export interface LocalCache {
 }
 
 /**
- * One owner's local state (§7): `options.json`, `cache/`, and a trace
- * stream per name under `trace/`. The directory is the owner's —
+ * One owner's local state: `options.json`, `cache/`, and a trace stream
+ * per name under `trace/`. The directory is the owner's —
  * `local/agent`, `local/extensions/<ext>` — and nothing here is a fact
  * of the vault.
  *
  * Every operation here queues on the owner's own chain, so that
- * `settle` covers it: a disposal (vault-folder.md §3.1) waits for what
- * was issued before it and removes the directory after — no write that
- * passed the guard lands on the emptied tree, no read reads it.
+ * `settle` covers it: a disposal waits for what was issued before it
+ * and removes the directory after — no write that passed the guard
+ * lands on the emptied tree, no read reads it.
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();
@@ -222,7 +222,7 @@ export class LocalOwner {
     private readonly backend: VaultBackend,
     readonly dir: string,
     private readonly options: FolderLocalEventStoreOptions = {},
-    /** throws once the owner is being disposed of with its extension (vault-folder.md §3.1) */
+    /** throws once the owner is being disposed of with its extension */
     private readonly guard: () => void = () => undefined
   ) {
     this.alive = options.alive ?? (() => undefined);

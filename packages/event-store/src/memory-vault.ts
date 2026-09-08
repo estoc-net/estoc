@@ -1,8 +1,8 @@
 /**
- * The vault's stores as maps in memory (event-store.md §9): the vault a
- * fold is tested on, and the far end of the round trip (§10.1). No local
- * state and no `dispose`: what a copy keeps for itself is the folder's
- * business, and nothing here outlives the process.
+ * The vault's stores as maps in memory: the vault a fold is tested on,
+ * and the far end of the round trip. No local state and no `dispose`:
+ * what a copy keeps for itself is the folder's business, and nothing
+ * here outlives the process.
  */
 
 import { MemoryBlobStore } from "./blobs.js";
@@ -58,7 +58,7 @@ export class MemoryVault implements VaultStores {
     return have;
   }
 
-  /** Every `ext` holding an event or a block (§8): a handle nothing was written through is not one. */
+  /** Every `ext` holding an event or a block: a handle nothing was written through is not one. */
   async extensions(): Promise<string[]> {
     const found: string[] = [];
     for (const [ext, stores] of [...this.exts].sort(([a], [b]) => (a < b ? -1 : 1))) {

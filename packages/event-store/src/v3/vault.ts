@@ -1,12 +1,12 @@
 /**
- * The vault, version 3 (event-store.md §10): what a program gets —
- * events to read, objects to read, portable files, and `commit` — and
- * what the runtime underneath keeps to itself: the vault-wide writer
- * lock, the read latch, `ingest`, and collection, whose keep set is
- * computed only under the lock. The interfaces every backend presents,
- * the facade that takes the lock on each operation and the view that
- * shares one held lock, and the vault in memory: the reference, the
- * vault the folds are tested on, and the far end of the round trip.
+ * The vault, version 3: what a program gets — events to read, objects
+ * to read, portable files, and `commit` — and what the runtime
+ * underneath keeps to itself: the vault-wide writer lock, the read
+ * latch, `ingest`, and collection, whose keep set is computed only
+ * under the lock. The interfaces every backend presents, the facade
+ * that takes the lock on each operation and the view that shares one
+ * held lock, and the vault in memory: the reference, the vault the
+ * folds are tested on, and the far end of the round trip.
  */
 
 import { MissingRoot, ObjectTooLarge } from "./errors.js";
@@ -17,16 +17,16 @@ import { MemoryEventStore } from "./memory-events.js";
 import { MemoryObjectStore } from "./memory-objects.js";
 import { LatchRegistry, chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectStore } from "./objects.js";
 
-/** An object handed to `commit` (§10): the bytes, and the raw CID they must hash to. */
+/** An object handed to `commit`: the bytes, and the raw CID they must hash to. */
 export type CommitObject = { cid: Cid; source: ByteSource };
 
-/** The events as application code reads them (§10): no `append`, `appendAll` or `ingest` (ES-29). */
+/** The events as application code reads them: no `append`, `appendAll` or `ingest`. */
 export type VaultEvents = Pick<EventStore, "scan" | "changes" | "damaged" | "conflicting">;
-/** The objects as application code reads them (§10): no put and no collection (ES-29). */
+/** The objects as application code reads them: no put and no collection. */
 export type VaultObjects = Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
 
 /**
- * The vault to a program (§10). Every local event write goes through
+ * The vault to a program. Every local event write goes through
  * `commit`, with or without new objects; every mutation takes the
  * vault-wide writer lock; an object read latches its CID against
  * collection for the life of the stream, and no longer holds the lock.
@@ -38,68 +38,68 @@ export interface Vault {
   /**
    * Under the writer lock: validate every draft, accept every supplied
    * object under `putObject`'s rules, require every draft root — new or
-   * reused — to name a present accepted object, then append the drafts
-   * as one all-or-nothing batch and return the events (§10, §5.2). A
-   * failure at any step appends nothing; an object accepted before it
-   * stays, an orphan under grace (dasl-objects.md §8.1).
+   * reused — to name a present accepted object, then append the drafts as
+   * one all-or-nothing batch and return the events. A failure at any step
+   * appends nothing; an object accepted before it stays, an orphan under
+   * grace.
    */
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
 
 /**
- * The keep set for one collection pass (dasl-objects.md §8.3), computed
- * by the caller while the pass holds the writer lock (§10): what the
- * vault runtime folds from the events it reads through `held` — a
- * set computed before the lock was taken cannot be handed in, which is
- * the rule made a type. The object store checks each CID.
+ * The keep set for one collection pass, computed by the caller while
+ * the pass holds the writer lock: what the vault runtime folds from the
+ * events it reads through `held` — a set computed before the lock was
+ * taken cannot be handed in, which is the rule made a type. The object
+ * store checks each CID.
  */
 export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
 /**
- * The vault as an operation holding the writer lock sees it (§10):
- * the same interface, every call sharing the held lock instead of
- * taking it — a read nested inside a commit, an import or an export
- * neither waits for itself nor shortens the operation's boundary —
- * plus the primitives the runtime keeps from application code.
+ * The vault as an operation holding the writer lock sees it: the same
+ * interface, every call sharing the held lock instead of taking it — a
+ * read nested inside a commit, an import or an export neither waits for
+ * itself nor shortens the operation's boundary — plus the primitives
+ * the runtime keeps from application code.
  */
 export interface Held extends Vault {
-  /** The store's `ingest` (§5.3), for validated import and restore. */
+  /** The store's `ingest`, for validated import and restore. */
   ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
-  /** One collection pass (dasl-objects.md §8.3): `keep` is called here, under the lock, then the unkept are collected. */
+  /** One collection pass: `keep` is called here, under the lock, then the unkept are collected. */
   collect(keep: KeepUnderLock): Promise<Collected>;
   /** Run `op` under the lock already held: nested, shares it. */
   locked<T>(op: (held: Held) => Promise<T>): Promise<T>;
 }
 
 /**
- * What a host opens (§10, last paragraph): a backend with its local
- * replica context — author and store generation — that hands out the
- * `Vault` application code gets and keeps the writer lock, `ingest` and
- * collection for the runtime above it.
+ * What a host opens: a backend with its local replica context — author
+ * and store generation — that hands out the `Vault` application code
+ * gets and keeps the writer lock, `ingest` and collection for the
+ * runtime above it.
  */
 export interface VaultRuntime {
-  /** The local replica every committed event is authored as (§4.1). */
+  /** The local replica every committed event is authored as. */
   readonly author: AuthorId;
-  /** The store generation this runtime's change tokens name (§5.5). */
+  /** The store generation this runtime's change tokens name. */
   readonly generation: string;
   /** The vault, as application code gets it: each operation takes the writer lock for itself. */
   readonly vault: Vault;
   /** Run `op` under the vault-wide writer lock, serialized with every other mutation; `op` works through the held view. */
   locked<T>(op: (held: Held) => Promise<T>): Promise<T>;
-  /** One collection pass under the lock: `keep` is computed inside it (§10, DO-19). */
+  /** One collection pass under the lock: `keep` is computed inside it. */
   collect(keep: KeepUnderLock): Promise<Collected>;
-  /** Ingest under the lock (§5.3, §10): the input is read whole first, then classified and accepted while nothing else writes. */
+  /** Ingest under the lock: the input is read whole first, then classified and accepted while nothing else writes. */
   ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
 }
 
 // ---- the lock -----------------------------------------------------------
 
 /**
- * The vault-wide writer lock (§10) for one runtime in one process:
- * operations run one at a time in the order they arrived, each holding
- * it from its first step to its last, whatever it awaits meanwhile.
- * Nesting is not this class's: an operation that needs the lock it
- * already holds works through `Held`.
+ * The vault-wide writer lock for one runtime in one process: operations
+ * run one at a time in the order they arrived, each holding it from its
+ * first step to its last, whatever it awaits meanwhile. Nesting is not
+ * this class's: an operation that needs the lock it already holds works
+ * through `Held`.
  */
 export class WriterLock {
   private tail: Promise<void> = Promise.resolve();
@@ -141,7 +141,7 @@ export interface Stores {
 type Enter = <T>(op: () => Promise<T>) => Promise<T>;
 
 /**
- * One view of the stores (§10): the facade application code gets, when
+ * One view of the stores: the facade application code gets, when
  * `enter` takes the lock, or the view an operation works through while
  * holding it, when `enter` is immediate. Reads of events, of object
  * metadata and of files take no lock; `open` takes it for the presence
@@ -187,7 +187,7 @@ class View implements Vault {
   private async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
     rawCidOf(cid);
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
-    // Size checked and stream latched under the lock; the bytes come out after it (§10, dasl-objects.md §6.3).
+    // Size checked and stream latched under the lock; the bytes come out after it.
     const opened = await this.enter(async () => {
       const info = await this.stores.objects.stat(cid);
       if (info === null) return null;
@@ -198,7 +198,7 @@ class View implements Vault {
     if (opened === null) return null;
     // From here the stream is this method's to end: whatever fails —
     // the allocation, the stream itself — cancels it, so its latch is
-    // released on every failure path (§10), not only the ones inside
+    // released on every failure path, not only the ones inside
     // the iteration.
     try {
       const out = new Uint8Array(opened.size);
@@ -217,7 +217,7 @@ class View implements Vault {
 
   commit<D extends JsonObject>(objects: CommitObject[], drafts: Draft<D>[]): Promise<Event<D>[]> {
     return this.enter(async () => {
-      // Every draft and every CID checked before a byte is read (§10):
+      // Every draft and every CID checked before a byte is read:
       // a bad batch accepts nothing.
       const clean = drafts.map((draft) => validateDraft(draft));
       for (const object of objects) rawCidOf(object.cid);
@@ -261,13 +261,13 @@ interface Read {
 }
 
 /**
- * The input of `ingest`, read whole before the lock is taken (§5.3):
- * its validation is its own, and a slow source should not hold the
- * vault. Each input is fixed — validated and copied into canonical
- * form, or recorded as rejected with its error — before the source is
- * asked for the next, so a source that reuses one object between
- * yields is read as it yielded, and what reaches the store is the
- * runtime's own data, which nothing outside can change.
+ * The input of `ingest`, read whole before the lock is taken: its
+ * validation is its own, and a slow source should not hold the vault.
+ * Each input is fixed — validated and copied into canonical form, or
+ * recorded as rejected with its error — before the source is asked for
+ * the next, so a source that reuses one object between yields is read
+ * as it yielded, and what reaches the store is the runtime's own data,
+ * which nothing outside can change.
  */
 async function readAll(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Read> {
   const read: Read = { events: [], rejected: [] };
@@ -289,9 +289,9 @@ async function ingestRead(events: EventStore, read: Read): Promise<Ingested> {
 
 /**
  * A runtime over any three stores, for one process: the lock, the
- * facade application code gets — a `Vault` with nothing else on it
- * (ES-29) — and the held view. What `MemoryVault` is, and what a folder
- * backend builds once it has opened its stores.
+ * facade application code gets — a `Vault` with nothing else on it —
+ * and the held view. What `MemoryVault` is, and what a folder backend
+ * builds once it has opened its stores.
  */
 export class Runtime implements VaultRuntime {
   readonly lock = new WriterLock();
@@ -341,30 +341,29 @@ export class Runtime implements VaultRuntime {
 // ---- in memory ----------------------------------------------------------
 
 export interface MemoryVaultOptions {
-  /** the author every committed event carries (§4.1); a fresh UUIDv7 when left out */
+  /** the author every committed event carries; a fresh UUIDv7 when left out */
   author?: AuthorId;
   /** the wall clock in Unix milliseconds, for `at` and for orphan age; default `Date.now`, pinned by tests */
   now?: () => number;
-  /** orphan grace (dasl-objects.md §8.3); default one hour */
+  /** orphan grace; default one hour */
   graceMs?: number;
-  /** the largest object a commit accepts (dasl-objects.md §12); default 1 GiB */
+  /** the largest object a commit accepts; default 1 GiB */
   maxObjectBytes?: number;
   /** the size of the internal extents an object is held in; default 1 MiB */
   extentBytes?: number;
 }
 
 /**
- * The vault as maps in memory: `MemoryEventStore`, `MemoryObjectStore`
- * and `MemoryFileStore` under one runtime, one lock and one latch
- * registry. Nothing persists, so the process-durable half of §2.1 is
- * vacuous; the boundaries are not: a commit is all or nothing, a paused
- * stream blocks no writer and protects its object, collection waits for
- * the commit in flight and computes its keep set only once it has the
- * lock.
+ * The vault as maps in memory: `MemoryEventStore`, `MemoryObjectStore` and
+ * `MemoryFileStore` under one runtime, one lock and one latch registry. Nothing
+ * persists, so the process-durable half of the store's promise is vacuous; the
+ * boundaries are not: a commit is all or nothing, a paused stream blocks no writer
+ * and protects its object, collection waits for the commit in flight and computes
+ * its keep set only once it has the lock.
  */
 export class MemoryVault extends Runtime {
   declare readonly stores: { events: MemoryEventStore; objects: MemoryObjectStore; files: MemoryFileStore };
-  /** the read latches over this vault's objects (§10) */
+  /** the read latches over this vault's objects */
   readonly latches: LatchRegistry;
 
   constructor(options: MemoryVaultOptions = {}) {

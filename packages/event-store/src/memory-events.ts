@@ -1,8 +1,8 @@
 /**
- * The event store as a map in memory (event-store.md §4): the reference
- * for the interface's semantics and the store folds are tested on.
- * Nothing persists; `damaged()` and `conflicting()` are empty by
- * construction, as a database's are (§4.5).
+ * The event store as a map in memory: the reference for the interface's
+ * semantics and the store folds are tested on. Nothing persists;
+ * `damaged()` and `conflicting()` are empty by construction, as a
+ * database's are.
  */
 
 import { BadToken, ForkedSelf } from "./errors.js";
@@ -113,7 +113,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    // Read everything first (§4.2): what is rejected, what is a duplicate
+    // Read everything first: what is rejected, what is a duplicate
     // or a conflict against what is held or against the input itself, and
     // whether any of it is self's — then, and only then, write.
     const staged: Staged = { outcome: { added: 0, duplicates: 0, conflicts: [], rejected: [] }, events: new Map() };
@@ -165,7 +165,7 @@ export class MemoryEventStore implements EventStore {
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
-    // The store sorts (§4.3), over a snapshot: an append during the walk is not yielded.
+    // The store sorts, over a snapshot: an append during the walk is not yielded.
     const events = [...this.held.values()].sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) {

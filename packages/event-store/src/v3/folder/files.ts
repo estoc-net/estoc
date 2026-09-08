@@ -1,11 +1,10 @@
 /**
- * The portable files over a folder (vault-folder.md §11.6, §7): what
- * `FileStore` reaches, by the shape of the path — `config.json`,
- * `keystore.json` and every opaque portable path (§7.3); never a
- * segment, an object, or anything under `local/` or `import/` (§3.1,
- * VF-39). Reads reach the two singletons; writes reach only opaque paths
- * (§7.1), whole, and refuse a path that would make one name both a file
- * and a directory (§2). Paths are relative to the layout's directory.
+ * The portable files over a folder: what `FileStore` reaches, by the
+ * shape of the path — `config.json`, `keystore.json` and every opaque
+ * portable path; never a segment, an object, or anything under `local/`
+ * or `import/`. Reads reach the two singletons; writes reach only
+ * opaque paths, whole, and refuse a path that would make one name both
+ * a file and a directory. Paths are relative to the layout's directory.
  */
 
 import type { VaultBackend } from "../../backend/types.js";
@@ -14,7 +13,7 @@ import { ancestorsOf, checkFilePath, checkPath, comparePaths, type FileStore } f
 import { WriterLock } from "../vault.js";
 import { ESTOC_DIR, kindOf } from "./layout.js";
 
-/** The kinds of path a file store reaches (§11.6). */
+/** The kinds of path a file store reaches. */
 const PORTABLE = new Set(["config", "keystore", "opaque"]);
 
 export class FolderFileStore implements FileStore {
@@ -29,7 +28,7 @@ export class FolderFileStore implements FileStore {
     this.base = base;
   }
 
-  /** A path this store reads: conforming (§2), and a portable file's by shape. */
+  /** A path this store reads: conforming, and a portable file's by shape. */
   private readable(path: string): string {
     checkPath(path);
     if (!PORTABLE.has(kindOf(path))) throw new Error(`not a portable file path: ${path}`);
@@ -40,7 +39,7 @@ export class FolderFileStore implements FileStore {
     return this.backend.read(this.readable(path));
   }
 
-  /** An opaque portable path only (§7.1); refused when it or an ancestor is taken by the other kind of entry (§2). */
+  /** An opaque portable path only; refused when it or an ancestor is taken by the other kind of entry. */
   async write(path: string, bytes: Uint8Array): Promise<void> {
     checkFilePath(path);
     if (!(bytes instanceof Uint8Array)) throw new TypeError("bytes is a Uint8Array");
@@ -56,7 +55,7 @@ export class FolderFileStore implements FileStore {
     });
   }
 
-  /** `config.json`, `keystore.json` and every opaque portable file (§11.6), in code-point order; nothing structural, nothing local. */
+  /** `config.json`, `keystore.json` and every opaque portable file, in code-point order; nothing structural, nothing local. */
   async list(): Promise<string[]> {
     const prefix = `${this.base}/`;
     return (await walk(this.backend, this.base))

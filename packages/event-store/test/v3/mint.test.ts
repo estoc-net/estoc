@@ -15,7 +15,7 @@ function ascending(ids: string[]): boolean {
 describe("mint", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("ES-19: more than 4096 IDs from one mint are distinct canonical UUIDv7; that they sort in mint order, later mints after them, is `uuid`'s doing, not the profile's", () => {
+  it("more than 4096 IDs from one mint are distinct canonical UUIDv7; that they sort in mint order, later mints after them, is `uuid`'s doing, not the profile's", () => {
     const c = clock(1756548000123);
     const batch = mint(5000, c.now);
     expect(batch.t).toBe(1756548000123);
@@ -50,7 +50,7 @@ describe("mint", () => {
     expect(mint(1, () => 0).at).toBe("1970-01-01T00:00:00.000Z");
   });
 
-  it("ES-20: after the store's clock rolls back, `at` follows it, every ID is still distinct and a batch shares one `at`", () => {
+  it("after the store's clock rolls back, `at` follows it, every ID is still distinct and a batch shares one `at`", () => {
     const c = clock(1000);
     const first = mint(1, c.now);
     c.set(999);
@@ -76,7 +76,7 @@ describe("mint", () => {
   });
 
   // Last: it leaves the module instance's generator timestamp in the future.
-  it("ES-20: when the wall clock itself rolls back, the generator still mints distinct IDs without following it — and, being `uuid`, still in mint order", () => {
+  it("when the wall clock itself rolls back, the generator still mints distinct IDs without following it — and, being `uuid`, still in mint order", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const t = Date.UTC(2100, 0, 1);
     vi.setSystemTime(t);

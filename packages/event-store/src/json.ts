@@ -1,8 +1,8 @@
 /**
- * JSON in the sense of RFC 8259 (event-store.md §2.3): objects, arrays,
- * strings, numbers, booleans and null, and nothing else. An event is
- * one of these; a draft that is not — `undefined`, a bigint, a `Date`,
- * a cycle — is rejected before it is stored.
+ * JSON in the sense of RFC 8259: objects, arrays, strings, numbers,
+ * booleans and null, and nothing else. An event is one of these; a
+ * draft that is not — `undefined`, a bigint, a `Date`, a cycle — is
+ * rejected before it is stored.
  */
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -29,7 +29,7 @@ export function isJsonObject(value: unknown): value is JsonObject {
 }
 
 /**
- * Structural equality as JSON (§2.3): objects as unordered maps, arrays in
+ * Structural equality as JSON: objects as unordered maps, arrays in
  * order, numbers as doubles, strings by code point. Key order and the
  * bytes a serializer chose are not differences; a field present with
  * `undefined` and a field absent are (the caller cleans first).

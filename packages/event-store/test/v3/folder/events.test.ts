@@ -33,7 +33,7 @@ const SEG = (n: number): string => uuidv7At(1_800_000_000_000 + n, 0x5e5e5e00 + 
 /** One from 2001: sorts before any the store mints. */
 const EARLY = (n: number): string => uuidv7At(1_000_000_000_000 + n, 0x0e0e0e00 + n);
 
-/** A store over `backend`, as a writable open would give it: `local/replica.json` read or minted (§11.1 step 5), the author the test names. */
+/** A store over `backend`, as a writable open would give it: `local/replica.json` read or minted, the author the test names. */
 async function openOver(backend: VaultBackend, options: OpenOptions & { rotateBytes?: number } = {}): Promise<FolderEventStore> {
   const replica = await openReplica(backend, BASE, options.author === undefined ? undefined : () => ({ replica_id: options.author as Replica["replica_id"], store_generation: SEG(Math.floor(Math.random() * 1e6)) }));
   return new FolderEventStore(backend, replica, {
@@ -70,8 +70,8 @@ async function bytesAt(backend: VaultBackend, rel: string): Promise<Uint8Array> 
   return (await backend.read(`${BASE}/${rel}`)) as Uint8Array;
 }
 
-describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
-  it("VF-1, VF-7: events land under events/<replica_id>/<uuidv7>.jsonl, the author from local/replica.json, with no replica-creation event", async () => {
+describe("FolderEventStore", () => {
+  it("events land under events/<replica_id>/<uuidv7>.jsonl, the author from local/replica.json, with no replica-creation event", async () => {
     const backend = new MemoryBackend();
     const store = await openOver(backend, { now: clock(T0).now });
     expect(await all(store.scan())).toEqual([]);
@@ -87,7 +87,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await all(store.scan())).toEqual([event]);
   });
 
-  it("ES-10, VF-9: each stored line is exactly canonicalEventBytes(event) followed by one LF, and a reopen reads those bytes back as the same events", async () => {
+  it("each stored line is exactly canonicalEventBytes(event) followed by one LF, and a reopen reads those bytes back as the same events", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -116,7 +116,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(JSON.stringify((await all(again.scan()))[0])).toBe(text(canonicalEventBytes(one)));
   });
 
-  it("VF-2: a canonical line under another author's directory is damage — reported, never scanned — and the path never supplies the author", async () => {
+  it("a canonical line under another author's directory is damage — reported, never scanned — and the path never supplies the author", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const other = await openOver(new MemoryBackend(), { author: authorN(2), now: c.now });
@@ -139,7 +139,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.damaged()).toHaveLength(1);
   });
 
-  it("VF-9: a merely compact, non-canonical line placed by hand is damage; the store itself never writes one", async () => {
+  it("a merely compact, non-canonical line placed by hand is damage; the store itself never writes one", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -150,7 +150,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     await backend.write(`${BASE}/${rel}`, utf8(`${JSON.stringify(reordered(foreign as Event))}\n`));
     expect(await all(store.scan())).toEqual([own]);
     expect((await store.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:1`, "not the event's RFC 8785 canonical bytes"]]);
-    // ingested instead, the same serialization is stored canonically (VF-11)
+    // ingested instead, the same serialization is stored canonically
     await backend.remove(`${BASE}/${rel}`);
     expect(await store.ingest([reordered(foreign as Event)])).toMatchObject({ added: 1 });
     const [written] = (await segmentsOf(backend)).filter((p) => p.startsWith(`events/${authorN(2)}/`));
@@ -158,7 +158,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.damaged()).toEqual([]);
   });
 
-  it("VF-10: a fragment a crash left is skipped and reported, and nothing is ever appended after it — the next append starts a fresh segment, so the two never fuse", async () => {
+  it("a fragment a crash left is skipped and reported, and nothing is ever appended after it — the next append starts a fresh segment, so the two never fuse", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -178,7 +178,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(segments).toHaveLength(2);
     expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([second]));
     expect(await all(reopened.scan())).toEqual([first, second]);
-    // the fragment remains what it is, reportable damage (§8.1), here and on a fresh open
+    // the fragment remains what it is, reportable damage, here and on a fresh open
     for (const view of [reopened, await openOver(backend)]) {
       expect((await view.damaged()).map((d) => [d.where, d.error])).toEqual([[`${rel}:2`, "incomplete final fragment"]]);
       expect(await all(view.scan())).toEqual([first, second]);
@@ -252,7 +252,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expectBytes(await bytesAt(backend, segments[1] as string), encodeLines([succeeded, next]));
   });
 
-  it("VF-11: ingest writes decoded, reserialized events into one fresh segment per author minted here, never a copied source segment", async () => {
+  it("ingest writes decoded, reserialized events into one fresh segment per author minted here, never a copied source segment", async () => {
     const source = new MemoryBackend();
     const c = clock(T0);
     const a = await openOver(source, { author: authorN(2), now: c.now });
@@ -279,7 +279,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await segmentsOf(target)).toEqual(written);
   });
 
-  it("ES-7: a fork writes nothing — not even the other authors' events of the same call", async () => {
+  it("a fork writes nothing — not even the other authors' events of the same call", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -293,7 +293,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await segmentsOf(backend)).toEqual(before);
   });
 
-  it("VF-12, §8.3: physical order — segment names, which segment a line is in, line order within one — changes nothing scan yields", async () => {
+  it("physical order — segment names, which segment a line is in, line order within one — changes nothing scan yields", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -339,7 +339,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.conflicting()).toEqual([{ eventId: asA?.eventId, kept: asA, rejected: asB, source: `${segmentPath(authorN(2), SEG(2))}:1` }]);
   });
 
-  it("§11.5: two contents under one eventId keep the lexicographically first segment path, then the first line, and report every other", async () => {
+  it("two contents under one eventId keep the lexicographically first segment path, then the first line, and report every other", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -364,7 +364,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.ingest([variant])).toMatchObject({ duplicates: 1 });
   });
 
-  it("VF-16: an unknown entry inside events/ is reported as damage, by path, and the events beside it are still read", async () => {
+  it("an unknown entry inside events/ is reported as damage, by path, and the events beside it are still read", async () => {
     const backend = new MemoryBackend();
     const store = await openOver(backend, { author: authorN(1), now: clock(T0).now });
     const own = await store.append({ type: "t", data: {} });
@@ -489,7 +489,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     });
   }
 
-  it("§8.1: append reuses the newest segment under its author, rotates past rotateBytes, and appendAll always writes a fresh segment whole", async () => {
+  it("append reuses the newest segment under its author, rotates past rotateBytes, and appendAll always writes a fresh segment whole", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now, rotateBytes: 400 });
@@ -517,7 +517,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(ids(await all(again.scan()))).toEqual(ids([a, b, cEvent, d, ...batch, e, f].sort(compareEvents)));
   });
 
-  it("§10.3: a token names the generation and each segment's accepted length; it is refused for another generation, a missing or shorter segment, a position inside a line, or an unrecognized shape", async () => {
+  it("a token names the generation and each segment's accepted length; it is refused for another generation, a missing or shorter segment, a position inside a line, or an unrecognized shape", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -552,7 +552,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     await expect(store.changes(undefined, second)).rejects.toThrow("past");
   });
 
-  it("§10.3: a token survives a reopen of the same generation, and a fragment is not part of the accepted length", async () => {
+  it("a token survives a reopen of the same generation, and a fragment is not part of the accepted length", async () => {
     const backend = new MemoryBackend();
     const c = clock(T0);
     const store = await openOver(backend, { author: authorN(1), now: c.now });
@@ -575,13 +575,13 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     const cut = await again.changes(undefined, delta.token);
     expect(await all(cut.events)).toEqual([]);
     expect((JSON.parse(cut.token) as { segments: Record<string, number> }).segments[rel as string]).toBe(whole.length);
-    // deleting local/ makes the next open another generation: every earlier token is refused (§3.1)
+    // deleting local/ makes the next open another generation: every earlier token is refused
     await backend.remove(`${BASE}/local/replica.json`);
     const fresh = await openOver(backend, { now: c.now });
     expect(fresh.generation).not.toBe(store.generation);
     expect(fresh.author).not.toBe(store.author);
     await expect(fresh.changes(undefined, delta.token)).rejects.toBeInstanceOf(BadToken);
-    expect(ids(await all(fresh.scan())).sort()).toEqual(ids([a, b, ...foreign]).sort()); // the history is all still there, under its authors (VF-23)
+ expect(ids(await all(fresh.scan())).sort()).toEqual(ids([a, b,...foreign]).sort()); // the history is all still there, under its authors
   });
 
   it("changes(): a line copied in by hand under an ID already held is no gain; what is yielded is the content the store holds", async () => {
@@ -601,7 +601,7 @@ describe("FolderEventStore (vault-folder.md §6, §8, §10.3, §11)", () => {
     expect(await store.conflicting()).toHaveLength(2);
   });
 
-  it("ES-1, VF-32: what a resolved append or batch wrote survives the process — a new store over the same disk folder observes it whole", async () => {
+  it("what a resolved append or batch wrote survives the process — a new store over the same disk folder observes it whole", async () => {
     const dir = await tempDir();
     const c = clock(T0);
     const store = await openOver(new FsBackend(dir), { author: authorN(1), now: c.now });

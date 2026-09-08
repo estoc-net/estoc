@@ -108,7 +108,7 @@ describe("RFC 8785 canonicalization", () => {
     expect(canonicalText(true)).toBe("true");
   });
 
-  it("ES-4: refuses what is not I-JSON", () => {
+  it("refuses what is not I-JSON", () => {
     const bad: [string, unknown][] = [
       ["undefined", undefined],
       ["an undefined member", { a: undefined }],
@@ -187,7 +187,7 @@ describe("strict parsing", () => {
     expect(Object.keys(proto)).toEqual(["__proto__", "constructor"]);
   });
 
-  it("ES-4: refuses a duplicate member, an unpaired surrogate and a number outside binary64", () => {
+  it("refuses a duplicate member, an unpaired surrogate and a number outside binary64", () => {
     const bad: [string, string | Uint8Array][] = [
       ["duplicate member", '{"a":1,"a":1}'],
       ["duplicate member, nested", '{"x":[{"a":1,"b":2,"a":3}]}'],
@@ -269,7 +269,7 @@ describe("strict parsing", () => {
     expect(() => parseStrict("[1 2]")).toThrow(/at offset 3/);
   });
 
-  it("ES-5: two serializations with different member order or whitespace canonicalize to one byte string", () => {
+  it("two serializations with different member order or whitespace canonicalize to one byte string", () => {
     const a = utf8.encode(`{"type":"t","data":{"b":2,"a":[1, 2]},${cp(10)}  "roots":[]}`);
     const b = utf8.encode('{ "roots" : [ ] , "data" : { "a" : [ 1 , 2.0 ] , "b" : 2E0 } , "type" : "t" }');
     expect(hex(canonicalize(parseStrict(a)))).toBe(hex(canonicalize(parseStrict(b))));

@@ -22,9 +22,9 @@ objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) =>
 /**
  * `inner` with its output streams cut into chunks of at most `n` bytes
  * — for the first 256 chunks of each stream; 64 KiB after that, so a
- * large object (DO-7) does not come out in millions — the latch
- * untouched: a store that chunks its output otherwise than by extent,
- * which the suite must accept just the same.
+ * large object does not come out in millions — the latch untouched: a
+ * store that chunks its output otherwise than by extent, which the
+ * suite must accept just the same.
  */
 function rechunked(inner: ObjectStore, n: number): ObjectStore {
   return {
@@ -397,7 +397,7 @@ async function withConstructFault<T>(name: "Uint8Array" | "ReadableStream", shou
   }
 }
 
-describe("MemoryObjectStore open releases the latch on every failure (event-store.md §10)", () => {
+describe("MemoryObjectStore open releases the latch on every failure", () => {
   const T0 = "2026-09-07T10:00:00.000Z";
 
   async function orphaned(): Promise<{ store: MemoryObjectStore; cid: Cid; bytes: Uint8Array }> {

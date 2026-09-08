@@ -1,7 +1,6 @@
 /**
- * Names of the `unixfs-v1-2025` profile (event-store.md §5.1): CIDv1,
- * sha-256, codec `raw` or `dag-pb`, base32 lower. Anything else is not a
- * name a vault holds.
+ * Names of the `unixfs-v1-2025` profile: CIDv1, sha-256, codec `raw` or
+ * `dag-pb`, base32 lower. Anything else is not a name a vault holds.
  */
 
 import { CID } from "multiformats/cid";

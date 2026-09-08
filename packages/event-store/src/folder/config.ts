@@ -1,7 +1,7 @@
 /**
- * `config.json` as vault-folder.md §6.1 and §11 read it: a JSON object
- * saying `estoc`, version 2, or the folder is refused — by `open`, and by
- * an import before a line is decoded.
+ * `config.json` as the version-2 folder reads it: a JSON object saying
+ * `estoc`, version 2, or the folder is refused — by `open`, and by an
+ * import before a line is decoded.
  */
 
 import { NotAVault } from "../errors.js";

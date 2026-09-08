@@ -7,32 +7,30 @@ import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./typ
  * Whole-file writes go through `createWritable()`, which OPFS commits
  * atomically on close (a swap file replaces the original), so a crash
  * mid-write never truncates a keystore. Appends reopen with
- * `keepExistingData` and write at the end; a crash there can leave a
- * partial last line, which the folder store reports and heals.
- * `modified` is the file's `lastModified`, which a rewrite renews.
+ * `keepExistingData` and write at the end; a crash there can leave a partial
+ * last line, which the folder store reports and heals. `modified` is the
+ * file's `lastModified`, which a rewrite renews.
  *
- * A streamed `create` over an existing file is one `createWritable()`
- * too, closed once the source has ended and aborted — the swap file
- * discarded, the original kept — when it throws. Over a path with no
- * file, getting a handle would make an empty file visible before the
- * source has ended, so the source is written to a temp sibling
- * and moved into place by `FileSystemFileHandle.move()`, which is atomic
- * and replaces a file at the destination. `rename` is `move` too. Where
- * the platform has no `move`, a fresh destination cannot be filled
- * atomically at all: `create` and `rename` to one refuse before touching
- * it, and only `rename` over an existing file — a copy through
- * `createWritable()`, atomic on close, then a removal of the source —
- * still works. `open` is the file's own `stream()`.
+ * A streamed `create` over an existing file is one `createWritable()` too,
+ * closed once the source has ended and aborted — the swap file discarded,
+ * the original kept — when it throws. Over a path with no file, getting a
+ * handle would make an empty file visible before the source has ended, so
+ * the source is written to a temp sibling and moved into place by
+ * `FileSystemFileHandle.move()`, which is atomic and replaces a file at the
+ * destination. `rename` is `move` too. Where the platform has no `move`, a
+ * fresh destination cannot be filled atomically at all: `create` and
+ * `rename` to one refuse before touching it, and only `rename` over an
+ * existing file — a copy through `createWritable()`, atomic on close, then a
+ * removal of the source — still works. `open` is the file's own `stream()`.
  *
  * `createWritable()` is what this needs from the platform; browsers that
- * only offer OPFS through sync access handles in workers are not served
- * by this adapter yet — the constructor says so up front.
+ * only offer OPFS through sync access handles in workers are not served by
+ * this adapter yet — the constructor says so up front.
  *
- * Ownership (vault-folder.md §15) is a Web Lock, exclusive, named for
- * the one path from the origin's storage root through this directory
- * to the name given, asked for with `ifAvailable` so a held lock
- * refuses at once; the browser releases it when the holding page goes
- * away. No file is made.
+ * Ownership is a Web Lock, exclusive, named for the one path from the
+ * origin's storage root through this directory to the name given, asked for
+ * with `ifAvailable` so a held lock refuses at once; the browser releases it
+ * when the holding page goes away. No file is made.
  */
 export class OpfsBackend implements VaultBackend {
   constructor(private readonly root: FileSystemDirectoryHandle) {

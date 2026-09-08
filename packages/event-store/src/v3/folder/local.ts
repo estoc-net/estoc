@@ -1,13 +1,12 @@
 /**
- * This copy's own (vault-folder.md §10.2, event-store.md §8.2): an
- * owner's `options.json`, `cache/` and trace streams under
- * `local/<owner>/`. Nothing here is a fact of the vault: not in a
- * snapshot, not imported, not synchronized, not reached by `FileStore`
- * (§3.1). A trace is a local event-like stream in the event's shape less
- * what only exchange needs — `eventId`, `at`, `type`, `data`, minted by
- * its producer — kept in segments and pruned whole segments at a time by
- * the owner's retention; `cache/` is rebuildable and may hold no derived
- * private key or key registry (VF-24), which is the owner's to honour.
+ * This copy's own: an owner's `options.json`, `cache/` and trace streams
+ * under `local/<owner>/`. Nothing here is a fact of the vault: not in a
+ * snapshot, not imported, not synchronized, not reached by `FileStore`.
+ * A trace is a local event-like stream in the event's shape less what
+ * only exchange needs — `eventId`, `at`, `type`, `data`, minted by its
+ * producer — kept in segments and pruned whole segments at a time by the
+ * owner's retention; `cache/` is rebuildable and may hold no derived
+ * private key or key registry, which is the owner's to honour.
  */
 
 import { v7 } from "uuid";
@@ -23,7 +22,7 @@ import { WriterLock } from "../vault.js";
 import { isSegmentName, prettyJson, text, utf8 } from "./layout.js";
 import { splitLines } from "./lines.js";
 
-/** The event's shape less author and roots (§10.2): id and time are the producer's. */
+/** The event's shape less author and roots: id and time are the producer's. */
 export type LocalEvent<D extends JsonObject = JsonObject> = { eventId: string; at: string; type: string; data: D };
 
 /** As `Filter`, less `author`, plus `eventId`: a line is looked up by the id another line cites. */
@@ -32,7 +31,7 @@ export type LocalFilter = { eventId?: string; type?: string; data?: { [field: st
 export interface LocalEventStore<E extends LocalEvent = LocalEvent, Policy = unknown, Report = unknown> {
   /** Minted by the producer; the store checks the shape and nothing else. */
   append(event: E): Promise<void>;
-  /** Equality, as event-store.md §5.4; canonical order. */
+  /** Equality on the fields named; canonical order. */
   scan(filter?: LocalFilter): AsyncIterable<E>;
   /** What the last `scan` met that was not a line. */
   damaged(): Damaged[];
@@ -40,7 +39,7 @@ export interface LocalEventStore<E extends LocalEvent = LocalEvent, Policy = unk
   prune(policy: Policy): Promise<Report>;
 }
 
-/** Canonical order for local events (as event-store.md §4.3): by `at`, then by `eventId`; both canonical strings, so their order is their spelling's. */
+/** Canonical order for local events, as for events: by `at`, then by `eventId`; both canonical strings, so their order is their spelling's. */
 export function compareLocalEvents(a: Pick<LocalEvent, "at" | "eventId">, b: Pick<LocalEvent, "at" | "eventId">): number {
   if (a.at !== b.at) return a.at < b.at ? -1 : 1;
   return a.eventId === b.eventId ? 0 : a.eventId < b.eventId ? -1 : 1;
@@ -66,7 +65,7 @@ export function matchesLocal(event: LocalEvent, filter?: LocalFilter): boolean {
   return filter.data === undefined || matchesData(event.data, filter.data);
 }
 
-/** What a stream keeps (§10.2): lines this old, this many bytes; 0 turns it off. */
+/** What a stream keeps: lines this old, this many bytes; 0 turns it off. */
 export interface RetentionPolicy {
   /** how long a line is kept, in milliseconds; 0 keeps nothing (and prune drops what is there) */
   keepMs: number;
@@ -240,7 +239,7 @@ export class FolderLocalEventStore implements LocalEventStore<LocalEvent, Retent
   }
 }
 
-/** Rebuildable files an owner keeps (§10.2): read, write, list, drop — any of it, any time. */
+/** Rebuildable files an owner keeps: read, write, list, drop — any of it, any time. */
 export interface LocalCache {
   read(path: string): Promise<Uint8Array | null>;
   write(path: string, bytes: Uint8Array): Promise<void>;
@@ -251,13 +250,13 @@ export interface LocalCache {
 }
 
 /**
- * One owner's local state (§10.2): `options.json`, `cache/`, and a trace
- * stream per name under `trace/`. The directory is the owner's —
- * `local/agent` for the application — and nothing here is a fact of the
- * vault. Writes and reads of one owner run one at a time; every
- * operation, on the owner or on a cache or trace handle taken from it,
- * checks the vault's guard as it is called, and `settle` waits for what
- * was accepted before.
+ * One owner's local state: `options.json`, `cache/`, and a trace stream
+ * per name under `trace/`. The directory is the owner's — `local/agent`
+ * for the application — and nothing here is a fact of the vault. Writes
+ * and reads of one owner run one at a time; every operation, on the
+ * owner or on a cache or trace handle taken from it, checks the vault's
+ * guard as it is called, and `settle` waits for what was accepted
+ * before.
  */
 export class LocalOwner {
   private readonly traces = new Map<string, FolderLocalEventStore>();

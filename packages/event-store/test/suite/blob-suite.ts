@@ -36,7 +36,7 @@ function pbNode(data: UnixFS, links: dagPB.PBLink[] = []): Uint8Array {
 }
 
 /**
- * The conformance suite of event-store.md §5: naming, the block check,
+ * The conformance suite of the blob store: naming, the block check,
  * reading a file back, and collection by age.
  */
 export function blobSuite(name: string, open: OpenBlobs): void {

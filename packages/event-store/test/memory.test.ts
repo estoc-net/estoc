@@ -22,7 +22,7 @@ describe("memory: FileStore", () => {
     expect(await files.read("config.json")).toEqual(new Uint8Array([5]));
   });
 
-  it("takes a file's path and no other, and never a file and a directory of one name (event-store.md §6)", async () => {
+ it("takes a file's path and no other, and never a file and a directory of one name", async () => {
     const files = new MemoryFileStore();
     for (const bad of [
       "devices/aaaaaa/01990000-0000-7000-8000-000000000010.jsonl",

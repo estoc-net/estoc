@@ -1,11 +1,10 @@
 /**
- * Interchange (event-store.md §10, vault-folder.md §10): the folder is
- * the form a vault travels in. `snapshot` takes a folder's tree,
- * `exportVault` renders any store's as one, `importVault` reads one into
- * any store by the one algorithm of §10.3, `restoreFolder` copies one
- * into an empty backend. The tree in memory is `VaultFiles`: vault-
- * relative path → bytes, `.estoc/config.json` and on — what a zip holds
- * (`zip.ts`) and what a backend unpacks.
+ * Interchange: the folder is the form a vault travels in. `snapshot`
+ * takes a folder's tree, `exportVault` renders any store's as one,
+ * `importVault` reads one into any store by the one import algorithm,
+ * `restoreFolder` copies one into an empty backend. The tree in memory
+ * is `VaultFiles`: vault- relative path → bytes, `.estoc/config.json`
+ * and on — what a zip holds (`zip.ts`) and what a backend unpacks.
  */
 
 import type { VaultBackend } from "./backend/types.js";
@@ -49,14 +48,14 @@ const LOCAL = `${ROOT}${LOCAL_DIR}/`;
 const LOCAL_PATH = `${ROOT}${LOCAL_DIR}`;
 const SELF_PATH = `${LOCAL}${SELF_FILE}`;
 
-/** Whether `path` is in a snapshot (vault-folder.md §10.1): under `.estoc/` and not this copy's own. */
+/** Whether `path` is in a snapshot: under `.estoc/` and not this copy's own. */
 export function isSnapshotPath(path: string): boolean {
   return path.startsWith(ROOT) && !path.startsWith(LOCAL);
 }
 
 // ---- snapshot and export -------------------------------------------------
 
-/** Everything under `.estoc/` except `local/` (vault-folder.md §10.1), byte for byte. */
+/** Everything under `.estoc/` except `local/`, byte for byte. */
 export async function snapshot(backend: VaultBackend): Promise<VaultFiles> {
   const files: VaultFiles = {};
   for (const path of await walk(backend, ESTOC_DIR)) {
@@ -77,11 +76,11 @@ export interface ExportOptions {
 }
 
 /**
- * Any store's vault as a folder (§10.2): every event a line under
+ * Any store's vault as a folder: every event a line under
  * `devices/<author>/`, one segment per author minted now; every block
- * under `blobs/`; every file in place; each extension store the same
- * way under `extensions/<ext>/`; no `local/`. Nothing about the chunking
- * is remembered. A folder store's export is `snapshot`.
+ * under `blobs/`; every file in place; each extension store the same way
+ * under `extensions/<ext>/`; no `local/`. Nothing about the chunking is
+ * remembered. A folder store's export is `snapshot`.
  */
 export async function exportVault(vault: VaultStores, options: ExportOptions = {}): Promise<VaultFiles> {
   const clock = options.clock ?? (() => new Date());
@@ -146,11 +145,10 @@ function emptyStore(): SourceStore {
 }
 
 /**
- * The whole source, read (§10.3 preflight): `config.json` first, or
- * `NotAVault`; then every line of every segment under `devices/<dev>/`
- * and `extensions/<ext>/devices/<dev>/` decoded (vault-folder.md §4), every block
- * named, every file kept. `local/` and anything outside `.estoc/` is
- * not looked at.
+ * The whole source, read: `config.json` first, or `NotAVault`; then
+ * every line of every segment under `devices/<dev>/` and
+ * `extensions/<ext>/devices/<dev>/` decoded, every block named, every
+ * file kept. `local/` and anything outside `.estoc/` is not looked at.
  */
 function readSource(files: VaultFiles): Source {
   const config = files[CONFIG_PATH];
@@ -236,15 +234,15 @@ function checkTree(paths: string[], whose: string): void {
 // ---- import ------------------------------------------------------------
 
 /**
- * What the import asks of the folds (§10.3): which roots the merged
- * event set holds, and which extensions it says are purged — read from
- * event types the store does not know. Left out, every root any event
- * names is held and nothing is purged: a merge that knows no type.
+ * What the import asks of the folds: which roots the merged event set
+ * holds, and which extensions it says are purged — read from event
+ * types the store does not know. Left out, every root any event names
+ * is held and nothing is purged: a merge that knows no type.
  */
 export interface ImportPolicy {
-  /** The roots held over `events`, the merged set of one store (`vault-events.md` §8.3); `store` is `vault` or the ext. */
+  /** The roots held over `events`, the merged set of one store; `store` is `vault` or the ext. */
   held?(store: string, events: Event[]): Cid[] | Promise<Cid[]>;
-  /** The extensions the fold over the merged vault set says are purged (`vault-events.md` §7.3): not read. */
+  /** The extensions the fold over the merged vault set says are purged: not read. */
   purged?(events: Event[]): string[] | Promise<string[]>;
   /** The extensions the merged vault set accounts for; when given, a store read that is not among them is reported. */
   installed?(events: Event[]): string[] | Promise<string[]>;
@@ -257,7 +255,7 @@ export interface Imported {
   events: Record<string, Ingested>;
   blobs: {
     copied: number;
-    /** blocks of the source that fail the check (§5.1): damage there, not copied */
+    /** blocks of the source that fail the check: damage there, not copied */
     damaged: { store: string; cid: string; error: string }[];
   };
   files: {
@@ -277,13 +275,13 @@ export interface Imported {
 }
 
 /**
- * Read `files` into `target` by §10.3: preflight — a version-2 vault,
- * the same `config.json` as this one's, no forked self in any store the
- * import will write — with nothing written on any failure; then the
- * events, the blobs a held root reaches, the files by their policies;
- * then each extension store the fold lets in. Into a store with no
- * `config.json` it is a restore — the same steps into an empty store,
- * and the config is written last.
+ * Read `files` into `target`: preflight — a version-2 vault, the same
+ * `config.json` as this one's, no forked self in any store the import
+ * will write — with nothing written on any failure; then the events,
+ * the blobs a held root reaches, the files by their policies; then each
+ * extension store the fold lets in. Into a store with no `config.json`
+ * it is a restore — the same steps into an empty store, and the config
+ * is written last.
  */
 export async function importVault(target: VaultStores, files: VaultFiles, policy: ImportPolicy = {}): Promise<Imported> {
   const source = readSource(files);
@@ -299,7 +297,7 @@ export async function importVault(target: VaultStores, files: VaultFiles, policy
     throw new NotSameVault(`the source's ${CONFIG_FILE} is not this vault's: another identity, or another format`);
   }
   const keystore = planKeystore(source.files.get(KEYSTORE_FILE), await target.files.read(KEYSTORE_FILE));
-  // a folder no store wrote (vault-folder.md §9.6): a file of this vault's where a store has its directory
+  // a folder no store wrote: a file of this vault's where a store has its directory
   for (const path of mine) {
     if (isStoreDir(path)) {
       throw new NotAVault(`this vault's files: ${path} is a file where the layout has a directory`);
@@ -389,7 +387,7 @@ function merged(held: Map<string, Event>, incoming: Event[]): Event[] {
   return [...all.values()].sort(compareEvents);
 }
 
-/** The events of `self` among `incoming` that `held` does not have as they are (§4.2): what `ingest` would refuse. */
+/** The events of `self` among `incoming` that `held` does not have as they are: what `ingest` would refuse. */
 function forksIn(self: string, held: Map<string, Event>, incoming: Event[]): Event[] {
   const forked: Event[] = [];
   for (const event of incoming) {
@@ -405,20 +403,20 @@ function forksIn(self: string, held: Map<string, Event>, incoming: Event[]): Eve
 }
 
 /**
- * Rule 2 (§10.3): a block absent here — a damaged one is absent — and
- * present in the source is copied iff a held root reaches it, walking
- * the blocks either copy holds, and iff it passes the check; one that
- * does not is damage in the source, reported. Damage is absent on the
- * walk too: bytes that fail the check are not a block, so what they
- * link is not reached through them — else a name over another node's
- * bytes would let that node's tree in under no held root.
+ * Rule 2: a block absent here — a damaged one is absent — and present
+ * in the source is copied iff a held root reaches it, walking the
+ * blocks either copy holds, and iff it passes the check; one that does
+ * not is damage in the source, reported. Damage is absent on the walk
+ * too: bytes that fail the check are not a block, so what they link is
+ * not reached through them — else a name over another node's bytes
+ * would let that node's tree in under no held root.
  */
 async function copyBlocks(store: string, blobs: BlobStore, blocks: Map<string, Uint8Array>, events: Event[], policy: ImportPolicy, report: Imported): Promise<void> {
   if (blocks.size === 0) {
     return;
   }
   const roots = policy.held === undefined ? events.flatMap((event) => event.blobs) : await policy.held(store, events);
-  // this copy's block when it holds it sound — reading it sets a damaged one aside (§5.1) — else the source's, checked
+  // this copy's block when it holds it sound — reading it sets a damaged one aside — else the source's, checked
   const here = new Map<string, boolean>();
   const sound = new Map<string, Uint8Array | null>();
   const reached = await reachable(roots, async (cid) => {
@@ -462,10 +460,10 @@ function underAny(path: string, exts: string[]): boolean {
 }
 
 /**
- * `keystore.json` (vault-folder.md §6.2): copied when this vault has
- * none; else the seed stays this one's and `keys[]` is the union by
- * name. Decided in preflight, both sides read, so that a keystore that
- * is not one refuses the import before anything is written.
+ * `keystore.json`: copied when this vault has none; else the seed stays
+ * this one's and `keys[]` is the union by name. Decided in preflight,
+ * both sides read, so that a keystore that is not one refuses the
+ * import before anything is written.
  */
 function planKeystore(theirs: Uint8Array | undefined, mine: Uint8Array | null): { write: Uint8Array | null; added: number; copied: boolean } {
   if (theirs === undefined) {
@@ -484,11 +482,11 @@ function planKeystore(theirs: Uint8Array | undefined, mine: Uint8Array | null): 
   return { write: prettyJson({ ...a.doc, keys: [...a.keys, ...fresh] }), added: fresh.length, copied: false };
 }
 
-/** A key name as `@estoc/keystore` v3 has it (vault-folder.md §6.2). */
+/** A key name as `@estoc/keystore` v3 has it. */
 const KEY_NAME = /^[A-Za-z0-9._/-]+$/;
 
 /**
- * A keystore as vault-folder.md §6.2 names it: `@estoc/keystore` v3 —
+ * A keystore as the folder format names it: `@estoc/keystore` v3 —
  * `version` 3, `seedJwe` a string, `keys[]` each a name of the grammar,
  * a did and a createdAt, the names unique — or `NotAVault`.
  */
@@ -533,17 +531,17 @@ function readKeystore(bytes: Uint8Array, whose: string): { doc: JsonObject; keys
 // ---- restore -----------------------------------------------------------
 
 /**
- * A folder store restoring into an empty backend (vault-folder.md
- * §10.4): the snapshot copied as it is, `config.json` last, so that a
- * crash midway leaves no vault rather than a vault missing pieces.
- * Refuses a backend with anything at `.estoc` — a vault, the remains of
- * one, an empty directory the copy would land in — and a source that is
- * not one, before writing. The one thing that may already be there is
- * `local/` without `self.json`: what a device keeps beside a vault
- * rather than in it (a daemon's pid file, a preference, §7) is not the
- * vault, and stays; `self.json` is a previous copy's device pointer, and
- * the restore that has to open as a fresh device refuses it. `local/` in
- * the source, should a hand-made zip carry one, stays out.
+ * A folder store restoring into an empty backend: the snapshot copied as
+ * it is, `config.json` last, so that a crash midway leaves no vault
+ * rather than a vault missing pieces. Refuses a backend with anything at
+ * `.estoc` — a vault, the remains of one, an empty directory the copy
+ * would land in — and a source that is not one, before writing. The one
+ * thing that may already be there is `local/` without `self.json`: what
+ * a device keeps beside a vault rather than in it (a daemon's pid file,
+ * a preference) is not the vault, and stays; `self.json` is a previous
+ * copy's device pointer, and the restore that has to open as a fresh
+ * device refuses it. `local/` in the source, should a hand-made zip
+ * carry one, stays out.
  */
 export async function restoreFolder(backend: VaultBackend, files: VaultFiles): Promise<{ files: number }> {
   const there = [...(await backend.list(ESTOC_DIR)), ...(await backend.dirs(ESTOC_DIR)).filter((name) => name !== LOCAL_DIR)];

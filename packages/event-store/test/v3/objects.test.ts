@@ -25,8 +25,8 @@ async function collect(source: AsyncIterable<Uint8Array>): Promise<Uint8Array[]>
   return out;
 }
 
-describe("raw CIDs (dasl-objects.md §3, §4)", () => {
-  it("§4.2: the vectors — from a digest, and back to the digest", () => {
+describe("raw CIDs", () => {
+  it("the vectors — from a digest, and back to the digest", () => {
     expect(rawCidFromDigest(sha256(new Uint8Array(0))).text).toBe(EMPTY_CID);
     expect(rawCidFromDigest(sha256(HELLO)).text).toBe(HELLO_CID);
     const parsed = rawCidOf(HELLO_CID);
@@ -36,7 +36,7 @@ describe("raw CIDs (dasl-objects.md §3, §4)", () => {
     expect(Buffer.from(parsed.bytes).toString("hex")).toBe("015512202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
   });
 
-  it("DO-3, DO-15: rawCidOf refuses every non-raw, non-canonical or malformed identifier, each as InvalidCid; isRawCid agrees", () => {
+  it("rawCidOf refuses every non-raw, non-canonical or malformed identifier, each as InvalidCid; isRawCid agrees", () => {
     for (const [why, bad] of BAD_CIDS) {
       expect(() => rawCidOf(bad), why).toThrow(InvalidCid);
       expect(isRawCid(bad), why).toBe(false);
@@ -63,7 +63,7 @@ describe("raw CIDs (dasl-objects.md §3, §4)", () => {
   });
 });
 
-describe("chunksOf and hashSource (dasl-objects.md §5, §6.1)", () => {
+describe("chunksOf and hashSource", () => {
   it("takes the three shapes and yields the same chunks; a whole Uint8Array is one chunk", async () => {
     const bytes = bytesOf(100, 1);
     expect(await collect(chunksOf(bytes))).toEqual([bytes]);
@@ -139,7 +139,7 @@ describe("chunksOf and hashSource (dasl-objects.md §5, §6.1)", () => {
   });
 });
 
-describe("LatchRegistry (event-store.md §10)", () => {
+describe("LatchRegistry", () => {
   it("counts holds per CID; a release releases one hold, once; the last release clears the CID", () => {
     const latches = new LatchRegistry();
     expect(latches.isLatched(HELLO_CID)).toBe(false);

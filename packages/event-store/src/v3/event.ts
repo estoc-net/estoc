@@ -1,8 +1,8 @@
 /**
- * The version-3 event (event-store.md §3), its identity, time and order
- * (§4), and the store interface (§5). The model with no store behind
- * it: what a folder, a database and a map in memory must all agree on.
- * No event type is known here; what an event means is `@estoc/vault`'s.
+ * The version-3 event, its identity, time and order, and the store
+ * interface. The model with no store behind it: what a folder, a
+ * database and a map in memory must all agree on. No event type is
+ * known here; what an event means is `@estoc/vault`'s.
  */
 
 import { RAW_CODE, codecOf } from "@estoc/dasl";
@@ -10,11 +10,11 @@ import { InvalidEvent, InvalidJson } from "./errors.js";
 import { canonicalText, canonicalize, parseStrict } from "./jcs.js";
 import { isJsonObject, isJsonPrimitive, type JsonObject, type JsonPrimitive } from "./json.js";
 
-/** A validated canonical raw DASL CID string (dasl-objects.md §3, §6): the brand says it was checked. */
+/** A validated canonical raw DASL CID string: the brand says it was checked. */
 export type Cid = string & { readonly __cid: unique symbol };
-/** A canonical lowercase UUIDv7 naming one event (§3). */
+/** A canonical lowercase UUIDv7 naming one event. */
 export type EventId = string & { readonly __eventId: unique symbol };
-/** A canonical lowercase UUIDv7 naming one writable local replica (§4.1). */
+/** A canonical lowercase UUIDv7 naming one writable local replica. */
 export type AuthorId = string & { readonly __authorId: unique symbol };
 
 export type Event<D extends JsonObject = JsonObject> = {
@@ -22,11 +22,11 @@ export type Event<D extends JsonObject = JsonObject> = {
   eventId: EventId;
   /** RFC 3339 UTC, exactly `YYYY-MM-DDTHH:mm:ss.sssZ`: the wall clock as the appending store read it */
   at: string;
-  /** the local replica that appended it (§4.1) */
+  /** the local replica that appended it */
   author: AuthorId;
-  /** non-empty; `vault-events.md` names the vault's own */
+  /** non-empty; the vault's own types are the vault's to name */
   type: string;
-  /** every object root the event retains, `[]` for none (§3.2); checked, never read, here */
+  /** every object root the event retains, `[]` for none; checked, never read, here */
   roots: Cid[];
   /** the payload, opaque here; `{}` when empty */
   data: D;
@@ -36,20 +36,19 @@ export type Event<D extends JsonObject = JsonObject> = {
 export type Draft<D extends JsonObject = JsonObject> = { type: string; roots?: Cid[]; data: D };
 
 /**
- * Equality only (§5.4): on the envelope fields named, and on the
- * top-level fields of `data` named under `data`. `null` matches a field
- * present and null; `undefined` is no constraint.
+ * Equality only: on the envelope fields named, and on the top-level
+ * fields of `data` named under `data`. `null` matches a field present
+ * and null; `undefined` is no constraint.
  */
 export type Filter = { author?: AuthorId; type?: string; data?: { [field: string]: JsonPrimitive | undefined } };
 
 /**
- * A local frontier of one store generation (§5.5): opaque, meaningful
- * only to the generation and event set that issued it; never sent
- * anywhere.
+ * A local frontier of one store generation: opaque, meaningful only to
+ * the generation and event set that issued it; never sent anywhere.
  */
 export type ChangeToken = string;
 
-/** Two contents under one `eventId` (§5.6): the store keeps `kept`, reports `rejected`. */
+/** Two contents under one `eventId`: the store keeps `kept`, reports `rejected`. */
 export interface Conflict {
   eventId: EventId;
   kept: Event;
@@ -58,14 +57,14 @@ export interface Conflict {
   source?: string;
 }
 
-/** A value `ingest` could not accept as an event (§3.4). */
+/** A value `ingest` could not accept as an event. */
 export interface Rejected {
   value: unknown;
   error: string;
   source?: string;
 }
 
-/** Storage material that could not be decoded as an event (§5.6). */
+/** Storage material that could not be decoded as an event. */
 export interface Damaged {
   /** where, in the store's own terms, e.g. `<segment path>:<line number>` */
   where: string;
@@ -84,31 +83,31 @@ export interface Ingested {
 }
 
 /**
- * The backend interface (§5). `append`, `appendAll` and `ingest` are
+ * The backend interface. `append`, `appendAll` and `ingest` are
  * internal to `Vault.commit` and validated import/restore; application
- * code sees only the read half through `Vault.events` (§10).
+ * code sees only the read half through `Vault.events`.
  */
 export interface EventStore {
   /** Author assigned to every locally appended event. */
   readonly author: AuthorId;
-  /** One local event: validates the draft, reads the clock for `at`, mints `eventId`, writes and returns it (§5.1). */
+  /** One local event: validates the draft, reads the clock for `at`, mints `eventId`, writes and returns it. */
   append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>>;
   /**
-   * Several local events as one all-or-nothing write (§5.2): every draft
+   * Several local events as one all-or-nothing write: every draft
    * validated first, one clock reading and one `at` for the batch, IDs
-   * minted and events returned in input order; canonical order (§4.3)
-   * need not match it.
+   * minted and events returned in input order; canonical order need not
+   * match it.
    */
   appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]>;
   /**
-   * Events from elsewhere (§5.3): union by `eventId`. Reads its whole
-   * input before committing anything; throws `ForkedAuthor`, having
-   * added nothing, on an event of this author it does not already hold.
+   * Events from elsewhere: union by `eventId`. Reads its whole input
+   * before committing anything; throws `ForkedAuthor`, having added
+   * nothing, on an event of this author it does not already hold.
    */
   ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
-  /** Every accepted event matching `filter`, in canonical order (§5.4). */
+  /** Every accepted event matching `filter`, in canonical order. */
   scan(filter?: Filter): AsyncIterable<Event>;
-  /** What this store gained after `since` and no later than `token`; each event once, in no promised order (§5.5). */
+  /** What this store gained after `since` and no later than `token`; each event once, in no promised order. */
   changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }>;
   /** Storage material that could not be read as an event; for the caller to surface. */
   damaged(): Promise<Damaged[]>;
@@ -133,7 +132,7 @@ export function isAuthorId(value: unknown): value is AuthorId {
   return isUuidv7(value);
 }
 
-/** A canonical raw DASL CID string — what `roots` may hold (dasl-objects.md §3). */
+/** A canonical raw DASL CID string — what `roots` may hold. */
 export function isRawCid(value: unknown): value is Cid {
   return typeof value === "string" && codecOf(value) === RAW_CODE;
 }
@@ -151,10 +150,10 @@ const AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 export const MAX_T = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
 
 /**
- * Exactly `YYYY-MM-DDTHH:mm:ss.sssZ` naming a real Gregorian UTC instant
- * (§3.4): three fractional digits, seconds `00`–`59`, a day that exists
- * in its month. One instant has one spelling, so lexical order of
- * accepted values is millisecond order (§4.3).
+ * Exactly `YYYY-MM-DDTHH:mm:ss.sssZ` naming a real Gregorian UTC instant:
+ * three fractional digits, seconds `00`–`59`, a day that exists in its
+ * month. One instant has one spelling, so lexical order of accepted
+ * values is millisecond order.
  */
 export function isCanonicalAt(value: unknown): value is string {
   if (typeof value !== "string" || !AT.test(value)) return false;
@@ -162,7 +161,7 @@ export function isCanonicalAt(value: unknown): value is string {
   return Number.isFinite(t) && new Date(t).toISOString() === value;
 }
 
-/** The canonical `at` of the integer Unix millisecond `t` (§4.2). */
+/** The canonical `at` of the integer Unix millisecond `t`. */
 export function atOf(t: number): string {
   if (!Number.isInteger(t) || t < 0 || t > MAX_T) {
     throw new RangeError(`${String(t)} is not an integer millisecond between 1970 and 9999`);
@@ -175,10 +174,10 @@ export function atOf(t: number): string {
 const FIELDS = ["eventId", "at", "author", "type", "roots", "data"] as const;
 
 /**
- * Envelope validation (§3.4): the eight rules, in order, and JCS
- * eligibility of the whole. Returns the same value, typed; throws
- * `InvalidEvent` naming the first rule broken. Validates no payload
- * field — `data` is opaque here.
+ * Envelope validation: the eight rules, in order, and JCS eligibility
+ * of the whole. Returns the same value, typed; throws `InvalidEvent`
+ * naming the first rule broken. Validates no payload field — `data` is
+ * opaque here.
  */
 export function validateEvent(value: unknown): Event {
   if (!isJsonObject(value)) throw new InvalidEvent("an event is a JSON object");
@@ -201,19 +200,19 @@ export function validateEvent(value: unknown): Event {
   return value as Event;
 }
 
-/** What the store mints (§5.1 steps 2–4): a draft that carries one is refused, never silently re-minted (vault-folder.md §11.3). */
+/** What the store mints: a draft that carries one is refused, never silently re-minted. */
 const MINTED = ["eventId", "at", "author"] as const;
 
 /**
- * A draft that can become an event (§5.1 step 1): none of `eventId`,
- * `at` or `author`, which the store mints — an event handed back as a
- * draft is refused, not quietly made a second event (vault-folder.md
- * §11.3) — a non-empty `type`, `roots` of raw CIDs or left out, and the
- * whole — `type`, `roots`, `data` under one root object, nested exactly
- * as the event will be — JCS-eligible, so that a draft this accepts
- * makes an event `validateEvent` accepts once the three are added.
- * Returns the draft normalized — `roots` always an array — as fresh
- * plain data the caller cannot reach.
+ * A draft that can become an event: none of `eventId`, `at` or
+ * `author`, which the store mints — an event handed back as a draft is
+ * refused, not quietly made a second event — a non-empty `type`,
+ * `roots` of raw CIDs or left out, and the whole — `type`, `roots`,
+ * `data` under one root object, nested exactly as the event will be —
+ * JCS-eligible, so that a draft this accepts makes an event
+ * `validateEvent` accepts once the three are added. Returns the draft
+ * normalized — `roots` always an array — as fresh plain data the caller
+ * cannot reach.
  */
 export function validateDraft(draft: unknown): Required<Draft> {
   if (!isJsonObject(draft)) throw new InvalidEvent("a draft is an object");
@@ -250,25 +249,25 @@ function checkJcs(value: unknown): void {
 }
 
 /**
- * `value` as an accepted event is held (§5.3, §5.4): validated, then
- * the form its canonical bytes parse to — member order, `-0` and all —
- * as fresh data of its own, sharing nothing with `value`. What a store
- * fixes each input of `ingest` to before it asks the source for the
- * next, so a source that reuses one working object between yields is
- * read as it yielded. Throws `InvalidEvent` or `InvalidJson`.
+ * `value` as an accepted event is held: validated, then the form its
+ * canonical bytes parse to — member order, `-0` and all — as fresh data
+ * of its own, sharing nothing with `value`. What a store fixes each
+ * input of `ingest` to before it asks the source for the next, so a
+ * source that reuses one working object between yields is read as it
+ * yielded. Throws `InvalidEvent` or `InvalidJson`.
  */
 export function canonicalEvent(value: unknown): Event {
   return parseStrict(canonicalText(validateEvent(value))) as Event;
 }
 
-/** `UTF8(RFC8785(event))` (§3.3): the sole content-equality representation of an event. */
+/** `UTF8(RFC8785(event))`: the sole content-equality representation of an event. */
 export function canonicalEventBytes(event: Event): Uint8Array {
   return canonicalize(event);
 }
 
 // ---- order and the filter -----------------------------------------------
 
-/** Canonical order (§4.3): ascending by `(at, eventId, author)`, comparing the literal strings. */
+/** Canonical order: ascending by `(at, eventId, author)`, comparing the literal strings. */
 export function compareEvents(a: Event, b: Event): number {
   return cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author);
 }
@@ -277,7 +276,7 @@ function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Does `event` satisfy `filter` (§5.4)? No filter matches everything. */
+/** Does `event` satisfy `filter`? No filter matches everything. */
 export function matches(event: Event, filter?: Filter): boolean {
   if (filter === undefined) return true;
   if (filter.author !== undefined && event.author !== filter.author) return false;

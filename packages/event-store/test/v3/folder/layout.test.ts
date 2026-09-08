@@ -6,13 +6,13 @@ import { authorN } from "../suite/helpers.js";
 const SEG = "019b2a43-5c8d-75a0-bf82-b2a61a4ce099";
 const RAW = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq";
 
-describe("layout (vault-folder.md §3)", () => {
+describe("layout", () => {
   it("names the six structural roots the file store refuses", () => {
     expect(OWNED_ROOTS).toEqual(["config.json", "keystore.json", "events", "objects", "import", "local"]);
     expect(REPLICA_FILE).toBe("local/replica.json");
   });
 
-  it("a segment is <uuidv7>.jsonl, lowercase, and nothing else (§8)", () => {
+ it("a segment is <uuidv7>.jsonl, lowercase, and nothing else", () => {
     expect(isSegmentName(`${SEG}.jsonl`)).toBe(true);
     for (const bad of [SEG, `${SEG}.json`, `${SEG.toUpperCase()}.jsonl`, `${SEG.replace("-7", "-4")}.jsonl`, ".jsonl", `x${SEG}.jsonl`, `${SEG}.jsonl.tmp`]) {
       expect(isSegmentName(bad), bad).toBe(false);
@@ -21,7 +21,7 @@ describe("layout (vault-folder.md §3)", () => {
     expect(authorDir(authorN(1))).toBe(`events/${authorN(1)}`);
   });
 
-  it("VF-16: kindOf tells the layout's own paths from opaque files, and an unknown entry inside a structural root is damage", () => {
+  it("kindOf tells the layout's own paths from opaque files, and an unknown entry inside a structural root is damage", () => {
     expect(kindOf("config.json")).toBe("config");
     expect(kindOf("keystore.json")).toBe("keystore");
     expect(kindOf(segmentPath(authorN(1), SEG))).toBe("segment");
@@ -53,7 +53,7 @@ describe("layout (vault-folder.md §3)", () => {
     for (const path of damage) expect(kindOf(path), path).toBe("damage");
   });
 
-  it("a JSON file is pretty-printed and ends in LF (§2)", () => {
+ it("a JSON file is pretty-printed and ends in LF", () => {
     expect(text(prettyJson({ a: 1, b: [1, 2] }))).toBe('{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}\n');
   });
 });

@@ -5,7 +5,7 @@ import { expectBytes } from "./suite/helpers.js";
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-describe("checkPath (vault-folder.md §2)", () => {
+describe("checkPath", () => {
   it("accepts conforming relative paths, Unicode included", () => {
     for (const path of ["notes.txt", "a/b/c", "résumé/中文.md", ".hidden", "a.b/..c", "x y"]) {
       expect(checkPath(path)).toBe(path);
@@ -35,7 +35,7 @@ describe("checkPath (vault-folder.md §2)", () => {
   });
 });
 
-describe("owned paths (vault-folder.md §7.1)", () => {
+describe("owned paths", () => {
   it("names the six structural roots", () => {
     expect([...OWNED_ROOTS]).toEqual(["config.json", "keystore.json", "events", "objects", "import", "local"]);
   });
@@ -73,7 +73,7 @@ describe("helpers", () => {
   });
 });
 
-describe("MemoryFileStore (event-store.md §8.1, vault-folder.md §11.6)", () => {
+describe("MemoryFileStore", () => {
   it("writes, reads and lists portable files; a missing path is null", async () => {
     const files = new MemoryFileStore();
     expect(await files.read("notes/a.txt")).toBeNull();

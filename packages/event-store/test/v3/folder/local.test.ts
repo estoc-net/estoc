@@ -10,7 +10,7 @@ function line(n: number, at: string, type = "wire.out", data: Record<string, str
   return { eventId: uuidv7At(1_700_000_000_000 + n, n), at, type, data };
 }
 
-describe("trace stream (vault-folder.md §10.2)", () => {
+describe("trace stream", () => {
   it("appends lines minted by the producer as canonical text and an LF, checks the shape and nothing else", async () => {
     const backend = new MemoryBackend();
     const store = new FolderLocalEventStore(backend, DIR);
@@ -97,7 +97,7 @@ describe("trace stream (vault-folder.md §10.2)", () => {
   });
 });
 
-describe("LocalOwner (vault-folder.md §10.2)", () => {
+describe("LocalOwner", () => {
   it("keeps options.json, cache/ and trace streams under local/<owner>/, and nothing else", async () => {
     const backend = new MemoryBackend();
     const owner = new LocalOwner(backend, ".estoc/local/agent");

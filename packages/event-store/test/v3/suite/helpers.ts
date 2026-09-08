@@ -29,7 +29,7 @@ export function ids(events: Event[]): string[] {
 /**
  * A canonical UUIDv7 whose embedded timestamp is `t` and whose random
  * bits are `seed`, spelled out: the tests' way of naming an author, or
- * an event whose ID says one time while its `at` says another (ES-21).
+ * an event whose ID says one time while its `at` says another.
  */
 export function uuidv7At(t: number, seed: number): string {
   const ts = t.toString(16).padStart(12, "0");
@@ -69,13 +69,13 @@ export function partition<T>(items: T[], sizes: number[]): T[][] {
   return out;
 }
 
-/** An event as another serialization would carry it: members in another order, through JSON text and back (ES-5). */
+/** An event as another serialization would carry it: members in another order, through JSON text and back. */
 export function reordered(event: Event): unknown {
   const data = Object.fromEntries(Object.entries(event.data).reverse());
   return JSON.parse(JSON.stringify({ data, roots: [...event.roots], type: event.type, author: event.author, at: event.at, eventId: event.eventId }));
 }
 
-/** `event` with one field of `data` changed: same `eventId`, other content (ES-6). */
+/** `event` with one field of `data` changed: same `eventId`, other content. */
 export function altered(event: Event): Event {
   return { ...event, data: { ...event.data, altered: true } };
 }

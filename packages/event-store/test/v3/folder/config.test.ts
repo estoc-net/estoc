@@ -5,8 +5,8 @@ import { ANCHOR_KEY, FORMAT, NotAVault, VERSION, checkKeystore, encodeConfig, pa
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const JWE = "eyJhbGciOiJQQkVTMi1IUzUxMitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIiwicDJjIjoyMjAwMDAsInAycyI6IkFCQ0QifQ.QUJDRA.QUJDRA.QUJDRA.QUJDRA";
 
-describe("config.json (vault-folder.md §4)", () => {
-  it("writes the file pretty-printed with LF, the members in the order the specification draws them, and reads it back", () => {
+describe("config.json", () => {
+  it("writes the file pretty-printed with LF, the members in a fixed order, and reads it back", () => {
     const bytes = encodeConfig(DID);
     expect(text(bytes)).toBe(`{\n  "format": "${FORMAT}",\n  "version": ${VERSION},\n  "identity": {\n    "anchor": {\n      "key": "${ANCHOR_KEY}",\n      "did": "${DID}"\n    }\n  }\n}\n`);
     expect(parseConfig(bytes)).toEqual({ format: "estoc", version: 3, identity: { anchor: { key: "anchor", did: DID } } });
@@ -14,7 +14,7 @@ describe("config.json (vault-folder.md §4)", () => {
     expect(parseConfig(utf8(JSON.stringify({ identity: { anchor: { did: DID, key: "anchor" } }, version: 3, format: "estoc" })))).toEqual(parseConfig(bytes));
   });
 
-  it("§16: refuses every other version, in words that name the version it opens", () => {
+  it("refuses every other version, in words that name the version it opens", () => {
     const v2 = utf8(JSON.stringify({ format: "estoc", version: 2, identity: { anchor: { key: "anchor", did: DID } } }));
     expect(() => parseConfig(v2)).toThrow(NotAVault);
     expect(() => parseConfig(v2)).toThrow(/version 2 is not 3; this reader opens version 3 vaults only/);
@@ -48,13 +48,13 @@ describe("config.json (vault-folder.md §4)", () => {
   });
 });
 
-describe("keystore.json by shape (vault-folder.md §5)", () => {
+describe("keystore.json by shape", () => {
   it("accepts exactly version 3 and seedJwe, compact or as a JWE object", () => {
     expect(() => checkKeystore(utf8(JSON.stringify({ version: 3, seedJwe: JWE })))).not.toThrow();
     expect(() => checkKeystore(utf8(JSON.stringify({ seedJwe: { protected: "e30", iv: "aa", ciphertext: "bb", tag: "cc" }, version: 3 })))).not.toThrow();
   });
 
-  it("VF-24: refuses a derived-key cache, another version, another shape of seedJwe, and anything that is not the closed set", () => {
+  it("refuses a derived-key cache, another version, another shape of seedJwe, and anything that is not the closed set", () => {
     const bad: [string, unknown, RegExp][] = [
       ["a v2 keystore with its keys cache", { version: 3, seedJwe: JWE, keys: [] }, /keys.*derived-key cache/],
       ["version 2", { version: 2, seedJwe: JWE }, /version 2 is not 3/],

@@ -1,10 +1,10 @@
 /**
- * The folder object store over any backend, as cases that run anywhere
- * (DO-5): vitest wraps them for memory and disk, and a page in a real
- * browser runs the same list against OPFS (`../../browser/opfs-entry.ts`).
- * No test framework is imported here, and no clock is pinned — the
- * backend's modification times are the platform's, so grace is either
- * zero or an hour.
+ * The folder object store over any backend, as cases that run anywhere:
+ * vitest wraps them for memory and disk, and a page in a real browser runs
+ * the same list against OPFS (`../../browser/opfs-entry.ts`). No test
+ * framework is imported here, and no clock is pinned — the backend's
+ * modification times are the platform's, so grace is either zero or an
+ * hour.
  */
 
 import { sha256 } from "@noble/hashes/sha2";
@@ -93,7 +93,7 @@ async function names(backend: VaultBackend, rel: string): Promise<string[]> {
 
 export const folderObjectCases: ObjectCase[] = [
   {
-    name: "DO-1, DO-2, DO-5, §4.2: the vectors, and an object put in chunks, hold the same CID and bytes as anywhere else; the file is exactly the bytes",
+    name: "the vectors, and an object put in chunks, hold the same CID and bytes as anywhere else; the file is exactly the bytes",
     run: async (fresh) => {
       const backend = await fresh();
       const store = new FolderObjectStore(backend, { base: BASE });
@@ -115,7 +115,7 @@ export const folderObjectCases: ObjectCase[] = [
     },
   },
   {
-    name: "DO-4, §6.2: a mismatch under the CID given is refused with nothing exposed; a put over a held object is one object still",
+    name: "a mismatch under the CID given is refused with nothing exposed; a put over a held object is one object still",
     run: async (fresh) => {
       const backend = await fresh();
       const store = new FolderObjectStore(backend, { base: BASE });
@@ -131,7 +131,7 @@ export const folderObjectCases: ObjectCase[] = [
     },
   },
   {
-    name: "DO-11, §8.3, §10: collection keeps the keep set and the latched, unlinks the rest past grace, and lists the young",
+    name: "collection keeps the keep set and the latched, unlinks the rest past grace, and lists the young",
     run: async (fresh) => {
       const backend = await fresh();
       const store = new FolderObjectStore(backend, { base: BASE, graceMs: HOUR });
@@ -151,7 +151,7 @@ export const folderObjectCases: ObjectCase[] = [
     },
   },
   {
-    name: "VF-13, DO-13, DO-16: a file whose bytes do not spell its name fails the stream and is moved to local/damaged/objects/",
+    name: "a file whose bytes do not spell its name fails the stream and is moved to local/damaged/objects/",
     run: async (fresh) => {
       const backend = await fresh();
       const store = new FolderObjectStore(backend, { base: BASE });
@@ -172,7 +172,7 @@ export const folderObjectCases: ObjectCase[] = [
     },
   },
   {
-    name: "DO-7: a larger object streams in and out through the folder in pieces",
+    name: "a larger object streams in and out through the folder in pieces",
     run: async (fresh) => {
       const backend = await fresh();
       const store = new FolderObjectStore(backend, { base: BASE });

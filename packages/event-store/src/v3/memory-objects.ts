@@ -1,22 +1,17 @@
 /**
- * The version-3 object store as a map in memory (dasl-objects.md §6):
- * the reference for the interface's semantics, and the store
- * `objectStoreSuite` is first run against. An object is held in
- * internal extents of a chosen size (§5) — invisible at the portable
- * layer, and how the suite shows they are. Nothing persists, so the
- * process-durable half of §6 is vacuous here; the rest is not: a put is
- * hashed as it streams and visible only whole, a read latches its CID
- * against collection until the stream completes, fails or is
- * cancelled, the bytes handed back are rehashed on the way out (§6.3),
- * and collection unlinks exactly the unkept, unlatched objects whose
- * grace has elapsed (§8.3).
+ * The version-3 object store as a map in memory: the reference for the interface's
+ * semantics, and the store `objectStoreSuite` is first run against. An object is held in
+ * internal extents of a chosen size — invisible at the portable layer, and how the suite
+ * shows they are. Nothing persists, so the process-durable half of the store's promise
+ * is vacuous here; the rest is not: a put is hashed as it streams and visible only
+ * whole, a read latches its CID against collection until the stream completes, fails or
+ * is cancelled, the bytes handed back are rehashed on the way out, and collection
+ * unlinks exactly the unkept, unlatched objects whose grace has elapsed.
  *
- * In memory the presence check and latch registration of `open`, and
- * the latch check and unlink of `collect`, are each one synchronous
- * step, so the serialization event-store.md §10 asks of the writer lock
- * holds by construction; a vault runtime still holds its lock around
- * `collect` for the commit boundary (DO-18, DO-19), which is its to
- * keep, not this store's.
+ * In memory the presence check and latch registration of `open`, and the latch check and
+ * unlink of `collect`, are each one synchronous step, so the serialization the vault
+ * asks of the writer lock holds by construction; a vault runtime still holds its lock
+ * around `collect` for the commit boundary, which is its to keep, not this store's.
  */
 
 import { compareBytes, type DaslCid } from "@estoc/dasl";
@@ -27,12 +22,12 @@ import type { Cid } from "./event.js";
 import { LatchRegistry, hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore } from "./objects.js";
 
 /**
- * How old an unkept object must be before `collect` takes it (§8.3):
- * generous, because the commit it may belong to is bounded by a
- * process, not a clock.
+ * How old an unkept object must be before `collect` takes it: generous,
+ * because the commit it may belong to is bounded by a process, not a
+ * clock.
  */
 export const DEFAULT_GRACE_MS = 60 * 60 * 1000;
-/** The accepted-size bound a store has when given none (§12): 1 GiB. */
+/** The accepted-size bound a store has when given none: 1 GiB. */
 export const DEFAULT_MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
 /** The extent size a store in memory has when given none: 1 MiB. */
 export const DEFAULT_EXTENT_BYTES = 1024 * 1024;
@@ -40,11 +35,11 @@ export const DEFAULT_EXTENT_BYTES = 1024 * 1024;
 export interface MemoryObjectStoreOptions {
   /** the wall clock in Unix milliseconds, for orphan age; default `Date.now`, pinned by tests */
   now?: () => number;
-  /** orphan grace (§8.3); default one hour */
+  /** orphan grace; default one hour */
   graceMs?: number;
-  /** the largest object a put accepts (§12); default 1 GiB */
+  /** the largest object a put accepts; default 1 GiB */
   maxObjectBytes?: number;
-  /** the size of the internal extents an object is held in (§5); default 1 MiB */
+  /** the size of the internal extents an object is held in; default 1 MiB */
   extentBytes?: number;
   /** the latch registry to share with other handles over the same objects; a fresh one when left out */
   latches?: LatchRegistry;
@@ -59,7 +54,7 @@ interface Held {
 }
 
 export class MemoryObjectStore implements ObjectStore {
-  /** the read latches over this store's objects (event-store.md §10), shared or its own */
+  /** the read latches over this store's objects, shared or its own */
   readonly latches: LatchRegistry;
   private readonly now: () => number;
   private readonly graceMs: number;
@@ -84,7 +79,7 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   async putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo> {
-    const want = rawCidOf(cid); // §6.2 step 1, before a byte is read
+    const want = rawCidOf(cid); // the CID checked before a byte is read
     const packer = new Packer(this.extentBytes);
     const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
     if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text); // steps 3–4: nothing accepted
@@ -92,13 +87,13 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   /**
-   * The one step that makes an object visible (§6.1 step 4), synchronous
-   * and whole. The bytes verified this time are the ones held from here
-   * on: an object already held is one object still (§6.2), with its
-   * orphan age renewed — and if what was held had gone bad underneath,
-   * it is now sound again. A stream open on the old bytes keeps reading
-   * them; should it find them damaged, `verified` sees they are no
-   * longer what is held and leaves the new ones alone.
+   * The one step that makes an object visible, synchronous and whole. The
+   * bytes verified this time are the ones held from here on: an object
+   * already held is one object still, with its orphan age renewed — and
+   * if what was held had gone bad underneath, it is now sound again. A
+   * stream open on the old bytes keeps reading them; should it find them
+   * damaged, `verified` sees they are no longer what is held and leaves
+   * the new ones alone.
    */
   private accept(cid: DaslCid, extents: Uint8Array[], size: number): ObjectInfo {
     this.held.set(cid.text, { cid, extents, size, acceptedAt: this.now() });
@@ -112,12 +107,12 @@ export class MemoryObjectStore implements ObjectStore {
     // Presence checked and latch registered in one step; the stream pulls
     // nothing until read (highWaterMark 0), rehashes each extent on the
     // way out, and releases the latch when it completes, fails or is
-    // cancelled (event-store.md §10; §6.3).
+    // cancelled.
     // The latch is this method's from here until the stream ends, and
     // every way it can end releases it: completion, damage, cancel, and
     // any failure — building the stream, copying a chunk — which
     // releases before the stream fails, since an errored stream runs no
-    // `cancel` and a caller can release nothing on its behalf (§10).
+    // `cancel` and a caller can release nothing on its behalf.
     const release = this.latches.acquire(cid);
     try {
       const hash = sha256.create();
@@ -162,7 +157,7 @@ export class MemoryObjectStore implements ObjectStore {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
     const held = this.held.get(cid);
     if (held === undefined) return null;
-    if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating (§6.3)
+ if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
     const release = this.latches.acquire(cid);
     try {
       const out = new Uint8Array(held.size);
@@ -180,7 +175,7 @@ export class MemoryObjectStore implements ObjectStore {
     }
   }
 
-  /** Do the bytes read still hash to the CID? If not, the object leaves the accepted namespace (§8.2), and the caller fails the read. */
+  /** Do the bytes read still hash to the CID? If not, the object leaves the accepted namespace, and the caller fails the read. */
   private verified(held: Held, digest: Uint8Array): boolean {
     if (compareBytes(digest, held.cid.digest) === 0) return true;
     if (this.held.get(held.cid.text) === held) this.held.delete(held.cid.text);
@@ -208,7 +203,7 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   async collect(keep: Iterable<Cid>): Promise<Collected> {
-    // Every keep CID checked before anything is touched (§8.3); then one
+    // Every keep CID checked before anything is touched; then one
     // synchronous pass: kept and latched objects are left alone and
     // unlisted, unkept objects within grace are `young`, the rest go.
     const kept = new Set<string>();
@@ -230,10 +225,10 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   /**
-   * Fault injection for tests (DO-16): flip one byte of an accepted
-   * object's held bytes in place, as a bad sector would, leaving it in
-   * the accepted namespace for the next read to find. Throws on an
-   * object not held, or one with no bytes to damage.
+   * Fault injection for tests: flip one byte of an accepted object's held
+   * bytes in place, as a bad sector would, leaving it in the accepted
+   * namespace for the next read to find. Throws on an object not held, or
+   * one with no bytes to damage.
    */
   damage(cid: Cid): void {
     rawCidOf(cid);
@@ -255,12 +250,12 @@ function bound(name: string, value: number): number {
 }
 
 /**
- * Chunks of any size into extents of one size (§5): each incoming chunk
- * is copied — the caller may reuse its buffer — into the extent being
+ * Chunks of any size into extents of one size: each incoming chunk is
+ * copied — the caller may reuse its buffer — into the extent being
  * filled, sealed when full; the last extent is whatever remains. No
  * more than one extent's worth of bytes is unsealed at a time, and
- * nothing is allocated ahead of the bytes that arrive. The copy is
- * `new Uint8Array(view)`, never `slice()`: a `Buffer` is a `Uint8Array`
+ * nothing is allocated ahead of the bytes that arrive. The copy is `new
+ * Uint8Array(view)`, never `slice()`: a `Buffer` is a `Uint8Array`
  * whose `slice` is a view, and what the store holds must be memory of
  * its own, or the source could rewrite an accepted object.
  */

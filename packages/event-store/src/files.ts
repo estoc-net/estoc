@@ -1,14 +1,14 @@
 /**
- * Files (event-store.md §6): everything in a vault that is neither an
- * event nor a blob, named by path. The paths are the folder's
- * (`vault-folder.md` §6); the store carries what it does not understand.
+ * Files: everything in a vault that is neither an event nor a blob,
+ * named by path. The paths are the folder's the store carries what it
+ * does not understand.
  */
 
 import { isStoreDir, kindOf } from "./folder/layout.js";
 
 export interface FileStore {
   read(path: string): Promise<Uint8Array | null>;
-  /** Refuses what is not a file's path (§6): a segment's or a blob's shape, `local/`, a directory the layout owns, or a file and a directory of one name. */
+  /** Refuses what is not a file's path: a segment's or a blob's shape, `local/`, a directory the layout owns, or a file and a directory of one name. */
   write(path: string, bytes: Uint8Array): Promise<void>;
   list(): Promise<string[]>;
 }
@@ -18,9 +18,9 @@ const PRINTABLE_ASCII = /^[\x21-\x5b\x5d-\x7e]+$/;
 
 /**
  * A relative path of `/`-separated non-empty segments of printable
- * ASCII, none of them `.` or `..`, no backslash (`vault-folder.md` §1):
- * what every store accepts, so that no store holds a path a folder
- * cannot. Throws otherwise.
+ * ASCII, none of them `.` or `..`, no backslash: what every store
+ * accepts, so that no store holds a path a folder cannot. Throws
+ * otherwise.
  */
 export function checkPath(path: string): string {
   if (path === "" || path.startsWith("/") || path.endsWith("/")) {
@@ -38,9 +38,9 @@ export function checkPath(path: string): string {
 }
 
 /**
- * A path a file store takes (§6): `checkPath`, and a file's by shape
- * (`vault-folder.md` §9.6) — not a segment's or a blob's, not under
- * `local/`, not a directory the layout owns. Throws otherwise.
+ * A path a file store takes: `checkPath`, and a file's by shape — not a
+ * segment's or a blob's, not under `local/`, not a directory the layout
+ * owns. Throws otherwise.
  */
 export function checkFilePath(path: string): string {
   checkPath(path);

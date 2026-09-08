@@ -175,7 +175,7 @@ describe("export", () => {
   });
 });
 
-describe("round trip (event-store.md §10.1)", () => {
+describe("round trip", () => {
   it("memory → folder → memory: the same events, the same blocks, the same files", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
     const { vault } = await populated(c.now);
@@ -243,7 +243,7 @@ describe("round trip (event-store.md §10.1)", () => {
   });
 });
 
-describe("import: preflight (event-store.md §10.3 step 0)", () => {
+describe("import: preflight", () => {
   it("refuses what is not a version-2 vault, and writes nothing", async () => {
     const c = clock("2026-08-30T10:00:00.000Z");
     const target = await memoryVault("aaaaaa", c.now);
@@ -300,7 +300,7 @@ describe("import: preflight (event-store.md §10.3 step 0)", () => {
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode("[]") })).rejects.toThrow(NotAVault);
     await expect(importVault(target, { ...files, ".estoc/keystore.json": enc.encode(JSON.stringify({ keys: [{}] })) })).rejects.toThrow(NotAVault);
     expect(await contents(target)).toEqual(before);
-    // the v3 shape §6.2 names, on either side: version, seed, each key's fields, names unique
+    // the v3 keystore shape, on either side: version, seed, each key's fields, names unique
     const v3 = JSON.parse(dec.decode(keystore("s", ["anchor"]))) as { keys: object[] };
     for (const doc of [
       { keys: [] },

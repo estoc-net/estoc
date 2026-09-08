@@ -26,8 +26,8 @@ function populated(): MemoryBackend {
   return backend;
 }
 
-describe("FolderFileStore (vault-folder.md §11.6, §7)", () => {
-  it("VF-39, VF-3: lists config.json, keystore.json and the opaque portable paths, in code-point order — never a segment, an object, or anything under local/ or import/, and no damage", async () => {
+describe("FolderFileStore", () => {
+  it("lists config.json, keystore.json and the opaque portable paths, in code-point order — never a segment, an object, or anything under local/ or import/, and no damage", async () => {
     const files = new FolderFileStore(populated(), BASE);
     expect(await files.list()).toEqual(["config.json", "keystore.json", "notes/readme.md", "state/x.json", "z"]);
   });
@@ -43,7 +43,7 @@ describe("FolderFileStore (vault-folder.md §11.6, §7)", () => {
     await expect(files.read("../x")).rejects.toThrow(/relative/);
   });
 
-  it("VF-8, §7.1: writes an opaque path whole — state/ is just another opaque directory — and refuses every owned path", async () => {
+  it("writes an opaque path whole — state/ is just another opaque directory — and refuses every owned path", async () => {
     const backend = populated();
     const files = new FolderFileStore(backend, BASE);
     await files.write("state/y.json", utf8("{}"));
@@ -56,7 +56,7 @@ describe("FolderFileStore (vault-folder.md §11.6, §7)", () => {
     expect(backend.files.get(`${BASE}/config.json`)).toEqual(utf8("{}"));
   });
 
-  it("§2: refuses a path that would make one name both a file and a directory, leaving both as they were", async () => {
+  it("refuses a path that would make one name both a file and a directory, leaving both as they were", async () => {
     const backend = populated();
     const files = new FolderFileStore(backend, BASE);
     await expect(files.write("notes", utf8(""))).rejects.toThrow(/is a directory/);

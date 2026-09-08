@@ -1,10 +1,10 @@
 /**
- * The shape of `keystore.json`, version 3 (vault-folder.md §5): one
- * sealed seed, `seedJwe`, under `version` 3, and nothing else — no
- * derived-key registry, no key cache (VF-24). The JWE profile itself is
- * `@estoc/keystore`'s; what the folder checks before any write-producing
- * open or import is the shape, so a version-2 keystore with its `keys`
- * cache, or a file that is not a keystore at all, is refused in words.
+ * The shape of `keystore.json`, version 3: one sealed seed, `seedJwe`,
+ * under `version` 3, and nothing else — no derived-key registry, no key
+ * cache. The JWE profile itself is `@estoc/keystore`'s; what the folder
+ * checks before any write-producing open or import is the shape, so a
+ * version-2 keystore with its `keys` cache, or a file that is not a
+ * keystore at all, is refused in words.
  */
 
 import { NotAVault } from "../errors.js";
@@ -18,11 +18,11 @@ const JWE_MEMBERS = ["protected", "iv", "ciphertext", "tag"] as const;
 const COMPACT_JWE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 /**
- * Check `bytes` are a version-3 keystore by shape (§5): a JSON object
- * with exactly `version` 3 and `seedJwe`, the latter a compact JWE string
- * — what `@estoc/keystore` writes — or the JSON serialization of one,
- * with exactly `protected`, `iv`, `ciphertext` and `tag`. Throws
- * `NotAVault` naming `path`. The seed is not opened here.
+ * Check `bytes` are a version-3 keystore by shape: a JSON object with
+ * exactly `version` 3 and `seedJwe`, the latter a compact JWE string —
+ * what `@estoc/keystore` writes — or the JSON serialization of one, with
+ * exactly `protected`, `iv`, `ciphertext` and `tag`. Throws `NotAVault`
+ * naming `path`. The seed is not opened here.
  */
 export function checkKeystore(bytes: Uint8Array, path = KEYSTORE_FILE): void {
   const value = parseJsonFile(bytes, path);

@@ -1,4 +1,4 @@
-/** One store's writes, one at a time (vault-folder.md §9.2): a promise chain the store's operations queue on. */
+/** One store's writes, one at a time: a promise chain the store's operations queue on. */
 export class Serial {
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -17,7 +17,7 @@ export interface StoreContext {
   backend: VaultBackend;
   /** the store's directory, relative to the vault root: `.estoc` or `.estoc/extensions/<ext>` */
   base: string;
-  /** where a damaged block is moved aside to (§8) */
+  /** where a damaged block is moved aside to */
   aside: string;
   self: string;
   instance: string;
@@ -27,10 +27,10 @@ export interface StoreContext {
   serial: Serial;
   /** segment names, monotone */
   segments: EidMinter;
-  /** throws once `dispose` has been called on the store (§3.1): checked as an operation is called */
+  /** throws once `dispose` has been called on the store: checked as an operation is called */
   guard: () => void;
   /** throws once the disposal has run in the store's chain: checked as an operation's turn comes, so what was queued before it finishes */
   alive: () => void;
-  /** the writer's own rotation (§5) */
+  /** the writer's own rotation */
   rotateBytes: number;
 }

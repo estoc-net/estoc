@@ -1,18 +1,16 @@
 /**
- * RFC 8785, the JSON Canonicalization Scheme, as event-store.md §3.3 uses
- * it: `canonicalize` turns a JSON value into the one byte string that
- * stands for its content; `parseStrict` reads JSON text back the way
- * §3.3 requires — refusing a duplicate member, an unpaired surrogate and
- * a number outside binary64, which `JSON.parse` would let through. The
- * syntax is jsonc-parser's scanner, held to RFC 8259; the value is built
- * here, where those refusals live.
+ * RFC 8785, the JSON Canonicalization Scheme, as the event format uses it:
+ * `canonicalize` turns a JSON value into the one byte string that stands for its
+ * content; `parseStrict` reads JSON text back the way the event format requires —
+ * refusing a duplicate member, an unpaired surrogate and a number outside binary64,
+ * which `JSON.parse` would let through. The syntax is jsonc-parser's scanner, held
+ * to RFC 8259; the value is built here, where those refusals live.
  *
- * Canonical form (RFC 8785 §3): no insignificant whitespace; object
- * members sorted by the UTF-16 code units of their names; arrays in
- * order; numbers in ECMAScript `Number::toString` form; strings escaped
- * as `JSON.stringify` escapes them (`"`, `\`, and U+0000–U+001F only);
- * UTF-8. Two events are the same content exactly when these bytes are
- * equal.
+ * Canonical form (RFC 8785 §3): no insignificant whitespace; object members sorted
+ * by the UTF-16 code units of their names; arrays in order; numbers in ECMAScript
+ * `Number::toString` form; strings escaped as `JSON.stringify` escapes them (`"`,
+ * `\`, and U+0000–U+001F only); UTF-8. Two events are the same content exactly when
+ * these bytes are equal.
  */
 
 import { printParseErrorCode, visit } from "jsonc-parser";
@@ -22,8 +20,8 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./json.js";
 
 /**
  * Nesting deeper than this is refused by both directions. Not a rule of
- * RFC 8785 — a limit this implementation documents (event-store.md §13)
- * so hostile input cannot exhaust the stack.
+ * RFC 8785 — a limit this implementation documents so hostile input
+ * cannot exhaust the stack.
  */
 export const MAX_DEPTH = 1000;
 
@@ -123,16 +121,15 @@ export function compareCodeUnits(a: string, b: string): number {
 }
 
 /**
- * Parse JSON text under event-store.md §3.3: RFC 8259 syntax, exactly;
- * valid UTF-8 with no byte-order mark; no duplicate member name; no
- * unpaired surrogate or noncharacter in a name or value, escaped or
- * not; every number a finite binary64; nesting within `MAX_DEPTH`.
- * jsonc-parser scans the text — comments and trailing commas refused,
- * whitespace only the four of RFC 8259, a control character or a bad
- * escape in a string an error — and the visitor below builds the value,
- * refusing what a scanner cannot see. What comes back is plain data — a
- * member named `__proto__` is an own property, as `JSON.parse` would
- * make it. Throws `InvalidJson`.
+ * Parse JSON text as the event format restricts it: RFC 8259 syntax, exactly;
+ * valid UTF-8 with no byte-order mark; no duplicate member name; no unpaired
+ * surrogate or noncharacter in a name or value, escaped or not; every number
+ * a finite binary64; nesting within `MAX_DEPTH`. jsonc-parser scans the text
+ * — comments and trailing commas refused, whitespace only the four of RFC
+ * 8259, a control character or a bad escape in a string an error — and the
+ * visitor below builds the value, refusing what a scanner cannot see. What
+ * comes back is plain data — a member named `__proto__` is an own property,
+ * as `JSON.parse` would make it. Throws `InvalidJson`.
  */
 export function parseStrict(input: Uint8Array | string): JsonValue {
   let text: string;

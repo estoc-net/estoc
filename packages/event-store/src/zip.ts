@@ -1,8 +1,8 @@
 /**
- * The interchange tree as one file (event-store.md §10.1): a backup is a
- * folder in a zip, its entries the vault's paths as they are
- * (`.estoc/config.json`, …), so that unzipping it yields the folder
- * every reader reads. Nothing is converted either way.
+ * The interchange tree as one file: a backup is a folder in a zip, its
+ * entries the vault's paths as they are (`.estoc/config.json`, …), so
+ * that unzipping it yields the folder every reader reads. Nothing is
+ * converted either way.
  */
 
 import { unzipSync, zipSync } from "fflate";
