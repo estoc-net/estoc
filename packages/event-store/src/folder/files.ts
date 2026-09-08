@@ -1,7 +1,7 @@
 /**
- * The vault's files over a folder (vault-folder.md §9.6): every path
- * under `.estoc/` that is not a segment, a blob, or `local/`, by the
- * shape of the path. Paths are relative to `.estoc/`.
+ * The vault's files over a folder: every path under `.estoc/` that is
+ * not a segment, a blob, or `local/`, by the shape of the path. Paths
+ * are relative to `.estoc/`.
  */
 
 import type { VaultBackend } from "../backend/types.js";
@@ -28,7 +28,7 @@ export class FolderFileStore implements FileStore {
     return this.backend.read(this.at(path));
   }
 
-  /** Refuses a path that with what the folder holds would be a file and a directory of one name (§9.6). */
+  /** Refuses a path that with what the folder holds would be a file and a directory of one name. */
   async write(path: string, bytes: Uint8Array): Promise<void> {
     const full = this.at(path);
     return this.serial.run(async () => {

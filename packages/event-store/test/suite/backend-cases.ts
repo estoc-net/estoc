@@ -198,7 +198,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r2-A: copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
+    name: "copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory",
     run: async (fresh) => {
       // A Uint8Array whose `slice` is a view, as `Buffer.prototype.slice` is: what any backend is given in Node
       class Viewing extends Uint8Array {
@@ -223,7 +223,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r3-A: refuses to write below a file or onto a directory, leaving both as they were",
+    name: "refuses to write below a file or onto a directory, leaving both as they were",
     run: async (fresh) => {
       const b = await fresh();
       await b.write("d/f", enc.encode("file"));
@@ -290,7 +290,7 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "r1-B: create to a fresh path shows nothing there — not even an empty file — until the source has ended",
+    name: "create to a fresh path shows nothing there — not even an empty file — until the source has ended",
     run: async (fresh) => {
       const b = await fresh();
       let release!: () => void;
@@ -335,6 +335,25 @@ export const backendCases: BackendCase[] = [
       await rejects(b.rename("staging/nope", "objects/w"), /./, "no source");
       same(await b.read("objects/w"), null, "nothing appeared");
       await rejects(b.rename("staging/../x", "objects/w"), /unsafe/, "an unsafe source path");
+    },
+  },
+  {
+    name: "own: exclusive under one name — a second take is VaultOwned, refused at once; release lets the next take it; releasing twice is fine; another name is another vault",
+    run: async (fresh) => {
+      const b = await fresh();
+      const first = await b.own(".estoc/local/owner.pid");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "a second take while the first holds");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "and again: nothing waits, nothing is stolen");
+      const other = await b.own("other/local/owner.pid");
+      await other.release();
+      await first.release();
+      await first.release();
+      const second = await b.own(".estoc/local/owner.pid");
+      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "the second holds now");
+      await second.release();
+      const third = await b.own(".estoc/local/owner.pid");
+      await third.release();
+      await rejects(b.own("../owner"), /relative|segment/, "a name outside the root");
     },
   },
   {

@@ -1,10 +1,9 @@
 /**
- * A vault over a folder (event-store.md §9, vault-folder.md §3): its own
- * three stores, a store per extension, `dispose`, and this copy's local
- * state. Opening checks `config.json` (§11), settles which device this
- * copy is (§7) and announces it (`device.minted`) — the one event type
- * the folder knows the name of, because the format says the folder
- * writes it.
+ * A vault over a folder: its own three stores, a store per extension,
+ * `dispose`, and this copy's local state. Opening checks `config.json`,
+ * settles which device this copy is and announces it (`device.minted`)
+ * — the one event type the folder knows the name of, because the format
+ * says the folder writes it.
  */
 
 import type { VaultBackend } from "../backend/types.js";
@@ -24,23 +23,23 @@ import { LocalOwner, type FolderLocalEventStoreOptions } from "./local.js";
 import type { Serial } from "./serial.js";
 import { folderStore } from "./store.js";
 
-/** An extension's own store (event-store.md §8), and its local state (§7). */
+/** An extension's own store, and its local state. */
 export interface ExtensionStore extends Stores {
   local: LocalOwner;
 }
 
-/** The first event a device writes (vault-events.md §5); the folder appends it on open (vault-folder.md §7). */
+/** The first event a device writes; the folder appends it on open. */
 export const DEVICE_MINTED = "device.minted";
 
 export interface OpenVaultOptions {
   clock?: () => Date;
-  /** how old an unreferenced block must be before `collect` takes it (event-store.md §5.3) */
+  /** how old an unreferenced block must be before `collect` takes it */
   graceMs?: number;
   /** how trace streams rotate their segments */
   trace?: FolderLocalEventStoreOptions["rotate"];
 }
 
-/** `local/self.json`: which device this copy writes as, and which instance it is (vault-folder.md §7). */
+/** `local/self.json`: which device this copy writes as, and which instance it is. */
 interface Self {
   dev: string;
   instance: string;
@@ -79,8 +78,8 @@ export class FolderVault implements Vault {
 
   /**
    * Open the vault in `backend`: refuse anything but a version-2
-   * `config.json` (vault-folder.md §11), read or mint `local/self.json`
-   * (§7), and append `device.minted` if this device has none yet.
+   * `config.json`, read or mint `local/self.json`, and append
+   * `device.minted` if this device has none yet.
    */
   static async open(backend: VaultBackend, options: OpenVaultOptions = {}): Promise<FolderVault> {
     const config = await backend.read(`${ESTOC_DIR}/${CONFIG_FILE}`);
@@ -111,7 +110,7 @@ export class FolderVault implements Vault {
     return FolderVault.open(backend, options);
   }
 
-  /** On every open (§7): a `device.minted` under `devices/<self>/`, or append one. */
+  /** On every open: a `device.minted` under `devices/<self>/`, or append one. */
   private async announce(): Promise<void> {
     for await (const _ of this.events.scan({ author: this.self, type: DEVICE_MINTED })) {
       return;
@@ -162,8 +161,8 @@ export class FolderVault implements Vault {
 
   /**
    * Remove every file under `extensions/<ext>/` and `local/extensions/<ext>/`
-   * (vault-folder.md §3.1) after the operations in flight on that store
-   * and before any can begin; every handle is dead from the call on.
+   * after the operations in flight on that store and before any can begin;
+   * every handle is dead from the call on.
    */
   async dispose(ext: string): Promise<void> {
     if (!isExtId(ext)) {
@@ -200,7 +199,7 @@ export class FolderVault implements Vault {
     return options;
   }
 
-  /** A named owner's local state under `local/<owner>/` (vault-folder.md §7): `agent`, or the application's own name. */
+  /** A named owner's local state under `local/<owner>/`: `agent`, or the application's own name. */
   local(owner: string): LocalOwner {
     if (!/^[a-z][a-z0-9-]*$/.test(owner) || RESERVED_OWNERS.has(owner)) {
       throw new Error(`not a local owner name: ${owner}`);
@@ -214,7 +213,7 @@ export class FolderVault implements Vault {
   }
 }
 
-/** `local/self.json`, or mint one (vault-folder.md §7): the first open on this copy. */
+/** `local/self.json`, or mint one: the first open on this copy. */
 async function readSelf(backend: VaultBackend): Promise<Self> {
   const path = `${ESTOC_DIR}/${LOCAL_DIR}/${SELF_FILE}`;
   const bytes = await backend.read(path);
@@ -230,7 +229,7 @@ async function readSelf(backend: VaultBackend): Promise<Self> {
   return self;
 }
 
-/** Whether an extension's directory holds a segment or a block (vault-folder.md §3.1): a store, not nothing. */
+/** Whether an extension's directory holds a segment or a block: a store, not nothing. */
 async function hasBytes(backend: VaultBackend, dir: string): Promise<boolean> {
   for (const dev of (await backend.dirs(`${dir}/${DEVICES_DIR}`)).filter(isDeviceId)) {
     if ((await backend.list(`${dir}/${DEVICES_DIR}/${dev}`)).some(isSegmentName)) {

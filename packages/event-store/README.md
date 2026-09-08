@@ -46,8 +46,7 @@ a batch, one fresh segment per author on `ingest` — and reads every
 segment whatever the filter, keeping the first content per `eventId`
 by path then line and reporting the rest, with change tokens naming
 the store generation and every segment's accepted length (§10.3).
-A writable open, for now, is `openReplica` then `new
-FolderEventStore(backend, replica, { base: ".estoc" })`; a file
+A file
 standing where `events/` belongs is reported by every read and refuses
 every write as `DamagedLayout`. Beside it `FolderObjectStore` (§9,
 dasl-objects.md §10): one file per object, `objects/<cid>`, exactly
@@ -68,8 +67,47 @@ For that the `VaultBackend` gained `open` (a file as a stream),
 fresh path until the source has ended) and `rename` (into place, over
 what was there), in all three backends; OPFS needs
 `FileSystemFileHandle.move()` for a fresh path and refuses one without
-it. The vault
-over it, `config.json` and the rest come next. Everything below is
+it. Over the three, `FolderVault` (§11.1, §15): `FolderVault.create(backend,
+{ anchor, keystore })` lays a vault in an empty folder — the keystore
+checked by shape, the anchor by the config parser, ownership taken
+first, then `keystore.json`, then `config.json`; a folder that holds
+anything but ownership's own files is refused with nothing written —
+and `FolderVault.openWritable(backend, { anchor })` opens one: `config.json`
+under its closed member set (another version refused in words a user
+can read), `keystore.json` by shape, the anchor DID the caller derived
+from the unlocked seed compared with the config's, ownership taken
+through `backend.own` before any local state is made, `import/`
+required empty, `local/replica.json` read or minted, the stores opened
+as that replica. What comes back is a `Runtime`: `vault` for
+application code, `locked`, `collect`, `ingest`, plus `local(owner)` —
+`options.json`, `cache/` and trace streams under `local/<owner>/` —
+`damaged()`, `portablePaths()` and `close()`, which refuses every new
+operation, lets the accepted ones run out, fails the object streams
+still alive, and only then releases ownership — nothing of the old
+runtime touches the folder after that; every handle taken from the
+vault, local ones included, refuses after close.
+`FolderReader.open(backend, { ownership })` is the read-only open:
+events, files and object metadata to read, no `local/` created, no
+write; object streams only with `ownership: "exclusive"` — the same
+ownership a writer takes, so a writer waits or fails meanwhile — and
+refused as unprotected without it, over an object store that moves
+nothing. `backend.own(path)` is a pid file on disk — `<pid> <thread>
+<origin> <token>`, live while the process it names is — a Node
+worker's as much as another process's, and a worker's record outlives
+the worker until its process exits — or, naming this very thread,
+while the origin is this incarnation of the process's, so the disk
+alone says who holds it, whatever copy of the module in whatever
+realm asks; nothing is removed from the name after a read, only moved
+aside and judged by what moved, and a take that is over — released,
+given up, or failed — gathers every copy of its record, and drops them
+only once the file's link count says no copy stands elsewhere, so a
+reclaim in flight can never put a released record back, the next take
+a new record; a disk without hard links, a USB stick, gets the same by
+exclusive create and rename — a Web Lock in OPFS, a set in memory;
+a held name is `VaultOwned` at once, and waiting is the host's. Unlocking the seed is not this package's: the caller
+derives the anchor with `@estoc/keystore` and hands it in.
+Interchange — snapshot, export, restore, import — comes next.
+Everything below is
 version 2, which stays until the vault switches over.
 
 What is here is the **model**, the **seam**, and the **folder**:

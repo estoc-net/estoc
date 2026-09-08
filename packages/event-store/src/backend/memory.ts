@@ -1,4 +1,4 @@
-import { segmentsOf, type VaultBackend } from "./types.js";
+import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./types.js";
 
 export interface MemoryBackendOptions {
   /** the clock `modified` reads; the wall clock when left out */
@@ -16,8 +16,8 @@ export interface MemoryBackendOptions {
  * Node `Buffer` is a `Uint8Array` whose `slice` is a view onto the same
  * memory, so `bytes.slice()` would have kept the caller's buffer as the
  * stored file, and a later write into it would have changed the file
- * with no write here (r2-A). And a write lands only where a file system
- * would let it: not below a file, not onto a directory (r3-A).
+ * with no write here. And a write lands only where a file system
+ * would let it: not below a file, not onto a directory.
  */
 /** How much of a file one pull of `open` hands out. */
 const STREAM_CHUNK = 64 * 1024;
@@ -25,6 +25,8 @@ const STREAM_CHUNK = 64 * 1024;
 export class MemoryBackend implements VaultBackend {
   readonly files = new Map<string, Uint8Array>();
   private readonly times = new Map<string, number>();
+  /** the names owned right now: one backend instance is one folder, so one set is its whole world */
+  private readonly owned = new Set<string>();
   private readonly clock: () => Date;
 
   constructor(options: MemoryBackendOptions = {}) {
@@ -40,7 +42,7 @@ export class MemoryBackend implements VaultBackend {
   }
 
   /**
-   * A key a write may land on, as a file system would judge it (r3-A):
+   * A key a write may land on, as a file system would judge it:
    * no file on the way down — `a/b` cannot be written while `a` is a
    * file — and not a directory itself — `a` cannot be written while
    * `a/b` exists. A flat map would take either; a disk refuses both.
@@ -181,5 +183,20 @@ export class MemoryBackend implements VaultBackend {
       }
     }
     return { files, dirs: [...dirs] };
+  }
+
+  /** Ownership as a name in a set: exclusive within this instance, which is the folder. Makes no file. */
+  async own(path: string): Promise<Ownership> {
+    const key = this.key(path);
+    if (this.owned.has(key)) throw new VaultOwned(path, "another holder in this process has it");
+    this.owned.add(key);
+    let released = false;
+    return {
+      release: async () => {
+        if (released) return;
+        released = true;
+        this.owned.delete(key);
+      },
+    };
   }
 }

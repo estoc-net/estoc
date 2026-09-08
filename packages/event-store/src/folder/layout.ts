@@ -1,7 +1,7 @@
 /**
- * The folder's paths (vault-folder.md §3) and the shape tests that tell
- * a segment and a blob from a file (§9.6). Paths here are relative to
- * the vault root; the machine's half is `.estoc/`.
+ * The folder's paths and the shape tests that tell a segment and a blob
+ * from a file. Paths here are relative to the vault root; the machine's
+ * half is `.estoc/`.
  */
 
 import { isCid } from "../cid.js";
@@ -18,12 +18,12 @@ export const SELF_FILE = "self.json";
 
 const SEGMENT_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$/;
 
-/** Whether `name` is a segment file: `<uuidv7>.jsonl`, lowercase (§5). */
+/** Whether `name` is a segment file: `<uuidv7>.jsonl`, lowercase. */
 export function isSegmentName(name: string): boolean {
   return SEGMENT_NAME.test(name);
 }
 
-/** Whether `name` is an extension store's directory name: the uuidv7 `extension.installed` minted (§3.1). */
+/** Whether `name` is an extension store's directory name: the uuidv7 `extension.installed` minted. */
 export function isExtId(name: string): boolean {
   return isUuidv7(name);
 }
@@ -31,7 +31,7 @@ export function isExtId(name: string): boolean {
 export type PathKind = "segment" | "blob" | "local" | "file";
 
 /**
- * What a path relative to `.estoc/` is (§9.6): a segment
+ * What a path relative to `.estoc/` is: a segment
  * (`devices/<dev>/<seg>.jsonl`), a blob (`blobs/<cid>`), the same two
  * under `extensions/<ext>/`, this copy's own (`local/...`), or a file —
  * whatever else, carried and never read.
@@ -42,15 +42,15 @@ export function kindOf(path: string): PathKind {
     return "local";
   }
   if (parts[0] === EXTENSIONS_DIR && parts.length > 2 && isExtId(parts[1] as string)) {
-    // an extension's tree has segments and blobs and nothing else (§3.1): no local/, no extensions/ of its own
+    // an extension's tree has segments and blobs and nothing else: no local/, no extensions/ of its own
     return storeKind(parts.slice(2));
   }
   return storeKind(parts);
 }
 
 /**
- * Whether `path` (relative to `.estoc/`) is a directory the layout owns
- * (§3, §9.6): a file there is a folder no store could write.
+ * Whether `path` (relative to `.estoc/`) is a directory the layout owns:
+ * a file there is a folder no store could write.
  */
 export function isStoreDir(path: string): boolean {
   const parts = path.split("/");
@@ -87,12 +87,12 @@ export function text(bytes: Uint8Array): string {
   return decoder.decode(bytes);
 }
 
-/** A JSON file as the folder writes one: pretty-printed, trailing newline (§1). */
+/** A JSON file as the folder writes one: pretty-printed, trailing newline. */
 export function prettyJson(value: unknown): Uint8Array {
   return utf8(JSON.stringify(value, null, 2) + "\n");
 }
 
-/** A JSONL line as the folder writes one: compact, terminated (§1). */
+/** A JSONL line as the folder writes one: compact, terminated. */
 export function jsonLine(value: unknown): Uint8Array {
   return utf8(JSON.stringify(value) + "\n");
 }

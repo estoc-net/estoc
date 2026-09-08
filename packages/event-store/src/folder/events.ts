@@ -1,7 +1,7 @@
 /**
- * The reference EventStore over a folder (vault-folder.md §9): one log
- * per device under `devices/<dev>/`, segments of JSONL, read whole and
- * sorted, appended by one writer, merged by union.
+ * The reference EventStore over a folder: one log per device under
+ * `devices/<dev>/`, segments of JSONL, read whole and sorted, appended
+ * by one writer, merged by union.
  */
 
 import { BadToken, ForkedSelf } from "../errors.js";
@@ -25,7 +25,7 @@ import { DEVICES_DIR, concat, isSegmentName, jsonLine, utf8 } from "./layout.js"
 import { decodeEvent, decodeSegment, endsClean } from "./lines.js";
 import type { StoreContext } from "./serial.js";
 
-/** The writer's own rotation (§5): a fresh segment once the open one is this long. */
+/** The writer's own rotation: a fresh segment once the open one is this long. */
 export const ROTATE_BYTES = 4 * 1024 * 1024;
 
 /** What reading one device's directory found. */
@@ -35,7 +35,7 @@ interface DeviceRead {
   conflicts: Conflict[];
 }
 
-/** What a token names (§9.4): the instance, the store, and every segment's length. */
+/** What a token names: the instance, the store, and every segment's length. */
 interface Frontier {
   instance: string;
   store: string;
@@ -64,7 +64,7 @@ export class FolderEventStore implements EventStore {
 
   // ---- reading -----------------------------------------------------------
 
-  /** Segment paths under one device's directory, in path order (§9.5). */
+  /** Segment paths under one device's directory, in path order. */
   private async segmentsOf(dev: string): Promise<string[]> {
     const dir = `${this.devicesDir}/${dev}`;
     return (await this.ctx.backend.list(dir))
@@ -79,11 +79,11 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * One device's whole log (§9.1): every segment, every line, the author
-   * checked against the directory, deduplicated by eid — the first by
-   * path order then line order is kept, the others with different
-   * content reported (§9.5). What was not an event is remembered for
-   * `damaged()` and `conflicting()`.
+   * One device's whole log: every segment, every line, the author checked
+   * against the directory, deduplicated by eid — the first by path order
+   * then line order is kept, the others with different content reported.
+   * What was not an event is remembered for `damaged()` and
+   * `conflicting()`.
    */
   private async readDevice(dev: string): Promise<DeviceRead> {
     const read: DeviceRead = { events: new Map(), damaged: [], conflicts: [] };
@@ -129,7 +129,7 @@ export class FolderEventStore implements EventStore {
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
     this.ctx.guard();
-    // read in the store's turn (§9.2), so that a scan in flight finishes before a disposal removes the log
+    // read in the store's turn, so that a scan in flight finishes before a disposal removes the log
     const events = await this.ctx.serial.run(async () => {
       this.ctx.alive();
       return [...(await this.readAll(filter?.author)).values()].sort(compareEvents);
@@ -194,7 +194,7 @@ export class FolderEventStore implements EventStore {
           data: clean.data,
         })
       );
-      // A fresh segment, written whole (vault-folder.md §9.2): a whole-file write is
+      // A fresh segment, written whole: a whole-file write is
       // atomic across a process crash, so the batch lands entire or not at all — an
       // append could tear between lines. On success it is the newest segment this
       // store minted, so it is the open one from here on; on failure `open` stands.
@@ -207,9 +207,9 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * The segment this instance appends to (§9.2): the newest under
+   * The segment this instance appends to: the newest under
    * `devices/<self>/` the first time, healed if a crash left it
-   * unterminated (§5), a fresh one once it is long enough.
+   * unterminated, a fresh one once it is long enough.
    */
   private async openSegment(): Promise<{ path: string; bytes: number }> {
     if (this.open === null) {
@@ -234,7 +234,7 @@ export class FolderEventStore implements EventStore {
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     this.ctx.guard();
-    // The whole input first (§9.3), touching nothing of the store: read as events, in order, every one kept —
+    // The whole input first, touching nothing of the store: read as events, in order, every one kept —
     // which of two under one eid is the duplicate is the store's to say, and the store is not read yet.
     const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
     const incoming: Event[] = [];
@@ -245,7 +245,7 @@ export class FolderEventStore implements EventStore {
         outcome.rejected.push({ event: raw, error: err instanceof Error ? err.message : String(err) });
       }
     }
-    // Then the store, in its turn (§9.2): what is here against what came, and the writes — nothing
+    // Then the store, in its turn: what is here against what came, and the writes — nothing
     // in between, so that no other write can slip in, and nothing before a disposal could not undo.
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
@@ -284,7 +284,7 @@ export class FolderEventStore implements EventStore {
       for (const [author, incoming] of [...byAuthor].sort(([a], [b]) => (a < b ? -1 : 1))) {
         const lines = incoming.map((event) => jsonLine(deepFreeze(event)));
         outcome.added += lines.length;
-        // one segment per author per call (§9.3), written whole
+        // one segment per author per call, written whole
         await this.ctx.backend.write(this.newSegmentPath(author), concat(lines));
       }
       return outcome;
@@ -297,7 +297,7 @@ export class FolderEventStore implements EventStore {
     this.ctx.guard();
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
-      // The frontier first (§9.4): every segment's length, before any line is read.
+      // The frontier first: every segment's length, before any line is read.
       const table = new Map<string, number>();
       for (const dev of await this.devices()) {
         for (const path of await this.segmentsOf(dev)) {

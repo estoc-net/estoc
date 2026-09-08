@@ -1,8 +1,7 @@
 /**
- * Local state of the trace kind (event-store.md §7.2): the event's shape
- * less what only exchange needs, minted by its producer, never ingested,
- * pruned by its owner. Types only; a folder keeps one under
- * `local/<owner>/trace/`.
+ * Local state of the trace kind: the event's shape less what only
+ * exchange needs, minted by its producer, never ingested, pruned by its
+ * owner. Types only; a folder keeps one under `local/<owner>/trace/`.
  */
 
 import type { JsonObject, JsonPrimitive } from "./json.js";
@@ -18,13 +17,13 @@ export type LocalFilter = { eid?: string; type?: string; data?: { [field: string
 export interface LocalEventStore<E extends LocalEvent = LocalEvent, Policy = unknown, Report = unknown> {
   /** Minted by the producer; the store checks the shape and nothing else. */
   append(event: E): Promise<void>;
-  /** Equality, as §4.3; canonical order. */
+  /** Equality on the fields named; canonical order. */
   scan(filter?: LocalFilter): AsyncIterable<E>;
   /** What is kept, per the owner; what was unlinked. */
   prune(policy: Policy): Promise<Report>;
 }
 
-/** Canonical order for local events (§7.2, as §3): by `at` as an instant, then by `eid`. */
+/** Canonical order for local events: by `at` as an instant, then by `eid`. */
 export function compareLocalEvents(a: Pick<LocalEvent, "at" | "eid">, b: Pick<LocalEvent, "at" | "eid">): number {
   const ka = atKey(a.at);
   const kb = atKey(b.at);

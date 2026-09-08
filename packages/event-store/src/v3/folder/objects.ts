@@ -1,45 +1,41 @@
 /**
- * The version-3 object store over a folder (dasl-objects.md §10,
- * vault-folder.md §9): one file per accepted object, `objects/<cid>`,
- * flat, holding the exact resource bytes and nothing else — no extent
- * directory, no chunk, no metadata node (VF-27, VF-28). A put streams
- * its source into a private staging file under `local/`, hashing as it
- * goes and never holding more than one chunk (§5), and only once the
- * whole stream has matched — the CID given, or the one computed — is
- * the file moved into `objects/` in one step (§6.1, §6.2, VF-31): a
- * crash midway leaves a staging file, which is not an object and is
- * swept once its grace has elapsed; a source that fails leaves nothing.
- * A read streams the file back, rehashing on the way out; a file whose
- * bytes no longer spell its name fails the stream before completion,
- * is moved aside to `local/damaged/objects/`, and reads as absent from
- * then on (§6.3, §8.2, DO-13, DO-16, VF-13) — moved aside only if its
- * bytes, read again in the store's turn, still do not spell its name,
- * so a put that has healed it meanwhile stands (r1-C). An object's
- * orphan age counts from its acceptance, which the store records as
- * the modification time of a stamp file, `local/accepted/objects/<cid>`,
- * written once the move into `objects/` has completed and rewritten
- * by repeating acceptance (§9): not the object file's own time, which
- * a backend sets when the last chunk was written, however long the
- * source then took to end, the store's turn to come, or the move to
- * run (r1-D, r2-A). An object with no stamp — `local/` deleted, a
- * crash before the stamp — is of unknown age: stamped by the first
- * collection pass that sees it and counted young. `collect` unlinks
- * exactly the unkept, unlatched objects past grace, with their stamps
- * (§8.3). What is in `objects/` and
- * not an object path — a name that is not a raw DASL CID, a directory —
- * is reported as damage, listed as nothing, and left alone by
- * collection; `verify` reads every object and moves the mismatched
- * aside (§3, VF-16).
+ * The version-3 object store over a folder: one file per accepted
+ * object, `objects/<cid>`, flat, holding the exact resource bytes and
+ * nothing else — no extent directory, no chunk, no metadata node. A put
+ * streams its source into a private staging file under `local/`, hashing
+ * as it goes and never holding more than one chunk, and only once the
+ * whole stream has matched — the CID given, or the one computed — is the
+ * file moved into `objects/` in one step: a crash midway leaves a
+ * staging file, which is not an object and is swept once its grace has
+ * elapsed; a source that fails leaves nothing. A read streams the file
+ * back, rehashing on the way out; a file whose bytes no longer spell its
+ * name fails the stream before completion, is moved aside to
+ * `local/damaged/objects/`, and reads as absent from then on — moved
+ * aside only if its bytes, read again in the store's turn, still do not
+ * spell its name, so a put that has healed it meanwhile stands. An
+ * object's orphan age counts from its acceptance, which the store
+ * records as the modification time of a stamp file,
+ * `local/accepted/objects/<cid>`, written once the move into `objects/`
+ * has completed and rewritten by repeating acceptance: not the object
+ * file's own time, which a backend sets when the last chunk was written,
+ * however long the source then took to end, the store's turn to come, or
+ * the move to run. An object with no stamp — `local/` deleted, a crash
+ * before the stamp — is of unknown age: stamped by the first collection
+ * pass that sees it and counted young. `collect` unlinks exactly the
+ * unkept, unlatched objects past grace, with their stamps. What is in
+ * `objects/` and not an object path — a name that is not a raw DASL CID,
+ * a directory — is reported as damage, listed as nothing, and left alone
+ * by collection; `verify` reads every object and moves the mismatched
+ * aside.
  *
  * The store's operations run one at a time — the presence check and
  * latch registration of `open`, the latch check and unlink of `collect`
- * — as event-store.md §10 asks; the streaming of a put and the draining
- * of a read run outside that turn, so a slow source or consumer holds
- * nothing but its own bytes. A vault runtime still holds its writer lock
- * around `collect` and each commit (DO-18, DO-19), which is its to keep.
- * Durability is the backend's: an accepted object is process-durable
- * with every backend shipped (VF-32); power-loss survival is the
- * platform's flush policy.
+ * — as the vault asks; the streaming of a put and the draining of a read
+ * run outside that turn, so a slow source or consumer holds nothing but
+ * its own bytes. A vault runtime still holds its writer lock around
+ * `collect` and each commit, which is its to keep. Durability is the
+ * backend's: an accepted object is process-durable with every backend
+ * shipped; power-loss survival is the platform's flush policy.
  */
 
 import { compareBytes, type DaslCid } from "@estoc/dasl";
@@ -47,7 +43,7 @@ import { sha256 } from "@noble/hashes/sha2";
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
-import { DamagedLayout, DamagedObject, DigestMismatch, ObjectTooLarge } from "../errors.js";
+import { DamagedLayout, DamagedObject, DigestMismatch, ObjectTooLarge, ReadOnlyVault, VaultClosed } from "../errors.js";
 import { isRawCid, type Cid, type Damaged } from "../event.js";
 import { comparePaths } from "../files.js";
 import { DEFAULT_GRACE_MS, DEFAULT_MAX_OBJECT_BYTES } from "../memory-objects.js";
@@ -65,11 +61,11 @@ import {
 } from "../objects.js";
 import { ESTOC_DIR, LOCAL_DIR, OBJECTS_DIR, objectPath } from "./layout.js";
 
-/** Where a put streams before its bytes have a name (§6.1): private to this copy, never an object, never portable. */
+/** Where a put streams before its bytes have a name: private to this copy, never an object, never portable. */
 export const STAGING_DIR = `${LOCAL_DIR}/staging/objects`;
-/** Where damaged material is moved out of `objects/` (§9): under the same name, a numbered suffix when that is taken. */
+/** Where damaged material is moved out of `objects/`: under the same name, a numbered suffix when that is taken. */
 export const DAMAGED_DIR = `${LOCAL_DIR}/damaged/objects`;
-/** Where an object's acceptance is recorded (§8.3, r1-D): an empty file per CID whose modification time is when the object was last accepted. */
+/** Where an object's acceptance is recorded: an empty file per CID whose modification time is when the object was last accepted. */
 export const ACCEPTED_DIR = `${LOCAL_DIR}/accepted/objects`;
 
 export interface FolderObjectStoreOptions {
@@ -77,15 +73,22 @@ export interface FolderObjectStoreOptions {
   base?: string;
   /** the wall clock in Unix milliseconds, against which a stamp's modification time is aged; default `Date.now`, pinned by tests together with the backend's clock */
   now?: () => number;
-  /** orphan grace (§8.3); default one hour */
+  /** orphan grace; default one hour */
   graceMs?: number;
-  /** the largest object a put accepts (§12); default 1 GiB */
+  /** the largest object a put accepts; default 1 GiB */
   maxObjectBytes?: number;
   /** the latch registry to share with other handles over the same objects; a fresh one when left out */
   latches?: LatchRegistry;
+  /**
+   * A store that changes nothing under `objects/` or `local/`:
+   * no put, no collection, and a file found not to spell its name is
+   * not moved aside but remembered, and absent from this store's view
+   * from then on — the bytes stay where a writable open will judge them.
+   */
+  readOnly?: boolean;
 }
 
-/** What a file where `objects/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses. */
+/** What a file where `objects/` belongs is reported as, by a read and by the write it refuses. */
 const OBJECTS_IS_A_FILE = "a file where the objects directory belongs";
 
 /** What one look at `objects/` found: the object files by CID, and every entry that is not one. */
@@ -95,7 +98,7 @@ interface Walked {
 }
 
 export class FolderObjectStore implements ObjectStore {
-  /** the read latches over this store's objects (event-store.md §10), shared or its own */
+  /** the read latches over this store's objects, shared or its own */
   readonly latches: LatchRegistry;
   private readonly base: string;
   private readonly now: () => number;
@@ -103,7 +106,14 @@ export class FolderObjectStore implements ObjectStore {
   private readonly maxObjectBytes: number;
   /** the staging files puts are streaming into right now, which no sweep touches */
   private readonly staging = new Set<string>();
-  /** operations run one at a time: the writer lock of event-store.md §10, as far as one store needs it */
+  private readonly readOnly: boolean;
+  /** what a read-only store found damaged: left in place, and out of its view */
+  private readonly excluded = new Set<Cid>();
+  /** the verifying streams alive right now, each as the function that fails it */
+  private readonly live = new Set<() => void>();
+  /** set by `close`: no stream opens after it, and none survives it */
+  private closed = false;
+  /** operations run one at a time: the vault's writer lock, as far as one store needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -115,6 +125,30 @@ export class FolderObjectStore implements ObjectStore {
     this.graceMs = bound("graceMs", options.graceMs ?? DEFAULT_GRACE_MS);
     this.maxObjectBytes = bound("maxObjectBytes", options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES);
     this.latches = options.latches ?? new LatchRegistry();
+    this.readOnly = options.readOnly ?? false;
+  }
+
+  /** Whether this store may change the folder: a read-only store's puts and collection are refused. */
+  private writable(what: string): void {
+    if (this.readOnly) throw new ReadOnlyVault(what);
+  }
+
+  /**
+   * End this store's part in the folder: in the store's turn, so
+   * every `open` already queued has registered its stream first, every
+   * live stream is failed with `VaultClosed` — its latch released, its
+   * file closed — and no stream opens after. What a caller holds by
+   * then is an errored stream, whose next read rejects. A closed store
+   * still answers `stat`, `has`, `list` and `damaged`; nothing that
+   * changes the folder runs in a turn after this one — a quarantine
+   * queued behind it does nothing, `verify` is refused — so once the
+   * close has returned, the folder is the next owner's alone.
+   */
+  async close(): Promise<void> {
+    await this.serialise(async () => {
+      this.closed = true;
+      for (const fail of [...this.live]) fail();
+    });
   }
 
   private serialise<T>(work: () => Promise<T>): Promise<T> {
@@ -133,7 +167,7 @@ export class FolderObjectStore implements ObjectStore {
     return (await this.backend.size(this.at(OBJECTS_DIR))) !== null;
   }
 
-  /** Before a write lands in `objects/`: a file where the directory belongs is not a place to put an object (§3). */
+  /** Before a write lands in `objects/`: a file where the directory belongs is not a place to put an object. */
   private async checkRoot(): Promise<void> {
     if (await this.rootIsAFile()) throw new DamagedLayout(OBJECTS_DIR, OBJECTS_IS_A_FILE);
   }
@@ -145,31 +179,32 @@ export class FolderObjectStore implements ObjectStore {
   }
 
   async putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo> {
-    return this.put(source, rawCidOf(cid)); // §6.2 step 1, before a byte is read
+    return this.put(source, rawCidOf(cid)); // the CID checked before a byte is read
   }
 
   /**
-   * The one way in (§6.1, §6.2): the source streamed into a fresh
-   * staging file, hashed as it passes, refused at the chunk that
-   * crosses the size bound; then, if the digest is the one wanted — or,
-   * with none wanted, whatever it is — the staging file moved to its
-   * object path in the store's turn. The backend makes the staging file
-   * visible only once the source has ended and leaves nothing when it
-   * throws, so a failure before the move leaves no object and no half
-   * of one (DO-4, DO-17); a failure after it — the stamp's write — has
-   * accepted the object, whole and unstamped, an orphan under grace,
-   * and is still reported. The stamp is written after the move, never
-   * before it: a stamp records a completed acceptance, and whatever
-   * time passes between the two backend calls must not count against
-   * the object (r2-A). Any stamp from an earlier acceptance of the same
-   * CID is removed before the move, so at no point does an object stand
-   * with a stamp older than its acceptance; an object with no stamp —
-   * a crash between the move and the stamp, or after the removal — is
-   * of unknown age, and `collect` stamps it and counts it young. A
-   * move over an object already there is the same object, its bytes
-   * the ones verified now, its orphan age renewed (§6.2, §9).
+   * The one way in: the source streamed into a fresh staging file, hashed
+   * as it passes, refused at the chunk that crosses the size bound; then,
+   * if the digest is the one wanted — or, with none wanted, whatever it
+   * is — the staging file moved to its object path in the store's turn.
+   * The backend makes the staging file visible only once the source has
+   * ended and leaves nothing when it throws, so a failure before the move
+   * leaves no object and no half of one; a failure after it — the stamp's
+   * write — has accepted the object, whole and unstamped, an orphan under
+   * grace, and is still reported. The stamp is written after the move,
+   * never before it: a stamp records a completed acceptance, and whatever
+   * time passes between the two backend calls must not count against the
+   * object. Any stamp from an earlier acceptance of the same CID is
+   * removed before the move, so at no point does an object stand with a
+   * stamp older than its acceptance; an object with no stamp — a crash
+   * between the move and the stamp, or after the removal — is of unknown
+   * age, and `collect` stamps it and counts it young. A move over an
+   * object already there is the same object, its bytes the ones verified
+   * now, its orphan age renewed.
    */
   private async put(source: ByteSource, want: DaslCid | null): Promise<ObjectInfo> {
+    this.writable("put");
+    if (this.closed) throw new VaultClosed();
     await this.checkRoot(); // before a byte is read, and again before the move
     const staged = `${STAGING_DIR}/${v7()}`;
     this.staging.add(staged);
@@ -183,8 +218,9 @@ export class FolderObjectStore implements ObjectStore {
       );
       const { cid, size } = hashed as { cid: DaslCid; size: number };
       try {
-        if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // steps 3–4: nothing accepted
+        if (want !== null && cid.text !== want.text) throw new DigestMismatch(want.text, cid.text); // nothing accepted
         await this.serialise(async () => {
+          if (this.closed) throw new VaultClosed();
           await this.checkRoot();
           const stamp = this.at(stampPath(cid.text));
           await this.backend.remove(stamp);
@@ -204,7 +240,7 @@ export class FolderObjectStore implements ObjectStore {
     }
   }
 
-  /** `source`'s chunks, passed through and hashed (§5); the CID and size handed to `done` after the last. */
+  /** `source`'s chunks, passed through and hashed; the CID and size handed to `done` after the last. */
   private async *hashing(source: ByteSource, done: (result: { cid: DaslCid; size: number }) => void): AsyncIterable<Uint8Array> {
     const hash = sha256.create();
     let size = 0;
@@ -228,9 +264,10 @@ export class FolderObjectStore implements ObjectStore {
   async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
     rawCidOf(cid);
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
-    // Size checked and stream latched in the store's turn; the bytes come out after it (§6.3).
+    // Size checked and stream latched in the store's turn; the bytes come out after it.
     const opened = await this.serialise(async () => {
-      const size = await this.backend.size(this.at(objectPath(cid)));
+      if (this.closed) throw new VaultClosed();
+      const size = this.excluded.has(cid) ? null : await this.backend.size(this.at(objectPath(cid)));
       if (size === null) return null;
       if (size > maxBytes) throw new ObjectTooLarge(`${cid} is ${size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
       return this.openHeld(cid);
@@ -255,14 +292,15 @@ export class FolderObjectStore implements ObjectStore {
 
   /**
    * In the store's turn: presence checked, the file opened and the latch
-   * registered in one step (event-store.md §10), and a verifying stream
-   * over it handed back. The latch is the stream's from here, and every
-   * way it can end releases it: completion, damage, cancel, and any
-   * failure — which releases before the stream fails, since an errored
-   * stream runs no `cancel` and a caller can release nothing on its
-   * behalf.
+   * registered in one step, and a verifying stream over it handed back.
+   * The latch is the stream's from here, and every way it can end
+   * releases it: completion, damage, cancel, and any failure — which
+   * releases before the stream fails, since an errored stream runs no
+   * `cancel` and a caller can release nothing on its behalf.
    */
   private async openHeld(cid: Cid): Promise<{ stream: ReadableStream<Uint8Array>; size: number } | null> {
+    if (this.closed) throw new VaultClosed();
+    if (this.excluded.has(cid)) return null;
     const rel = objectPath(cid);
     const path = this.at(rel);
     const size = await this.backend.size(path);
@@ -280,45 +318,64 @@ export class FolderObjectStore implements ObjectStore {
   }
 
   /**
-   * The bytes of `inner` passed through and rehashed (§6.3): the stream
-   * completes only when what came out spells `cid`; otherwise the file
-   * is moved aside — if what stands there still does not spell `cid` —
-   * and the stream fails with `DamagedObject` (§8.2, DO-16). Nothing is
-   * pulled from the file until read (highWaterMark 0).
+   * The bytes of `inner` passed through and rehashed: the stream
+   * completes only when what came out spells `cid`; otherwise the file is
+   * moved aside — if what stands there still does not spell `cid` — and
+   * the stream fails with `DamagedObject`. Nothing is pulled from the
+   * file until read (highWaterMark 0).
    */
   private verifying(cid: Cid, inner: ReadableStream<Uint8Array>, rel: string, size: number, release: () => void): ReadableStream<Uint8Array> {
     const reader = inner.getReader();
     const hash = sha256.create();
     const want = rawCidOf(cid);
     let seen = 0;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    // Every way the stream ends runs `done` once: the latch goes, the file
+    // closes, and the store forgets the stream.
+    let ended = false;
+    const done = (): void => {
+      if (ended) return;
+      ended = true;
+      this.live.delete(fail);
+      release();
+      reader.cancel().catch(() => undefined);
+    };
+    const fail = (): void => {
+      done();
+      controller.error(new VaultClosed());
+    };
     return new ReadableStream<Uint8Array>(
       {
-        pull: async (controller) => {
+        start: (c) => {
+          controller = c; // registered only once there is a controller to fail: a construction that throws leaves nothing for `close` to find
+          this.live.add(fail);
+        },
+        pull: async (c) => {
           try {
-            const { done, value } = await reader.read();
-            if (!done) {
+            const { done: over, value } = await reader.read();
+            if (ended) return; // failed by `close` while the read was pending: the error stands
+            if (!over) {
               hash.update(value);
               seen += value.length;
-              controller.enqueue(value);
+              c.enqueue(value);
               return;
             }
             if (seen === size && compareBytes(hash.digest(), want.digest) === 0) {
-              release();
-              controller.close();
+              done();
+              c.close();
               return;
             }
             await this.quarantine(cid, rel);
-            release();
-            controller.error(new DamagedObject(cid));
+            done();
+            c.error(new DamagedObject(cid));
           } catch (err) {
-            release();
-            await reader.cancel().catch(() => undefined);
-            controller.error(err);
+            if (ended) return;
+            done();
+            c.error(err);
           }
         },
-        cancel: async () => {
-          release();
-          await reader.cancel().catch(() => undefined);
+        cancel: () => {
+          done();
         },
       },
       { highWaterMark: 0 }
@@ -326,18 +383,23 @@ export class FolderObjectStore implements ObjectStore {
   }
 
   /**
-   * The file a read found damaged moved out of `objects/` (§9, §8.2), in
-   * the store's turn, and only if what stands at its path, read again
-   * now, still does not spell `cid`: a put that has since replaced it
-   * with sound bytes — of the same length, in the same clock tick, even
-   * — is left alone (§6.2, r1-C). Neither size nor modification time
-   * tells one file from another; the bytes do.
+   * The file a read found damaged moved out of `objects/`, in the store's
+   * turn, and only if what stands at its path, read again now, still does
+   * not spell `cid`: a put that has since replaced it with sound bytes —
+   * of the same length, in the same clock tick, even — is left alone.
+   * Neither size nor modification time tells one file from another; the
+   * bytes do. Nothing after `close`: a quarantine a stream queued behind
+   * the close runs in a turn the store no longer owns the folder in — the
+   * next writer may hold it and have put the object back — and does
+   * nothing.
    */
   private quarantine(cid: Cid, rel: string): Promise<void> {
     return this.serialise(async () => {
+      if (this.closed) return;
       const actual = await this.hashAt(rel);
       if (actual === null || actual.text === cid) return;
-      await this.aside(rel);
+      if (this.readOnly) this.excluded.add(cid); // remembered, not moved
+      else await this.aside(rel);
     });
   }
 
@@ -361,13 +423,13 @@ export class FolderObjectStore implements ObjectStore {
 
   async stat(cid: Cid): Promise<ObjectInfo | null> {
     const parsed = rawCidOf(cid);
-    const size = await this.serialise(() => this.backend.size(this.at(objectPath(cid))));
+    const size = await this.serialise(async () => (this.excluded.has(cid) ? null : this.backend.size(this.at(objectPath(cid)))));
     return size === null ? null : info(parsed, size);
   }
 
   async has(cid: Cid): Promise<boolean> {
     rawCidOf(cid);
-    return (await this.serialise(() => this.backend.size(this.at(objectPath(cid))))) !== null;
+    return (await this.serialise(async () => (this.excluded.has(cid) ? null : this.backend.size(this.at(objectPath(cid)))))) !== null;
   }
 
   async *list(): AsyncIterable<Cid> {
@@ -376,13 +438,12 @@ export class FolderObjectStore implements ObjectStore {
   }
 
   /**
-   * One look at `objects/` (§9, §3): the files whose names are raw DASL
-   * CIDs, in binary-CID byte order, and everything else as damage — a
-   * file where the directory belongs, a file under a name that is not a
-   * raw CID (a temp file a crash left, a CIDv0, an uppercase spelling, a
-   * dag-pb or BLAKE3 identifier: DO-3, DO-15, VF-13), a directory
-   * (VF-16). Whether a file's bytes spell its name is not looked at
-   * here; that is a read's, or `verify`'s.
+   * One look at `objects/`: the files whose names are raw DASL CIDs, in
+   * binary-CID byte order, and everything else as damage — a file where
+   * the directory belongs, a file under a name that is not a raw CID (a
+   * temp file a crash left, a CIDv0, an uppercase spelling, a dag-pb or
+   * BLAKE3 identifier), a directory. Whether a file's bytes spell its
+   * name is not looked at here; that is a read's, or `verify`'s.
    */
   private async walk(): Promise<Walked> {
     const walked: Walked = { cids: [], damaged: [] };
@@ -392,8 +453,9 @@ export class FolderObjectStore implements ObjectStore {
     }
     const dir = this.at(OBJECTS_DIR);
     for (const name of await this.backend.list(dir)) {
-      if (isRawCid(name)) walked.cids.push(name);
-      else walked.damaged.push({ where: objectPath(name), error: "not an object path: the name is not a canonical raw DASL CID" });
+      if (!isRawCid(name)) walked.damaged.push({ where: objectPath(name), error: "not an object path: the name is not a canonical raw DASL CID" });
+      else if (this.excluded.has(name)) walked.damaged.push({ where: objectPath(name), error: "the bytes do not hash to the name" });
+      else walked.cids.push(name);
     }
     for (const name of await this.backend.dirs(dir)) {
       walked.damaged.push({ where: objectPath(name), error: "a directory where an object belongs" });
@@ -403,33 +465,36 @@ export class FolderObjectStore implements ObjectStore {
     return walked;
   }
 
-  /** What stands in `objects/` that is not an object path (§3, VF-16), each with where it stands; nothing is moved. */
+  /** What stands in `objects/` that is not an object path, each with where it stands; nothing is moved. */
   async damaged(): Promise<Damaged[]> {
     return (await this.serialise(() => this.walk())).damaged;
   }
 
   /**
-   * Every object file read whole and rehashed, in the store's turn (§9,
-   * VF-31, DO-13): one whose bytes do not spell its name is moved aside
-   * and reported with the CID the bytes do have; what is in `objects/`
-   * and not an object path is moved aside and reported as `damaged`
-   * would; a directory there is reported and left. What comes back is
-   * everything moved or reported, in path order; `objects/` afterwards
-   * holds only verified objects and the directories reported.
+   * Every object file read whole and rehashed, in the store's turn: one
+   * whose bytes do not spell its name is moved aside and reported with
+   * the CID the bytes do have; what is in `objects/` and not an object
+   * path is moved aside and reported as `damaged` would; a directory
+   * there is reported and left. What comes back is everything moved or
+   * reported, in path order; `objects/` afterwards holds only verified
+   * objects and the directories reported.
    */
   async verify(): Promise<Damaged[]> {
     return this.serialise(async () => {
+      if (this.closed) throw new VaultClosed(); // it moves files: not in a turn after the folder was given up
       const walked = await this.walk();
       const found: Damaged[] = [];
       for (const damage of walked.damaged) {
         found.push(damage);
+        if (this.readOnly) continue; // reported, left where it is
         if (damage.where !== OBJECTS_DIR && (await this.backend.size(this.at(damage.where))) !== null) await this.aside(damage.where);
       }
       for (const cid of walked.cids) {
         const rel = objectPath(cid);
         const actual = await this.hashAt(rel);
         if (actual === null || actual.text === cid) continue;
-        await this.aside(rel);
+        if (this.readOnly) this.excluded.add(cid);
+        else await this.aside(rel);
         found.push({ where: rel, error: `the bytes hash to ${actual.text}, not the name` });
       }
       return found.sort((a, b) => comparePaths(a.where, b.where));
@@ -439,14 +504,16 @@ export class FolderObjectStore implements ObjectStore {
   // ---- collection --------------------------------------------------------
 
   async collect(keep: Iterable<Cid>): Promise<Collected> {
-    // Every keep CID checked before anything is touched (§8.3); then, in
+    this.writable("collect");
+    // Every keep CID checked before anything is touched; then, in
     // the store's turn: kept and latched objects are left alone and
     // unlisted, unkept objects within grace of their stamp are `young`,
     // the rest go with their stamps — and stamps with no object, and
-    // staging files a crash left, past grace, go too (§12).
+    // staging files a crash left, past grace, go too.
     const kept = new Set<string>();
     for (const cid of keep) kept.add(rawCidOf(cid).text);
     return this.serialise(async () => {
+      if (this.closed) throw new VaultClosed();
       const now = this.now();
       const unlinked: Cid[] = [];
       const young: Cid[] = [];
@@ -488,7 +555,7 @@ export class FolderObjectStore implements ObjectStore {
   }
 }
 
-/** The stamp of `cid` (r1-D): `local/accepted/objects/<cid>`. */
+/** The stamp of `cid`: `local/accepted/objects/<cid>`. */
 function stampPath(cid: string): string {
   return `${ACCEPTED_DIR}/${cid}`;
 }

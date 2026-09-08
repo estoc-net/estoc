@@ -17,7 +17,7 @@ import { authorN } from "../suite/helpers.js";
 
 const R: Replica = { replica_id: authorN(1), store_generation: "019b2a43-5c8d-75a0-bf82-b2a61a4ce099" };
 
-describe("local/replica.json (vault-folder.md §10.1)", () => {
+describe("local/replica.json", () => {
   it("mints two canonical UUIDv7s, distinct each time", () => {
     const a = mintReplica();
     const b = mintReplica();
@@ -36,7 +36,7 @@ describe("local/replica.json (vault-folder.md §10.1)", () => {
     expect(parseReplica(utf8(JSON.stringify({ store_generation: R.store_generation, replica_id: R.replica_id })))).toEqual(R);
   });
 
-  it("VF-6: a partial, malformed or inconsistent file is DamagedReplica, never repaired by keeping the half that parses", () => {
+  it("a partial, malformed or inconsistent file is DamagedReplica, never repaired by keeping the half that parses", () => {
     const damaged: [string, Uint8Array][] = [
       ["empty", new Uint8Array(0)],
       ["half-written", utf8(`{\n  "replica_id": "${R.replica_id}",\n  "store_gen`)],
@@ -77,7 +77,7 @@ describe("local/replica.json (vault-folder.md §10.1)", () => {
     await expect(readReplica(backend, ".estoc")).rejects.toThrow(".estoc/local/replica.json");
   });
 
-  it("VF-7: openReplica mints and durably writes the file when absent, returns the file's when present, and appends no event", async () => {
+  it("openReplica mints and durably writes the file when absent, returns the file's when present, and appends no event", async () => {
     const backend = new MemoryBackend();
     const minted = await openReplica(backend, ".estoc");
     expect(isUuidv7(minted.replica_id)).toBe(true);

@@ -1,7 +1,7 @@
 /**
- * The blob store over a folder (vault-folder.md §8): one file per block
- * under `blobs/<cid>`, flat; a block's age is its file's modification
- * time; a block found damaged is moved aside and is absent from then on.
+ * The blob store over a folder: one file per block under `blobs/<cid>`,
+ * flat; a block's age is its file's modification time; a block found
+ * damaged is moved aside and is absent from then on.
  */
 
 import type { BlobStore, Collected } from "../blobs.js";
@@ -26,9 +26,9 @@ export class FolderBlobStore implements BlobStore {
   }
 
   /**
-   * A block's bytes as the file holds them, checked against the name
-   * (§8): a file that is not its name's block is moved aside, out of
-   * `blobs/`, and reads as absent.
+   * A block's bytes as the file holds them, checked against the name: a
+   * file that is not its name's block is moved aside, out of `blobs/`,
+   * and reads as absent.
    */
   private async readBlock(cid: string): Promise<Uint8Array | null> {
     if (!isCid(cid)) {
@@ -54,7 +54,7 @@ export class FolderBlobStore implements BlobStore {
     const { root, blocks } = await hashFile(bytes.slice());
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
-      // leaves before root, and a block already here is rewritten so its time is renewed (§8)
+      // leaves before root, and a block already here is rewritten so its time is renewed
       for (const [cid, block] of blocks) {
         await this.ctx.backend.write(this.path(cid), block);
       }

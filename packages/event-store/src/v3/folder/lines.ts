@@ -1,12 +1,11 @@
 /**
- * The lines of a segment (vault-folder.md §2, §6, §8, §11.5). A complete
- * line, its LF excluded, is exactly `canonicalEventBytes(event)` (VF-9):
- * anything else — a trailing fragment, bad UTF-8, bad JSON, a
- * non-canonical spelling, a bad envelope, an author the path does not
- * confirm (VF-2) — is damage, reported by position and never fused with
- * the line after it (VF-10). What a line decodes to is what its bytes
- * parse to, and nothing is recovered from the path: the path confirms
- * authorship, it never supplies it (§6).
+ * The lines of a segment. A complete line, its LF excluded, is exactly
+ * `canonicalEventBytes(event)`: anything else — a trailing fragment,
+ * bad UTF-8, bad JSON, a non-canonical spelling, a bad envelope, an
+ * author the path does not confirm — is damage, reported by position
+ * and never fused with the line after it. What a line decodes to is
+ * what its bytes parse to, and nothing is recovered from the path: the
+ * path confirms authorship, it never supplies it.
  */
 
 import { InvalidEvent } from "../errors.js";
@@ -38,12 +37,12 @@ export function splitLines(bytes: Uint8Array): Line[] {
   return lines;
 }
 
-/** The byte length of a segment's complete lines (§10.3): the offset after its last LF, 0 when it has none. */
+/** The byte length of a segment's complete lines: the offset after its last LF, 0 when it has none. */
 export function acceptedLength(bytes: Uint8Array): number {
   return bytes.lastIndexOf(LF) + 1;
 }
 
-/** Whether a segment's bytes end where a writer may append (§8.1): empty, or terminated. */
+/** Whether a segment's bytes end where a writer may append: empty, or terminated. */
 export function endsClean(bytes: Uint8Array): boolean {
   return bytes.length === 0 || bytes[bytes.length - 1] === LF;
 }
@@ -55,12 +54,12 @@ export interface Decoded {
 }
 
 /**
- * The event one complete line holds (§6, §11.5): UTF-8, JSON, a valid
- * envelope, spelled canonically, and authored by `author` — the
- * directory's. The bytes go to the parser as bytes and are compared as
- * bytes: a byte order mark, which a text decoder would drop, is three
- * bytes the canonical form does not have (r1-C). Throws `InvalidJson`
- * or `InvalidEvent` naming the first rule broken.
+ * The event one complete line holds: UTF-8, JSON, a valid envelope,
+ * spelled canonically, and authored by `author` — the directory's. The
+ * bytes go to the parser as bytes and are compared as bytes: a byte
+ * order mark, which a text decoder would drop, is three bytes the
+ * canonical form does not have. Throws `InvalidJson` or `InvalidEvent`
+ * naming the first rule broken.
  */
 export function decodeLine(bytes: Uint8Array, author: string): Decoded {
   const value = parseStrict(bytes); // `InvalidJson` on bad UTF-8, a BOM, bad syntax, a duplicate member, an unpaired surrogate, a number outside binary64
@@ -92,16 +91,16 @@ export interface SegmentEvent extends Decoded {
 export interface SegmentRead {
   events: SegmentEvent[];
   damaged: Damaged[];
-  /** the byte length of the complete lines (§10.3) */
+  /** the byte length of the complete lines */
   accepted: number;
 }
 
 /**
  * Every line of a segment at `path` under the author directory `author`:
- * the events, and what was not one as `Damaged` naming `<path>:<n>`
- * (§11.5). Only lines within `[from, to)` of the segment's bytes are
- * read; both default to the whole. A fragment is damage wherever it
- * stands, and is never joined with what follows.
+ * the events, and what was not one as `Damaged` naming `<path>:<n>`.
+ * Only lines within `[from, to)` of the segment's bytes are read; both
+ * default to the whole. A fragment is damage wherever it stands, and is
+ * never joined with what follows.
  */
 export function decodeSegment(bytes: Uint8Array, path: string, author: string, from = 0, to = bytes.length): SegmentRead {
   const read: SegmentRead = { events: [], damaged: [], accepted: acceptedLength(bytes) };
@@ -122,7 +121,7 @@ export function decodeSegment(bytes: Uint8Array, path: string, author: string, f
   return read;
 }
 
-/** The lines of a segment written whole (§8): each event's canonical bytes followed by LF (ES-10). */
+/** The lines of a segment written whole: each event's canonical bytes followed by LF. */
 export function encodeLines(events: Event[]): Uint8Array {
   return concat(events.flatMap((event) => [canonicalEventBytes(event), utf8("\n")]));
 }

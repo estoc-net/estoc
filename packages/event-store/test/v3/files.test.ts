@@ -5,7 +5,7 @@ import { expectBytes } from "./suite/helpers.js";
 
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-describe("checkPath (vault-folder.md §2)", () => {
+describe("checkPath", () => {
   it("accepts conforming relative paths, Unicode included", () => {
     for (const path of ["notes.txt", "a/b/c", "résumé/中文.md", ".hidden", "a.b/..c", "x y"]) {
       expect(checkPath(path)).toBe(path);
@@ -18,7 +18,7 @@ describe("checkPath (vault-folder.md §2)", () => {
     }
   });
 
-  it("r1-C rejects an unpaired surrogate anywhere, and keeps a paired one", () => {
+  it("rejects an unpaired surrogate anywhere, and keeps a paired one", () => {
     const high = String.fromCharCode(0xd800);
     const low = String.fromCharCode(0xdc01);
     for (const path of [high, low, `notes/${high}.txt`, `notes/${low}.txt`, `${high}/a`, `a/b${low}c`, `${low}${high}`]) {
@@ -35,7 +35,7 @@ describe("checkPath (vault-folder.md §2)", () => {
   });
 });
 
-describe("owned paths (vault-folder.md §7.1)", () => {
+describe("owned paths", () => {
   it("names the six structural roots", () => {
     expect([...OWNED_ROOTS]).toEqual(["config.json", "keystore.json", "events", "objects", "import", "local"]);
   });
@@ -73,7 +73,7 @@ describe("helpers", () => {
   });
 });
 
-describe("MemoryFileStore (event-store.md §8.1, vault-folder.md §11.6)", () => {
+describe("MemoryFileStore", () => {
   it("writes, reads and lists portable files; a missing path is null", async () => {
     const files = new MemoryFileStore();
     expect(await files.read("notes/a.txt")).toBeNull();
@@ -113,7 +113,7 @@ describe("MemoryFileStore (event-store.md §8.1, vault-folder.md §11.6)", () =>
     expect(await files.list()).toEqual([]);
   });
 
-  it("r1-C refuses a path with an unpaired surrogate on read and write alike; an astral character is a name like any other", async () => {
+  it("refuses a path with an unpaired surrogate on read and write alike; an astral character is a name like any other", async () => {
     const files = new MemoryFileStore();
     const high = String.fromCharCode(0xd800);
     const low = String.fromCharCode(0xdc01);

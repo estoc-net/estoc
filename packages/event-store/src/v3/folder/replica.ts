@@ -1,11 +1,11 @@
 /**
- * This copy's replica identity (vault-folder.md §10.1): `local/replica.json`,
- * holding the author every local append carries and the store
- * generation every change token names. Minted whole on the first
- * writable open and written before any append; read back strictly —
- * a file that is partly there, malformed, or not two canonical UUIDv7s
- * under exactly those two names is damage, never repaired by keeping
- * the half that parses (VF-6). No event records its creation (VF-7).
+ * This copy's replica identity: `local/replica.json`, holding the
+ * author every local append carries and the store generation every
+ * change token names. Minted whole on the first writable open and
+ * written before any append; read back strictly — a file that is partly
+ * there, malformed, or not two canonical UUIDv7s under exactly those
+ * two names is damage, never repaired by keeping the half that parses.
+ * No event records its creation.
  */
 
 import { v7 } from "uuid";
@@ -16,15 +16,15 @@ import { parseStrict } from "../jcs.js";
 import { isJsonObject } from "../json.js";
 import { REPLICA_FILE, prettyJson, text } from "./layout.js";
 
-/** The two values of `local/replica.json` (§10.1). */
+/** The two values of `local/replica.json`. */
 export interface Replica {
-  /** the event author of every local append (§6, event-store.md §4.1) */
+  /** the event author of every local append */
   replica_id: AuthorId;
-  /** this local physical event-store generation, which change tokens name (§10.3) */
+  /** this local physical event-store generation, which change tokens name */
   store_generation: string;
 }
 
-/** `local/replica.json` could not be read as a replica identity (§10.1): the recovery is a human's, never a partial repair. */
+/** `local/replica.json` could not be read as a replica identity: the recovery is a human's, never a partial repair. */
 export class DamagedReplica extends Error {
   constructor(
     readonly path: string,
@@ -35,7 +35,7 @@ export class DamagedReplica extends Error {
   }
 }
 
-/** A fresh identity: two UUIDv7s from the standard generator (§10.1). */
+/** A fresh identity: two UUIDv7s from the standard generator. */
 export function mintReplica(): Replica {
   return { replica_id: v7() as AuthorId, store_generation: v7() };
 }
@@ -68,7 +68,7 @@ export function parseReplica(bytes: Uint8Array, path = REPLICA_FILE): Replica {
   return { replica_id, store_generation };
 }
 
-/** The file as the folder writes it (§2, §10.1): pretty-printed, the two members in this order. */
+/** The file as the folder writes it: pretty-printed, the two members in this order. */
 export function encodeReplica(replica: Replica): Uint8Array {
   return prettyJson({ replica_id: replica.replica_id, store_generation: replica.store_generation });
 }
@@ -81,10 +81,10 @@ export async function readReplica(backend: VaultBackend, base: string): Promise<
 }
 
 /**
- * The replica identity of a writable open (§10.1, §11.1 step 5): the
- * file's when it is there and whole; minted, durably written and
- * returned when the whole file is absent; `DamagedReplica` otherwise.
- * `mint` is the generator, injectable so a test can name the author.
+ * The replica identity of a writable open: the file's when it is there
+ * and whole; minted, durably written and returned when the whole file
+ * is absent; `DamagedReplica` otherwise. `mint` is the generator,
+ * injectable so a test can name the author.
  */
 export async function openReplica(backend: VaultBackend, base: string, mint: () => Replica = mintReplica): Promise<Replica> {
   const have = await readReplica(backend, base);

@@ -1,21 +1,21 @@
 /**
- * The vault, to a program (event-store.md §9): its own three stores, a
- * store per extension, and `dispose`. The folder implements it
- * (`folder/vault.ts`); a map in memory implements the stores
- * (`memory-vault.ts`); export and import loop over them (§10).
+ * The vault, to a program: its own three stores, a store per extension,
+ * and `dispose`. The folder implements it (`folder/vault.ts`); a map in
+ * memory implements the stores (`memory-vault.ts`); export and import
+ * loop over them.
  */
 
 import type { BlobStore } from "./blobs.js";
 import type { EventStore } from "./event.js";
 import type { FileStore } from "./files.js";
 
-/** An extension's two stores (§8): the vault's shape again, less files. */
+/** An extension's two stores: the vault's shape again, less files. */
 export interface Stores {
   events: EventStore;
   blobs: BlobStore;
 }
 
-/** What export reads and import writes (§10): the stores, and the map from `ext` to an extension's. */
+/** What export reads and import writes: the stores, and the map from `ext` to an extension's. */
 export interface VaultStores {
   events: EventStore;
   blobs: BlobStore;
@@ -27,6 +27,6 @@ export interface VaultStores {
 }
 
 export interface Vault extends VaultStores {
-  /** Store and local state, whole; every handle dead (§8). */
+  /** Store and local state, whole; every handle dead. */
   dispose(ext: string): Promise<void>;
 }

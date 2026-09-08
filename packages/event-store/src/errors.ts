@@ -1,6 +1,6 @@
 import type { Event } from "./event.js";
 
-/** A value that is not an event (event-store.md §2.4) or a draft that cannot become one. */
+/** A value that is not an event or a draft that cannot become one. */
 export class InvalidEvent extends Error {
   constructor(message: string) {
     super(message);
@@ -9,9 +9,9 @@ export class InvalidEvent extends Error {
 }
 
 /**
- * `ingest` met an event authored by `self` that this store does not hold
- * (§4.2): two writers have shared one device. Nothing was written; the
- * person decides, usually by minting a fresh device and importing again.
+ * `ingest` met an event authored by `self` that this store does not hold:
+ * two writers have shared one device. Nothing was written; the person
+ * decides, usually by minting a fresh device and importing again.
  */
 export class ForkedSelf extends Error {
   constructor(
@@ -23,7 +23,7 @@ export class ForkedSelf extends Error {
   }
 }
 
-/** A `ChangeToken` this store instance cannot place (§4.4): refold from `scan`. */
+/** A `ChangeToken` this store instance cannot place: refold from `scan`. */
 export class BadToken extends Error {
   constructor(message: string) {
     super(message);
@@ -31,7 +31,7 @@ export class BadToken extends Error {
   }
 }
 
-/** A block that is not what its name says (§5.1): never stored, never served. */
+/** A block that is not what its name says: never stored, never served. */
 export class BadBlock extends Error {
   constructor(
     readonly cid: string,
@@ -50,7 +50,7 @@ export class NotAFile extends Error {
   }
 }
 
-/** A handle to an extension store this instance disposed of (§8): every method rejects, for good. */
+/** A handle to an extension store this instance disposed of: every method rejects, for good. */
 export class Disposed extends Error {
   constructor(readonly ext: string) {
     super(`extension store ${ext} was disposed of`);
@@ -58,7 +58,7 @@ export class Disposed extends Error {
   }
 }
 
-/** The folder is not a version-2 vault (vault-folder.md §11): nothing was read past `config.json`, nothing written. */
+/** The folder is not a version-2 vault: nothing was read past `config.json`, nothing written. */
 export class NotAVault extends Error {
   constructor(message: string) {
     super(message);
@@ -67,9 +67,9 @@ export class NotAVault extends Error {
 }
 
 /**
- * The source of a merge is another vault (vault-folder.md §6.1): its
- * `config.json` — format, version, anchor — is not this one's. Nothing
- * was written; two identities are two vaults.
+ * The source of a merge is another vault: its `config.json` — format,
+ * version, anchor — is not this one's. Nothing was written; two
+ * identities are two vaults.
  */
 export class NotSameVault extends Error {
   constructor(message: string) {

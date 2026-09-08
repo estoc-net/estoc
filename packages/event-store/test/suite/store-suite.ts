@@ -36,7 +36,7 @@ function foldAll(events: Event[]): Folded {
 }
 
 /**
- * The conformance suite of event-store.md §4: what every EventStore
+ * The conformance suite of the event store: what every EventStore
  * promises, whatever it is made of. `open` gives the suite fresh stores;
  * a store that passes here reads and writes the same set as any other.
  */

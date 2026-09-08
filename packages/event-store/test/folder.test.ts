@@ -412,7 +412,7 @@ describe("folder: kindOf", () => {
     expect(kindOf(`extensions/01990000-0000-7000-8000-0000000000ee/devices/${dev}/01990000-0000-7000-8000-000000000010.jsonl`)).toBe("segment");
     expect(kindOf(`extensions/onion/blobs/${HELLO_CID}`)).toBe("file");
     expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee")).toBe("file");
-    // an extension's tree has no local/ and no extensions/ of its own (§3.1): such paths are files, carried
+    // an extension's tree has no local/ and no extensions/ of its own: such paths are files, carried
     expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee/local/self.json")).toBe("file");
     expect(kindOf(`extensions/01990000-0000-7000-8000-0000000000ee/extensions/01990000-0000-7000-8000-0000000000ef/blobs/${HELLO_CID}`)).toBe("file");
     expect(kindOf("extensions/01990000-0000-7000-8000-0000000000ee/config.json")).toBe("file");

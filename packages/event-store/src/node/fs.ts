@@ -1,7 +1,9 @@
-import { appendFile, chmod, mkdir, open, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { segmentsOf, type VaultBackend } from "../backend/types.js";
+
+import { segmentsOf, type Ownership, type VaultBackend } from "../backend/types.js";
+import { own } from "./ownership.js";
 
 /**
  * A vault in a folder on disk. Whole-file writes go to a sibling temp file
@@ -21,6 +23,15 @@ import { segmentsOf, type VaultBackend } from "../backend/types.js";
  * throws — and `rename` is the platform's, atomic over an existing
  * file. `open` reads through a file handle in fixed pieces, closed when
  * the stream ends or is cancelled.
+ *
+ * Ownership is a pid file at the name given, taken and kept as
+ * `./ownership.ts` says: created whole, read back, live while the
+ * process it names is — a worker's record outlives the worker until
+ * its process exits — or, naming this thread, while the process's
+ * origin is this incarnation's; stale and reclaimed otherwise, judged
+ * from the disk alone, with no advisory file lock; and withdrawn whole
+ * when the take is over, whether released or failed, the next take a
+ * new line.
  */
 export interface FsBackendOptions {
   /**
@@ -105,7 +116,7 @@ export class FsBackend implements VaultBackend {
       const handle = await open(tmp, "wx");
       try {
         for await (const chunk of source) {
-          // A write may take fewer bytes than offered (r1-A): the rest
+          // A write may take fewer bytes than offered: the rest
           // is offered again until the chunk is down, and no progress
           // at all is a failure, never a shorter file.
           let at = 0;
@@ -222,6 +233,13 @@ export class FsBackend implements VaultBackend {
       }
       throw err;
     }
+  }
+
+  /** The pid file at `p`, its directory made, taken by its real path so that two names of one place are one name. */
+  async own(p: string): Promise<Ownership> {
+    const file = this.at(p);
+    await mkdir(path.dirname(file), { recursive: true });
+    return own(path.join(await realpath(path.dirname(file)), path.basename(file)), p);
   }
 }
 

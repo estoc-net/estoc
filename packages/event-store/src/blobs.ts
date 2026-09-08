@@ -1,6 +1,5 @@
 /**
- * The blob store (event-store.md §5): a block store of the profile, and
- * its in-memory form.
+ * The blob store: a block store of the profile, and its in-memory form.
  */
 
 import { checkBlock, hashFile, readFile, reachable } from "./blocks.js";
@@ -13,7 +12,7 @@ export interface BlobStore {
   /** The file's bytes, chunks rejoined; null if the root or any chunk is absent; throws on a node that is not a file. */
   get(root: Cid): Promise<Uint8Array | null>;
   // blocks — what the profile's trees are made of
-  /** Checked against `cid` (§5.1); the only way in for a block minted elsewhere. */
+  /** Checked against `cid`; the only way in for a block minted elsewhere. */
   putBlock(cid: Cid, bytes: Uint8Array): Promise<void>;
   getBlock(cid: Cid): Promise<Uint8Array | null>;
   has(cid: Cid): Promise<boolean>;
@@ -30,7 +29,7 @@ export interface Collected {
 }
 
 /**
- * How old an unreferenced block must be before `collect` takes it (§5.3):
+ * How old an unreferenced block must be before `collect` takes it:
  * generous, because the write it may belong to is bounded by a process,
  * not a clock.
  */
@@ -43,7 +42,7 @@ export interface MemoryBlobStoreOptions {
 
 interface Held {
   bytes: Uint8Array;
-  /** when this copy last wrote the block (§5.3) */
+  /** when this copy last wrote the block */
   written: number;
 }
 
@@ -66,7 +65,7 @@ export class MemoryBlobStore implements BlobStore {
 
   /**
    * Store a block, or renew its write time if held: the clock moves either
-   * way (§5.3). `bytes` must already be the store's own copy.
+   * way. `bytes` must already be the store's own copy.
    */
   private hold(cid: string, bytes: Uint8Array): void {
     const have = this.blocks.get(cid);

@@ -21,10 +21,10 @@ const A1 = authorN(1);
 const A2 = authorN(2);
 const ID = uuidv7At(Date.UTC(2026, 8, 7, 10), 0x1234abcd);
 const EVENT = { eventId: ID, at: "2026-09-07T10:00:00.000Z", author: A1, type: "t", roots: [], data: { b: 1, a: "x" } } as unknown as Event;
-/** the one spelling the folder stores (§2, VF-9) */
+/** the one spelling the folder stores */
 const CANONICAL = `{"at":"2026-09-07T10:00:00.000Z","author":"${A1}","data":{"a":"x","b":1},"eventId":"${ID}","roots":[],"type":"t"}`;
 
-describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
+describe("lines", () => {
   it("splitLines finds each line's byte range, numbered from 1; an unterminated tail is not whole", () => {
     expect(splitLines(new Uint8Array(0))).toEqual([]);
     expect(splitLines(utf8("ab\ncd\n"))).toEqual([
@@ -48,7 +48,7 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(endsClean(utf8("ab"))).toBe(false);
   });
 
-  it("ES-10, VF-9: encodeLines writes each event's RFC 8785 bytes and one LF, and decodeLine reads exactly that back", () => {
+  it("encodeLines writes each event's RFC 8785 bytes and one LF, and decodeLine reads exactly that back", () => {
     const bytes = encodeLines([EVENT]);
     expectBytes(bytes, utf8(`${CANONICAL}\n`));
     expectBytes(canonicalEventBytes(EVENT), utf8(CANONICAL));
@@ -58,7 +58,7 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(Object.keys(decoded.event)).toEqual(["at", "author", "data", "eventId", "roots", "type"]);
   });
 
-  it("VF-9: a line that is not the event's canonical bytes is damage, however valid its JSON", () => {
+  it("a line that is not the event's canonical bytes is damage, however valid its JSON", () => {
     const spellings = [
       JSON.stringify(EVENT), // compact, members in the writer's order
       `${CANONICAL} `, // trailing space
@@ -77,7 +77,7 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(() => decodeLine(utf8(JSON.stringify(EVENT)), A1)).toThrow("not the event's RFC 8785 canonical bytes");
   });
 
-  it("§11.5: bad UTF-8, bad JSON, a non-object, a bad envelope and a duplicate member are each damage with their own reason", () => {
+  it("bad UTF-8, bad JSON, a non-object, a bad envelope and a duplicate member are each damage with their own reason", () => {
     expect(() => decodeLine(new Uint8Array([0x7b, 0xff, 0x7d]), A1)).toThrow(InvalidJson);
     expect(() => decodeLine(new Uint8Array([0x7b, 0xff, 0x7d]), A1)).toThrow(/UTF-8/);
     expect(() => decodeLine(utf8("{"), A1)).toThrow(InvalidJson);
@@ -88,7 +88,7 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(() => decodeLine(utf8(CANONICAL.replace("Z\"", "\"")), A1)).toThrow(InvalidEvent);
   });
 
-  it("r1-C: a byte order mark in front of a canonical line is three bytes the canonical form does not have — damage, on the first line and on any later one; U+FEFF inside a string value is content and stays", () => {
+  it("a byte order mark in front of a canonical line is three bytes the canonical form does not have — damage, on the first line and on any later one; U+FEFF inside a string value is content and stays", () => {
     const BOM = new Uint8Array([0xef, 0xbb, 0xbf]);
     const withBom = concat([BOM, utf8(CANONICAL)]);
     expect(() => decodeLine(withBom, A1)).toThrow(InvalidJson);
@@ -109,12 +109,12 @@ describe("lines (vault-folder.md §2, §6, §8, §11.5)", () => {
     expect(text(line)).toContain("\ufeffx");
   });
 
-  it("VF-2: the path confirms authorship and never supplies it — a canonical line under another author's directory is damage", () => {
+  it("the path confirms authorship and never supplies it — a canonical line under another author's directory is damage", () => {
     expect(() => decodeLine(utf8(CANONICAL), A2)).toThrow(`author ${A1} in a segment of ${A2}`);
     expect(decodeLine(utf8(CANONICAL), A1).event.author).toBe(A1);
   });
 
-  it("VF-10: decodeSegment reports a fragment by position and never joins it with the next line; every other line stands on its own", () => {
+  it("decodeSegment reports a fragment by position and never joins it with the next line; every other line stands on its own", () => {
     const good = `${CANONICAL}\n`;
     const other = CANONICAL.replace(ID, uuidv7At(Date.UTC(2026, 8, 7, 11), 0x1));
     const bytes = utf8(`${good}{"at":"2026-09-07T10:00:00.000Z","aut`);

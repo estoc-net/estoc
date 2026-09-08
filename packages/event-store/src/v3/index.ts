@@ -1,16 +1,17 @@
 /**
- * `@estoc/event-store/v3` — the version-3 event model of
- * `docs/replica-model/event-store.md`, built beside version 2 until the
- * vault switches over: RFC 8785 canonical JSON and the strict parser
- * (§3.3), the six-field envelope and its validation (§3.4), identity,
- * time and canonical order (§4), the store interface (§5), and minting
- * — `at` from the clock, `eventId` from `uuid`'s standard UUIDv7
- * generator (§4.2); and the store in memory, the reference every other
- * store is measured against. Beside it the object model of
- * `dasl-objects.md`: raw DASL objects, the `ObjectStore` interface, the
- * read latch, and the store in memory. Portable files (§8.1) and the
- * vault itself (§10): the interfaces, the writer lock, the held view,
- * and the vault in memory. No event type.
+ * `@estoc/event-store/v3` — the version-3 event model of the replica
+ * model, built beside version 2 until the vault switches over: RFC 8785
+ * canonical JSON and the strict parser, the six-field envelope and its
+ * validation, identity, time and canonical order, the store interface,
+ * and minting — `at` from the clock, `eventId` from `uuid`'s standard
+ * UUIDv7 generator; and the store in memory, the reference every other
+ * store is measured against. Beside it the object model: raw DASL
+ * objects, the `ObjectStore` interface, the read latch, and the store
+ * in memory. Portable files and the vault itself: the interfaces, the
+ * writer lock, the held view, and the vault in memory. And the folder:
+ * the layout, the segments, the replica, the three folder stores, this
+ * copy's local state, and the vault over them, opened for writing under
+ * the backend's ownership or for reading. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -95,7 +96,54 @@ export { splitLines, acceptedLength, endsClean, decodeLine, decodeSegment, encod
 export { DamagedReplica, mintReplica, parseReplica, encodeReplica, readReplica, openReplica, type Replica } from "./folder/replica.js";
 export { FolderEventStore, ROTATE_BYTES, type FolderEventStoreOptions } from "./folder/events.js";
 export { FolderObjectStore, STAGING_DIR, DAMAGED_DIR, ACCEPTED_DIR, type FolderObjectStoreOptions } from "./folder/objects.js";
-export type { VaultBackend } from "../backend/types.js";
+export { FORMAT, VERSION, ANCHOR_KEY, parseConfig, encodeConfig, parseJsonFile, type Config } from "./folder/config.js";
+export { checkKeystore } from "./folder/keystore.js";
+export { FolderFileStore } from "./folder/files.js";
+export {
+  FolderLocalEventStore,
+  LocalOwner,
+  DEFAULT_ROTATION,
+  compareLocalEvents,
+  isLocalEvent,
+  matchesLocal,
+  segmentTime,
+  type LocalEvent,
+  type LocalFilter,
+  type LocalEventStore,
+  type LocalCache,
+  type LocalOptions,
+  type RetentionPolicy,
+  type PruneReport,
+  type Rotation,
+} from "./folder/local.js";
+export {
+  FolderVault,
+  FolderReader,
+  OWNER_FILE,
+  type FolderVaultOptions,
+  type OpenWritableOptions,
+  type OpenReadOnlyOptions,
+  type CreateOptions,
+} from "./folder/vault.js";
+export type { VaultBackend, Ownership } from "../backend/types.js";
+export { VaultOwned } from "../backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
 
-export { InvalidJson, InvalidEvent, ForkedAuthor, BadToken, InvalidCid, DigestMismatch, ObjectTooLarge, DamagedObject, MissingRoot, DamagedLayout } from "./errors.js";
+export {
+  InvalidJson,
+  InvalidEvent,
+  ForkedAuthor,
+  BadToken,
+  InvalidCid,
+  DigestMismatch,
+  ObjectTooLarge,
+  DamagedObject,
+  MissingRoot,
+  DamagedLayout,
+  NotAVault,
+  AnchorMismatch,
+  PendingImport,
+  ReadOnlyVault,
+  Unprotected,
+  VaultClosed,
+} from "./errors.js";

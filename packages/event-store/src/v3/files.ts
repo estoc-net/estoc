@@ -1,35 +1,33 @@
 /**
- * Portable files, version 3 (event-store.md §8.1): what a vault carries
- * that is neither an event nor an object, named by path. The paths are
- * the folder's (vault-folder.md §2); the six structural roots of §3 are
- * owned by the operations that write them (§7.1), and a file store
- * refuses them; everything else is an opaque portable file the store
- * carries without reading (§7.3). The interface, the path rules every
- * store agrees on, and the store in memory.
+ * Portable files, version 3: what a vault carries that is neither an
+ * event nor an object, named by path. The paths are the folder's; the
+ * six structural roots are owned by the operations that write them, and
+ * a file store refuses them; everything else is an opaque portable file
+ * the store carries without reading. The interface, the path rules
+ * every store agrees on, and the store in memory.
  */
 
 export interface FileStore {
   /** The bytes at `path`, or `null`; throws on a path that is not a file's. */
   read(path: string): Promise<Uint8Array | null>;
-  /** Replace or create the portable file at `path`, whole (vault-folder.md §11.6); throws on an owned or structural path, or one that would be both a file and a directory. */
+  /** Replace or create the portable file at `path`, whole; throws on an owned or structural path, or one that would be both a file and a directory. */
   write(path: string, bytes: Uint8Array): Promise<void>;
   /** Every portable file's path, sorted by code point; never a segment, an object, or anything under `local/` or `import/`. */
   list(): Promise<string[]>;
 }
 
-/** The structural roots of vault-folder.md §3, which a file store never writes (§7.1). */
+/** The folder's structural roots, which a file store never writes. */
 export const OWNED_ROOTS: readonly string[] = Object.freeze(["config.json", "keystore.json", "events", "objects", "import", "local"]);
 
 /** A UTF-16 code unit that is not part of a pair: a string holding one has no UTF-8 form. */
 const UNPAIRED_SURROGATE = /\p{Cs}/u;
 
 /**
- * A conforming relative path (vault-folder.md §2): `/`-separated,
- * non-empty components, none `.` or `..`, no NUL, no backslash, not
- * absolute, and UTF-8 — so no unpaired surrogate, which no folder or
- * archive could hold as the name it was given. Returns `path`; throws
- * otherwise. Unicode is allowed and compared by code point, never
- * case-folded or normalized.
+ * A conforming relative path: `/`-separated, non-empty components, none
+ * `.` or `..`, no NUL, no backslash, not absolute, and UTF-8 — so no
+ * unpaired surrogate, which no folder or archive could hold as the name
+ * it was given. Returns `path`; throws otherwise. Unicode is allowed
+ * and compared by code point, never case-folded or normalized.
  */
 export function checkPath(path: string): string {
   if (typeof path !== "string" || path === "") throw new Error(`not a path: ${JSON.stringify(path)}`);
@@ -42,17 +40,17 @@ export function checkPath(path: string): string {
   return path;
 }
 
-/** Is `path` one of the owned roots, or under one (vault-folder.md §7.1)? A checked path. */
+/** Is `path` one of the owned roots, or under one? A checked path. */
 export function isOwnedPath(path: string): boolean {
   const root = path.split("/", 1)[0] as string;
   return OWNED_ROOTS.includes(root);
 }
 
 /**
- * A path a file store writes (vault-folder.md §7.1, §11.6): `checkPath`,
- * and not owned. Throws otherwise. `config.json` and `keystore.json`
- * are written by the operation that creates or restores a vault, never
- * through this interface.
+ * A path a file store writes: `checkPath`, and not owned. Throws
+ * otherwise. `config.json` and `keystore.json` are written by the
+ * operation that creates or restores a vault, never through this
+ * interface.
  */
 export function checkFilePath(path: string): string {
   checkPath(path);
@@ -66,7 +64,7 @@ export function ancestorsOf(path: string): string[] {
   return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
-/** Code-point order (vault-folder.md §2), which `<` on strings is not for characters outside the BMP. */
+/** Code-point order, which `<` on strings is not for characters outside the BMP. */
 export function comparePaths(a: string, b: string): number {
   const ia = a[Symbol.iterator]();
   const ib = b[Symbol.iterator]();
@@ -85,7 +83,7 @@ export function comparePaths(a: string, b: string): number {
  * The file store as a map in memory: the reference for the interface,
  * and what the vault in memory carries. Bytes in and out are copies —
  * what is held is the store's own. Nothing persists, so the
- * process-durable half of vault-folder.md §11.6 is vacuous here; the
+ * process-durable half of a file write's promise is vacuous here; the
  * whole-file half is not: a write is one synchronous replacement.
  */
 export class MemoryFileStore implements FileStore {

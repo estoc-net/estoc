@@ -1,24 +1,24 @@
 /**
- * The bytes layer under a folder store (vault-folder.md §9): a small
- * file-system interface — read, write, append, remove, size, modified,
- * list, dirs — that the folder store is written against and knows the
- * tree above. Three implementations ship: OPFS for the browser, a folder
- * on disk for Node, memory for tests. Paths are `/`-separated, relative
- * to the vault root, never absolute, never containing `.` or `..`.
- * A file and a directory are told apart by every query: what asks
- * about a file (`read`, `size`, `modified`) answers null for a
- * directory, and what asks about a directory (`list`, `dirs`) answers
- * [] for a file, as each does for a path that is not there.
+ * The bytes layer under a folder store: a small file-system interface —
+ * read, write, append, remove, size, modified, list, dirs — that the
+ * folder store is written against and knows the tree above. Three
+ * implementations ship: OPFS for the browser, a folder on disk for Node,
+ * memory for tests. Paths are `/`-separated, relative to the vault root,
+ * never absolute, never containing `.` or `..`. A file and a directory
+ * are told apart by every query: what asks about a file (`read`, `size`,
+ * `modified`) answers null for a directory, and what asks about a
+ * directory (`list`, `dirs`) answers [] for a file, as each does for a
+ * path that is not there.
  *
  * Whole-file writes are atomic in the sense a crash never leaves a
  * half-written file where a good one was; appends may leave a cut-short
- * last line, which the folder store reports and heals (§5).
+ * last line, which the folder store reports and heals.
  *
- * Three members are for bytes too large to hold whole (dasl-objects.md
- * §5): `open` streams a file out, `create` streams one in and makes it
- * visible only once its source has ended — a source that throws leaves
- * the path as it was — and `rename` moves a file into place, replacing
- * what stood there, so a file can be written before its name is known.
+ * Three members are for bytes too large to hold whole: `open` streams a
+ * file out, `create` streams one in and makes it visible only once its
+ * source has ended — a source that throws leaves the path as it was —
+ * and `rename` moves a file into place, replacing what stood there, so a
+ * file can be written before its name is known.
  */
 export interface VaultBackend {
   /** File contents, or null if there is no such file (a directory is not one). */
@@ -59,6 +59,30 @@ export interface VaultBackend {
    * `from`.
    */
   rename(from: string, to: string): Promise<void>;
+  /**
+   * Take exclusive ownership of the name `path` — a path under the
+   * vault root that the backend may or may not make a file of — or
+   * throw `VaultOwned` at once when another holder has it; never wait.
+   * Ownership is a process's: it ends at `release`, or when the
+   * process holding it is gone.
+   */
+  own(path: string): Promise<Ownership>;
+}
+
+/** Ownership taken by `own`: released once; releasing again does nothing. */
+export interface Ownership {
+  release(): Promise<void>;
+}
+
+/** `own` found the name held by another holder: nothing was taken. */
+export class VaultOwned extends Error {
+  constructor(
+    readonly path: string,
+    detail: string
+  ) {
+    super(`${path} is owned elsewhere: ${detail}`);
+    this.name = "VaultOwned";
+  }
 }
 
 /**

@@ -43,7 +43,7 @@ describe("a vault on disk", () => {
     expect(await vault.files.read("state")).toBeNull();
   });
 
-  it("lays the tree out as vault-folder.md §3 draws it, and a second process carries on", async () => {
+  it("lays the tree out as the layout draws it, and a second process carries on", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
     const vault = await FolderVault.create(backend, { identity: { anchor: { key: "anchor", did: "did:key:z6MkTest" } } });

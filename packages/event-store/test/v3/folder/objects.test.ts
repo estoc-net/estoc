@@ -28,7 +28,7 @@ const HOUR = 60 * 60 * 1000;
 const BASE = ".estoc";
 const HELLO = new TextEncoder().encode("hello");
 
-/** The suite's options as a store takes them: `extentBytes` is nobody's here — a folder has no extents (DO-6 holds by construction). */
+/** The suite's options as a store takes them: `extentBytes` is nobody's here — a folder has no extents. */
 function storeOptions(options: OpenObjectOptions): ConstructorParameters<typeof FolderObjectStore>[1] {
   return {
     base: BASE,
@@ -111,8 +111,8 @@ for (const [name, fresh] of [
   ["over MemoryBackend", overMemory],
   ["over FsBackend", overDisk],
 ] as const) {
-  describe(`FolderObjectStore ${name} (vault-folder.md §9, dasl-objects.md §10)`, () => {
-    it("§9, VF-27, VF-28: an accepted object is one file, objects/<cid>, holding exactly its bytes — nothing else under objects/, nothing left in staging", async () => {
+  describe(`FolderObjectStore ${name}`, () => {
+    it("an accepted object is one file, objects/<cid>, holding exactly its bytes — nothing else under objects/, nothing left in staging", async () => {
       const { backend, store } = await fresh();
       const bytes = bytesOf(300 * 1024 + 11, 1);
       const cid = (await store.putRaw(chunked(bytes, [100_000, 100_000, 100_000]))).cid;
@@ -127,7 +127,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, STAGING_DIR)).toEqual([]);
     });
 
-    it("DO-5, DO-17, VF-32: a second store over the same folder finds the object, by presence, by stat, by list, by open — the bytes and the CID the same", async () => {
+    it("a second store over the same folder finds the object, by presence, by stat, by list, by open — the bytes and the CID the same", async () => {
       const { store, reopen } = await fresh();
       const bytes = bytesOf(50_000, 2);
       const cid = (await store.putRaw(bytes)).cid;
@@ -139,7 +139,7 @@ for (const [name, fresh] of [
       expectBytes(await again.read(cid, bytes.length), bytes);
     });
 
-    it("DO-4, §12: a refused put — a mismatch, an oversize source, a source that throws — leaves nothing in objects/ and nothing in staging", async () => {
+    it("a refused put — a mismatch, an oversize source, a source that throws — leaves nothing in objects/ and nothing in staging", async () => {
       const { backend, store } = await fresh({ maxObjectBytes: 10_000 });
       const bytes = bytesOf(5_000, 3);
       await expect(store.putObject(cidOf(bytes), bytesOf(5_000, 4))).rejects.toThrow(DigestMismatch);
@@ -154,7 +154,7 @@ for (const [name, fresh] of [
       expect(await all(store.list())).toEqual([]);
     });
 
-    it("DO-12, DO-21, §12: a staging file a crash left is not an object and is swept by collect once past grace; one being written is not", async () => {
+    it("a staging file a crash left is not an object and is swept by collect once past grace; one being written is not", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: HOUR });
       await backend.write(`${BASE}/${STAGING_DIR}/019b0000-0000-7000-8000-000000000001`, bytesOf(100, 6)); // as a crash mid-put would leave it
@@ -186,7 +186,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, STAGING_DIR)).toEqual([]);
     });
 
-    it("VF-13, DO-13, DO-16: a file whose bytes do not spell its name reads as present until looked at; the stream then fails, the file goes to local/damaged/objects/, and presence is gone", async () => {
+    it("a file whose bytes do not spell its name reads as present until looked at; the stream then fails, the file goes to local/damaged/objects/, and presence is gone", async () => {
       const { backend, store } = await fresh();
       const bytes = bytesOf(2_000, 9);
       const cid = (await store.putRaw(bytes)).cid;
@@ -214,7 +214,7 @@ for (const [name, fresh] of [
       expectBytes(await fileAt(backend, `${DAMAGED_DIR}/${cid}.1`), bytesOf(2_000, 11));
     });
 
-    it("§6.2: a put that heals a damaged object while a stream over the old bytes is still open is not undone by that stream's failure", async () => {
+    it("a put that heals a damaged object while a stream over the old bytes is still open is not undone by that stream's failure", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now });
       const bytes = bytesOf(1_000, 12);
@@ -236,7 +236,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, DAMAGED_DIR)).toEqual([]);
     });
 
-    it("r1-C: a heal of the same length in the same clock tick, under a stream opened on the damaged bytes, stands — the stale stream may fail, the healed object is not moved aside", async () => {
+    it("a heal of the same length in the same clock tick, under a stream opened on the damaged bytes, stands — the stale stream may fail, the healed object is not moved aside", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now });
       const cid = (await store.putRaw(HELLO)).cid;
@@ -256,7 +256,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, "objects")).toEqual([cid]);
     });
 
-    it("r1-D, §8.3: an object's age counts from its acceptance, recorded as local/accepted/objects/<cid>: written with the move, renewed by a repeat, removed with the object or when the object is gone; an object with no stamp is stamped and young", async () => {
+    it("an object's age counts from its acceptance, recorded as local/accepted/objects/<cid>: written with the move, renewed by a repeat, removed with the object or when the object is gone; an object with no stamp is stamped and young", async () => {
       const c = clock(T0);
       const { backend, store, reopen } = await fresh({ now: c.now, graceMs: HOUR });
       const cid = (await store.putRaw(bytesOf(10, 30))).cid;
@@ -291,7 +291,7 @@ for (const [name, fresh] of [
       expect(await namesUnder(backend, ACCEPTED_DIR)).toEqual([kept]);
     });
 
-    it("r2-A: the stamp records a completed acceptance — a move that takes longer than grace leaves the object young; a crash before the stamp, on a first or a repeated acceptance, leaves it of unknown age, stamped and young at the next pass", async () => {
+    it("the stamp records a completed acceptance — a move that takes longer than grace leaves the object young; a crash before the stamp, on a first or a repeated acceptance, leaves it of unknown age, stamped and young at the next pass", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: HOUR });
       // The move itself takes longer than grace: the clock moves on inside `rename`.
@@ -342,7 +342,7 @@ for (const [name, fresh] of [
       expect(await store.has(orphan)).toBe(true);
     });
 
-    it("VF-13, VF-16, DO-3, DO-15: an entry under objects/ that is not an object path is damage — reported, listed as nothing, left by collection, moved aside by verify", async () => {
+    it("an entry under objects/ that is not an object path is damage — reported, listed as nothing, left by collection, moved aside by verify", async () => {
       const c = clock(T0);
       const { backend, store } = await fresh({ now: c.now, graceMs: 0 });
       const cid = (await store.putRaw(HELLO)).cid;
@@ -363,7 +363,7 @@ for (const [name, fresh] of [
       expect(await store.verify()).toEqual([{ where: "objects/nested", error: "a directory where an object belongs" }]);
     });
 
-    it("VF-31, DO-13: verify reads every object whole and moves aside the ones whose bytes do not spell their names, reporting the CID the bytes do have", async () => {
+    it("verify reads every object whole and moves aside the ones whose bytes do not spell their names, reporting the CID the bytes do have", async () => {
       const { backend, store } = await fresh();
       const good = bytesOf(3_000, 14);
       const goodCid = (await store.putRaw(good)).cid;
@@ -378,7 +378,7 @@ for (const [name, fresh] of [
       expect(await store.verify()).toEqual([]);
     });
 
-    it("§3, VF-16: a file where objects/ belongs is damage — reported, an empty store to read, and refused by every put before a byte lands", async () => {
+    it("a file where objects/ belongs is damage — reported, an empty store to read, and refused by every put before a byte lands", async () => {
       const { backend, store } = await fresh();
       await backend.write(`${BASE}/objects`, HELLO);
       expect(await store.damaged()).toEqual([{ where: "objects", error: "a file where the objects directory belongs" }]);
@@ -400,7 +400,7 @@ for (const [name, fresh] of [
       expectBytes(await backend.read(`${BASE}/objects`), HELLO); // untouched
     });
 
-    it("DO-11, DO-20, §8.3: across a reopen, an orphan's age is its file's — kept by a keep set, unlinked past grace; and the file is gone from the folder", async () => {
+    it("across a reopen, an orphan's age is its file's — kept by a keep set, unlinked past grace; and the file is gone from the folder", async () => {
       const c = clock(T0);
       const { backend, store, reopen } = await fresh({ now: c.now, graceMs: HOUR });
       const kept = (await store.putRaw(bytesOf(10, 17))).cid;
@@ -415,7 +415,7 @@ for (const [name, fresh] of [
       expect(await again.has(kept)).toBe(true);
     });
 
-    it("§10 latch: a stream opened by one store handle over the folder is honoured by another sharing its registry, and not by one that does not", async () => {
+    it("the latch: a stream opened by one store handle over the folder is honoured by another sharing its registry, and not by one that does not", async () => {
       const c = clock(T0);
       const { store, reopen } = await fresh({ now: c.now, graceMs: 0 });
       const cid = (await store.putRaw(bytesOf(10, 19))).cid;
@@ -430,7 +430,7 @@ for (const [name, fresh] of [
 }
 
 describe("FolderObjectStore on disk", () => {
-  it("DO-7, §5: a large object is one file on disk, streamed in and out in fixed pieces, no temp file beside it afterwards", async () => {
+  it("a large object is one file on disk, streamed in and out in fixed pieces, no temp file beside it afterwards", async () => {
     const { backend, store, root } = await overDisk();
     const size = 6 * 1024 * 1024 + 3;
     const piece = 64 * 1024;
@@ -453,7 +453,7 @@ describe("FolderObjectStore on disk", () => {
     expect(chunks).toBeGreaterThan(1);
   });
 
-  it("r1-A: a file handle that takes only part of each write is written until every byte is down; the file is the whole object", async () => {
+  it("a file handle that takes only part of each write is written until every byte is down; the file is the whole object", async () => {
     const { store, root } = await overDisk();
     const probe = await fsOpen(path.join(root as string, "probe"), "w");
     type Write = (this: unknown, buffer: Uint8Array, ...rest: unknown[]) => Promise<{ bytesWritten: number }>;
@@ -476,7 +476,7 @@ describe("FolderObjectStore on disk", () => {
     }
   });
 
-  it("r1-D: with the platform's clock, an object whose source idled after its last chunk is young right after acceptance, and a reopened store reads the same acceptance", async () => {
+  it("with the platform's clock, an object whose source idled after its last chunk is young right after acceptance, and a reopened store reads the same acceptance", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
     const store = new FolderObjectStore(backend, { base: BASE, graceMs: 100 });
@@ -491,7 +491,7 @@ describe("FolderObjectStore on disk", () => {
     expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [cid], young: [] });
   });
 
-  it("r2-A: with the platform's clock, a move that waits longer than grace before completing leaves the object young right after acceptance, in this store and a reopened one", async () => {
+  it("with the platform's clock, a move that waits longer than grace before completing leaves the object young right after acceptance, in this store and a reopened one", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
     const slowMove = new Proxy(backend, {
@@ -511,7 +511,7 @@ describe("FolderObjectStore on disk", () => {
     expect(await new FolderObjectStore(backend, { base: BASE, graceMs: 100 }).collect([])).toEqual({ unlinked: [cid], young: [] });
   });
 
-  it("DO-16 on disk: a byte flipped in the file behind the backend's back fails the read and moves the file aside", async () => {
+  it("on disk: a byte flipped in the file behind the backend's back fails the read and moves the file aside", async () => {
     const { store, root, backend } = await overDisk();
     const bytes = bytesOf(100_000, 20);
     const cid = (await store.putRaw(bytes)).cid;

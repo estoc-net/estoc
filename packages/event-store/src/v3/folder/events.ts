@@ -1,27 +1,25 @@
 /**
- * The version-3 event store over a folder (vault-folder.md §6, §8,
- * §11): the reference backend, and the readable interchange format
- * every other backend renders. One directory per author under
- * `events/`, segments of JSONL in it, each complete line exactly one
- * event's RFC 8785 canonical bytes and an LF (VF-9). This store writes
- * only under its own replica's directory (§8.1) — appends to its newest
- * segment when that ends in LF, starts a fresh one when a crash or a
- * failed write left a fragment there, so nothing is ever appended after
- * a fragment (VF-10), a batch as a fresh segment written whole (§8.1) —
- * and, for `ingest`, one fresh
- * segment per incoming author, of decoded and reserialized events, never
- * a copied source segment (§8.2, VF-11). Reads walk every segment, take
- * nothing from physical order (§8.3, VF-12), confirm each line's author
- * against its directory (VF-2), deduplicate by `eventId` with the
- * first by path order then line offset kept and every other content
- * reported (§11.5), and report what was not an event, an unknown entry
- * inside `events/` included (VF-16). A change token names the store
- * generation and the accepted length of every segment (§10.3).
+ * The version-3 event store over a folder: the reference backend, and
+ * the readable interchange format every other backend renders. One
+ * directory per author under `events/`, segments of JSONL in it, each
+ * complete line exactly one event's RFC 8785 canonical bytes and an LF.
+ * This store writes only under its own replica's directory — appends to
+ * its newest segment when that ends in LF, starts a fresh one when a
+ * crash or a failed write left a fragment there, so nothing is ever
+ * appended after a fragment, a batch as a fresh segment written whole —
+ * and, for `ingest`, one fresh segment per incoming author, of decoded
+ * and reserialized events, never a copied source segment. Reads walk
+ * every segment, take nothing from physical order, confirm each line's
+ * author against its directory, deduplicate by `eventId` with the first
+ * by path order then line offset kept and every other content reported,
+ * and report what was not an event, an unknown entry inside `events/`
+ * included. A change token names the store generation and the accepted
+ * length of every segment.
  *
  * Durability is the backend's: a resolved append or batch is
- * process-durable (event-store.md §2.1) with every backend shipped;
- * power-loss survival is a matter of the backend's flush policy, which
- * none of them documents as stronger than the platform's.
+ * process-durable with every backend shipped; power-loss survival is a
+ * matter of the backend's flush policy, which none of them documents as
+ * stronger than the platform's.
  */
 
 import { v7 } from "uuid";
@@ -53,13 +51,13 @@ import { ESTOC_DIR, EVENTS_DIR, authorDir, isSegmentName, kindOf, segmentPath } 
 import { decodeSegment, encodeLines, endsClean, type Decoded, type SegmentRead } from "./lines.js";
 import type { Replica } from "./replica.js";
 
-/** The writer's own rotation (§8.1): a fresh segment once the open one is this long. */
+/** The writer's own rotation: a fresh segment once the open one is this long. */
 export const ROTATE_BYTES = 4 * 1024 * 1024;
 
 export interface FolderEventStoreOptions {
   /** the layout's directory, relative to the backend's root; `.estoc` when left out */
   base?: string;
-  /** the wall clock in Unix milliseconds (event-store.md §4.2); default `Date.now`, pinned by tests */
+  /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
   now?: () => number;
   /** rotate the append segment once it is this long; default `ROTATE_BYTES` */
   rotateBytes?: number;
@@ -81,13 +79,13 @@ interface Read {
   conflicts: Conflict[];
 }
 
-/** What a token names (§10.3): the generation, and the accepted length of every segment visible at the frontier. */
+/** What a token names: the generation, and the accepted length of every segment visible at the frontier. */
 interface Frontier {
   generation: string;
   segments: Record<string, number>;
 }
 
-/** What a file where `events/` belongs is reported as, by a read (§3, VF-16) and by the write it refuses (r2-B, r3-A). */
+/** What a file where `events/` belongs is reported as, by a read and by the write it refuses. */
 const EVENTS_IS_A_FILE = "a file where the events directory belongs";
 
 /** What one `ingest` read before taking the lock: each input either as an accepted event would be held, or rejected. */
@@ -95,14 +93,14 @@ type Input = { held: Decoded } | { rejected: { value: unknown; error: string } }
 
 export class FolderEventStore implements EventStore {
   readonly author: AuthorId;
-  /** the store generation its tokens name (§10.3): `local/replica.json`'s */
+  /** the store generation its tokens name: `local/replica.json`'s */
   readonly generation: string;
   private readonly base: string;
   private readonly now: () => number;
   private readonly rotateBytes: number;
   /** the segment this instance appends to, once it has one */
   private open: { rel: string; bytes: number } | null = null;
-  /** operations run one at a time (§8.1): the writer lock of event-store.md §10, as far as one store needs it */
+  /** operations run one at a time: the vault's writer lock, as far as one store needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
@@ -131,20 +129,20 @@ export class FolderEventStore implements EventStore {
   // ---- reading -----------------------------------------------------------
 
   /**
-   * The segments under `events/` (§11.2 step 1), in path order; and every
-   * entry that is not one — a file where `events/` itself belongs, a file
-   * beside the author directories, a directory that is not an author's, a
-   * name in an author directory that is not a segment's, a directory where
-   * a segment belongs — as damage (§3, VF-16). An absent `events/` is an
-   * empty store; a file there is not.
+   * The segments under `events/`, in path order; and every entry that is
+   * not one — a file where `events/` itself belongs, a file beside the
+   * author directories, a directory that is not an author's, a name in an
+   * author directory that is not a segment's, a directory where a segment
+   * belongs — as damage. An absent `events/` is an empty store; a file
+   * there is not.
    */
   private async walk(): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[] }> {
     const damaged: Damaged[] = [];
     const segments: { rel: string; author: AuthorId }[] = [];
     const events = this.at(EVENTS_DIR);
-    // The root itself first (§3, §11.1 step 3): a backend answers `list`
+    // The root itself first: a backend answers `list`
     // and `dirs` with [] for a file as for nothing there, so a file where
-    // `events/` belongs would read as an empty store (r2-B).
+    // `events/` belongs would read as an empty store.
     if (await this.rootIsAFile()) {
       damaged.push({ where: EVENTS_DIR, error: EVENTS_IS_A_FILE });
       return { segments, damaged };
@@ -178,7 +176,7 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * Before the first byte of a write (r3-A): a file where `events/`
+   * Before the first byte of a write: a file where `events/`
    * belongs is not a place to write a segment. A backend over a flat map
    * would take the write, and every read would then skip what it wrote;
    * one over a file system would fail in its own words. Either way the
@@ -190,11 +188,11 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * Every segment read (§11.2 steps 1–5): each line decoded under its
-   * directory's author, the accepted event per `eventId` — the first by
-   * path order, then line offset — and every other content under an ID
-   * already held reported as a conflict naming where it was found
-   * (§11.5). Nothing is taken from segment name or position (§8.3).
+   * Every segment read: each line decoded under its directory's author,
+   * the accepted event per `eventId` — the first by path order, then line
+   * offset — and every other content under an ID already held reported as
+   * a conflict naming where it was found. Nothing is taken from segment
+   * name or position.
    */
   private async readAll(): Promise<Read> {
     const walked = await this.walk();
@@ -219,10 +217,10 @@ export class FolderEventStore implements EventStore {
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
     // Read in the store's turn — the whole of `events/`, whatever the
-    // filter (§11.2 step 1): which content an ID is accepted under is
-    // decided over every segment (§11.5) and only then filtered, so a
-    // filter never exposes a content `scan()` rejects (event-store.md
-    // §5.4). Sorted here (§8.3), over what the read found: a write during
+    // filter: which content an ID is accepted under is
+    // decided over every segment and only then filtered, so a
+    // filter never exposes a content `scan()` rejects. Sorted here,
+    // over what the read found: a write during
     // the walk is not yielded.
     const read = await this.serialise(() => this.readAll());
     const events = [...read.held.values()].map((held) => held.event).sort(compareEvents);
@@ -231,12 +229,12 @@ export class FolderEventStore implements EventStore {
     }
   }
 
-  /** What a read of the whole of `events/` finds that is not an event (§11.5, VF-16), each with where it stands. */
+  /** What a read of the whole of `events/` finds that is not an event, each with where it stands. */
   async damaged(): Promise<Damaged[]> {
     return (await this.serialise(() => this.readAll())).damaged;
   }
 
-  /** Every content under an already-held `eventId` (§11.5), each with the segment and line it stands in. */
+  /** Every content under an already-held `eventId`, each with the segment and line it stands in. */
   async conflicting(): Promise<Conflict[]> {
     return (await this.serialise(() => this.readAll())).conflicts;
   }
@@ -244,7 +242,7 @@ export class FolderEventStore implements EventStore {
   // ---- writing -----------------------------------------------------------
 
   async append<D extends JsonObject>(draft: Draft<D>): Promise<Event<D>> {
-    const clean = validateDraft(draft); // checked before the store's turn; the backend never sees `eventId`, `at` or `author` from the draft (§11.3)
+    const clean = validateDraft(draft); // checked before the store's turn; the backend never sees `eventId`, `at` or `author` from the draft
     return this.serialise(async () => {
       await this.checkRoot();
       const { at, eventIds } = mint(1, this.now);
@@ -254,7 +252,7 @@ export class FolderEventStore implements EventStore {
       try {
         await this.backend.append(this.at(open.rel), line);
       } catch (err) {
-        // The backend may have written part of the line (r1-A). The segment
+        // The backend may have written part of the line. The segment
         // is no longer one to append to: forget it, so the next append reads
         // the tail afresh and, finding it unterminated, leaves it behind.
         this.open = null;
@@ -266,16 +264,16 @@ export class FolderEventStore implements EventStore {
   }
 
   async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
-    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands (§5.2)
+    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
     if (clean.length === 0) return [];
     return this.serialise(async () => {
       await this.checkRoot();
-      // One clock reading and one `at` for the batch (event-store.md §5.2, ES-22).
+      // One clock reading and one `at` for the batch.
       const { at, eventIds } = mint(clean.length, this.now);
       const held = clean.map((draft, i) =>
         canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data })
       );
-      // A fresh segment, written whole (§8.1): the backend's `write` is a
+      // A fresh segment, written whole: the backend's `write` is a
       // whole-file replacement, atomic across a process crash, so a
       // restart sees the complete batch or none of it — an append could
       // tear between lines. On success it is the newest segment under this
@@ -289,13 +287,13 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * The segment this instance appends to (§8.1): the newest under its
-   * own author directory when it ends in LF; a fresh one when there is
-   * none, when the newest ends mid-line — a crash or a failed write left
-   * a fragment there, and nothing is ever appended after a fragment, so
-   * it can never fuse with the next event and stays what it is, reportable
-   * damage, whatever its bytes happen to spell (VF-10, r1-B) — and a fresh
-   * one once the open one is long enough.
+   * The segment this instance appends to: the newest under its own author
+   * directory when it ends in LF; a fresh one when there is none, when the
+   * newest ends mid-line — a crash or a failed write left a fragment
+   * there, and nothing is ever appended after a fragment, so it can never
+   * fuse with the next event and stays what it is, reportable damage,
+   * whatever its bytes happen to spell — and a fresh one once the open one
+   * is long enough.
    */
   private async openSegment(): Promise<{ rel: string; bytes: number }> {
     if (this.open === null) {
@@ -308,17 +306,17 @@ export class FolderEventStore implements EventStore {
     return this.open;
   }
 
-  /** A segment path this store has never used, under `author` (§8): a fresh UUIDv7 name. */
+  /** A segment path this store has never used, under `author`: a fresh UUIDv7 name. */
   private freshSegment(author: AuthorId): string {
     return segmentPath(author, v7());
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    // The whole input first (§11.4), fixed to canonical form as each
+    // The whole input first, fixed to canonical form as each
     // arrives and touching nothing of the folder. Then, in the store's
     // turn: what the folder holds against what came — duplicate, conflict,
     // new — the fork preflight, and only then the writes, one fresh segment
-    // per incoming author (§8.2). A failure before the writes writes nothing.
+    // per incoming author. A failure before the writes writes nothing.
     const input: Input[] = [];
     for await (const value of events) {
       try {
@@ -373,7 +371,7 @@ export class FolderEventStore implements EventStore {
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
     return this.serialise(async () => {
-      // One read gives both the frontier (§10.3) — every segment's accepted
+      // One read gives both the frontier — every segment's accepted
       // length — and the events; the token is issued for what was read.
       const read = await this.readAll();
       const from = since === undefined ? new Map<string, number>() : this.place(since, read);
@@ -381,7 +379,7 @@ export class FolderEventStore implements EventStore {
       // stands in no line at or before the position `since` recorded for
       // its segment. A line appended later under an ID already held — a
       // hand-copied duplicate — is not a gain; and what is yielded is what
-      // the store holds under the ID, whichever line that is (§11.5).
+      // the store holds under the ID, whichever line that is.
       const before = new Set<EventId>();
       for (const segment of read.segments) {
         const start = from.get(segment.rel) ?? 0;
@@ -402,10 +400,9 @@ export class FolderEventStore implements EventStore {
   }
 
   /**
-   * The positions `since` names, or a throw (§10.3): another
-   * generation's, a shape not recognized, a named segment now missing or
-   * shorter than the position, or a position that is not the end of a
-   * complete line.
+   * The positions `since` names, or a throw: another generation's, a
+   * shape not recognized, a named segment now missing or shorter than the
+   * position, or a position that is not the end of a complete line.
    */
   private place(since: ChangeToken, read: Read): Map<string, number> {
     let parsed: unknown;
@@ -434,10 +431,10 @@ export class FolderEventStore implements EventStore {
 }
 
 /**
- * A value as the folder holds it: validated (event-store.md §3.4), then
- * the form its canonical bytes parse to, with that text — the same
- * helper the store in memory uses, so a local append reads back as its
- * ingest elsewhere would (ES-5). Throws `InvalidEvent` or `InvalidJson`.
+ * A value as the folder holds it: validated, then the form its
+ * canonical bytes parse to, with that text — the same helper the store
+ * in memory uses, so a local append reads back as its ingest elsewhere
+ * would. Throws `InvalidEvent` or `InvalidJson`.
  */
 function canonical(value: unknown): Decoded {
   const text = canonicalText(validateEvent(value));

@@ -118,7 +118,7 @@ describe("vault: this copy", () => {
 });
 
 describe("vault: files", () => {
-  it("take a file's path and no other, and never a file and a directory of one name (vault-folder.md §9.6)", async () => {
+  it("take a file's path and no other, and never a file and a directory of one name", async () => {
     const backend = new MemoryBackend();
     const vault = await FolderVault.create(backend, {});
     await vault.events.append({ type: "t", data: {} });

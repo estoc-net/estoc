@@ -1,17 +1,16 @@
 /**
- * The version-3 folder's shape (vault-folder.md §3): the six structural
- * roots, the grammar of a segment path and an object path, and
- * `kindOf`, which says what a path under `.estoc/` is — so that a
- * reader can tell the layout's own files from an opaque portable file,
- * and either from damage (§3, VF-16). Paths here are relative to
- * `.estoc/`, as the specification writes them; `ESTOC_DIR` is the
- * directory a backend rooted at the vault's parent puts in front.
+ * The version-3 folder's shape: the six structural roots, the grammar
+ * of a segment path and an object path, and `kindOf`, which says what a
+ * path under `.estoc/` is — so that a reader can tell the layout's own
+ * files from an opaque portable file, and either from damage. Paths
+ * here are relative to `.estoc/`; `ESTOC_DIR` is the directory a
+ * backend rooted at the vault's parent puts in front.
  */
 
 import { isAuthorId, isRawCid, isUuidv7 } from "../event.js";
 import { OWNED_ROOTS } from "../files.js";
 
-/** The machine's half of a portable vault: the directory the layout lives in (§1). */
+/** The machine's half of a portable vault: the directory the layout lives in. */
 export const ESTOC_DIR = ".estoc";
 export const CONFIG_FILE = "config.json";
 export const KEYSTORE_FILE = "keystore.json";
@@ -19,54 +18,54 @@ export const EVENTS_DIR = "events";
 export const OBJECTS_DIR = "objects";
 export const IMPORT_DIR = "import";
 export const LOCAL_DIR = "local";
-/** This copy's replica identity (§10.1), under `local/`. */
+/** This copy's replica identity, under `local/`. */
 export const REPLICA_FILE = `${LOCAL_DIR}/replica.json`;
 
 export { OWNED_ROOTS };
 
 const SEGMENT_SUFFIX = ".jsonl";
 
-/** Whether `name` is a segment file's name (§8): `<uuidv7>.jsonl`, the UUID canonical lowercase. */
+/** Whether `name` is a segment file's name: `<uuidv7>.jsonl`, the UUID canonical lowercase. */
 export function isSegmentName(name: string): boolean {
   return name.endsWith(SEGMENT_SUFFIX) && isUuidv7(name.slice(0, -SEGMENT_SUFFIX.length));
 }
 
-/** The segment path of `segment` under `author` (§6, §8): `events/<author>/<segment>.jsonl`. */
+/** The segment path of `segment` under `author`: `events/<author>/<segment>.jsonl`. */
 export function segmentPath(author: string, segment: string): string {
   return `${EVENTS_DIR}/${author}/${segment}${SEGMENT_SUFFIX}`;
 }
 
-/** The object path of `cid` (§9): `objects/<cid>`, the CID as given. */
+/** The object path of `cid`: `objects/<cid>`, the CID as given. */
 export function objectPath(cid: string): string {
   return `${OBJECTS_DIR}/${cid}`;
 }
 
-/** The author directory of `author` (§6): `events/<author>`. */
+/** The author directory of `author`: `events/<author>`. */
 export function authorDir(author: string): string {
   return `${EVENTS_DIR}/${author}`;
 }
 
 export type PathKind =
-  /** `config.json` (§4) */
+  /** `config.json` */
   | "config"
-  /** `keystore.json` (§5) */
+  /** `keystore.json` */
   | "keystore"
-  /** `events/<author>/<segment>.jsonl` (§6, §8) */
+  /** `events/<author>/<segment>.jsonl` */
   | "segment"
-  /** `objects/<raw cid>` (§9) */
+  /** `objects/<raw cid>` */
   | "object"
-  /** anything under `import/` (§3): backend-private staging, whose owner reads it */
+  /** anything under `import/`: backend-private staging, whose owner reads it */
   | "import"
-  /** anything under `local/` (§10): this copy's own, whose owner reads it */
+  /** anything under `local/`: this copy's own, whose owner reads it */
   | "local"
-  /** an entry inside a structural root that is none of the above (§3, VF-16) */
+  /** an entry inside a structural root that is none of the above */
   | "damage"
-  /** a top-level path outside every structural root (§7.3): carried, never read */
+  /** a top-level path outside every structural root: carried, never read */
   | "opaque";
 
 /**
- * What a conforming path relative to `.estoc/` is (§3). The structural
- * roots are closed: under `events/` only `<author>/<segment>.jsonl`, under
+ * What a conforming path relative to `.estoc/` is. The structural roots
+ * are closed: under `events/` only `<author>/<segment>.jsonl`, under
  * `objects/` only `<raw cid>`, and `config.json` and `keystore.json` are
  * files — anything else under a root, a file where a directory belongs
  * included, is damage. `import/` and `local/` are their owners' to read.
@@ -105,7 +104,7 @@ export function text(bytes: Uint8Array): string {
   return decoder.decode(bytes);
 }
 
-/** A JSON file as the folder writes one (§2): pretty-printed, ending in `\n`. */
+/** A JSON file as the folder writes one: pretty-printed, ending in `\n`. */
 export function prettyJson(value: unknown): Uint8Array {
   return utf8(`${JSON.stringify(value, null, 2)}\n`);
 }
