@@ -266,14 +266,18 @@
   taken off it only by moving it aside under a marker and judging
   what moved, a live holder's file moved by mistake given its name
   back; a take that is over is withdrawn — a holder releasing, a
-  taker giving up a name taken beside a marker, or failing once its
-  line had been at the name — by taking its own line off the name the
-  same way and off every marker holding it, until a pass finds it
-  nowhere, under a notice of the withdrawal beside the name that a
-  restore looks for once it has linked the line back, taking it off
+  taker giving up a name taken beside a marker or moved off it by a
+  mover's mistake, or failing at any point after its claim was
+  written — by taking its own line off the name the same way, off
+  every marker holding it, until a pass finds it nowhere, and its
+  claim with it, under a notice of the withdrawal beside the name
+  that a restore looks for once the line is back at the name, by its
+  own link or another restore's of the same marker, taking it off
   again and keeping its marker until it has, so a withdrawal that
-  finds no marker holding its line has no restore left to fear, and
-  a failed take leaves nothing that bars the next.
+  finds no marker holding its line has no restore left to fear; and
+  every try is a new line with its own token, so a restore still
+  expecting the old one can never mistake the next for it, and a
+  failed take leaves nothing that bars the next.
   A restore that cannot give a moved holder its name
   back within its budget — a taker stalled between its take and its
   look — leaves the marker standing and fails the mover's take, so

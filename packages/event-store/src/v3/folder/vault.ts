@@ -1,12 +1,12 @@
 /**
- * The vault over a folder, version 3 (vault-folder.md §11.1, §15,
- * event-store.md §10): the three folder stores under one runtime, one
- * writer lock and one latch registry, opened for writing or for reading.
+ * The vault over a folder, version 3: the three folder stores under one
+ * runtime, one writer lock and one latch registry, opened for writing or
+ * for reading.
  *
  * A read-only open validates the path shape, `config.json` and the
  * structural roots, creates no `local/` and alters no `import/`; it
  * takes no ownership unless asked, and without ownership it serves no
- * object stream (§15: unprotected reads are refused, not served); its
+ * object stream (unprotected reads are refused, not served); its
  * object store moves nothing, so a file found not to spell its name is
  * reported and dropped from the reader's view, never quarantined. A
  * writable open additionally validates `keystore.json` by shape,
@@ -14,7 +14,7 @@
  * the one `config.json` fixes, takes writer-exclusive ownership through
  * the backend before creating any local state, refuses while `import/`
  * holds recovery state, then reads or mints `local/replica.json` and
- * opens the event store as that replica (§11.1 steps 1–6). `close`
+ * opens the event store as that replica. `close`
  * refuses every new operation, lets the accepted ones run out, fails
  * the object streams still alive, and only then releases ownership.
  *
@@ -39,7 +39,7 @@ import { LocalOwner, type LocalOptions, type Rotation } from "./local.js";
 import { FolderObjectStore, type FolderObjectStoreOptions } from "./objects.js";
 import { mintReplica, openReplica, type Replica } from "./replica.js";
 
-/** Where ownership is named (§15): under `local/`, this copy's own; on disk, the writer's pid file. */
+/** Where ownership is named: under `local/`, this copy's own; on disk, the writer's pid file. */
 export const OWNER_FILE = `${LOCAL_DIR}/owner.pid`;
 
 export interface FolderVaultOptions {
@@ -47,40 +47,40 @@ export interface FolderVaultOptions {
   base?: string;
   /** the wall clock in Unix milliseconds, for `at`, orphan age and trace rotation; default `Date.now`, pinned by tests together with the backend's clock */
   now?: () => number;
-  /** orphan grace (dasl-objects.md §8.3); default one hour */
+  /** how long an object may stand unreferenced by any event before it is an orphan; default one hour */
   graceMs?: number;
-  /** the largest object a commit accepts (dasl-objects.md §12); default 1 GiB */
+  /** the largest object a commit accepts; default 1 GiB */
   maxObjectBytes?: number;
-  /** rotate the append segment once it is this long (§8.1); default `ROTATE_BYTES` */
+  /** rotate the append segment once it is this long; default `ROTATE_BYTES` */
   rotateBytes?: number;
-  /** how trace streams rotate their segments (§10.2) */
+  /** how trace streams rotate their segments */
   trace?: Rotation;
 }
 
 export interface OpenWritableOptions extends FolderVaultOptions {
-  /** the DID the unlocked seed derives under the fixed anchor name (§4): compared with `config.json`'s before anything else happens */
+  /** the DID the unlocked seed derives under the fixed anchor name: compared with `config.json`'s before anything else happens */
   anchor: string;
-  /** the replica identity to mint when `local/replica.json` is absent (§10.1); the standard generator when left out */
+  /** the replica identity to mint when `local/replica.json` is absent; the standard generator when left out */
   mint?: () => Replica;
 }
 
 export interface CreateOptions extends OpenWritableOptions {
-  /** `keystore.json` as `@estoc/keystore` serialized it: checked by shape (§5), written first */
+  /** `keystore.json` as `@estoc/keystore` serialized it: checked by shape, written first */
   keystore: Uint8Array;
 }
 
 export interface OpenReadOnlyOptions extends FolderVaultOptions {
   /**
-   * `"exclusive"`: take the same ownership a writer would (§15; decision
-   * 5 of the v3 plan: no shared advisory lock), so object streams are
-   * protected and a writer waits or fails meanwhile — makes the owner
-   * file under `local/`. `"none"`, the default: touch nothing, and
+   * `"exclusive"`: take the same ownership a writer would — there is
+   * no shared advisory lock, only the one exclusive ownership — so object
+   * streams are protected and a writer waits or fails meanwhile; makes
+   * the owner file under `local/`. `"none"`, the default: touch nothing, and
    * refuse object streams as unprotected.
    */
   ownership?: "exclusive" | "none";
 }
 
-/** What the folder holds that the layout does not define (§3, VF-16), from every root, in path order. */
+/** What the folder holds that the layout does not define, from every root, in path order. */
 async function layoutDamage(backend: VaultBackend, base: string): Promise<Damaged[]> {
   const damaged: Damaged[] = [];
   for (const file of [CONFIG_FILE, KEYSTORE_FILE]) {
@@ -93,14 +93,14 @@ async function layoutDamage(backend: VaultBackend, base: string): Promise<Damage
   return damaged;
 }
 
-/** A file where `import/` or `local/` belongs is refused before ownership is taken or anything written (§3). */
+/** A file where `import/` or `local/` belongs is refused before ownership is taken or anything written. */
 async function checkRoots(backend: VaultBackend, base: string): Promise<void> {
   for (const damage of await layoutDamage(backend, base)) {
     if (damage.where === IMPORT_DIR || damage.where === LOCAL_DIR) throw new DamagedLayout(damage.where, damage.error);
   }
 }
 
-/** `config.json` read and checked (§11.1 step 2); `NotAVault` when it is not there. */
+/** `config.json` read and checked; `NotAVault` when it is not there. */
 async function readConfig(backend: VaultBackend, base: string): Promise<Config> {
   const bytes = await backend.read(`${base}/${CONFIG_FILE}`);
   if (bytes === null) throw new NotAVault(`no ${base}/${CONFIG_FILE}: not a vault`);
@@ -108,7 +108,7 @@ async function readConfig(backend: VaultBackend, base: string): Promise<Config> 
 }
 
 /**
- * Whatever stands under `import/` blocks the open (§3, VF-40): this
+ * Whatever stands under `import/` blocks the open: this
  * version records no import there yet, so anything found is an import
  * another backend or version left unfinished, or damage — either way
  * not something to open over. An empty or absent `import/` is nothing
@@ -170,7 +170,7 @@ const OWNER_NAME = /^[a-z][a-z0-9-]*$/;
  */
 export class FolderVault extends Runtime {
   declare readonly stores: { events: FolderEventStore; objects: FolderObjectStore; files: FolderFileStore };
-  /** the read latches over this vault's objects (event-store.md §10) */
+  /** the read latches over this vault's objects */
   readonly latches: LatchRegistry;
   private readonly owners = new Map<string, LocalOwner>();
   /** set by `close`; read by the runtime's guard, which is made before `super` returns and so cannot read a field of `this` */
@@ -195,7 +195,7 @@ export class FolderVault extends Runtime {
   }
 
   /**
-   * A writable open (§11.1): `config.json`, `keystore.json` by shape,
+   * A writable open: `config.json`, `keystore.json` by shape,
    * the anchor compared, ownership taken, `import/` checked, the replica
    * read or minted, the stores opened as it — in that order, each step
    * before the next touches anything, and ownership released on any
@@ -244,7 +244,7 @@ export class FolderVault extends Runtime {
     return FolderVault.openOwned(backend, base, config, ownership, options);
   }
 
-  /** Steps 1–3 of §11.1 for a writable open, and the shape of the roots: nothing taken, nothing written. */
+  /** What a writable open checks before taking anything: the path shape, `config.json`, `keystore.json`, the anchor, and the shape of the roots — nothing taken, nothing written. */
   private static async preflight(backend: VaultBackend, base: string, anchor: string): Promise<Config> {
     const config = await readConfig(backend, base);
     const keystore = await backend.read(`${base}/${KEYSTORE_FILE}`);
@@ -255,7 +255,7 @@ export class FolderVault extends Runtime {
     return config;
   }
 
-  /** Steps 5–6 of §11.1, ownership already held: `import/`, the replica, the stores; ownership released on a failure. */
+  /** What a writable open does once it holds ownership: `import/`, the replica, the stores; ownership released on a failure. */
   private static async openOwned(backend: VaultBackend, base: string, config: Config, ownership: Ownership, options: OpenWritableOptions): Promise<FolderVault> {
     try {
       await checkImport(backend, base);
@@ -273,7 +273,7 @@ export class FolderVault extends Runtime {
     }
   }
 
-  /** A named owner's local state under `local/<owner>/` (§10.2): `agent` for the application. */
+  /** A named owner's local state under `local/<owner>/`: `agent` for the application. */
   local(owner: string): LocalOwner {
     if (!OWNER_NAME.test(owner)) throw new Error(`not a local owner name: ${owner}`);
     if (this.state.closed) throw new VaultClosed();
@@ -290,13 +290,13 @@ export class FolderVault extends Runtime {
     return have;
   }
 
-  /** What the folder holds that the layout does not define (§3, VF-16): from the roots, `events/` and `objects/`, in path order. */
+  /** What the folder holds that the layout does not define: from the roots, `events/` and `objects/`, in path order. */
   async damaged(): Promise<Damaged[]> {
     const found = [...(await layoutDamage(this.backend, this.base)), ...(await this.stores.events.damaged()), ...(await this.stores.objects.damaged())];
     return found.sort((a, b) => comparePaths(a.where, b.where));
   }
 
-  /** Every portable path (§3.1, §12.1): what a snapshot copies — never `local/` or `import/`. In code-point order. */
+  /** Every portable path: what a snapshot copies — never `local/` or `import/`. In code-point order. */
   async portablePaths(): Promise<string[]> {
     const prefix = `${this.base}/`;
     return (await walk(this.backend, this.base))
@@ -314,7 +314,7 @@ export class FolderVault extends Runtime {
   }
 
   /**
-   * Release the folder (§15): new operations are refused from this call
+   * Release the folder: new operations are refused from this call
    * on — the runtime's, and every local owner's, cache's and trace
    * handle's — then what was already accepted runs out: the
    * operations holding or queued for the writer lock, the local work
@@ -335,10 +335,10 @@ export class FolderVault extends Runtime {
 }
 
 /**
- * A vault opened read-only (§11.1): events, objects and files to read,
+ * A vault opened read-only: events, objects and files to read,
  * the config, and what is damaged. No `local/` is created, no
  * `import/` altered, nothing written; `files.write` is refused. Object
- * streams are served only with ownership (§15).
+ * streams are served only with ownership.
  */
 export class FolderReader {
   readonly events: VaultEvents;
@@ -397,7 +397,7 @@ export class FolderReader {
   }
 
   /**
-   * A read-only open (§11.1): the path shape and `config.json` checked,
+   * A read-only open: the path shape and `config.json` checked,
    * the roots looked at, `import/` required empty — recovery state
    * there is reported, never read around — and ownership taken only
    * when asked. The event store reads as no replica: it is never
@@ -410,7 +410,7 @@ export class FolderReader {
     await checkImport(backend, base);
     const ownership = options.ownership === "exclusive" ? await backend.own(`${base}/${OWNER_FILE}`) : null;
     try {
-      // A replica no event carries: the store never writes here, and a reader has no author (§11.1).
+      // A replica no event carries: the store never writes here, and a reader has no author.
       const nobody = mintReplica();
       const latches = new LatchRegistry();
       const stores = {
@@ -425,12 +425,12 @@ export class FolderReader {
     }
   }
 
-  /** Whether this reader holds the folder's ownership (§15): with it, object streams are protected. */
+  /** Whether this reader holds the folder's ownership: with it, object streams are protected. */
   get owned(): boolean {
     return this.ownership !== null;
   }
 
-  /** What the folder holds that the layout does not define (§3, VF-16), in path order. */
+  /** What the folder holds that the layout does not define, in path order. */
   async damaged(): Promise<Damaged[]> {
     const found = [...(await layoutDamage(this.backend, this.base)), ...(await this.stores.events.damaged()), ...(await this.stores.objects.damaged())];
     return found.sort((a, b) => comparePaths(a.where, b.where));

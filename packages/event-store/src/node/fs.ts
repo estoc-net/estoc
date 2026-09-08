@@ -24,14 +24,14 @@ import { own } from "./ownership.js";
  * file. `open` reads through a file handle in fixed pieces, closed when
  * the stream ends or is cancelled.
  *
- * Ownership (vault-folder.md §15) is a pid file at the name given,
- * taken and kept as `./ownership.ts` says: created whole, read back,
- * live while the process it names is — a worker's record outlives the
- * worker until its process exits — or, naming this thread, while the
- * process's origin is this incarnation's; stale and reclaimed
- * otherwise, judged from the disk alone, with no advisory file lock
- * (decision 5 of the v3 plan); and withdrawn whole when the take is
- * over, whether released or failed.
+ * Ownership is a pid file at the name given, taken and kept as
+ * `./ownership.ts` says: created whole, read back, live while the
+ * process it names is — a worker's record outlives the worker until
+ * its process exits — or, naming this thread, while the process's
+ * origin is this incarnation's; stale and reclaimed otherwise, judged
+ * from the disk alone, with no advisory file lock; and withdrawn whole
+ * when the take is over, whether released or failed, the next take a
+ * new line.
  */
 export interface FsBackendOptions {
   /**

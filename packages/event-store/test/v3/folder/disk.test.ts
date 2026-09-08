@@ -1,9 +1,8 @@
 /**
- * The vault on a real disk (vault-folder.md §15, VF-32, VF-34): what the
- * memory backend cannot show — a pid file as ownership, a second process's
- * stale pid taken over, a reopen from another backend instance finding
- * what the last one wrote, and a whole-file write that leaves nothing
- * beside the file.
+ * The vault on a real disk: what the memory backend cannot show — a
+ * pid file as ownership, a second process's stale pid taken over, a
+ * reopen from another backend instance finding what the last one wrote,
+ * and a whole-file write that leaves nothing beside the file.
  */
 
 import { link, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -60,7 +59,7 @@ async function localEntries(dir: string): Promise<string[]> {
   return (await readdir(path.join(dir, ".estoc", "local"))).sort();
 }
 
-describe("FsBackend.own (vault-folder.md §15)", () => {
+describe("FsBackend.own", () => {
   it("is a pid file holding this process's pid and a token: taken whole, refused while this process holds it, removed at release with nothing left beside it", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);
@@ -581,6 +580,105 @@ describe("a take that is over leaves nothing of its line behind", () => {
       Object.assign(fsp, originals);
     }
   });
+
+  it("a take that gave the name up and tries again is a new line: the restore that had linked the old line back, and is late taking it off again, finds the new line where it expected the old, and gives it back — the holder keeps the name, the reclaimer is refused", async () => {
+    const { dir, real, local } = await place();
+    const copy = loadCopy();
+    try {
+      const move = holdUp("rename", "before", (from) => from === real);
+      const r = new copy.FsBackend(dir).own(LOCK);
+      void r.catch(() => undefined);
+      await move.paused; // R has read the dead taker's file and is about to take it off the name
+      const took = holdUp("rm", "after", (from) => from.includes(".claim."), 2); // A's second take — the first found the dead file, and took it off — has its line at the name and has not yet looked for markers
+      const a = new copy.FsBackend(dir).own(LOCK);
+      await took.paused;
+      const aLine = await readFile(real, "utf8");
+      expect(aLine.split(" ")[0]).toBe(String(process.pid));
+      const put = holdUp("link", "before", isMarker);
+      move.letGo(); // R's move takes A's file by its stale reading
+      await put.paused;
+      const [marker] = await localEntries(dir);
+      expect(await readFile(path.join(local, marker as string), "utf8")).toBe(aLine);
+      const miss = holdUp("readFile", "failed", (from) => from === real);
+      took.letGo(); // A sees R's marker and gives the name up: its notice is written, its look at the name finds nothing there
+      await miss.paused;
+      expect(await localEntries(dir)).toEqual([marker, `owner.pid.withdraw.${aLine.replace(LINE, "$1.$2.$3.$4")}`]);
+      const late = holdUp("rename", "before", (from) => from === real);
+      put.letGo(); // R links A's line back, finds the notice, reads the line at the name and is held before taking it off
+      await late.paused;
+      expect(await readFile(real, "utf8")).toBe(aLine);
+      miss.letGo(); // A's withdrawal finds its line at the name and under R's marker, takes both off, and A takes the name again — as a new line
+      const held = await a;
+      const again = await readFile(real, "utf8");
+      expect(again).not.toBe(aLine);
+      expect(again.split(" ")[0]).toBe(String(process.pid));
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      late.letGo(); // R's move takes the new line, which is not the one it expected: given back, and R is refused by it
+      await expect(r).rejects.toThrow(/this thread of this process holds it/);
+      expect(await readFile(real, "utf8")).toBe(again);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+      await held.release();
+      expect(await localEntries(dir)).toEqual([]);
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
+
+  it("two sweeps restoring one dead reclaimer's marker while the holder it moved releases: the one that finds the line already linked back honours the notice too, and takes the line off — nothing of the released holder stays at the name", async () => {
+    const { dir, real } = await place();
+    const copy = loadCopy();
+    try {
+      const w = await new copy.FsBackend(dir).own(LOCK);
+      const wLine = await readFile(real, "utf8");
+      const marker = `${real}.reclaim.${DEAD}.0.${AGO}.cccccccccccccccc`; // a reclaimer moved W's live file aside by its stale reading, and died
+      await rename(real, marker);
+      const miss = holdUp("readFile", "failed", (from) => from === real);
+      const release = w.release(); // W's notice is written; its look at the name finds nothing there
+      await miss.paused;
+      const linked = holdUp("link", "after", (from, to) => from === marker && to === real);
+      const s1 = new copy.FsBackend(dir).own(LOCK); // S1's sweep links W's line back, and is held before its look for the notice
+      void s1.catch(() => undefined);
+      await linked.paused;
+      expect(await readFile(real, "utf8")).toBe(wLine);
+      const s2 = await new copy.FsBackend(dir).own(LOCK); // S2's sweep finds the line linked back already, finds the notice, takes the line off, and takes the free name
+      const s2Line = await readFile(real, "utf8");
+      expect(s2Line).not.toBe(wLine);
+      expect(await localEntries(dir)).toEqual(["owner.pid", `owner.pid.withdraw.${wLine.replace(LINE, "$1.$2.$3.$4")}`]);
+      miss.letGo(); // W's withdrawal finds its line nowhere, and is done
+      await release;
+      linked.letGo(); // S1 finds no notice left, and is refused by S2
+      await expect(s1).rejects.toThrow(/this thread of this process holds it/);
+      expect(await readFile(real, "utf8")).toBe(s2Line);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      await s2.release();
+      expect(await localEntries(dir)).toEqual([]);
+      await (await new copy.FsBackend(dir).own(LOCK)).release();
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
+
+  it("a take whose line reached the name but whose claim could not be removed fails, and withdraws line and claim before it does: the same thread takes the name next", async () => {
+    const { dir, real } = await place();
+    await rm(real); // nothing at the name: the first take links its line there
+    const copy = loadCopy();
+    try {
+      fsp.rm = async (...args: Parameters<typeof fsp.rm>) => {
+        fsp.rm = originals.rm; // once: the disk is fine again after
+        if (!String(args[0]).includes(".claim.")) return originals.rm(...args);
+        throw Object.assign(new Error("EIO: i/o error, unlink"), { code: "EIO" });
+      };
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/EIO/);
+      expect(await localEntries(dir)).toEqual([]);
+      const held = await new copy.FsBackend(dir).own(LOCK);
+      expect((await readFile(real, "utf8")).split(" ")[0]).toBe(String(process.pid));
+      await held.release();
+      expect(await localEntries(dir)).toEqual([]);
+    } finally {
+      Object.assign(fsp, originals);
+    }
+  });
 });
 
 describe("ownership across realms of one thread", () => {
@@ -604,7 +702,7 @@ describe("ownership across realms of one thread", () => {
 });
 
 describe("a version-3 vault on disk", () => {
-  it("VF-32, VF-34: what one instance committed and wrote, the next finds — events, objects, a portable file, the replica — and a rewrite leaves nothing beside the file", async () => {
+  it("what one instance committed and wrote, the next finds — events, objects, a portable file, the replica — and a rewrite leaves nothing beside the file", async () => {
     const dir = await tempDir();
     const vault = await FolderVault.create(new FsBackend(dir), { anchor: DID, keystore: KEYSTORE });
     const [event] = await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
@@ -629,7 +727,7 @@ describe("a version-3 vault on disk", () => {
     await reader.close();
   });
 
-  it("§15: a second writer from another backend instance is refused while the first holds the folder, and served after it closes", async () => {
+  it("a second writer from another backend instance is refused while the first holds the folder, and served after it closes", async () => {
     const dir = await tempDir();
     const first = await FolderVault.create(new FsBackend(dir), { anchor: DID, keystore: KEYSTORE });
     await expect(FolderVault.openWritable(new FsBackend(dir), { anchor: DID })).rejects.toThrow(VaultOwned);
