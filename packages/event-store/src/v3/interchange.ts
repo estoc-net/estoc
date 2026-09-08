@@ -68,7 +68,7 @@ async function laying<T>(into: VaultBackend, base: string, config: Uint8Array, w
   }
 }
 
-/** The writes of one laying, into a folder owned and found empty: `work`'s, then the publication's; a failure withdraws what they wrote. */
+/** Only for a folder owned and found empty. */
 async function writing<T>(into: VaultBackend, base: string, config: Uint8Array, work: (lay: Lay) => Promise<T>): Promise<T> {
   const written: string[] = [];
   let publishing = false;

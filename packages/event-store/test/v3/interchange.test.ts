@@ -119,7 +119,7 @@ class GatedBackend extends MemoryBackend {
   }
 }
 
-/** A destination whose first `own` waits at the gate once asked, so that another laying can fill the folder between an operation's empty check and its ownership; every later `own` is the memory backend's. */
+/** A destination that lets another laying fill the folder between an operation's empty check and its taking ownership. */
 class DelayedOwnership extends MemoryBackend {
   readonly arrived = gate();
   readonly resume = gate();
