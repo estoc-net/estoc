@@ -10,7 +10,9 @@ import { link, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { Worker, threadId } from "node:worker_threads";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -40,11 +42,15 @@ afterAll(async () => {
 });
 
 const LOCK = `.estoc/${OWNER_FILE}`;
-const LINE = /^([1-9][0-9]*) ([0-9]+) ([0-9a-f]{16})\n$/;
+const LINE = /^([1-9][0-9]*) ([0-9]+) ([1-9][0-9]*) ([0-9a-f]{16})\n$/;
 /** A pid nobody has: above Linux's largest. */
 const DEAD = 4194305;
 /** A pid that is alive and not this process: the test runner's parent. */
 const LIVE = process.ppid;
+/** When this process began, as the module stamps its records (r3-B): read here on its own, not through the module. */
+const ORIGIN = Math.floor(performance.timeOrigin);
+/** When some other process began: any origin, since only this thread's records are checked against this process's. */
+const AGO = 1700000000000;
 
 async function ownerFile(dir: string): Promise<string> {
   return readFile(path.join(dir, ".estoc", "local", "owner.pid"), "utf8");
@@ -64,7 +70,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     expect(line.split(" ")[0]).toBe(String(process.pid));
     expect(await localEntries(dir)).toEqual(["owner.pid"]);
     await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(VaultOwned);
-    await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(/this process holds it already/);
+    await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
     await held.release();
     expect(await localEntries(dir)).toEqual([]);
     const again = await backend.own(LOCK);
@@ -89,10 +95,10 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     const dir = await tempDir();
     const file = path.join(dir, ".estoc", "local", "owner.pid");
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${LIVE} 0 0123456789abcdef\n`);
+    await writeFile(file, `${LIVE} 0 ${AGO} 0123456789abcdef\n`);
     await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`process ${LIVE} holds it`));
-    expect(await ownerFile(dir)).toBe(`${LIVE} 0 0123456789abcdef\n`);
-    await writeFile(file, `${DEAD} 0 0123456789abcdef\n`);
+    expect(await ownerFile(dir)).toBe(`${LIVE} 0 ${AGO} 0123456789abcdef\n`);
+    await writeFile(file, `${DEAD} 0 ${AGO} 0123456789abcdef\n`);
     const taken = await new FsBackend(dir).own(LOCK);
     expect((await ownerFile(dir)).split(" ")[0]).toBe(String(process.pid));
     expect(await localEntries(dir)).toEqual(["owner.pid"]); // the reclaim left no marker
@@ -100,7 +106,7 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
   });
 
   it("r1-G: an empty file, garbage, or another format is not a live holder: reclaimed and taken over", async () => {
-    for (const residue of ["", "not a pid\n", "0 0 0123456789abcdef\n", `${process.pid}\n`, "-1 0 0123456789abcdef\n", `${LIVE}\n`, `${LIVE} 0123456789abcdef\n`, `${process.pid} 0123456789abcdef\n`]) {
+    for (const residue of ["", "not a pid\n", "0 0 0123456789abcdef\n", `${process.pid}\n`, "-1 0 0123456789abcdef\n", `${LIVE}\n`, `${LIVE} 0123456789abcdef\n`, `${process.pid} 0123456789abcdef\n`, `${process.pid} ${threadId} 0123456789abcdef\n`, `${LIVE} 0 0 0123456789abcdef\n`]) {
       const dir = await tempDir();
       const file = path.join(dir, ".estoc", "local", "owner.pid");
       await mkdir(path.dirname(file), { recursive: true });
@@ -112,18 +118,24 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     }
   });
 
-  it("r1-A: a file naming this process without this process's record is a previous incarnation's, stale", async () => {
+  it("r1-A, r3-B: a file naming this thread with another origin is a previous incarnation's, stale; one with this process's origin is live — written by hand, with no memory of it anywhere — as is one naming another thread of this process, whichever origin", async () => {
     const dir = await tempDir();
     const file = path.join(dir, ".estoc", "local", "owner.pid");
     await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, `${process.pid} ${threadId} 0123456789abcdef\n`);
+    await writeFile(file, `${process.pid} ${threadId} ${ORIGIN - 1} 0123456789abcdef\n`);
     const taken = await new FsBackend(dir).own(LOCK);
-    expect(await ownerFile(dir)).not.toBe(`${process.pid} ${threadId} 0123456789abcdef\n`);
+    expect(await ownerFile(dir)).toBe((await ownerFile(dir)).replace(LINE, `${process.pid} ${threadId} ${ORIGIN} $4\n`)); // this incarnation's stamp
     await taken.release();
-    // r2-A: one naming another thread of this process is that thread's, live
-    await writeFile(file, `${process.pid} ${threadId + 1000} 0123456789abcdef\n`);
-    await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`thread ${threadId + 1000} of this process holds it`));
-    expect(await ownerFile(dir)).toBe(`${process.pid} ${threadId + 1000} 0123456789abcdef\n`);
+    // r3-B: this thread's, this incarnation's: live by the disk's word alone
+    await writeFile(file, `${process.pid} ${threadId} ${ORIGIN} 0123456789abcdef\n`);
+    await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+    expect(await ownerFile(dir)).toBe(`${process.pid} ${threadId} ${ORIGIN} 0123456789abcdef\n`);
+    // r2-A: one naming another thread of this process is that thread's, live while the process is — its origin is not this thread's to check
+    for (const origin of [ORIGIN, ORIGIN - 1]) {
+      await writeFile(file, `${process.pid} ${threadId + 1000} ${origin} 0123456789abcdef\n`);
+      await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`thread ${threadId + 1000} of this process holds it`));
+      expect(await ownerFile(dir)).toBe(`${process.pid} ${threadId + 1000} ${origin} 0123456789abcdef\n`);
+    }
     await rm(file);
   });
 
@@ -132,9 +144,9 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     const file = path.join(dir, ".estoc", "local", "owner.pid");
     const held = await new FsBackend(dir).own(LOCK);
     await rm(file);
-    await writeFile(file, `${LIVE} 0 fedcba9876543210\n`); // another holder, by force
+    await writeFile(file, `${LIVE} 0 ${AGO} fedcba9876543210\n`); // another holder, by force
     await held.release();
-    expect(await ownerFile(dir)).toBe(`${LIVE} 0 fedcba9876543210\n`);
+    expect(await ownerFile(dir)).toBe(`${LIVE} 0 ${AGO} fedcba9876543210\n`);
     await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(VaultOwned);
     await rm(file);
   });
@@ -144,19 +156,19 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
     const local = path.join(dir, ".estoc", "local");
     await mkdir(local, { recursive: true });
     // a dead reclaimer moved a live holder's file aside and never put it back
-    await writeFile(path.join(local, `owner.pid.reclaim.${DEAD}.0.0123456789abcdef`), `${LIVE} 0 1111111111111111\n`);
-    await writeFile(path.join(local, `owner.pid.claim.${DEAD}.0.2222222222222222`), `${DEAD} 0 2222222222222222\n`);
+    await writeFile(path.join(local, `owner.pid.reclaim.${DEAD}.0.${AGO}.0123456789abcdef`), `${LIVE} 0 ${AGO} 1111111111111111\n`);
+    await writeFile(path.join(local, `owner.pid.claim.${DEAD}.0.${AGO}.2222222222222222`), `${DEAD} 0 ${AGO} 2222222222222222\n`);
     await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`process ${LIVE} holds it`));
     expect(await localEntries(dir)).toEqual(["owner.pid"]);
-    expect(await ownerFile(dir)).toBe(`${LIVE} 0 1111111111111111\n`);
+    expect(await ownerFile(dir)).toBe(`${LIVE} 0 ${AGO} 1111111111111111\n`);
     await rm(path.join(local, "owner.pid"));
     // a dead reclaimer's marker holding a dead holder's file is just removed
-    await writeFile(path.join(local, `owner.pid.reclaim.${DEAD}.0.3333333333333333`), `${DEAD} 0 3333333333333333\n`);
+    await writeFile(path.join(local, `owner.pid.reclaim.${DEAD}.0.${AGO}.3333333333333333`), `${DEAD} 0 ${AGO} 3333333333333333\n`);
     const taken = await new FsBackend(dir).own(LOCK);
     expect(await localEntries(dir)).toEqual(["owner.pid"]);
     await taken.release();
     // a live reclaimer's marker is its own: a taker gives the name up and waits it out
-    await writeFile(path.join(local, `owner.pid.reclaim.${LIVE}.0.4444444444444444`), `${DEAD} 0 4444444444444444\n`);
+    await writeFile(path.join(local, `owner.pid.reclaim.${LIVE}.0.${AGO}.4444444444444444`), `${DEAD} 0 ${AGO} 4444444444444444\n`);
     const waiting = new FsBackend(dir).own(LOCK);
     let done = false;
     void waiting.then(
@@ -171,31 +183,32 @@ describe("FsBackend.own (vault-folder.md §15)", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(done).toBe(false); // takes the name, sees the marker, gives it up, and looks again — never keeps it
     }
-    await rm(path.join(local, `owner.pid.reclaim.${LIVE}.0.4444444444444444`)); // the reclaimer finishes
+    await rm(path.join(local, `owner.pid.reclaim.${LIVE}.0.${AGO}.4444444444444444`)); // the reclaimer finishes
     const settled = await waiting;
     expect(await localEntries(dir)).toEqual(["owner.pid"]);
     await settled.release();
   });
 });
 
-describe("ownership across threads and module copies (r2-A)", () => {
-  /** The ownership module bundled on its own: another copy of it, as a worker loads, or a second bundle in one thread. */
-  let bundle: string;
-  beforeAll(async () => {
-    const dir = await tempDir();
-    bundle = path.join(dir, "ownership.cjs");
-    await build({
-      entryPoints: [fileURLToPath(new URL("../../../src/node/fs.ts", import.meta.url))],
-      bundle: true,
-      format: "cjs",
-      platform: "node",
-      target: "es2022",
-      outfile: bundle,
-    });
+/** The ownership module bundled on its own: another copy of it, as a worker loads, or a second bundle or realm in one thread. */
+let bundle: string;
+beforeAll(async () => {
+  const dir = await tempDir();
+  bundle = path.join(dir, "ownership.cjs");
+  await build({
+    entryPoints: [fileURLToPath(new URL("../../../src/node/fs.ts", import.meta.url))],
+    bundle: true,
+    format: "cjs",
+    platform: "node",
+    target: "es2022",
+    outfile: bundle,
   });
+});
 
-  /** The bundle loaded into this thread by the platform's own `require`, which the test runner's loader does not stand in for. */
-  const loadCopy = (): { FsBackend: typeof FsBackend } => createRequire(import.meta.url)(bundle) as { FsBackend: typeof FsBackend };
+/** The bundle loaded into this thread by the platform's own `require`, which the test runner's loader does not stand in for. */
+const loadCopy = (): { FsBackend: typeof FsBackend } => createRequire(import.meta.url)(bundle) as { FsBackend: typeof FsBackend };
+
+describe("ownership across threads and module copies (r2-A)", () => {
 
   /** A worker that takes `lock` in `dir` through the bundled copy on "take", reports the outcome, and releases on "release". */
   function worker(dir: string): { take: () => Promise<string>; release: () => Promise<void> } {
@@ -265,11 +278,11 @@ describe("ownership across threads and module copies (r2-A)", () => {
     expect(await localEntries(dir)).toEqual([]);
   });
 
-  it("r2-A: a second copy of the module in this thread shares its registry: what one copy holds the other refuses at once, and a take through either has one winner", async () => {
+  it("r2-A, r3-B: a second copy of the module in this thread: what one copy holds the disk refuses the other, and a take through either has one winner", async () => {
     const dir = await tempDir();
     const copy = loadCopy();
     const held = await new FsBackend(dir).own(LOCK);
-    await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this process holds it already/);
+    await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
     await held.release();
     const attempts = await Promise.allSettled([new copy.FsBackend(dir).own(LOCK), new FsBackend(dir).own(LOCK)]);
     expect(attempts.filter((a) => a.status === "fulfilled")).toHaveLength(1);
@@ -286,16 +299,16 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     await mkdir(local, { recursive: true });
     return { real: path.join(local, "owner.pid"), local };
   }
-  const W = `${LIVE} 0 1111111111111111\n`; // a live holder, moved aside
-  const T = `${LIVE} 7 2222222222222222\n`; // a live taker's file, standing at the name and not given up
+  const W = `${LIVE} 0 ${AGO} 1111111111111111\n`; // a live holder, moved aside
+  const T = `${LIVE} 7 ${AGO} 2222222222222222\n`; // a live taker's file, standing at the name and not given up
 
   it("r2-C: a restore that runs out of patience leaves the marker — the moved holder's record — in place; a taker meanwhile sees the live file, and one after the taker gave up is barred by the marker until the restore completes", async () => {
     const { real, local } = await place();
-    const marker = `${real}.reclaim.${DEAD}.0.3333333333333333`;
+    const marker = `${real}.reclaim.${DEAD}.0.${AGO}.3333333333333333`;
     await writeFile(marker, W);
     await writeFile(real, T);
     expect(await restore(marker, 3)).toBe(false);
-    expect((await readdir(local)).sort()).toEqual([`owner.pid`, `owner.pid.reclaim.${DEAD}.0.3333333333333333`]);
+    expect((await readdir(local)).sort()).toEqual([`owner.pid`, `owner.pid.reclaim.${DEAD}.0.${AGO}.3333333333333333`]);
     expect(await readFile(marker, "utf8")).toBe(W);
     expect(await readFile(real, "utf8")).toBe(T);
     // a taker now: the live taker's file refuses it
@@ -309,33 +322,33 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
 
   it("r2-C: the reclaimer whose restore gave up fails its take with the marker standing, and its next take — the marker its own, no longer in flight — restores first", async () => {
     const { real, local } = await place();
-    const stale = `${DEAD} 0 4444444444444444\n`;
+    const stale = `${DEAD} 0 ${AGO} 4444444444444444\n`;
     await writeFile(real, stale);
     // W took the name between this reclaimer's look and its move, and a taker T took it after the move: the state after the move
     // is laid out by hand — the marker, this thread's and no longer in flight, holds W, not what was seen; T stands at the name —
     // and the reclaimer's own restore is what `own` runs through `sweep`.
-    const marker = `${real}.reclaim.${process.pid}.${threadId}.5555555555555555`;
+    const marker = `${real}.reclaim.${process.pid}.${threadId}.${ORIGIN}.5555555555555555`;
     await writeFile(marker, W);
     await writeFile(real, T);
     await expect(own(real, LOCK, 3)).rejects.toThrow(new RegExp(`process ${LIVE} holds it`));
-    expect((await readdir(local)).sort()).toEqual(["owner.pid", `owner.pid.reclaim.${process.pid}.${threadId}.5555555555555555`]); // the marker stands: W's record bars every taker
+    expect((await readdir(local)).sort()).toEqual(["owner.pid", `owner.pid.reclaim.${process.pid}.${threadId}.${ORIGIN}.5555555555555555`]); // the marker stands: W's record bars every taker
     await rm(real);
     await expect(own(real, LOCK, 3)).rejects.toThrow(new RegExp(`process ${LIVE} holds it`));
     expect((await readdir(local)).sort()).toEqual(["owner.pid"]);
     expect(await readFile(real, "utf8")).toBe(W);
   });
 
-  it("r2-C: a stale file at the name — a taker that died, a previous incarnation — is removed by the restore, which then completes; a marker gone from under it, or already linked back, is done", async () => {
+  it("r2-C: a stale file at the name — a taker that died, a previous incarnation — is taken off it by the restore, which then completes; a marker gone from under it, or already linked back, is done", async () => {
     const { real, local } = await place();
-    const marker = `${real}.reclaim.${DEAD}.0.6666666666666666`;
+    const marker = `${real}.reclaim.${DEAD}.0.${AGO}.6666666666666666`;
     await writeFile(marker, W);
-    await writeFile(real, `${DEAD} 0 7777777777777777\n`);
+    await writeFile(real, `${DEAD} 0 ${AGO} 7777777777777777\n`);
     expect(await restore(marker, 3)).toBe(true);
     expect((await readdir(local)).sort()).toEqual(["owner.pid"]);
     expect(await readFile(real, "utf8")).toBe(W);
     await rm(real);
     await writeFile(marker, W);
-    await writeFile(real, `${process.pid} ${threadId} 8888888888888888\n`); // this thread, no record of it: a previous incarnation's
+    await writeFile(real, `${process.pid} ${threadId} ${ORIGIN - 1} 8888888888888888\n`); // this thread, another incarnation: a previous one's
     expect(await restore(marker, 3)).toBe(true);
     expect(await readFile(real, "utf8")).toBe(W);
     expect(await restore(marker, 3)).toBe(true); // no marker: nothing left to restore
@@ -348,7 +361,7 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     const { real, local } = await place();
     const held = await own(real, LOCK, 3);
     const line = await readFile(real, "utf8");
-    const marker = `${real}.reclaim.${LIVE}.0.9999999999999999`; // a live reclaimer stuck in its restore
+    const marker = `${real}.reclaim.${LIVE}.0.${AGO}.9999999999999999`; // a live reclaimer stuck in its restore
     await rename(real, marker);
     await writeFile(real, T);
     await held.release();
@@ -361,6 +374,77 @@ describe("a reclaim that cannot give a moved holder its name back (r2-C)", () =>
     await link(marker, real); // a restore that linked back just before the release looked
     await again.release();
     expect((await readdir(local)).sort()).toEqual([]);
+  });
+});
+
+describe("a stale file at the name, taken off it by two sweepers at once (r3-A)", () => {
+  /** `node:fs/promises` as the bundled copy sees it: the platform's one module object, whose methods the bundle looks up at each call. */
+  const fsp = createRequire(import.meta.url)("node:fs/promises") as typeof import("node:fs/promises");
+
+  it("r3-A: a sweeper that read a dead taker's file at the name and is held up before taking it off finds, when it goes on, a live holder's there — given its name back by the other sweeper meanwhile — and leaves it standing: what moved is judged, not what was read", async () => {
+    const dir = await tempDir();
+    const local = path.join(dir, ".estoc", "local");
+    await mkdir(local, { recursive: true });
+    const real = path.join(local, "owner.pid");
+    const W = `${LIVE} 0 ${AGO} 1111111111111111\n`; // a live holder, moved aside by a reclaimer that then died
+    const T = `${DEAD} 0 ${AGO} 2222222222222222\n`; // a taker that died at the name
+    await writeFile(`${real}.reclaim.${DEAD}.0.${AGO}.3333333333333333`, W);
+    await writeFile(real, T);
+    const copy = loadCopy();
+    // The first move or removal of the name — sweeper A's, once it has read T there — is held up until let go; every later one goes straight through.
+    const originals = { rename: fsp.rename, rm: fsp.rm };
+    const gate: { letGo: (() => void) | null; paused: Promise<void> } = { letGo: null, paused: Promise.resolve() };
+    gate.paused = new Promise<void>((paused) => {
+      const holdUp = <F extends (...args: never[]) => Promise<unknown>>(f: F): F =>
+        (async (...args: Parameters<F>) => {
+          if (gate.letGo === null && String(args[0]) === real) {
+            await new Promise<void>((letGo) => {
+              gate.letGo = letGo;
+              paused();
+            });
+          }
+          return f(...args);
+        }) as F;
+      fsp.rename = holdUp(originals.rename);
+      fsp.rm = holdUp(originals.rm);
+    });
+    try {
+      const a = new copy.FsBackend(dir).own(LOCK);
+      void a.catch(() => undefined);
+      await gate.paused;
+      expect(await readFile(real, "utf8")).toBe(T); // A has read T and is about to take it off the name
+      // B sweeps meanwhile: takes T off, gives W its name back, removes the marker, and is refused by W
+      await expect(new copy.FsBackend(dir).own(LOCK)).rejects.toThrow(new RegExp(`process ${LIVE} holds it`));
+      expect(await readFile(real, "utf8")).toBe(W);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+      gate.letGo?.();
+      await expect(a).rejects.toThrow(new RegExp(`process ${LIVE} holds it`)); // A moves W by its stale reading of T, sees what moved, gives it back, and is refused
+      expect(await readFile(real, "utf8")).toBe(W);
+      expect(await localEntries(dir)).toEqual(["owner.pid"]);
+    } finally {
+      fsp.rename = originals.rename;
+      fsp.rm = originals.rm;
+    }
+  });
+});
+
+describe("ownership across realms of one thread (r3-B)", () => {
+  it("r3-B: a copy of the module in another realm of this thread — its own global object; the platform's process, require and modules — is refused what this realm holds, and this realm what it holds: the disk says who, not memory", async () => {
+    const dir = await tempDir();
+    const realm = { module: { exports: {} as { FsBackend: typeof FsBackend } }, exports: {}, require: createRequire(import.meta.url), process, Buffer, setTimeout, clearTimeout, ReadableStream };
+    realm.exports = realm.module.exports;
+    runInNewContext(await readFile(bundle, "utf8"), realm, { filename: bundle });
+    const other = realm.module.exports;
+    const held = await new FsBackend(dir).own(LOCK);
+    const line = await ownerFile(dir);
+    await expect(new other.FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+    expect(await ownerFile(dir)).toBe(line); // nothing took the name over
+    await held.release();
+    const theirs = await new other.FsBackend(dir).own(LOCK);
+    expect(await ownerFile(dir)).toMatch(new RegExp(`^${process.pid} ${threadId} ${ORIGIN} `)); // the same stamp from the other realm
+    await expect(new FsBackend(dir).own(LOCK)).rejects.toThrow(/this thread of this process holds it/);
+    await theirs.release();
+    expect(await localEntries(dir)).toEqual([]);
   });
 });
 

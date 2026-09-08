@@ -249,24 +249,32 @@
   The `VaultBackend` gained `own(path)`: ownership of a name, exclusive
   against every holder in every process reaching the folder, refused
   at once as `VaultOwned` — `FsBackend` a pid file holding `<pid>
-  <thread> <token>` (`src/node/ownership.ts`), created whole by claim
-  file and hard link, read back, a live holder refused — a record is
-  live while the process it names is, a Node worker's included, since
-  workers share a pid and differ in thread id; only one naming this
-  very thread that this thread has no memory of is a previous
-  incarnation's, stale (r2-A) — a stale one — dead, empty, garbage —
-  reclaimed by moving it aside and checking what moved, a holder
-  moved by mistake given its name back, this thread's takes and
-  sidecars recorded synchronously in one registry shared by every
-  copy of the module the thread loads, so two takes cannot both pass
-  whichever copy each came through (r1-A, r2-A), release only while
-  the record is still this take's — at the name, or aside under a
-  marker (r1-A, r1-G). A restore that cannot give a moved holder its
-  name back within its budget — a taker stalled between its take and
-  its look — leaves the marker standing and fails the reclaimer's
-  take, so the moved holder's record bars every taker until a later
-  sweep completes it; a stale taker's file at the name is removed by
-  the restore, and a marker gone from under it is done (r2-C);
+  <thread> <origin> <token>` (`src/node/ownership.ts`), created whole
+  by claim file and hard link, read back, a live holder refused — a
+  record is judged live from the disk alone, by no memory of the
+  module's, since a copy in another realm of the thread shares none
+  (r3-B): live while the process it names is, a Node worker's
+  included, since workers share a pid and differ in thread id, and a
+  worker's record outlives the worker until its process exits; one
+  naming this very thread is live while its origin — the millisecond
+  the process began, `performance.timeOrigin`, the same in every
+  realm and copy — is this incarnation's, and a previous
+  incarnation's otherwise, stale (r2-A, r3-B); so two takes in one
+  thread cannot both pass, whichever copy each came through (r1-A,
+  r2-A). Nothing is removed from the name after a read (r3-A): a
+  stale file — dead, a previous incarnation, empty, garbage — is
+  taken off it only by moving it aside under a marker and judging
+  what moved, a live holder's file moved by mistake given its name
+  back; a holder withdraws — releasing, or giving up a name taken
+  beside a marker — by taking its own line off the name the same way
+  and off every marker holding it, until a pass finds it nowhere
+  (r1-A, r1-G). A restore that cannot give a moved holder its name
+  back within its budget — a taker stalled between its take and its
+  look — leaves the marker standing and fails the mover's take, so
+  the moved holder's record bars every taker until a later sweep
+  completes it; a stale taker's file at the name is taken off it by
+  the restore the same way, and a marker gone from under it is done
+  (r2-C, r3-A);
   `OpfsBackend` a Web Lock named for
   the one path from the origin's storage root to the name, so one place
   reached through two handles and bases is one lock (r1-B), and a

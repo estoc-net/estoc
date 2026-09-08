@@ -92,10 +92,14 @@ write; object streams only with `ownership: "exclusive"` — the same
 ownership a writer takes, so a writer waits or fails meanwhile — and
 refused as unprotected without it, over an object store that moves
 nothing. `backend.own(path)` is a pid file on disk — `<pid> <thread>
-<token>`, live while the process and thread it names are, a Node
-worker's as much as another process's — a Web Lock in OPFS, a set in
-memory; a held name is `VaultOwned` at once, and waiting is the
-host's. Unlocking the seed is not this package's: the caller
+<origin> <token>`, live while the process it names is — a Node
+worker's as much as another process's, and a worker's record outlives
+the worker until its process exits — or, naming this very thread,
+while the origin is this incarnation of the process's, so the disk
+alone says who holds it, whatever copy of the module in whatever
+realm asks; nothing is removed from the name after a read, only moved
+aside and judged by what moved — a Web Lock in OPFS, a set in memory;
+a held name is `VaultOwned` at once, and waiting is the host's. Unlocking the seed is not this package's: the caller
 derives the anchor with `@estoc/keystore` and hands it in.
 Interchange — snapshot, export, restore, import — comes next.
 Everything below is

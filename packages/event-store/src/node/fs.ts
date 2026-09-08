@@ -26,8 +26,11 @@ import { own } from "./ownership.js";
  *
  * Ownership (vault-folder.md §15) is a pid file at the name given,
  * taken and kept as `./ownership.ts` says: created whole, read back,
- * live while the process and thread it names are, stale and reclaimed
- * otherwise, with no advisory file lock (decision 5 of the v3 plan).
+ * live while the process it names is — a worker's record outlives the
+ * worker until its process exits — or, naming this thread, while the
+ * process's origin is this incarnation's; stale and reclaimed
+ * otherwise, judged from the disk alone, with no advisory file lock
+ * (decision 5 of the v3 plan).
  */
 export interface FsBackendOptions {
   /**
