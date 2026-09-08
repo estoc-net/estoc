@@ -33,6 +33,7 @@ import {
   type Draft,
   type Event,
   type Held,
+  type Ownership,
   type VaultBackend,
   type VaultRuntime,
 } from "../../src/v3/index.js";
@@ -118,7 +119,21 @@ class GatedBackend extends MemoryBackend {
   }
 }
 
-/** A destination that fails every `create` before pulling from its source. */
+/** A destination whose first `own` waits at the gate once asked, so that another laying can fill the folder between an operation's empty check and its ownership; every later `own` is the memory backend's. */
+class DelayedOwnership extends MemoryBackend {
+  readonly arrived = gate();
+  readonly resume = gate();
+  private delayed = false;
+  override async own(path: string): Promise<Ownership> {
+    if (!this.delayed) {
+      this.delayed = true;
+      (await this.arrived).open();
+      await (await this.resume).wait;
+    }
+    return super.own(path);
+  }
+}
+
 class RefusingCreate extends MemoryBackend {
   override async create(): Promise<void> {
     throw new Error("the destination cannot create a file");
@@ -223,6 +238,29 @@ describe("laying a vault down", () => {
     expectBytes(await opened.vault.objects.read(HELLO_CID, 1024), HELLO);
     expect(await opened.damaged()).toEqual([]);
     await opened.close();
+  });
+
+  it("a destination another laying filled between the empty check and ownership is refused and left as it stands, every byte, for an export and for a restore", async () => {
+    const runtime = memoryVault();
+    await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const from = new MemoryBackend();
+    await exportVault(runtime, from, { heldRoots: allRoots });
+    const bytesOf = (backend: MemoryBackend): Record<string, number[]> => Object.fromEntries([...backend.files].map(([p, b]) => [p, Array.from(b)]));
+    for (const operation of ["export", "restore"] as const) {
+      const into = new DelayedOwnership();
+      const delayed = operation === "export" ? exportVault(runtime, into, { heldRoots: allRoots }) : restoreFolder(from, into, { heldRoots: allRoots });
+      const settled = delayed.then(() => null, (err: unknown) => err);
+      await (await into.arrived).wait;
+      expect(await restoreFolder(from, into, { heldRoots: allRoots }), operation).toEqual({ events: 1, objects: 1, files: 2 });
+      const before = bytesOf(into);
+      (await into.resume).open();
+      expect(await settled, operation).toBeInstanceOf(NotAVault);
+      expect(bytesOf(into), operation).toEqual(before);
+      const opened = await FolderVault.openWritable(into, { anchor: DID });
+      expect((await all(opened.vault.events.scan())).length, operation).toBe(1);
+      expectBytes(await opened.vault.objects.read(HELLO_CID, 1024), HELLO);
+      await opened.close();
+    }
   });
 });
 

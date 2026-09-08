@@ -52,49 +52,64 @@ interface Lay {
  * everything but ownership's own files, before and again after ownership
  * is taken, so that no other create, restore or export lands in the same
  * folder meanwhile; `work` writes everything but `config.json`; then
- * `config.json`, which is what makes it a vault. A failure anywhere is
+ * `config.json`, which is what makes it a vault. A folder found taken
+ * once owned is another laying's, finished between the two checks: it
+ * is refused and left as it stands. A failure of this laying's own is
  * withdrawn as `withdraw` says. Ownership is released either way.
  */
 async function laying<T>(into: VaultBackend, base: string, config: Uint8Array, work: (lay: Lay) => Promise<T>): Promise<T> {
   await checkEmpty(into, base);
   const ownership: Ownership = await into.own(`${base}/${OWNER_FILE}`);
+  try {
+    await checkEmpty(into, base);
+    return await writing(into, base, config, work);
+  } finally {
+    await ownership.release();
+  }
+}
+
+/** The writes of one laying, into a folder owned and found empty: `work`'s, then the publication's; a failure withdraws what they wrote. */
+async function writing<T>(into: VaultBackend, base: string, config: Uint8Array, work: (lay: Lay) => Promise<T>): Promise<T> {
   const written: string[] = [];
+  let publishing = false;
   const at = (rel: string): string => {
     if (rel === CONFIG_FILE) throw new Error(`${CONFIG_FILE} is written last, by publication`);
     written.push(`${base}/${rel}`);
     return `${base}/${rel}`;
   };
   try {
-    await checkEmpty(into, base);
     const result = await work({
       write: (rel, bytes) => into.write(at(rel), bytes),
       create: (rel, source) => into.create(at(rel), source),
     });
+    publishing = true;
     await into.write(`${base}/${CONFIG_FILE}`, config);
     return result;
   } catch (err) {
-    await withdraw(into, base, written);
+    await withdraw(into, base, written, publishing);
     throw err;
-  } finally {
-    await ownership.release();
   }
 }
 
 /**
  * What a failed laying leaves behind. A write that rejects may still
  * have landed its bytes, and the publication's are the ones that
- * matter: `config.json` is removed first and required gone before
- * anything else is touched, and then the rest is taken back, as far as
- * the backend allows. When the publication cannot be withdrawn the rest
- * is left standing too: everything else was written whole before the
- * publication began, so under a `config.json` that stands the folder is
- * a complete vault, while taking the rest back from under it would leave
- * one that opens on nothing.
+ * matter: when this laying got as far as writing `config.json`, that is
+ * removed first and required gone before anything else is touched, and
+ * then the rest is taken back, as far as the backend allows. When the
+ * publication cannot be withdrawn the rest is left standing too:
+ * everything else was written whole before the publication began, so
+ * under a `config.json` that stands the folder is a complete vault,
+ * while taking the rest back from under it would leave one that opens
+ * on nothing. A `config.json` this laying never wrote is not its to
+ * remove: the folder was found empty once owned, so none can be there.
  */
-async function withdraw(into: VaultBackend, base: string, written: string[]): Promise<void> {
-  const config = `${base}/${CONFIG_FILE}`;
-  await into.remove(config).catch(() => undefined);
-  if ((await into.size(config).catch(() => 0)) !== null) return;
+async function withdraw(into: VaultBackend, base: string, written: string[], publishing: boolean): Promise<void> {
+  if (publishing) {
+    const config = `${base}/${CONFIG_FILE}`;
+    await into.remove(config).catch(() => undefined);
+    if ((await into.size(config).catch(() => 0)) !== null) return;
+  }
   for (const path of written.reverse()) await into.remove(path).catch(() => undefined);
 }
 
@@ -282,11 +297,13 @@ export interface RestoreOptions {
  * conflict refused; every held root of that event set present among the
  * objects; every object's bytes required to hash to its name as they
  * are copied. Nothing is written until everything but the objects has
- * passed, and a failure leaves no `config.json`. The source's `local/`
- * and `import/` are never read, whatever a hand-made archive put there:
- * recovery state is the source backend's to finish, never instructions
- * for the target, and a staged half-object is not a portable file. The
- * target opens as a new replica.
+ * passed; a failure withdraws the publication before the rest, and
+ * leaves everything standing when the publication cannot be withdrawn.
+ * The source's `local/` and `import/` are never read, whatever a
+ * hand-made archive put there: recovery state is the source backend's
+ * to finish, never instructions for the target, and a staged
+ * half-object is not a portable file. The target opens as a new
+ * replica.
  */
 export async function restoreFolder(from: VaultBackend, into: VaultBackend, options: RestoreOptions): Promise<Copied> {
   const base = options.base ?? ESTOC_DIR;
@@ -409,7 +426,6 @@ async function misplacedDirectories(from: VaultBackend, fromBase: string): Promi
   return damaged.sort((a, b) => comparePaths(a.where, b.where));
 }
 
-/** The held roots of `events`, as the fold computes them over the set held as a vault in memory. */
 async function rootsOf(events: Event[], heldRoots: KeepUnderLock): Promise<Cid[]> {
   const vault = new MemoryVault();
   await vault.ingest(events);

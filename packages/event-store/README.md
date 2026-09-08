@@ -124,11 +124,12 @@ segment line under its author, no conflict, and every held root of
 that event set, as the fold computes it, among the source's objects;
 objects are verified as they stream. Both own the destination while
 laying it down, as `create` does, and publish by writing `config.json`
-last; a failure withdraws the publication first and then the rest, so
-what an interrupted run leaves is not a vault, and when the
+last; a failure withdraws what the run wrote, its publication first,
+so what an interrupted run leaves is not a vault, and when the
 publication cannot be withdrawn everything is left standing, since it
-was all written before it. Import into an existing vault and the zip
-form come next.
+was all written before it. A destination another laying filled between
+the check and ownership is refused and left untouched. Import into an
+existing vault and the zip form come next.
 Everything below is
 version 2, which stays until the vault switches over.
 
