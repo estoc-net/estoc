@@ -245,7 +245,7 @@
   `config.json`, `keystore.json` and opaque paths, writes opaque paths
   only, and lists nothing under `local/` or `import/` (§11.6, VF-39).
   `damaged()` reports what every structural root holds that the layout
-  does not define (VF-16); `portablePaths()` is what a snapshot copies.
+  does not define (VF-16).
   The `VaultBackend` gained `own(path)`: ownership of a name, exclusive
   against every holder in every process reaching the folder, refused
   at once as `VaultOwned` — `FsBackend` a pid file holding `<pid>

@@ -81,7 +81,7 @@ export interface OpenReadOnlyOptions extends FolderVaultOptions {
 }
 
 /** What the folder holds that the layout does not define, from every root, in path order. */
-async function layoutDamage(backend: VaultBackend, base: string): Promise<Damaged[]> {
+export async function layoutDamage(backend: VaultBackend, base: string): Promise<Damaged[]> {
   const damaged: Damaged[] = [];
   for (const file of [CONFIG_FILE, KEYSTORE_FILE]) {
     const at = `${base}/${file}`;
@@ -114,7 +114,7 @@ async function readConfig(backend: VaultBackend, base: string): Promise<Config> 
  * not something to open over. An empty or absent `import/` is nothing
  * pending.
  */
-async function checkImport(backend: VaultBackend, base: string): Promise<void> {
+export async function checkImport(backend: VaultBackend, base: string): Promise<void> {
   const dir = `${base}/${IMPORT_DIR}`;
   const entries = [...(await backend.list(dir)), ...(await backend.dirs(dir))].sort(comparePaths);
   if (entries.length > 0) throw new PendingImport(entries);
