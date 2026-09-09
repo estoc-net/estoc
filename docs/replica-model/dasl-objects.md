@@ -164,13 +164,16 @@ results do not certify content integrity or guarantee that a later read succeeds
 
 Known damage means damage known to the current open store session. It need not
 be persisted across close/reopen; a later session may discover it again.
+An accepted object is **sound** for reuse when it is not known damaged in that
+session; this does not certify its current content integrity.
 Known damage to a stored object MUST make `has`, `stat`, `open` and `read` fail
 with an explicit damage error; `false` and `null` indicate absence only. `list`
 MUST fail when it encounters a known damaged object, without yielding that CID
 or silently omitting it from a successful result. Verified repair restores
 normal results.
 
-Verification is mandatory at acceptance/import/restore. A read may stream before
+Bytes supplied for acceptance, import or restore MUST be verified. Reusing sound
+accepted bytes does not require rehashing them. A read may stream before
 rehashing finishes, but a mismatch MUST fail before successful completion.
 Consumers cannot treat earlier chunks as verified until that completion.
 `read(maxBytes)` bounds size before allocating and errors rather than truncating
@@ -232,8 +235,9 @@ through deletion. The object store does not interpret event types.
 
 Collection enumerates accepted object records, including damaged ones, without
 applying the public `list` failure rule. Known object damage alone MUST NOT fail
-the pass: retain and report damaged held objects; delete damaged unheld objects
-normally. Storage, enumeration and transaction failures still surface as errors.
+the pass: retain known-damaged held objects without clearing their damage state;
+delete damaged unheld objects normally. Storage, enumeration and transaction
+failures still surface as errors.
 
 `removed` contains unique canonical CIDs actually deleted by the pass, including
 damaged objects; order is not significant. After deletion, read and presence
@@ -315,9 +319,10 @@ space and report exceeded limits explicitly.
 9. <a id="do-9"></a> A CID only in event data creates no retention edge.
 10. <a id="do-10"></a> A CID only inside object bytes creates no edge or fetch.
 11. <a id="do-11"></a> Collection preserves every held root, including known damaged
-    objects, and reports their damage. Damaged unheld objects are deleted and
-    included in `removed`; neither form of object damage alone fails the pass.
-    Deleted CIDs subsequently report absence, even if damage diagnostics remain.
+    objects, whose reads and presence checks still fail after collection. Damaged
+    unheld objects are deleted and included in `removed`; neither form of object
+    damage alone fails the pass. Deleted CIDs subsequently report absence, even
+    if damage diagnostics remain.
 12. <a id="do-12"></a> Commit interruption accepts all new objects/events or none.
 13. <a id="do-13"></a> Broken chunks, lengths or hashes are reported as damage.
     Known damage makes `has`, `stat`, `open` and `read` fail explicitly; `list`

@@ -123,10 +123,11 @@ Duplicates SHOULD be omitted. A CID merely mentioned in `data` or inside an
 object is not a root. Known types list all objects they retain; unknown types
 retain all their listed roots without content traversal.
 
-A local commit requires every root to name sound accepted bytes or verified
-bytes accepted in that same transaction. Fields such as `bodyCid` may repeat
-roots without creating extra references. Erasure targets such as `dropCids`
-MUST NOT become roots of the erasure event.
+A local commit requires every root to name
+[sound accepted bytes](dasl-objects.md#read-operations) or verified bytes accepted
+in that same transaction. Fields such as `bodyCid` may repeat roots without
+creating extra references. Erasure targets such as `dropCids` MUST NOT become
+roots of the erasure event.
 
 <a id="rfc-8785-canonical-json-and-equality"></a>
 
@@ -431,14 +432,6 @@ interface Vault {
 }
 ```
 
-Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
-snapshot's immutable metadata; `events` provides `scan`, `damaged` and
-`conflicting`, and `objects` provides `open`, `read`, `stat`, `has` and `list`
-under their ordinary read and damage rules. `commit` and `events.changes` MUST
-always reject with `UnsupportedOperation`, without consuming object sources or
-minting local IDs, positions or tokens. No local `EventStore.author` is exposed
-or invented; historical event authors remain unchanged.
-
 For a writable runtime, `commit` validates known payloads, prepares/verifies
 supplied objects and checks all roots, including reused ones. Every supplied
 object must be referenced by at least one draft. New objects, the entire event
@@ -446,6 +439,14 @@ batch and local positions accept in one transaction under the batch rules above.
 Validation failure or rollback accepts neither new objects nor events; private
 preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
+
+Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
+snapshot's immutable metadata; `events` provides `scan`, `damaged` and
+`conflicting`, and `objects` provides `open`, `read`, `stat`, `has` and `list`
+under their ordinary read and damage rules. `commit` and `events.changes` MUST
+always reject with `UnsupportedOperation`, without consuming object sources or
+minting local IDs, positions or tokens. No local `EventStore.author` is exposed
+or invented; historical event authors remain unchanged.
 
 The vault-wide operation lock serializes semantic mutations from preflight
 through publication, including receipt allocation and GC's held-root decision.
@@ -480,7 +481,8 @@ not identity.
 [SQ §10](vault-sqlite.md#snapshot-and-export) defines fresh portable construction
 from a consistent event/wrapper/held-root cut. Missing held bytes fails complete
 export. Release the operation lock once the standalone snapshot is built and
-verified, before file delivery. Success still requires completed output.
+its destination writer is closed. Validate the final immutable file and deliver
+it outside that lock, in that order. Success still requires completed output.
 
 <a id="import-into-an-existing-vault"></a>
 
@@ -491,7 +493,10 @@ validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
 canonical duplicate/conflict, own-author fork, known payload,
 [receipt-integrity](vault-events.md#message-in) and erasure rules. Required union
-roots must have sound bytes in source or target.
+roots must have verified bytes in the source or
+[sound accepted bytes](dasl-objects.md#read-operations) in the target. Reusing
+target objects does not rehash them; maintenance repair follows
+[SQ §12.2](vault-sqlite.md#import).
 
 One transaction publishes required objects and all new events. Preserve target
 identity, wrapper and local control. A failed preflight changes no accepted state;

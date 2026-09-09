@@ -170,7 +170,8 @@ A sync store is not a seed backup.
 When event damage stops runtime writes, the application MUST explain the stopped
 state and the need to restore a validated snapshot into a new runtime. Only the
 snapshot's history is recovered; without a usable snapshot, phase 1 provides no
-history recovery path.
+history recovery path. Seed export and identity recovery remain possible when
+the seed is available or a readable valid wrapper can be unlocked.
 
 <a id="events-and-change-tokens"></a>
 
@@ -267,11 +268,12 @@ runtime; event damage follows [ES §5.6](event-store.md#damage-and-conflicts).
 
 GC holds the operation lock from computing current held roots through deleting
 unheld objects and their chunks in one transaction. Object damage does not block
-collection: retain and report damaged held objects and delete damaged unheld
-objects under [DO §8.3](dasl-objects.md#collection). No acceptance timestamps or
-minimum orphan age are needed. Unpublished temporary data may be discarded when
-no operation uses it. Collection promises logical removal, not file shrinkage
-or forensic erasure. Never remove accepted data merely because a promise failed.
+collection: retain known-damaged held objects without clearing their damage state
+and delete damaged unheld objects under [DO §8.3](dasl-objects.md#collection).
+No acceptance timestamps or minimum orphan age are needed. Unpublished temporary
+data may be discarded when no operation uses it. Collection promises logical
+removal, not file shrinkage or forensic erasure. Never remove accepted data merely
+because a promise failed.
 
 <a id="local-state-and-projections"></a>
 
@@ -320,10 +322,10 @@ SQLite recover its journal. Require the expected `application_id` and a supporte
 run its application-owned migration under ownership in one transaction,
 committing the schema and `user_version` together while preserving existing
 logical vault values. This migration is the only application write permitted
-before seed/anchor verification. Then validate the current schema and metadata,
-unlock or obtain the seed, and verify its anchor before application data writes
-or identity use. Validate control and reconstruct committed retention and
-unfinished work under
+before seed/anchor verification. After any migration, validate the current schema
+and metadata again. Then unlock or obtain the seed and verify its anchor before
+application data writes or identity use. Validate control and reconstruct
+committed retention and unfinished work under
 [VE §13.1](vault-events.md#open-the-writable-full-runtime) before GC or workers.
 
 An inspector makes no application writes or new local IDs and rejects a runtime
@@ -350,9 +352,10 @@ No particular VFS, WAL mode or stronger power-loss guarantee is mandated.
 ### 9.1 Atomic commit
 
 Under the operation lock, validate drafts and prepare objects, assign events
-under ES's batch rules, and require every root to have sound accepted or prepared
-bytes. One transaction accepts all supplied objects, the whole event batch and
-positions, and updates/invalidates any affected caches. Resolve after commit.
+under ES's batch rules, and require every root to have sound accepted bytes under
+[DO §6.3](dasl-objects.md#read-operations) or verified prepared bytes. One transaction
+accepts all supplied objects, the whole event batch and positions, and
+updates/invalidates any affected caches. Resolve after commit.
 Do not compose independently committed puts and appends. A rollback accepts
 nothing new. Do not hold a write transaction across network or source-stream
 waits; copying prepared local data may occur within the final transaction.
@@ -391,10 +394,12 @@ portable-state selection.
 
 Validate the destination, set ready, finish journal/checkpoint work and close it
 as a standalone main file with rollback-format headers and no required sidecars.
-Reopen that final file read-only and complete [section 11](#portable-source-validation)'s
-restore/import source validation, then close the verifier. No later cleanup or
-delivery step may modify the verified file. Only after this succeeds, release
-the operation lock **before** delivering that immutable file.
+Release the operation lock once the destination writer is closed and keep the
+completed file immutable. Outside that lock, reopen the file read-only and
+complete [section 11](#portable-source-validation)'s restore/import source validation,
+then close the verifier. Validation and delivery use only the completed file;
+no later cleanup or delivery step may modify it. Deliver it only after validation
+succeeds.
 Success requires completed output; cancellation/truncation is a delivery failure,
 not permission to omit content. Object I/O and output need bounded memory or an
 explicit enforced total-backup limit before allocation.
@@ -464,8 +469,13 @@ Then, under that lock, require a ready unlocked target with equal `user_version`
 and `ForkedAuthor` checks, and compute the prospective union and held roots with
 erasure closure. The target wins event-ID
 content conflicts, which are reported; distinct valid facts remain in the union.
-Require sound bytes for every union root in source or target. Stage required
-absent/damaged objects without publishing them; quiesce reads before repair.
+Require verified source bytes or [sound accepted target bytes](dasl-objects.md#read-operations)
+for every union root. Import reuses sound target objects without rehashing them.
+Stage only required absent or known-damaged target objects from the verified
+source, without publishing them; quiesce reads before repair. Implementations
+MAY offer a separate verification pass that rehashes accepted objects in the
+target session to discover damage before maintenance import. Successful import
+does not certify the integrity of reused target bytes.
 
 One transaction accepts the required objects, all new events and positions, and
 updates/invalidates any caches. No visible sub-batches. Preflight failure changes
@@ -545,8 +555,8 @@ physical-version guarantees are recorded in the suite's section history.
 21. <a id="sq-21"></a> Preparation is invisible; unused supplied objects fail full commit.
 22. <a id="sq-22"></a> Repair waits for or cancels affected readers before replacing bytes.
 23. <a id="sq-23"></a> GC preserves held roots and atomically deletes selected unheld objects.
-    Known object damage alone does not block it; damaged held objects remain and
-    are reported, while damaged unheld objects are deleted.
+    Known object damage alone does not block it; held objects retain their known
+    damage state, while damaged unheld objects are deleted.
 24. <a id="sq-24"></a> Each read completes unchanged or explicitly fails/cancels during writes or maintenance.
     An ordinary serialized commit can complete without a paused consumer resuming.
 25. <a id="sq-25"></a> A failed lazy hash or interrupted read never reports successful completion.
@@ -563,7 +573,9 @@ physical-version guarantees are recorded in the suite's section history.
 29. <a id="sq-29"></a> Export contains the exact keystore row, every event and exactly held objects
     at its selected cut.
 30. <a id="sq-30"></a> Excluded local/unheld sentinel bytes never enter the fresh portable file.
-31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut; delivery holds no operation lock.
+31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut. Final read-only validation
+    and delivery hold no operation lock; runtime mutations can proceed without
+    changing that immutable file.
 32. <a id="sq-32"></a> Output opens without sidecars; incomplete/cancelled output is not success.
     After the destination writer closes, the final file passes full portable
     source validation on read-only reopen; later cleanup cannot modify it.
@@ -576,7 +588,10 @@ physical-version guarantees are recorded in the suite's section history.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> Missing prospective roots or a fork aborts without semantic writes.
-37. <a id="sq-37"></a> Maintenance import repairs damaged objects without reviving erasures.
+37. <a id="sq-37"></a> Maintenance import repairs required known-damaged objects without
+    reviving erasures. Reusing target objects does not rehash them. After reopen,
+    forgotten damage does not select an object for repair; detecting it again in
+    the target session makes a required object eligible for verified repair.
 38. <a id="sq-38"></a> Interrupted construction is unpublished or complete, never implicit creation.
 39. <a id="sq-39"></a> Exact move requires a stopped source; stale copies refresh local identity.
 40. <a id="sq-40"></a> Large-object and output limits are exercised on each supported platform.
