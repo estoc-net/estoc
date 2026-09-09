@@ -434,10 +434,11 @@ interface Vault {
 
 For a writable runtime, `commit` validates known payloads, prepares/verifies
 supplied objects and checks all roots, including reused ones. Every supplied
-object must be referenced by at least one draft. New objects, the entire event
-batch and local positions accept in one transaction under the batch rules above.
-Validation failure or rollback accepts neither new objects nor events; private
-preparation may remain.
+object must be referenced by at least one draft. A supplied object for a
+known-damaged CID follows [DO §6.2](dasl-objects.md#putobject)'s verified replacement
+rule. New objects, repairs, the entire event batch and local positions publish
+in one transaction under the batch rules above. Validation failure or rollback
+publishes no objects, repairs or events; private preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
 
 Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
@@ -492,17 +493,22 @@ it outside that lock, in that order. Success still requires completed output.
 validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
 canonical duplicate/conflict, own-author fork, known payload,
-[receipt-integrity](vault-events.md#message-in) and erasure rules. Required union
-roots must have verified bytes in the source or
-[sound accepted bytes](dasl-objects.md#read-operations) in the target. Reusing
-target objects does not rehash them; maintenance repair follows
-[SQ §12.2](vault-sqlite.md#import).
+[receipt-integrity](vault-events.md#message-in) and erasure rules. Every root
+retained by a newly accepted source event in the prospective union must have
+verified source bytes or [sound accepted target bytes](dasl-objects.md#read-operations).
+An erased reference does not require bytes. Under [SQ §12.2](vault-sqlite.md#import),
+stage every union-held object that is absent or known damaged in the target and
+has verified source bytes, even if there are no new events. Missing or damaged
+roots retained only by existing target events and absent from the source do not
+block import; their state remains unchanged. Reusing target objects does not
+rehash them.
 
-One transaction publishes required objects and all new events. Preserve target
-identity, wrapper and local control. A failed preflight changes no accepted state;
-crash recovery leaves the complete old or new union. Valid conflicting semantic
-facts remain facts. Missing data or partial sync ingestion is not a successful
-complete import, and old source bytes do not revive an erased relation.
+One transaction publishes staged objects and repairs with all new events.
+Preserve target identity, wrapper and local control. A failed preflight changes
+no accepted state; crash recovery leaves the complete old or new union. Valid
+conflicting semantic facts remain facts. An incomplete source or partial sync
+ingestion is not a successful complete import, and old source bytes do not
+revive an erased relation.
 
 <a id="restore-and-bootstrap"></a>
 

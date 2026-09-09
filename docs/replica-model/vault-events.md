@@ -3158,10 +3158,12 @@ if invalid; an incremental result must equal the pure fold of that union.
 
 ### 14.2 Object merge
 
-Compute held roots from the prospective event union and copy only valid absent
-objects required by that fold. Full import publishes events and available
-objects under [event-store.md section 11.3](event-store.md#import-into-an-existing-vault)'s complete-view boundary; this
-semantic union is not permission to expose an intermediate event-only import.
+Compute held roots from the prospective event union and copy only verified
+source objects that are absent or known damaged in the target and held by that
+fold. Full import publishes events and object additions or repairs under
+[event-store.md section 11.3](event-store.md#import-into-an-existing-vault)'s atomic
+publication boundary; this semantic union is not permission to expose an
+intermediate event-only import.
 No content traversal is implied. An erased message/root relation does not
 revive merely because an older source still has the bytes.
 

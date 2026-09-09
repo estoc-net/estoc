@@ -261,8 +261,10 @@ physical-version protocol is prescribed.
 Missing chunks, wrong lengths and hash mismatches are reported as damage, never
 policy erasure or success. Read and presence operations follow
 [DO §6.3](dasl-objects.md#read-operations). Work requiring damaged content stays
-deferred until verified repair. Repair may run in maintenance mode and replaces
-the complete object's bytes in one transaction after readers are quiesced.
+deferred until verified repair. Repair may run in maintenance mode and follows
+[DO §6.2](dasl-objects.md#putobject)'s replacement rule: after readers are quiesced,
+replace the object's metadata and complete chunk set in the enclosing acceptance
+transaction. Failed validation or rollback preserves the existing damage state.
 Persistent quarantine is not required. Structural database damage fails the
 runtime; event damage follows [ES §5.6](event-store.md#damage-and-conflicts).
 
@@ -354,10 +356,11 @@ No particular VFS, WAL mode or stronger power-loss guarantee is mandated.
 Under the operation lock, validate drafts and prepare objects, assign events
 under ES's batch rules, and require every root to have sound accepted bytes under
 [DO §6.3](dasl-objects.md#read-operations) or verified prepared bytes. One transaction
-accepts all supplied objects, the whole event batch and positions, and
-updates/invalidates any affected caches. Resolve after commit.
-Do not compose independently committed puts and appends. A rollback accepts
-nothing new. Do not hold a write transaction across network or source-stream
+accepts all supplied objects, including repairs under
+[DO §6.2](dasl-objects.md#putobject), the whole event batch and positions, and
+updates/invalidates any affected caches. Resolve after commit. Do not compose
+independently committed puts and appends. A rollback publishes no objects,
+repairs or events. Do not hold a write transaction across network or source-stream
 waits; copying prepared local data may occur within the final transaction.
 
 <a id="failure-and-recovery"></a>
@@ -392,8 +395,9 @@ Do not run `ANALYZE` on the portable destination.
 SQLite's backup API is suitable for whole-runtime recovery copies, not this
 portable-state selection.
 
-Validate the destination, set ready, finish journal/checkpoint work and close it
-as a standalone main file with rollback-format headers and no required sidecars.
+Check the destination's logical values, set ready, finish journal/checkpoint work
+and close it as a standalone main file with rollback-format headers and no
+required sidecars.
 Release the operation lock once the destination writer is closed and keep the
 completed file immutable. Outside that lock, reopen the file read-only and
 complete [section 11](#portable-source-validation)'s restore/import source validation,
@@ -467,22 +471,34 @@ Validate and pin the complete source **before taking the target operation lock**
 Then, under that lock, require a ready unlocked target with equal `user_version`,
 `vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
 and `ForkedAuthor` checks, and compute the prospective union and held roots with
-erasure closure. The target wins event-ID
-content conflicts, which are reported; distinct valid facts remain in the union.
-Require verified source bytes or [sound accepted target bytes](dasl-objects.md#read-operations)
-for every union root. Import reuses sound target objects without rehashing them.
-Stage only required absent or known-damaged target objects from the verified
-source, without publishing them; quiesce reads before repair. Implementations
-MAY offer a separate verification pass that rehashes accepted objects in the
-target session to discover damage before maintenance import. Successful import
-does not certify the integrity of reused target bytes.
+erasure closure. The target wins event-ID content conflicts, which are reported;
+distinct valid facts remain in the union.
 
-One transaction accepts the required objects, all new events and positions, and
-updates/invalidates any caches. No visible sub-batches. Preflight failure changes
-no accepted state; crash recovery yields the complete old or new union. Preserve
-target metadata, wrapper and local IDs. Repeated import is idempotent and cannot
-revive an erased relation just because the source has old bytes. Partial sync
-ingestion is a separate facility, not a complete portable import.
+For every root retained in the prospective union by a newly accepted source
+event, require verified source bytes or
+[sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort.
+New events have IDs absent from the target after duplicate/conflict and fork
+checks. Apply erasure closure before this requirement; erased references do not
+require bytes.
+
+For every union-held CID with verified source bytes, stage those bytes if the
+target object is absent or known damaged, even when there are no new events.
+If a root is retained only by existing target events and the source lacks its
+bytes, leave any absence or known damage unchanged; it does not block import.
+Stage no unheld objects and do not publish staging early. Import reuses sound
+target objects without rehashing them. Implementations MAY offer a separate
+verification pass that rehashes accepted objects in the target session to
+discover damage before maintenance import. Successful import does not certify
+the integrity of reused target bytes or repair every existing target object.
+
+Quiesce readers before repair under [DO §6.2](dasl-objects.md#putobject).
+One transaction publishes the staged objects and repairs, all new events and
+positions, and updates/invalidates any caches. No visible sub-batches. Preflight
+failure changes no accepted state; crash recovery yields the complete old or
+new union. Preserve target metadata, wrapper and local IDs. Repeated import is
+idempotent and cannot revive an erased relation just because the source has old
+bytes. Partial sync ingestion is a separate facility, not a complete portable
+import.
 
 <a id="exact-local-move"></a>
 
@@ -554,6 +570,8 @@ physical-version guarantees are recorded in the suite's section history.
 20. <a id="sq-20"></a> Missing chunks, wrong sizes/hashes and exceeded limits fail explicitly.
 21. <a id="sq-21"></a> Preparation is invisible; unused supplied objects fail full commit.
 22. <a id="sq-22"></a> Repair waits for or cancels affected readers before replacing bytes.
+    A full commit publishes supplied repairs with its events in one transaction;
+    failed validation or rollback leaves the old bytes and known damage unchanged.
 23. <a id="sq-23"></a> GC preserves held roots and atomically deletes selected unheld objects.
     Known object damage alone does not block it; held objects retain their known
     damage state, while damaged unheld objects are deleted.
@@ -587,11 +605,17 @@ physical-version guarantees are recorded in the suite's section history.
     querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
-36. <a id="sq-36"></a> Missing prospective roots or a fork aborts without semantic writes.
-37. <a id="sq-37"></a> Maintenance import repairs required known-damaged objects without
-    reviving erasures. Reusing target objects does not rehash them. After reopen,
-    forgotten damage does not select an object for repair; detecting it again in
-    the target session makes a required object eligible for verified repair.
+36. <a id="sq-36"></a> A fork or unavailable root retained by a newly accepted source event
+    after union erasure closure aborts without semantic writes. An erased source
+    reference requires no bytes. Missing or known-damaged roots retained only by
+    existing target events do not block import when the source lacks their bytes;
+    those objects remain absent or damaged.
+37. <a id="sq-37"></a> Import fills absent union-held objects and repairs known-damaged
+    ones whenever the verified source has their bytes, including when all events
+    are duplicates. It does not revive erasures or require unrelated target-only
+    damage to be repairable. Reusing target objects does not rehash them. After
+    reopen, forgotten damage does not select an object for repair; detecting it
+    again permits repair when the object is union-held and source bytes exist.
 38. <a id="sq-38"></a> Interrupted construction is unpublished or complete, never implicit creation.
 39. <a id="sq-39"></a> Exact move requires a stopped source; stale copies refresh local identity.
 40. <a id="sq-40"></a> Large-object and output limits are exercised on each supported platform.

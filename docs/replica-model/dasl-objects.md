@@ -142,6 +142,7 @@ partially accepted bytes.
 
 Consume one finite source in order, hash incrementally, derive its raw CID,
 accept the complete bytes atomically and return only after durable acceptance.
+An existing CID follows [section 6.2](#putobject)'s idempotence and repair rules.
 Temporary partial bytes are not accepted objects and may be discarded on recovery.
 
 <a id="putobject"></a>
@@ -152,6 +153,14 @@ Validate the expected raw CID, consume and hash all source bytes, require a
 matching digest, and publish only complete verified bytes at the same durable
 boundary. A sound existing CID is idempotent; it does not create a second object.
 No acceptance-age renewal is part of this interface.
+
+For a known-damaged existing CID, `putObject` MUST replace its complete bytes
+and metadata with the verified supplied value in one transaction, after
+quiescing readers under [SQ §6.2](vault-sqlite.md#reads-damage-and-collection).
+Clear known damage only after successful publication; invalid replacement bytes
+or rollback leave the existing bytes and damage state unchanged. Full commits
+and import use this same replacement rule within their enclosing acceptance
+transaction.
 
 <a id="read-operations"></a>
 
@@ -327,7 +336,9 @@ space and report exceeded limits explicitly.
 13. <a id="do-13"></a> Broken chunks, lengths or hashes are reported as damage.
     Known damage makes `has`, `stat`, `open` and `read` fail explicitly; `list`
     fails instead of yielding or silently omitting the damaged CID. Verified
-    repair restores normal read, presence and listing results.
+    replacement under [section 6.2](#putobject) restores normal read, presence and
+    listing results. Invalid replacement bytes or rollback leave the old bytes
+    and known damage unchanged.
 14. <a id="do-14"></a> Private objects are never implicitly published through RASL.
 15. <a id="do-15"></a> BDASL/BLAKE3 identifiers are rejected.
 16. <a id="do-16"></a> A failed lazy hash fails the stream before successful completion.
