@@ -11,9 +11,11 @@ import path from "node:path";
 
 import { afterAll, describe, expect, it } from "vitest";
 
+import { tempName } from "../../src/backend/types.js";
 import { FsBackend } from "../../src/node.js";
 import {
   AnchorMismatch,
+  DamagedObject,
   FolderReader,
   FolderVault,
   ForkedAuthor,
@@ -23,6 +25,7 @@ import {
   MemoryVault,
   NotAVault,
   PendingImport,
+  UnsettledRead,
   VaultClosed,
   canonicalEventBytes,
   encodeConfig,
@@ -546,6 +549,121 @@ describe("importFolder", () => {
     await goesOn.close();
   });
 
+  /** A backend whose first quarantine pauses between rehashing the damaged file and moving it aside. */
+  class PausedQuarantine extends MemoryBackend {
+    readonly reached = gate();
+    readonly resume = gate();
+    private paused = false;
+    override async size(p: string): Promise<number | null> {
+      if (!this.paused && p === `${BASE}/local/damaged/objects/${HELLO_CID}`) {
+        this.paused = true;
+        this.reached.open();
+        await this.resume.wait;
+      }
+      return super.size(p);
+    }
+  }
+
+  it("publishes in the object store's turn too: a quarantine that found the target's file damaged before the import repaired it waits to move it aside, and moves aside the damaged bytes, not the repair — which the runtime, and the next open, read", async () => {
+    const { from } = await source();
+    const backend = new PausedQuarantine();
+    const vault = await target(backend);
+    await backend.write(`${BASE}/objects/${HELLO_CID}`, utf8("not hello"));
+    const stream = (await vault.vault.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
+    const draining = all(stream as unknown as AsyncIterable<Uint8Array>).then(() => "completed", (err: unknown) => err);
+    await backend.reached.wait;
+    let imported: unknown = null;
+    const importing = importFolder(vault, from, { heldRoots: allRoots }).then((result) => (imported = result));
+    await tick();
+    expect(imported).toBeNull();
+    backend.resume.open();
+    expect(await draining).toBeInstanceOf(DamagedObject);
+    await importing;
+    expect(imported).toMatchObject({ events: 2, objects: 1, files: 1 });
+    expectBytes(await vault.vault.objects.read(HELLO_CID, 1024), HELLO);
+    expectBytes(backend.files.get(`${BASE}/local/damaged/objects/${HELLO_CID}`), utf8("not hello"));
+    expect(paths(backend).filter((p) => p.startsWith("import/"))).toEqual([]);
+    await vault.close();
+    const reopened = await FolderVault.openWritable(backend, { anchor: DID });
+    expectBytes(await reopened.vault.objects.read(HELLO_CID, 1024), HELLO);
+    expect(await reopened.damaged()).toEqual([]);
+    await reopened.close();
+  });
+
+  /** `backend` as a reader sees it, with `twist` run — once, or every time — as a listing of an author's directory completes and before its names are handed back. */
+  function listing(backend: MemoryBackend, twist: () => Promise<void>, every: boolean): VaultBackend {
+    let done = false;
+    return new Proxy(backend, {
+      get(t, prop, receiver) {
+        const value = Reflect.get(t, prop, receiver);
+        if (prop === "list") {
+          return async (dir: string) => {
+            const names = await t.list(dir);
+            if (dir.startsWith(`${BASE}/events/`) && (every || !done)) {
+              done = true;
+              await twist();
+            }
+            return names;
+          };
+        }
+        return typeof value === "function" ? value.bind(t) : value;
+      },
+    });
+  }
+
+  for (const mode of ["scan", "changes"] as const) {
+    it(`a reader without ownership whose ${mode} spans a whole import — begun and published between its first listing and its last — answers with the union, never with the segments it happened to list after`, async () => {
+      const backend = new MemoryBackend();
+      const vault = await target(backend);
+      const { from, events: theirs, other } = await source(async (runtime, other) => {
+        await runtime.ingest(await other.vault.commit([], [draft([], { who: "them again" })]));
+      });
+      const first = theirs.find((e) => e.author === other.author) as Event;
+      await vault.ingest([first]); // two author directories before the import, which adds to one and makes another
+      const before = ids(await all(vault.vault.events.scan()));
+      expect(before.length).toBe(2);
+      const union = [...before, ...ids(theirs).filter((id) => id !== first.eventId)].sort();
+      let imported: unknown = null;
+      const reader = await FolderReader.open(
+        listing(backend, async () => {
+          imported = await importFolder(vault, from, { heldRoots: allRoots });
+        }, false)
+      );
+      const events = mode === "scan" ? await all(reader.events.scan()) : await all((await reader.events.changes()).events);
+      expect(imported).toMatchObject({ events: 2 });
+      expect(ids(events).sort()).toEqual(union);
+      await reader.close();
+      await vault.close();
+    });
+  }
+
+  it("a reader without ownership under which events/ changes at every attempt refuses the read as UnsettledRead rather than answer with a view the folder was never in; one with ownership shares the folder with no writer and settles nothing", async () => {
+    const backend = new MemoryBackend();
+    const vault = await target(backend);
+    let commits = 0;
+    const reader = await FolderReader.open(
+      listing(backend, async () => {
+        commits += 1;
+        await vault.vault.commit([], [draft([], { n: commits })]);
+      }, true)
+    );
+    await expect(all(reader.events.scan())).rejects.toThrow(UnsettledRead);
+    await expect(reader.events.changes()).rejects.toMatchObject({ attempts: 4 });
+    await reader.close();
+    await vault.close();
+    let listings = 0;
+    const owned = await FolderReader.open(
+      listing(backend, async () => {
+        listings += 1;
+      }, true),
+      { ownership: "exclusive" }
+    );
+    expect(owned.owned).toBe(true);
+    expect(ids(await all(owned.events.scan())).length).toBe(1 + commits);
+    expect(listings).toBe(1); // the one author's directory, listed once: no second walk to compare against
+    await owned.close();
+  });
+
   it("finishes an import whose journal names a path with a noncharacter, which a portable file may carry, after a crash in its publication", async () => {
     class StopAtPublication extends MemoryBackend {
       override async rename(from: string, to: string): Promise<void> {
@@ -770,8 +888,27 @@ describe("the barrier under import/", () => {
         /staged\/b.txt is neither the journal nor an item it names/,
       ],
       ["an item neither staged nor at its place", (f) => f.write(`${BASE}/import/${JOB(4)}/journal.json`, encodeJournal(["a.txt"])), /a.txt is neither staged nor at its place/],
-      ["staging beside a file that is not staging", (f) => f.write(`${BASE}/import/${JOB(4)}/notes`, utf8("?")), /notes is neither the journal nor staging/],
-      ["staging of a path no import publishes, with no journal", (f) => f.write(`${BASE}/import/${JOB(4)}/staged/local/replica.json`, utf8("{}")), /not the staging of a path an import publishes, and there is no journal/],
+      ["staging beside a file that is not staging", (f) => f.write(`${BASE}/import/${JOB(4)}/notes`, utf8("?")), /notes is neither the journal, its unfinished write, nor staging/],
+      ["staging of a path no import publishes, with no journal", (f) => f.write(`${BASE}/import/${JOB(4)}/staged/local/replica.json`, utf8("{}")), /not the staging of a path an import publishes, nor its unfinished write, and there is no journal/],
+      ["an unfinished write of a path no import publishes, with no journal", (f) => f.write(`${BASE}/import/${JOB(4)}/staged/local/${tempName("replica.json")}`, utf8("{")), /not the staging of a path an import publishes, nor its unfinished write, and there is no journal/],
+      [
+        "an unfinished write of an item beside a journal that stands, which was written only once every item was",
+        async (f) => {
+          await f.write(`${BASE}/import/${JOB(4)}/journal.json`, encodeJournal(["a.txt"]));
+          await f.write(`${BASE}/import/${JOB(4)}/staged/a.txt`, utf8("a"));
+          await f.write(`${BASE}/import/${JOB(4)}/staged/${tempName("a.txt")}`, utf8("a"));
+        },
+        /is neither the journal nor an item it names/,
+      ],
+      [
+        "an unfinished write of the journal beside a journal that stands",
+        async (f) => {
+          await f.write(`${BASE}/import/${JOB(4)}/journal.json`, encodeJournal(["a.txt"]));
+          await f.write(`${BASE}/import/${JOB(4)}/staged/a.txt`, utf8("a"));
+          await f.write(`${BASE}/import/${JOB(4)}/${tempName("journal.json")}`, encodeJournal(["a.txt"]));
+        },
+        /journal.json\.[0-9a-f]{12}\.tmp is neither the journal nor staging/,
+      ],
       ["a journal naming a path with a noncharacter, which a file may carry, is read back", async (f) => {
         await f.write(`${BASE}/import/${JOB(4)}/journal.json`, encodeJournal(["\ufdd0.txt"]));
         await f.write(`${BASE}/import/${JOB(4)}/staged/\ufdd0.txt`, utf8("x"));
@@ -890,6 +1027,32 @@ describe("on disk", () => {
     expect(ids(await all(vault.vault.events.scan()))).toEqual(before);
     await expect(readdir(path.join(dir, BASE, "import"))).rejects.toMatchObject({ code: "ENOENT" });
     await vault.close();
+  });
+
+  it("rolls back what a process that died while the backend was writing a staged item, or the journal, left — the sibling the backend writes beside the place, named as the backend names it — with the folder as it was; a read-only open reports it meanwhile", async () => {
+    const dir = await tempDir();
+    const disk = new FsBackend(dir);
+    const vault = await FolderVault.create(disk, { anchor: DID, keystore: KEYSTORE });
+    await vault.vault.commit([{ cid: BIG_CID, source: BIG }], [draft([BIG_CID], { mine: true })]);
+    const before = ids(await all(vault.vault.events.scan()));
+    await vault.close();
+    const author = authorN(7);
+    // an object staged whole, and the next one's write cut short
+    await disk.write(`${BASE}/import/${JOB(7)}/staged/objects/${HELLO_CID}`, HELLO);
+    await disk.write(`${BASE}/import/${JOB(7)}/staged/objects/${tempName(WORLD_CID)}`, WORLD.subarray(0, 2));
+    // every item staged, and the journal's write cut short
+    await disk.write(`${BASE}/import/${JOB(8)}/staged/${segmentPath(author, SEG(2))}`, encodeLines([]));
+    await disk.write(`${BASE}/import/${JOB(8)}/staged/shared/a.txt`, utf8("a"));
+    await disk.write(`${BASE}/import/${JOB(8)}/${tempName("journal.json")}`, encodeJournal([segmentPath(author, SEG(2)), "shared/a.txt"]).subarray(0, 10));
+    await expect(FolderReader.open(new FsBackend(dir))).rejects.toThrow(PendingImport);
+    const reopened = await FolderVault.openWritable(new FsBackend(dir), { anchor: DID });
+    expect(await readdir(path.join(dir, BASE, "import"))).toEqual([]);
+    expect(ids(await all(reopened.vault.events.scan()))).toEqual(before);
+    expect(await reopened.vault.objects.has(HELLO_CID)).toBe(false);
+    expect(await reopened.vault.objects.has(WORLD_CID)).toBe(false);
+    expect(await reopened.vault.files.read("shared/a.txt")).toBeNull();
+    expect(await reopened.damaged()).toEqual([]);
+    await reopened.close();
   });
 
   it("blocks a writable open on a directory under import/ that no import of this version leaves — a journal that is a directory, a directory beside staged/, an empty directory staging would not make — and finishes one that left empty directories on the way to its items", async () => {

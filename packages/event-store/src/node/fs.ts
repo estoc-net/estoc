@@ -1,8 +1,7 @@
 import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 
-import { segmentsOf, type Ownership, type VaultBackend } from "../backend/types.js";
+import { segmentsOf, tempName, type Ownership, type VaultBackend } from "../backend/types.js";
 import { own } from "./ownership.js";
 
 /**
@@ -89,7 +88,7 @@ export class FsBackend implements VaultBackend {
    */
   private async replace(file: string, fill: (tmp: string) => Promise<void>): Promise<void> {
     await mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+    const tmp = tempName(file);
     try {
       await fill(tmp);
       const mode = await modeOf(file);

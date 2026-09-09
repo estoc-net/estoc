@@ -18,16 +18,17 @@
  * A writable open runs that recovery once it holds ownership and before
  * it opens the stores, whatever became of `local/` meanwhile. Whatever
  * under `import/` is not one of these two states, exactly as this
- * version leaves them, blocks the open as `PendingImport`, untouched: a
- * recovery this version does not understand is a human's, never guessed
- * at. A read-only open recovers nothing and reports any of it the same
- * way.
+ * version leaves them — the sibling a backend was writing an item or
+ * the journal to when the process died included — blocks the open as
+ * `PendingImport`, untouched: a recovery this version does not
+ * understand is a human's, never guessed at. A read-only open recovers
+ * nothing and reports any of it the same way.
  */
 
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
-import { walk } from "../../backend/types.js";
+import { unfinishedWriteOf, walk } from "../../backend/types.js";
 import { PendingImport } from "../errors.js";
 import { isAuthorId, isUuidv7 } from "../event.js";
 import { ancestorsOf, checkPath, comparePaths } from "../files.js";
@@ -105,6 +106,12 @@ function publishable(rel: string): boolean {
   return rank(rel) >= 0;
 }
 
+/** The sibling a backend was writing `rel` to when the process died, for a `rel` that passes `to`: what staging leaves without having staged anything at `rel`. */
+function unfinishedStaging(rel: string, to: (target: string) => boolean): boolean {
+  const target = unfinishedWriteOf(rel);
+  return target !== null && to(target);
+}
+
 /**
  * A directory an import's staging makes on the way to a publishable
  * path, and nothing else: `objects/`, `events/`, an author's directory,
@@ -175,7 +182,6 @@ export class Staging {
     this.items.push(rel);
   }
 
-  /** The journal written, then every item moved to its place and the directory removed. */
   async publish(): Promise<void> {
     this.journal = "attempted";
     await this.backend.write(`${this.dir}/${JOURNAL_FILE}`, encodeJournal(this.items));
@@ -221,7 +227,6 @@ async function finish(backend: VaultBackend, base: string, dir: string, items: s
   await removeTree(backend, dir);
 }
 
-/** Every file under `dir` removed, then every directory, deepest first, then `dir` itself. */
 async function removeTree(backend: VaultBackend, dir: string): Promise<void> {
   for (const path of await walk(backend, dir)) await backend.remove(path);
   await removeDirs(backend, dir);
@@ -232,7 +237,7 @@ async function removeDirs(backend: VaultBackend, dir: string): Promise<void> {
   await backend.remove(dir);
 }
 
-/** Every file and every directory under `dir`, relative to it, each list in path order. */
+/** The files and the directories under `dir`, relative to it. */
 async function tree(backend: VaultBackend, dir: string): Promise<{ files: string[]; dirs: string[] }> {
   const files: string[] = [];
   const dirs: string[] = [];
@@ -255,13 +260,17 @@ async function tree(backend: VaultBackend, dir: string): Promise<{ files: string
  * and anything else refused as `PendingImport` before any of them is
  * touched. An import's directory is understood only in the shapes this
  * version leaves: without a journal, files and directories under
- * `staged/` on the way to publishable paths, nothing else; with one,
- * the journal, and under `staged/` only items it names and the
- * directories on their way. Nothing is done while anything under
- * `import/` is not understood — a journal that is a directory, a
- * directory beside `staged/`, an empty directory the staging of no
- * named item would leave — since an import this version cannot finish
- * is left whole for whoever can.
+ * `staged/` on the way to publishable paths — the sibling a backend
+ * was writing one of them, or the journal itself, to when the process
+ * died included, since the journal stands only once it is at its name
+ * — and nothing else; with one, the journal, and under `staged/` only
+ * items it names and the directories on their way, every item having
+ * been written whole before the journal was. Nothing is done while
+ * anything under `import/` is not understood — a journal that is a
+ * directory, a directory beside `staged/`, an empty directory the
+ * staging of no named item would leave, a sibling beside a journal
+ * that stands — since an import this version cannot finish is left
+ * whole for whoever can.
  */
 export async function recoverImports(backend: VaultBackend, base: string): Promise<void> {
   const entries = await pendingEntries(backend, base);
@@ -279,16 +288,22 @@ export async function recoverImports(backend: VaultBackend, base: string): Promi
     const dir = `${root}/${name}`;
     const held = await tree(backend, dir);
     const staged = `${STAGED_DIR}/`;
+    const journal = await backend.read(`${dir}/${JOURNAL_FILE}`);
     for (const file of held.files) {
-      if (file !== JOURNAL_FILE && !file.startsWith(staged)) refuse(file, "is neither the journal nor staging");
+      if (file === JOURNAL_FILE || file.startsWith(staged)) continue;
+      if (journal === null && unfinishedStaging(file, (target) => target === JOURNAL_FILE)) continue;
+      refuse(file, journal === null ? "is neither the journal, its unfinished write, nor staging" : "is neither the journal nor staging");
     }
     for (const sub of held.dirs) {
       if (sub === JOURNAL_FILE) refuse(sub, "is a directory, not a journal");
       if (sub !== STAGED_DIR && !sub.startsWith(staged)) refuse(sub, "is a directory an import does not make");
     }
-    const journal = await backend.read(`${dir}/${JOURNAL_FILE}`);
     if (journal === null) {
-      for (const file of held.files) if (!publishable(file.slice(staged.length))) refuse(file, "is not the staging of a path an import publishes, and there is no journal");
+      for (const file of held.files) {
+        if (!file.startsWith(staged)) continue;
+        const rel = file.slice(staged.length);
+        if (!publishable(rel) && !unfinishedStaging(rel, publishable)) refuse(file, "is not the staging of a path an import publishes, nor its unfinished write, and there is no journal");
+      }
       for (const sub of held.dirs) if (sub !== STAGED_DIR && !stagingDirectory(sub.slice(staged.length))) refuse(sub, "is not a directory staging makes, and there is no journal");
       plans.push(() => removeTree(backend, dir));
       continue;

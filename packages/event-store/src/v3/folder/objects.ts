@@ -157,6 +157,17 @@ export class FolderObjectStore implements ObjectStore {
     return run;
   }
 
+  /**
+   * `op`, which moves whole files into `objects/` from outside this
+   * store, run in the store's turn: a quarantine rehashes a file and
+   * moves it aside in one turn, so a file `op` lands between the two
+   * would be judged by bytes it replaced and moved aside sound. In the
+   * turn, what `op` lands is what the next quarantine rehashes.
+   */
+  publishing<T>(op: () => Promise<T>): Promise<T> {
+    return this.serialise(op);
+  }
+
   /** A layout path as the backend names it. */
   private at(rel: string): string {
     return `${this.base}/${rel}`;

@@ -12,7 +12,10 @@
  *
  * Whole-file writes are atomic in the sense a crash never leaves a
  * half-written file where a good one was; appends may leave a cut-short
- * last line, which the folder store reports and heals.
+ * last line, which the folder store reports and heals. A backend that
+ * gets there by writing beside the place and moving in names the
+ * sibling as `tempName` does, and a crash may leave it standing; that
+ * is the only file a backend ever leaves that the store did not name.
  *
  * Three members are for bytes too large to hold whole: `open` streams a
  * file out, `create` streams one in and makes it visible only once its
@@ -83,6 +86,20 @@ export class VaultOwned extends Error {
     super(`${path} is owned elsewhere: ${detail}`);
     this.name = "VaultOwned";
   }
+}
+
+const TEMP_SUFFIX = /^(.+)\.([0-9a-f]{12})\.tmp$/;
+
+/** The sibling a backend writes `name` to before moving it into place: `<name>.<12 hex>.tmp`, the hex fresh for each write. */
+export function tempName(name: string): string {
+  const random = new Uint8Array(6);
+  crypto.getRandomValues(random);
+  return `${name}.${[...random].map((b) => b.toString(16).padStart(2, "0")).join("")}.tmp`;
+}
+
+/** The name a `tempName` sibling was written for, or null for a name of any other shape. */
+export function unfinishedWriteOf(name: string): string | null {
+  return TEMP_SUFFIX.exec(name)?.[1] ?? null;
 }
 
 /**

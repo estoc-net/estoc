@@ -149,17 +149,27 @@ never touched. The writes go through the barrier under
 journal naming them all, then each moved to its place — objects before
 the segments that name them — then the journal and the directory gone.
 The moves run in the event store's turn, so a read of the runtime that
-arrives meanwhile waits and sees the union whole; a `FolderReader`
-open beside the writer checks `import/` before and after each read of
-the events and reports the import as `PendingImport` rather than the
-half. A writable open finishes an import whose journal it finds and
-rolls back staging that never reached one, before any store opens and
-whatever became of `local/`; a read-only open takes up neither and
-reports both; anything under `import/` that is not exactly a shape
-this version leaves — a journal that is a directory, a directory or a
-file beside the staging, staging on the way to nothing the journal
-names — blocks the writable open, untouched, as `PendingImport` saying
-what it found. A failure after the journal — or a journal write that
+arrives meanwhile waits and sees the union whole, and in the object
+store's, so a quarantine that rehashed the target's damaged file
+before the repair landed cannot move the repair aside. A
+`FolderReader` without ownership shares the folder with whatever
+writer holds it, and answers a read of the events only once it is
+shown to be a view the folder was in at one moment with no import
+being published — `import/` empty after the read, and a listing taken
+then naming the same segments at the lengths the read found, which
+suffices since no segment is ever removed or shortened — reading
+again while it is not, and refusing as `UnsettledRead` after four
+tries; an import in progress is `PendingImport`. A writable open
+finishes an import whose journal it finds and rolls back staging that
+never reached one — the sibling a backend was writing a staged item,
+or the journal, to when the process died included, named as
+`tempName` names it — before any store opens and whatever became of
+`local/`; a read-only open takes up neither and reports both;
+anything under `import/` that is not exactly a shape this version
+leaves — a journal that is a directory, a directory or a file beside
+the staging, staging on the way to nothing the journal names, an
+unfinished write beside a journal that stands — blocks the writable
+open, untouched, as `PendingImport` saying what it found. A failure after the journal — or a journal write that
 failed when the staging cannot then be removed, since the file may
 stand — halts the runtime, `FolderVault.halt()`: what was queued for
 the lock is refused as its turn comes, every read is refused, and

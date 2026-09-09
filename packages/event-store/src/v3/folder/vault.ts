@@ -310,7 +310,9 @@ interface State {
  * A vault opened read-only: events, objects and files to read,
  * the config, and what is damaged. No `local/` is created, no
  * `import/` altered, nothing written; `files.write` is refused. Object
- * streams are served only with ownership.
+ * streams are served only with ownership; without it the folder is
+ * shared with whatever writer holds it, and each read of the events
+ * is the event store's to settle.
  */
 export class FolderReader {
   readonly events: VaultEvents;
@@ -333,26 +335,17 @@ export class FolderReader {
       if (this.ownership === null) throw new Unprotected(cid);
     };
     const { events, objects, files } = stores;
-    // A reader without ownership shares the folder with a live writer,
-    // whose import publishes segments one by one: a read of `events/`
-    // stands only when nothing was under `import/` before it began and
-    // after it ended, an import's directory being there from its first
-    // staged byte to its last rename.
-    const published = async <T>(read: () => Promise<T>): Promise<T> => {
+    const reading = async <T>(read: () => Promise<T>): Promise<T> => {
       guard();
-      await checkImport(backend, base);
-      const out = await read();
-      await checkImport(backend, base);
-      return out;
+      return read();
     };
-    // Every refusal is a rejection — of the promise, or of the iteration's first step — as every other failure is.
     this.events = {
       scan: async function* (filter) {
-        yield* (await published(() => events.changes(filter))).events;
+        yield* (await reading(() => events.changes(filter))).events;
       },
-      changes: (filter, since) => published(() => events.changes(filter, since)),
-      damaged: () => published(() => events.damaged()),
-      conflicting: () => published(() => events.conflicting()),
+      changes: (filter, since) => reading(() => events.changes(filter, since)),
+      damaged: () => reading(() => events.damaged()),
+      conflicting: () => reading(() => events.conflicting()),
     };
     this.objects = {
       open: async (cid) => {
@@ -394,7 +387,7 @@ export class FolderReader {
       const nobody = mintReplica();
       const latches = new LatchRegistry();
       const stores = {
-        events: new FolderEventStore(backend, nobody, eventOptions(options, base)),
+        events: new FolderEventStore(backend, nobody, { ...eventOptions(options, base), shared: ownership === null }),
         objects: new FolderObjectStore(backend, { ...objectOptions(options, base, latches), readOnly: true }),
         files: new FolderFileStore(backend, base),
       };

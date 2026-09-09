@@ -164,7 +164,6 @@ class View implements Vault {
     check: Check = () => undefined
   ) {
     const { events, objects, files } = stores;
-    // Every refusal is a rejection — of the promise, or of the iteration's first step — as every other failure is.
     this.events = {
       scan: async function* (filter) {
         check();

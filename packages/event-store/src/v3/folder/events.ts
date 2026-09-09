@@ -25,7 +25,7 @@
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
-import { BadToken, DamagedLayout, ForkedAuthor } from "../errors.js";
+import { BadToken, DamagedLayout, ForkedAuthor, UnsettledRead } from "../errors.js";
 import {
   compareEvents,
   isAuthorId,
@@ -47,9 +47,13 @@ import { comparePaths } from "../files.js";
 import { canonicalText, parseStrict } from "../jcs.js";
 import { deepFreeze, type JsonObject } from "../json.js";
 import { mint } from "../mint.js";
+import { checkImport } from "./import.js";
 import { ESTOC_DIR, EVENTS_DIR, authorDir, isSegmentName, kindOf, segmentPath } from "./layout.js";
 import { decodeSegment, encodeLines, endsClean, type Decoded, type SegmentRead } from "./lines.js";
 import type { Replica } from "./replica.js";
+
+/** How many times a shared store reads `events/` over before it gives up on finding it still. */
+const SETTLE_ATTEMPTS = 4;
 
 /** The writer's own rotation: a fresh segment once the open one is this long. */
 export const ROTATE_BYTES = 4 * 1024 * 1024;
@@ -68,6 +72,14 @@ export interface FolderEventStoreOptions {
    * read, whenever the read was asked for.
    */
   guard?: () => void;
+  /**
+   * The folder is shared with a writer this store does not exclude —
+   * a read-only open without ownership. Each read is then answered
+   * only once it is shown to be a published view the folder was in at
+   * one moment, and read again until it is, or refused as
+   * `UnsettledRead`.
+   */
+  shared?: boolean;
 }
 
 /** One segment as a read found it: its path relative to the layout, its author directory, its bytes, and what they decoded to. */
@@ -106,6 +118,7 @@ export class FolderEventStore implements EventStore {
   private readonly now: () => number;
   private readonly rotateBytes: number;
   private readonly guard: () => void;
+  private readonly shared: boolean;
   /** the segment this instance appends to, once it has one */
   private open: { rel: string; bytes: number } | null = null;
   /** operations run one at a time: the vault's writer lock, as far as one store needs it */
@@ -122,6 +135,7 @@ export class FolderEventStore implements EventStore {
     this.now = options.now ?? Date.now;
     this.rotateBytes = options.rotateBytes ?? ROTATE_BYTES;
     this.guard = options.guard ?? (() => undefined);
+    this.shared = options.shared ?? false;
   }
 
   private serialise<T>(work: () => Promise<T>): Promise<T> {
@@ -130,12 +144,46 @@ export class FolderEventStore implements EventStore {
     return run;
   }
 
-  /** A read in the store's turn, asked of the guard as its turn comes. */
-  private reading<T>(work: () => Promise<T>): Promise<T> {
-    return this.serialise(() => {
+  /** A read of the whole of `events/` in the store's turn, asked of the guard as its turn comes, and settled when the folder is shared. */
+  private reading<T>(work: (read: Read) => Promise<T> | T): Promise<T> {
+    return this.serialise(async () => {
       this.guard();
-      return work();
+      return work(this.shared ? await this.settled() : await this.readAll());
     });
+  }
+
+  /**
+   * A read of `events/` shown to be a published view the folder was in
+   * at one moment, beside a writer this store does not exclude. No
+   * segment is ever removed or shortened — the writer appends to its
+   * own or writes fresh ones, an import moves fresh ones in — so when
+   * a listing taken after the read names the same segments at the
+   * lengths the read found, the folder held exactly them from the end
+   * of the read's listing to the start of the second; and `import/`
+   * empty in between means no import was being published at that
+   * moment. That `import/` is empty before the read as well is not
+   * needed for the proof: it is what refuses at once a read that
+   * would be refused after.
+   */
+  private async settled(): Promise<Read> {
+    for (let attempt = 1; ; attempt++) {
+      await checkImport(this.backend, this.base);
+      const read = await this.readAll();
+      await checkImport(this.backend, this.base);
+      if (await this.unchanged(read)) return read;
+      if (attempt === SETTLE_ATTEMPTS) throw new UnsettledRead(attempt);
+    }
+  }
+
+  /** Whether `events/` lists now exactly the segments `read` found, each as long as the bytes it read. */
+  private async unchanged(read: Read): Promise<boolean> {
+    const now = (await this.walk()).segments;
+    if (now.length !== read.segments.length) return false;
+    for (const [i, segment] of read.segments.entries()) {
+      if (segment.rel !== now[i]?.rel) return false;
+      if ((await this.backend.size(this.at(segment.rel))) !== segment.bytes.length) return false;
+    }
+    return true;
   }
 
   /**
@@ -249,7 +297,7 @@ export class FolderEventStore implements EventStore {
     // filter never exposes a content `scan()` rejects. Sorted here,
     // over what the read found: a write during
     // the walk is not yielded.
-    const read = await this.reading(() => this.readAll());
+    const read = await this.reading((read) => read);
     const events = [...read.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) yield event;
@@ -258,12 +306,12 @@ export class FolderEventStore implements EventStore {
 
   /** What a read of the whole of `events/` finds that is not an event, each with where it stands. */
   async damaged(): Promise<Damaged[]> {
-    return (await this.reading(() => this.readAll())).damaged;
+    return (await this.reading((read) => read)).damaged;
   }
 
   /** Every content under an already-held `eventId`, each with the segment and line it stands in. */
   async conflicting(): Promise<Conflict[]> {
-    return (await this.reading(() => this.readAll())).conflicts;
+    return (await this.reading((read) => read)).conflicts;
   }
 
   // ---- writing -----------------------------------------------------------
@@ -397,10 +445,9 @@ export class FolderEventStore implements EventStore {
   // ---- changes -----------------------------------------------------------
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
-    return this.reading(async () => {
+    return this.reading((read) => {
       // One read gives both the frontier — every segment's accepted
       // length — and the events; the token is issued for what was read.
-      const read = await this.readAll();
       const from = since === undefined ? new Map<string, number>() : this.place(since, read);
       // What the store gained after `since`: every accepted event whose ID
       // stands in no line at or before the position `since` recorded for

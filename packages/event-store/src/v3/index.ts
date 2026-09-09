@@ -145,6 +145,7 @@ export {
   PendingImport,
   ReadOnlyVault,
   Unprotected,
+  UnsettledRead,
   VaultClosed,
   IncompleteSnapshot,
   InvalidSnapshot,

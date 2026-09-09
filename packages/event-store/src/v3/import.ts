@@ -28,7 +28,9 @@
  *
  * Then the items are staged, the objects verified as they stream, and
  * published through the barrier in the event store's turn, so that no
- * read of this runtime sees the union half published. A failure before
+ * read of this runtime sees the union half published, and in the
+ * object store's, so that no quarantine moves aside a repair that
+ * landed after it rehashed the damaged bytes. A failure before
  * the journal withdraws the staging; one after it leaves the import the
  * folder's to finish and halts this runtime: the next writable open
  * finishes the import before it opens anything. Importing the same
@@ -111,15 +113,17 @@ export async function importFolder(target: FolderVault, from: VaultBackend, opti
         await staging.withdraw(); // no journal was attempted: staging that cannot be removed now is the next writable open's to remove
         throw err;
       }
-      await target.stores.events.publishing(async () => {
-        try {
-          await staging.publish();
-        } catch (err) {
-          // Decided here, in the store's turn, so that a read queued behind the publication finds the runtime halted before it runs.
-          if (!(await staging.withdraw())) failure.halting = target.halt();
-          throw err;
-        }
-      });
+      await target.stores.objects.publishing(() =>
+        target.stores.events.publishing(async () => {
+          try {
+            await staging.publish();
+          } catch (err) {
+            // Decided here, in the store's turn, so that a read queued behind the publication finds the runtime halted before it runs.
+            if (!(await staging.withdraw())) failure.halting = target.halt();
+            throw err;
+          }
+        })
+      );
       return counts;
     });
   } finally {
@@ -127,7 +131,6 @@ export async function importFolder(target: FolderVault, from: VaultBackend, opti
   }
 }
 
-/** What an import will write, decided under the lock before a byte is. */
 interface Plan {
   /** the new events by author, in author order, each author's in the order the source held them */
   segments: Map<AuthorId, Event[]>;

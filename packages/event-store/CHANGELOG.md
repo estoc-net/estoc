@@ -357,24 +357,38 @@
   that name them; then the journal and the directory removed. The
   moves run in the event store's turn
   (`FolderEventStore.publishing`): a read of the runtime that arrives
-  meanwhile waits and sees the union whole, never half; a
-  `FolderReader` open beside the writer checks `import/` before and
-  after each read of the events and reports `PendingImport` meanwhile.
-  A writable open, once it holds ownership and before any store opens,
-  finishes an import whose journal it finds — items still staged
-  moved, ones already at their place left — and rolls back staging
-  that never reached a journal, whatever became of `local/`
-  meanwhile; a read-only open takes up neither and reports both as
-  `PendingImport`. Whatever under `import/` is not exactly a shape
-  this version leaves — a file at the top, a directory not named by a
-  UUIDv7, a journal that does not parse or names paths of another
-  shape, a journal that is a directory, a file or directory beside the
-  journal and `staged/`, a staged file or directory on the way to
-  nothing the journal names or, without a journal, to no publishable
-  path, an item found neither staged nor published — blocks the
-  writable open as `PendingImport`, with `detail` saying what, and
-  nothing under `import/` touched; the journal is read with
-  noncharacters allowed, since a portable file's name may hold one.
+  meanwhile waits and sees the union whole, never half; and in the
+  object store's (`FolderObjectStore.publishing`), so that a
+  quarantine which rehashed the target's damaged file before the
+  repair landed moves aside the damaged bytes, never the repair. A
+  `FolderReader` without ownership shares the folder with whatever
+  writer holds it: its event store (`shared: true`) answers a read
+  only once it is shown to be a view the folder was in at one moment
+  with no import being published — `import/` empty after the read,
+  and a listing taken then naming the same segments at the lengths
+  the read found, which suffices since no segment is ever removed or
+  shortened — reading again while it is not and refusing as
+  `UnsettledRead`, new, after four tries; an import in progress is
+  `PendingImport`. A writable open, once it holds ownership and
+  before any store opens, finishes an import whose journal it finds —
+  items still staged moved, ones already at their place left — and
+  rolls back staging that never reached a journal, whatever became of
+  `local/` meanwhile, the sibling a backend was writing a staged item
+  or the journal to when the process died included; a read-only open
+  takes up neither and reports both as `PendingImport`. Whatever
+  under `import/` is not exactly a shape this version leaves — a file
+  at the top, a directory not named by a UUIDv7, a journal that does
+  not parse or names paths of another shape, a journal that is a
+  directory, a file or directory beside the journal and `staged/`, a
+  staged file or directory on the way to nothing the journal names
+  or, without a journal, to no publishable path, an unfinished write
+  beside a journal that stands, an item found neither staged nor
+  published — blocks the writable open as `PendingImport`, with
+  `detail` saying what, and nothing under `import/` touched; the
+  journal is read with noncharacters allowed, since a portable file's
+  name may hold one. `FsBackend` and `OpfsBackend` name the sibling
+  they write a whole file to through `tempName`, and
+  `unfinishedWriteOf` reads the name back.
   A failure before the journal withdraws the staging; a journal write
   that fails is taken to have landed unless the staging can then be
   removed whole; one after the journal leaves the import the next

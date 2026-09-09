@@ -171,6 +171,19 @@ export class Unprotected extends Error {
   }
 }
 
+/**
+ * A read-only open without ownership found `events/` changed under its
+ * read, and again under each read it tried instead: a writer is at
+ * work in the folder, and what was read cannot be shown to be a view
+ * the folder was in at one moment. Read again, or open with ownership.
+ */
+export class UnsettledRead extends Error {
+  constructor(readonly attempts: number) {
+    super(`events/ changed under the read ${attempts} times over: a writer is at work in the folder`);
+    this.name = "UnsettledRead";
+  }
+}
+
 /** An operation on a vault after `close`: ownership is released, and another process may hold the folder by now. */
 export class VaultClosed extends Error {
   constructor() {
