@@ -93,12 +93,18 @@ interface Segment {
   read: SegmentRead;
 }
 
-/** What one read of `events/` found: the segments in path order, the accepted event per ID, and what was not one — `listed` is the part of `damaged` the listing found, before any segment was read. */
+/**
+ * What one read of `events/` found. `listingDamage` is kept apart from
+ * the damage the segments decoded to, so that a listing taken after the
+ * read can be compared to it; `unfinished` are the files among it that
+ * are a segment's write beside its place.
+ */
 interface Read {
   segments: Segment[];
   held: Map<EventId, Decoded>;
   damaged: Damaged[];
-  listed: Damaged[];
+  listingDamage: Damaged[];
+  unfinished: string[];
   conflicts: Conflict[];
 }
 
@@ -178,22 +184,22 @@ export class FolderEventStore implements EventStore {
       await checkImport(this.backend, this.base);
       const read = await this.readAll();
       await checkImport(this.backend, this.base);
-      const writing = read.listed.find((damage) => isUnfinishedSegment(damage.where));
+      const writing = read.unfinished[0];
       if (writing === undefined && (await this.unchanged(read))) return read;
       if (attempt === SETTLE_ATTEMPTS) {
-        throw new UnsettledRead(attempt, writing === undefined ? undefined : `${writing.where} is a segment's write the backend has not moved into place, or left there`);
+        throw new UnsettledRead(attempt, writing === undefined ? undefined : `${writing} is a segment's write the backend has not moved into place, or left there`);
       }
     }
   }
 
   private async unchanged(read: Read): Promise<boolean> {
     const now = await this.walk();
-    if (now.segments.length !== read.segments.length || now.damaged.length !== read.listed.length) return false;
+    if (now.segments.length !== read.segments.length || now.damaged.length !== read.listingDamage.length) return false;
     for (const [i, segment] of read.segments.entries()) {
       if (segment.rel !== now.segments[i]?.rel) return false;
       if ((await this.backend.size(this.at(segment.rel))) !== segment.bytes.length) return false;
     }
-    return read.listed.every((damage, i) => damage.where === now.damaged[i]?.where && damage.error === now.damaged[i]?.error);
+    return read.listingDamage.every((damage, i) => damage.where === now.damaged[i]?.where && damage.error === now.damaged[i]?.error);
   }
 
   /**
@@ -218,19 +224,23 @@ export class FolderEventStore implements EventStore {
    * not one — a file where `events/` itself belongs, a file beside the
    * author directories, a directory that is not an author's, a name in an
    * author directory that is not a segment's, a directory where a segment
-   * belongs — as damage. An absent `events/` is an empty store; a file
-   * there is not.
+   * belongs — as damage; and, apart, the files in an author directory
+   * that are a segment's write beside its place, which a backend writes
+   * as a file and never as a directory, so a directory under that name
+   * is damage like any other. An absent `events/` is an empty store; a
+   * file there is not.
    */
-  private async walk(): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[] }> {
+  private async walk(): Promise<{ segments: { rel: string; author: AuthorId }[]; damaged: Damaged[]; unfinished: string[] }> {
     const damaged: Damaged[] = [];
     const segments: { rel: string; author: AuthorId }[] = [];
+    const unfinished: string[] = [];
     const events = this.at(EVENTS_DIR);
     // The root itself first: a backend answers `list`
     // and `dirs` with [] for a file as for nothing there, so a file where
     // `events/` belongs would read as an empty store.
     if (await this.rootIsAFile()) {
       damaged.push({ where: EVENTS_DIR, error: EVENTS_IS_A_FILE });
-      return { segments, damaged };
+      return { segments, damaged, unfinished };
     }
     for (const name of await this.backend.list(events)) {
       damaged.push({ where: `${EVENTS_DIR}/${name}`, error: "a file where an author directory belongs" });
@@ -246,13 +256,18 @@ export class FolderEventStore implements EventStore {
       }
       for (const file of await this.backend.list(this.at(dir))) {
         const rel = `${dir}/${file}`;
-        if (isSegmentName(file)) segments.push({ rel, author: name });
-        else damaged.push({ where: rel, error: "not a segment: the name is not <uuidv7>.jsonl" });
+        if (isSegmentName(file)) {
+          segments.push({ rel, author: name });
+          continue;
+        }
+        damaged.push({ where: rel, error: "not a segment: the name is not <uuidv7>.jsonl" });
+        if (isUnfinishedSegmentName(file)) unfinished.push(rel);
       }
     }
     segments.sort((a, b) => comparePaths(a.rel, b.rel));
     damaged.sort((a, b) => comparePaths(a.where, b.where));
-    return { segments, damaged };
+    unfinished.sort(comparePaths);
+    return { segments, damaged, unfinished };
   }
 
   /** Whether a file stands where `events/` belongs: asked as a file, it has a size, and a directory or nothing there has none. */
@@ -281,7 +296,7 @@ export class FolderEventStore implements EventStore {
    */
   private async readAll(): Promise<Read> {
     const walked = await this.walk();
-    const read: Read = { segments: [], held: new Map(), damaged: [...walked.damaged], listed: walked.damaged, conflicts: [] };
+    const read: Read = { segments: [], held: new Map(), damaged: [...walked.damaged], listingDamage: walked.damaged, unfinished: walked.unfinished, conflicts: [] };
     for (const { rel, author } of walked.segments) {
       const bytes = await this.backend.read(this.at(rel));
       if (bytes === null) continue; // gone between the listing and the read: not this store's writing
@@ -525,11 +540,8 @@ function canonical(value: unknown): Decoded {
   return { event: parseStrict(text) as Event, text };
 }
 
-/** Whether `rel` is the sibling a backend writes a segment to before moving it into place, inside an author's directory. */
-function isUnfinishedSegment(rel: string): boolean {
-  const parts = rel.split("/");
-  if (parts.length !== 3 || parts[0] !== EVENTS_DIR || !isAuthorId(parts[1] as string)) return false;
-  const target = unfinishedWriteOf(parts[2] as string);
+function isUnfinishedSegmentName(name: string): boolean {
+  const target = unfinishedWriteOf(name);
   return target !== null && isSegmentName(target);
 }
 

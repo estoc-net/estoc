@@ -374,7 +374,9 @@
   the sibling `tempName` names — is never such a view, since the
   reader cannot tell the writer's in progress from what a crash left,
   so it is read past and then refused, and only a store with
-  ownership reports it as damage; an import in progress is
+  ownership reports it as damage — a directory under such a name is
+  not one, since a backend writes the sibling as a file, and either
+  store reports it as damage; an import in progress is
   `PendingImport`. A `FolderReader` with ownership looks at `import/`
   once it holds the folder, so a writer that failed an import and
   released meanwhile cannot leave it the segments that landed to

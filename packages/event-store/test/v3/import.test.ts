@@ -753,6 +753,24 @@ describe("importFolder", () => {
     await listed.close();
   });
 
+  it("a directory under the name of a segment's unfinished write is damage a reader without ownership reports, and the segments beside it are read: a backend writes the sibling as a file, so no writer is in progress there", async () => {
+    const backend = new MemoryBackend();
+    const vault = await target(backend);
+    const [committed] = await vault.vault.commit([], [draft([], { beside: "a directory" })]);
+    await vault.close();
+    const directory = `events/${(committed as Event).author}/${tempName(`${SEG(9)}.jsonl`)}`;
+    await backend.write(`${BASE}/${directory}/notes.txt`, utf8("a directory, not a write the backend left"));
+    expect(await backend.size(`${BASE}/${directory}`)).toBeNull();
+    const reader = await FolderReader.open(backend);
+    expect(await reader.events.damaged()).toEqual([{ where: directory, error: "a directory where a segment belongs" }]);
+    expect(ids(await all(reader.events.scan()))).toContain((committed as Event).eventId);
+    expect(ids(await all((await reader.events.changes()).events))).toContain((committed as Event).eventId);
+    await reader.close();
+    const owned = await FolderReader.open(backend, { ownership: "exclusive" });
+    expect((await owned.damaged()).map((d) => d.where)).toEqual([directory]);
+    await owned.close();
+  });
+
   it("finishes an import whose journal names a path with a noncharacter, which a portable file may carry, after a crash in its publication", async () => {
     class StopAtPublication extends MemoryBackend {
       override async rename(from: string, to: string): Promise<void> {

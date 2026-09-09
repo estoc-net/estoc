@@ -163,7 +163,9 @@ removed or shortened — reading again while it is not, and refusing as
 its place is never such a view, since the reader cannot tell the
 writer's in progress from what a crash left, so it is read past and
 then refused naming it, and only a reader with ownership reports it as
-damage; an import in progress is `PendingImport`. A reader with
+damage — a directory under such a name is not one, since a backend
+writes the sibling as a file, and is reported as damage by either
+reader; an import in progress is `PendingImport`. A reader with
 ownership looks at `import/` once it holds the folder, so a writer
 that failed an import and released cannot leave it the segments that
 landed to serve as the whole. A writable open
