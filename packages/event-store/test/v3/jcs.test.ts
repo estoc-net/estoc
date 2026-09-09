@@ -282,3 +282,16 @@ describe("strict parsing", () => {
     expect(hex(canonicalize(parseStrict(once)))).toBe(hex(once));
   });
 });
+
+describe("parseStrict with noncharacters allowed", () => {
+  it("lets a noncharacter through in a name or a value, which a path may hold, and still refuses an unpaired surrogate, a duplicate member and bad syntax", () => {
+    const text = '{"\ufdd0":["a\ufdefb","\uffff"]}';
+    expect(parseStrict(text, { noncharacters: true })).toEqual({ "\ufdd0": ["a\ufdefb", "\uffff"] });
+    expect(() => parseStrict(text)).toThrow(InvalidJson);
+    expect(() => parseStrict('"\\ud800"', { noncharacters: true })).toThrow(/unpaired surrogate/);
+    expect(() => parseStrict('{"a":1,"a":2}', { noncharacters: true })).toThrow(/duplicate member/);
+    expect(() => parseStrict("{", { noncharacters: true })).toThrow(InvalidJson);
+    expect(forbiddenIn("\ufdd0", { noncharacters: true })).toBeNull();
+    expect(forbiddenIn("\ufdd0")).toBe("noncharacter U+FDD0");
+  });
+});

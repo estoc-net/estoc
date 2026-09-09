@@ -15,7 +15,7 @@ import { CONFIG_FILE, IMPORT_DIR, KEYSTORE_FILE, LOCAL_DIR } from "./layout.js";
 /** Where ownership is named: under `local/`, this copy's own; on disk, the writer's pid file. */
 export const OWNER_FILE = `${LOCAL_DIR}/owner.pid`;
 
-/** What the folder holds that the layout does not define, from every root, in path order. */
+/** What stands at the roots no store owns and the layout does not allow: a directory where `config.json` or `keystore.json` belongs, a file where `import/` or `local/` belongs; in path order. `events/` and `objects/` are their stores' to report. */
 export async function layoutDamage(backend: VaultBackend, base: string): Promise<Damaged[]> {
   const damaged: Damaged[] = [];
   for (const file of [CONFIG_FILE, KEYSTORE_FILE]) {

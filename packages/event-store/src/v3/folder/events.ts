@@ -61,6 +61,13 @@ export interface FolderEventStoreOptions {
   now?: () => number;
   /** rotate the append segment once it is this long; default `ROTATE_BYTES` */
   rotateBytes?: number;
+  /**
+   * Asked as each read takes the store's turn, before it looks at
+   * `events/`; a throw refuses the read. The vault above throws from it
+   * once it has halted: what `events/` holds is then not a view to
+   * read, whenever the read was asked for.
+   */
+  guard?: () => void;
 }
 
 /** One segment as a read found it: its path relative to the layout, its author directory, its bytes, and what they decoded to. */
@@ -98,6 +105,7 @@ export class FolderEventStore implements EventStore {
   private readonly base: string;
   private readonly now: () => number;
   private readonly rotateBytes: number;
+  private readonly guard: () => void;
   /** the segment this instance appends to, once it has one */
   private open: { rel: string; bytes: number } | null = null;
   /** operations run one at a time: the vault's writer lock, as far as one store needs it */
@@ -113,12 +121,31 @@ export class FolderEventStore implements EventStore {
     this.base = options.base ?? ESTOC_DIR;
     this.now = options.now ?? Date.now;
     this.rotateBytes = options.rotateBytes ?? ROTATE_BYTES;
+    this.guard = options.guard ?? (() => undefined);
   }
 
   private serialise<T>(work: () => Promise<T>): Promise<T> {
     const run = this.chain.then(work);
     this.chain = run.catch(() => undefined);
     return run;
+  }
+
+  /** A read in the store's turn, asked of the guard as its turn comes. */
+  private reading<T>(work: () => Promise<T>): Promise<T> {
+    return this.serialise(() => {
+      this.guard();
+      return work();
+    });
+  }
+
+  /**
+   * `op`, which moves whole segments into `events/` from outside this
+   * store, run in the store's turn: a read already begun finishes
+   * first, and every read after sees all of what `op` moved or none of
+   * it — as it would of a batch this store wrote — never some.
+   */
+  publishing<T>(op: () => Promise<T>): Promise<T> {
+    return this.serialise(op);
   }
 
   /** A layout path as the backend names it. */
@@ -222,7 +249,7 @@ export class FolderEventStore implements EventStore {
     // filter never exposes a content `scan()` rejects. Sorted here,
     // over what the read found: a write during
     // the walk is not yielded.
-    const read = await this.serialise(() => this.readAll());
+    const read = await this.reading(() => this.readAll());
     const events = [...read.held.values()].map((held) => held.event).sort(compareEvents);
     for (const event of events) {
       if (matches(event, filter)) yield event;
@@ -231,12 +258,12 @@ export class FolderEventStore implements EventStore {
 
   /** What a read of the whole of `events/` finds that is not an event, each with where it stands. */
   async damaged(): Promise<Damaged[]> {
-    return (await this.serialise(() => this.readAll())).damaged;
+    return (await this.reading(() => this.readAll())).damaged;
   }
 
   /** Every content under an already-held `eventId`, each with the segment and line it stands in. */
   async conflicting(): Promise<Conflict[]> {
-    return (await this.serialise(() => this.readAll())).conflicts;
+    return (await this.reading(() => this.readAll())).conflicts;
   }
 
   // ---- writing -----------------------------------------------------------
@@ -370,7 +397,7 @@ export class FolderEventStore implements EventStore {
   // ---- changes -----------------------------------------------------------
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
-    return this.serialise(async () => {
+    return this.reading(async () => {
       // One read gives both the frontier — every segment's accepted
       // length — and the events; the token is issued for what was read.
       const read = await this.readAll();

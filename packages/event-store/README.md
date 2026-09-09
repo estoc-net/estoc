@@ -137,22 +137,35 @@ everything decided before a byte is written: the source validated as a
 restore validates it; each of its events a duplicate, a conflict the
 target wins and reports, or new — this replica's own author over an
 event it did not write is `ForkedAuthor`; the held roots of the merged
-set computed by the fold, each required to have bytes in the target or
-among the source's objects, which are the only objects copied; a
-source file copied only where the target has nothing, and refused
-where it would land on a directory or under a file; the target's
-config and keystore never touched. The writes go through the barrier
-under `import/<uuidv7>/`: every item staged at the path it will have,
-then a journal naming them all, then each moved to its place — objects
-before the segments that name them — then the journal and the
-directory gone. A writable open finishes an import whose journal it
-finds and rolls back staging that never reached one, before any store
-opens and whatever became of `local/`; a read-only open takes up
-neither and reports both; anything under `import/` that is neither
-state blocks the writable open, untouched, as `PendingImport` saying
-what it found. A failure after the journal closes the runtime, since
-what it would go on reading might be the union half published: the
-next open finishes the import. The zip form comes next.
+set computed by the fold, each required to have sound bytes in the
+target — read whole and rehashed, nothing moved — or among the
+source's objects, which are the only objects copied, a copy landing
+over a target file that no longer spells its name; a source file
+copied only where the target has nothing, left where the target has a
+file, and refused where it would land on a directory — an empty one
+on disk included — or under a file; the target's config and keystore
+never touched. The writes go through the barrier under
+`import/<uuidv7>/`: every item staged at the path it will have, then a
+journal naming them all, then each moved to its place — objects before
+the segments that name them — then the journal and the directory gone.
+The moves run in the event store's turn, so a read of the runtime that
+arrives meanwhile waits and sees the union whole; a `FolderReader`
+open beside the writer checks `import/` before and after each read of
+the events and reports the import as `PendingImport` rather than the
+half. A writable open finishes an import whose journal it finds and
+rolls back staging that never reached one, before any store opens and
+whatever became of `local/`; a read-only open takes up neither and
+reports both; anything under `import/` that is not exactly a shape
+this version leaves — a journal that is a directory, a directory or a
+file beside the staging, staging on the way to nothing the journal
+names — blocks the writable open, untouched, as `PendingImport` saying
+what it found. A failure after the journal — or a journal write that
+failed when the staging cannot then be removed, since the file may
+stand — halts the runtime, `FolderVault.halt()`: what was queued for
+the lock is refused as its turn comes, every read is refused, and
+ownership is released, so that nothing of this runtime folds or
+collects over the union half published and the next open finishes
+the import. The zip form comes next.
 Everything below is
 version 2, which stays until the vault switches over.
 

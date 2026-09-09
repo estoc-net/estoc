@@ -17,7 +17,9 @@
  * understand — then reads or mints `local/replica.json` and
  * opens the event store as that replica. `close`
  * refuses every new operation, lets the accepted ones run out, fails
- * the object streams still alive, and only then releases ownership.
+ * the object streams still alive, and only then releases ownership;
+ * `halt` refuses the accepted ones too, queued operations and reads
+ * alike, for a runtime that must not go on reading the folder.
  *
  * Unlocking the seed is not this module's: the caller hands in the
  * anchor DID it derived (`@estoc/keystore`, under the fixed name). This
@@ -116,9 +118,14 @@ export class FolderVault extends Runtime {
   /** the read latches over this vault's objects */
   readonly latches: LatchRegistry;
   private readonly owners = new Map<string, LocalOwner>();
-  /** set by `close`; read by the runtime's guard, which is made before `super` returns and so cannot read a field of `this` */
-  private readonly state: { closed: boolean };
 
+  /**
+   * `state` is shared with the runtime's guard and the event store's,
+   * both made before `super` returns and so unable to read a field of
+   * `this`. `closed` is set by `close`: nothing new is accepted, what
+   * was runs out. `halted` is set by `halt`: nothing runs, accepted
+   * or not.
+   */
   private constructor(
     /** the bytes under the vault: what `importFolder` stages its barrier in */
     readonly backend: VaultBackend,
@@ -127,14 +134,13 @@ export class FolderVault extends Runtime {
     readonly replica: Replica,
     private readonly ownership: Ownership,
     private readonly options: FolderVaultOptions,
+    private readonly state: State,
     latches: LatchRegistry,
     stores: { events: FolderEventStore; objects: FolderObjectStore; files: FolderFileStore }
   ) {
-    const state = { closed: false };
-    super(replica.replica_id, replica.store_generation, stores, () => {
-      if (state.closed) throw new VaultClosed();
+    super(replica.replica_id, replica.store_generation, stores, (when) => {
+      if (state.halted || (when === "enter" && state.closed)) throw new VaultClosed();
     });
-    this.state = state;
     this.latches = latches;
   }
 
@@ -211,12 +217,18 @@ export class FolderVault extends Runtime {
       await recoverImports(backend, base);
       const replica = await openReplica(backend, base, options.mint ?? mintReplica);
       const latches = new LatchRegistry();
+      const state: State = { closed: false, halted: false };
       const stores = {
-        events: new FolderEventStore(backend, replica, eventOptions(options, base)),
+        events: new FolderEventStore(backend, replica, {
+          ...eventOptions(options, base),
+          guard: () => {
+            if (state.halted) throw new VaultClosed();
+          },
+        }),
         objects: new FolderObjectStore(backend, objectOptions(options, base, latches)),
         files: new FolderFileStore(backend, base),
       };
-      return new FolderVault(backend, base, config, replica, ownership, options, latches, stores);
+      return new FolderVault(backend, base, config, replica, ownership, options, state, latches, stores);
     } catch (err) {
       await ownership.release();
       throw err;
@@ -270,6 +282,28 @@ export class FolderVault extends Runtime {
     await this.stores.objects.close();
     await this.ownership.release();
   }
+
+  /**
+   * Stop where it stands, then close: from this call on every
+   * operation queued for the writer lock is refused as it would take
+   * it, every read that takes no lock is refused as it is asked, and
+   * every new operation as `close` refuses it; then the vault closes as
+   * `close` closes it, ownership released last. For an import that
+   * could not finish once its journal was written: `events/` may hold
+   * the union half published, which only the next writable open's
+   * recovery completes, and nothing of this runtime — a collection or
+   * a fold already waiting for the lock included — may read it as the
+   * vault meanwhile.
+   */
+  async halt(): Promise<void> {
+    this.state.halted = true;
+    await this.close();
+  }
+}
+
+interface State {
+  closed: boolean;
+  halted: boolean;
 }
 
 /**
@@ -299,18 +333,26 @@ export class FolderReader {
       if (this.ownership === null) throw new Unprotected(cid);
     };
     const { events, objects, files } = stores;
+    // A reader without ownership shares the folder with a live writer,
+    // whose import publishes segments one by one: a read of `events/`
+    // stands only when nothing was under `import/` before it began and
+    // after it ended, an import's directory being there from its first
+    // staged byte to its last rename.
+    const published = async <T>(read: () => Promise<T>): Promise<T> => {
+      guard();
+      await checkImport(backend, base);
+      const out = await read();
+      await checkImport(backend, base);
+      return out;
+    };
     // Every refusal is a rejection — of the promise, or of the iteration's first step — as every other failure is.
     this.events = {
       scan: async function* (filter) {
-        guard();
-        yield* events.scan(filter);
+        yield* (await published(() => events.changes(filter))).events;
       },
-      changes: async (filter, since) => {
-        guard();
-        return events.changes(filter, since);
-      },
-      damaged: () => events.damaged(),
-      conflicting: () => events.conflicting(),
+      changes: (filter, since) => published(() => events.changes(filter, since)),
+      damaged: () => published(() => events.damaged()),
+      conflicting: () => published(() => events.conflicting()),
     };
     this.objects = {
       open: async (cid) => {
@@ -370,7 +412,7 @@ export class FolderReader {
 
   /** What the folder holds that the layout does not define, in path order. */
   async damaged(): Promise<Damaged[]> {
-    const found = [...(await layoutDamage(this.backend, this.base)), ...(await this.stores.events.damaged()), ...(await this.stores.objects.damaged())];
+    const found = [...(await layoutDamage(this.backend, this.base)), ...(await this.events.damaged()), ...(await this.stores.objects.damaged())];
     return found.sort((a, b) => comparePaths(a.where, b.where));
   }
 

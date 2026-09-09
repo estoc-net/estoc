@@ -397,6 +397,40 @@ describe("FolderVault.openWritable", () => {
     await next.close();
   });
 
+  it("halt refuses what close lets run out — an operation queued for the lock, and every read — as well as everything new; the operation holding the lock finishes, then ownership is released", async () => {
+    const backend = new MemoryBackend();
+    const vault = await created(backend);
+    await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const g = gate();
+    const world = new TextEncoder().encode("world");
+    const commit = vault.vault.commit([{ cid: cidOf(world), source: gated(world, g) }], []);
+    await tick();
+    const opening = vault.vault.objects.open(HELLO_CID); // queued behind the commit: close would let it run
+    const halting = vault.halt();
+    await tick();
+    expect(await settled(halting)).toBe(false);
+    expect(await settled(opening)).toBe(false); // queued behind the commit still
+    expect(vault.open).toBe(false);
+    await expect(all(vault.vault.events.scan())).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.events.changes()).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.events.damaged()).rejects.toThrow(VaultClosed);
+    await expect(all(vault.stores.events.scan())).rejects.toThrow(VaultClosed); // the store's own read, its turn coming after the halt
+    await expect(vault.vault.objects.has(HELLO_CID)).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.objects.stat(HELLO_CID)).rejects.toThrow(VaultClosed);
+    await expect(all(vault.vault.objects.list())).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.files.read("config.json")).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.files.list()).rejects.toThrow(VaultClosed);
+    await expect(vault.vault.commit([], [draft()])).rejects.toThrow(VaultClosed);
+    g.open();
+    await commit;
+    await expect(opening).rejects.toThrow(VaultClosed); // its turn came after the halt
+    await halting;
+    const next = await FolderVault.openWritable(backend, { anchor: DID });
+    expect(await all(next.vault.events.scan())).toHaveLength(1);
+    expect(await next.vault.objects.has(cidOf(world))).toBe(true); // the commit holding the lock ran out
+    await next.close();
+  });
+
   it("anything under import/ blocks a writable open and a read-only open alike, with ownership released; an empty import/ is nothing pending", async () => {
     const backend = new MemoryBackend();
     const vault = await created(backend);

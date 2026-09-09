@@ -101,9 +101,11 @@ function quote(text: string, path: string): string {
   return JSON.stringify(text);
 }
 
-/** Why `text` is not an I-JSON string, or null when it is one. */
-export function forbiddenIn(text: string): string | null {
-  const match = FORBIDDEN.exec(text);
+const SURROGATE = /\p{Cs}/u;
+
+/** Why `text` is not an I-JSON string, or null when it is one; with `noncharacters: true`, only an unpaired surrogate counts. */
+export function forbiddenIn(text: string, options: { noncharacters?: boolean } = {}): string | null {
+  const match = (options.noncharacters === true ? SURROGATE : FORBIDDEN).exec(text);
   if (match === null) return null;
   const code = match[0].codePointAt(0) as number;
   const kind = code >= 0xd800 && code <= 0xdfff ? "unpaired surrogate" : "noncharacter";
@@ -129,9 +131,11 @@ export function compareCodeUnits(a: string, b: string): number {
  * 8259, a control character or a bad escape in a string an error — and the
  * visitor below builds the value, refusing what a scanner cannot see. What
  * comes back is plain data — a member named `__proto__` is an own property,
- * as `JSON.parse` would make it. Throws `InvalidJson`.
+ * as `JSON.parse` would make it. Throws `InvalidJson`. With
+ * `noncharacters: true` a noncharacter in a name or value is let
+ * through: what a path may hold, and what the event format may not.
  */
-export function parseStrict(input: Uint8Array | string): JsonValue {
+export function parseStrict(input: Uint8Array | string, options: { noncharacters?: boolean } = {}): JsonValue {
   let text: string;
   if (typeof input === "string") {
     text = input;
@@ -170,7 +174,7 @@ export function parseStrict(input: Uint8Array | string): JsonValue {
     {
       onObjectBegin: (offset) => begin(offset, {}),
       onObjectProperty: (name, offset) => {
-        const fault = forbiddenIn(name);
+        const fault = forbiddenIn(name, options);
         if (fault !== null) fail(offset, fault);
         const parent = open[open.length - 1] as { value: JsonObject; key: string | null };
         if (Object.hasOwn(parent.value, name)) fail(offset, `duplicate member ${JSON.stringify(name)}`);
@@ -181,7 +185,7 @@ export function parseStrict(input: Uint8Array | string): JsonValue {
       onArrayEnd: end,
       onLiteralValue: (value: unknown, offset, length) => {
         if (typeof value === "string") {
-          const fault = forbiddenIn(value);
+          const fault = forbiddenIn(value, options);
           if (fault !== null) fail(offset, fault);
         } else if (typeof value === "number" && !Number.isFinite(value)) {
           fail(offset, `${text.slice(offset, offset + length)} is outside binary64`);
