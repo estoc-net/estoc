@@ -371,18 +371,22 @@ export class FolderReader {
 
   /**
    * A read-only open: the path shape and `config.json` checked,
-   * the roots looked at, `import/` required empty — recovery state
-   * there is reported, never read around — and ownership taken only
-   * when asked. The event store reads as no replica: it is never
-   * appended to. Nothing under `local/` is created or read.
+   * the roots looked at, ownership taken when asked, and then `import/`
+   * required empty — recovery state there is reported, never read
+   * around. With ownership the look at `import/` comes after it is
+   * held, so that no writer can fail an import between the look and
+   * the open and leave this reader a partial union to serve as whole;
+   * without it, the event store looks again at each read. The event
+   * store reads as no replica: it is never appended to. Nothing under
+   * `local/` is created or read.
    */
   static async open(backend: VaultBackend, options: OpenReadOnlyOptions = {}): Promise<FolderReader> {
     const base = options.base ?? ESTOC_DIR;
     const config = await readConfig(backend, base);
     await checkRoots(backend, base);
-    await checkImport(backend, base);
     const ownership = options.ownership === "exclusive" ? await backend.own(`${base}/${OWNER_FILE}`) : null;
     try {
+      await checkImport(backend, base);
       // A replica no event carries: the store never writes here, and a reader has no author.
       const nobody = mintReplica();
       const latches = new LatchRegistry();

@@ -25,6 +25,7 @@
 import { v7 } from "uuid";
 
 import type { VaultBackend } from "../../backend/types.js";
+import { unfinishedWriteOf } from "../../backend/types.js";
 import { BadToken, DamagedLayout, ForkedAuthor, UnsettledRead } from "../errors.js";
 import {
   compareEvents,
@@ -52,7 +53,6 @@ import { ESTOC_DIR, EVENTS_DIR, authorDir, isSegmentName, kindOf, segmentPath } 
 import { decodeSegment, encodeLines, endsClean, type Decoded, type SegmentRead } from "./lines.js";
 import type { Replica } from "./replica.js";
 
-/** How many times a shared store reads `events/` over before it gives up on finding it still. */
 const SETTLE_ATTEMPTS = 4;
 
 /** The writer's own rotation: a fresh segment once the open one is this long. */
@@ -76,8 +76,11 @@ export interface FolderEventStoreOptions {
    * The folder is shared with a writer this store does not exclude —
    * a read-only open without ownership. Each read is then answered
    * only once it is shown to be a published view the folder was in at
-   * one moment, and read again until it is, or refused as
-   * `UnsettledRead`.
+   * one moment — the segments, and what beside them is not one — and
+   * read again until it is, or refused as `UnsettledRead`. A segment's
+   * unfinished write beside its place is never such a view: the
+   * writer's in progress, or a crash's leaving, which only ownership
+   * tells apart.
    */
   shared?: boolean;
 }
@@ -90,11 +93,12 @@ interface Segment {
   read: SegmentRead;
 }
 
-/** What one read of `events/` found: the segments in path order, the accepted event per ID, and what was not one. */
+/** What one read of `events/` found: the segments in path order, the accepted event per ID, and what was not one — `listed` is the part of `damaged` the listing found, before any segment was read. */
 interface Read {
   segments: Segment[];
   held: Map<EventId, Decoded>;
   damaged: Damaged[];
+  listed: Damaged[];
   conflicts: Conflict[];
 }
 
@@ -144,7 +148,6 @@ export class FolderEventStore implements EventStore {
     return run;
   }
 
-  /** A read of the whole of `events/` in the store's turn, asked of the guard as its turn comes, and settled when the folder is shared. */
   private reading<T>(work: (read: Read) => Promise<T> | T): Promise<T> {
     return this.serialise(async () => {
       this.guard();
@@ -158,32 +161,39 @@ export class FolderEventStore implements EventStore {
    * segment is ever removed or shortened — the writer appends to its
    * own or writes fresh ones, an import moves fresh ones in — so when
    * a listing taken after the read names the same segments at the
-   * lengths the read found, the folder held exactly them from the end
-   * of the read's listing to the start of the second; and `import/`
-   * empty in between means no import was being published at that
-   * moment. That `import/` is empty before the read as well is not
-   * needed for the proof: it is what refuses at once a read that
-   * would be refused after.
+   * lengths the read found, and the same entries beside them that are
+   * not segments, the folder held exactly them from the end of the
+   * read's listing to the start of the second; and `import/` empty in
+   * between means no import was being published at that moment. That
+   * `import/` is empty before the read as well is not needed for the
+   * proof: it is what refuses at once a read that would be refused
+   * after. A segment's unfinished write beside its place is not part
+   * of any published view, and this store cannot tell the writer's in
+   * progress — gone once the move lands — from what a crash left; so a
+   * read that lists one is read again, and the sibling still standing
+   * is what the refusal names.
    */
   private async settled(): Promise<Read> {
     for (let attempt = 1; ; attempt++) {
       await checkImport(this.backend, this.base);
       const read = await this.readAll();
       await checkImport(this.backend, this.base);
-      if (await this.unchanged(read)) return read;
-      if (attempt === SETTLE_ATTEMPTS) throw new UnsettledRead(attempt);
+      const writing = read.listed.find((damage) => isUnfinishedSegment(damage.where));
+      if (writing === undefined && (await this.unchanged(read))) return read;
+      if (attempt === SETTLE_ATTEMPTS) {
+        throw new UnsettledRead(attempt, writing === undefined ? undefined : `${writing.where} is a segment's write the backend has not moved into place, or left there`);
+      }
     }
   }
 
-  /** Whether `events/` lists now exactly the segments `read` found, each as long as the bytes it read. */
   private async unchanged(read: Read): Promise<boolean> {
-    const now = (await this.walk()).segments;
-    if (now.length !== read.segments.length) return false;
+    const now = await this.walk();
+    if (now.segments.length !== read.segments.length || now.damaged.length !== read.listed.length) return false;
     for (const [i, segment] of read.segments.entries()) {
-      if (segment.rel !== now[i]?.rel) return false;
+      if (segment.rel !== now.segments[i]?.rel) return false;
       if ((await this.backend.size(this.at(segment.rel))) !== segment.bytes.length) return false;
     }
-    return true;
+    return read.listed.every((damage, i) => damage.where === now.damaged[i]?.where && damage.error === now.damaged[i]?.error);
   }
 
   /**
@@ -271,7 +281,7 @@ export class FolderEventStore implements EventStore {
    */
   private async readAll(): Promise<Read> {
     const walked = await this.walk();
-    const read: Read = { segments: [], held: new Map(), damaged: walked.damaged, conflicts: [] };
+    const read: Read = { segments: [], held: new Map(), damaged: [...walked.damaged], listed: walked.damaged, conflicts: [] };
     for (const { rel, author } of walked.segments) {
       const bytes = await this.backend.read(this.at(rel));
       if (bytes === null) continue; // gone between the listing and the read: not this store's writing
@@ -513,6 +523,14 @@ export class FolderEventStore implements EventStore {
 function canonical(value: unknown): Decoded {
   const text = canonicalText(validateEvent(value));
   return { event: parseStrict(text) as Event, text };
+}
+
+/** Whether `rel` is the sibling a backend writes a segment to before moving it into place, inside an author's directory. */
+function isUnfinishedSegment(rel: string): boolean {
+  const parts = rel.split("/");
+  if (parts.length !== 3 || parts[0] !== EVENTS_DIR || !isAuthorId(parts[1] as string)) return false;
+  const target = unfinishedWriteOf(parts[2] as string);
+  return target !== null && isSegmentName(target);
 }
 
 async function* iterate<T>(items: T[]): AsyncIterable<T> {

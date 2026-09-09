@@ -172,14 +172,19 @@ export class Unprotected extends Error {
 }
 
 /**
- * A read-only open without ownership found `events/` changed under its
- * read, and again under each read it tried instead: a writer is at
- * work in the folder, and what was read cannot be shown to be a view
- * the folder was in at one moment. Read again, or open with ownership.
+ * A read-only open without ownership could not show what it read of
+ * `events/` to be a view the folder was in at one moment, in as many
+ * reads as it tried: `events/` changed under each, or a segment's write
+ * stood unfinished beside its place — the writer's in progress, or what
+ * a crash left, which only ownership can tell apart. Read again, or
+ * open with ownership; `detail` says what stood in the way.
  */
 export class UnsettledRead extends Error {
-  constructor(readonly attempts: number) {
-    super(`events/ changed under the read ${attempts} times over: a writer is at work in the folder`);
+  constructor(
+    readonly attempts: number,
+    readonly detail?: string
+  ) {
+    super(`events/ was not shown to be a settled view in ${attempts} reads over: ${detail ?? "it changed under each"}`);
     this.name = "UnsettledRead";
   }
 }

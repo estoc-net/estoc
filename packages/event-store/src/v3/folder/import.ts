@@ -106,7 +106,6 @@ function publishable(rel: string): boolean {
   return rank(rel) >= 0;
 }
 
-/** The sibling a backend was writing `rel` to when the process died, for a `rel` that passes `to`: what staging leaves without having staged anything at `rel`. */
 function unfinishedStaging(rel: string, to: (target: string) => boolean): boolean {
   const target = unfinishedWriteOf(rel);
   return target !== null && to(target);
@@ -237,7 +236,6 @@ async function removeDirs(backend: VaultBackend, dir: string): Promise<void> {
   await backend.remove(dir);
 }
 
-/** The files and the directories under `dir`, relative to it. */
 async function tree(backend: VaultBackend, dir: string): Promise<{ files: string[]; dirs: string[] }> {
   const files: string[] = [];
   const dirs: string[] = [];

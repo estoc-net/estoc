@@ -664,6 +664,95 @@ describe("importFolder", () => {
     await owned.close();
   });
 
+  it("an exclusive reader whose ownership comes only after a writer failed an import and halted looks at import/ once it holds the folder: it refuses as PendingImport and releases, never serving the segments the failure left as the whole, and the next writable open finishes the import", async () => {
+    const backend = new GatedPublication();
+    backend.fail = true;
+    const vault = await target(backend);
+    const { from, events: theirs } = await source();
+    const before = ids(await all(vault.vault.events.scan()));
+    const owning = gate();
+    const late = new Proxy(backend, {
+      get(t, prop, receiver) {
+        const value = Reflect.get(t, prop, receiver);
+        if (prop === "own") {
+          return async (p: string) => {
+            await owning.wait;
+            return t.own(p);
+          };
+        }
+        return typeof value === "function" ? value.bind(t) : value;
+      },
+    }) as VaultBackend;
+    const opening = FolderReader.open(late, { ownership: "exclusive" }).catch((e: unknown) => e);
+    await tick();
+    const importing = importFolder(vault, from, { heldRoots: allRoots }).catch((e: unknown) => e);
+    await backend.reached.wait;
+    backend.resume.open();
+    expect(await importing).toMatchObject({ message: "the second segment did not move" });
+    expect(vault.open).toBe(false);
+    expect(paths(backend).filter((p) => p.startsWith("import/"))).not.toEqual([]);
+    owning.open();
+    expect(await opening).toBeInstanceOf(PendingImport);
+    const reopened = await FolderVault.openWritable(backend, { anchor: DID });
+    expect(paths(backend).filter((p) => p.startsWith("import/"))).toEqual([]);
+    expect(ids(await all(reopened.vault.events.scan())).sort()).toEqual([...before, ...ids(theirs)].sort());
+    await reopened.close();
+  });
+
+  /** A backend that writes a segment whole as the disk and OPFS backends do — beside its place under `tempName`, then moved in — and, while `paused`, stops between the two. */
+  class PausedSegmentWrite extends MemoryBackend {
+    readonly reached = gate();
+    readonly resume = gate();
+    paused = false;
+    override async write(path: string, data: Uint8Array): Promise<void> {
+      if (!this.paused || kindOf(path.slice(`${BASE}/`.length)) !== "segment") return super.write(path, data);
+      const sibling = tempName(path);
+      await super.write(sibling, data);
+      this.reached.open();
+      await this.resume.wait;
+      await super.rename(sibling, path);
+    }
+  }
+
+  it("a reader without ownership never answers with a segment's unfinished write beside its place as damage: while the writer's stands it reads again and refuses as UnsettledRead naming it, and answers once the move lands; one a crash left it refuses the same way, and a reader with ownership reports; and an entry beside the segments that arrives between the read and its second listing is read again, not left out", async () => {
+    const backend = new PausedSegmentWrite();
+    const vault = await target(backend);
+    const before = ids(await all(vault.vault.events.scan()));
+    const reader = await FolderReader.open(backend);
+    backend.paused = true;
+    const committing = vault.vault.commit([], [draft([], { whole: true })]);
+    await backend.reached.wait;
+    const refused = await reader.events.damaged().catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnsettledRead);
+    expect(refused).toMatchObject({ attempts: 4, detail: expect.stringMatching(/^events\/[0-9a-f-]+\/[0-9a-f-]+\.jsonl\.[0-9a-f]{12}\.tmp is a segment's write the backend has not moved into place, or left there$/) });
+    await expect(all(reader.events.scan())).rejects.toThrow(UnsettledRead);
+    backend.paused = false;
+    backend.resume.open();
+    const [committed] = await committing;
+    expect(await reader.events.damaged()).toEqual([]);
+    expect(ids(await all(reader.events.scan())).sort()).toEqual([...before, (committed as Event).eventId].sort());
+
+    const left = `events/${authorN(3)}/${tempName(`${SEG(9)}.jsonl`)}`;
+    await backend.write(`${BASE}/${left}`, utf8("{"));
+    await expect(reader.events.damaged()).rejects.toMatchObject({ attempts: 4, detail: expect.stringContaining(left) });
+    expect((await vault.damaged()).map((d) => d.where)).toEqual([left]);
+    await reader.close();
+    await vault.close();
+    const owned = await FolderReader.open(backend, { ownership: "exclusive" });
+    expect((await owned.damaged()).map((d) => d.where)).toEqual([left]);
+    await owned.close();
+    await backend.remove(`${BASE}/${left}`);
+
+    const beside = `events/${authorN(4)}/notes.txt`;
+    const listed = await FolderReader.open(
+      listing(backend, async () => {
+        await backend.write(`${BASE}/${beside}`, utf8("x"));
+      }, false)
+    );
+    expect((await listed.damaged()).map((d) => d.where)).toEqual([beside]);
+    await listed.close();
+  });
+
   it("finishes an import whose journal names a path with a noncharacter, which a portable file may carry, after a crash in its publication", async () => {
     class StopAtPublication extends MemoryBackend {
       override async rename(from: string, to: string): Promise<void> {
@@ -1037,13 +1126,15 @@ describe("on disk", () => {
     const before = ids(await all(vault.vault.events.scan()));
     await vault.close();
     const author = authorN(7);
-    // an object staged whole, and the next one's write cut short
-    await disk.write(`${BASE}/import/${JOB(7)}/staged/objects/${HELLO_CID}`, HELLO);
-    await disk.write(`${BASE}/import/${JOB(7)}/staged/objects/${tempName(WORLD_CID)}`, WORLD.subarray(0, 2));
-    // every item staged, and the journal's write cut short
-    await disk.write(`${BASE}/import/${JOB(8)}/staged/${segmentPath(author, SEG(2))}`, encodeLines([]));
-    await disk.write(`${BASE}/import/${JOB(8)}/staged/shared/a.txt`, utf8("a"));
-    await disk.write(`${BASE}/import/${JOB(8)}/${tempName("journal.json")}`, encodeJournal([segmentPath(author, SEG(2)), "shared/a.txt"]).subarray(0, 10));
+    const journal = encodeJournal([segmentPath(author, SEG(2)), "shared/a.txt"]);
+    const diedWriting = {
+      theSecondObject: { job: JOB(7), whole: { [`staged/objects/${HELLO_CID}`]: HELLO }, unfinished: [`staged/objects/${tempName(WORLD_CID)}`, WORLD.subarray(0, 2)] },
+      theJournal: { job: JOB(8), whole: { [`staged/${segmentPath(author, SEG(2))}`]: encodeLines([]), "staged/shared/a.txt": utf8("a") }, unfinished: [tempName("journal.json"), journal.subarray(0, 10)] },
+    } satisfies Record<string, { job: string; whole: Record<string, Uint8Array>; unfinished: [string, Uint8Array] }>;
+    for (const { job, whole, unfinished: [sibling, part] } of Object.values(diedWriting)) {
+      for (const [rel, bytes] of Object.entries(whole)) await disk.write(`${BASE}/import/${job}/${rel}`, bytes);
+      await disk.write(`${BASE}/import/${job}/${sibling}`, part);
+    }
     await expect(FolderReader.open(new FsBackend(dir))).rejects.toThrow(PendingImport);
     const reopened = await FolderVault.openWritable(new FsBackend(dir), { anchor: DID });
     expect(await readdir(path.join(dir, BASE, "import"))).toEqual([]);

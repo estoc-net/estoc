@@ -366,10 +366,19 @@
   only once it is shown to be a view the folder was in at one moment
   with no import being published — `import/` empty after the read,
   and a listing taken then naming the same segments at the lengths
-  the read found, which suffices since no segment is ever removed or
+  the read found and the same entries beside them that are not
+  segments, which suffices since no segment is ever removed or
   shortened — reading again while it is not and refusing as
-  `UnsettledRead`, new, after four tries; an import in progress is
-  `PendingImport`. A writable open, once it holds ownership and
+  `UnsettledRead`, new, after four tries, its `detail` naming what
+  stood in the way; a segment's unfinished write beside its place —
+  the sibling `tempName` names — is never such a view, since the
+  reader cannot tell the writer's in progress from what a crash left,
+  so it is read past and then refused, and only a store with
+  ownership reports it as damage; an import in progress is
+  `PendingImport`. A `FolderReader` with ownership looks at `import/`
+  once it holds the folder, so a writer that failed an import and
+  released meanwhile cannot leave it the segments that landed to
+  serve as the whole. A writable open, once it holds ownership and
   before any store opens, finishes an import whose journal it finds —
   items still staged moved, ones already at their place left — and
   rolls back staging that never reached a journal, whatever became of
