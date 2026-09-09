@@ -304,6 +304,122 @@
   set. `Runtime` takes a `guard` run as each operation asks for the
   lock.
 
+- **Interchange** (v3 A09). `exportVault(runtime, into, { heldRoots })`
+  writes any runtime's vault — in memory or over a folder — as a
+  portable folder into an empty backend, under the writer lock from
+  selecting the cut to publication: every event rendered afresh as
+  canonical bytes, one segment per author; every portable file; every
+  present object through the store's verified stream; `config.json`
+  and `keystore.json` checked as a restore would; and the held roots,
+  computed by the fold handed in under that same lock, each required
+  present and sound, or the export aborts unpublished.
+  `restoreFolder(from, into, { heldRoots })` reads a portable folder
+  into an empty backend, the portable half only — never `local/`,
+  never `import/`, a source with anything under `import/` refused as
+  `PendingImport` — validated whole before a byte is written: config,
+  keystore shape, every structural root holding only what the layout
+  defines, every segment line under its author, no conflict, every
+  held root of that event set among the source's objects; objects are
+  verified as they stream. Both own the destination while laying it
+  down and publish by writing `config.json` last; a failure withdraws
+  what the run wrote, its publication first, and leaves everything
+  standing when the publication cannot be withdrawn; a destination
+  another laying filled between the check and ownership is refused
+  untouched. `MemoryVault` takes `config` and `keystore` so that a
+  vault in memory can be exported. New errors `IncompleteSnapshot` and
+  `InvalidSnapshot`.
+
+- **Import into an existing vault, and the barrier under `import/`**
+  (v3 A10). `importFolder(vault, from, { heldRoots })` merges a portable
+  folder of the same vault — the same anchor, or `AnchorMismatch` —
+  into an open `FolderVault`, under its writer lock from the first look
+  at the target to publication. Everything is decided before a byte is
+  written: the source read and validated as a restore reads it; the
+  target's event set required whole; every source event a duplicate,
+  a conflict — the target's kept and the source's reported — or new,
+  unless its author is this replica's, which is `ForkedAuthor` and
+  writes nothing; the held roots of the merged set computed by the
+  fold, each required to have sound bytes in the target already —
+  read whole and rehashed in the preflight, nothing moved — or among
+  the source's objects, which are the objects copied and the only
+  ones, a copy landing over a target file that no longer spells its
+  name; a source file copied when the target has nothing at its path,
+  left when the target has a file there, and refused when it would
+  land on a directory — an empty one on disk too, which the parent's
+  listing shows — or under a file of the target, as is an object that
+  would land on a directory; the target's config and keystore never
+  touched; a root with sound bytes nowhere, or a collision, is
+  `IncompleteImport`. The writes go through the barrier: every item
+  — one fresh segment per incoming author, each object verified as it
+  streams, each file — staged under `import/<uuidv7>/staged/` at the
+  path it will have; then `journal.json` written beside them naming
+  them all; then each moved to its place, objects before the segments
+  that name them; then the journal and the directory removed. The
+  moves run in the event store's turn
+  (`FolderEventStore.publishing`): a read of the runtime that arrives
+  meanwhile waits and sees the union whole, never half; and in the
+  object store's (`FolderObjectStore.publishing`), so that a
+  quarantine which rehashed the target's damaged file before the
+  repair landed moves aside the damaged bytes, never the repair. A
+  `FolderReader` without ownership shares the folder with whatever
+  writer holds it: its event store (`shared: true`) answers a read
+  only once it is shown to be a view the folder was in at one moment
+  with no import being published — `import/` empty after the read,
+  and a listing taken then naming the same segments at the lengths
+  the read found and the same entries beside them that are not
+  segments, which suffices since no segment is ever removed or
+  shortened — reading again while it is not and refusing as
+  `UnsettledRead`, new, after four tries, its `detail` naming what
+  stood in the way; a segment's unfinished write beside its place —
+  the sibling `tempName` names — is never such a view, since the
+  reader cannot tell the writer's in progress from what a crash left,
+  so it is read past and then refused, and only a store with
+  ownership reports it as damage — a directory under such a name is
+  not one, since a backend writes the sibling as a file, and either
+  store reports it as damage; an import in progress is
+  `PendingImport`. A `FolderReader` with ownership looks at `import/`
+  once it holds the folder, so a writer that failed an import and
+  released meanwhile cannot leave it the segments that landed to
+  serve as the whole. A writable open, once it holds ownership and
+  before any store opens, finishes an import whose journal it finds —
+  items still staged moved, ones already at their place left — and
+  rolls back staging that never reached a journal, whatever became of
+  `local/` meanwhile, the sibling a backend was writing a staged item
+  or the journal to when the process died included; a read-only open
+  takes up neither and reports both as `PendingImport`. Whatever
+  under `import/` is not exactly a shape this version leaves — a file
+  at the top, a directory not named by a UUIDv7, a journal that does
+  not parse or names paths of another shape, a journal that is a
+  directory, a file or directory beside the journal and `staged/`, a
+  staged file or directory on the way to nothing the journal names
+  or, without a journal, to no publishable path, an unfinished write
+  beside a journal that stands, an item found neither staged nor
+  published — blocks the writable open as `PendingImport`, with
+  `detail` saying what, and nothing under `import/` touched; the
+  journal is read with noncharacters allowed, since a portable file's
+  name may hold one. `FsBackend` and `OpfsBackend` name the sibling
+  they write a whole file to through `tempName`, and
+  `unfinishedWriteOf` reads the name back.
+  A failure before the journal withdraws the staging; a journal write
+  that fails is taken to have landed unless the staging can then be
+  removed whole; one after the journal leaves the import the next
+  open's to finish and halts the runtime — `FolderVault.halt()`, new:
+  every operation queued for the writer lock is refused as its turn
+  comes, every read that takes no lock is refused, then the vault
+  closes and releases ownership — so that no collection pass or fold
+  already waiting runs over the union half published. For that
+  `Runtime`'s guard is asked again as an operation takes the lock and
+  by each lock-free read, and `FolderEventStore` takes a `guard`
+  asked as each read takes its turn. Importing the same folder again
+  adds nothing and writes nothing. `parseStrict` takes
+  `{ noncharacters: true }`. `VaultBackend.remove`
+  now removes an empty directory too, and refuses one with entries —
+  `FsBackend` by `rmdir`, `OpfsBackend` as `removeEntry` always did,
+  `MemoryBackend` by the files under the name — so a finished import
+  leaves no directory behind. `FolderVault.backend` is public; the
+  folder's shared checks (`OWNER_FILE`, `checkEmpty`, `layoutDamage`)
+  moved to `folder/roots.ts`.
+
 - **`MemoryBackend` copies bytes**: a Node `Buffer` given to `write` or a
   first `append`, or handed back by `read`, was kept or returned as a
   view onto the same memory — `Buffer#slice` is not a copy — so writing

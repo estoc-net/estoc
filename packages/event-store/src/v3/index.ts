@@ -12,8 +12,10 @@
  * the layout, the segments, the replica, the three folder stores, this
  * copy's local state, and the vault over them, opened for writing under
  * the backend's ownership or for reading. And interchange: any vault
- * exported as a portable folder under its writer lock, and a portable
- * folder restored into an empty backend. No event type.
+ * exported as a portable folder under its writer lock, a portable
+ * folder restored into an empty backend, and one imported into an open
+ * folder vault through the recoverable barrier under `import/`. No
+ * event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -118,16 +120,11 @@ export {
   type PruneReport,
   type Rotation,
 } from "./folder/local.js";
-export {
-  FolderVault,
-  FolderReader,
-  OWNER_FILE,
-  type FolderVaultOptions,
-  type OpenWritableOptions,
-  type OpenReadOnlyOptions,
-  type CreateOptions,
-} from "./folder/vault.js";
+export { OWNER_FILE } from "./folder/roots.js";
+export { JOURNAL_FILE, STAGED_DIR, encodeJournal } from "./folder/import.js";
+export { FolderVault, FolderReader, type FolderVaultOptions, type OpenWritableOptions, type OpenReadOnlyOptions, type CreateOptions } from "./folder/vault.js";
 export { exportVault, restoreFolder, type Copied, type Exported, type ExportOptions, type RestoreOptions } from "./interchange.js";
+export { importFolder, type ImportOptions, type Imported } from "./import.js";
 export type { VaultBackend, Ownership } from "../backend/types.js";
 export { VaultOwned } from "../backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
@@ -148,7 +145,9 @@ export {
   PendingImport,
   ReadOnlyVault,
   Unprotected,
+  UnsettledRead,
   VaultClosed,
   IncompleteSnapshot,
   InvalidSnapshot,
+  IncompleteImport,
 } from "./errors.js";

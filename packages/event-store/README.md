@@ -76,9 +76,10 @@ and `FolderVault.openWritable(backend, { anchor })` opens one: `config.json`
 under its closed member set (another version refused in words a user
 can read), `keystore.json` by shape, the anchor DID the caller derived
 from the unlocked seed compared with the config's, ownership taken
-through `backend.own` before any local state is made, `import/`
-required empty, `local/replica.json` read or minted, the stores opened
-as that replica. What comes back is a `Runtime`: `vault` for
+through `backend.own` before any local state is made, the import
+`import/` records finished or rolled back — one it does not understand
+refused as `PendingImport` — `local/replica.json` read or minted, the
+stores opened as that replica. What comes back is a `Runtime`: `vault` for
 application code, `locked`, `collect`, `ingest`, plus `local(owner)` —
 `options.json`, `cache/` and trace streams under `local/<owner>/` —
 `damaged()` and `close()`, which refuses every new
@@ -128,8 +129,62 @@ last; a failure withdraws what the run wrote, its publication first,
 so what an interrupted run leaves is not a vault, and when the
 publication cannot be withdrawn everything is left standing, since it
 was all written before it. A destination another laying filled between
-the check and ownership is refused and left untouched. Import into an
-existing vault and the zip form come next.
+the check and ownership is refused and left untouched.
+`importFolder(vault, from, { heldRoots })` merges a portable folder of
+the same vault — the same anchor — into an open folder vault, under
+its writer lock from the first look at the target to publication,
+everything decided before a byte is written: the source validated as a
+restore validates it; each of its events a duplicate, a conflict the
+target wins and reports, or new — this replica's own author over an
+event it did not write is `ForkedAuthor`; the held roots of the merged
+set computed by the fold, each required to have sound bytes in the
+target — read whole and rehashed, nothing moved — or among the
+source's objects, which are the only objects copied, a copy landing
+over a target file that no longer spells its name; a source file
+copied only where the target has nothing, left where the target has a
+file, and refused where it would land on a directory — an empty one
+on disk included — or under a file; the target's config and keystore
+never touched. The writes go through the barrier under
+`import/<uuidv7>/`: every item staged at the path it will have, then a
+journal naming them all, then each moved to its place — objects before
+the segments that name them — then the journal and the directory gone.
+The moves run in the event store's turn, so a read of the runtime that
+arrives meanwhile waits and sees the union whole, and in the object
+store's, so a quarantine that rehashed the target's damaged file
+before the repair landed cannot move the repair aside. A
+`FolderReader` without ownership shares the folder with whatever
+writer holds it, and answers a read of the events only once it is
+shown to be a view the folder was in at one moment with no import
+being published — `import/` empty after the read, and a listing taken
+then naming the same segments at the lengths the read found and the
+same entries beside them, which suffices since no segment is ever
+removed or shortened — reading again while it is not, and refusing as
+`UnsettledRead` after four tries; a segment's unfinished write beside
+its place is never such a view, since the reader cannot tell the
+writer's in progress from what a crash left, so it is read past and
+then refused naming it, and only a reader with ownership reports it as
+damage — a directory under such a name is not one, since a backend
+writes the sibling as a file, and is reported as damage by either
+reader; an import in progress is `PendingImport`. A reader with
+ownership looks at `import/` once it holds the folder, so a writer
+that failed an import and released cannot leave it the segments that
+landed to serve as the whole. A writable open
+finishes an import whose journal it finds and rolls back staging that
+never reached one — the sibling a backend was writing a staged item,
+or the journal, to when the process died included, named as
+`tempName` names it — before any store opens and whatever became of
+`local/`; a read-only open takes up neither and reports both;
+anything under `import/` that is not exactly a shape this version
+leaves — a journal that is a directory, a directory or a file beside
+the staging, staging on the way to nothing the journal names, an
+unfinished write beside a journal that stands — blocks the writable
+open, untouched, as `PendingImport` saying what it found. A failure after the journal — or a journal write that
+failed when the staging cannot then be removed, since the file may
+stand — halts the runtime, `FolderVault.halt()`: what was queued for
+the lock is refused as its turn comes, every read is refused, and
+ownership is released, so that nothing of this runtime folds or
+collects over the union half published and the next open finishes
+the import. The zip form comes next.
 Everything below is
 version 2, which stays until the vault switches over.
 

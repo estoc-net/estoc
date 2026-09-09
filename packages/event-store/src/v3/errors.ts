@@ -114,27 +114,43 @@ export class NotAVault extends Error {
   }
 }
 
-/** The seed in hand does not derive this vault's anchor DID: the wrong seed for this vault. Refused before ownership is taken or any local state made. */
+/**
+ * Another anchor DID than this vault's: the seed in hand does not derive
+ * it — the wrong seed for this vault — or, for an import, the source
+ * folder is another vault's. Refused before ownership is taken, any
+ * local state made or any byte written.
+ */
 export class AnchorMismatch extends Error {
   constructor(
     readonly expected: string,
-    readonly derived: string
+    readonly derived: string,
+    of: "seed" | "source" = "seed"
   ) {
-    super(`the seed derives ${derived}, not this vault's anchor ${expected}: wrong seed for this vault`);
+    super(
+      of === "seed"
+        ? `the seed derives ${derived}, not this vault's anchor ${expected}: wrong seed for this vault`
+        : `the source's anchor is ${derived}, not this vault's ${expected}: another vault's folder is not imported into this one`
+    );
     this.name = "AnchorMismatch";
   }
 }
 
 /**
- * `import/` holds recovery state: an import this backend has not
- * finished or cannot recognize. A writable open is blocked until it is
- * completed or rolled back; a read-only open reports it rather than
- * present what `events/` and `objects/` hold as a complete vault.
- * `entries` names what stands under `import/`.
+ * `import/` holds recovery state this open does not take up: for a
+ * read-only open, a restore or an import source, any import its owner
+ * has not finished; for a writable open, one this version cannot
+ * recognize or cannot finish, which it leaves whole rather than guess
+ * at. `entries` names what stands under `import/`; `detail`, when
+ * there is one, what could not be understood.
  */
 export class PendingImport extends Error {
-  constructor(readonly entries: string[]) {
-    super(`import/ holds recovery state (${entries.join(", ")}): the import must be completed or rolled back before the vault is opened`);
+  constructor(
+    readonly entries: string[],
+    readonly detail?: string
+  ) {
+    super(
+      `import/ holds recovery state (${entries.join(", ")}): the import must be completed or rolled back before the vault is opened${detail === undefined ? "" : `; ${detail}`}`
+    );
     this.name = "PendingImport";
   }
 }
@@ -152,6 +168,24 @@ export class Unprotected extends Error {
   constructor(readonly cid: string) {
     super(`${cid}: a read-only open without ownership serves no object stream; open with ownership, or through the writer's broker`);
     this.name = "Unprotected";
+  }
+}
+
+/**
+ * A read-only open without ownership could not show what it read of
+ * `events/` to be a view the folder was in at one moment, in as many
+ * reads as it tried: `events/` changed under each, or a segment's write
+ * stood unfinished beside its place — the writer's in progress, or what
+ * a crash left, which only ownership can tell apart. Read again, or
+ * open with ownership; `detail` says what stood in the way.
+ */
+export class UnsettledRead extends Error {
+  constructor(
+    readonly attempts: number,
+    readonly detail?: string
+  ) {
+    super(`events/ was not shown to be a settled view in ${attempts} reads over: ${detail ?? "it changed under each"}`);
+    this.name = "UnsettledRead";
   }
 }
 
@@ -176,6 +210,20 @@ export class InvalidSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {
     super(`not a valid snapshot: ${describe(problems)}`);
     this.name = "InvalidSnapshot";
+  }
+}
+
+/**
+ * An import could not make a complete merged view: damage or a conflict
+ * in the target's event set, a held root of the union with valid bytes
+ * in neither the source nor the target, a source object whose bytes do
+ * not spell its name, or a portable path of the source that collides
+ * with a file or directory of the target. Nothing was published.
+ */
+export class IncompleteImport extends Error {
+  constructor(readonly problems: { where: string; error: string }[]) {
+    super(`the import is incomplete and was not published: ${describe(problems)}`);
+    this.name = "IncompleteImport";
   }
 }
 

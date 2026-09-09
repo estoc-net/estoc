@@ -140,6 +140,9 @@ export interface Stores {
 /** How a view enters the lock: by taking it, or — already inside — by doing nothing. */
 type Enter = <T>(op: () => Promise<T>) => Promise<T>;
 
+/** What each read that takes no lock asks first: nothing, or a throw refusing it. */
+type Check = () => void;
+
 /**
  * One view of the stores: the facade application code gets, when
  * `enter` takes the lock, or the view an operation works through while
@@ -157,26 +160,54 @@ class View implements Vault {
 
   constructor(
     protected readonly stores: Stores,
-    protected readonly enter: Enter
+    protected readonly enter: Enter,
+    check: Check = () => undefined
   ) {
     const { events, objects, files } = stores;
     this.events = {
-      scan: (filter) => events.scan(filter),
-      changes: (filter, since) => events.changes(filter, since),
-      damaged: () => events.damaged(),
-      conflicting: () => events.conflicting(),
+      scan: async function* (filter) {
+        check();
+        yield* events.scan(filter);
+      },
+      changes: async (filter, since) => {
+        check();
+        return events.changes(filter, since);
+      },
+      damaged: async () => {
+        check();
+        return events.damaged();
+      },
+      conflicting: async () => {
+        check();
+        return events.conflicting();
+      },
     };
     this.objects = {
       open: (cid) => this.open(cid),
       read: (cid, maxBytes) => this.read(cid, maxBytes),
-      stat: (cid) => objects.stat(cid),
-      has: (cid) => objects.has(cid),
-      list: () => objects.list(),
+      stat: async (cid) => {
+        check();
+        return objects.stat(cid);
+      },
+      has: async (cid) => {
+        check();
+        return objects.has(cid);
+      },
+      list: async function* () {
+        check();
+        yield* objects.list();
+      },
     };
     this.files = {
-      read: (path) => files.read(path),
+      read: async (path) => {
+        check();
+        return files.read(path);
+      },
       write: (path, bytes) => enter(() => files.write(path, bytes)),
-      list: () => files.list(),
+      list: async () => {
+        check();
+        return files.list();
+      },
     };
   }
 
@@ -299,28 +330,39 @@ export class Runtime implements VaultRuntime {
   private readonly held: HeldView;
 
   /**
-   * `guard` runs as each operation asks for the lock, before it queues:
-   * a runtime that can be closed throws from it once it is, so nothing
-   * queued after the close runs on a folder another process may own by
-   * then. An operation already inside the lock is not asked again.
+   * `guard` is asked as each operation asks for the lock, before it
+   * queues (`"enter"`), again as it takes the lock (`"run"`), and by
+   * each read that takes no lock (`"read"`). A runtime that can be
+   * closed throws from `"enter"` once it is, so nothing queued after
+   * the close runs on a folder another process may own by then, while
+   * what was accepted before runs out; one that has been halted throws
+   * from all three, so nothing accepted earlier runs either. An
+   * operation already inside the lock is not asked again.
    */
   constructor(
     readonly author: AuthorId,
     readonly generation: string,
     readonly stores: Stores,
-    private readonly guard: () => void = () => undefined
+    private readonly guard: (when: "enter" | "run" | "read") => void = () => undefined
   ) {
     this.held = new HeldView(stores);
-    this.vault = new View(stores, (op) => this.enter(op));
+    this.vault = new View(
+      stores,
+      (op) => this.enter(op),
+      () => this.guard("read")
+    );
   }
 
   private enter<T>(op: () => Promise<T>): Promise<T> {
     try {
-      this.guard();
+      this.guard("enter");
     } catch (err) {
       return Promise.reject(err); // a refusal is a rejection, as every other failure of the operation is
     }
-    return this.lock.run(op);
+    return this.lock.run(() => {
+      this.guard("run");
+      return op();
+    });
   }
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
@@ -332,7 +374,7 @@ export class Runtime implements VaultRuntime {
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    this.guard(); // inside an async function: a throw here is this promise's rejection
+    this.guard("enter"); // inside an async function: a throw here is this promise's rejection
     const read = await readAll(events);
     return this.locked(() => ingestRead(this.stores.events, read));
   }

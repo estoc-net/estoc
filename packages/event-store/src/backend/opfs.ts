@@ -1,4 +1,4 @@
-import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./types.js";
+import { VaultOwned, segmentsOf, tempName, type Ownership, type VaultBackend } from "./types.js";
 
 /**
  * A vault inside the Origin Private File System, rooted at any directory
@@ -126,7 +126,7 @@ export class OpfsBackend implements VaultBackend {
     const name = segments.pop() as string;
     const dir = (await this.dir(segments, true)) as FileSystemDirectoryHandle;
     if (!hasMove()) throw noMove(`create ${JSON.stringify(path)}`);
-    const tmpName = `${name}.${randomHex(6)}.tmp`;
+    const tmpName = tempName(name);
     const tmp = await dir.getFileHandle(tmpName, { create: true });
     try {
       await fill(tmp, source);
@@ -265,12 +265,6 @@ function hasMove(): boolean {
 
 function noMove(what: string): Error {
   return new Error(`${what}: OPFS here has no FileSystemFileHandle.move(), so a file cannot be put in place whole`);
-}
-
-function randomHex(bytes: number): string {
-  const out = new Uint8Array(bytes);
-  crypto.getRandomValues(out);
-  return [...out].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** `handle`'s contents replaced by every chunk of `source`, atomically on close; on a throw the swap file is discarded and the file is as it was. */

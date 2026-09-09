@@ -91,6 +91,10 @@ export class MemoryBackend implements VaultBackend {
 
   async remove(path: string): Promise<void> {
     const key = this.key(path);
+    const prefix = `${key}/`;
+    for (const other of this.files.keys()) {
+      if (other.startsWith(prefix)) throw new Error(`directory not empty: ${JSON.stringify(key)}`);
+    }
     this.files.delete(key);
     this.times.delete(key);
   }
