@@ -135,7 +135,7 @@ full `Vault.commit` rejects supplied objects with no draft reference.
 Direct folds are sufficient; cache schemas, incremental algorithms and background
 rebuild protocols are not requirements. Optional caches still cannot serve stale
 answers. Source-only import validation precedes the target lock. Export releases
-the live vault lock before delivering its completed standalone file. SQLite owns
+the operation lock before delivering its completed standalone file. SQLite owns
 transaction recovery; application-level blind retry of uncertain new drafts is
 not an exactly-once guarantee. Storage section numbers and named anchors remain;
 event envelopes, raw CIDs, key derivation, domain folds and wire formats do not

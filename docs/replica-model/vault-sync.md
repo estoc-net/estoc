@@ -1411,7 +1411,7 @@ by phase 1.
 This intent adds one sync-service locator to portable vault
 state. `syncId` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
 store; its current endpoint is resolved at runtime and may be cached only
-in local SQLite cache tables.
+in local runtime state.
 
 The same configuration ID with a different store DID is an integrity
 conflict. Configuring the same store DID under more than one ID is

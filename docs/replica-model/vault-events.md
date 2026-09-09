@@ -974,7 +974,7 @@ DID. Its consumer is the binding's symmetric `R`. A continuation, another
 local recipient or a remote invitation never satisfies this rule merely by
 sharing `pthid`. No contact, rotation or application response is required.
 
-The receive lock covers invitation availability, binding selection and inbound
+The operation lock covers invitation availability, binding selection and inbound
 commit. A different consumer of an unavailable invitation is terminally rejected
 before receipt. The same consumer may reuse it or consume another matching
 invitation with a new root-address input. Duplicate receipt never takes it
@@ -1007,15 +1007,16 @@ local perspective supplies `localDidId` and the peer end; it does not affect the
 
 ### 6.1 Receipt and relationship evidence
 
-The **receive lock** is the vault-wide writer lock of [event-store.md section 10](event-store.md#vault-interface), acquired by the receive operation as the enclosing operation after network
-resolution and authentication. Hold it from pair lookup and [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
+After network resolution and authentication, the enclosing receive operation
+acquires the vault-wide operation lock of [event-store.md section 10](event-store.md#vault-interface).
+Hold it from pair lookup and [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
 commits; nested `Vault.commit` calls share it. Release it before network work
 or waiting for missing evidence. Outbound birth preparation uses the same lock
 for its binding lookup, recheck and commit. This serializes the operations
 without making separate commits one crash-atomic batch.
 
 Every authenticated delivery uses the same relationship lookup,
-irrespective of the recipient's allocation policy. Under the receive lock:
+irrespective of the recipient's allocation policy. Under the operation lock:
 
 1. look for the received local DID and canonical sender DID in the address
    histories of existing relationships under [section 6.6](#relationship-fold-and-address-index);
@@ -1118,7 +1119,7 @@ For a new outbound, the writer first commits the offline intent's `birth`
 selection under [section 9.2](#message-out). After resolution and before preparing/submitting
 its first package, commit this binding. For new inbound, authentication and
 `peer.resolved` commit first, then this binding in its own commit, then
-`message.in` referencing the binding's returned `eventId`. Keep the receive lock
+`message.in` referencing the binding's returned `eventId`. Keep the operation lock
 across these dependent commits under [section 6.1](#receipt-and-relationship-evidence). A crash after
 the binding commit leaves reusable binding evidence and no receipt; it consumes
 no invitation and creates no pickup ACK or ultimate ACK/effect work. A binding
@@ -1667,7 +1668,7 @@ only disclosures from protocols it supports, not names inferred from arbitrary
 message content. This definition also applies to [section 7.4](#profile-shared).
 
 The producer lifts `name` from a supported profile disclosure while its source
-content is readable and eligible for application processing under [section 10.6](#inbound-message-and-execution-fold), checking erasure and contact tombstones under the writer lock. A claim
+content is readable and eligible for application processing under [section 10.6](#inbound-message-and-execution-fold), checking erasure and contact tombstones under the operation lock. A claim
 may belong to an unassigned R; later contact assignment only changes where it
 is displayed. This lifted value survives source-body erasure; it is a peer's
 claim, not a verified identity name. It holds no source content roots. Missing
@@ -1676,7 +1677,7 @@ source-body erasure alone does not invalidate an existing lifted value.
 Deduplication and display ordering follow [section 7.5](#relationship-profile-fold).
 
 Lifting under [sections 7.3](#profile-nameclaimed)–[7.4](#profile-shared) is idempotent by event type and logical source.
-Under the writer lock, reuse an existing valid lift; otherwise recognize and
+Under the operation lock, reuse an existing valid lift; otherwise recognize and
 lift the disclosure from eligible readable source content. Reopen/recovery
 enumerates missing lifts under [section 13.1](#open-the-writable-full-runtime), including sources whose scope
 became available later. Missing content defers this work; erased content or a
@@ -2062,7 +2063,7 @@ performing a rotation. Public/private allocation never gates send eligibility.
 
 For an automatic response, `relationshipId` is exactly its carrier's derived `R`.
 Preparation uses that `R`'s current local and peer ends; another relationship
-of the same contact cannot substitute. Apply [distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set)'s local-sender gate under the intent-commit lock. Contact assignment and
+of the same contact cannot substitute. Apply [distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set)'s local-sender gate under the operation lock. Contact assignment and
 tombstones are checked when present; unassigned control relationships need no
 invented contact.
 
@@ -2541,7 +2542,7 @@ Requirements:
   execution scope. An unknown key under a recognized DID keeps these references
   for the same-DID diagnostic, instead of inventing a new binding.
   Both references are immutable portable evidence, excluded from message hashes
-  and wire headers. Choose them under the receive lock. Missing references
+  and wire headers. Choose them under the operation lock. Missing references
   defer, mismatches conflict, and import never infers a replacement from event
   timestamps. A carried proof with a non-null binding must validate in that
   same relationship before scope/ACK/effect work;
@@ -2877,7 +2878,7 @@ Missing bytes MUST NOT be displayed as intentional deletion.
 
 ### 12.3 Held roots
 
-Under the writer lock in [event-store.md section 10](event-store.md#vault-interface), the vault runtime computes
+Under the operation lock in [event-store.md section 10](event-store.md#vault-interface), the vault runtime computes
 the held roots passed to `ObjectStore.collect` in [dasl-objects.md section 8.3](dasl-objects.md#collection).
 
 A root is held when at least one accepted event retains it through
@@ -2960,12 +2961,14 @@ list when no new objects are needed; `Vault.events` is read-only.
 
 1. acquire exclusive runtime ownership and open SQLite, allowing its required
    journal recovery;
-2. validate the database format, schema, ready state, metadata and seed wrapper;
+2. follow [vault-sqlite.md section 8.1](vault-sqlite.md#create-open-and-close)'s
+   version checks and any supported schema upgrade before validating the current
+   schema, ready state, metadata and seed wrapper;
 3. unlock or obtain the seed and verify its derived anchor before application
    writes;
-4. validate local `replica_id` and `store_generation`, finish any supported
-   schema upgrade and discard only unpublished staging. Normal reopen preserves
-   local IDs; create and restore initialize fresh ones under
+4. validate local `replica_id` and `store_generation` and discard only unpublished
+   staging. Normal reopen preserves local IDs; create and restore initialize
+   fresh ones under
    [vault-sqlite.md section 8](vault-sqlite.md#ownership-and-lifecycle);
 5. fold portable state and reconstruct committed held roots before permitting
    GC;
@@ -2993,9 +2996,10 @@ submitted outbounds never resume, including deterministic responses whose
 carriers are observed again. An outbound without `delivery.submitted` may
 resume eligible work even when an earlier transport call might have succeeded;
 it does not invent missing evidence or choose new response work merely
-because a cache was lost. Missing objects or proofs keep the affected work
-deferred. Protocol-defined external effects retain their existing idempotency
-or explicitly at-least-once contract; this procedure makes no exactly-once claim.
+because a cache was lost. Missing or damaged objects, or missing proofs, keep
+the affected work deferred. Protocol-defined external effects retain their
+existing idempotency or explicitly at-least-once contract; this procedure makes
+no exactly-once claim.
 
 Phase 1 MUST NOT require `replica-mediation/1.0` or `vault-sync/1.0`. Failure of
 one mediator MUST NOT prevent offline local vault use or communication through
@@ -3103,7 +3107,7 @@ resurrect the contact or authorize a new response. A terminal recipient under
 
 ### 13.7 Rotate a local relationship address
 
-1. under the writer lock, identify one `R` and validate [section 6.5](#relationship-localtransitioned)'s rooted
+1. under the operation lock, identify one `R` and validate [section 6.5](#relationship-localtransitioned)'s rooted
    binding, assignment, predecessor and confirmation evidence;
 2. choose a live configured route and create a fresh successor under [section 13.3](#create-a-communication-did); its route may differ from the predecessor's;
 3. sample the rotation instant once, sign the predecessor-to-successor proof,
@@ -3457,7 +3461,7 @@ There is no migration requirement from an earlier event vocabulary.
     otherwise retained package. Committing `delivery.submitted` releases every
     package's delivery retention contribution for that message ID without waiting for
     ACK; message body and attachment lifetimes remain separate.
-58. <a id="ve-58"></a> Commit and collection share the writer lock; GC computes current held roots
+58. <a id="ve-58"></a> Commit and collection share the operation lock; GC computes current held roots
     under that lock and cannot delete a retained object or overlap acceptance
     and append within a commit.
 59. <a id="ve-59"></a> A successfully appended inbound event survives immediate process restart
@@ -3552,7 +3556,7 @@ There is no migration requirement from an earlier event vocabulary.
 88. <a id="ve-88"></a> A successor freezes its own route at DID creation. Crash before commit may
     choose again; afterward recovery reuses that exact document and route.
     Preference changes do not edit it.
-89. <a id="ve-89"></a> Retirement and input commit serialize under the writer lock. Retired
+89. <a id="ve-89"></a> Retirement and input commit serialize under the operation lock. Retired
     addresses accept existing-history receipt but no new births, independent
     of public/private policy. Historical receipt and invitation consumption
     survive import without a clock cutoff.
@@ -3747,7 +3751,7 @@ There is no migration requirement from an earlier event vocabulary.
      commits. The receipt references the returned binding eventId; no draft may
      supply a pre-minted eventId. Crash after binding consumes no invitation and
      creates no receipt ACK; recovery reuses that binding after authentication.
-     The enclosing receive operation holds the same vault-wide writer lock as
+     The enclosing receive operation holds the same vault-wide operation lock as
      outbound preparation, so that preparation cannot insert another binding
      between lookup and receipt. Whichever operation binds first supplies the
      reused pin, even when concurrent did:web resolutions return different

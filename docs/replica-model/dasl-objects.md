@@ -159,8 +159,13 @@ No acceptance-age renewal is part of this interface.
 
 `open` returns complete accepted bytes, or null for absence. `stat` returns their
 validated metadata or null; `has` reports accepted presence; `list` enumerates
-accepted CIDs without duplicates, not temporary preparation. A listing does not
-promise that a later open cannot encounter collection or damage.
+accepted CIDs without duplicates, not temporary preparation. Presence and metadata
+results do not certify content integrity or guarantee that a later read succeeds.
+
+Known damage MUST make `has`, `stat`, `open` and `read` fail with an explicit
+damage error; `false` and `null` indicate absence only. `list` MUST fail when
+it encounters a known damaged object, without yielding that CID or silently
+omitting it from a successful result. Verified repair restores normal results.
 
 Verification is mandatory at acceptance/import/restore. A read may stream before
 rehashing finishes, but a mismatch MUST fail before successful completion.
@@ -169,9 +174,9 @@ Consumers cannot treat earlier chunks as verified until that completion.
 when the bound is exceeded.
 
 Reads follow [SQ §6.2](vault-sqlite.md#reads-damage-and-collection): they may wait,
-fail or be explicitly cancelled for maintenance, but cannot successfully return
-truncated or mixed bytes. This API does not require latches, indefinitely paused
-streams, concurrent writers or seamless online repair.
+fail or be explicitly cancelled to allow writes or maintenance, but cannot
+successfully return truncated or mixed bytes. This API does not require latches,
+indefinitely paused streams, concurrent writers or seamless online repair.
 
 <a id="event-roots-and-retention"></a>
 
@@ -208,9 +213,10 @@ retention from recovered committed events before running.
 
 The semantic layer distinguishes policy erasure from unavailable/corrupt bytes
 and explicitly partial sync views. An object whose bytes do not match its CID
-is damaged, not another valid version. Report damage and exclude it from normal
-reads until verified repair. SQLite maintenance procedures, not an additional
-portable quarantine or version format, are defined in SQ.
+is damaged, not another valid version. Report damage and fail affected reads
+under [section 6.3](#read-operations) until verified repair. SQLite maintenance
+procedures, not an additional portable quarantine or version format, are defined
+in SQ.
 
 <a id="collection"></a>
 
@@ -218,7 +224,7 @@ portable quarantine or version format, are defined in SQ.
 
 `collect(keep)` compares accepted CIDs to the exact keep set. Validate all input
 CIDs before deletion; duplicates in keep have no extra effect. The vault, not
-application callers, supplies held roots under the writer lock and holds it
+application callers, supplies held roots under the operation lock and holds it
 through deletion. The object store does not interpret event types.
 
 `removed` contains unique canonical CIDs actually made unavailable by the pass;
@@ -301,6 +307,9 @@ space and report exceeded limits explicitly.
 11. <a id="do-11"></a> Collection preserves every held root.
 12. <a id="do-12"></a> Commit interruption accepts all new objects/events or none.
 13. <a id="do-13"></a> Broken chunks, lengths or hashes are reported as damage.
+    Known damage makes `has`, `stat`, `open` and `read` fail explicitly; `list`
+    fails instead of yielding or silently omitting the damaged CID. Verified
+    repair restores normal read, presence and listing results.
 14. <a id="do-14"></a> Private objects are never implicitly published through RASL.
 15. <a id="do-15"></a> BDASL/BLAKE3 identifiers are rejected.
 16. <a id="do-16"></a> A failed lazy hash fails the stream before successful completion.
@@ -311,6 +320,6 @@ space and report exceeded limits explicitly.
 
 17. <a id="do-17"></a> Successful primitive acceptance survives restart; partial bytes never accept.
 18. <a id="do-18"></a> Collection cannot overlap a full commit's root checks and publication.
-19. <a id="do-19"></a> GC computes roots after taking the writer lock and holds it through deletion.
+19. <a id="do-19"></a> GC computes roots after taking the operation lock and holds it through deletion.
 20. <a id="do-20"></a> Reopen recovers committed retention before GC.
 21. <a id="do-21"></a> Discarding preparation cannot remove committed data; unheld bytes need no age clock.

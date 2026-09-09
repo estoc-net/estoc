@@ -264,7 +264,7 @@ The following table is normative. "Committed" means process-durable success.
 
 | Step | Required committed evidence | Permitted next action |
 | --- | --- | --- |
-| Object acceptance | Complete verified objects under the commit's writer lock | Append the referencing batch before releasing the lock |
+| Object acceptance | Complete verified objects under the commit's operation lock | Append the referencing batch before releasing the lock |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under [vault-events.md section 6.2](vault-events.md#relationship-bound) | Submit that exact package |
 | Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under [vault-events.md section 12.3](vault-events.md#held-roots) |
@@ -325,7 +325,7 @@ Within the active runtime, prepare/submit work for one logical message ID MUST b
 serialized. Before each transport call, recheck its committed completion and
 eligibility state; after acceptance, commit `delivery.submitted` before
 dispatching further work for that message ID. This per-message scheduling boundary
-does not hold the vault writer lock across network calls. If the process exits
+does not hold the vault operation lock across network calls. If the process exits
 before the submission event commits, reopen may submit the same exact package
 again under section 13. No durable pre-call attempt reservation is required.
 
@@ -349,7 +349,7 @@ relationship.
    and apply [sender resolution and its bounded retries](relationships.md#did-resolution-requirements).
    Safely terminal delivery is pickup-ACKed without portable application input;
    recoverable prerequisites defer.
-3. Under the [receive lock and pair-lookup rules](vault-events.md#receipt-and-relationship-evidence),
+3. Under the [operation lock and pair-lookup rules](vault-events.md#receipt-and-relationship-evidence),
    select the unique binding and transition evidence or a genuinely new live
    root pair. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
    superseded-sender and invitation/relationship-integrity checks. Required
@@ -362,7 +362,7 @@ relationship.
 4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
    is needed, commit it separately and obtain its returned `eventId`; only then
    commit `message.in` referencing that binding, with retained content, hashes
-   and its fresh receipt ordinal. Hold the receive lock across these dependent
+   and its fresh receipt ordinal. Hold the operation lock across these dependent
    commits and recheck recipient eligibility. Crash after binding but before
    receipt leaves reusable evidence, no invitation consumption and no receipt
    ACK; redelivery repeats authentication and reuses the binding.
@@ -608,7 +608,7 @@ intents are reused; later rotation or retirement uses that document's [section 6
 Binding and required input/proof evidence must already be committed. An early
 privacy transition and its notification follow [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications);
 they do not create scope or bypass the local-sender gate. Recheck eligibility
-under the same writer lock as response selection and intent commit.
+under the same operation lock as response selection and intent commit.
 
 For one received carrier message `X`, a conforming receiver performs this
 algorithm after normal inbound commit, only when no response intent already
@@ -841,7 +841,7 @@ historical set; current sender authentication remains a separate receive gate.
 
 The local history starts with `relationship.bound.localDidId` and extends through
 `relationship.localTransitioned`. `relationshipRecipientKeyNames(R)` includes that
-whole rooted history. For a new delivery, first apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s producer-time superseded-sender check under the receive lock. The rows
+whole rooted history. For a new delivery, first apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s producer-time superseded-sender check under the operation lock. The rows
 below validate immutable evidence of committed observations; they neither
 admit new traffic from a superseded peer node nor re-evaluate earlier receipts
 against a later rotation. Each valid committed observation must satisfy one
@@ -978,7 +978,7 @@ payload validation MUST verify the execution ID against that carrier group,
 the stored tuple and output intent against the producing protocol, the key
 against that tuple, and the message ID against the key.
 
-Under the writer lock in [event-store.md section 10](event-store.md#vault-interface), the runtime MUST derive
+Under the operation lock in [event-store.md section 10](event-store.md#vault-interface), the runtime MUST derive
 the carrier's execution ID and check for an already-selected ACK-bearing
 response under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) before selecting an ACK response
 handler or tuple. If one exists, reuse it; a new handler or tuple cannot consume
@@ -1340,7 +1340,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     its returned eventId. Crash at that boundary leaves no receipt, invitation
     consumption or pickup ACK; reauthentication reuses the binding, including
     when the incoming message is a pure ACK control observation. The enclosing
-    receive operation holds the shared writer lock across lookup and these
+    receive operation holds the shared operation lock across lookup and these
     commits, excluding a competing outbound binding until it releases the lock.
 69. <a id="dd-69"></a> After an authenticated unknown-iss carrier commits, its exact local/sender
     pair remains pending for later proof-free input until predecessor evidence

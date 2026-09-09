@@ -54,7 +54,7 @@ has one active writable runtime, and two writable copies cannot share an author.
 
 Only explicit event roots retain objects. Local objects and references commit
 atomically. Collection removes only unheld objects, never events or identity
-metadata, and shares the mutation lock with commits. Losing caches cannot lose
+metadata, and shares the operation lock with commits. Losing caches cannot lose
 a committed decision or message body. Portable interchange preserves the values
 below; local change tokens are not synchronization cursors.
 
@@ -180,7 +180,7 @@ replica-creation event or mediator replica registration.
 
 Local appends mint `eventId` with a standard RFC 9562 UUIDv7 generator. Generator
 counter layout, monotonicity and rollback handling are not additional Estoc
-requirements. Appends share one generator under the writer lock. Failure to
+requirements. Appends share one generator under the operation lock. Failure to
 mint any ID fails the whole batch before acceptance.
 
 `at` is one integer Unix-millisecond wall-clock observation, truncating any
@@ -332,6 +332,11 @@ its related cache and refolds. Token encoding is private and never a wire
 cursor or authorization credential. SQLite position rules are in
 [SQ §5](vault-sqlite.md#events-and-change-tokens).
 
+Portable snapshot inspection has no local change frontier. Every `changes`
+call MUST reject with `UnsupportedOperation`, with or without a token; it MUST
+NOT mint local IDs, positions or tokens. Use `scan`, `damaged` and `conflicting`
+to inspect the snapshot.
+
 <a id="damage-and-conflicts"></a>
 
 ### 5.6 Damage and conflicts
@@ -339,7 +344,9 @@ cursor or authorization credential. SQLite position rules are in
 Damage includes invalid event bytes and disagreement with indexed columns.
 Report location and exclude damaged values from diagnostic scans. Event damage
 makes the history incomplete and blocks mutation, GC and full export; structural
-SQLite damage fails the runtime. Object damage follows
+SQLite damage fails the runtime. In-place event repair is outside the phase-1
+contract. Recovery uses a validated snapshot restored into a new runtime under
+[SQ §12.1](vault-sqlite.md#restore). Object damage follows
 [SQ §6](vault-sqlite.md#reads-damage-and-collection).
 
 `conflicting()` reports observed rejected values with the accepted value as
@@ -429,11 +436,11 @@ accept in one transaction under the batch rules above. Validation failure or
 rollback accepts neither new objects nor events; private preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
 
-The vault-wide writer/operation lock serializes semantic mutations from preflight
+The vault-wide operation lock serializes semantic mutations from preflight
 through publication, including receipt allocation and GC's held-root decision.
 Nested stores share that lock and the enclosing transaction. Lifetime ownership,
-read cancellation/maintenance and SQLite procedures belong to
-[SQ §§8–9](vault-sqlite.md#ownership-and-lifecycle). Nonblocking reads, live brokers
+read cancellation and SQLite procedures belong to
+[SQ](vault-sqlite.md#ownership-and-lifecycle). Nonblocking reads, live brokers
 and online repair are not API guarantees.
 
 An ambiguous outcome is not a safe instruction to resubmit drafts: commit mints
@@ -450,9 +457,10 @@ commit, carries existing IDs and can deduplicate retries.
 ### 11.1 SQLite round trip
 
 Portable interchange preserves every canonical event byte and historical author,
-every currently held object's CID/bytes, immutable metadata and the selected
-wrapper. Import into an existing vault retains its target wrapper. Local IDs,
-positions, caches and staging never travel. Physical SQLite layout is not identity.
+every currently held object's CID/bytes, immutable metadata and the seed wrapper
+at the export cut. Import into an existing vault retains its target wrapper.
+Local IDs, positions, caches and staging never travel. Physical SQLite layout is
+not identity.
 
 <a id="export"></a>
 
@@ -460,7 +468,7 @@ positions, caches and staging never travel. Physical SQLite layout is not identi
 
 [SQ §10](vault-sqlite.md#snapshot-and-export) defines fresh portable construction
 from a consistent event/wrapper/held-root cut. Missing held bytes fails complete
-export. Release the live vault lock once the standalone snapshot is built and
+export. Release the operation lock once the standalone snapshot is built and
 verified, before file delivery. Success still requires completed output.
 
 <a id="import-into-an-existing-vault"></a>
@@ -470,8 +478,9 @@ verified, before file delivery. Success still requires completed output.
 [SQ §§11–12](vault-sqlite.md#portable-source-validation) define stable-source
 validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
-canonical duplicate/conflict, own-author fork, known payload, receipt-integrity
-and erasure rules. Required union roots must have sound bytes in source or target.
+canonical duplicate/conflict, own-author fork, known payload,
+[receipt-integrity](vault-events.md#message-in) and erasure rules. Required union
+roots must have sound bytes in source or target.
 
 One transaction publishes required objects and all new events. Preserve target
 identity, wrapper and local control. A failed preflight changes no accepted state;
@@ -505,10 +514,9 @@ required objects are incomplete local data, never erasure.
 
 SQLite is the only persistent backend; memory stores are semantic test references.
 [SQ](vault-sqlite.md#commit-and-recovery) owns driver/durability, ownership, limits
-and recovery requirements. SQL and migrations are application-owned; input
-values are bound, and portable input supplies no executable schema instructions.
-Only claimed platforms must pass their real persistence and large-object tests;
-memory or native tests do not establish browser support.
+and recovery requirements. Only claimed platforms must pass their real
+persistence and large-object tests; memory or native tests do not establish
+browser support.
 
 <a id="versioning"></a>
 
@@ -574,7 +582,7 @@ Storage procedures are tested under SQ rather than redefined here.
 24. <a id="es-24"></a> Import recovery exposes the whole old or new union, not staging.
 25. <a id="es-25"></a> Any cached projections are updated/invalidated atomically and not used stale.
 26. <a id="es-26"></a> Runtime/local data and executable schema never travel as portable state.
-27. <a id="es-27"></a> Maintenance waits for or cancels readers; it never silently changes their bytes.
+27. <a id="es-27"></a> Commits and maintenance may explicitly cancel readers; their bytes never silently change.
 28. <a id="es-28"></a> Read/GC races yield complete bytes, absence or an explicit error, never partial success.
 29. <a id="es-29"></a> Public stores expose no append/ingest/put/collect bypass; unused commit objects fail.
 30. <a id="es-30"></a> A cancelled paused reader cannot resume as a successful unprotected read.

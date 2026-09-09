@@ -131,7 +131,9 @@ key and require the resulting DID to equal `vault_meta.anchor`.
 
 `seed_jwe` stores the exact UTF-8 bytes of the **compact JWE string** produced
 by `@estoc/keystore` version 3, without JSON quoting or a trailing newline.
-The API value is `{ version: 3, seedJwe: string }`. Validate the package's JWE
+The BLOB representation keeps the wrapper on the driver's opaque-byte path;
+decode it as UTF-8 at the API boundary. The API value is
+`{ version: 3, seedJwe: string }`. Validate the package's JWE
 profile; do not convert it to a different JOSE serialization. The vault stores
 no key registry. Derive keys by their exact portable names after unlock; keep
 the plaintext seed, private keys and derivation caches out of persistent state.
@@ -142,9 +144,9 @@ Release in-memory secrets on lock or process exit.
 ### 4.1 Rewrap and import policy
 
 Rewrap verifies that the replacement wrapper unlocks to the same seed/anchor,
-then replaces it in one serialized transaction. Restore adopts the snapshot's
-wrapper. Import into an unlocked same-anchor vault retains the target wrapper;
-it validates source wrapper shape without requiring the source passphrase.
+then replaces it in one transaction under the operation lock. Restore adopts
+the snapshot's wrapper. Import into an unlocked same-anchor vault retains the
+target wrapper; it validates source wrapper shape without requiring the source passphrase.
 If the source seed is unlocked, its derived anchor must also match. Anchor
 equality is an identity consistency check, not authentication of supplied history.
 
@@ -154,10 +156,11 @@ equality is an identity consistency check, not authentication of supplied histor
 
 Before describing a vault as recoverable, the application MUST verify an
 independent recovery path: a documented integrity-protected offline seed export,
-or a complete snapshot plus a separately retained credential. Verification
-unlocks that material in isolation and derives the exact anchor. Seed-only
-recovery restores identity, not history; phase-1 history recovery needs a
-snapshot. Onboarding exposes recovery status. A sync store is not a seed backup.
+or a complete snapshot plus a separately retained credential that unlocks that
+snapshot's seed wrapper. Verification unlocks that material in isolation and
+derives the exact anchor. Seed-only recovery restores identity, not history;
+phase-1 history recovery needs a snapshot. Onboarding exposes recovery status.
+A sync store is not a seed backup.
 
 <a id="events-and-change-tokens"></a>
 
@@ -167,6 +170,10 @@ snapshot. Onboarding exposes recovery status. A sync store is not a seed backup.
 the other columns MUST equal the corresponding envelope fields. Accepted events
 are never updated or deleted. Duplicate/conflict and current-author fork checks
 follow [ES §5](event-store.md#eventstore).
+
+If SQL JSON functions are used for filtering, pass `CAST(canonical AS TEXT)`;
+the stored BLOB is UTF-8 JSON, not SQLite JSONB. Preserve JSON primitive types
+when implementing [ES §5.4](event-store.md#scan)'s filter semantics.
 
 Runtime-only control:
 
@@ -184,19 +191,23 @@ CREATE TABLE event_positions (
 ) STRICT;
 ```
 
-There is one control row; both IDs are canonical lowercase UUIDv7. Every accepted
-event has one position. Acceptance allocates positions above `last_seq` and
+In a runtime there is one control row; both IDs are canonical lowercase UUIDv7.
+Every accepted event has one position. Acceptance allocates positions above `last_seq` and
 advances it in the same transaction. Empty/duplicate-only writes do not advance
 it. Positions remain fixed within a generation; `last_seq` is their maximum or
 zero for an empty store. Missing/inconsistent control is damage, not creation.
 
-Scans and deltas capture a fixed upper position; later accepts cannot change
-that result. Scans use canonical order, not position order. Tokens identify the
-vault, local generation and complete delta frontier. Their encoding and the
+Runtime scans and deltas capture a fixed upper position; later accepts cannot
+change that result. Scans use canonical order, not position order. Tokens identify
+the vault, local generation and complete delta frontier. Their encoding and the
 query/pagination strategy are implementation details. Reject malformed,
 wrong-vault/generation and future tokens. An empty filtered delta still advances
 the frontier; a consumer checkpoints only after consuming the complete result.
 Positions/tokens never travel in portable state or become sync cursors.
+
+Portable inspection scans the immutable event set in canonical order and uses
+the diagnostic methods without local control tables. It has no change frontier;
+`changes` is rejected under [ES §5.5](event-store.md#changes).
 
 <a id="objects-and-streams"></a>
 
@@ -226,19 +237,21 @@ referenced by any of its drafts; no orphan-grace workflow is required.
 
 A read either returns complete unchanged bytes or explicitly fails/cancels;
 maintenance MUST NOT turn it into a successful truncated or mixed read. A runtime
-MAY serialize reads with writes. Before repair or GC changes bytes, prevent new
-reads and let affected reads finish or explicitly cancel them. Nonblocking
-writers, indefinitely paused streams and seamless online repair are not required.
+MAY serialize reads with writes and explicitly cancel readers to let any write,
+including an ordinary commit, proceed. A paused consumer MUST NOT be required
+to resume before that write can complete. Before repair or GC changes bytes,
+prevent new reads and let affected reads finish or explicitly cancel them.
+Nonblocking writers, indefinitely paused streams and seamless online repair are not required.
 SQLite read transactions may be used where supported; no application latch or
 physical-version protocol is prescribed.
 
 Missing chunks, wrong lengths and hash mismatches are reported as damage, never
-policy erasure or success. Damaged objects cannot satisfy new reads or work
-requiring sound content until verified repair. Repair may run in maintenance
-mode and replaces the complete object's bytes in one transaction after readers
-are quiesced. Persistent quarantine is not required. Structural database damage
-fails the runtime; event damage blocks mutation, GC and full export rather than
-silently shrinking history.
+policy erasure or success. Read and presence operations follow
+[DO §6.3](dasl-objects.md#read-operations). Work requiring damaged content stays
+deferred until verified repair. Repair may run in maintenance mode and replaces
+the complete object's bytes in one transaction after readers are quiesced.
+Persistent quarantine is not required. Structural database damage fails the
+runtime; event damage follows [ES §5.6](event-store.md#damage-and-conflicts).
 
 GC holds the operation lock from computing current held roots through deleting
 unheld objects and their chunks in one transaction. No acceptance timestamps or
@@ -270,8 +283,9 @@ One runtime owns a physical database, including recovery and all its handles.
 Ownership must exclude a second process/worker addressing the same database;
 rejecting that open is sufficient. Cross-process read brokers and independent
 live SQL readers are not required; clients cannot bypass ownership. An offline
-inspector takes ownership too;
-an immutable portable snapshot can be read separately.
+inspector takes ownership too; an immutable portable snapshot can be read
+separately, subject to [section 11](#portable-source-validation)'s opening and
+schema checks.
 
 Within the owner, one operation lock serializes semantic mutations, including
 receipt allocation and GC. SQLite transactions provide atomic publication;
@@ -284,14 +298,19 @@ work. The ownership mechanism is platform-specific, not another storage format.
 
 Create requires an unused destination and validated seed/anchor/wrapper. It
 publishes complete metadata and fresh control as `ready = 1` in one transaction.
-Open never creates a missing vault: acquire ownership, let SQLite recover its
-journal, validate format/schema and `kind = 'runtime', ready = 1`, then verify
-the unlocked seed's anchor before application writes. Validate control and
+Open never creates a missing vault. For writable open, acquire ownership and let
+SQLite recover its journal, then inspect the format and versions. Reject
+unsupported versions. For a supported older runtime schema, validate the source runtime under that
+version's rules and run its application-owned migration under ownership in one
+transaction, committing the schema and `user_version` together. Then validate
+the current schema and `kind = 'runtime', ready = 1`, unlock or obtain the seed,
+and verify its anchor before application writes. Validate control and
 reconstruct committed retention and unfinished work under
 [VE §13.1](vault-events.md#open-the-writable-full-runtime) before GC or workers.
 
-An inspector makes no application writes or new local IDs. If read-only access
-cannot perform needed journal recovery, fail rather than discard the journal.
+An inspector makes no application writes or new local IDs and rejects a runtime
+that requires schema migration. If read-only access cannot perform needed
+journal recovery, fail rather than discard the journal.
 Close stops admission, finishes or safely cancels work/streams and closes all
 database handles before releasing ownership. Old handles cannot continue after
 close. Do not release ownership while an operation still uses the database.
@@ -301,7 +320,8 @@ close. Do not release ownership while an operation still uses the database.
 ## 9. Commit and recovery
 
 Use SQLite transactions and journal recovery, not an application publication
-journal. The driver must meet [ES §2.1](event-store.md#commit-and-durability-terminology),
+journal. SQL statements are application-owned and input values are bound.
+The driver must meet [ES §2.1](event-store.md#commit-and-durability-terminology),
 enable foreign keys and use a recoverable journal/durability configuration.
 Document and test the effective configuration on each supported platform;
 `journal_mode=OFF/MEMORY` and `synchronous=OFF` are not runtime policies.
@@ -337,21 +357,23 @@ events. Transaction atomicity does not itself guarantee exactly-once execution.
 
 ## 10. Snapshot and export
 
-Export includes immutable metadata, the selected seed wrapper, every accepted
-event and exactly the held objects for that event cut. Unknown valid event types
-retain their roots. Missing/damaged held bytes or incomplete history fails export.
-Local tables, control, unheld content and temporary data are excluded.
+Export includes immutable metadata, the keystore row at the export cut, every
+accepted event and exactly the held objects for that same cut. Copy the keystore
+row's `seed_jwe` bytes unchanged. Unknown valid event types retain their roots.
+Missing/damaged held bytes or incomplete history fails export. Local tables,
+control, unheld content and temporary data are excluded.
 
 Hold the operation lock while building and verifying a fresh destination with
 the common schema, `kind = 'portable'` and initially `ready = 0`. Copy only the
 allowed logical values; verify canonical events and object hashes. Do not clone
 the runtime then delete unwanted rows: excluded bytes may remain in free pages.
+Do not run `ANALYZE` on the portable destination.
 SQLite's backup API is suitable for whole-runtime recovery copies, not this
 portable-state selection.
 
 Validate the destination, set ready, finish journal/checkpoint work and close it
 as a standalone main file with rollback-format headers and no required sidecars.
-Then release the live vault lock **before** delivering that immutable file.
+Then release the operation lock **before** delivering that immutable file.
 Success requires completed output; cancellation/truncation is a delivery failure,
 not permission to omit content. Object I/O and output need bounded memory or an
 explicit enforced total-backup limit before allocation.
@@ -360,21 +382,26 @@ explicit enforced total-backup limit before allocation.
 
 ## 11. Portable source validation
 
-Use a stable source for the entire validation and copy: an isolated immutable
-file or a protected source read transaction. Open it read-only, disable extension
-loading and use untrusted-schema handling (`trusted_schema=OFF` or equivalent).
-Inspect schema before querying its
-application data or running integrity checks; execute no source-supplied SQL,
-views, triggers, migrations or extensions.
+Every operation that opens a portable file as input, including inspection,
+MUST apply the following opening and schema checks. Keep the source stable
+throughout reading, validation and copying: an isolated immutable file or a
+protected source read transaction. Open it read-only, disable extension loading
+and use untrusted-schema handling (`trusted_schema=OFF` or equivalent). Bound
+input size and validation work and report limits explicitly, never partial success.
 
-Require supported header/encoding/versions, a complete standalone file, the
-common ordinary tables and only their allowed columns/keys/indexes, valid
+Before querying application data or running integrity checks, inspect the schema
+and require the common ordinary tables and only their allowed columns/keys/indexes.
+Reject extra tables, including `ANALYZE` statistics tables such as `sqlite_stat1`,
+and executable schema objects; execute no source-supplied SQL, views, triggers,
+migrations or extensions.
+
+Before accepting a source for restore/import, also require supported
+header/encoding/versions, a complete standalone file with rollback-format headers
+(file read and write versions both 1) and no required sidecars, valid
 metadata/wrapper, successful SQLite integrity and foreign-key checks, exact
-canonical event bytes and matching columns, valid known payloads, and locally
-verified object lengths/chunks/hashes. The object set must equal the held-root
-fold of all source events. Reject extra tables or executable schema objects;
-validate values rather than trusting source constraints. Bound input size and
-validation work and report limits explicitly, never partial success.
+canonical event bytes and matching columns, valid known payloads, and locally verified object
+lengths/chunks/hashes. The object set must equal the held-root fold of all source
+events. Validate values rather than trusting source constraints.
 
 Runtime databases, unpublished files and incomplete snapshots are not portable
 restore/import inputs. Validation establishes integrity, not who selected or
@@ -391,19 +418,24 @@ authored the history. Valid conflicting semantic facts remain facts.
 Validate a complete source and its recovery credential/anchor. Build a new
 runtime in an unused destination using application-owned DDL, adopting the
 wrapper and preserving every event ID, author, canonical byte and required
-object. Assign fresh replica/generation IDs and local positions. Keep it unready
-until integrity/completeness checks pass; publish readiness in one transaction.
+object. Rebuilding copies validated logical values without copying source free
+pages or adopting source SQL. Assign fresh replica/generation IDs and local
+positions. Keep it unready until integrity/completeness checks pass; publish readiness in one transaction.
 Open then reconstructs retention and unfinished work before enabling workers.
 A failed construction is not an empty vault and cannot silently mint another seed.
+
+Recovery from a damaged runtime restores only the snapshot's history. Salvaging
+history absent from that snapshot is outside the phase-1 contract.
 
 <a id="import"></a>
 
 ### 12.2 Import
 
 Validate and pin the complete source **before taking the target operation lock**.
-Then, under that lock, require a ready unlocked target with equal version/anchor,
-apply target duplicate/conflict and `ForkedAuthor` checks, and compute the
-prospective union and held roots with erasure closure. The target wins event-ID
+Then, under that lock, require a ready unlocked target with equal `user_version`,
+`vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
+and `ForkedAuthor` checks, and compute the prospective union and held roots with
+erasure closure. The target wins event-ID
 content conflicts, which are reported; distinct valid facts remain in the union.
 Require sound bytes for every union root in source or target. Stage required
 absent/damaged objects without publishing them; quiesce reads before repair.
@@ -455,6 +487,8 @@ physical-version guarantees are recorded in the suite's section history.
 7. <a id="sq-7"></a> Cache clearing preserves identity/data; no private keys are persisted.
 8. <a id="sq-8"></a> Independent recovery material derives the same anchor after runtime loss.
 9. <a id="sq-9"></a> A supported migration is atomic and never executes source instructions.
+    Runtime open completes it before current-schema validation and seed unlock;
+    failure exposes no partially upgraded normal runtime.
 
 <a id="events-and-transactions"></a>
 
@@ -465,6 +499,8 @@ physical-version guarantees are recorded in the suite's section history.
 12. <a id="sq-12"></a> Large batches preserve ES timestamp/ID/order and atomicity rules.
 13. <a id="sq-13"></a> Process/worker termination never exposes a partial accepted commit.
 14. <a id="sq-14"></a> Late events appear in deltas; empty filtered deltas advance tokens.
+    Portable inspection rejects every `changes` call with `UnsupportedOperation`
+    and allocates no local IDs, positions or tokens.
 15. <a id="sq-15"></a> Driver integers round-trip exactly or fail before acceptance.
 16. <a id="sq-16"></a> Scans/deltas use a fixed cut and exact primitive filter semantics.
 17. <a id="sq-17"></a> Direct folds and any optional caches agree after imports and erasures.
@@ -479,7 +515,8 @@ physical-version guarantees are recorded in the suite's section history.
 21. <a id="sq-21"></a> Preparation is invisible; unused supplied objects fail full commit.
 22. <a id="sq-22"></a> Repair waits for or cancels affected readers before replacing bytes.
 23. <a id="sq-23"></a> GC preserves held roots and atomically deletes selected unheld objects.
-24. <a id="sq-24"></a> Each read completes unchanged or explicitly fails/cancels during maintenance.
+24. <a id="sq-24"></a> Each read completes unchanged or explicitly fails/cancels during writes or maintenance.
+    An ordinary serialized commit can complete without a paused consumer resuming.
 25. <a id="sq-25"></a> A failed lazy hash or interrupted read never reports successful completion.
 26. <a id="sq-26"></a> A second owner is excluded, including during offline inspection.
 27. <a id="sq-27"></a> Close stops old handles and ends database access before releasing ownership.
@@ -489,11 +526,14 @@ physical-version guarantees are recorded in the suite's section history.
 
 ### Backup, import and restore (SQ-29–SQ-40)
 
-29. <a id="sq-29"></a> Export contains every event and exactly held objects at its selected cut.
+29. <a id="sq-29"></a> Export contains the exact keystore row, every event and exactly held objects
+    at its selected cut.
 30. <a id="sq-30"></a> Excluded local/unheld sentinel bytes never enter the fresh portable file.
-31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut; delivery holds no live vault lock.
+31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut; delivery holds no operation lock.
 32. <a id="sq-32"></a> Output opens without sidecars; incomplete/cancelled output is not success.
 33. <a id="sq-33"></a> Stable-source validation rejects hostile schema and malformed values.
+    Portable inspection rejects views, triggers or other forbidden schema before
+    querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> Missing prospective roots or a fork aborts without semantic writes.
