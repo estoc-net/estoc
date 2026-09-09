@@ -366,6 +366,8 @@ relationship.
    commits and recheck recipient eligibility. Crash after binding but before
    receipt leaves reusable evidence, no invitation consumption and no receipt
    ACK; redelivery repeats authentication and reuses the binding.
+   If event damage blocks these commits, keep the delivery pending without
+   pickup ACK until recovery under [vault-sqlite.md section 12.1](vault-sqlite.md#restore).
 5. Only after durable receipt, ACK the mediator delivery. A crash before this
    point leaves it pending or causes idempotent redelivery.
 6. Validate every carried rotation against its exact retained predecessor and

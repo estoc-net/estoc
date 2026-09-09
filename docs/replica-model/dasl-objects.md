@@ -162,10 +162,13 @@ validated metadata or null; `has` reports accepted presence; `list` enumerates
 accepted CIDs without duplicates, not temporary preparation. Presence and metadata
 results do not certify content integrity or guarantee that a later read succeeds.
 
-Known damage MUST make `has`, `stat`, `open` and `read` fail with an explicit
-damage error; `false` and `null` indicate absence only. `list` MUST fail when
-it encounters a known damaged object, without yielding that CID or silently
-omitting it from a successful result. Verified repair restores normal results.
+Known damage means damage known to the current open store session. It need not
+be persisted across close/reopen; a later session may discover it again.
+Known damage to a stored object MUST make `has`, `stat`, `open` and `read` fail
+with an explicit damage error; `false` and `null` indicate absence only. `list`
+MUST fail when it encounters a known damaged object, without yielding that CID
+or silently omitting it from a successful result. Verified repair restores
+normal results.
 
 Verification is mandatory at acceptance/import/restore. A read may stream before
 rehashing finishes, but a mismatch MUST fail before successful completion.
@@ -214,9 +217,9 @@ retention from recovered committed events before running.
 The semantic layer distinguishes policy erasure from unavailable/corrupt bytes
 and explicitly partial sync views. An object whose bytes do not match its CID
 is damaged, not another valid version. Report damage and fail affected reads
-under [section 6.3](#read-operations) until verified repair. SQLite maintenance
-procedures, not an additional portable quarantine or version format, are defined
-in SQ.
+under [section 6.3](#read-operations) while the damaged object remains stored.
+Verified repair restores normal results. SQLite maintenance procedures, not an
+additional portable quarantine or version format, are defined in SQ.
 
 <a id="collection"></a>
 
@@ -227,8 +230,15 @@ CIDs before deletion; duplicates in keep have no extra effect. The vault, not
 application callers, supplies held roots under the operation lock and holds it
 through deletion. The object store does not interpret event types.
 
-`removed` contains unique canonical CIDs actually made unavailable by the pass;
-order is not significant. There is no `young` result or orphan-age guarantee.
+Collection enumerates accepted object records, including damaged ones, without
+applying the public `list` failure rule. Known object damage alone MUST NOT fail
+the pass: retain and report damaged held objects; delete damaged unheld objects
+normally. Storage, enumeration and transaction failures still surface as errors.
+
+`removed` contains unique canonical CIDs actually deleted by the pass, including
+damaged objects; order is not significant. After deletion, read and presence
+operations report absence even if historical damage diagnostics remain.
+There is no `young` result or orphan-age guarantee.
 Unheld objects may be deleted once reads are quiesced under SQ's maintenance
 rules. Removal is atomic within SQLite and does not promise immediate file
 shrinkage or forensic erasure.
@@ -304,7 +314,10 @@ space and report exceeded limits explicitly.
 8. <a id="do-8"></a> Bad supplied bytes or missing reused roots abort the whole commit.
 9. <a id="do-9"></a> A CID only in event data creates no retention edge.
 10. <a id="do-10"></a> A CID only inside object bytes creates no edge or fetch.
-11. <a id="do-11"></a> Collection preserves every held root.
+11. <a id="do-11"></a> Collection preserves every held root, including known damaged
+    objects, and reports their damage. Damaged unheld objects are deleted and
+    included in `removed`; neither form of object damage alone fails the pass.
+    Deleted CIDs subsequently report absence, even if damage diagnostics remain.
 12. <a id="do-12"></a> Commit interruption accepts all new objects/events or none.
 13. <a id="do-13"></a> Broken chunks, lengths or hashes are reported as damage.
     Known damage makes `has`, `stat`, `open` and `read` fail explicitly; `list`

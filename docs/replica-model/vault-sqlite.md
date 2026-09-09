@@ -62,6 +62,9 @@ identifies event, object, key and fold semantics. Reject unsupported versions
 before application writes or payload interpretation. This unreleased draft
 requires no migration from earlier drafts. Published schema changes require a
 new schema version; semantic changes follow [ES §14](event-store.md#versioning).
+Each published schema revision must separately define the portable source
+versions accepted for restore and import; runtime migration support alone does
+not imply portable compatibility.
 Any supported migration is application-owned and commits schema and version
 together. A failed migration cannot expose a partly upgraded normal runtime.
 
@@ -126,8 +129,10 @@ out-of-range values rather than rounding them.
 ## 4. Identity and keystore
 
 The metadata anchor, format and vault version are immutable. Before application
-writes or identity use, unlock or obtain the seed, derive its fixed `anchor`
-key and require the resulting DID to equal `vault_meta.anchor`.
+data writes or identity use, unlock or obtain the seed, derive its fixed `anchor`
+key and require the resulting DID to equal `vault_meta.anchor`. The only earlier
+application write permitted on open is a supported schema migration under
+[section 8.1](#create-open-and-close), preserving existing logical vault values.
 
 `seed_jwe` stores the exact UTF-8 bytes of the **compact JWE string** produced
 by `@estoc/keystore` version 3, without JSON quoting or a trailing newline.
@@ -161,6 +166,11 @@ snapshot's seed wrapper. Verification unlocks that material in isolation and
 derives the exact anchor. Seed-only recovery restores identity, not history;
 phase-1 history recovery needs a snapshot. Onboarding exposes recovery status.
 A sync store is not a seed backup.
+
+When event damage stops runtime writes, the application MUST explain the stopped
+state and the need to restore a validated snapshot into a new runtime. Only the
+snapshot's history is recovered; without a usable snapshot, phase 1 provides no
+history recovery path.
 
 <a id="events-and-change-tokens"></a>
 
@@ -205,9 +215,11 @@ wrong-vault/generation and future tokens. An empty filtered delta still advances
 the frontier; a consumer checkpoints only after consuming the complete result.
 Positions/tokens never travel in portable state or become sync cursors.
 
-Portable inspection scans the immutable event set in canonical order and uses
-the diagnostic methods without local control tables. It has no change frontier;
-`changes` is rejected under [ES §5.5](event-store.md#changes).
+Portable inspection exposes [ES §10](event-store.md#vault-interface)'s read-only
+`Vault` and scans the immutable event set in canonical order without local
+control tables. It has no change frontier; `changes` is rejected under
+[ES §5.5](event-store.md#changes). Its `conflicting()` result is always empty
+because local rejection diagnostics are not exported.
 
 <a id="objects-and-streams"></a>
 
@@ -254,7 +266,9 @@ Persistent quarantine is not required. Structural database damage fails the
 runtime; event damage follows [ES §5.6](event-store.md#damage-and-conflicts).
 
 GC holds the operation lock from computing current held roots through deleting
-unheld objects and their chunks in one transaction. No acceptance timestamps or
+unheld objects and their chunks in one transaction. Object damage does not block
+collection: retain and report damaged held objects and delete damaged unheld
+objects under [DO §8.3](dasl-objects.md#collection). No acceptance timestamps or
 minimum orphan age are needed. Unpublished temporary data may be discarded when
 no operation uses it. Collection promises logical removal, not file shrinkage
 or forensic erasure. Never remove accepted data merely because a promise failed.
@@ -299,13 +313,17 @@ work. The ownership mechanism is platform-specific, not another storage format.
 Create requires an unused destination and validated seed/anchor/wrapper. It
 publishes complete metadata and fresh control as `ready = 1` in one transaction.
 Open never creates a missing vault. For writable open, acquire ownership and let
-SQLite recover its journal, then inspect the format and versions. Reject
-unsupported versions. For a supported older runtime schema, validate the source runtime under that
-version's rules and run its application-owned migration under ownership in one
-transaction, committing the schema and `user_version` together. Then validate
-the current schema and `kind = 'runtime', ready = 1`, unlock or obtain the seed,
-and verify its anchor before application writes. Validate control and
-reconstruct committed retention and unfinished work under
+SQLite recover its journal. Require the expected `application_id` and a supported
+`user_version`, then validate the database under that version's rules, including
+`format = 'estoc-sqlite'`, a supported `vault_version`, `kind = 'runtime'` and
+`ready = 1`, before any application write. For a supported older runtime schema,
+run its application-owned migration under ownership in one transaction,
+committing the schema and `user_version` together while preserving existing
+logical vault values. This migration is the only application write permitted
+before seed/anchor verification. Then validate the current schema and metadata,
+unlock or obtain the seed, and verify its anchor before application data writes
+or identity use. Validate control and reconstruct committed retention and
+unfinished work under
 [VE §13.1](vault-events.md#open-the-writable-full-runtime) before GC or workers.
 
 An inspector makes no application writes or new local IDs and rejects a runtime
@@ -373,7 +391,10 @@ portable-state selection.
 
 Validate the destination, set ready, finish journal/checkpoint work and close it
 as a standalone main file with rollback-format headers and no required sidecars.
-Then release the operation lock **before** delivering that immutable file.
+Reopen that final file read-only and complete [section 11](#portable-source-validation)'s
+restore/import source validation, then close the verifier. No later cleanup or
+delivery step may modify the verified file. Only after this succeeds, release
+the operation lock **before** delivering that immutable file.
 Success requires completed output; cancellation/truncation is a delivery failure,
 not permission to omit content. Object I/O and output need bounded memory or an
 explicit enforced total-backup limit before allocation.
@@ -389,19 +410,25 @@ protected source read transaction. Open it read-only, disable extension loading
 and use untrusted-schema handling (`trusted_schema=OFF` or equivalent). Bound
 input size and validation work and report limits explicitly, never partial success.
 
-Before querying application data or running integrity checks, inspect the schema
-and require the common ordinary tables and only their allowed columns/keys/indexes.
+Before querying application data or running integrity checks, require the
+expected `application_id`, UTF-8 encoding and a supported `user_version`. Then
+inspect the schema for that version and require the common ordinary tables and
+only their allowed columns/keys/indexes.
 Reject extra tables, including `ANALYZE` statistics tables such as `sqlite_stat1`,
 and executable schema objects; execute no source-supplied SQL, views, triggers,
 migrations or extensions.
 
-Before accepting a source for restore/import, also require supported
-header/encoding/versions, a complete standalone file with rollback-format headers
-(file read and write versions both 1) and no required sidecars, valid
-metadata/wrapper, successful SQLite integrity and foreign-key checks, exact
-canonical event bytes and matching columns, valid known payloads, and locally verified object
-lengths/chunks/hashes. The object set must equal the held-root fold of all source
-events. Validate values rather than trusting source constraints.
+After schema validation, check metadata values for `format = 'estoc-sqlite'`,
+`kind = 'portable'`, `ready = 1` and a supported `vault_version` before interpreting
+event or object payloads. These checks also apply when inspecting only metadata.
+
+Before accepting a source for restore/import, also require a complete standalone
+file with rollback-format headers (file read and write versions both 1) and no
+required sidecars, valid metadata/wrapper, successful SQLite integrity and
+foreign-key checks, exact canonical event bytes and matching columns, valid
+known payloads, and locally verified object lengths/chunks/hashes. The object
+set must equal the held-root fold of all source events. Validate values rather
+than trusting source constraints.
 
 Runtime databases, unpublished files and incomplete snapshots are not portable
 restore/import inputs. Validation establishes integrity, not who selected or
@@ -481,14 +508,17 @@ physical-version guarantees are recorded in the suite's section history.
 1. <a id="sq-1"></a> Native/browser drivers exchange identical portable logical values.
 2. <a id="sq-2"></a> Unsupported versions, folder inputs and extra portable schema fail.
 3. <a id="sq-3"></a> Create refuses existing destinations; open never implicitly creates.
-4. <a id="sq-4"></a> Wrong seed/anchor fails before application writes.
+4. <a id="sq-4"></a> Wrong seed/anchor fails before application data writes or identity use;
+    a completed schema migration is the only permitted earlier application write.
 5. <a id="sq-5"></a> Rewrap interruption leaves the complete old or new wrapper.
 6. <a id="sq-6"></a> Reopen preserves local IDs; restore renews them; malformed control fails.
 7. <a id="sq-7"></a> Cache clearing preserves identity/data; no private keys are persisted.
 8. <a id="sq-8"></a> Independent recovery material derives the same anchor after runtime loss.
 9. <a id="sq-9"></a> A supported migration is atomic and never executes source instructions.
-    Runtime open completes it before current-schema validation and seed unlock;
-    failure exposes no partially upgraded normal runtime.
+    Runtime open checks application/format IDs, supported versions and the existing
+    schema's runtime/ready metadata before migration; portable or unready files
+    fail without migration. It completes migration before current-schema validation
+    and seed unlock; failure exposes no partially upgraded normal runtime.
 
 <a id="events-and-transactions"></a>
 
@@ -515,12 +545,16 @@ physical-version guarantees are recorded in the suite's section history.
 21. <a id="sq-21"></a> Preparation is invisible; unused supplied objects fail full commit.
 22. <a id="sq-22"></a> Repair waits for or cancels affected readers before replacing bytes.
 23. <a id="sq-23"></a> GC preserves held roots and atomically deletes selected unheld objects.
+    Known object damage alone does not block it; damaged held objects remain and
+    are reported, while damaged unheld objects are deleted.
 24. <a id="sq-24"></a> Each read completes unchanged or explicitly fails/cancels during writes or maintenance.
     An ordinary serialized commit can complete without a paused consumer resuming.
 25. <a id="sq-25"></a> A failed lazy hash or interrupted read never reports successful completion.
 26. <a id="sq-26"></a> A second owner is excluded, including during offline inspection.
 27. <a id="sq-27"></a> Close stops old handles and ends database access before releasing ownership.
 28. <a id="sq-28"></a> Storage/event damage never becomes an empty complete vault.
+    On event damage, the application explains stopped writes and snapshot-only
+    history recovery, including the absence of recovery without a usable snapshot.
 
 <a id="backup-import-and-restore"></a>
 
@@ -531,7 +565,12 @@ physical-version guarantees are recorded in the suite's section history.
 30. <a id="sq-30"></a> Excluded local/unheld sentinel bytes never enter the fresh portable file.
 31. <a id="sq-31"></a> Rewrap/erase/GC cannot mix the export cut; delivery holds no operation lock.
 32. <a id="sq-32"></a> Output opens without sidecars; incomplete/cancelled output is not success.
+    After the destination writer closes, the final file passes full portable
+    source validation on read-only reopen; later cleanup cannot modify it.
 33. <a id="sq-33"></a> Stable-source validation rejects hostile schema and malformed values.
+    Portable inspection checks application ID, encoding and schema version before
+    interpreting schema, and metadata format/kind/readiness and semantic version
+    before interpreting payloads.
     Portable inspection rejects views, triggers or other forbidden schema before
     querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.

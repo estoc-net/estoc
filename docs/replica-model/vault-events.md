@@ -2965,7 +2965,7 @@ list when no new objects are needed; `Vault.events` is read-only.
    version checks and any supported schema upgrade before validating the current
    schema, ready state, metadata and seed wrapper;
 3. unlock or obtain the seed and verify its derived anchor before application
-   writes;
+   data writes or identity use;
 4. validate local `replica_id` and `store_generation` and discard only unpublished
    staging. Normal reopen preserves local IDs; create and restore initialize
    fresh ones under

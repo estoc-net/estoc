@@ -350,7 +350,9 @@ contract. Recovery uses a validated snapshot restored into a new runtime under
 [SQ §6](vault-sqlite.md#reads-damage-and-collection).
 
 `conflicting()` reports observed rejected values with the accepted value as
-`kept`. This diagnostic history is local and may be cleared. Never use row order
+`kept`. This diagnostic history is local and may be cleared. Portable snapshot
+inspection always returns an empty array from `conflicting()` because rejected
+values and their diagnostic history are not exported. Never use row order
 or a read filter to pick another accepted value, including after structural
 damage. A conflict is not permission to overwrite an accepted event.
 
@@ -429,11 +431,20 @@ interface Vault {
 }
 ```
 
-`commit` validates known payloads, prepares/verifies supplied objects and checks
-all roots, including reused ones. Every supplied object must be referenced by
-at least one draft. New objects, the entire event batch and local positions
-accept in one transaction under the batch rules above. Validation failure or
-rollback accepts neither new objects nor events; private preparation may remain.
+Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
+snapshot's immutable metadata; `events` provides `scan`, `damaged` and
+`conflicting`, and `objects` provides `open`, `read`, `stat`, `has` and `list`
+under their ordinary read and damage rules. `commit` and `events.changes` MUST
+always reject with `UnsupportedOperation`, without consuming object sources or
+minting local IDs, positions or tokens. No local `EventStore.author` is exposed
+or invented; historical event authors remain unchanged.
+
+For a writable runtime, `commit` validates known payloads, prepares/verifies
+supplied objects and checks all roots, including reused ones. Every supplied
+object must be referenced by at least one draft. New objects, the entire event
+batch and local positions accept in one transaction under the batch rules above.
+Validation failure or rollback accepts neither new objects nor events; private
+preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
 
 The vault-wide operation lock serializes semantic mutations from preflight
@@ -588,3 +599,6 @@ Storage procedures are tested under SQ rather than redefined here.
 30. <a id="es-30"></a> A cancelled paused reader cannot resume as a successful unprotected read.
 31. <a id="es-31"></a> Independent clients cannot bypass runtime ownership; a broker is optional.
 32. <a id="es-32"></a> Offline inspection excludes a later writer; separate immutable snapshots need no live owner.
+    Portable inspection exposes the read-only `Vault` members, no local author,
+    and an empty `conflicting()` result. Every `commit` and `changes` call fails
+    with `UnsupportedOperation` without consuming sources or minting local IDs.
