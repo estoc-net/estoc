@@ -147,7 +147,7 @@ Canonical order is used only where stated.
 
 ### 3.1 Vault identity
 
-The vault identity is the anchor DID in `config.json`. Two vaults are the
+The vault identity is the anchor DID in `vault_meta.anchor`. Two vaults are the
 same identity exactly when their anchor DIDs are equal.
 
 On unlock, the runtime derives the `anchor` key from the seed and MUST verify
@@ -2586,7 +2586,7 @@ max(empty set) = 0
 Allocation and inbound commit MUST be serialized across the active writer.
 A batch assigns distinct ordinals in observation order. Aborted reservations
 may leave gaps; contiguous numbering is not required. A cache may accelerate
-allocation, but restart, deletion of `local/`, or a new `replica_id` or
+allocation, but restart, clearing local caches, or a new `replica_id` or
 `store_generation` MUST NOT reset the recovered high-water mark or reuse an
 ordinal already present in accepted history.
 
@@ -2934,7 +2934,7 @@ retention edge unless it also appears in an accepted event's `roots`.
 
 Version 3 does not represent local body eviction as a portable event. A local
 storage policy that deletes a non-erased retained object makes the phase-1
-vault incomplete. It may be repaired from a verified folder import or backup.
+vault incomplete. It may be repaired from a verified portable SQLite import or backup.
 Deferred `vault-sync/1.0` may later provide another repair source. Local
 absence never authorizes collection elsewhere.
 
@@ -2958,11 +2958,15 @@ list when no new objects are needed; `Vault.events` is read-only.
 
 ### 13.1 Open the writable full runtime
 
-1. verify folder/store version and anchor;
-2. unlock or obtain the seed;
-3. acquire the exclusive writer lock before creating mutable local state;
-4. complete backend recovery and any import publication barrier, then load or
-   mint local `replica_id` and `store_generation`;
+1. acquire exclusive runtime ownership and open SQLite, allowing its required
+   journal recovery;
+2. validate the database format, schema, ready state, metadata and seed wrapper;
+3. unlock or obtain the seed and verify its derived anchor before application
+   writes;
+4. validate local `replica_id` and `store_generation`, finish any supported
+   schema upgrade and discard only unpublished staging. Normal reopen preserves
+   local IDs; create and restore initialize fresh ones under
+   [vault-sqlite.md section 8](vault-sqlite.md#ownership-and-lifecycle);
 5. fold portable state and reconstruct committed held roots before permitting
    GC;
 6. project receipt-integrity conflicts and recover the vault-wide ordinal
@@ -3138,9 +3142,11 @@ Merge is event-store union by `eventId`. It never:
 - rewrites an event;
 - removes another replica's decision;
 - treats another author as read-only history; or
-- adopts a segment as opaque state.
+- adopts database pages or physical row order as authoritative state.
 
-After merge, every fold is recomputed from the union.
+After merge, every fold reflects the complete union. A cached projection must
+be updated or invalidated in the acceptance transaction and rebuilt before use
+if invalid; an incremental result must equal the pure fold of that union.
 
 <a id="172-object-merge"></a>
 
@@ -3156,7 +3162,7 @@ No content traversal is implied. An erased message/root relation does not
 revive merely because an older source still has the bytes.
 
 Missing non-erased bytes remain an integrity/availability condition and may
-be repaired from a verified folder import or backup. Deferred
+be repaired from a verified portable SQLite import or backup. Deferred
 `vault-sync/1.0` may later provide another repair source.
 
 <a id="173-replica-synchronization-deferred"></a>
@@ -3175,18 +3181,22 @@ implicitly by a phase-1 runtime.
 
 ### 14.4 Restore
 
-A portable folder restore creates a new local `replica_id` and
-`store_generation` unless the operation is an exact move whose old writer is
-permanently stopped. The restored runtime derives every mediation and
-communication key, reconciles required recipients using ordinary Coordinate
-Mediation, drains the account-scoped mailbox, and resumes eligible outbox work.
+A portable SQLite restore creates a new local `replica_id` and
+`store_generation`. An exact local move is a separate operation that may retain
+them only with the old writer permanently stopped under
+[vault-sqlite.md section 12.3](vault-sqlite.md#exact-local-move). The restored
+runtime derives every mediation and communication key, reconciles required
+recipients using ordinary Coordinate Mediation, drains the account-scoped
+mailbox, and resumes eligible outbox work.
 It also reconciles unfinished committed inbound work under [section 13.1](#open-the-writable-full-runtime),
 including observations already pickup-ACKed before the snapshot. Local queue
 state is not a recovery source.
 
 No previous process must be online. Mediator retention still bounds messages
-that were never committed to the vault. Seed/recovery material must be backed
-up independently of the readable event/object folder.
+that were never committed to the vault. The seed recovery credential must be
+retained independently of the active runtime; a portable SQLite backup includes
+its encrypted wrapper. Recovery verification follows
+[vault-sqlite.md section 4.2](vault-sqlite.md#recovery-material-and-product-requirement).
 
 <a id="175-forked-author"></a>
 
@@ -3210,8 +3220,8 @@ author remain unchanged.
   confer ownership of a DID.
 - `replica_id` and event author are operational provenance, not credentials or
   peer-visible addresses.
-- The readable folder contains plaintext retained message content and
-  attachments unless surrounding storage encrypts it.
+- Runtime and portable SQLite databases contain plaintext retained message
+  content and attachments unless surrounding storage encrypts them.
 - A rendezvous DID is intentionally disclosed and correlatable within its
   audience. Its Peer long form avoids DNS resolution for that DID; resolving
   an external peer or mediator may still involve a network resolver.
@@ -3431,9 +3441,9 @@ There is no migration requirement from an earlier event vocabulary.
     allocator selects its independent route when creating the successor DID.
 52. <a id="ve-52"></a> Erasure is checked before object presence; late roots receive equivalent
     erasure closure.
-53. <a id="ve-53"></a> Restore from a readable folder creates a new local author unless it is an
-    exact move, reconciles standard mediation/pickup and resumes eligible
-    outbox work.
+53. <a id="ve-53"></a> Restore from portable SQLite creates a new local author, reconciles standard
+    mediation/pickup and resumes eligible outbox work; an exact local move follows
+    its separate stopped-source rule.
 54. <a id="ve-54"></a> Phase 1 requires neither `replica-mediation/1.0` nor `vault-sync/1.0`.
 55. <a id="ve-55"></a> Shuffling the same event set leaves every phase-1 fold result unchanged.
 
@@ -3448,7 +3458,7 @@ There is no migration requirement from an earlier event vocabulary.
     package's delivery retention contribution for that message ID without waiting for
     ACK; message body and attachment lifetimes remain separate.
 58. <a id="ve-58"></a> Commit and collection share the writer lock; GC computes current held roots
-    under that lock and cannot unlink a retained object or overlap acceptance
+    under that lock and cannot delete a retained object or overlap acceptance
     and append within a commit.
 59. <a id="ve-59"></a> A successfully appended inbound event survives immediate process restart
     before the mediator pickup acknowledgment is sent.
@@ -3465,7 +3475,7 @@ There is no migration requirement from an earlier event vocabulary.
 63. <a id="ve-63"></a> Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
     Contact decisions or DID/route retirement never select a new execution scope.
-64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of `local/`,
+64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of local caches,
     clock rollback, package retirement, content erasure and envelope collection.
     Retained event skeletons prevent resubmission or replacement of that message ID.
 65. <a id="ve-65"></a> One package's committed `delivery.submitted` completes its entire message ID and
@@ -3486,7 +3496,7 @@ There is no migration requirement from an earlier event vocabulary.
 71. <a id="ve-71"></a> Each new duplicate observation receives a fresh ordinal; exact re-ingest
     does not. The logical group's minimum complete `(integer ordinal, author)`
     key orders future ACKs without changing any already frozen ACK array.
-72. <a id="ve-72"></a> Restore, restart and loss of `local/` recover the ordinal high-water mark
+72. <a id="ve-72"></a> Restore, restart and loss of local caches recover the ordinal high-water mark
     across all historical authors. Cross-author equal ordinals survive import
     and sort by author on a tie; allocation resumes above the union's maximum.
 

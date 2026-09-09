@@ -36,7 +36,7 @@ and only when, they appear in all capitals.
 - [7. Event roots and retention](#event-roots-and-retention)
 - [8. Write ordering, damage and collection](#write-ordering-damage-and-collection)
 - [9. Canonical JSON stored as raw DASL objects](#canonical-json-stored-as-raw-dasl-objects)
-- [10. Folder representation](#folder-representation)
+- [10. SQLite representation](#sqlite-representation)
 - [11. Deferred encodings and transports](#deferred-encodings-and-transports)
 - [12. Security and resource limits](#security-and-resource-limits)
 - [13. Required conformance cases](#required-conformance-cases)
@@ -57,7 +57,7 @@ profile defines:
 - the `ObjectStore` interface;
 - explicit event retention roots;
 - validation, collection and damage behavior;
-- folder serialization; and
+- SQLite representation; and
 - the boundary around deferred encodings and transports.
 
 This profile does **not** define:
@@ -72,8 +72,8 @@ This profile does **not** define:
 - remote authorization; or
 - vault synchronization encryption.
 
-[event-store.md](event-store.md) defines how events reference objects. [vault-folder.md](vault-folder.md)
-defines the readable folder representation. [vault-sync.md](vault-sync.md) defines how exact
+[event-store.md](event-store.md) defines how events reference objects. [vault-sqlite.md](vault-sqlite.md)
+defines SQLite persistence and portable snapshots. [vault-sync.md](vault-sync.md) defines how exact
 object bytes are hidden and transferred through an untrusted sync store.
 
 The normative DASL dependency is DASL CIDs: <https://dasl.ing/cid.html>.
@@ -198,25 +198,20 @@ type ObjectInfo = {
 };
 
 interface ObjectStore {
-  /** Store exact bytes as one whole-resource raw DASL object. */
   putRaw(source: ByteSource): Promise<ObjectInfo>;
 
-  /** Verify and atomically accept exact encoded bytes under an expected CID. */
   putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
 
-  /** Open exact portable object bytes as a stream. */
   open(cid: Cid): Promise<ReadableStream<Uint8Array> | null>;
 
-  /** Read a bounded object; fail rather than exceed maxBytes. */
   read(cid: Cid, maxBytes: number): Promise<Uint8Array | null>;
 
   stat(cid: Cid): Promise<ObjectInfo | null>;
   has(cid: Cid): Promise<boolean>;
   list(): AsyncIterable<Cid>;
 
-  /** Retain the exact keep set; no implicit content traversal. */
   collect(keep: Iterable<Cid>): Promise<{
-    unlinked: Cid[];
+    removed: Cid[];
     young: Cid[];
   }>;
 }
@@ -285,19 +280,19 @@ operation to renew local orphan age.
 `null` when no accepted object exists. It MUST NOT return a partially written
 object.
 
-Verification is mandatory at acceptance: `putRaw`, `putObject` and folder
-import. `open` MAY stream bytes of an already accepted object before the digest
-is rechecked. A backend that rechecks lazily MUST fail the stream before
+Verification is mandatory at acceptance: `putRaw`, `putObject` and SQLite
+import/restore. `open` MAY stream bytes of an already accepted object before
+the digest is rechecked. A backend that rechecks lazily MUST fail the stream before
 completion when the digest does not match. A consumer MUST NOT treat streamed
 bytes as verified until the stream completes successfully.
 
 `read(cid, maxBytes)` MUST determine or bound the size before allocating more
 than `maxBytes`. Exceeding the bound is an error, not a truncated success.
 
-Object streams and bounded reads use the read protection in [event-store.md section 10](event-store.md#vault-interface). Collection cannot unlink their bytes during the read. Within an
+Object streams and bounded reads use the read protection in [event-store.md section 10](event-store.md#vault-interface). Collection cannot delete their bytes during the read. Within an
 active writer runtime, a caller's stream lifetime does not hold its operation
 lock; a read-only stream opened without a writer follows that section's
-rule for excluding a later writer or sharing latches with it.
+exclusive inspection ownership rule, which excludes a later writer.
 
 <a id="event-roots-and-retention"></a>
 
@@ -340,10 +335,12 @@ when there are no new objects, under [event-store.md section 10](event-store.md#
 are accepted within the commit that references them; collection never runs
 concurrently with that commit.
 
-A failure or crash after object acceptance but before event commit may leave
-an orphan. Reopen MUST reconstruct every committed event and the resulting
-held-root set before enabling collection. A recovered committed reference keeps
-its object; otherwise the accepted object follows the orphan-grace policy.
+SQLite accepts a commit's new objects and event batch in the same transaction.
+A rollback accepts neither; a crash before resolution may leave the entire
+commit or none. Unpublished chunks are staging, not accepted orphans. A
+successful standalone internal put or `commit(objects, [])` may leave accepted
+unheld objects subject to orphan grace. Reopen MUST reconstruct committed
+retention before enabling collection.
 
 <a id="missing-and-damaged-objects"></a>
 
@@ -356,7 +353,7 @@ semantic layer decides whether absence means:
 - missing or corrupt local data; or
 - not yet fetched under an explicitly partial local view.
 
-A file or row whose bytes do not match its CID is damaged, not an alternate
+An object whose stored bytes do not match its CID is damaged, not an alternate
 version. It MUST be excluded from normal reads and SHOULD be quarantined before
 repair.
 
@@ -369,19 +366,22 @@ set. It does not traverse links. Duplicate values in `keep` have no additional
 effect. Every input CID MUST already be canonical; an invalid CID fails the
 operation before collection begins.
 
-The returned `unlinked` array contains exact CIDs physically made unavailable
-by this collection pass. The returned `young` array contains unkept CIDs that
-were retained only because their orphan grace period had not elapsed. Both
+The returned `removed` array contains exact CIDs whose accepted mappings and
+unlatched physical bytes were deleted by this collection pass. The returned
+`young` array contains unkept CIDs that were retained only because their orphan
+grace period had not elapsed. Both
 arrays MUST contain canonical unique CIDs. Their order is not semantically
 significant. An implementation SHOULD return them in binary-CID byte order for
 deterministic diagnostics.
 
 An active read latch causes collection to skip that CID under [event-store.md section 10](event-store.md#vault-interface). CIDs skipped because of read latches appear in neither output
-array. Release of the latch does not itself trigger unlink.
+array. Release of the latch does not itself trigger deletion.
 
-The store MAY unlink an unkept object only after its documented orphan grace
-period. Grace covers abandoned writes after failure or crash. Live operations
-use the writer-lock boundaries in [event-store.md section 10](event-store.md#vault-interface).
+The store MAY remove an unkept accepted object only after its documented orphan
+grace period. Grace covers accepted objects awaiting a later reference; incomplete
+staged writes are not accepted. Live operations use the writer-lock boundaries
+in [event-store.md section 10](event-store.md#vault-interface). Deletion is atomic
+within SQLite and does not promise database-file shrinkage or forensic erasure.
 
 The semantic layer computes `keep` from [vault-events.md](vault-events.md); the object store
 MUST NOT inspect event types.
@@ -419,26 +419,28 @@ cid   = rawCid(bytes)
 The raw codec is intentional. Changing the encoded bytes changes the CID;
 Estoc MUST NOT transcode a stored document and preserve its old CID.
 
-<a id="folder-representation"></a>
+<a id="sqlite-representation"></a>
 
-## 10. Folder representation
+## 10. SQLite representation
 
-The canonical readable folder stores each accepted portable object as one
-path:
+[vault-sqlite.md section 6](vault-sqlite.md#objects-and-streams) defines the
+object mappings, immutable physical versions and contiguous BLOB chunks in the
+same database as events and the seed wrapper. Runtime and portable databases
+use that representation. Concatenating a physical version's chunks yields one
+exact resource stream under its raw CID; chunk numbers and data IDs are not
+portable content identities or references.
 
-```text
-objects/<canonical-dasl-cid>
-```
+Acceptance verifies canonical CID, chunk sequence, total length and digest
+before publishing a mapping. Portable snapshots include exactly the held
+objects, with newly assigned physical IDs and no staging, quarantine or
+acceptance times. They contain neither an external object directory nor hidden
+DAG-PB/UnixFS nodes or independently addressed child chunks.
 
-The file contents are the exact complete resource bytes identified by the raw
-CID.
-
-A folder backend MUST verify filename against bytes before acceptance. It MUST
-reject hidden portable child chunks, DAG-PB nodes and UnixFS metadata.
-
-A backend may store an object internally in extents, but export MUST create one
-complete file or stream at the object path. The folder representation has no
-portable extent directory.
+Repair publishes a new physical version. Latches protect both the CID and the
+version captured by a stream, and quarantine must check the mapping still
+names the damaged version before removing it. Collection removes the mapping
+and its unlatched bytes in a single transaction; cleanup never follows an
+incomplete local projection or deletes a version still used by a reader.
 
 <a id="deferred-encodings-and-transports"></a>
 
@@ -474,9 +476,9 @@ A conforming implementation MUST bound at least:
 A raw object can contain hostile file formats or embedded links. The object
 store neither executes content nor fetches its links.
 
-The store MUST hash the exact bytes it commits. It MUST NOT rely on a filename,
-HTTP `Content-Digest`, server claim or sync descriptor without local
-verification.
+The store MUST hash the exact bytes it accepts. It MUST NOT rely on a stored
+CID column, HTTP `Content-Digest`, server claim or sync descriptor without
+local verification.
 
 <a id="required-conformance-cases"></a>
 
@@ -496,8 +498,8 @@ A conforming implementation MUST pass at least these cases:
    `dag-pb`, non-SHA-256 and wrong digest length are rejected.
 4. <a id="do-4"></a> A raw CID with one changed payload byte is rejected without exposing a
    partial object.
-5. <a id="do-5"></a> Filesystem, SQL, IndexedDB and OPFS backends export identical bytes and CID
-   for the same object.
+5. <a id="do-5"></a> Native and browser SQLite drivers export identical bytes and CID for the
+   same object; in-memory semantic references produce the same values.
 6. <a id="do-6"></a> Backend internal extent size does not affect CID or exported bytes.
 7. <a id="do-7"></a> A large object can be put, opened, verified and exported with bounded
    memory.
@@ -512,10 +514,10 @@ A conforming implementation MUST pass at least these cases:
 10. <a id="do-10"></a> A CID embedded in object content but absent from event `roots` is not
     implicitly retained or fetched.
 11. <a id="do-11"></a> Collection never removes an exact CID in the current held-root set.
-12. <a id="do-12"></a> A crash after object acceptance but before event append leaves only a
-    grace-protected orphan.
-13. <a id="do-13"></a> A folder object whose filename does not match its bytes is reported as
-    damage.
+12. <a id="do-12"></a> A crash during a vault commit leaves all its newly accepted objects and
+    events or none; staged chunks never become an accepted orphan.
+13. <a id="do-13"></a> A SQLite object whose chunks, total length or digest do not match its
+    accepted CID is reported as damage.
 14. <a id="do-14"></a> A private DASL object is not exposed through RASL without a separate
     explicit publication decision.
 15. <a id="do-15"></a> A core reader rejects a BDASL/BLAKE3 identifier.
@@ -529,13 +531,13 @@ A conforming implementation MUST pass at least these cases:
 
 17. <a id="do-17"></a> A successful object put survives immediate process restart; a
     pre-resolution crash exposes either the whole object or no accepted object.
-18. <a id="do-18"></a> Collection waits while a commit pauses between object acceptance and event
-    append, even after orphan grace expires; on success the event retains the
-    object.
+18. <a id="do-18"></a> Collection waits while a commit stages verified objects before its final
+    transaction, even after time passes beyond orphan grace; successful object
+    and event acceptance is atomic.
 19. <a id="do-19"></a> Collection computes its held-root set after acquiring the writer lock and
-    holds it through unlink; a reference commit completes before that fold or
-    starts after the collection pass.
+    holds it through the deletion transaction; a reference commit completes
+    before that fold or starts after the collection pass.
 20. <a id="do-20"></a> Reopen recovery reconstructs committed-event retention before enabling GC.
-21. <a id="do-21"></a> A crash before event commit makes the accepted unreferenced object an
-    ordinary grace-protected orphan after recovery; a crash after event commit
-    keeps the object through the recovered event root.
+21. <a id="do-21"></a> Recovery discards unpublished staging without changing accepted data; a
+    recovered committed root keeps its object, while a successfully accepted
+    unreferenced object follows the documented local orphan-grace clock.

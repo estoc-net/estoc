@@ -2,6 +2,7 @@
 
 Status: **draft**. Phase 1 has one active writable full vault runtime.
 The suite contains six phase-1 specifications and two deferred extensions.
+SQLite is the sole persistent vault and portable interchange format.
 This page and the reading guides are informative navigation; the linked
 specification sections define the requirements.
 
@@ -9,7 +10,9 @@ The implemented version-2 vault is documented separately in
 [event-store.md](../event-store.md), [vault-folder.md](../vault-folder.md)
 and [vault-events.md](../vault-events.md). Those documents describe the existing
 implementation; the version-3 drafts in this directory do not assert that
-their features are implemented. Each document states its own version and status.
+their features are implemented. Existing version-3 folder code also predates
+this SQLite revision and is not evidence of SQLite conformance. Each document
+states its own version and status.
 
 <a id="model-overview"></a>
 
@@ -27,7 +30,7 @@ receipt information. See the [vault model](vault-events.md#model),
 | Layer | Documents | Responsibility |
 | --- | --- | --- |
 | Storage primitives | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event envelope, commit, store interfaces, exact object identity and bytes |
-| File representation | [Vault folder](vault-folder.md) | Reference folder backend, readable interchange and backup |
+| Persistence and interchange | [SQLite vault](vault-sqlite.md) | Single-database storage, atomic publication, portable backup and recovery |
 | Portable application state | [Vault events](vault-events.md) | Event payloads, evidence validation, folds and held roots |
 | Runtime protocols and policy | [Delivery](distributed-delivery.md), [Relationships and addresses](relationships.md) | Sending, receipt, acknowledgment, relationship formation and address policy |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Future per-replica pickup and encrypted remote synchronization |
@@ -42,11 +45,11 @@ handshake. Public/rendezvous addresses remain a discovery concept in that profil
 | Task | Suggested path |
 | --- | --- |
 | Understand the system | [Vault model](vault-events.md#model) → [relationship model](relationships.md#what-it-is-for) → [commit and ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
-| Implement storage | [DASL identity and ObjectStore](dasl-objects.md#reading-guide) → [EventStore and Vault](event-store.md#reading-guide) → [folder backend and interchange](vault-folder.md#reading-guide) |
+| Implement storage | [DASL identity and ObjectStore](dasl-objects.md#reading-guide) → [EventStore and Vault](event-store.md#reading-guide) → [SQLite schema and interchange](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas and folds by domain](vault-events.md#reading-guide) → [open and recovery procedures](vault-events.md#procedures) |
 | Implement sending | [Send procedure](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
 | Implement receiving | [Receive procedure](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) and [receipt gates](relationships.md#uniform-receipt) → [binding evidence](vault-events.md#receipt-and-relationship-evidence) → [scope](distributed-delivery.md#address-chains-and-observation-membership) and [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
-| Implement backup and recovery | [Recovery material](vault-folder.md#recovery-material-and-product-requirement) → [snapshot and export](vault-folder.md#snapshot-and-export) → [import and restore](vault-folder.md#import-and-restore) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
+| Implement backup and recovery | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [snapshot and export](vault-sqlite.md#snapshot-and-export) → [restore and import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
 | Explore future replication | Read the phase-1 documents first, then [replica mediation](replica-mediation.md#reading-guide) and [vault sync](vault-sync.md#reading-guide). Neither extension is required for phase 1. |
 
 <a id="rule-ownership"></a>
@@ -61,8 +64,9 @@ This index records the existing division of responsibilities.
 | --- | --- | --- |
 | Event envelope, event IDs and canonical order | [ES §§3–4](event-store.md#the-event) | [VE identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) |
 | Process durability, writer lock and commit | [ES §2.1](event-store.md#commit-and-durability-terminology), [ES §10](event-store.md#vault-interface) | [DD commit boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table), [VE receive-lock scope](vault-events.md#receipt-and-relationship-evidence) |
-| Raw CID identity and ObjectStore | [DO §§3–6](dasl-objects.md#accepted-dasl-cids) | [VF object paths](vault-folder.md#dasl-object-paths), [ES object interface](event-store.md#objectstore) |
-| Folder bytes, import and restore | [VF](vault-folder.md#reading-guide) | [ES interchange contract](event-store.md#interchange) |
+| Raw CID identity and ObjectStore | [DO §§3–6](dasl-objects.md#accepted-dasl-cids) | [SQ object rows and streams](vault-sqlite.md#objects-and-streams), [ES object interface](event-store.md#objectstore) |
+| SQLite schema, export, import and restore | [SQ](vault-sqlite.md#reading-guide) | [ES interchange contract](event-store.md#interchange) |
+| Metadata, wrapper and local control | [SQ identity](vault-sqlite.md#identity-and-keystore), [SQ local state](vault-sqlite.md#local-state-and-projections) | [ES typed API](event-store.md#metadata-and-keystore), [VE open](vault-events.md#open-the-writable-full-runtime) |
 | Vault-event fields, typed references and folds | [VE](vault-events.md#reading-guide) | [DD wire procedures](distributed-delivery.md#reading-guide), [RZ address policy](relationships.md#reading-guide) |
 | Stored message and attachment normalization | [VE §8](vault-events.md#stored-message-document) | [DD hash projections](distributed-delivery.md#canonical-projections-and-hashes) |
 | Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
@@ -87,7 +91,9 @@ This index records the existing division of responsibilities.
 ## Conformance and references
 
 Each specification ends with required conformance cases grouped by topic.
-Existing case numbers are retained. A prefix identifies the document, so
+Existing case identities are retained where the contract continues; the retired
+folder cases are replaced as described in the section history. A prefix identifies
+the document, so
 [RZ-42](relationships.md#rz-42) is case 42 in the relationship profile, and
 [VE-129](vault-events.md#ve-129) is vault-events case 129.
 The relationship profile retains its historical `RZ` prefix for section
@@ -97,7 +103,7 @@ shorthand and case IDs so existing review references still identify the same rul
 | --- | --- | --- |
 | ES | [Event store](event-store.md#required-conformance-cases) | Phase 1 |
 | DO | [DASL objects](dasl-objects.md#required-conformance-cases) | Phase 1 |
-| VF | [Vault folder](vault-folder.md#required-conformance-cases) | Phase 1 |
+| SQ | [SQLite vault](vault-sqlite.md#required-conformance-cases) | Phase 1 |
 | VE | [Vault events](vault-events.md#required-conformance-cases) | Phase 1 |
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
 | RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
@@ -122,6 +128,37 @@ Record moved and retitled numbered sections in the section history.
 <a id="section-history"></a>
 
 ## Section history
+
+The unreleased version-3 `vault-folder.md` has been replaced by
+[vault-sqlite.md](vault-sqlite.md). The earlier folder specification is available
+in [the pre-SQLite revision](https://github.com/estoc-net/estoc/blob/4a0dae97975f30f3d6f4a4346ae47f6ae744da26/docs/replica-model/vault-folder.md).
+It is historical documentation, not an accepted format, migration input or
+second backend. Version-2 documents outside this directory still describe their
+historical implementation.
+
+This intentionally retires that file's named anchors and `VF-1`–`VF-43` cases;
+`SQ` cases have new identities and are not aliases. Existing `ES`/`DO` case
+numbers continue to identify their semantic subjects, with atomicity, reader
+ownership and interchange assertions updated to the SQLite contract. Passing
+old folder tests does not establish the revised conformance.
+
+| Previous contract | Current definition |
+| --- | --- |
+| Folder layout, JSONL segments, path diagnostics and change tokens | [SQLite schema](vault-sqlite.md#common-schema), [events and tokens](vault-sqlite.md#events-and-change-tokens); physical folder cases retired |
+| Config and keystore files, arbitrary `FileStore` | [Typed metadata and keystore](event-store.md#metadata-and-keystore), [identity and wrapper rows](vault-sqlite.md#identity-and-keystore); opaque-file API retired |
+| Object files, acceptance stamps and unlink | [Object rows, streams and collection](vault-sqlite.md#objects-and-streams); `ObjectStore.collect` reports `removed` instead of `unlinked` |
+| Object acceptance before an independently published event batch | [Atomic vault commit](vault-sqlite.md#atomic-vault-commit); rollback accepts neither new objects nor events |
+| Folder import journal and incomplete in-place union recovery | [Atomic SQLite import](vault-sqlite.md#import); private staging may be discarded, accepted union is always whole |
+| Shared independent live readers | [One owner and brokered reads](vault-sqlite.md#ownership-and-lifecycle); standalone inspection takes exclusive ownership |
+| Folder snapshot and database-to-folder round trip | [Fresh portable SQLite](vault-sqlite.md#snapshot-and-export); exactly held objects, no runtime control or deleted-page residue |
+| Deleting `local/` to reset identity | [Explicit identity reset](vault-sqlite.md#local-state-and-projections); ordinary cache clearing preserves both IDs |
+
+Event-store section 8 is now metadata/keystore/local state, section 11.1 is the
+SQLite round trip, and DASL-object section 10 is SQLite representation. Their
+former folder/FileStore anchors are intentionally retired. Event envelopes,
+raw CIDs, key derivations, domain folds and encrypted wire formats are unchanged;
+the deferred sync root maps its logical configuration into SQLite metadata.
+
 
 `relationships.md` was previously named `rendezvous.md`. The filename change
 preserves its section numbers, named anchors and `RZ` case IDs. Earlier reviews

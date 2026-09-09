@@ -3,6 +3,10 @@
 The vault as an event store: the code form of
 [`docs/event-store.md`](../../docs/event-store.md).
 
+**The current v3 specification now uses [SQLite](../../docs/replica-model/vault-sqlite.md).**
+The implementation described below follows the earlier unreleased folder model;
+SQLite storage and interchange are not implemented here yet.
+
 **Version 3 is being built beside this**, under `@estoc/event-store/v3`,
 as the code form of
 [`docs/replica-model/event-store.md`](../../docs/replica-model/event-store.md):
@@ -30,7 +34,7 @@ function called only under the lock; and `ingest`. `MemoryVault` is
 the three memory stores under one runtime; `Runtime` builds the same
 over any three. Portable files (§8.1) are `FileStore`, `checkPath`
 and `MemoryFileStore`. And the folder of
-[`docs/replica-model/vault-folder.md`](../../docs/replica-model/vault-folder.md),
+[the earlier v3 folder specification](https://github.com/estoc-net/estoc/blob/4a0dae97975f30f3d6f4a4346ae47f6ae744da26/docs/replica-model/vault-folder.md),
 so far its events and objects: the layout (§3) as `kindOf(path)` — config,
 keystore, segment, object, import, local, damage, or opaque — with the
 root names beside it; segment lines (§6, §8) as `decodeLine`,

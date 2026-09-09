@@ -4,8 +4,8 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1** — clean-break event, object and interchange model
-for one active writable Estoc vault runtime. The author model remains
+Status: **draft, phase 1** — clean-break event and object model with SQLite as the sole
+persistent vault and interchange format for one active writable Estoc runtime. The author model remains
 replication-ready, while network replica synchronization is deferred.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
@@ -19,9 +19,9 @@ deferred extensions:
 
 | document | defines |
 | --- | --- |
-| [event-store.md](event-store.md) | the medium-independent event and vault-store interfaces |
+| [event-store.md](event-store.md) | event and vault-store interfaces and their observable semantics |
 | [dasl-objects.md](dasl-objects.md) | the pinned raw DASL CID, object and retention profile |
-| [vault-folder.md](vault-folder.md) | the readable `.estoc/` interchange serialization |
+| [vault-sqlite.md](vault-sqlite.md) | the SQLite runtime, portable schema and recovery procedures |
 | [vault-events.md](vault-events.md) | the meaning and folds of the vault's own event types |
 | [distributed-delivery.md](distributed-delivery.md) | vault-first send, packaging, retry and end-to-end acknowledgment |
 | [relationships.md](relationships.md) | Symmetric relationships, pinned resolution and early address-rotation policy |
@@ -29,7 +29,7 @@ deferred extensions:
 | [vault-sync.md](vault-sync.md) | **deferred:** encrypted anti-entropy through an untrusted sync store |
 
 Dependency runs downward. [dasl-objects.md](dasl-objects.md) defines the object layer used
-here. [vault-folder.md](vault-folder.md) serializes this model. [vault-events.md](vault-events.md) defines
+here. [vault-sqlite.md](vault-sqlite.md) persists and exports this model. [vault-events.md](vault-events.md) defines
 payloads above it. The delivery, mediation and sync protocols and the relationship profile use
 the event and object primitives but do not change their meaning.
 
@@ -54,7 +54,7 @@ the event and object primitives but do not change their meaning.
 - [5. EventStore](#eventstore)
 - [6. Folds and local caches](#folds-and-local-caches)
 - [7. ObjectStore](#objectstore)
-- [8. Portable files and local state](#portable-files-and-local-state)
+- [8. Metadata, keystore and local state](#metadata-and-local-state)
 - [9. Deferred extension stores](#deferred-extension-stores)
 - [10. Vault interface](#vault-interface)
 - [11. Interchange](#interchange)
@@ -70,25 +70,25 @@ the event and object primitives but do not change their meaning.
 
 ## 1. Scope
 
-A phase-1 vault is three portable sets and one active local execution
-environment:
+A phase-1 vault is an immutable event set, retained objects and typed identity
+metadata, persisted with one active local execution environment in SQLite:
 
 ```text
 portable vault
     events       immutable facts, merged by `eventId`
     DASL objects  immutable content-addressed bytes
-    files        singleton and opaque portable files
+    metadata     immutable anchor/version and encrypted seed wrapper
 
 local copy
-    replica ID, store generation, locks, caches, traces and options
+    replica ID, store generation, accepted positions, locks, caches, traces and options
 ```
 
-The portable sets define the identity's recoverable state. Local state is
-not part of the vault, is never synchronized, and is omitted from every
-portable snapshot. Backend import staging and publication-recovery metadata
-are also non-portable; the reference folder reserves `import/` for them under
-[vault-folder.md section 3](vault-folder.md#layout). They are recovered before normal access and are
-not opaque portable files or deletable local caches.
+The portable values define the identity's recoverable state. Local execution
+state and storage control are non-portable even though they share the database.
+SQLite recovery determines the accepted view; staged input is never accepted
+merely because its rows exist. [vault-sqlite.md](vault-sqlite.md) defines the
+common schema, local control and construction of a portable snapshot. There is
+no generic portable-file API or folder interchange.
 
 The store does not know contacts, messages, public DIDs, mediators or
 replicas as domain objects. It knows only event authors. The vault layer
@@ -110,26 +110,27 @@ Every conforming implementation preserves the following rules.
 2. **Merge is set union by event ID.** The same `eventId` with identical RFC 8785
    canonical event bytes is a duplicate. The same `eventId` with different content
    is a conflict and MUST NOT overwrite either store's accepted value.
-3. **Folds are functions of the event set.** Ingest order, segment order,
+3. **Folds are functions of the event set.** Ingest order, physical row order,
    replica order and transport order MUST NOT change a fold's result.
 4. **Authorship is explicit.** The event's `author` identifies the
-   writable local replica that created it. A path, database row or sync
-   envelope MUST NOT supply or replace authorship.
+   writable local replica that created it. A database index or sync envelope
+   MUST NOT supply or replace authorship.
 5. **One active writer per author.** Two concurrent writable copies MUST
    NOT share one author ID. The store detects this condition when it can.
 6. **Object references are explicit.** The event envelope lists every object
    root the event retains. A CID elsewhere in `data` is not a reference.
-7. **Objects precede references.** A local `Vault.commit` accepts new objects
-   and verifies every referenced root before appending its events (section 10).
-8. **Only DASL objects are collected.** Events and portable files are not
-   garbage-collected through the object API.
-9. **Local state is not correctness state.** Losing `local/` may require
-   minting a new local author and rebuilding caches, but MUST NOT lose a
-   committed user decision or message body. Future replica-mediation may add
-   network registration, but phase 1 does not.
-10. **The folder is the interchange format.** Every backend MUST be able
-    to export and import the version-3 folder without changing the event
-    set or portable bytes.
+7. **Objects and references commit together.** A local `Vault.commit` verifies
+   every referenced root and accepts its new objects and entire event batch in
+   one SQLite transaction (section 10).
+8. **Only DASL objects are collected.** Events, metadata and the seed wrapper
+   are not garbage-collected through the object API.
+9. **Caches are not correctness state.** Losing caches or resetting local
+   identity MUST NOT lose a committed decision or message body. Ordinary cache
+   clearing preserves storage control and author selection. Future replica
+   mediation may add network registration, but phase 1 does not.
+10. **SQLite is the persistent and interchange format.** Export and import
+    preserve the event set, retained object bytes and typed identity metadata
+    under section 11. The folder format is retired.
 11. **Local change tokens are not synchronization cursors.** Phase 1 uses
     them only inside one store generation. Deferred `vault-sync/1.0` defines a
     separate network cursor model.
@@ -138,18 +139,20 @@ Every conforming implementation preserves the following rules.
     the same seed would be equally trusted; author IDs are not a security
     boundary.
 13. **Successful commits are process-durable.** When an append, ingest, object
-    acceptance or portable-file write reports success, a later process restart
+    acceptance or keystore replacement reports success, a later process restart
     over the same intact storage generation observes the complete committed
     value. Power-loss durability is a separate backend policy.
 14. **Collection shares the vault writer lock.** Computing held roots and
-    unlinking objects cannot overlap a reference commit (section 10).
+    deleting objects cannot overlap a reference commit (section 10).
 
 <a id="commit-and-durability-terminology"></a>
 
 ### 2.1 Commit and durability terminology
 
-A value is **accepted** or **committed** only after the operation's promise
-resolves successfully.
+Successful resolution of an operation's promise confirms its value is
+**accepted** or **committed**. The database transaction may already have
+committed before confirmation reaches the caller; an unresolved or rejected
+promise is not evidence of rollback.
 
 - If the process terminates before resolution, a restart MAY observe the
   complete value or no value, but MUST NOT observe a partially accepted value.
@@ -178,7 +181,6 @@ type JsonValue =
   | JsonValue[]
   | { [field: string]: JsonValue };
 type JsonObject = { [field: string]: JsonValue };
-// Cid is the validated type defined by dasl-objects.md section 6.
 type EventId = string & { readonly __eventId: unique symbol };
 type AuthorId = string & { readonly __authorId: unique symbol };
 
@@ -237,7 +239,7 @@ nevertheless rejects unknown top-level fields; changing the envelope is
 a vault-format version change.
 
 Everything needed to understand an event apart from storage location is
-on the event. A folder path confirms an author but never supplies one.
+on the event. An indexed database column confirms an author but never supplies one.
 
 <a id="roots"></a>
 
@@ -249,10 +251,9 @@ on the event. A folder path confirms an author but never supplies one.
 - MUST contain canonical CIDs accepted by the object profile in section 7;
 - SHOULD contain no duplicate root;
 - MUST be sufficient for a collector that does not understand `type`;
-- MUST NOT include a CID that is merely mentioned as a name or evidence;
-  and
-- MUST be written only after the referenced objects have been accepted by
-  the local object store.
+- MUST NOT include a CID that is merely mentioned as a name or evidence; and
+- in a local commit, MUST name objects already accepted or verified for
+  acceptance in that same transaction.
 
 A type may repeat the roots in `data` under semantic names such as
 `bodyCid`, `attachmentCids` or `envelopeCid`. Repetition does not create another
@@ -296,9 +297,10 @@ algorithm.
 `append`, `appendAll` and `ingest` MUST validate JCS eligibility before an
 event becomes accepted. `ingest` MAY receive non-canonical source JSON, but it
 MUST parse with duplicate-name detection, reject invalid I-JSON and store or
-compare the RFC 8785 canonical bytes. Folder serialization is stricter:
-section 11 and [vault-folder.md](vault-folder.md) require each JSONL event record itself to be
-the canonical bytes followed by one LF.
+compare the RFC 8785 canonical bytes. Persistent and portable SQLite rows
+store exactly those bytes in a BLOB, without a trailing LF;
+[vault-sqlite.md section 5](vault-sqlite.md#events-and-change-tokens) requires
+indexed columns to agree with the canonical value.
 
 <a id="envelope-validation"></a>
 
@@ -484,7 +486,6 @@ type Ingested = {
 };
 
 interface EventStore {
-  /** Author assigned to every locally appended event. */
   readonly author: AuthorId;
 
   append(draft: Draft): Promise<Event>;
@@ -561,7 +562,7 @@ An empty input returns an empty array and writes nothing.
 
 ### 5.3 `ingest`
 
-`ingest` accepts events from a snapshot, another backend or
+`ingest` accepts events from a portable snapshot, another store or
 `vault-sync/1.0`. It reads or stages its complete input before committing
 anything needed for the fork check below.
 
@@ -573,11 +574,12 @@ For each valid incoming event:
   store, report a conflict and add nothing.
 
 Rejected envelopes are reported and never stored. A backend MUST NOT
-partially reinterpret a malformed line into an event. When `ingest` resolves,
-every event counted in `added` is process-durable under section 2.1. An
-implementation that commits ingest in internal batches may expose a subset of
-whole events after a pre-resolution process crash; retrying the same input is
-idempotent and completes the union.
+partially reinterpret malformed input into an event. The new accepted events,
+positions and projection update/invalidation commit in one transaction after
+the complete fork check. When `ingest` resolves, every event counted in `added`
+is process-durable under section 2.1. A pre-resolution process crash leaves
+all or none of those new accepted events. Retrying is idempotent. Full-vault
+import also includes object acceptance in that transaction under section 11.3.
 
 <a id="forked-author"></a>
 
@@ -634,9 +636,9 @@ A token is meaningful only to:
 - the vault event set that issued it.
 
 A store MUST reject a token it cannot place, including a token from
-another generation or vault, a truncated segment set or a
-future position. The caller then discards the related cache and refolds
-from `scan()`.
+another generation or vault, a malformed encoding or a future position. The caller then discards the related cache and refolds
+from `scan()`. SQLite positions, fixed scan cuts and the token encoding are
+defined by [vault-sqlite.md section 5](vault-sqlite.md#events-and-change-tokens).
 
 A token is not an authorization credential, replica cursor, Lamport
 clock, vector clock or network synchronization token. A client MUST NOT
@@ -647,15 +649,20 @@ send it to another replica or to the sync store.
 ### 5.6 Damage and conflicts
 
 **Damage** is storage material that cannot be decoded as a valid event or
-DASL object. It is reported with its location and excluded from normal reads.
-A backend MAY quarantine damaged bytes but MUST NOT present them as a
-valid event or missing-by-policy object.
+DASL object, including disagreement between canonical event bytes and indexed
+columns. It is reported with its location and excluded from diagnostic reads.
+Event damage makes the event view incomplete and blocks mutation, GC and full
+export; it MUST NOT silently shrink the accepted history. Structural SQLite
+corruption fails the runtime. Object damage is isolated by CID and physical
+version under [vault-sqlite.md section 6](vault-sqlite.md#objects-and-streams).
 
-**Conflict** is more than one JSON content for one `eventId`. The store never
-creates one through `append` or `ingest`; a folder can contain one after
-a manual edit or copied segment. Each backend MUST define a stable local
-tie-break for reads and report every discarded content. The tie-break is
-not a claim that the selected content is correct.
+**Conflict** is different canonical content offered for an already accepted
+`eventId`. The store keeps its existing value, reports the rejected input and
+never overwrites either source. `conflicting()` reports conflicts observed in
+the current runtime, with that same accepted value as `kept`; diagnostic
+retention is local and may be cleared. The database admits only one accepted
+row per ID. Duplicate accepted IDs caused by structural damage are not resolved
+by inventing a row-order winner. Read filters cannot change the accepted value.
 
 <a id="folds-and-local-caches"></a>
 
@@ -669,10 +676,13 @@ A fold:
   local operational view rather than vault state; and
 - can be rebuilt from `scan()`.
 
-A cached fold stores its projection and the local `ChangeToken` to which
-it was advanced. On open it applies `changes()` and advances. If the
-token is rejected or a consistency check fails, it discards the cache
-and refolds.
+A cached fold records its projection version, local generation and complete
+event frontier. Acceptance either updates it with its checkpoint or invalidates
+it in the same transaction. Invalid or incompatible projections are rebuilt
+before use. Incremental updates MUST equal folding the complete accepted set,
+including late events and newly available evidence; arrival order is not a
+fold order. Rebuild/publication rules are defined by
+[vault-sqlite.md section 7](vault-sqlite.md#local-state-and-projections).
 
 Caches belong under local state. They do not appear in snapshots,
 exports or vault sync.
@@ -687,60 +697,62 @@ the object store reads no event type and application callers cannot supply a
 keep set.
 
 [dasl-objects.md](dasl-objects.md) defines `ObjectStore`, whole-resource identity,
-write-before-reference, collection and object damage.
+verification-before-acceptance, collection and object damage.
 
-<a id="portable-files-and-local-state"></a>
+<a id="metadata-and-local-state"></a>
 
-## 8. Portable files and local state
+## 8. Metadata, keystore and local state
 
-<a id="filestore"></a>
+<a id="metadata-and-keystore"></a>
 
-### 8.1 FileStore
+### 8.1 Metadata and keystore
 
 ```ts
-interface FileStore {
-  read(path: string): Promise<Uint8Array | null>;
-  write(path: string, bytes: Uint8Array): Promise<void>;
-  list(): Promise<string[]>;
+type VaultMetadata = Readonly<{
+  version: 3;
+  anchor: string;
+}>;
+
+type WrappedSeed = {
+  version: 3;
+  seedJwe: JsonObject;
+};
+
+interface KeystoreAccess {
+  read(): Promise<WrappedSeed>;
+  rewrap(next: WrappedSeed): Promise<void>;
 }
 ```
 
-Portable files are the portable part of the interchange format other than
-event segments and DASL objects. Local and backend recovery metadata are
-excluded. [vault-folder.md](vault-folder.md) defines reserved paths and singleton merge
-policies.
+`Vault.metadata` exposes immutable typed metadata. The unlocked runtime host
+owns `KeystoreAccess`; `rewrap` is a privileged operation that validates a
+replacement wrapper for the same seed/anchor before atomically replacing it.
+The cryptographic check is part of the host operation, not a generic row-write
+API. Reading returns a detached value and does not grant identity authority.
+[vault-sqlite.md section 4](vault-sqlite.md#identity-and-keystore) defines exact
+storage bytes, validation, rewrap, recovery and import policy.
 
-A `FileStore` path MUST NOT address:
-
-- an event segment;
-- a DASL object;
-- `local/` or backend import-recovery metadata under `import/`;
-- an owned structural directory; or
-- a path that would make one name both a file and a directory.
-
-Version-3 correctness-critical mutable state MUST be an event or object,
-not an arbitrary portable file. Unknown portable files are carried for
-forward compatibility but are not interpreted or synchronized by
-`vault-sync/1.0` unless another protocol defines them.
+There is no `FileStore`, arbitrary path API, unknown-file preservation or
+generic mutable portable table. New authoritative application state uses
+versioned events and referenced objects; the metadata and seed wrapper are the
+specified identity singletons. Runtime callers cannot use a keystore write to
+change the seed or anchor.
 
 <a id="local-state"></a>
 
 ### 8.2 Local state
 
-Local state includes:
+Local execution data includes options, caches, traces, retry timers and
+transport bookkeeping. Runtime control additionally includes replica/generation
+selection, event positions, object acceptance times and schema/initialization
+state. Both are stored in the same SQLite database and excluded from portable
+snapshots and synchronization.
 
-- current replica ID;
-- store generation;
-- process and browser locks;
-- fold caches and indexes;
-- mediator sockets and pickup cursors;
-- retry timers;
-- local options;
-- traces and retention configuration.
-
-It is not exposed through `FileStore`, not present in a snapshot, and not
-merged or synchronized. Anything whose loss would violate a committed
-user decision is in the wrong place.
+Ordinary cache reset preserves control, options and the seed wrapper. An
+explicit local-identity reset changes both IDs atomically and invalidates the
+old generation's caches. Missing control is damage, not implicit creation.
+Anything whose loss would lose a committed decision or message body belongs
+in events/objects rather than a cache or local queue.
 
 <a id="deferred-extension-stores"></a>
 
@@ -760,226 +772,180 @@ type CommitObject = {
 };
 
 interface Vault {
+  readonly metadata: VaultMetadata;
   readonly events: Pick<EventStore, "scan" | "changes" | "damaged" | "conflicting">;
   readonly objects: Omit<ObjectStore, "putRaw" | "putObject" | "collect">;
-  readonly files: FileStore;
 
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
 ```
 
-`ByteSource` is defined by [dasl-objects.md](dasl-objects.md). Each supplied object names its
-expected raw CID; preparing a source in private temporary storage does not
-accept it into the portable object store.
+`ByteSource` is defined by [dasl-objects.md](dasl-objects.md). Each supplied object
+names its expected raw CID. Preparation and private staged rows do not accept
+it into `Vault.objects`. Application callers cannot perform standalone object
+puts or supply a collector keep set. The runtime computes held roots under
+[vault-events.md section 12.3](vault-events.md#held-roots).
 
-The object put primitives are backend-internal to `commit` and the validated
-import/restore paths. They are not exposed through `Vault.objects` for
-standalone application writes. Application preparation uses private temporary
-storage; accepting new objects and their local event references uses `commit`.
-`collect(keep)` is also backend-internal. The vault runtime computes the
-held-root set under [vault-events.md section 12.3](vault-events.md#held-roots) and invokes collection within
-the locked boundary below; application callers cannot supply a keep set.
+`commit(objects, drafts)` holds the writer lock while validating drafts,
+staging and verifying all supplied objects, checking every root (including
+reused objects), and publishing one process-durable transaction. Each root
+must identify a present accepted object or this operation's complete verified
+candidate. New object mappings, the entire event batch, accepted frontier and
+projection updates/invalidations commit together. A rollback or validation
+failure accepts no new objects or events; private staging may remain. An
+uncertain commit outcome halts the runtime until SQLite recovery establishes
+the accepted state. A successful commit may accept unreferenced objects, which
+then follow ordinary orphan grace.
 
-`commit(objects, drafts)` holds the writer lock while validating all drafts,
-accepting supplied objects under `ObjectStore.putObject`'s rules, requiring
-every draft root (including reused objects) to identify a present accepted
-object, and appending and returning one process-durable batch under section 5.2.
+`Vault.events` is read-only. Locally authored events with no new objects use
+`commit([], drafts)` with the same validation and lock. Import/restore use
+internal stage/accept operations within their own validated transaction; they
+cannot publish objects through separately committed put calls first.
 
-Object acceptance or root-check failure appends no events. Accepted objects
-may remain after failure or crash under [dasl-objects.md](dasl-objects.md)'s orphan-grace policy;
-the event batch still obeys section 5.2's all-or-nothing rule.
+Phase 1 has one exclusive owner per physical runtime database across all
+processes and workers. It brokers every live handle. A separate vault-wide
+operation lock serializes semantic mutations, including events, objects,
+keystore rewrap and local changes that affect an operation. Nested stores share
+that lock and the enclosing final transaction. The operation lock may span
+asynchronous preparation; a SQL write transaction MUST NOT span stream waits
+or network effects. SQLite write serialization does not replace lifetime
+ownership or procedure serialization.
 
-`Vault.events` exposes reads only; it has no `append`, `appendAll` or `ingest`
-method. Locally authored events with no new objects use `commit([], drafts)`
-with the same payload validation, root checks and lock. Import/restore uses
-the internal ingest primitive only within its validated publication boundary.
+Under the operation lock, object `open` checks presence and registers a
+per-CID and physical-version latch before exposing a stream. The stream then
+releases that lock and reads bounded chunks. It keeps its latch until EOF,
+failure, cancellation or owner shutdown. Idle time never releases protection.
+Two streams have independent latches. A repair uses a new immutable version;
+a paused stream never switches physical versions or reads unprotected bytes.
 
-Phase 1 MUST serialize operations over one writable vault generation with one
-vault-wide writer lock, across all handles and workers. The lock covers all
-event, object and portable-file mutations. Nested store calls share the
-enclosing operation's lock. A backend MAY use a transaction that provides the
-same serialization.
+Collection takes the same operation lock before computing held roots and holds
+it through its deletion transaction. A keep set computed before the lock MUST
+NOT be used. Collection skips a latched CID without waiting and may remove
+other eligible objects. Stream lifetime does not hold the writer lock, except
+when nested inside a full operation such as export which already owns that
+lock for its complete boundary.
 
-Within an active writer runtime, object reads use a per-CID read latch shared
-across every handle, worker and process accessing the same physical object
-namespace, including read-only handles. Distinct local store-generation tokens
-do not separate protection for shared bytes. `open` briefly takes the writer
-lock to check object presence and register the latch before exposing a stream,
-then releases that lock. A backend may broker this operation through the active
-writer process; a read-only handle still participates in the same lock and
-latch registry.
+Independent live database readers are not supported in phase 1. A client uses
+the owner's broker, waits or fails. With no owner, an inspector acquires the
+same exclusive ownership before opening the runtime and holds it until all
+reads end. A later writer waits or fails. Broker loss fails its streams; a
+client MUST NOT fall back to direct database reads. Isolated immutable portable
+snapshots can be read independently. Details are in
+[vault-sqlite.md section 8](vault-sqlite.md#ownership-and-lifecycle).
 
-The latch remains until stream completion, failure or cancellation and is
-released on each of those paths. A CID remains latched while any of its reads
-is active. `read` uses the same protection. Abandonment without cancellation
-is a caller defect: an idle or unreachable stream's latch MUST NOT time out.
-It persists until one of the release paths above or the process owning that
-stream exits. A process exit releases only its own latches; other processes'
-live streams remain protected or fail closed; they never continue unlatched.
-A slow or abandoned consumer in an active writer runtime therefore retains
-only the opened object's bytes; it MUST NOT hold that runtime's writer lock
-for the stream's lifetime. Reads nested inside a commit, import or export
-share its existing lock without shortening that operation's required boundary.
-
-A read-only stream opened before any writer starts needs the same protection
-against a later collector. It MUST either participate in a cross-process latch
-registry honored by future writers, or acquire the backend's vault
-ownership before checking presence and opening bytes, holding that ownership
-until all streams it protects end. This ownership is shared among readers,
-exclusive against a writer, and excludes a writable open including its recovery
-and collection. It is distinct from an active runtime's
-operation lock. A later writable open waits or fails until ownership is
-released. Completion, failure, cancellation and owner-process exit release
-protection as above; idle time does not. Merely observing that no writer is
-running is insufficient. [vault-folder.md section 15](vault-folder.md#concurrency-and-crash-behavior) defines the disk-folder
-case without creating local state from a read-only open.
-
-`ingest` holds the runtime's operation lock from its target-state fork and
-duplicate checks through event acceptance. Collection acquires it before
-computing the current held-root set and holds it through physical unlink;
-a keep set computed before acquiring the lock MUST NOT be used.
-Collection MUST skip a CID with an active read latch
-without waiting for its reader; other eligible CIDs may be unlinked in that
-pass. Latch registration and the collector's latch check/unlink are serialized
-by the writer lock. Latches are local read protection, not portable retention
-references; when the last latch is released, normal collection rules apply.
-A backend unable to coordinate a concurrent reader with that namespace's
-collector MUST refuse the live object read; it may serve an isolated immutable
-snapshot instead. Complete-line event visibility alone is insufficient.
-Full import and export hold the writer lock across the boundaries
-defined in sections 11.2 and 11.3. Existing rules for serialized receipt
-allocation and bootstrap integrity checks use this same lock.
-
-The current replica and other local state are intentionally absent from
-`Vault`. A host opens a vault backend with a local replica context and
-obtains stores already configured with that author.
+`ingest` holds the operation lock from target-state fork/duplicate checks through
+its final transaction. Import and export hold it over the full boundaries in
+section 11. Receipt allocation and bootstrap integrity checks use this same
+lock. The host configures stores with the current local replica; author
+selection and local control are not writable fields of `Vault`.
 
 <a id="interchange"></a>
 
 ## 11. Interchange
 
-<a id="folder-round-trip"></a>
+<a id="sqlite-round-trip"></a>
 
-### 11.1 Folder round trip
+### 11.1 SQLite round trip
 
-Every backend MUST export a version-3 `.estoc/` folder and import one.
-For any conforming vault:
+Every persistent vault MUST export and import the portable SQLite format in
+[vault-sqlite.md](vault-sqlite.md). A conforming round trip preserves:
 
-- every event returns with identical RFC 8785 canonical bytes and `eventId`;
-- every retained DASL object returns byte-for-byte under the same CID;
-- every portable file returns byte-for-byte unless its documented
-  singleton merge policy applies; and
-- local state does not travel.
+- every event's exact RFC 8785 canonical bytes and `eventId`;
+- every currently held DASL object's exact bytes and CID;
+- immutable metadata and the exported encrypted seed wrapper, except that
+  import into an existing vault retains the target wrapper; and
+- no source local state, control positions or staging.
 
-The folder is the readable sovereignty format. `vault-sync/1.0` is a
-separate encrypted wire representation and is not a folder export.
+SQLite pages, physical data IDs and runtime indexes are not portable identity.
+There is no folder/JSONL interchange or opaque-file merge. `vault-sync/1.0`
+remains a separate encrypted wire representation, not a SQLite-file upload.
 
 <a id="export"></a>
 
 ### 11.2 Export
 
-Export writes the complete portable vault:
+Export selects one consistent event/metadata/keystore/held-root cut and holds
+section 10's writer lock through copying, verification and publication. It
+writes every event and exactly the currently held object set to a new database
+with the prescribed portable schema. Missing/damaged held bytes or an
+incomplete event view fail complete export. Rewrap, erasure and GC wait.
 
-- all events;
-- all retained DASL objects;
-- all portable files; and
-- no local state or backend import staging/recovery metadata.
-
-Every complete event record in a segment is exactly
-`canonicalEventBytes(event)` followed by byte `0x0A`. A writer MUST NOT pretty
-print an event or preserve non-canonical imported member order. Segment
-boundaries and names are serialization details. Two exports of the same event
-set need not have the same segment files.
-
-An export MUST select one consistent portable-state cut: the event set,
-portable-file contents and exact held roots.
-The exporter MUST hold the section-10 writer lock from selecting that cut
-through copying, verification and publication. Erasure, collection and portable
-file writes therefore wait for completion or abort. The destination remains
-unpublished until every required object and file validates. Missing or damaged
-non-erased content makes the export incomplete; it MUST NOT be reported as a
-successful complete snapshot.
+The exporter copies an explicit table/column allowlist into a fresh database;
+cloning the runtime and deleting local rows is not conforming. Local IDs,
+options, caches, traces, control rows, staging, quarantine and unheld content
+never enter the output. Every event BLOB is exactly `canonicalEventBytes(event)`
+without a newline. The final standalone file needs no journal or runtime VFS
+state and is reported successful only after output completes. Publication and
+memory bounds are defined by
+[vault-sqlite.md section 10](vault-sqlite.md#snapshot-and-export).
 
 <a id="import-into-an-existing-vault"></a>
 
 ### 11.3 Import into an existing vault
 
-Import is allowed only when source and target have the same format
-version and anchor identity. It performs a complete preflight before the
-first semantic write:
+Import accepts a complete stable portable SQLite source with the same vault
+version and anchor as the target. It holds the writer lock from target-state
+preflight through the final transaction. Full preflight:
 
-1. validate the folder structure and singleton shapes;
-2. decode and validate every source event envelope;
-3. compute fork checks for the event store;
-4. compute the prospective merged event set and held-root fold, applying
-   erasure rules;
-5. derive vault-level semantic projections, preserving valid conflicting
-   facts rather than choosing a winner by arrival order; and
-6. verify every object to be copied and require every prospective non-erased
-   held root to have valid bytes in the source or target.
+1. validates the source schema, metadata, wrapper, events and object bytes;
+2. checks canonical duplicate/conflict and own-author fork conditions;
+3. computes the prospective accepted event union and held-root fold with
+   erasure closure;
+4. derives semantic projections, retaining valid conflicting facts rather
+   than selecting a winner by arrival order; and
+5. verifies every required root has sound bytes in source or target.
 
-The importer applies the receipt-conflict rules in [vault-events.md section 10.2](vault-events.md#message-in). Existing `ForkedAuthor`, envelope, identity and object-integrity checks
-still apply.
+These are full-vault duties, not domain payload validation by the opaque
+`EventStore.ingest` API. Receipt-conflict rules in
+[vault-events.md section 10.2](vault-events.md#message-in) continue to apply.
+A preflight may write private staging rows but MUST change no accepted state
+on failure. The source remains stable throughout validation and use, is opened
+with restricted read capabilities, and supplies no executable schema or
+migration to the target.
 
-These are full-vault importer duties, not payload validation by the opaque
-`EventStore.ingest` API. A preflight failure writes nothing. Import MUST hold
-the section-10 writer lock from target-state preflight through publication,
-including object acceptance and ingest.
+After verification, one SQLite transaction accepts new/repaired required
+objects and all new events, allocates positions and updates or invalidates
+projections. It MUST NOT expose visible sub-batches. A process crash leaves the
+complete old or complete new union after SQLite recovery. There is no folder
+publication journal or partially applied accepted union for application code
+to replay. Unpublished staging can be discarded; cache reset cannot publish it.
+An uncertain final result halts ordinary work until reopen resolves it.
 
-After preflight, import:
+Import is idempotent. It preserves the target identity, wrapper, author and
+generation and assigns its own physical IDs/positions. Only objects required
+by the prospective union are newly accepted. An old source cannot revive an
+erased message/root relation; another live reference to the CID may retain
+those bytes. Missing non-erased held material fails complete import. Invalid
+projections are rebuilt before any query, GC or worker relies on them.
 
-1. stages the prospective event union;
-2. accepts the required absent objects before publishing their importing
-   references;
-3. applies singleton and opaque-file policies to the staged view; and
-4. verifies the prospective held-root requirements and publishes the complete
-   merged view.
-
-The backend MUST use a staged-generation publication boundary or an equivalent
-recoverable import barrier. A crash leaves either the previous usable view or
-an explicitly incomplete import; ordinary workers and GC MUST NOT act on a
-partial event union as if it were the completed import. A correctness-critical
-barrier MUST survive restart and deletion of `local/`, identify the intended
-import, and carry enough recovery information to finish or safely roll back.
-It is backend recovery metadata, not a new vault-domain event. The reference
-folder keeps it under the reserved, non-portable `import/` root defined by
-[vault-folder.md section 3](vault-folder.md#layout). A backend unable to provide such a barrier MUST
-keep the generation unpublished instead. Import and export MUST exclude this
-metadata, not carry it as opaque portable files or execute a source's recovery
-journal as instructions for the target. An incomplete source must be recovered
-or read through a verified complete published generation before full import.
-
-A completed full import requires all non-erased held objects. An explicitly
-requested partial-data import MAY expose missing-material diagnostics, but
-MUST NOT be described as a complete restore or enable work that needs missing
-material. Recovery reconstructs committed retention before enabling collection.
-The writer lock does not replace the recoverable publication boundary.
-
-The operation is idempotent. It decodes and ingests events rather than copying
-segments as opaque files. Source bytes do not revive an erased message/root
-relation; another independently live reference to the same CID may still retain
-those bytes. Target identity, seed wrapping and local author selection are
-unchanged. Rebuildable indexes are refreshed from the published union before
-ordinary work resumes.
+Explicit partial event/object ingestion may diagnose missing data, including
+for deferred sync, but MUST NOT be described as a complete portable import or
+restore or enable work dependent on missing material. Exact source validation
+and merge rules are in
+[vault-sqlite.md sections 11](vault-sqlite.md#portable-source-validation) and
+[12](vault-sqlite.md#restore-and-import).
 
 <a id="restore-and-bootstrap"></a>
 
 ### 11.4 Restore and bootstrap
 
-A restore reads a folder into an empty backend. It writes portable state
-only. On first writable open, the host mints a new local replica ID and
-store generation.
+Restore reads a complete portable snapshot into a new SQLite runtime, validates
+the recovery credential against its anchor, and adopts its seed wrapper. It
+preserves historical authors but mints fresh local replica/generation IDs,
+positions and acceptance times. A ready marker is published only after the
+complete destination validates. Recovery reconstructs held roots and unfinished
+committed work before normal operation.
 
-A folder copied together with `local/` is an exact local move, not a
-portable snapshot. Preserving its replica ID is safe only when the old
-writer no longer exists.
+An exact local move instead transfers the complete quiesced runtime and MAY
+preserve its author/generation only when the source is permanently stopped.
+A stale local copy restored after later source writes refreshes local identity
+and invalidates checkpoints. The standalone-file and ownership conditions in
+[vault-sqlite.md section 12.3](vault-sqlite.md#exact-local-move) apply.
 
-`vault-sync/1.0` additionally supports bootstrap of the version-3 core
-vault from the vault seed and sync-store locator. That protocol reconstructs
-the immutable root, event and DASL objects; the new local copy then creates
-its own passphrase wrapping and local replica context. Opaque portable files
-not represented by a versioned sync object remain folder-interchange data
-and are not reconstructed by this bootstrap.
+Deferred `vault-sync/1.0` bootstrap reconstructs a fresh SQLite runtime from
+verified immutable configuration, events and DASL objects using the seed and
+sync locator. It creates a new seed wrapper and local context; it never copies
+another runtime's database pages or local state.
 
 <a id="synchronization-boundary"></a>
 
@@ -1010,56 +976,37 @@ one replica staying online or a mutable local queue.
 
 ## 13. Backend obligations
 
-A folder, SQL database, IndexedDB store or in-memory test store may all
-conform. A backend chooses its own indexes and physical transactions but
-MUST provide the same accepted event set and the same observable
-semantics.
+SQLite is the sole persistent backend. Native and WASM drivers implement the
+same schema and observable semantics in [vault-sqlite.md](vault-sqlite.md).
+Memory implementations may run common semantic tests but cannot establish
+persistence, restart or portable-file conformance. An additional filesystem,
+IndexedDB or opaque path-to-bytes backend is not part of this version.
 
-A database commonly uses:
+The implementation MUST document and verify:
 
-```sql
-CREATE TABLE events (
-  seq       INTEGER PRIMARY KEY,
-  eventId   TEXT NOT NULL UNIQUE,
-  at        TEXT NOT NULL,
-  author    TEXT NOT NULL,
-  type      TEXT NOT NULL,
-  roots     TEXT NOT NULL,
-  data      TEXT NOT NULL,
-  canonical BLOB NOT NULL
-);
+- engine/driver/VFS versions and supported platforms;
+- effective journal, synchronization and foreign-key settings;
+- the mandatory process-durable success boundary and any stronger power-loss
+  claim with its platform evidence;
+- exclusive ownership, operation locking and brokered stream protection;
+- orphan grace, staging/quarantine cleanup and collection transactions;
+- exact integer/BLOB conversion, event/batch/object and temporary-space limits;
+- backup construction and file-output memory bounds or enforced size limits; and
+- close, halt, schema-upgrade and ambiguous-commit recovery behavior.
 
-CREATE INDEX events_canonical ON events (at, eventId, author);
-CREATE INDEX events_author ON events (author);
-CREATE INDEX events_type ON events (type);
-```
-
-`canonical` is the RFC 8785 UTF-8 event representation used for equality,
-conflict checks and export. A backend MAY instead reconstruct it from validated
-columns, but the result MUST be byte-identical. `seq` is local insertion order
-used by a local change token. It is not
-part of the event and MUST NOT affect a fold or export.
-
-A backend MUST implement the mandatory process-durable success boundary in
-section 2.1 and document:
-
-- its stronger power-loss durability and flush policy, if any;
-- orphan grace for abandoned objects;
-- implementation of the section-10 writer lock;
-- per-CID latch registration and collection exclusion across processes,
-  including read-only handles, stream cancellation and owner-process exit;
-- protection of streams opened without an active writer and how a later
-  writable open joins or waits for that protection;
-- maximum event, batch and object sizes; and
-- locking requirements for concurrent handles.
+Core DDL and portable schema belong to the SQLite specification; application
+indexes/projections must remain rebuildable and preserve canonical event bytes.
+SQL statements and identifiers come from the implementation, values are bound
+parameters, and portable input cannot provide executable SQL.
 
 <a id="versioning"></a>
 
 ## 14. Versioning
 
-`config.json.version` covers the event envelope, folder layout,
-singleton meanings and vault-event semantics together. This document is
-version 3.
+`vault_meta.vault_version` covers the event envelope, object profile, key
+derivation and vault-event semantics together. This document is version 3.
+SQLite schema evolution is additionally versioned by `PRAGMA user_version`
+under [vault-sqlite.md section 2](vault-sqlite.md#format-and-versions).
 
 Version 3 is an unreleased draft. Its current schema supersedes earlier draft
 spellings without a migration or read alias; for example, the event envelope
@@ -1073,14 +1020,13 @@ Within version 3, compatible changes are limited to:
 
 - a new event type;
 - an optional field in a known event payload whose absence has a fixed
-  meaning;
-- a new top-level opaque portable file outside reserved structural
-  directories; or
+  meaning; or
 - an explicitly negotiated protocol capability.
 
 Changing an existing field's meaning, event-envelope fields, ID format,
-folder path grammar, key derivation or required fold rule requires a new
-vault version.
+CID profile, key derivation or required fold rule requires a new vault version.
+Portable schema changes require a new SQLite schema version; arbitrary tables
+or columns cannot be added as opaque portable state.
 
 <a id="required-conformance-cases"></a>
 
@@ -1116,12 +1062,13 @@ A conforming implementation MUST pass at least these cases:
 
 8. <a id="es-8"></a> Shuffling and repartitioning one event set does not change a fold.
 9. <a id="es-9"></a> `scan()` returns canonical event order independently of physical order.
-10. <a id="es-10"></a> A folder export emits each JSONL event as exact RFC 8785 UTF-8 followed by
-   one LF; re-import preserves those canonical bytes.
+10. <a id="es-10"></a> A portable SQLite export stores each event BLOB as exact RFC 8785 UTF-8
+   without a trailing LF; re-import preserves those bytes and indexed fields.
 11. <a id="es-11"></a> `changes()` returns a complete local delta and rejects another store
     generation's token.
 12. <a id="es-12"></a> A token is never required for successful full reconciliation.
-13. <a id="es-13"></a> Export and re-import preserve every portable byte.
+13. <a id="es-13"></a> Export and re-import preserve every canonical event byte, held object and
+    typed metadata value, with the defined seed-wrapper import policy.
 14. <a id="es-14"></a> Restore omits local state and mints a fresh replica ID.
 15. <a id="es-15"></a> No API interprets a hardware or operating-system identifier.
 16. <a id="es-16"></a> Events produced by a retired replica remain valid immutable history.
@@ -1152,21 +1099,21 @@ A conforming implementation MUST pass at least these cases:
 
 23. <a id="es-23"></a> Concurrent erasure/GC cannot publish an export with a dangling held root;
     the selected cut remains protected or the export aborts before publication.
-24. <a id="es-24"></a> Crash at each full-import boundary exposes either the previous usable view
-    or a recoverably incomplete import, never an apparently complete partial
-    union. Deleting `local/` does not bypass that publication boundary.
-25. <a id="es-25"></a> Full import recomputes rebuildable indexes from the published event union
-    before ordinary work resumes.
-26. <a id="es-26"></a> Import/export never includes backend recovery metadata as portable files.
-    Source recovery journals are not executed on the target, and omitting a
-    journal cannot turn an incomplete source into a complete snapshot.
+24. <a id="es-24"></a> Crash at each full-import boundary exposes the complete previous or new
+    union after SQLite recovery. Clearing caches cannot accept staged rows or
+    expose a partial union.
+25. <a id="es-25"></a> Full import updates or invalidates projections in its final transaction;
+    queries, workers and GC never consume an invalid projection.
+26. <a id="es-26"></a> Import/export never carries runtime control or recovery data. Extra source
+    tables and executable schema are rejected; an unpublished database or one
+    requiring an external journal is not a complete portable snapshot.
 27. <a id="es-27"></a> Within an active writer runtime, a paused object stream does not block
-    another handle's commit or portable-file write. Collection skips its CID
+    another handle's commit or keystore rewrap. Collection skips its CID
     without waiting and can collect an unrelated eligible CID. Completion,
     failure and cancellation each release the latch so a later pass can
     collect the now-unkept object.
 28. <a id="es-28"></a> Racing `open` with collection either obtains a protected complete object
-    or returns null after unlink; it never exposes an unprotected stream.
+    or returns null after deletion; it never exposes an unprotected stream.
     When two streams read the same CID, ending one does not release the other's
     protection.
 29. <a id="es-29"></a> `Vault.events` exposes only `scan`, `changes`, `damaged` and `conflicting`;
@@ -1181,15 +1128,10 @@ A conforming implementation MUST pass at least these cases:
 30. <a id="es-30"></a> An abandoned, uncancelled stream remains latched across idle periods and
     collection passes. A still-reachable paused stream can resume to completion
     without losing protection; elapsed time alone never releases its latch.
-31. <a id="es-31"></a> A read-only process opens an object while the writer process remains active.
-    Collection skips that object and can collect another eligible CID. Exiting
-    one reader process releases only its latches; another process's stream on
-    the same CID stays protected. A backend without this coordination refuses
-    live concurrent object reads rather than exposing an unprotected stream.
-32. <a id="es-32"></a> A read-only process opens and pauses an object stream before any writer
-    starts. A later writable open either joins its existing cross-process
-    protection or waits/fails behind its shared reader ownership. There is no
-    interval in which collection can unlink the stream's bytes. Two readers
-    can hold shared ownership concurrently; releasing one stream or reader
-    does not release another's protection. After the last
-    stream ends, a writer can open and collect an otherwise eligible object.
+31. <a id="es-31"></a> A client reads through the active owner's broker. Collection skips
+    its protected object and may collect unrelated CIDs; broker loss fails its
+    streams. An independent client cannot bypass ownership with a live SQL read.
+32. <a id="es-32"></a> With no owner, an inspector takes exclusive ownership before opening
+    a runtime object stream. A later writable open waits or fails until all
+    inspection statements and streams end. Independent immutable portable
+    snapshots can be read without owning the original runtime.

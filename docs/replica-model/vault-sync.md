@@ -17,7 +17,7 @@ portable object identity and verification. This protocol encrypts and moves
 those exact bytes; it does not redefine either layer.
 
 > **Phase-1 boundary.** The first implementation recovers and transfers a
-> vault through the readable folder and independently backed-up seed/recovery
+> vault through portable SQLite and independently backed-up seed/recovery
 > material. No phase-1 operation may silently depend on this protocol.
 
 <!-- reading-guide:start -->
@@ -74,10 +74,10 @@ The protocol synchronizes:
 - content-addressed DASL objects referenced by those events, including exact
   resolved peer DID document snapshots.
 
-It does not synchronize `local/`, sockets, pickup acknowledgments,
-process locks, fold caches, traces, local options or other local
+It does not synchronize SQLite pages or runtime control, sockets, pickup
+acknowledgments, process locks, fold caches, traces, local options or other local
 state. Correctness-critical state must be an event or referenced object,
-not an unsynchronized local file.
+not an unsynchronized local table.
 
 Within one `store_id`, version 1.0 is append-only. It has no selective
 per-object retraction, compaction or distributed garbage collection. A
@@ -227,9 +227,13 @@ Payload is RFC 8785 canonical UTF-8 of the immutable vault configuration:
 ```
 
 The root object allows a replica holding the seed and sync-store locator to
-reconstruct `config.json`. It does not contain `seedJwe`; a new local vault
-copy wraps the supplied seed under its own local passphrase and derives named
-keys on demand.
+reconstruct immutable SQLite vault metadata: `version` maps to
+`vault_meta.vault_version`, and `identity.anchor.did` maps to `vault_meta.anchor`.
+The root's logical `format = "estoc"` and fixed anchor key name are validated;
+they are independent of the database's `format = "estoc-sqlite"` marker and
+local schema version. This logical root payload does not change with database
+page layout. It does not contain `seedJwe`; a new local vault wraps the supplied
+seed under its own passphrase and derives named keys on demand.
 
 <a id="event-object"></a>
 
@@ -1358,24 +1362,25 @@ A new local replica needs:
 - the sync-store DID/endpoint locator; and
 - a local passphrase or platform mechanism under which to wrap the seed.
 
-A normal folder restore obtains candidate locators from `sync.configured`
-events after opening the readable snapshot. A bootstrap that starts with
-only the seed must obtain the first locator from an external trusted source.
+A normal portable SQLite restore obtains candidate locators from
+`sync.configured` events after opening the validated snapshot. A bootstrap that
+starts with only the seed must obtain the first locator from an external trusted
+source.
 
 It derives the sync account and object keys, fetches the fixed root object
 ID, verifies the immutable configuration, inventories every opaque object,
 downloads and validates events and currently held DASL objects, builds a fresh
-local core vault,
-and finally mints a new local `replica_id` and private `store_generation`.
-Unknown portable folder paths that have no versioned sync-object profile are
-not reconstructed by this protocol.
+SQLite runtime, and finally mints a new local `replica_id` and private
+`store_generation`. Database control, positions and chunk IDs are reconstructed
+locally. This protocol does not restore another runtime's physical layout or
+provide an opaque-file extension mechanism.
 
 Absence of the root object means the server account cannot bootstrap a
 vault. An existing local vault may publish it. A root object whose anchor
 does not match the anchor derived from the supplied seed is fatal.
 
 A sync store is not the sole sovereign representation. A normal Estoc
-folder snapshot remains a complete readable interchange format.
+portable SQLite snapshot remains a complete independently recoverable format.
 
 A full replica bootstrapped on a server has no special sync identity. It uses
 the same account and anti-entropy as any other full replica. DID-document
@@ -1406,7 +1411,7 @@ by phase 1.
 This intent adds one sync-service locator to portable vault
 state. `syncId` is a UUIDv7. `storeDid` MUST identify a DIDComm-capable sync
 store; its current endpoint is resolved at runtime and may be cached only
-under `local/`.
+in local SQLite cache tables.
 
 The same configuration ID with a different store DID is an integrity
 conflict. Configuring the same store DID under more than one ID is
@@ -1450,7 +1455,7 @@ upload, download and inventory work against it after learning the event.
 Retirement does not imply remote ciphertext deletion. The explicit
 account-reset operation is defined in section 12.
 
-A readable folder therefore carries its sync-service locator in events.
+A portable SQLite snapshot therefore carries its sync-service locator in events.
 A bootstrap that starts with only the seed still needs one locator from an
 external trusted source to find the first sync store.
 
