@@ -147,7 +147,7 @@ Canonical order is used only where stated.
 
 ### 3.1 Vault identity
 
-The vault identity is the anchor DID in `config.json`. Two vaults are the
+The vault identity is the anchor DID in `vault_meta.anchor`. Two vaults are the
 same identity exactly when their anchor DIDs are equal.
 
 On unlock, the runtime derives the `anchor` key from the seed and MUST verify
@@ -974,7 +974,7 @@ DID. Its consumer is the binding's symmetric `R`. A continuation, another
 local recipient or a remote invitation never satisfies this rule merely by
 sharing `pthid`. No contact, rotation or application response is required.
 
-The receive lock covers invitation availability, binding selection and inbound
+The operation lock covers invitation availability, binding selection and inbound
 commit. A different consumer of an unavailable invitation is terminally rejected
 before receipt. The same consumer may reuse it or consume another matching
 invitation with a new root-address input. Duplicate receipt never takes it
@@ -1007,15 +1007,16 @@ local perspective supplies `localDidId` and the peer end; it does not affect the
 
 ### 6.1 Receipt and relationship evidence
 
-The **receive lock** is the vault-wide writer lock of [event-store.md section 10](event-store.md#vault-interface), acquired by the receive operation as the enclosing operation after network
-resolution and authentication. Hold it from pair lookup and [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
+After network resolution and authentication, the enclosing receive operation
+acquires the vault-wide operation lock of [event-store.md section 10](event-store.md#vault-interface).
+Hold it from pair lookup and [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s checks through the dependent resolution, binding and receipt
 commits; nested `Vault.commit` calls share it. Release it before network work
 or waiting for missing evidence. Outbound birth preparation uses the same lock
 for its binding lookup, recheck and commit. This serializes the operations
 without making separate commits one crash-atomic batch.
 
 Every authenticated delivery uses the same relationship lookup,
-irrespective of the recipient's allocation policy. Under the receive lock:
+irrespective of the recipient's allocation policy. Under the operation lock:
 
 1. look for the received local DID and canonical sender DID in the address
    histories of existing relationships under [section 6.6](#relationship-fold-and-address-index);
@@ -1118,7 +1119,7 @@ For a new outbound, the writer first commits the offline intent's `birth`
 selection under [section 9.2](#message-out). After resolution and before preparing/submitting
 its first package, commit this binding. For new inbound, authentication and
 `peer.resolved` commit first, then this binding in its own commit, then
-`message.in` referencing the binding's returned `eventId`. Keep the receive lock
+`message.in` referencing the binding's returned `eventId`. Keep the operation lock
 across these dependent commits under [section 6.1](#receipt-and-relationship-evidence). A crash after
 the binding commit leaves reusable binding evidence and no receipt; it consumes
 no invitation and creates no pickup ACK or ultimate ACK/effect work. A binding
@@ -1667,7 +1668,7 @@ only disclosures from protocols it supports, not names inferred from arbitrary
 message content. This definition also applies to [section 7.4](#profile-shared).
 
 The producer lifts `name` from a supported profile disclosure while its source
-content is readable and eligible for application processing under [section 10.6](#inbound-message-and-execution-fold), checking erasure and contact tombstones under the writer lock. A claim
+content is readable and eligible for application processing under [section 10.6](#inbound-message-and-execution-fold), checking erasure and contact tombstones under the operation lock. A claim
 may belong to an unassigned R; later contact assignment only changes where it
 is displayed. This lifted value survives source-body erasure; it is a peer's
 claim, not a verified identity name. It holds no source content roots. Missing
@@ -1676,7 +1677,7 @@ source-body erasure alone does not invalidate an existing lifted value.
 Deduplication and display ordering follow [section 7.5](#relationship-profile-fold).
 
 Lifting under [sections 7.3](#profile-nameclaimed)–[7.4](#profile-shared) is idempotent by event type and logical source.
-Under the writer lock, reuse an existing valid lift; otherwise recognize and
+Under the operation lock, reuse an existing valid lift; otherwise recognize and
 lift the disclosure from eligible readable source content. Reopen/recovery
 enumerates missing lifts under [section 13.1](#open-the-writable-full-runtime), including sources whose scope
 became available later. Missing content defers this work; erased content or a
@@ -2062,7 +2063,7 @@ performing a rotation. Public/private allocation never gates send eligibility.
 
 For an automatic response, `relationshipId` is exactly its carrier's derived `R`.
 Preparation uses that `R`'s current local and peer ends; another relationship
-of the same contact cannot substitute. Apply [distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set)'s local-sender gate under the intent-commit lock. Contact assignment and
+of the same contact cannot substitute. Apply [distributed-delivery.md section 8.1](distributed-delivery.md#freezing-an-ack-target-set)'s local-sender gate under the operation lock. Contact assignment and
 tombstones are checked when present; unassigned control relationships need no
 invented contact.
 
@@ -2541,7 +2542,7 @@ Requirements:
   execution scope. An unknown key under a recognized DID keeps these references
   for the same-DID diagnostic, instead of inventing a new binding.
   Both references are immutable portable evidence, excluded from message hashes
-  and wire headers. Choose them under the receive lock. Missing references
+  and wire headers. Choose them under the operation lock. Missing references
   defer, mismatches conflict, and import never infers a replacement from event
   timestamps. A carried proof with a non-null binding must validate in that
   same relationship before scope/ACK/effect work;
@@ -2586,7 +2587,7 @@ max(empty set) = 0
 Allocation and inbound commit MUST be serialized across the active writer.
 A batch assigns distinct ordinals in observation order. Aborted reservations
 may leave gaps; contiguous numbering is not required. A cache may accelerate
-allocation, but restart, deletion of `local/`, or a new `replica_id` or
+allocation, but restart, clearing local caches, or a new `replica_id` or
 `store_generation` MUST NOT reset the recovered high-water mark or reuse an
 ordinal already present in accepted history.
 
@@ -2877,7 +2878,7 @@ Missing bytes MUST NOT be displayed as intentional deletion.
 
 ### 12.3 Held roots
 
-Under the writer lock in [event-store.md section 10](event-store.md#vault-interface), the vault runtime computes
+Under the operation lock in [event-store.md section 10](event-store.md#vault-interface), the vault runtime computes
 the held roots passed to `ObjectStore.collect` in [dasl-objects.md section 8.3](dasl-objects.md#collection).
 
 A root is held when at least one accepted event retains it through
@@ -2934,7 +2935,7 @@ retention edge unless it also appears in an accepted event's `roots`.
 
 Version 3 does not represent local body eviction as a portable event. A local
 storage policy that deletes a non-erased retained object makes the phase-1
-vault incomplete. It may be repaired from a verified folder import or backup.
+vault incomplete. It may be repaired from a verified portable SQLite import or backup.
 Deferred `vault-sync/1.0` may later provide another repair source. Local
 absence never authorizes collection elsewhere.
 
@@ -2958,11 +2959,17 @@ list when no new objects are needed; `Vault.events` is read-only.
 
 ### 13.1 Open the writable full runtime
 
-1. verify folder/store version and anchor;
-2. unlock or obtain the seed;
-3. acquire the exclusive writer lock before creating mutable local state;
-4. complete backend recovery and any import publication barrier, then load or
-   mint local `replica_id` and `store_generation`;
+1. acquire exclusive runtime ownership and open SQLite, allowing its required
+   journal recovery;
+2. follow [vault-sqlite.md section 8.1](vault-sqlite.md#create-open-and-close)'s
+   version checks and any supported schema upgrade before validating the current
+   schema, ready state, metadata and seed wrapper;
+3. unlock or obtain the seed and verify its derived anchor before application
+   data writes or identity use;
+4. validate local `replica_id` and `store_generation` and discard only unpublished
+   staging. Normal reopen preserves local IDs; create and restore initialize
+   fresh ones under
+   [vault-sqlite.md section 8](vault-sqlite.md#ownership-and-lifecycle);
 5. fold portable state and reconstruct committed held roots before permitting
    GC;
 6. project receipt-integrity conflicts and recover the vault-wide ordinal
@@ -2989,9 +2996,10 @@ submitted outbounds never resume, including deterministic responses whose
 carriers are observed again. An outbound without `delivery.submitted` may
 resume eligible work even when an earlier transport call might have succeeded;
 it does not invent missing evidence or choose new response work merely
-because a cache was lost. Missing objects or proofs keep the affected work
-deferred. Protocol-defined external effects retain their existing idempotency
-or explicitly at-least-once contract; this procedure makes no exactly-once claim.
+because a cache was lost. Missing or damaged objects, or missing proofs, keep
+the affected work deferred. Protocol-defined external effects retain their
+existing idempotency or explicitly at-least-once contract; this procedure makes
+no exactly-once claim.
 
 Phase 1 MUST NOT require `replica-mediation/1.0` or `vault-sync/1.0`. Failure of
 one mediator MUST NOT prevent offline local vault use or communication through
@@ -3099,7 +3107,7 @@ resurrect the contact or authorize a new response. A terminal recipient under
 
 ### 13.7 Rotate a local relationship address
 
-1. under the writer lock, identify one `R` and validate [section 6.5](#relationship-localtransitioned)'s rooted
+1. under the operation lock, identify one `R` and validate [section 6.5](#relationship-localtransitioned)'s rooted
    binding, assignment, predecessor and confirmation evidence;
 2. choose a live configured route and create a fresh successor under [section 13.3](#create-a-communication-did); its route may differ from the predecessor's;
 3. sample the rotation instant once, sign the predecessor-to-successor proof,
@@ -3138,9 +3146,11 @@ Merge is event-store union by `eventId`. It never:
 - rewrites an event;
 - removes another replica's decision;
 - treats another author as read-only history; or
-- adopts a segment as opaque state.
+- adopts database pages or physical row order as authoritative state.
 
-After merge, every fold is recomputed from the union.
+After merge, every fold reflects the complete union. A cached projection must
+be updated or invalidated in the acceptance transaction and rebuilt before use
+if invalid; an incremental result must equal the pure fold of that union.
 
 <a id="172-object-merge"></a>
 
@@ -3148,15 +3158,17 @@ After merge, every fold is recomputed from the union.
 
 ### 14.2 Object merge
 
-Compute held roots from the prospective event union and copy only valid absent
-objects required by that fold. Full import publishes events and available
-objects under [event-store.md section 11.3](event-store.md#import-into-an-existing-vault)'s complete-view boundary; this
-semantic union is not permission to expose an intermediate event-only import.
+Compute held roots from the prospective event union and copy only verified
+source objects that are absent or known damaged in the target and held by that
+fold. Full import publishes events and object additions or repairs under
+[event-store.md section 11.3](event-store.md#import-into-an-existing-vault)'s atomic
+publication boundary; this semantic union is not permission to expose an
+intermediate event-only import.
 No content traversal is implied. An erased message/root relation does not
 revive merely because an older source still has the bytes.
 
 Missing non-erased bytes remain an integrity/availability condition and may
-be repaired from a verified folder import or backup. Deferred
+be repaired from a verified portable SQLite import or backup. Deferred
 `vault-sync/1.0` may later provide another repair source.
 
 <a id="173-replica-synchronization-deferred"></a>
@@ -3175,18 +3187,22 @@ implicitly by a phase-1 runtime.
 
 ### 14.4 Restore
 
-A portable folder restore creates a new local `replica_id` and
-`store_generation` unless the operation is an exact move whose old writer is
-permanently stopped. The restored runtime derives every mediation and
-communication key, reconciles required recipients using ordinary Coordinate
-Mediation, drains the account-scoped mailbox, and resumes eligible outbox work.
+A portable SQLite restore creates a new local `replica_id` and
+`store_generation`. An exact local move is a separate operation that may retain
+them only with the old writer permanently stopped under
+[vault-sqlite.md section 12.3](vault-sqlite.md#exact-local-move). The restored
+runtime derives every mediation and communication key, reconciles required
+recipients using ordinary Coordinate Mediation, drains the account-scoped
+mailbox, and resumes eligible outbox work.
 It also reconciles unfinished committed inbound work under [section 13.1](#open-the-writable-full-runtime),
 including observations already pickup-ACKed before the snapshot. Local queue
 state is not a recovery source.
 
 No previous process must be online. Mediator retention still bounds messages
-that were never committed to the vault. Seed/recovery material must be backed
-up independently of the readable event/object folder.
+that were never committed to the vault. The seed recovery credential must be
+retained independently of the active runtime; a portable SQLite backup includes
+its encrypted wrapper. Recovery verification follows
+[vault-sqlite.md section 4.2](vault-sqlite.md#recovery-material-and-product-requirement).
 
 <a id="175-forked-author"></a>
 
@@ -3210,8 +3226,8 @@ author remain unchanged.
   confer ownership of a DID.
 - `replica_id` and event author are operational provenance, not credentials or
   peer-visible addresses.
-- The readable folder contains plaintext retained message content and
-  attachments unless surrounding storage encrypts it.
+- Runtime and portable SQLite databases contain plaintext retained message
+  content and attachments unless surrounding storage encrypts them.
 - A rendezvous DID is intentionally disclosed and correlatable within its
   audience. Its Peer long form avoids DNS resolution for that DID; resolving
   an external peer or mediator may still involve a network resolver.
@@ -3431,9 +3447,9 @@ There is no migration requirement from an earlier event vocabulary.
     allocator selects its independent route when creating the successor DID.
 52. <a id="ve-52"></a> Erasure is checked before object presence; late roots receive equivalent
     erasure closure.
-53. <a id="ve-53"></a> Restore from a readable folder creates a new local author unless it is an
-    exact move, reconciles standard mediation/pickup and resumes eligible
-    outbox work.
+53. <a id="ve-53"></a> Restore from portable SQLite creates a new local author, reconciles standard
+    mediation/pickup and resumes eligible outbox work; an exact local move follows
+    its separate stopped-source rule.
 54. <a id="ve-54"></a> Phase 1 requires neither `replica-mediation/1.0` nor `vault-sync/1.0`.
 55. <a id="ve-55"></a> Shuffling the same event set leaves every phase-1 fold result unchanged.
 
@@ -3447,8 +3463,8 @@ There is no migration requirement from an earlier event vocabulary.
     otherwise retained package. Committing `delivery.submitted` releases every
     package's delivery retention contribution for that message ID without waiting for
     ACK; message body and attachment lifetimes remain separate.
-58. <a id="ve-58"></a> Commit and collection share the writer lock; GC computes current held roots
-    under that lock and cannot unlink a retained object or overlap acceptance
+58. <a id="ve-58"></a> Commit and collection share the operation lock; GC computes current held roots
+    under that lock and cannot delete a retained object or overlap acceptance
     and append within a commit.
 59. <a id="ve-59"></a> A successfully appended inbound event survives immediate process restart
     before the mediator pickup acknowledgment is sent.
@@ -3465,7 +3481,7 @@ There is no migration requirement from an earlier event vocabulary.
 63. <a id="ve-63"></a> Later transition-verified aliases/rotations in that relationship reuse the
     same execution ID and cannot execute the same logical wire message twice.
     Contact decisions or DID/route retirement never select a new execution scope.
-64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of `local/`,
+64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of local caches,
     clock rollback, package retirement, content erasure and envelope collection.
     Retained event skeletons prevent resubmission or replacement of that message ID.
 65. <a id="ve-65"></a> One package's committed `delivery.submitted` completes its entire message ID and
@@ -3486,7 +3502,7 @@ There is no migration requirement from an earlier event vocabulary.
 71. <a id="ve-71"></a> Each new duplicate observation receives a fresh ordinal; exact re-ingest
     does not. The logical group's minimum complete `(integer ordinal, author)`
     key orders future ACKs without changing any already frozen ACK array.
-72. <a id="ve-72"></a> Restore, restart and loss of `local/` recover the ordinal high-water mark
+72. <a id="ve-72"></a> Restore, restart and loss of local caches recover the ordinal high-water mark
     across all historical authors. Cross-author equal ordinals survive import
     and sort by author on a tie; allocation resumes above the union's maximum.
 
@@ -3542,7 +3558,7 @@ There is no migration requirement from an earlier event vocabulary.
 88. <a id="ve-88"></a> A successor freezes its own route at DID creation. Crash before commit may
     choose again; afterward recovery reuses that exact document and route.
     Preference changes do not edit it.
-89. <a id="ve-89"></a> Retirement and input commit serialize under the writer lock. Retired
+89. <a id="ve-89"></a> Retirement and input commit serialize under the operation lock. Retired
     addresses accept existing-history receipt but no new births, independent
     of public/private policy. Historical receipt and invitation consumption
     survive import without a clock cutoff.
@@ -3737,7 +3753,7 @@ There is no migration requirement from an earlier event vocabulary.
      commits. The receipt references the returned binding eventId; no draft may
      supply a pre-minted eventId. Crash after binding consumes no invitation and
      creates no receipt ACK; recovery reuses that binding after authentication.
-     The enclosing receive operation holds the same vault-wide writer lock as
+     The enclosing receive operation holds the same vault-wide operation lock as
      outbound preparation, so that preparation cannot insert another binding
      between lookup and receipt. Whichever operation binds first supplies the
      reused pin, even when concurrent did:web resolutions return different

@@ -118,7 +118,7 @@ advisory; successful `register` is the authoritative capability check.
   Web recipients.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
   incarnation for event provenance, delivery and acknowledgment. It is
-  stored as `local/replica.json.replica_id`, is also used as the author of
+  stored as `store_state.replica_id`, is also used as the author of
   events produced by that incarnation, and is not a key or authorization
   boundary. There is no second identity for the execution host or operating
   system.
@@ -438,14 +438,14 @@ retirement did not preserve one.
 
 If `register`, `list`, status, live delivery or another authenticated mediator
 response says that the client's **current** replica ID is retired, the client
-MUST treat the ID as terminal even when `local/` is otherwise intact. It MUST:
+MUST treat the ID as terminal even when local runtime state is otherwise intact. It MUST:
 
 1. stop new event appends, pickup ACKs, live registration and outbound
    submission under the old ID;
 2. durably finish or checkpoint local work; events already authored by the old
    ID remain valid sync objects;
 3. atomically mint and store a fresh `replica_id` and `store_generation` in
-   `local/replica.json`;
+   the SQLite `store_state` row;
 4. reopen local event stores under the new author and discard change tokens or
    caches bound to the old generation;
 5. append or reconcile `replica.retired` for the old ID with the mediator's
@@ -458,7 +458,7 @@ A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
-Local restore and exact-move rules are defined by [vault-folder.md](vault-folder.md).
+Local restore and exact-move rules are defined by [vault-sqlite.md section 12](vault-sqlite.md#restore-and-import).
 
 <a id="portable-replica-events"></a>
 

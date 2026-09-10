@@ -230,7 +230,7 @@ pair already claimed by another R through rotation is an index conflict under
 
 Explicit user contacts use UUIDv7. Automatic contact creation for a relationship
 uses `contactId` above, unless that R already has a contact assignment. Reuse
-the selected assignment under the writer lock; do not infer cryptographic
+the selected assignment under the operation lock; do not infer cryptographic
 identity from a display name, contact merge or globally shared public address.
 The contact tombstone remains effective for that R after rotation or erasure.
 
@@ -306,7 +306,7 @@ retire resources only when no other relationship or disclosure requires them.
 
 [vault-events.md section 9.2](vault-events.md#message-out) owns the outbound schema. Every send freezes one
 `relationshipId`. A contact or address selection API determines that R
-under the writer lock before intent commit, using existing address histories
+under the operation lock before intent commit, using existing address histories
 first. For a new pair, nullable `birth` freezes the local DID entity and exact
 peer DID spelling, allowing an offline send before resolution. These birth
 addresses identify R permanently; later packages use its current ends.
@@ -374,7 +374,7 @@ Content remains application content regardless of whether a rotation is carried.
 
 1. Check submitted/expiry/conflict/lifecycle predicates before network work.
 2. Resolve the selected peer under [section 10.1](#did-resolution-requirements) and retain `peer.resolved`.
-3. Under the writer lock defined for receive and outbound binding operations
+3. Under the operation lock defined for receive and outbound binding operations
    in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence), recheck the pair and, for an unbound birth,
    commit the common `relationship.bound`. If a reverse-direction incoming
    message has already bound that pair, reuse its
@@ -510,7 +510,7 @@ rejection and hard abuse/resource limits are examples of this gate.
 
 ### 9.3 Integrity checks and durable receipt
 
-Network resolution and authentication finish before taking the receive lock
+Network resolution and authentication finish before taking the operation lock
 defined in [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence). Under that lock, every local recipient
 follows that document's
 [sections 6.1](vault-events.md#receipt-and-relationship-evidence) and [6.6](vault-events.md#relationship-fold-and-address-index)'s pair lookup. A carried proof
@@ -546,7 +546,7 @@ required for the delivery.
 
 For input passing these checks, follow [distributed-delivery.md section 4.3](distributed-delivery.md#receive-a-message)
 steps 4–6 for separate dependent resolution/binding/inbound commits, pickup ACK
-and carried-proof verification. The receive lock spans step 4's dependent
+and carried-proof verification. The operation lock spans step 4's dependent
 commits, not network ACK work. On redelivery after a pre-receipt crash, authenticate again
 under [section 10.1](#duplicate-authentication-and-historical-recovery) and reuse committed evidence.
 Safely identified integrity rejection is terminal without new input or response effect.
@@ -922,7 +922,7 @@ a committed `did.disclosed` with `as == "oob"` or `uses == "many"`, or occurs
 in another relationship's local history. An already
 private address needs no change. No policy requires the peer to rotate.
 
-Under the writer lock, reuse any existing local transition. Otherwise select
+Under the operation lock, reuse any existing local transition. Otherwise select
 one eligible committed application observation with no already selected natural,
 pure-ACK or notification response, validate its exact-root
 confirmation, and atomically commit a fresh successor and a normal
@@ -1245,7 +1245,7 @@ automatic resubmission of the completed message ID.
 
 ### Receipt recovery and evidence fixtures (RZ-55–RZ-61)
 
-55. <a id="rz-55"></a> Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eventId. One shared writer lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
+55. <a id="rz-55"></a> Crash after a new inbound binding commits but before message.in leaves reusable binding evidence, no invitation consumption and no pickup or ultimate ACK. Redelivery reauthenticates and references the previously returned binding eventId. One shared operation lock covers lookup through receipt; outbound preparation cannot interleave a competing binding between those commits.
 56. <a id="rz-56"></a> A public root confirmed in R_AB still uses its long form in new R_BC until input confirms that exact root in R_BC. A predecessor pin whose presentedDid is short and a valid equivalent long-form iss/kid verify against the same pinned method; unrelated spellings or keys fail.
 57. <a id="rz-57"></a> An unknown-iss carrier with authenticated sub=B1 commits unscoped and pickup-ACKs. Later proof-free B1-to-A0 input stays pending before receipt without a client retention cap; restart, body erasure and mediator expiry preserve that pair claim. Restoring and verifying the missing predecessor chain unlocks receipt in the original R, while an unrelated local/B1 pair is not blocked by this claim.
 58. <a id="rz-58"></a> Long-form disclosure and later short-form lookup retain the same numalgo-4 document bytes and CID under [vault-events.md section 4.4](vault-events.md#peer-resolved), across resolver implementations and import. Neither lookup spelling nor optional resolver transformations create another binding/transition pin.
