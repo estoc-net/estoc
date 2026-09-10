@@ -805,26 +805,86 @@ describe("the held view (nested calls share the lock)", () => {
     expect(vault.lock.held).toBe(false);
   });
 
-  it("a held view kept past its operation refuses a mutation and an open: nothing runs without the lock", async () => {
+  it("a held view kept past its operation refuses every call — mutation, open, nested locked, read — before doing anything: nothing runs without the lock", async () => {
     const { vault } = open();
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
-    const kept = await vault.locked(async (held) => held);
+    let nested = 0;
+    const kept = await vault.locked(async (held) => {
+      const keepView = await new Promise<Held>((resolve) => {
+        void held.collect((view) => {
+          resolve(view);
+          return rootsOf(view);
+        });
+      });
+      return { held, keepView };
+    });
     expect(vault.lock.held).toBe(false);
-    for (const attempt of [
-      () => kept.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]),
-      () => kept.ingest([]),
-      () => kept.collect(() => []),
-      () => kept.objects.open(HELLO_CID),
-      () => kept.objects.read(HELLO_CID, 5),
-      () => kept.locked((again) => again.commit([], [draft([HELLO_CID])])),
-    ]) {
-      await expect(attempt()).rejects.toThrow(UnsupportedOperation);
+    for (const view of [kept.held, kept.keepView]) {
+      for (const attempt of [
+        () => view.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]),
+        () => view.ingest([]),
+        () => view.collect(() => []),
+        () => view.objects.open(HELLO_CID),
+        () => view.objects.read(HELLO_CID, 5),
+        () =>
+          view.locked(async () => {
+            nested += 1;
+            return nested;
+          }),
+        () => view.objects.has(HELLO_CID),
+        () => view.objects.stat(HELLO_CID),
+        () => all(view.objects.list()),
+        () => all(view.events.scan()),
+        () => view.events.changes(),
+        () => view.events.damaged(),
+        () => view.events.conflicting(),
+      ]) {
+        await expect(attempt()).rejects.toThrow(UnsupportedOperation);
+      }
     }
-    expect(await kept.objects.has(HELLO_CID)).toBe(true);
-    expect(await all(kept.events.scan())).toHaveLength(1);
+    expect(nested).toBe(0);
+    expect(kept.held.metadata).toBe(vault.metadata);
     expect(await vault.vault.objects.has(WORLD_CID)).toBe(false);
     // the next operation gets a view of its own
     expect(await vault.locked((held) => held.commit([], [draft([HELLO_CID])]))).toHaveLength(1);
+  });
+
+  it("a runtime halted after an operation ended: the facade refuses through its guard, and the operation's views refuse on their own, asking the guard nothing", async () => {
+    const events = new MemoryEventStore({ author: authorN(1) });
+    const objects = new MemoryObjectStore();
+    let halted = false;
+    const asked: string[] = [];
+    const runtime = new Runtime({
+      author: events.author,
+      generation: events.generation,
+      metadata: META,
+      stores: {
+        events,
+        objects,
+        transaction: async (body) => {
+          const prepared = objects.prepare();
+          const drafts = await body(prepared);
+          return events.appendAll(drafts, () => prepared.publish());
+        },
+      },
+      keystore: () => ({ read: () => Promise.reject(new NotAVault("none")), rewrap: () => Promise.resolve() }),
+      guard: (when) => {
+        asked.push(when);
+        if (halted) throw new Error("halted");
+      },
+    });
+    await runtime.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const kept = await runtime.locked(async (held) => held);
+    halted = true;
+    asked.length = 0;
+    await expect(runtime.vault.objects.has(HELLO_CID)).rejects.toThrow("halted");
+    await expect(all(runtime.vault.events.scan())).rejects.toThrow("halted");
+    await expect(runtime.vault.events.changes()).rejects.toThrow("halted");
+    expect(asked).toEqual(["read", "read", "read"]);
+    await expect(kept.objects.has(HELLO_CID)).rejects.toThrow(UnsupportedOperation);
+    await expect(all(kept.events.scan())).rejects.toThrow(UnsupportedOperation);
+    await expect(kept.events.changes()).rejects.toThrow(UnsupportedOperation);
+    expect(asked).toEqual(["read", "read", "read"]);
   });
 
   it("a keep callback's ingest is refused before its source is asked for anything: a source that counts is untouched, one that throws is never reached", async () => {
@@ -873,6 +933,7 @@ describe("the held view (nested calls share the lock)", () => {
         }
         expect(await view.objects.has(HELLO_CID)).toBe(true);
         expect(view.metadata).toBe(held.metadata);
+        expect(await view.locked(async (again) => (await all(again.events.scan())).length)).toBe(1);
         return rootsOf(view);
       });
       expect(refused).toEqual(["UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation"]);

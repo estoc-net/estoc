@@ -71,9 +71,10 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * as the lock runs operations: a commit issued while a collection pass
  * computes its keep set lands after the pass, so what the pass decided
  * to keep is what it deletes against. The view lives as long as the
- * operation: one it issued and did not wait for still finishes before
- * the lock is released, and one issued after the operation ended —
- * through a view kept past it — is refused.
+ * operation: a mutation it issued and did not wait for still finishes
+ * before the lock is released, and a view kept past its operation
+ * refuses every call, reads included, since it is no longer inside the
+ * lock and no longer the runtime's to check.
  */
 export interface Held extends Vault {
   /** The store's `ingest`, for validated import and restore. */
@@ -177,8 +178,8 @@ type Mutate = Enter;
 /**
  * The span of one operation under the lock, as its held views see it:
  * mutations queued one behind another while it runs; once it has
- * ended, no further mutation and no further `open` — a view kept past
- * its operation would otherwise run without the lock — and `end`
+ * ended, nothing — a view kept past its operation would otherwise run
+ * without the lock, and read past the runtime's guard — and `end`
  * resolves when every mutation accepted before then has finished, so
  * the lock is released after them, not before.
  */
@@ -186,12 +187,18 @@ class Operation {
   private readonly mutations = new WriterLock();
   private ended = false;
 
-  enter<T>(op: () => Promise<T>): Promise<T> {
-    return this.ended ? refuse("an operation after the one holding the lock ended") : op();
+  check(): void {
+    if (this.ended) throw new UnsupportedOperation("a call through a held view after its operation ended");
   }
 
-  mutate<T>(op: () => Promise<T>): Promise<T> {
-    return this.ended ? refuse("a mutation after the operation holding the lock ended") : this.mutations.run(op);
+  async enter<T>(op: () => Promise<T>): Promise<T> {
+    this.check();
+    return op();
+  }
+
+  async mutate<T>(op: () => Promise<T>): Promise<T> {
+    this.check();
+    return this.mutations.run(op);
   }
 
   end(): Promise<void> {
@@ -339,11 +346,12 @@ class HeldView extends View implements Held {
 
   static forOperation(stores: Stores, metadata: VaultMetadata, operation: Operation): HeldView {
     const enter: Enter = (op) => operation.enter(op);
-    return new HeldView(stores, metadata, enter, (op) => operation.mutate(op), new HeldView(stores, metadata, enter, refuseInKeep));
+    const check: Check = () => operation.check();
+    return new HeldView(stores, metadata, enter, (op) => operation.mutate(op), check, new HeldView(stores, metadata, enter, refuseInKeep, check));
   }
 
-  private constructor(stores: Stores, metadata: VaultMetadata, enter: Enter, mutate: Mutate, reading?: Held) {
-    super(stores, metadata, enter, mutate);
+  private constructor(stores: Stores, metadata: VaultMetadata, enter: Enter, mutate: Mutate, check: Check, reading?: Held) {
+    super(stores, metadata, enter, mutate, check);
     this.reading = reading ?? this;
   }
 
@@ -356,7 +364,7 @@ class HeldView extends View implements Held {
   }
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
-    return op(this);
+    return this.enter(() => op(this));
   }
 }
 
@@ -367,9 +375,10 @@ interface Read {
 }
 
 /**
- * The input of `ingest`, read whole before the lock is taken: its
- * validation is its own, and a slow source should not hold the vault.
- * Each input is fixed — validated and copied into canonical form, or
+ * The input of `ingest`, read whole before any of it is classified —
+ * by the runtime before it takes the lock, since a slow source should
+ * not hold the vault, and by a held view in its turn among the
+ * operation's mutations. Each input is fixed — validated and copied into canonical form, or
  * recorded as rejected with its error — before the source is asked for
  * the next, so a source that reuses one object between yields is read
  * as it yielded, and what reaches the store is the runtime's own data,
