@@ -106,7 +106,7 @@ export class UnreferencedObject extends Error {
   }
 }
 
-/** An operation the vault in hand does not do — a write asked of the read-only view of a snapshot — refused before consuming a source or minting anything. */
+/** An operation the view in hand does not do — a write asked of the read-only view of a snapshot, a mutation asked inside a keep callback — refused before consuming a source or minting anything. */
 export class UnsupportedOperation extends Error {
   constructor(what: string) {
     super(`${what}: not supported by this vault`);

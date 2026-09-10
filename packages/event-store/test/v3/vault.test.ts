@@ -680,35 +680,105 @@ describe("the held view (nested calls share the lock)", () => {
     expectBytes((await drain(result.stream)).bytes, HELLO);
   });
 
-  it("two commits in flight through one held view each publish their own: the one that fails undoes nothing of the one that landed", async () => {
+  it("two commits issued through one held view run one at a time, in order: the second waits for the first, and a failure undoes nothing of the one that landed", async () => {
     const { vault } = open();
     await vault.locked(async (held) => {
       const g = gate();
       const failing = held.commit([{ cid: WORLD_CID, source: gated(HELLO, g) }], [draft([WORLD_CID])]);
-      await tick();
-      const landed = await held.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
-      expect(landed).toHaveLength(1);
-      expect(await held.objects.has(HELLO_CID)).toBe(true);
+      const landing = held.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+      expect(await settled(landing)).toBe(false); // queued behind the commit still reading its source
+      expect(await held.objects.has(HELLO_CID)).toBe(false);
       g.open();
       await expect(failing).rejects.toThrow(DigestMismatch);
+      const landed = await landing;
+      expect(landed).toHaveLength(1);
       expect(await held.objects.has(HELLO_CID)).toBe(true);
       expect(await held.objects.has(WORLD_CID)).toBe(false);
       expect(await all(held.events.scan())).toEqual(landed);
-      // and the other way round: the one that lands, lands whole, whatever failed before it
+      // and the other way round: the one that lands first lands whole, whatever fails after it
       const g2 = gate();
-      const failingFirst = held.commit([{ cid: WORLD_CID, source: gated(HELLO, g2) }], [draft([WORLD_CID])]);
-      await tick();
-      const g3 = gate();
-      const landingLater = held.commit([{ cid: EMPTY_CID, source: gated(new Uint8Array(0), g3) }], [draft([EMPTY_CID])]);
-      await tick();
+      const landingFirst = held.commit([{ cid: EMPTY_CID, source: gated(new Uint8Array(0), g2) }], [draft([EMPTY_CID])]);
+      const failingLater = held.commit([{ cid: WORLD_CID, source: HELLO }], [draft([WORLD_CID])]);
+      expect(await settled(failingLater)).toBe(false);
       g2.open();
-      await expect(failingFirst).rejects.toThrow(DigestMismatch);
-      expect(await held.objects.has(EMPTY_CID)).toBe(false);
-      g3.open();
-      expect(await landingLater).toHaveLength(1);
+      expect(await landingFirst).toHaveLength(1);
+      await expect(failingLater).rejects.toThrow(DigestMismatch);
       expect(await held.objects.has(EMPTY_CID)).toBe(true);
       expect(await all(held.objects.list())).toEqual([HELLO_CID, EMPTY_CID].sort());
       expect(await all(held.events.scan())).toHaveLength(2);
+    });
+  });
+
+  it("a commit issued through the held view while a collection pass computes its keep set lands after the pass: nothing the pass kept is what it deletes", async () => {
+    const { vault } = open();
+    await vault.locked(async (held) => {
+      const computed = gate();
+      const resume = gate();
+      const keeps: Cid[][] = [];
+      const collecting = held.collect(async (view) => {
+        const keep = await rootsOf(view);
+        keeps.push(keep);
+        computed.open();
+        await resume.wait;
+        return keep;
+      });
+      await computed.wait;
+      const committing = held.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+      expect(await settled(committing)).toBe(false);
+      expect(await held.objects.has(HELLO_CID)).toBe(false);
+      resume.open();
+      expect(await collecting).toEqual({ removed: [] });
+      expect(await committing).toHaveLength(1);
+      expect(keeps).toEqual([[]]);
+      expect(await held.objects.has(HELLO_CID)).toBe(true);
+      expect(await all(held.events.scan())).toHaveLength(1);
+      // the next pass sees the commit and keeps its root
+      expect(await held.collect(rootsOf)).toEqual({ removed: [] });
+      expect(await held.objects.has(HELLO_CID)).toBe(true);
+    });
+  });
+
+  it("an ingest issued through the held view queues with its commits: the input is read first, then it lands in order", async () => {
+    const { vault } = open();
+    const other = new MemoryVault({ metadata: META, author: authorN(2) });
+    const [foreign] = await other.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await vault.locked(async (held) => {
+      const g = gate();
+      const committing = held.commit([{ cid: HELLO_CID, source: gated(HELLO, g) }], [draft([HELLO_CID])]);
+      const ingesting = held.ingest([foreign]);
+      expect(await settled(ingesting)).toBe(false);
+      g.open();
+      expect(await committing).toHaveLength(1);
+      expect(await ingesting).toMatchObject({ added: 1, duplicates: 0 });
+      expect((await all(held.events.scan())).map((e) => e.author)).toEqual([authorN(1), authorN(2)]);
+    });
+  });
+
+  it("a keep callback computes from reads: a commit, ingest or collect through its view is refused before touching anything", async () => {
+    const { vault } = open();
+    await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await vault.locked(async (held) => {
+      const refused: string[] = [];
+      const collected = await held.collect(async (view) => {
+        for (const attempt of [
+          () => view.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]),
+          () => view.ingest([]),
+          () => view.collect(() => []),
+          () => view.locked((again) => again.commit([], [draft([HELLO_CID])])),
+        ]) {
+          await attempt().then(
+            () => refused.push("landed"),
+            (err: Error) => refused.push(err.name)
+          );
+        }
+        expect(await view.objects.has(HELLO_CID)).toBe(true);
+        expect(view.metadata).toBe(held.metadata);
+        return rootsOf(view);
+      });
+      expect(refused).toEqual(["UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation"]);
+      expect(collected).toEqual({ removed: [] });
+      expect(await held.objects.has(WORLD_CID)).toBe(false);
+      expect(await all(held.events.scan())).toHaveLength(1);
     });
   });
 

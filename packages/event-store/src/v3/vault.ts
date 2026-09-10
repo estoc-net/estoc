@@ -9,7 +9,7 @@
  * far end of the round trip.
  */
 
-import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject } from "./errors.js";
+import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject, UnsupportedOperation } from "./errors.js";
 import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested, type Rejected } from "./event.js";
 import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
@@ -53,8 +53,10 @@ export interface Vault {
  * The keep set for one collection pass, computed by the caller while
  * the pass holds the writer lock: what the vault runtime folds from the
  * events it reads through `held` — a set computed before the lock was
- * taken cannot be handed in, which is the rule made a type. The object
- * store checks each CID.
+ * taken cannot be handed in, which is the rule made a type. The view
+ * `keep` gets is for reading: a mutation through it is refused, since
+ * it would wait on the pass that is waiting on `keep`. The object store
+ * checks each CID.
  */
 export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
@@ -63,7 +65,12 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * interface, every call sharing the held lock instead of taking it — a
  * read nested inside a commit, an import or an export neither waits for
  * itself nor shortens the operation's boundary — plus the primitives
- * the runtime keeps from application code.
+ * the runtime keeps from application code. The mutations the operation
+ * issues through it — `commit`, `ingest`, `collect` — run one at a
+ * time in the order issued, each whole from its first step to its last,
+ * as the lock runs operations: a commit issued while a collection pass
+ * computes its keep set lands after the pass, so what the pass decided
+ * to keep is what it deletes against.
  */
 export interface Held extends Vault {
   /** The store's `ingest`, for validated import and restore. */
@@ -102,11 +109,12 @@ export interface VaultRuntime {
 // ---- the lock -----------------------------------------------------------
 
 /**
- * The vault-wide writer lock for one runtime in one process: operations
- * run one at a time in the order they arrived, each holding it from its
- * first step to its last, whatever it awaits meanwhile. Nesting is not
- * this class's: an operation that needs the lock it already holds works
- * through `Held`.
+ * Operations run one at a time in the order they arrived, each holding
+ * the lock from its first step to its last, whatever it awaits
+ * meanwhile: the vault-wide writer lock of one runtime in one process,
+ * and, inside one operation, the order of the mutations it issues
+ * through `Held`. Nesting is not this class's: an operation that needs
+ * the lock it already holds works through `Held`.
  */
 export class WriterLock {
   private tail: Promise<void> = Promise.resolve();
@@ -155,6 +163,9 @@ export interface Stores {
 /** How a view enters the lock: by taking it, or — already inside — by doing nothing. */
 type Enter = <T>(op: () => Promise<T>) => Promise<T>;
 
+/** What a view does around each mutation: the facade takes the lock; the held view queues it behind the operation's other mutations; a keep callback's view refuses it. */
+type Mutate = Enter;
+
 /** What each read that takes no lock asks first: nothing, or a throw refusing it. */
 type Check = () => void;
 
@@ -165,7 +176,7 @@ type Check = () => void;
  * metadata take no lock; `open` takes it for the presence check and
  * releases it before the stream is consumed; `read` is `open` drained
  * outside the lock, refused before allocation when the object is larger
- * than `maxBytes`; every mutation runs under it whole.
+ * than `maxBytes`; every mutation runs whole inside `mutate`.
  */
 class View implements Vault {
   readonly events: VaultEvents;
@@ -175,6 +186,7 @@ class View implements Vault {
     protected readonly stores: Stores,
     readonly metadata: VaultMetadata,
     protected readonly enter: Enter,
+    protected readonly mutate: Mutate,
     check: Check = () => undefined
   ) {
     const { events, objects } = stores;
@@ -248,7 +260,7 @@ class View implements Vault {
   }
 
   commit<D extends JsonObject>(objects: CommitObject[], drafts: Draft<D>[]): Promise<Event<D>[]> {
-    return this.enter(async () => {
+    return this.mutate(async () => {
       // The batch is fixed first — the drafts validated into copies,
       // the object descriptors copied — so what is checked is what is
       // read: a source that grows the caller's array or rewrites a
@@ -273,23 +285,38 @@ class View implements Vault {
   }
 }
 
+/** A mutation issued inside a keep callback would wait on the collection pass that is waiting on the callback: refused before it touches anything. */
+function refuseInKeep<T>(): Promise<T> {
+  return Promise.reject(new UnsupportedOperation("a mutation inside a keep callback"));
+}
+
 /**
  * The view an operation works through while it holds the lock: the
- * vault's members entering nothing, plus the runtime's primitives. One
- * per runtime; handed to every locked operation and every keep
- * computation.
+ * vault's members entering nothing, its mutations queued one behind
+ * another, plus the runtime's primitives. One per runtime, handed to
+ * every locked operation; the keep callback of each collection pass
+ * gets `reading`, the same view with its mutations refused.
  */
 class HeldView extends View implements Held {
-  constructor(stores: Stores, metadata: VaultMetadata) {
-    super(stores, metadata, (op) => op());
+  private readonly reading: Held;
+
+  static forOperations(stores: Stores, metadata: VaultMetadata): HeldView {
+    const lock = new WriterLock();
+    return new HeldView(stores, metadata, (op) => lock.run(op), new HeldView(stores, metadata, refuseInKeep));
+  }
+
+  private constructor(stores: Stores, metadata: VaultMetadata, mutate: Mutate, reading?: Held) {
+    super(stores, metadata, (op) => op(), mutate);
+    this.reading = reading ?? this;
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    return ingestRead(this.stores.events, await readAll(events));
+    const read = await readAll(events);
+    return this.mutate(() => ingestRead(this.stores.events, read));
   }
 
-  async collect(keep: KeepUnderLock): Promise<Collected> {
-    return this.stores.objects.collect(await keep(this));
+  collect(keep: KeepUnderLock): Promise<Collected> {
+    return this.mutate(async () => this.stores.objects.collect(await keep(this.reading)));
   }
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
@@ -376,10 +403,11 @@ export class Runtime implements VaultRuntime {
     this.metadata = checkMetadata(options.metadata);
     this.stores = options.stores;
     this.guard = options.guard ?? (() => undefined);
-    this.held = new HeldView(this.stores, this.metadata);
+    this.held = HeldView.forOperations(this.stores, this.metadata);
     this.vault = new View(
       this.stores,
       this.metadata,
+      (op) => this.enter(op),
       (op) => this.enter(op),
       () => this.guard("read")
     );
@@ -464,8 +492,9 @@ class MemoryKeystore implements KeystoreAccess {
  * commit's objects are verified in a preparation no read sees and
  * published in the one synchronous step that accepts its events, so the
  * two land together or not at all; a paused stream blocks no writer;
- * collection waits for the commit in flight and computes its keep set
- * only once it has the lock.
+ * collection waits for the commit in flight, computes its keep set
+ * only once it has the lock, and a commit issued meanwhile lands after
+ * it has deleted.
  */
 export class MemoryVault extends Runtime {
   declare readonly stores: Stores & { events: MemoryEventStore; objects: MemoryObjectStore };

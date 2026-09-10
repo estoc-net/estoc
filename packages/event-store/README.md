@@ -41,8 +41,10 @@ drafts)`, the one way a local event is written, which refuses a supplied
 object no draft names as a root before reading a byte and publishes its
 objects and events together or not at all — and `VaultRuntime`, what a
 host opens: `locked(op)`, the vault-wide writer lock, whose operation
-works through `Held`, the same vault sharing the held lock;
-`collect(keep)`, the keep set a function called only under the lock;
+works through `Held`, the same vault sharing the held lock, its
+mutations run one at a time in the order issued;
+`collect(keep)`, the keep set a function called only under the lock,
+through a view that reads and refuses to mutate;
 `ingest`; and `keystore`, the `KeystoreAccess` to the wrapped seed —
 `read` a detached value, `rewrap` a replacement under the lock, the
 check that it opens to the same seed being the unlocked host's.

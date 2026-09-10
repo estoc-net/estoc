@@ -79,10 +79,11 @@ export class MemoryEventStore implements EventStore {
   /**
    * `drafts` appended as one batch; `publish`, when given, runs in the
    * same synchronous step, after the batch is minted and before any of
-   * it is accepted, so what it lands and the events land together or —
-   * a throw from the clock, the generator or `publish` itself — not at
-   * all. How the vault in memory publishes a commit's objects with its
-   * events.
+   * it is accepted: what it lands and the events land together. A throw
+   * from the clock, the generator or `publish` accepts no event, and
+   * undoes nothing `publish` did before throwing — so `publish` must
+   * finish synchronously and leave nothing visible when it throws. How
+   * the vault in memory publishes a commit's objects with its events.
    */
   async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
     const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands

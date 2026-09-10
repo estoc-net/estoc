@@ -32,7 +32,12 @@
   commit's own preparation; `Stores.transaction` is required, and
   `Runtime` refuses stores without it; `MemoryObjectStore.prepare`
   is new and its `transaction` gone; `MemoryEventStore.appendAll`
-  takes an optional `publish` step that lands with the batch;
+  takes an optional `publish` step that lands with the batch; the
+  mutations an operation issues through `Held` — `commit`, `ingest`,
+  `collect` — run one at a time in the order issued, so a commit
+  issued while a collection pass computes its keep set lands after the
+  pass, and the view a keep callback gets refuses a mutation
+  (`UnsupportedOperation`) rather than wait on the pass itself;
   `VaultRuntime` gained `metadata` and
   `keystore`, a `KeystoreAccess` whose `rewrap` runs under the writer
   lock; `Runtime` takes an options object; `MemoryVault` takes

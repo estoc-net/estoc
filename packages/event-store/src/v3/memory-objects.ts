@@ -67,7 +67,6 @@ export class MemoryObjectStore implements ObjectStore {
     return this.accept(await this.verify(cid, source));
   }
 
-  /** `source` hashed into extents of this store's size, its CID checked before a byte is read; `DigestMismatch` when the bytes are not `cid`'s. */
   private async verify(cid: Cid, source: ByteSource): Promise<Held> {
     const want = rawCidOf(cid);
     const packer = new Packer(this.extentBytes);
