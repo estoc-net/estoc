@@ -8,21 +8,26 @@ import {
   InvalidEvent,
   MemoryVault,
   MissingRoot,
+  NotAVault,
   ObjectTooLarge,
+  UnreferencedObject,
   WriterLock,
   type Cid,
   type Draft,
   type Event,
   type Held,
+  type VaultMetadata,
+  type WrappedSeed,
 } from "../../src/v3/index.js";
 import { all, authorN, clock, expectBytes } from "./suite/helpers.js";
-import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain } from "./suite/object-store-suite.js";
+import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, join } from "./suite/object-store-suite.js";
 
 const T0 = "2026-09-07T10:00:00.000Z";
-const HOUR = 60 * 60 * 1000;
 const HELLO = new TextEncoder().encode("hello");
 const WORLD = new TextEncoder().encode("world");
 const WORLD_CID = cidOf(WORLD);
+const META: VaultMetadata = { version: 3, anchor: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK" };
+const WRAPPED: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJQQkVTMi1IUzI1NitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.a.b.c.d" };
 
 const draft = (roots: Cid[] = [], data: Record<string, unknown> = {}): Draft => ({ type: "test.event", roots, data: { n: 1, ...data } });
 
@@ -69,10 +74,26 @@ async function rootsOf(held: Held): Promise<Cid[]> {
   return roots;
 }
 
-function open(overrides: { graceMs?: number } = {}): { vault: MemoryVault; now: ReturnType<typeof clock> } {
+/** Every root but `except`: what a fold that had erased that object would compute. */
+function rootsExcept(except: Cid): (held: Held) => Promise<Cid[]> {
+  return async (held) => (await rootsOf(held)).filter((cid) => cid !== except);
+}
+
+function open(): { vault: MemoryVault; now: ReturnType<typeof clock> } {
   const now = clock(T0);
-  const vault = new MemoryVault({ now: now.now, graceMs: overrides.graceMs ?? HOUR, author: authorN(1) });
+  const vault = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: now.now, author: authorN(1) });
   return { vault, now };
+}
+
+/** A stream drained after its object may have been collected or replaced: complete with exactly `bytes`, or failed — never anything else. */
+async function completeOrFailed(stream: ReadableStream<Uint8Array>, bytes: Uint8Array): Promise<"complete" | "failed"> {
+  try {
+    expectBytes((await drain(stream)).bytes, bytes);
+    return "complete";
+  } catch (err) {
+    expect(err).toBeInstanceOf(Error);
+    return "failed";
+  }
 }
 
 describe("WriterLock", () => {
@@ -105,9 +126,12 @@ describe("WriterLock", () => {
 });
 
 describe("Vault facade", () => {
-  it("exposes only the read half of the stores; every local write is a commit", async () => {
+  it("exposes the metadata and the read half of the stores; every local write is a commit", async () => {
     const { vault } = open();
     const v = vault.vault;
+    expect(v.metadata).toEqual(META);
+    expect(Object.isFrozen(v.metadata)).toBe(true);
+    expect(vault.metadata).toBe(v.metadata);
     expect(Object.keys(v.events).sort()).toEqual(["changes", "conflicting", "damaged", "scan"]);
     expect("append" in v.events).toBe(false);
     expect("appendAll" in v.events).toBe(false);
@@ -116,19 +140,25 @@ describe("Vault facade", () => {
     expect("putRaw" in v.objects).toBe(false);
     expect("putObject" in v.objects).toBe(false);
     expect("collect" in v.objects).toBe(false);
+    expect("files" in v).toBe(false);
     expect("locked" in v).toBe(false);
     expect("ingest" in v).toBe(false);
     expect("collect" in v).toBe(false);
+    expect("keystore" in v).toBe(false);
     const [event] = await v.commit([], [draft()]);
     expect(event?.author).toBe(vault.author);
     expect(await all(v.events.scan())).toEqual([event]);
   });
 
-  it("carries the replica context: author and generation", () => {
+  it("carries the replica context — author and generation — and refuses metadata that is not a version-3 anchor", () => {
     const { vault } = open();
     expect(vault.author).toBe(authorN(1));
     expect(typeof vault.generation).toBe("string");
-    expect(new MemoryVault().author).not.toBe(new MemoryVault().author);
+    expect(new MemoryVault({ metadata: META }).author).not.toBe(new MemoryVault({ metadata: META }).author);
+    expect(() => new MemoryVault({ metadata: { version: 2, anchor: META.anchor } as unknown as VaultMetadata })).toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: { version: 3, anchor: "z6Mk" } })).toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: { version: 3, anchor: "did:" } })).toThrow(NotAVault);
+    expect(() => new MemoryVault({ metadata: null as unknown as VaultMetadata })).toThrow(NotAVault);
   });
 });
 
@@ -165,8 +195,8 @@ describe("Vault.commit", () => {
     expect((await all(v.events.scan())).length).toBe(2);
   });
 
-  it("an object that fails verification appends nothing; objects accepted before it stay, orphans under grace", async () => {
-    const { vault, now } = open();
+  it("an object that fails verification publishes nothing: no event, and not the objects accepted before it", async () => {
+    const { vault } = open();
     const v = vault.vault;
     await expect(
       v.commit(
@@ -178,19 +208,47 @@ describe("Vault.commit", () => {
       )
     ).rejects.toThrow(DigestMismatch);
     expect(await all(v.events.scan())).toEqual([]);
-    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
     expect(await v.objects.has(WORLD_CID)).toBe(false);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [HELLO_CID] });
-    now.advance(HOUR);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [HELLO_CID], young: [] });
+    expect(await all(v.objects.list())).toEqual([]);
+    expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
   });
 
-  it("a root absent after acceptance appends nothing: the supplied objects are checked, the drafts' roots are what count", async () => {
+  it("a root still absent after the supplied objects are accepted publishes nothing, the accepted objects included", async () => {
     const { vault } = open();
     const v = vault.vault;
-    await expect(v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([WORLD_CID])])).rejects.toThrow(MissingRoot);
+    await expect(v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID, WORLD_CID])])).rejects.toThrow(MissingRoot);
     expect(await all(v.events.scan())).toEqual([]);
-    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
+  });
+
+  it("a supplied object no draft names as a root is UnreferencedObject: refused before its source is read, and nothing of the batch is accepted", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    let read = 0;
+    const counted = async function* (bytes: Uint8Array): AsyncIterable<Uint8Array> {
+      read += 1;
+      yield bytes;
+    };
+    await expect(v.commit([{ cid: HELLO_CID, source: counted(HELLO) }], [draft()])).rejects.toThrow(UnreferencedObject);
+    await expect(v.commit([{ cid: HELLO_CID, source: counted(HELLO) }], [draft([WORLD_CID])])).rejects.toMatchObject({ name: "UnreferencedObject", cid: HELLO_CID });
+    await expect(
+      v.commit(
+        [
+          { cid: WORLD_CID, source: counted(WORLD) },
+          { cid: HELLO_CID, source: counted(HELLO) },
+        ],
+        [draft([WORLD_CID])]
+      )
+    ).rejects.toThrow(UnreferencedObject);
+    expect(read).toBe(0);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
+    expect(await all(v.events.scan())).toEqual([]);
+    // named by any draft of the batch, not necessarily the first
+    const events = await v.commit([{ cid: HELLO_CID, source: counted(HELLO) }], [draft(), draft([HELLO_CID])]);
+    expect(events.length).toBe(2);
+    expect(read).toBe(1);
   });
 
   it("checks every draft and every CID before reading a byte: a bad draft or a bad CID accepts nothing", async () => {
@@ -201,17 +259,17 @@ describe("Vault.commit", () => {
       read += 1;
       yield HELLO;
     };
-    await expect(v.commit([{ cid: HELLO_CID, source: counted() }], [draft(), { type: "", data: {} }])).rejects.toThrow(InvalidEvent);
+    await expect(v.commit([{ cid: HELLO_CID, source: counted() }], [draft([HELLO_CID]), { type: "", data: {} }])).rejects.toThrow(InvalidEvent);
     await expect(
       v.commit(
         [
           { cid: HELLO_CID, source: counted() },
           { cid: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG" as Cid, source: WORLD },
         ],
-        [draft()]
+        [draft([HELLO_CID])]
       )
     ).rejects.toThrow(InvalidCid);
-    await expect(v.commit([{ cid: HELLO_CID, source: counted() }], [draft([WORLD_CID], { data: { a: undefined } })])).rejects.toThrow(InvalidEvent);
+    await expect(v.commit([{ cid: HELLO_CID, source: counted() }], [draft([HELLO_CID], { data: { a: undefined } })])).rejects.toThrow(InvalidEvent);
     expect(read).toBe(0);
     expect(await v.objects.has(HELLO_CID)).toBe(false);
     expect(await all(v.events.scan())).toEqual([]);
@@ -247,6 +305,33 @@ describe("Vault.commit", () => {
     expect(await all(v.objects.list())).toEqual([HELLO_CID, EMPTY_CID].sort());
     expectBytes(await v.objects.read(EMPTY_CID, 0), new Uint8Array(0));
   });
+
+  it("a root known damaged fails the commit explicitly and appends nothing; a commit that supplies its verified bytes repairs it and lands", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    vault.stores.objects.damage(HELLO_CID);
+    await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(DamagedObject);
+    await expect(v.commit([], [draft([HELLO_CID])])).rejects.toThrow(DamagedObject);
+    expect((await all(v.events.scan())).length).toBe(1);
+    await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
+    const events = await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    expect(events.length).toBe(1);
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expectBytes(await v.objects.read(HELLO_CID, 5), HELLO);
+    expect((await all(v.events.scan())).length).toBe(2);
+  });
+
+  it("a commit that fails after repairing a damaged object leaves the damage as it was", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    vault.stores.objects.damage(HELLO_CID);
+    await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(DamagedObject);
+    await expect(v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID, WORLD_CID])])).rejects.toThrow(MissingRoot);
+    await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
+    expect((await all(v.events.scan())).length).toBe(1);
+  });
 });
 
 describe("Vault.objects reads", () => {
@@ -255,7 +340,6 @@ describe("Vault.objects reads", () => {
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     await expect(v.objects.read(HELLO_CID, 4)).rejects.toThrow(ObjectTooLarge);
-    expect(vault.latches.latched()).toEqual([]);
     expectBytes(await v.objects.read(HELLO_CID, 5), HELLO);
     expect(await v.objects.read(WORLD_CID, 100)).toBeNull();
     await expect(v.objects.read("bafybadcid" as Cid, 100)).rejects.toThrow(InvalidCid);
@@ -263,61 +347,19 @@ describe("Vault.objects reads", () => {
     await expect(v.objects.open("bafybadcid" as Cid)).rejects.toThrow(InvalidCid);
   });
 
-  it("a damaged object fails its read and its stream, and leaves the accepted namespace", async () => {
+  it("a damaged object fails its read and its stream, and is known damaged from then on: presence fails too, never reads as absence", async () => {
     const { vault } = open();
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     vault.stores.objects.damage(HELLO_CID);
     await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(DamagedObject);
-    expect(await v.objects.has(HELLO_CID)).toBe(false);
-    expect(vault.latches.latched()).toEqual([]);
+    await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
+    await expect(v.objects.stat(HELLO_CID)).rejects.toThrow(DamagedObject);
+    await expect(v.objects.open(HELLO_CID)).rejects.toThrow(DamagedObject);
+    await expect(all(v.objects.list())).rejects.toThrow(DamagedObject);
   });
 
-  it("a read whose output buffer cannot be allocated cancels the stream it opened: no latch is left behind", async () => {
-    const { vault, now } = open({ graceMs: 0 });
-    const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(HOUR);
-    // Fault injection: `new Uint8Array(5)` — the one allocation `read` makes for this object — throws; every other construction goes through.
-    const Real = globalThis.Uint8Array;
-    globalThis.Uint8Array = new Proxy(Real, {
-      construct: (target, args, newTarget) => {
-        if (args.length === 1 && args[0] === 5) throw new RangeError("Array buffer allocation failed");
-        return Reflect.construct(target, args, newTarget);
-      },
-    }) as typeof Uint8Array;
-    try {
-      await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(RangeError);
-    } finally {
-      globalThis.Uint8Array = Real;
-    }
-    expect(vault.latches.latched()).toEqual([]);
-    expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
-  });
-
-  it("a read whose stream fails copying a chunk keeps the error, leaves no latch, and the object is collectable", async () => {
-    const { vault, now } = open({ graceMs: 0 });
-    const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(HOUR);
-    // Fault injection: copying the one 5-byte extent throws; the output buffer `new Uint8Array(5)` and everything else go through.
-    const Real = globalThis.Uint8Array;
-    globalThis.Uint8Array = new Proxy(Real, {
-      construct: (target, args, newTarget) => {
-        if (args.length === 1 && args[0] instanceof Real && args[0].length === 5) throw new RangeError("injected: chunk copy");
-        return Reflect.construct(target, args, newTarget);
-      },
-    }) as typeof Uint8Array;
-    try {
-      await expect(v.objects.read(HELLO_CID, 5)).rejects.toThrow(/injected: chunk copy/);
-    } finally {
-      globalThis.Uint8Array = Real;
-    }
-    expect(vault.latches.latched()).toEqual([]);
-    expect(await vault.collect(() => [])).toEqual({ unlinked: [HELLO_CID], young: [] });
-  });
-
-  it("read holds no latch once done, and no lock while draining", async () => {
+  it("read holds no lock while draining", async () => {
     const { vault } = open();
     const v = vault.vault;
     const big = bytesOf(3 * 1024 * 1024, 7);
@@ -327,12 +369,11 @@ describe("Vault.objects reads", () => {
     // a commit issued while the read is in flight lands
     await v.commit([], [draft()]);
     expectBytes(await reading, big);
-    expect(vault.latches.latched()).toEqual([]);
   });
 });
 
-describe("latch and collection", () => {
-  it("a paused stream blocks no commit or file write; collection skips its CID, collects another, and takes it once the stream ends", async () => {
+describe("collection", () => {
+  it("a paused stream blocks no commit; collection deletes the unkept at once, whatever their age, and the stream then completes whole or fails explicitly", async () => {
     const { vault, now } = open();
     const v = vault.vault;
     await v.commit(
@@ -340,79 +381,64 @@ describe("latch and collection", () => {
         { cid: HELLO_CID, source: HELLO },
         { cid: WORLD_CID, source: WORLD },
       ],
-      [draft([HELLO_CID])]
+      [draft([HELLO_CID, WORLD_CID])]
     );
-    // HELLO retained, WORLD an orphan, both past grace
-    now.advance(2 * HOUR);
     const stream = (await v.objects.open(WORLD_CID)) as ReadableStream<Uint8Array>;
-    expect(vault.latches.latched()).toEqual([WORLD_CID]);
     expect(vault.lock.held).toBe(false);
-    // another handle's commit and a file write land while the stream is paused
+    // another commit lands while the stream is paused
     const [event] = await v.commit([{ cid: EMPTY_CID, source: new Uint8Array(0) }], [draft([EMPTY_CID])]);
     expect(event).toBeDefined();
-    await v.files.write("notes.txt", HELLO);
-    // collection skips WORLD (latched, unlisted) and can collect nothing else eligible yet: EMPTY is held, HELLO is held
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [] });
-    // make HELLO unheld: a keep set without it (what an erasure fold would compute) — WORLD is still skipped
-    expect(await vault.collect(async (held) => (await rootsOf(held)).filter((c) => c !== HELLO_CID))).toEqual({ unlinked: [HELLO_CID], young: [] });
-    expect(await v.objects.has(WORLD_CID)).toBe(true);
-    // the stream reads its whole object, then the latch is gone and the next pass takes it
-    expectBytes((await drain(stream)).bytes, WORLD);
-    expect(vault.latches.latched()).toEqual([]);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [WORLD_CID], young: [] });
+    // everything held: nothing to collect, however long it has been there
+    now.advance(365 * 24 * 60 * 60 * 1000);
+    expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
+    // a keep set without WORLD — what an erasure fold would compute — takes it at once, stream or no stream
+    expect(await vault.collect(rootsExcept(WORLD_CID))).toEqual({ removed: [WORLD_CID] });
     expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await v.objects.open(WORLD_CID)).toBeNull();
+    await completeOrFailed(stream, WORLD);
+    expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(await v.objects.has(EMPTY_CID)).toBe(true);
   });
 
-  it("failure and cancellation each release the latch", async () => {
-    const { vault, now } = open();
+  it("a held root known damaged survives collection with its damage; unheld, it is removed like any other and reports absence after", async () => {
+    const { vault } = open();
     const v = vault.vault;
     await v.commit(
       [
         { cid: HELLO_CID, source: HELLO },
         { cid: WORLD_CID, source: WORLD },
       ],
-      [draft()]
+      [draft([HELLO_CID, WORLD_CID])]
     );
-    now.advance(2 * HOUR);
-    // cancellation
-    const cancelled = (await v.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [WORLD_CID], young: [] });
-    await cancelled.cancel();
-    expect(vault.latches.latched()).toEqual([]);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [HELLO_CID], young: [] });
-    // failure
-    await v.commit([{ cid: WORLD_CID, source: WORLD }], [draft()]);
-    now.advance(2 * HOUR);
-    const failing = (await v.objects.open(WORLD_CID)) as ReadableStream<Uint8Array>;
+    const stream = (await v.objects.open(WORLD_CID)) as ReadableStream<Uint8Array>;
     vault.stores.objects.damage(WORLD_CID);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [] });
-    await expect(drain(failing)).rejects.toThrow(DamagedObject);
-    expect(vault.latches.latched()).toEqual([]);
+    await expect(drain(stream)).rejects.toThrow(DamagedObject);
+    await expect(v.objects.has(WORLD_CID)).rejects.toThrow(DamagedObject);
+    expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
+    await expect(v.objects.has(WORLD_CID)).rejects.toThrow(DamagedObject);
+    expect(await vault.collect(rootsExcept(WORLD_CID))).toEqual({ removed: [WORLD_CID] });
     expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await v.objects.stat(WORLD_CID)).toBeNull();
+    expect(await all(v.objects.list())).toEqual([HELLO_CID]);
   });
 
-  it("open before collection gets the whole protected object; open after gets null; one stream ending does not release another's", async () => {
-    const { vault, now } = open();
+  it("two streams open before collection each get the whole object or an explicit failure; open after gets null", async () => {
+    const { vault } = open();
     const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(2 * HOUR);
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     const a = (await v.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
     const b = (await v.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
-    expect(vault.latches.count(HELLO_CID)).toBe(2);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [] });
-    expectBytes((await drain(a)).bytes, HELLO);
-    expect(vault.latches.count(HELLO_CID)).toBe(1);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [] });
-    expectBytes((await drain(b)).bytes, HELLO);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [HELLO_CID], young: [] });
+    expect(await vault.collect(rootsExcept(HELLO_CID))).toEqual({ removed: [HELLO_CID] });
+    await completeOrFailed(a, HELLO);
+    await completeOrFailed(b, HELLO);
     expect(await v.objects.open(HELLO_CID)).toBeNull();
   });
 
-  it("open and collection racing serialize on the lock: the stream is protected or null, never unprotected", async () => {
-    const { vault, now } = open();
+  it("open and collection racing serialize on the lock: the stream sees the object whole, or null", async () => {
+    const { vault } = open();
     const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(2 * HOUR);
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     // collection first in line, with a keep computation that yields; open queued behind it
     const g = gate();
     const collecting = vault.collect(async () => {
@@ -422,42 +448,40 @@ describe("latch and collection", () => {
     const opening = v.objects.open(HELLO_CID);
     expect(await settled(opening)).toBe(false);
     g.open();
-    expect(await collecting).toEqual({ unlinked: [HELLO_CID], young: [] });
+    expect(await collecting).toEqual({ removed: [HELLO_CID] });
     expect(await opening).toBeNull();
     // the other order: open first, then a collection issued while it is queued
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(2 * HOUR);
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     const stream = v.objects.open(HELLO_CID);
-    const collected = vault.collect(rootsOf);
-    expect(await collected).toEqual({ unlinked: [], young: [] });
-    expectBytes((await drain((await stream) as ReadableStream<Uint8Array>)).bytes, HELLO);
+    const collected = vault.collect(rootsExcept(HELLO_CID));
+    expect(await collected).toEqual({ removed: [HELLO_CID] });
+    await completeOrFailed((await stream) as ReadableStream<Uint8Array>, HELLO);
   });
 
-  it("an abandoned stream stays latched across idle time and passes; a paused one resumes to completion", async () => {
-    const { vault, now } = open();
+  it("a paused stream resumes to completion or fails, whatever passes ran meanwhile; it never truncates", async () => {
+    const { vault } = open();
     const v = vault.vault;
-    await v.commit([{ cid: WORLD_CID, source: chunked(WORLD, [2, 2]) }], [draft()]);
+    await v.commit([{ cid: WORLD_CID, source: chunked(WORLD, [2, 2]) }], [draft([WORLD_CID])]);
     const stream = (await v.objects.open(WORLD_CID)) as ReadableStream<Uint8Array>;
     const reader = stream.getReader();
     const first = (await reader.read()).value as Uint8Array;
-    for (let day = 0; day < 3; day++) {
-      now.advance(24 * HOUR);
-      expect(await vault.collect(rootsOf)).toEqual({ unlinked: [], young: [] });
-    }
-    expect(vault.latches.latched()).toEqual([WORLD_CID]);
+    for (let pass = 0; pass < 3; pass++) expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
+    expect(await vault.collect(rootsExcept(WORLD_CID))).toEqual({ removed: [WORLD_CID] });
     const rest: Uint8Array[] = [first];
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      rest.push(value);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        rest.push(value);
+      }
+      expectBytes(join(rest), WORLD);
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
     }
-    expectBytes(new Uint8Array(rest.flatMap((c) => [...c])), WORLD);
-    expect(vault.latches.latched()).toEqual([]);
-    expect(await vault.collect(rootsOf)).toEqual({ unlinked: [WORLD_CID], young: [] });
   });
 
-  it("collection waits for a commit paused between object acceptance and event append, past grace; the event then retains the object", async () => {
-    const { vault, now } = open({ graceMs: 0 });
+  it("collection waits for a commit paused between object acceptance and event append; the event then retains the object", async () => {
+    const { vault } = open();
     const v = vault.vault;
     const g = gate();
     const committing = v.commit(
@@ -469,8 +493,7 @@ describe("latch and collection", () => {
     );
     await tick();
     expect(vault.lock.held).toBe(true);
-    expect(await vault.stores.objects.has(HELLO_CID)).toBe(true); // accepted, unreferenced, grace 0: eligible if collection ran now
-    now.advance(HOUR);
+    expect(await vault.stores.objects.has(HELLO_CID)).toBe(true); // accepted, not yet referenced by any event: eligible if collection ran now
     const keeps: number[] = [];
     const collecting = vault.collect(async (held) => {
       keeps.push((await all(held.events.scan())).length);
@@ -480,23 +503,22 @@ describe("latch and collection", () => {
     g.open();
     const events = await committing;
     expect(events.length).toBe(1);
-    expect(await collecting).toEqual({ unlinked: [], young: [] });
+    expect(await collecting).toEqual({ removed: [] });
     expect(keeps).toEqual([1]); // the keep set was computed after the commit landed
     expect(await v.objects.has(HELLO_CID)).toBe(true);
     expect(await v.objects.has(WORLD_CID)).toBe(true);
   });
 
-  it("the keep set is computed after the lock is acquired and held through unlink; a commit issued meanwhile starts after the pass", async () => {
-    const { vault, now } = open({ graceMs: 0 });
+  it("the keep set is computed after the lock is acquired and held through deletion; a commit issued meanwhile starts after the pass", async () => {
+    const { vault } = open();
     const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(HOUR);
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     const order: string[] = [];
     const g = gate();
     const collecting = vault.collect(async (held) => {
       order.push("keep in");
       expect(vault.lock.held).toBe(true);
-      const roots = await rootsOf(held);
+      const roots = (await rootsOf(held)).filter((cid) => cid !== HELLO_CID);
       await g.wait;
       order.push("keep out");
       return roots;
@@ -514,32 +536,30 @@ describe("latch and collection", () => {
     );
     expect(await settled(committing)).toBe(false);
     g.open();
-    expect(await collecting).toEqual({ unlinked: [HELLO_CID], young: [] });
+    expect(await collecting).toEqual({ removed: [HELLO_CID] });
     // the commit ran after the pass, and found its root gone
     await expect(committing).rejects.toThrow(MissingRoot);
     expect(order).toEqual(["keep in", "keep out", "commit failed: MissingRoot"]);
   });
 
   it("collection validates the keep set before touching anything", async () => {
-    const { vault, now } = open();
+    const { vault } = open();
     const v = vault.vault;
-    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft()]);
-    now.advance(2 * HOUR);
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     await expect(vault.collect(() => ["not-a-cid" as Cid])).rejects.toThrow(InvalidCid);
     expect(await v.objects.has(HELLO_CID)).toBe(true);
   });
 });
 
 describe("the held view (nested calls share the lock)", () => {
-  it("an operation under the lock can commit, open, read, write and nest without waiting for itself", async () => {
+  it("an operation under the lock can commit, open, read and nest without waiting for itself", async () => {
     const { vault } = open();
-    const v = vault.vault;
     const result = await vault.locked(async (held) => {
       expect(vault.lock.held).toBe(true);
+      expect(held.metadata).toBe(vault.metadata);
       const [event] = await held.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
       const bytes = await held.objects.read(HELLO_CID, 5);
       const stream = (await held.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>;
-      await held.files.write("under-lock.txt", WORLD);
       const nested = await held.locked(async (again) => {
         expect(again).toBe(held);
         return (await all(again.events.scan())).length;
@@ -549,10 +569,9 @@ describe("the held view (nested calls share the lock)", () => {
     });
     expectBytes(result.bytes, HELLO);
     expect(result.nested).toBe(1);
-    expect(result.collected).toEqual({ unlinked: [], young: [] });
+    expect(result.collected).toEqual({ removed: [] });
     expect(vault.lock.held).toBe(false);
     expectBytes((await drain(result.stream)).bytes, HELLO);
-    expectBytes(await v.files.read("under-lock.txt"), WORLD);
   });
 
   it("a facade operation issued while the lock is held waits for it; a failure inside releases it", async () => {
@@ -571,21 +590,20 @@ describe("the held view (nested calls share the lock)", () => {
       order.push("commit");
       return events;
     });
-    const writing = v.files.write("f", HELLO).then(() => order.push("write"));
+    const collecting = vault.collect(rootsOf).then(() => order.push("collect"));
     expect(await settled(committing)).toBe(false);
     g.open();
     await expect(locked).rejects.toThrow("boom");
     await committing;
-    await writing;
-    expect(order).toEqual(["locked in", "locked out", "commit", "write"]);
+    await collecting;
+    expect(order).toEqual(["locked in", "locked out", "commit", "collect"]);
     expect(vault.lock.held).toBe(false);
   });
 
-  it("reads through the facade take no lock: a scan, stat, has, list and file read land while an operation holds it", async () => {
+  it("reads through the facade take no lock: a scan, stat, has and list land while an operation holds it; open does take it", async () => {
     const { vault } = open();
     const v = vault.vault;
     await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
-    await v.files.write("f", WORLD);
     const g = gate();
     const locked = vault.locked(() => g.wait);
     await tick();
@@ -593,17 +611,57 @@ describe("the held view (nested calls share the lock)", () => {
     expect(await v.objects.has(HELLO_CID)).toBe(true);
     expect(await v.objects.stat(HELLO_CID)).toMatchObject({ size: 5 });
     expect(await all(v.objects.list())).toEqual([HELLO_CID]);
-    expectBytes(await v.files.read("f"), WORLD);
-    expect(await v.files.list()).toEqual(["f"]);
-    expect(await settled(v.objects.open(HELLO_CID))).toBe(false); // open does take it
+    expect(await settled(v.objects.open(HELLO_CID))).toBe(false);
     g.open();
     await locked;
   });
 });
 
+describe("VaultRuntime.keystore", () => {
+  it("read hands out the wrapped seed as given, frozen; a vault given none refuses to read one", async () => {
+    const { vault } = open();
+    const wrapped = await vault.keystore.read();
+    expect(wrapped).toEqual(WRAPPED);
+    expect(Object.isFrozen(wrapped)).toBe(true);
+    await expect(new MemoryVault({ metadata: META }).keystore.read()).rejects.toThrow(NotAVault);
+  });
+
+  it("rewrap replaces the wrapper under the lock: it waits for the operation holding it, and read sees the replacement after", async () => {
+    const { vault } = open();
+    const next: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..iv.ct.tag" };
+    const g = gate();
+    const locked = vault.locked(() => g.wait);
+    await tick();
+    const rewrapping = vault.keystore.rewrap(next);
+    expect(await settled(rewrapping)).toBe(false);
+    expect(await vault.keystore.read()).toEqual(WRAPPED);
+    g.open();
+    await locked;
+    await rewrapping;
+    expect(await vault.keystore.read()).toEqual(next);
+  });
+
+  it("rewrap refuses what is not a version-3 compact JWE before taking the lock, leaving the wrapper as it was", async () => {
+    const { vault } = open();
+    for (const bad of [
+      { version: 2, seedJwe: WRAPPED.seedJwe },
+      { version: 3, seedJwe: "not a jwe" },
+      { version: 3, seedJwe: "a.b.c" },
+      { version: 3, seedJwe: ".b.c.d.e" },
+      { version: 3 },
+      null,
+    ]) {
+      await expect(vault.keystore.rewrap(bad as unknown as WrappedSeed), JSON.stringify(bad)).rejects.toThrow(NotAVault);
+    }
+    expect(vault.lock.held).toBe(false);
+    expect(await vault.keystore.read()).toEqual(WRAPPED);
+    expect(() => new MemoryVault({ metadata: META, wrapped: { version: 3, seedJwe: "nope" } })).toThrow(NotAVault);
+  });
+});
+
 describe("VaultRuntime.ingest", () => {
   it("ingests another replica's events under the lock; its own unseen event is ForkedAuthor", async () => {
-    const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
+    const other = new MemoryVault({ metadata: META, author: authorN(2), now: clock(T0).now });
     const [foreign] = await other.vault.commit([], [draft([], { from: "other" })]);
     const { vault } = open();
     const g = gate();
@@ -614,7 +672,6 @@ describe("VaultRuntime.ingest", () => {
     g.open();
     await locked;
     expect(await ingesting).toEqual({ added: 1, duplicates: 0, conflicts: [], rejected: [] });
-    expect(await ingesting).toBeDefined();
     expect(await vault.ingest([foreign])).toMatchObject({ added: 0, duplicates: 1 });
     const [own] = await vault.vault.commit([], [draft()]);
     const forked = { ...(own as Event), eventId: (foreign as Event).eventId.replace(/.$/, "f") };
@@ -623,7 +680,7 @@ describe("VaultRuntime.ingest", () => {
   });
 
   it("reads each input as it was yielded: a source reusing one object between yields loses nothing, on both paths", async () => {
-    const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
+    const other = new MemoryVault({ metadata: META, author: authorN(2), now: clock(T0).now });
     const [first, second] = (await other.vault.commit([], [draft([], { n: 1 }), draft([], { n: 2 })])) as [Event, Event];
     async function* reused(): AsyncIterable<unknown> {
       const value = structuredClone(first);
@@ -631,9 +688,9 @@ describe("VaultRuntime.ingest", () => {
       Object.assign(value, structuredClone(second));
       yield value;
     }
-    const direct = await new MemoryVault({ author: authorN(3) }).ingest(reused());
+    const direct = await new MemoryVault({ metadata: META, author: authorN(3) }).ingest(reused());
     expect(direct).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
-    const held = await new MemoryVault({ author: authorN(3) }).locked((h) => h.ingest(reused()));
+    const held = await new MemoryVault({ metadata: META, author: authorN(3) }).locked((h) => h.ingest(reused()));
     expect(held).toEqual({ added: 2, duplicates: 0, conflicts: [], rejected: [] });
     // the same ID under two contents, through one reused object: a conflict, not a duplicate
     async function* conflicting(): AsyncIterable<unknown> {
@@ -642,11 +699,11 @@ describe("VaultRuntime.ingest", () => {
       value.data = { n: 3 };
       yield value;
     }
-    const conflicted = await new MemoryVault({ author: authorN(3) }).ingest(conflicting());
+    const conflicted = await new MemoryVault({ metadata: META, author: authorN(3) }).ingest(conflicting());
     expect(conflicted.added).toBe(1);
     expect(conflicted.conflicts.map((c) => [c.eventId, c.kept.data, c.rejected.data])).toEqual([[first.eventId, { n: 1 }, { n: 3 }]]);
     // what the store holds is the runtime's own copy: mutating the source afterwards changes nothing
-    const vault = new MemoryVault({ author: authorN(3) });
+    const vault = new MemoryVault({ metadata: META, author: authorN(3) });
     const value = structuredClone(first);
     await vault.ingest([value]);
     (value.data as { n: number }).n = 99;
@@ -654,7 +711,7 @@ describe("VaultRuntime.ingest", () => {
   });
 
   it("an input that is not an event is reported as rejected, with why, in the order it was read", async () => {
-    const other = new MemoryVault({ author: authorN(2), now: clock(T0).now });
+    const other = new MemoryVault({ metadata: META, author: authorN(2), now: clock(T0).now });
     const [good] = await other.vault.commit([], [draft()]);
     async function* mixed(): AsyncIterable<unknown> {
       const bad = { ...(good as Event), at: "yesterday" };
@@ -663,14 +720,14 @@ describe("VaultRuntime.ingest", () => {
       yield { ...(good as Event), data: { n: -0 } }; // a canonical form of its own: -0 becomes 0
       yield 42;
     }
-    const outcome = await new MemoryVault({ author: authorN(3) }).ingest(mixed());
+    const outcome = await new MemoryVault({ metadata: META, author: authorN(3) }).ingest(mixed());
     expect(outcome.added).toBe(1);
     expect(outcome.rejected.map((r) => r.error)).toEqual(["at is not a canonical RFC 3339 UTC millisecond", "an event is a JSON object"]);
     expect(outcome.rejected[1]?.value).toBe(42);
   });
 
   it("the held view ingests too, for import and restore", async () => {
-    const other = new MemoryVault({ author: authorN(2) });
+    const other = new MemoryVault({ metadata: META, author: authorN(2) });
     const events = await other.vault.commit([], [draft(), draft()]);
     const { vault } = open();
     const outcome = await vault.locked((held) => held.ingest(events));

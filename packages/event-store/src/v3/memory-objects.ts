@@ -4,14 +4,14 @@
  * internal extents of a chosen size — invisible at the portable layer, and how the suite
  * shows they are. Nothing persists, so the process-durable half of the store's promise
  * is vacuous here; the rest is not: a put is hashed as it streams and visible only
- * whole, a read latches its CID against collection until the stream completes, fails or
- * is cancelled, the bytes handed back are rehashed on the way out, and collection
- * unlinks exactly the unkept, unlatched objects whose grace has elapsed.
+ * whole, the bytes handed back are rehashed on the way out, an object a read finds
+ * damaged is known damaged from then on, and collection deletes exactly the unkept.
  *
- * In memory the presence check and latch registration of `open`, and the latch check and
- * unlink of `collect`, are each one synchronous step, so the serialization the vault
- * asks of the writer lock holds by construction; a vault runtime still holds its lock
+ * Every step that changes what is held is synchronous, so the serialization the vault
+ * asks of its writer lock holds by construction; a vault runtime still holds its lock
  * around `collect` for the commit boundary, which is its to keep, not this store's.
+ * A stream open when its object is replaced or collected reads the bytes it opened on
+ * to their end: complete, and verified against the CID before it completes.
  */
 
 import { compareBytes, type DaslCid } from "@estoc/dasl";
@@ -19,57 +19,39 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { DamagedObject, DigestMismatch, ObjectTooLarge } from "./errors.js";
 import type { Cid } from "./event.js";
-import { LatchRegistry, hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore } from "./objects.js";
+import { hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore } from "./objects.js";
 
-/**
- * How old an unkept object must be before `collect` takes it: generous,
- * because the commit it may belong to is bounded by a process, not a
- * clock.
- */
-export const DEFAULT_GRACE_MS = 60 * 60 * 1000;
 /** The accepted-size bound a store has when given none: 1 GiB. */
 export const DEFAULT_MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
 /** The extent size a store in memory has when given none: 1 MiB. */
 export const DEFAULT_EXTENT_BYTES = 1024 * 1024;
 
 export interface MemoryObjectStoreOptions {
-  /** the wall clock in Unix milliseconds, for orphan age; default `Date.now`, pinned by tests */
-  now?: () => number;
-  /** orphan grace; default one hour */
-  graceMs?: number;
   /** the largest object a put accepts; default 1 GiB */
   maxObjectBytes?: number;
   /** the size of the internal extents an object is held in; default 1 MiB */
   extentBytes?: number;
-  /** the latch registry to share with other handles over the same objects; a fresh one when left out */
-  latches?: LatchRegistry;
 }
 
-/** One accepted object: its bytes in extents, and when it was last accepted, for grace. */
+/** One accepted object: its bytes in extents. */
 interface Held {
   cid: DaslCid;
   extents: Uint8Array[];
   size: number;
-  acceptedAt: number;
 }
 
 export class MemoryObjectStore implements ObjectStore {
-  /** the read latches over this store's objects, shared or its own */
-  readonly latches: LatchRegistry;
-  private readonly now: () => number;
-  private readonly graceMs: number;
   private readonly maxObjectBytes: number;
   private readonly extentBytes: number;
   /** every accepted object, by CID text */
   private readonly held = new Map<string, Held>();
+  /** the accepted objects a read of this session found not to hash to their CID, by CID text */
+  private readonly damaged = new Set<string>();
 
   constructor(options: MemoryObjectStoreOptions = {}) {
-    this.now = options.now ?? Date.now;
-    this.graceMs = bound("graceMs", options.graceMs ?? DEFAULT_GRACE_MS);
     this.maxObjectBytes = bound("maxObjectBytes", options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES);
     this.extentBytes = bound("extentBytes", options.extentBytes ?? DEFAULT_EXTENT_BYTES);
     if (this.extentBytes === 0) throw new RangeError("extentBytes is at least 1");
-    this.latches = options.latches ?? new LatchRegistry();
   }
 
   async putRaw(source: ByteSource): Promise<ObjectInfo> {
@@ -87,114 +69,123 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   /**
-   * The one step that makes an object visible, synchronous and whole. The
-   * bytes verified this time are the ones held from here on: an object
-   * already held is one object still, with its orphan age renewed — and
-   * if what was held had gone bad underneath, it is now sound again. A
-   * stream open on the old bytes keeps reading them; should it find them
-   * damaged, `verified` sees they are no longer what is held and leaves
-   * the new ones alone.
+   * The one step that makes an object visible, synchronous and whole.
+   * An object already held and sound is one object still, its bytes
+   * untouched; one known damaged is replaced by the bytes verified
+   * now, and the damage forgotten. A stream open on the old bytes
+   * keeps reading them and, finding them damaged, fails without
+   * touching the new ones.
    */
   private accept(cid: DaslCid, extents: Uint8Array[], size: number): ObjectInfo {
-    this.held.set(cid.text, { cid, extents, size, acceptedAt: this.now() });
+    const have = this.held.get(cid.text);
+    if (have !== undefined && !this.damaged.has(cid.text)) return info(have.cid, have.size);
+    this.held.set(cid.text, { cid, extents, size });
+    this.damaged.delete(cid.text);
     return info(cid, size);
   }
 
-  async open(cid: Cid): Promise<ReadableStream<Uint8Array> | null> {
-    rawCidOf(cid);
-    const held = this.held.get(cid);
-    if (held === undefined) return null;
-    // Presence checked and latch registered in one step; the stream pulls
-    // nothing until read (highWaterMark 0), rehashes each extent on the
-    // way out, and releases the latch when it completes, fails or is
-    // cancelled.
-    // The latch is this method's from here until the stream ends, and
-    // every way it can end releases it: completion, damage, cancel, and
-    // any failure — building the stream, copying a chunk — which
-    // releases before the stream fails, since an errored stream runs no
-    // `cancel` and a caller can release nothing on its behalf.
-    const release = this.latches.acquire(cid);
+  /**
+   * Undo everything `body` accepted if it throws: what was held, and
+   * what was known damaged, are as they were before it ran. For the
+   * vault's commit, whose objects and events publish together or not
+   * at all.
+   */
+  async transaction<T>(body: () => Promise<T>): Promise<T> {
+    const held = new Map(this.held);
+    const damaged = new Set(this.damaged);
     try {
-      const hash = sha256.create();
-      let next = 0;
-      return new ReadableStream<Uint8Array>(
-        {
-          pull: (controller) => {
-            try {
-              const extent = held.extents[next];
-              if (extent !== undefined) {
-                next += 1;
-                hash.update(extent);
-                controller.enqueue(new Uint8Array(extent)); // a copy: the store's bytes stay its own
-                return;
-              }
-              if (!this.verified(held, hash.digest())) {
-                release();
-                controller.error(new DamagedObject(cid));
-                return;
-              }
-              release();
-              controller.close();
-            } catch (err) {
-              release();
-              controller.error(err);
-            }
-          },
-          cancel: () => {
-            release();
-          },
-        },
-        { highWaterMark: 0 }
-      );
+      return await body();
     } catch (err) {
-      release();
+      this.held.clear();
+      for (const [cid, object] of held) this.held.set(cid, object);
+      this.damaged.clear();
+      for (const cid of damaged) this.damaged.add(cid);
       throw err;
     }
   }
 
-  async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
+  /** The object `cid` names, or null for absence; `DamagedObject` for one known damaged. Every read starts here. */
+  private sound(cid: Cid): Held | null {
     rawCidOf(cid);
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
-    const held = this.held.get(cid);
-    if (held === undefined) return null;
-    if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
-    const release = this.latches.acquire(cid);
-    try {
-      const out = new Uint8Array(held.size);
-      const hash = sha256.create();
-      let at = 0;
-      for (const extent of held.extents) {
-        hash.update(extent);
-        out.set(extent, at);
-        at += extent.length;
-      }
-      if (!this.verified(held, hash.digest())) throw new DamagedObject(cid);
-      return out;
-    } finally {
-      release();
-    }
+    if (this.damaged.has(cid)) throw new DamagedObject(cid);
+    return this.held.get(cid) ?? null;
   }
 
-  /** Do the bytes read still hash to the CID? If not, the object leaves the accepted namespace, and the caller fails the read. */
+  async open(cid: Cid): Promise<ReadableStream<Uint8Array> | null> {
+    const held = this.sound(cid);
+    if (held === null) return null;
+    // The stream pulls nothing until read (highWaterMark 0), rehashes
+    // each extent on the way out, and fails on the read after the last
+    // extent when the digest is not the CID's.
+    const hash = sha256.create();
+    let next = 0;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull: (controller) => {
+          try {
+            const extent = held.extents[next];
+            if (extent !== undefined) {
+              next += 1;
+              hash.update(extent);
+              controller.enqueue(new Uint8Array(extent)); // a copy: the store's bytes stay its own
+              return;
+            }
+            if (!this.verified(held, hash.digest())) {
+              controller.error(new DamagedObject(cid));
+              return;
+            }
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
+      },
+      { highWaterMark: 0 }
+    );
+  }
+
+  async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
+    const held = this.sound(cid);
+    if (held === null) return null;
+    if (held.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${held.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
+    const out = new Uint8Array(held.size);
+    const hash = sha256.create();
+    let at = 0;
+    for (const extent of held.extents) {
+      hash.update(extent);
+      out.set(extent, at);
+      at += extent.length;
+    }
+    if (!this.verified(held, hash.digest())) throw new DamagedObject(cid);
+    return out;
+  }
+
+  /**
+   * Do the bytes read still hash to the CID? If not, and they are still
+   * what is held — not replaced since the read opened — the object is
+   * known damaged from here on; either way the caller fails the read.
+   */
   private verified(held: Held, digest: Uint8Array): boolean {
     if (compareBytes(digest, held.cid.digest) === 0) return true;
-    if (this.held.get(held.cid.text) === held) this.held.delete(held.cid.text);
+    if (this.held.get(held.cid.text) === held) this.damaged.add(held.cid.text);
     return false;
   }
 
   async stat(cid: Cid): Promise<ObjectInfo | null> {
-    rawCidOf(cid);
-    const held = this.held.get(cid);
-    return held === undefined ? null : info(held.cid, held.size);
+    const held = this.sound(cid);
+    return held === null ? null : info(held.cid, held.size);
   }
 
   async has(cid: Cid): Promise<boolean> {
-    rawCidOf(cid);
-    return this.held.has(cid);
+    return this.sound(cid) !== null;
   }
 
   async *list(): AsyncIterable<Cid> {
-    for (const cid of this.cids()) yield cid;
+    for (const cid of this.cids()) {
+      if (this.damaged.has(cid)) throw new DamagedObject(cid);
+      yield cid;
+    }
   }
 
   /** Every accepted CID, in binary-CID byte order, as of now. */
@@ -204,24 +195,18 @@ export class MemoryObjectStore implements ObjectStore {
 
   async collect(keep: Iterable<Cid>): Promise<Collected> {
     // Every keep CID checked before anything is touched; then one
-    // synchronous pass: kept and latched objects are left alone and
-    // unlisted, unkept objects within grace are `young`, the rest go.
+    // synchronous pass: kept objects are left alone, damaged or not,
+    // and every other goes.
     const kept = new Set<string>();
     for (const cid of keep) kept.add(rawCidOf(cid).text);
-    const now = this.now();
-    const unlinked: Cid[] = [];
-    const young: Cid[] = [];
-    for (const held of this.held.values()) {
-      const cid = held.cid.text as Cid;
-      if (kept.has(cid) || this.latches.isLatched(cid)) continue;
-      if (now - held.acceptedAt < this.graceMs) {
-        young.push(cid);
-        continue;
-      }
+    const removed: Cid[] = [];
+    for (const cid of this.held.keys()) {
+      if (kept.has(cid)) continue;
       this.held.delete(cid);
-      unlinked.push(cid);
+      this.damaged.delete(cid);
+      removed.push(cid as Cid);
     }
-    return { unlinked: sortCids(unlinked), young: sortCids(young) };
+    return { removed: sortCids(removed) };
   }
 
   /**

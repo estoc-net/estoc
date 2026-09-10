@@ -1,4 +1,4 @@
-import { VaultOwned, segmentsOf, type Ownership, type VaultBackend } from "./types.js";
+import { segmentsOf, type VaultBackend } from "./types.js";
 
 export interface MemoryBackendOptions {
   /** the clock `modified` reads; the wall clock when left out */
@@ -19,14 +19,9 @@ export interface MemoryBackendOptions {
  * with no write here. And a write lands only where a file system
  * would let it: not below a file, not onto a directory.
  */
-/** How much of a file one pull of `open` hands out. */
-const STREAM_CHUNK = 64 * 1024;
-
 export class MemoryBackend implements VaultBackend {
   readonly files = new Map<string, Uint8Array>();
   private readonly times = new Map<string, number>();
-  /** the names owned right now: one backend instance is one folder, so one set is its whole world */
-  private readonly owned = new Set<string>();
   private readonly clock: () => Date;
 
   constructor(options: MemoryBackendOptions = {}) {
@@ -91,10 +86,6 @@ export class MemoryBackend implements VaultBackend {
 
   async remove(path: string): Promise<void> {
     const key = this.key(path);
-    const prefix = `${key}/`;
-    for (const other of this.files.keys()) {
-      if (other.startsWith(prefix)) throw new Error(`directory not empty: ${JSON.stringify(key)}`);
-    }
     this.files.delete(key);
     this.times.delete(key);
   }
@@ -106,59 +97,6 @@ export class MemoryBackend implements VaultBackend {
 
   async modified(path: string): Promise<number | null> {
     return this.times.get(this.key(path)) ?? null;
-  }
-
-  async open(path: string): Promise<ReadableStream<Uint8Array> | null> {
-    const data = this.files.get(this.key(path));
-    if (data === undefined) return null;
-    // A copy taken at the open, handed out a chunk at a time: what a
-    // later write here changes is the map's bytes, not this stream's.
-    const bytes = new Uint8Array(data);
-    let at = 0;
-    return new ReadableStream<Uint8Array>({
-      pull: (controller) => {
-        if (at >= bytes.length) {
-          controller.close();
-          return;
-        }
-        const end = Math.min(at + STREAM_CHUNK, bytes.length);
-        controller.enqueue(bytes.slice(at, end));
-        at = end;
-      },
-    });
-  }
-
-  async create(path: string, source: AsyncIterable<Uint8Array>): Promise<void> {
-    const key = this.writable(this.key(path));
-    // Gathered whole, then set in one step: a source that throws has put
-    // nothing here.
-    const parts: Uint8Array[] = [];
-    let size = 0;
-    for await (const chunk of source) {
-      parts.push(new Uint8Array(chunk));
-      size += chunk.length;
-    }
-    const joined = new Uint8Array(size);
-    let at = 0;
-    for (const part of parts) {
-      joined.set(part, at);
-      at += part.length;
-    }
-    this.files.set(key, joined);
-    this.touch(key);
-  }
-
-  async rename(from: string, to: string): Promise<void> {
-    const source = this.key(from);
-    const data = this.files.get(source);
-    if (data === undefined) throw new Error(`no such file: ${JSON.stringify(from)}`);
-    const target = this.writable(this.key(to));
-    this.files.set(target, data);
-    this.times.set(target, this.times.get(source) as number);
-    if (target !== source) {
-      this.files.delete(source);
-      this.times.delete(source);
-    }
   }
 
   async list(dir: string): Promise<string[]> {
@@ -187,20 +125,5 @@ export class MemoryBackend implements VaultBackend {
       }
     }
     return { files, dirs: [...dirs] };
-  }
-
-  /** Ownership as a name in a set: exclusive within this instance, which is the folder. Makes no file. */
-  async own(path: string): Promise<Ownership> {
-    const key = this.key(path);
-    if (this.owned.has(key)) throw new VaultOwned(path, "another holder in this process has it");
-    this.owned.add(key);
-    let released = false;
-    return {
-      release: async () => {
-        if (released) return;
-        released = true;
-        this.owned.delete(key);
-      },
-    };
   }
 }

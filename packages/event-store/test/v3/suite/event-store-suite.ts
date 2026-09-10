@@ -49,7 +49,7 @@ function fold(events: Event[]): Folded {
 
 /**
  * The conformance suite over one `EventStore`, whatever it is made of:
- * what a store in memory, a folder and a database must all agree on.
+ * what a store in memory and a database must both agree on.
  * `open` gives the suite fresh stores, each its own generation.
  * Durability across a process restart is a backend's to show with its
  * own tests.

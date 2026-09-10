@@ -6,7 +6,6 @@ import {
   DamagedObject,
   DigestMismatch,
   InvalidCid,
-  LatchRegistry,
   ObjectTooLarge,
   chunksOf,
   compareCids,
@@ -14,19 +13,13 @@ import {
   type Cid,
   type ObjectStore,
 } from "../../../src/v3/index.js";
-import { clock, expectBytes, partition, shuffle } from "./helpers.js";
+import { expectBytes, partition, shuffle } from "./helpers.js";
 
 export interface OpenObjectOptions {
-  /** the wall clock in Unix milliseconds, for orphan age */
-  now?: () => number;
-  /** orphan grace in milliseconds */
-  graceMs?: number;
   /** the largest object a put accepts */
   maxObjectBytes?: number;
   /** the backend's internal extent size, where it has one */
   extentBytes?: number;
-  /** the latch registry to share */
-  latches?: LatchRegistry;
 }
 
 export interface ObjectStoreUnderTest {
@@ -42,8 +35,6 @@ export type OpenObjectStore = (options?: OpenObjectOptions) => Promise<ObjectSto
 export const EMPTY_CID = "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" as Cid;
 export const HELLO_CID = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
 const HELLO = new TextEncoder().encode("hello");
-const T0 = "2026-09-07T10:00:00.000Z";
-const HOUR = 60 * 60 * 1000;
 
 // ---- bytes and sources ----------------------------------------------------
 
@@ -135,10 +126,10 @@ export const BAD_CIDS: [string, string][] = [
 
 /**
  * The conformance suite over one `ObjectStore`, whatever it is made of:
- * what a store in memory, a folder and a database must all agree on.
- * `open` gives the suite fresh stores. Durability across a process
- * restart and the commit boundary are a backend's and the vault's to
- * show with their own tests.
+ * what a store in memory and a database must both agree on. `open`
+ * gives the suite fresh stores. Durability across a process restart and
+ * the commit boundary are a backend's and the vault's to show with their
+ * own tests.
  */
 export function objectStoreSuite(name: string, open: OpenObjectStore): void {
   describe(`${name}: objectStoreSuite`, () => {
@@ -372,205 +363,156 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
       });
     });
 
-    describe("collection and latches", () => {
-      it("kept objects are never unlinked; unkept ones are young within grace and unlinked after it; the keep set is exact, a duplicate no different", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: HOUR });
+    describe("collection and damage", () => {
+      /** The first read to find `cid` damaged, by stream: the failure may come from `open` itself or from the stream, never a completion. */
+      async function discover(store: ObjectStore, cid: Cid): Promise<void> {
+        let failed: unknown;
+        try {
+          const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
+          for await (const _ of chunksOf(stream)) {
+            // consumed and discarded: chunks handed out before the failure were not to be trusted
+          }
+        } catch (err) {
+          failed = err;
+        }
+        expect(failed).toBeInstanceOf(DamagedObject);
+      }
+
+      /** Every read and presence operation on a known damaged object fails with `DamagedObject`, and so does listing. */
+      async function expectDamaged(store: ObjectStore, cid: Cid): Promise<void> {
+        await expect(store.has(cid)).rejects.toThrow(DamagedObject);
+        await expect(store.stat(cid)).rejects.toThrow(DamagedObject);
+        await expect(store.open(cid)).rejects.toThrow(DamagedObject);
+        await expect(store.read(cid, 1 << 20)).rejects.toThrow(DamagedObject);
+        await expect(all(store.list())).rejects.toThrow(DamagedObject);
+      }
+
+      it("collect deletes exactly the unkept, at once and whatever their age; the keep set is exact, a duplicate no different; removed is unique, in binary-CID byte order", async () => {
+        const { store } = await open();
         const kept = (await store.putRaw(bytesOf(10, 11))).cid;
-        const orphan = (await store.putRaw(bytesOf(10, 12))).cid;
-        expect(await store.collect([kept, kept])).toEqual({ unlinked: [], young: [orphan] });
-        c.advance(HOUR - 1);
-        expect(await store.collect([kept])).toEqual({ unlinked: [], young: [orphan] });
-        c.advance(1);
-        expect(await store.collect([kept])).toEqual({ unlinked: [orphan], young: [] });
-        expect(await store.has(orphan)).toBe(false);
-        expect(await store.open(orphan)).toBeNull();
+        const orphans: Cid[] = [];
+        for (let i = 0; i < 12; i++) orphans.push((await store.putRaw(bytesOf(10, 200 + i))).cid);
+        expect(await store.collect([kept, kept])).toEqual({ removed: [...orphans].sort(compareCids) });
+        for (const orphan of orphans) {
+          expect(await store.has(orphan)).toBe(false);
+          expect(await store.stat(orphan)).toBeNull();
+          expect(await store.open(orphan)).toBeNull();
+          expect(await store.read(orphan, 10)).toBeNull();
+        }
         expect(await store.has(kept)).toBe(true);
-        expect(await store.collect([kept])).toEqual({ unlinked: [], young: [] });
-        c.advance(100 * HOUR);
-        expect(await store.collect([kept])).toEqual({ unlinked: [], young: [] });
+        expect(await all(store.list())).toEqual([kept]);
+        expect(await store.collect([kept])).toEqual({ removed: [] });
         expectBytes(await store.read(kept, 10), bytesOf(10, 11));
       });
 
-      it("an unkept object within grace when kept elsewhere is untouched; with no keep set at all, everything past grace goes", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0 });
+      it("with no keep set at all, everything goes; a store with nothing collects nothing", async () => {
+        const { store } = await open();
+        expect(await store.collect([])).toEqual({ removed: [] });
         const cids = [];
         for (let i = 0; i < 5; i++) cids.push((await store.putRaw(bytesOf(20, 20 + i))).cid);
-        expect(await store.collect([])).toEqual({ unlinked: [...cids].sort(compareCids), young: [] });
+        expect(await store.collect([])).toEqual({ removed: [...cids].sort(compareCids) });
         expect(await all(store.list())).toEqual([]);
+        expect(await store.collect([])).toEqual({ removed: [] });
       });
 
-      it("unlinked and young come back unique, in binary-CID byte order", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: HOUR });
-        const old: Cid[] = [];
-        for (let i = 0; i < 12; i++) old.push((await store.putRaw(bytesOf(10, 200 + i))).cid);
-        c.advance(HOUR);
-        const fresh: Cid[] = [];
-        for (let i = 0; i < 12; i++) fresh.push((await store.putRaw(bytesOf(10, 300 + i))).cid);
-        const { unlinked, young } = await store.collect([]);
-        expect(unlinked).toEqual([...old].sort(compareCids));
-        expect(young).toEqual([...fresh].sort(compareCids));
-      });
-
-      it("an invalid CID in keep fails the pass before it begins: nothing past grace is touched", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0 });
+      it("an invalid CID in keep fails the pass before it begins: nothing is touched", async () => {
+        const { store } = await open();
         const cid = (await store.putRaw(HELLO)).cid;
         await expect(store.collect([cid, "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi" as Cid])).rejects.toThrow(InvalidCid);
         await expect(store.collect(["" as Cid])).rejects.toThrow(InvalidCid);
         expect(await store.has(cid)).toBe(true);
       });
 
-      it("accepting a held object again renews its orphan age", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: HOUR });
-        const bytes = bytesOf(10, 13);
-        const cid = (await store.putRaw(bytes)).cid;
-        c.advance(HOUR - 1);
-        await store.putObject(cid, bytes);
-        c.advance(1); // an hour since the first acceptance: gone, had it not been renewed a millisecond ago
-        expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
-        c.advance(HOUR - 2);
-        expect(await store.collect([])).toEqual({ unlinked: [], young: [cid] });
-        c.advance(1); // an hour since the renewal
-        expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
-      });
-
       it("a CID written inside an object's bytes retains nothing; only the keep set does", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0 });
+        const { store } = await open();
         const leaf = (await store.putRaw(bytesOf(50, 14))).cid;
         const root = (await store.putRaw(new TextEncoder().encode(JSON.stringify({ attachment: leaf })))).cid;
-        expect(await store.collect([root])).toEqual({ unlinked: [leaf], young: [] });
+        expect(await store.collect([root])).toEqual({ removed: [leaf] });
         expect(await store.has(root)).toBe(true);
         expect(await store.has(leaf)).toBe(false);
       });
 
-      it("the latch: an opened stream keeps its object out of a collection pass — listed in neither array — from open until it completes or is cancelled, and lets the rest go", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0, extentBytes: 4 });
+      it("a stream open when its object is collected completes with the whole object or fails explicitly, never a truncation; the object is absent either way", async () => {
+        const { store } = await open({ extentBytes: 4 });
         const bytes = bytesOf(10, 15);
-        const held = (await store.putRaw(bytes)).cid;
-        const other = (await store.putRaw(bytesOf(10, 16))).cid;
-        const stream = (await store.open(held)) as ReadableStream<Uint8Array>;
-        // The latch is registered by open, before a byte is read.
-        expect(await store.collect([])).toEqual({ unlinked: [other], young: [] });
-        expect(await store.has(held)).toBe(true);
-        const reader = stream.getReader();
-        const first = await reader.read();
-        // One read is a prefix of the object, however the store chunks its output.
-        expect(first.done).toBe(false);
-        expectBytes(first.value, bytes.slice(0, first.value?.length));
-        if ((first.value as Uint8Array).length < bytes.length) {
-          // Bytes remain, so the stream cannot have completed: still latched.
-          expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-        }
-        await reader.cancel();
-        expect(await store.collect([])).toEqual({ unlinked: [held], young: [] });
-        expect(await store.has(held)).toBe(false);
-      });
-
-      it("the latch: a stream is latched while bytes remain to be read, and released once it has completed", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0, extentBytes: 4 });
-        const bytes = bytesOf(10, 17);
         const cid = (await store.putRaw(bytes)).cid;
         const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
-        const parts: Uint8Array[] = [];
-        let seen = 0;
-        while (seen < bytes.length) {
-          const { done, value } = await reader.read();
-          expect(done).toBe(false);
-          parts.push(value as Uint8Array);
-          seen += (value as Uint8Array).length;
-          // Whether the store completes with the last chunk or on the read after it is its own; while bytes remain, it has not.
-          if (seen < bytes.length) expect(await store.collect([]), `after ${seen} bytes`).toEqual({ unlinked: [], young: [] });
+        const first = await reader.read();
+        expect(first.done).toBe(false);
+        expect(await store.collect([])).toEqual({ removed: [cid] });
+        expect(await store.has(cid)).toBe(false);
+        expect(await store.open(cid)).toBeNull();
+        const parts = [first.value as Uint8Array];
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parts.push(value);
+          }
+          expectBytes(join(parts), bytes); // completed: then with every byte
+        } catch (err) {
+          expect(err).toBeInstanceOf(Error); // or failed, explicitly
         }
-        expectBytes(join(parts), bytes);
-        expect((await reader.read()).done).toBe(true);
-        expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
       });
 
-      it("the latch: a CID stays latched while any of its reads is active; two handles, one cancelled, still protect it", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0 });
-        const cid = (await store.putRaw(bytesOf(10, 18))).cid;
-        const a = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
-        const b = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
-        await a.cancel();
-        expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-        await b.cancel();
-        expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
-      });
-
-      it("the latch: a bounded read holds the latch only while it runs", async () => {
-        const c = clock(T0);
-        const { store } = await open({ now: c.now, graceMs: 0 });
-        const cid = (await store.putRaw(bytesOf(10, 19))).cid;
-        expectBytes(await store.read(cid, 10), bytesOf(10, 19));
-        expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
-      });
-
-      it("the latch: the registry is shared when given — a latch taken through it is honoured by the store's collector", async () => {
-        const c = clock(T0);
-        const latches = new LatchRegistry();
-        const { store } = await open({ now: c.now, graceMs: 0, latches });
-        const cid = (await store.putRaw(bytesOf(10, 21))).cid;
-        const release = latches.acquire(cid);
-        expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-        release();
-        expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
-        const again = (await store.putRaw(bytesOf(10, 21))).cid;
-        const stream = (await store.open(again)) as ReadableStream<Uint8Array>;
-        expect(latches.isLatched(again)).toBe(true);
-        await stream.cancel();
-        expect(latches.isLatched(again)).toBe(false);
-      });
-
-      it("an accepted object corrupted underneath the store fails its stream before completion and leaves the accepted namespace; a bounded read fails the same way", async () => {
+      it("an object a read finds not to hash to its CID fails that read and is known damaged from then on: has, stat, open, read and list all fail, other objects are untouched", async () => {
         const { store, corrupt } = await open({ extentBytes: 4 });
         if (corrupt === undefined) return; // a backend that cannot be damaged from outside has nothing to show here
         const bytes = bytesOf(10, 22);
         const cid = (await store.putRaw(bytes)).cid;
+        const other = (await store.putRaw(bytesOf(10, 23))).cid;
         await corrupt(cid);
         expect(await store.has(cid)).toBe(true); // nothing has looked yet
-        // Whether the store checks at open, before the first chunk or after the last is its own:
-        // what it may not do is complete the stream. Chunks handed out before the failure were not to be trusted.
-        let failed: unknown;
-        try {
-          const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
-          for await (const _ of chunksOf(stream)) {
-            // consumed and discarded
-          }
-        } catch (err) {
-          failed = err;
-        }
-        expect(failed).toBeInstanceOf(DamagedObject);
-        expect(await store.has(cid)).toBe(false);
-        expect(await store.open(cid)).toBeNull();
-        expect(await store.stat(cid)).toBeNull();
-        const again = (await store.putRaw(bytes)).cid;
-        expect(again).toBe(cid);
-        await corrupt(cid);
-        await expect(store.read(cid, 10)).rejects.toThrow(DamagedObject);
-        expect(await store.has(cid)).toBe(false);
-        await expect(store.collect([])).resolves.toEqual({ unlinked: [], young: [] }); // the failed reads released their latches; nothing is left to collect
+        await discover(store, cid);
+        await expectDamaged(store, cid);
+        expect(await store.has(other)).toBe(true);
+        expectBytes(await store.read(other, 10), bytesOf(10, 23));
+        // a bounded read discovers it just the same
+        const { store: fresh, corrupt: corruptFresh } = await open({ extentBytes: 4 });
+        if (corruptFresh === undefined) return;
+        await fresh.putRaw(bytes);
+        await corruptFresh(cid);
+        await expect(fresh.read(cid, 10)).rejects.toThrow(DamagedObject);
+        await expectDamaged(fresh, cid);
       });
 
-      it("a put over an object damaged underneath — that nothing has read yet — holds the bytes verified now; one object, readable again", async () => {
+      it("collection with a known damaged object: kept, it stays and stays damaged; unkept, it goes, is in removed, and reports absence after", async () => {
         const { store, corrupt } = await open({ extentBytes: 4 });
         if (corrupt === undefined) return;
-        const bytes = bytesOf(10, 23);
+        const bytes = bytesOf(10, 24);
+        const cid = (await store.putRaw(bytes)).cid;
+        const sound = (await store.putRaw(bytesOf(10, 25))).cid;
+        await corrupt(cid);
+        await discover(store, cid);
+        expect(await store.collect([cid, sound])).toEqual({ removed: [] });
+        await expectDamaged(store, cid);
+        expect(await store.collect([sound])).toEqual({ removed: [cid] });
+        expect(await store.has(cid)).toBe(false);
+        expect(await store.stat(cid)).toBeNull();
+        expect(await store.open(cid)).toBeNull();
+        expect(await store.read(cid, 10)).toBeNull();
+        expect(await all(store.list())).toEqual([sound]);
+      });
+
+      it("verified replacement of a known damaged object restores normal results, by putObject and by putRaw alike; wrong bytes are DigestMismatch and leave the damage as it was", async () => {
+        const { store, corrupt } = await open({ extentBytes: 4 });
+        if (corrupt === undefined) return;
+        const bytes = bytesOf(10, 26);
         const cid = (await store.putRaw(bytes)).cid;
         await corrupt(cid);
-        expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 });
+        await discover(store, cid);
+        await expect(store.putObject(cid, bytesOf(10, 27))).rejects.toThrow(DigestMismatch);
+        await expectDamaged(store, cid);
+        expect(await store.putObject(cid, chunked(bytes, [3, 3]))).toEqual({ cid, codec: "raw", size: 10 });
+        expect(await store.has(cid)).toBe(true);
+        expect(await store.stat(cid)).toEqual({ cid, codec: "raw", size: 10 });
         expectBytes(await store.read(cid, 10), bytes);
+        expectBytes((await drain((await store.open(cid)) as ReadableStream<Uint8Array>)).bytes, bytes);
+        expect(await all(store.list())).toEqual([cid]);
         await corrupt(cid);
+        await expect(store.read(cid, 10)).rejects.toThrow(DamagedObject);
         expect(await store.putRaw(bytes)).toEqual({ cid, codec: "raw", size: 10 });
-        const { bytes: streamed } = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
-        expectBytes(streamed, bytes);
+        expectBytes(await store.read(cid, 10), bytes);
         expect(await all(store.list())).toEqual([cid]);
       });
     });

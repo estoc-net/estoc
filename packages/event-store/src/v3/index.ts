@@ -6,16 +6,11 @@
  * and minting — `at` from the clock, `eventId` from `uuid`'s standard
  * UUIDv7 generator; and the store in memory, the reference every other
  * store is measured against. Beside it the object model: raw DASL
- * objects, the `ObjectStore` interface, the read latch, and the store
- * in memory. Portable files and the vault itself: the interfaces, the
- * writer lock, the held view, and the vault in memory. And the folder:
- * the layout, the segments, the replica, the three folder stores, this
- * copy's local state, and the vault over them, opened for writing under
- * the backend's ownership or for reading. And interchange: any vault
- * exported as a portable folder under its writer lock, a portable
- * folder restored into an empty backend, and one imported into an open
- * folder vault through the recoverable barrier under `import/`. No
- * event type.
+ * objects, the `ObjectStore` interface, and the store in memory. Over
+ * both the vault: its metadata and keystore, the interfaces, the writer
+ * lock, the held view, and the vault in memory. No persistent store
+ * yet: the SQLite vault comes next, and with it export, restore and
+ * import. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -60,74 +55,15 @@ export { mint, type Minted } from "./mint.js";
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
 export type { ByteSource, ObjectInfo, Collected, ObjectStore } from "./objects.js";
-export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource, LatchRegistry } from "./objects.js";
+export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource } from "./objects.js";
 
-export {
-  MemoryObjectStore,
-  type MemoryObjectStoreOptions,
-  DEFAULT_GRACE_MS,
-  DEFAULT_MAX_OBJECT_BYTES,
-  DEFAULT_EXTENT_BYTES,
-} from "./memory-objects.js";
+export { MemoryObjectStore, type MemoryObjectStoreOptions, DEFAULT_MAX_OBJECT_BYTES, DEFAULT_EXTENT_BYTES } from "./memory-objects.js";
 
-export type { FileStore } from "./files.js";
-export { OWNED_ROOTS, checkPath, checkFilePath, isOwnedPath, ancestorsOf, comparePaths, MemoryFileStore } from "./files.js";
+export type { VaultMetadata, WrappedSeed, KeystoreAccess } from "./keystore.js";
+export { checkMetadata, checkWrappedSeed } from "./keystore.js";
 
-export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores } from "./vault.js";
+export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
-
-export {
-  ESTOC_DIR,
-  CONFIG_FILE,
-  KEYSTORE_FILE,
-  EVENTS_DIR,
-  OBJECTS_DIR,
-  IMPORT_DIR,
-  LOCAL_DIR,
-  REPLICA_FILE,
-  isSegmentName,
-  segmentPath,
-  objectPath,
-  authorDir,
-  kindOf,
-  type PathKind,
-  utf8,
-  text,
-  prettyJson,
-  concat,
-} from "./folder/layout.js";
-export { splitLines, acceptedLength, endsClean, decodeLine, decodeSegment, encodeLines, type Line, type Decoded, type SegmentEvent, type SegmentRead } from "./folder/lines.js";
-export { DamagedReplica, mintReplica, parseReplica, encodeReplica, readReplica, openReplica, type Replica } from "./folder/replica.js";
-export { FolderEventStore, ROTATE_BYTES, type FolderEventStoreOptions } from "./folder/events.js";
-export { FolderObjectStore, STAGING_DIR, DAMAGED_DIR, ACCEPTED_DIR, type FolderObjectStoreOptions } from "./folder/objects.js";
-export { FORMAT, VERSION, ANCHOR_KEY, parseConfig, encodeConfig, parseJsonFile, type Config } from "./folder/config.js";
-export { checkKeystore } from "./folder/keystore.js";
-export { FolderFileStore } from "./folder/files.js";
-export {
-  FolderLocalEventStore,
-  LocalOwner,
-  DEFAULT_ROTATION,
-  compareLocalEvents,
-  isLocalEvent,
-  matchesLocal,
-  segmentTime,
-  type LocalEvent,
-  type LocalFilter,
-  type LocalEventStore,
-  type LocalCache,
-  type LocalOptions,
-  type RetentionPolicy,
-  type PruneReport,
-  type Rotation,
-} from "./folder/local.js";
-export { OWNER_FILE } from "./folder/roots.js";
-export { JOURNAL_FILE, STAGED_DIR, encodeJournal } from "./folder/import.js";
-export { FolderVault, FolderReader, type FolderVaultOptions, type OpenWritableOptions, type OpenReadOnlyOptions, type CreateOptions } from "./folder/vault.js";
-export { exportVault, restoreFolder, type Copied, type Exported, type ExportOptions, type RestoreOptions } from "./interchange.js";
-export { importFolder, type ImportOptions, type Imported } from "./import.js";
-export type { VaultBackend, Ownership } from "../backend/types.js";
-export { VaultOwned } from "../backend/types.js";
-export { MemoryBackend, type MemoryBackendOptions } from "../backend/memory.js";
 
 export {
   InvalidJson,
@@ -139,13 +75,11 @@ export {
   ObjectTooLarge,
   DamagedObject,
   MissingRoot,
-  DamagedLayout,
+  UnreferencedObject,
+  UnsupportedOperation,
   NotAVault,
   AnchorMismatch,
-  PendingImport,
   ReadOnlyVault,
-  Unprotected,
-  UnsettledRead,
   VaultClosed,
   IncompleteSnapshot,
   InvalidSnapshot,

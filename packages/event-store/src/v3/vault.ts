@@ -1,21 +1,21 @@
 /**
- * The vault, version 3: what a program gets — events to read, objects
- * to read, portable files, and `commit` — and what the runtime
- * underneath keeps to itself: the vault-wide writer lock, the read
- * latch, `ingest`, and collection, whose keep set is computed only
- * under the lock. The interfaces every backend presents, the facade
- * that takes the lock on each operation and the view that shares one
- * held lock, and the vault in memory: the reference, the vault the
- * folds are tested on, and the far end of the round trip.
+ * The vault, version 3: what a program gets — its metadata, events to
+ * read, objects to read, and `commit` — and what the runtime underneath
+ * keeps to itself: the vault-wide writer lock, the keystore, `ingest`,
+ * and collection, whose keep set is computed only under the lock. The
+ * interfaces every backend presents, the facade that takes the lock on
+ * each operation and the view that shares one held lock, and the vault
+ * in memory: the reference, the vault the folds are tested on, and the
+ * far end of the round trip.
  */
 
-import { MissingRoot, ObjectTooLarge } from "./errors.js";
+import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject } from "./errors.js";
 import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested, type Rejected } from "./event.js";
-import { MemoryFileStore, type FileStore } from "./files.js";
 import type { JsonObject } from "./json.js";
+import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
 import { MemoryObjectStore } from "./memory-objects.js";
-import { LatchRegistry, chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectStore } from "./objects.js";
+import { chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectStore } from "./objects.js";
 
 /** An object handed to `commit`: the bytes, and the raw CID they must hash to. */
 export type CommitObject = { cid: Cid; source: ByteSource };
@@ -28,20 +28,23 @@ export type VaultObjects = Omit<ObjectStore, "putRaw" | "putObject" | "collect">
 /**
  * The vault to a program. Every local event write goes through
  * `commit`, with or without new objects; every mutation takes the
- * vault-wide writer lock; an object read latches its CID against
- * collection for the life of the stream, and no longer holds the lock.
+ * vault-wide writer lock; a read of events or object metadata takes
+ * none, and an object stream holds it only for its presence check.
  */
 export interface Vault {
+  /** The vault's identity, the same in every copy; never changes while open. */
+  readonly metadata: VaultMetadata;
   readonly events: VaultEvents;
   readonly objects: VaultObjects;
-  readonly files: FileStore;
   /**
-   * Under the writer lock: validate every draft, accept every supplied
-   * object under `putObject`'s rules, require every draft root — new or
-   * reused — to name a present accepted object, then append the drafts as
-   * one all-or-nothing batch and return the events. A failure at any step
-   * appends nothing; an object accepted before it stays, an orphan under
-   * grace.
+   * Under the writer lock: validate every draft and every CID, refuse
+   * a supplied object no draft names as a root (`UnreferencedObject`)
+   * before reading a byte, accept every supplied object under
+   * `putObject`'s rules, require every draft root — new or reused — to
+   * name a present accepted object (`MissingRoot` otherwise), then
+   * append the drafts as one all-or-nothing batch and return the
+   * events. A failure at any step publishes nothing: no object, no
+   * repair, no event.
    */
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
@@ -65,7 +68,7 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
 export interface Held extends Vault {
   /** The store's `ingest`, for validated import and restore. */
   ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
-  /** One collection pass: `keep` is called here, under the lock, then the unkept are collected. */
+  /** One collection pass: `keep` is called here, under the lock, then the unkept are deleted. */
   collect(keep: KeepUnderLock): Promise<Collected>;
   /** Run `op` under the lock already held: nested, shares it. */
   locked<T>(op: (held: Held) => Promise<T>): Promise<T>;
@@ -74,14 +77,18 @@ export interface Held extends Vault {
 /**
  * What a host opens: a backend with its local replica context — author
  * and store generation — that hands out the `Vault` application code
- * gets and keeps the writer lock, `ingest` and collection for the
- * runtime above it.
+ * gets and keeps the writer lock, the keystore, `ingest` and collection
+ * for the runtime above it.
  */
 export interface VaultRuntime {
   /** The local replica every committed event is authored as. */
   readonly author: AuthorId;
   /** The store generation this runtime's change tokens name. */
   readonly generation: string;
+  /** The vault's identity; the same object `vault.metadata` is. */
+  readonly metadata: VaultMetadata;
+  /** The wrapped seed: read by whoever unlocks, rewrapped under the lock. */
+  readonly keystore: KeystoreAccess;
   /** The vault, as application code gets it: each operation takes the writer lock for itself. */
   readonly vault: Vault;
   /** Run `op` under the vault-wide writer lock, serialized with every other mutation; `op` works through the held view. */
@@ -130,11 +137,16 @@ export class WriterLock {
 
 // ---- the views ----------------------------------------------------------
 
-/** The backend stores a runtime is built over. */
+/**
+ * The backend stores a runtime is built over. `transaction`, when a
+ * backend has one, runs a commit's acceptances and appends so that a
+ * throw inside publishes none of them; without it the stores publish
+ * as they go.
+ */
 export interface Stores {
   events: EventStore;
   objects: ObjectStore;
-  files: FileStore;
+  transaction?: <T>(body: () => Promise<T>) => Promise<T>;
 }
 
 /** How a view enters the lock: by taking it, or — already inside — by doing nothing. */
@@ -146,24 +158,25 @@ type Check = () => void;
 /**
  * One view of the stores: the facade application code gets, when
  * `enter` takes the lock, or the view an operation works through while
- * holding it, when `enter` is immediate. Reads of events, of object
- * metadata and of files take no lock; `open` takes it for the presence
- * check and latch registration and releases it before the stream is
- * consumed; `read` is `open` drained outside the lock, refused before
- * allocation when the object is larger than `maxBytes`; every mutation
- * runs under it whole.
+ * holding it, when `enter` is immediate. Reads of events and of object
+ * metadata take no lock; `open` takes it for the presence check and
+ * releases it before the stream is consumed; `read` is `open` drained
+ * outside the lock, refused before allocation when the object is larger
+ * than `maxBytes`; every mutation runs under it whole.
  */
 class View implements Vault {
   readonly events: VaultEvents;
   readonly objects: VaultObjects;
-  readonly files: FileStore;
+  private readonly transaction: <T>(body: () => Promise<T>) => Promise<T>;
 
   constructor(
     protected readonly stores: Stores,
+    readonly metadata: VaultMetadata,
     protected readonly enter: Enter,
     check: Check = () => undefined
   ) {
-    const { events, objects, files } = stores;
+    const { events, objects } = stores;
+    this.transaction = stores.transaction ?? ((body) => body());
     this.events = {
       scan: async function* (filter) {
         check();
@@ -198,17 +211,6 @@ class View implements Vault {
         yield* objects.list();
       },
     };
-    this.files = {
-      read: async (path) => {
-        check();
-        return files.read(path);
-      },
-      write: (path, bytes) => enter(() => files.write(path, bytes)),
-      list: async () => {
-        check();
-        return files.list();
-      },
-    };
   }
 
   private open(cid: Cid): Promise<ReadableStream<Uint8Array> | null> {
@@ -218,7 +220,7 @@ class View implements Vault {
   private async read(cid: Cid, maxBytes: number): Promise<Uint8Array | null> {
     rawCidOf(cid);
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError("maxBytes is a non-negative integer");
-    // Size checked and stream latched under the lock; the bytes come out after it.
+    // Size checked and stream opened under the lock; the bytes come out after it.
     const opened = await this.enter(async () => {
       const info = await this.stores.objects.stat(cid);
       if (info === null) return null;
@@ -228,9 +230,7 @@ class View implements Vault {
     });
     if (opened === null) return null;
     // From here the stream is this method's to end: whatever fails —
-    // the allocation, the stream itself — cancels it, so its latch is
-    // released on every failure path, not only the ones inside
-    // the iteration.
+    // the allocation, the stream itself — cancels it.
     try {
       const out = new Uint8Array(opened.size);
       let at = 0;
@@ -248,15 +248,21 @@ class View implements Vault {
 
   commit<D extends JsonObject>(objects: CommitObject[], drafts: Draft<D>[]): Promise<Event<D>[]> {
     return this.enter(async () => {
-      // Every draft and every CID checked before a byte is read:
-      // a bad batch accepts nothing.
+      // Every draft and every CID checked, and every supplied object
+      // matched to a root, before a byte is read: a bad batch accepts nothing.
       const clean = drafts.map((draft) => validateDraft(draft));
-      for (const object of objects) rawCidOf(object.cid);
-      for (const object of objects) await this.stores.objects.putObject(object.cid, object.source);
-      for (const root of sortCids(clean.flatMap((draft) => draft.roots))) {
-        if (!(await this.stores.objects.has(root))) throw new MissingRoot(root);
+      const roots = new Set<Cid>(clean.flatMap((draft) => draft.roots));
+      for (const object of objects) {
+        rawCidOf(object.cid);
+        if (!roots.has(object.cid)) throw new UnreferencedObject(object.cid);
       }
-      return this.stores.events.appendAll(clean) as Promise<Event<D>[]>;
+      return this.transaction(async () => {
+        for (const object of objects) await this.stores.objects.putObject(object.cid, object.source);
+        for (const root of sortCids(roots)) {
+          if (!(await this.stores.objects.has(root))) throw new MissingRoot(root);
+        }
+        return this.stores.events.appendAll(clean) as Promise<Event<D>[]>;
+      });
     });
   }
 }
@@ -268,8 +274,8 @@ class View implements Vault {
  * computation.
  */
 class HeldView extends View implements Held {
-  constructor(stores: Stores) {
-    super(stores, (op) => op());
+  constructor(stores: Stores, metadata: VaultMetadata) {
+    super(stores, metadata, (op) => op());
   }
 
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
@@ -318,39 +324,59 @@ async function ingestRead(events: EventStore, read: Read): Promise<Ingested> {
   return read.rejected.length === 0 ? outcome : { ...outcome, rejected: [...read.rejected, ...outcome.rejected] };
 }
 
+// ---- the runtime --------------------------------------------------------
+
+export interface RuntimeOptions {
+  author: AuthorId;
+  generation: string;
+  metadata: VaultMetadata;
+  stores: Stores;
+  /** The keystore over the runtime's lock: called once, with the runtime whose `locked` a rewrap runs under. */
+  keystore: (runtime: VaultRuntime) => KeystoreAccess;
+  /**
+   * Asked as each operation asks for the lock, before it queues
+   * (`"enter"`), again as it takes the lock (`"run"`), and by each read
+   * that takes no lock (`"read"`). A runtime that can be closed throws
+   * from `"enter"` once it is, so nothing queued after the close runs on
+   * a vault another process may own by then, while what was accepted
+   * before runs out; one that has been halted throws from all three, so
+   * nothing accepted earlier runs either. An operation already inside
+   * the lock is not asked again.
+   */
+  guard?: (when: "enter" | "run" | "read") => void;
+}
+
 /**
- * A runtime over any three stores, for one process: the lock, the
- * facade application code gets — a `Vault` with nothing else on it —
- * and the held view. What `MemoryVault` is, and what a folder backend
+ * A runtime over any two stores, for one process: the lock, the facade
+ * application code gets — a `Vault` with nothing else on it — and the
+ * held view. What `MemoryVault` is, and what a persistent backend
  * builds once it has opened its stores.
  */
 export class Runtime implements VaultRuntime {
   readonly lock = new WriterLock();
+  readonly author: AuthorId;
+  readonly generation: string;
+  readonly metadata: VaultMetadata;
+  readonly keystore: KeystoreAccess;
+  readonly stores: Stores;
   readonly vault: Vault;
   private readonly held: HeldView;
+  private readonly guard: (when: "enter" | "run" | "read") => void;
 
-  /**
-   * `guard` is asked as each operation asks for the lock, before it
-   * queues (`"enter"`), again as it takes the lock (`"run"`), and by
-   * each read that takes no lock (`"read"`). A runtime that can be
-   * closed throws from `"enter"` once it is, so nothing queued after
-   * the close runs on a folder another process may own by then, while
-   * what was accepted before runs out; one that has been halted throws
-   * from all three, so nothing accepted earlier runs either. An
-   * operation already inside the lock is not asked again.
-   */
-  constructor(
-    readonly author: AuthorId,
-    readonly generation: string,
-    readonly stores: Stores,
-    private readonly guard: (when: "enter" | "run" | "read") => void = () => undefined
-  ) {
-    this.held = new HeldView(stores);
+  constructor(options: RuntimeOptions) {
+    this.author = options.author;
+    this.generation = options.generation;
+    this.metadata = checkMetadata(options.metadata);
+    this.stores = options.stores;
+    this.guard = options.guard ?? (() => undefined);
+    this.held = new HeldView(this.stores, this.metadata);
     this.vault = new View(
-      stores,
+      this.stores,
+      this.metadata,
       (op) => this.enter(op),
       () => this.guard("read")
     );
+    this.keystore = options.keystore(this);
   }
 
   private enter<T>(op: () => Promise<T>): Promise<T> {
@@ -383,51 +409,71 @@ export class Runtime implements VaultRuntime {
 // ---- in memory ----------------------------------------------------------
 
 export interface MemoryVaultOptions {
+  /** the vault's identity: version 3 and its anchor DID */
+  metadata: VaultMetadata;
+  /** the wrapped seed the keystore hands out; a vault given none refuses to read it */
+  wrapped?: WrappedSeed;
   /** the author every committed event carries; a fresh UUIDv7 when left out */
   author?: AuthorId;
-  /** the wall clock in Unix milliseconds, for `at` and for orphan age; default `Date.now`, pinned by tests */
+  /** the wall clock in Unix milliseconds, for `at`; default `Date.now`, pinned by tests */
   now?: () => number;
-  /** orphan grace; default one hour */
-  graceMs?: number;
   /** the largest object a commit accepts; default 1 GiB */
   maxObjectBytes?: number;
   /** the size of the internal extents an object is held in; default 1 MiB */
   extentBytes?: number;
-  /** `config.json`, when this vault is to be exported as a folder: read through `files`, never written */
-  config?: Uint8Array;
-  /** `keystore.json`, likewise */
-  keystore?: Uint8Array;
 }
 
 /**
- * The vault as maps in memory: `MemoryEventStore`, `MemoryObjectStore` and
- * `MemoryFileStore` under one runtime, one lock and one latch registry. Nothing
- * persists, so the process-durable half of the store's promise is vacuous; the
- * boundaries are not: a commit is all or nothing, a paused stream blocks no writer
- * and protects its object, collection waits for the commit in flight and computes
+ * The wrapped seed of a vault in memory: a value held, handed out as
+ * given, replaced whole under the runtime's lock.
+ */
+class MemoryKeystore implements KeystoreAccess {
+  private wrapped: WrappedSeed | null;
+
+  constructor(
+    wrapped: WrappedSeed | undefined,
+    private readonly locked: <T>(op: () => Promise<T>) => Promise<T>
+  ) {
+    this.wrapped = wrapped === undefined ? null : checkWrappedSeed(wrapped);
+  }
+
+  async read(): Promise<WrappedSeed> {
+    if (this.wrapped === null) throw new NotAVault("this vault in memory was given no wrapped seed");
+    return this.wrapped;
+  }
+
+  async rewrap(next: WrappedSeed): Promise<void> {
+    const clean = checkWrappedSeed(next); // checked before the lock is asked for
+    await this.locked(async () => {
+      this.wrapped = clean;
+    });
+  }
+}
+
+/**
+ * The vault as maps in memory: `MemoryEventStore` and `MemoryObjectStore`
+ * under one runtime and one lock. Nothing persists, so the process-durable
+ * half of the store's promise is vacuous; the boundaries are not: a commit
+ * publishes its objects and events together or not at all, a paused stream
+ * blocks no writer, collection waits for the commit in flight and computes
  * its keep set only once it has the lock.
  */
 export class MemoryVault extends Runtime {
-  declare readonly stores: { events: MemoryEventStore; objects: MemoryObjectStore; files: MemoryFileStore };
-  /** the read latches over this vault's objects */
-  readonly latches: LatchRegistry;
+  declare readonly stores: { events: MemoryEventStore; objects: MemoryObjectStore; transaction: <T>(body: () => Promise<T>) => Promise<T> };
 
-  constructor(options: MemoryVaultOptions = {}) {
-    const latches = new LatchRegistry();
+  constructor(options: MemoryVaultOptions) {
     const now = options.now === undefined ? {} : { now: options.now };
     const events = new MemoryEventStore({ ...now, ...(options.author === undefined ? {} : { author: options.author }) });
     const objects = new MemoryObjectStore({
-      ...now,
-      latches,
-      ...(options.graceMs === undefined ? {} : { graceMs: options.graceMs }),
       ...(options.maxObjectBytes === undefined ? {} : { maxObjectBytes: options.maxObjectBytes }),
       ...(options.extentBytes === undefined ? {} : { extentBytes: options.extentBytes }),
     });
-    const files = new MemoryFileStore({
-      ...(options.config === undefined ? {} : { config: options.config }),
-      ...(options.keystore === undefined ? {} : { keystore: options.keystore }),
+    super({
+      author: events.author,
+      generation: events.generation,
+      metadata: options.metadata,
+      stores: { events, objects, transaction: (body) => objects.transaction(body) },
+      keystore: (runtime) => new MemoryKeystore(options.wrapped, (op) => runtime.locked(() => op())),
     });
-    super(events.author, events.generation, { events, objects, files });
-    this.latches = latches;
   }
 }

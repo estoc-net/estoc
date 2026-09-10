@@ -75,7 +75,14 @@ export class ObjectTooLarge extends Error {
   }
 }
 
-/** An accepted object whose bytes no longer hash to its CID, found by a read: the stream fails, and the object leaves the accepted namespace. */
+/**
+ * An accepted object whose bytes no longer hash to its CID. The read
+ * that finds it fails; from then on, for as long as the store is open,
+ * `has`, `stat`, `open` and `read` of that CID fail the same way and
+ * `list` fails on reaching it — absence is never how damage shows. The
+ * bytes stay where they are until a put of the same CID replaces them
+ * with verified ones, or collection removes them.
+ */
 export class DamagedObject extends Error {
   constructor(readonly cid: string) {
     super(`the bytes held for ${cid} no longer hash to it`);
@@ -91,22 +98,23 @@ export class MissingRoot extends Error {
   }
 }
 
-/**
- * A structural root of the folder that is not what the layout requires
- * — a file where `events/` belongs — met by a write: nothing was
- * written. A read reports the same as `Damaged` at `where`.
- */
-export class DamagedLayout extends Error {
-  constructor(
-    readonly where: string,
-    message: string
-  ) {
-    super(`${where}: ${message}`);
-    this.name = "DamagedLayout";
+/** An object handed to `commit` that no draft of the batch names as a root: refused before its bytes are read, and nothing of the batch was accepted. */
+export class UnreferencedObject extends Error {
+  constructor(readonly cid: string) {
+    super(`object ${cid} is not a root of any draft in the batch: a commit accepts only what its events reference`);
+    this.name = "UnreferencedObject";
   }
 }
 
-/** The folder is not a version-3 vault this reader opens: no `config.json`, another format or version, a member the closed set does not have, a keystore of another shape. Nothing was written. */
+/** An operation the vault in hand does not do — a write asked of the read-only view of a snapshot — refused before consuming a source or minting anything. */
+export class UnsupportedOperation extends Error {
+  constructor(what: string) {
+    super(`${what}: not supported by this vault`);
+    this.name = "UnsupportedOperation";
+  }
+}
+
+/** What was opened is not a version-3 vault this reader opens: another format or version, missing or malformed metadata, a keystore of another shape. Nothing was written. */
 export class NotAVault extends Error {
   constructor(message: string) {
     super(message);
@@ -117,7 +125,7 @@ export class NotAVault extends Error {
 /**
  * Another anchor DID than this vault's: the seed in hand does not derive
  * it — the wrong seed for this vault — or, for an import, the source
- * folder is another vault's. Refused before ownership is taken, any
+ * snapshot is another vault's. Refused before ownership is taken, any
  * local state made or any byte written.
  */
 export class AnchorMismatch extends Error {
@@ -129,29 +137,9 @@ export class AnchorMismatch extends Error {
     super(
       of === "seed"
         ? `the seed derives ${derived}, not this vault's anchor ${expected}: wrong seed for this vault`
-        : `the source's anchor is ${derived}, not this vault's ${expected}: another vault's folder is not imported into this one`
+        : `the source's anchor is ${derived}, not this vault's ${expected}: another vault's snapshot is not imported into this one`
     );
     this.name = "AnchorMismatch";
-  }
-}
-
-/**
- * `import/` holds recovery state this open does not take up: for a
- * read-only open, a restore or an import source, any import its owner
- * has not finished; for a writable open, one this version cannot
- * recognize or cannot finish, which it leaves whole rather than guess
- * at. `entries` names what stands under `import/`; `detail`, when
- * there is one, what could not be understood.
- */
-export class PendingImport extends Error {
-  constructor(
-    readonly entries: string[],
-    readonly detail?: string
-  ) {
-    super(
-      `import/ holds recovery state (${entries.join(", ")}): the import must be completed or rolled back before the vault is opened${detail === undefined ? "" : `; ${detail}`}`
-    );
-    this.name = "PendingImport";
   }
 }
 
@@ -163,33 +151,7 @@ export class ReadOnlyVault extends Error {
   }
 }
 
-/** An object stream asked of a read-only open that holds no ownership: refused rather than served unprotected against a collector. */
-export class Unprotected extends Error {
-  constructor(readonly cid: string) {
-    super(`${cid}: a read-only open without ownership serves no object stream; open with ownership, or through the writer's broker`);
-    this.name = "Unprotected";
-  }
-}
-
-/**
- * A read-only open without ownership could not show what it read of
- * `events/` to be a view the folder was in at one moment, in as many
- * reads as it tried: `events/` changed under each, or a segment's write
- * stood unfinished beside its place — the writer's in progress, or what
- * a crash left, which only ownership can tell apart. Read again, or
- * open with ownership; `detail` says what stood in the way.
- */
-export class UnsettledRead extends Error {
-  constructor(
-    readonly attempts: number,
-    readonly detail?: string
-  ) {
-    super(`events/ was not shown to be a settled view in ${attempts} reads over: ${detail ?? "it changed under each"}`);
-    this.name = "UnsettledRead";
-  }
-}
-
-/** An operation on a vault after `close`: ownership is released, and another process may hold the folder by now. */
+/** An operation on a vault after `close`: ownership is released, and another process may hold the vault by now. */
 export class VaultClosed extends Error {
   constructor() {
     super("the vault is closed");
@@ -215,10 +177,9 @@ export class InvalidSnapshot extends Error {
 
 /**
  * An import could not make a complete merged view: damage or a conflict
- * in the target's event set, a held root of the union with valid bytes
- * in neither the source nor the target, a source object whose bytes do
- * not spell its name, or a portable path of the source that collides
- * with a file or directory of the target. Nothing was published.
+ * in the target's event set, a root the merged set requires with valid
+ * bytes in neither the source nor the target, or a source object whose
+ * bytes do not spell its name. Nothing was published.
  */
 export class IncompleteImport extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {

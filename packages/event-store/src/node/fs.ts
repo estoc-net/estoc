@@ -1,8 +1,8 @@
-import { appendFile, chmod, mkdir, open, readdir, readFile, realpath, rename, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
-import { segmentsOf, tempName, type Ownership, type VaultBackend } from "../backend/types.js";
-import { own } from "./ownership.js";
+import { segmentsOf, type VaultBackend } from "../backend/types.js";
 
 /**
  * A vault in a folder on disk. Whole-file writes go to a sibling temp file
@@ -16,43 +16,9 @@ import { own } from "./ownership.js";
  *
  * Bytes come back as plain `Uint8Array` views, not Buffers: a Buffer
  * serialises itself as `{type, data}`, which is not what a wire wants.
- *
- * A streamed `create` goes the same way as `write` — to a sibling temp
- * file, renamed into place once the source has ended, removed when it
- * throws — and `rename` is the platform's, atomic over an existing
- * file. `open` reads through a file handle in fixed pieces, closed when
- * the stream ends or is cancelled.
- *
- * Ownership is a pid file at the name given, taken and kept as
- * `./ownership.ts` says: created whole, read back, live while the
- * process it names is — a worker's record outlives the worker until
- * its process exits — or, naming this thread, while the process's
- * origin is this incarnation's; stale and reclaimed otherwise, judged
- * from the disk alone, with no advisory file lock; and withdrawn whole
- * when the take is over, whether released or failed, the next take a
- * new line.
  */
-export interface FsBackendOptions {
-  /**
-   * The time a written file is stamped with, when given — what `modified`
-   * then reads back from the disk; the platform's clock when left out.
-   * For tests that age a file by the clock they pin.
-   */
-  clock?: () => Date;
-}
-
-/** How much of a file one pull of `open` reads. */
-const READ_CHUNK = 64 * 1024;
-
 export class FsBackend implements VaultBackend {
-  private readonly clock: (() => Date) | null;
-
-  constructor(
-    readonly root: string,
-    options: FsBackendOptions = {}
-  ) {
-    this.clock = options.clock ?? null;
-  }
+  constructor(readonly root: string) {}
 
   /** The file `p` names, checked once more to lie under the root whatever the platform made of the segments. */
   private at(p: string): string {
@@ -77,25 +43,15 @@ export class FsBackend implements VaultBackend {
   }
 
   async write(p: string, data: Uint8Array): Promise<void> {
-    await this.replace(this.at(p), (tmp) => writeFile(tmp, data));
-  }
-
-  /**
-   * `file` replaced by what `fill` writes to a sibling temp path: the
-   * temp file takes the mode of the file it replaces, the clock's stamp
-   * when there is one, and is renamed into place — or removed, when
-   * `fill` throws.
-   */
-  private async replace(file: string, fill: (tmp: string) => Promise<void>): Promise<void> {
+    const file = this.at(p);
     await mkdir(path.dirname(file), { recursive: true });
-    const tmp = tempName(file);
+    const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
     try {
-      await fill(tmp);
+      await writeFile(tmp, data);
       const mode = await modeOf(file);
       if (mode !== null) {
         await chmod(tmp, mode);
       }
-      await this.stamp(tmp);
       await rename(tmp, file);
     } catch (err) {
       await rm(tmp, { force: true });
@@ -103,97 +59,14 @@ export class FsBackend implements VaultBackend {
     }
   }
 
-  /** The clock's time onto `file`, when a clock was given: what `modified` reads back. */
-  private async stamp(file: string): Promise<void> {
-    if (this.clock === null) return;
-    const now = this.clock();
-    await utimes(file, now, now);
-  }
-
-  async create(p: string, source: AsyncIterable<Uint8Array>): Promise<void> {
-    await this.replace(this.at(p), async (tmp) => {
-      const handle = await open(tmp, "wx");
-      try {
-        for await (const chunk of source) {
-          // A write may take fewer bytes than offered: the rest
-          // is offered again until the chunk is down, and no progress
-          // at all is a failure, never a shorter file.
-          let at = 0;
-          while (at < chunk.length) {
-            const { bytesWritten } = await handle.write(chunk.subarray(at));
-            if (bytesWritten <= 0) throw new Error(`write to ${tmp} made no progress`);
-            at += bytesWritten;
-          }
-        }
-      } finally {
-        await handle.close();
-      }
-    });
-  }
-
-  async rename(from: string, to: string): Promise<void> {
-    const target = this.at(to);
-    await mkdir(path.dirname(target), { recursive: true });
-    await rename(this.at(from), target);
-  }
-
-  async open(p: string): Promise<ReadableStream<Uint8Array> | null> {
-    let handle;
-    try {
-      handle = await open(this.at(p), "r");
-    } catch (err) {
-      if (isMissing(err)) {
-        return null;
-      }
-      throw err;
-    }
-    if (!(await handle.stat()).isFile()) {
-      await handle.close();
-      return null;
-    }
-    // One handle for the stream's life, closed on every way it ends:
-    // the end of the file, a failed read, a cancel.
-    let closed = false;
-    const close = async (): Promise<void> => {
-      if (closed) return;
-      closed = true;
-      await handle.close();
-    };
-    return new ReadableStream<Uint8Array>({
-      pull: async (controller) => {
-        try {
-          const buffer = new Uint8Array(READ_CHUNK);
-          const { bytesRead } = await handle.read(buffer, 0, READ_CHUNK, null);
-          if (bytesRead === 0) {
-            await close();
-            controller.close();
-            return;
-          }
-          controller.enqueue(buffer.subarray(0, bytesRead));
-        } catch (err) {
-          await close();
-          controller.error(err);
-        }
-      },
-      cancel: () => close(),
-    });
-  }
-
   async append(p: string, data: Uint8Array): Promise<void> {
     const file = this.at(p);
     await mkdir(path.dirname(file), { recursive: true });
     await appendFile(file, data);
-    await this.stamp(file);
   }
 
   async remove(p: string): Promise<void> {
-    const file = this.at(p);
-    try {
-      await rm(file, { force: true });
-    } catch (err) {
-      if (!isDirectory(err)) throw err;
-      await rmdir(file); // an empty directory goes; one with entries is refused in the platform's words
-    }
+    await rm(this.at(p), { force: true });
   }
 
   async size(p: string): Promise<number | null> {
@@ -239,13 +112,6 @@ export class FsBackend implements VaultBackend {
       throw err;
     }
   }
-
-  /** The pid file at `p`, its directory made, taken by its real path so that two names of one place are one name. */
-  async own(p: string): Promise<Ownership> {
-    const file = this.at(p);
-    await mkdir(path.dirname(file), { recursive: true });
-    return own(path.join(await realpath(path.dirname(file)), path.basename(file)), p);
-  }
 }
 
 async function modeOf(file: string): Promise<number | null> {
@@ -264,8 +130,7 @@ function isMissing(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** The path names a directory where a file was asked for: `EISDIR` from a read, `ERR_FS_EISDIR` from a non-recursive `rm`. */
+/** The path names a directory where a file was asked for. */
 function isDirectory(err: unknown): boolean {
-  const code = (err as { code?: string }).code;
-  return code === "EISDIR" || code === "ERR_FS_EISDIR";
+  return (err as { code?: string }).code === "EISDIR";
 }

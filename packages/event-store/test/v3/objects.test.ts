@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   InvalidCid,
-  LatchRegistry,
   ObjectTooLarge,
   chunksOf,
   compareCids,
@@ -136,28 +135,5 @@ describe("chunksOf and hashSource", () => {
     expect(pulled).toBe(3);
     await expect(hashSource(bytesOf(251, 1), 250, () => undefined)).rejects.toThrow(ObjectTooLarge);
     expect((await hashSource(bytesOf(250, 1), 250, () => undefined)).size).toBe(250);
-  });
-});
-
-describe("LatchRegistry", () => {
-  it("counts holds per CID; a release releases one hold, once; the last release clears the CID", () => {
-    const latches = new LatchRegistry();
-    expect(latches.isLatched(HELLO_CID)).toBe(false);
-    const a = latches.acquire(HELLO_CID);
-    const b = latches.acquire(HELLO_CID);
-    const c = latches.acquire(EMPTY_CID);
-    expect(latches.count(HELLO_CID)).toBe(2);
-    expect(latches.latched()).toEqual(sortCids([HELLO_CID, EMPTY_CID]));
-    a();
-    a();
-    a();
-    expect(latches.count(HELLO_CID)).toBe(1);
-    expect(latches.isLatched(HELLO_CID)).toBe(true);
-    b();
-    expect(latches.isLatched(HELLO_CID)).toBe(false);
-    expect(latches.count(HELLO_CID)).toBe(0);
-    expect(latches.latched()).toEqual([EMPTY_CID]);
-    c();
-    expect(latches.latched()).toEqual([]);
   });
 });

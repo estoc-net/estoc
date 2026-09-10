@@ -1,10 +1,9 @@
 /**
- * The OPFS backend in a real browser: the backend cases, and the folder
- * object cases over it, are bundled with esbuild, served to a headless
- * Chromium over localhost (a secure context, which OPFS needs), run
- * there, and their results read back — one vitest case per case.
- * Skipped, loudly, when no Chromium is found; `ESTOC_BROWSER=/path/to/chrome`
- * names one.
+ * The OPFS backend in a real browser: the backend cases are bundled with
+ * esbuild, served to a headless Chromium over localhost (a secure
+ * context, which OPFS needs), run there, and their results read back —
+ * one vitest case per backend case. Skipped, loudly, when no Chromium is
+ * found; `ESTOC_BROWSER=/path/to/chrome` names one.
  */
 
 import { existsSync } from "node:fs";
@@ -17,8 +16,6 @@ import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { backendCases } from "./suite/backend-cases.js";
 import type { CaseResult } from "./browser/opfs-entry.js";
-import { opfsCases } from "./suite/opfs-cases.js";
-import { folderObjectCases } from "./v3/suite/folder-object-cases.js";
 
 function findBrowser(): string | null {
   const candidates = [
@@ -45,8 +42,6 @@ if (browserPath === null) {
 
 describe.skipIf(browserPath === null)("opfs backend (in Chromium)", () => {
   const results = new Map<string, CaseResult>();
-  const objectResults = new Map<string, CaseResult>();
-  const opfsResults = new Map<string, CaseResult>();
   let server: http.Server | undefined;
 
   beforeAll(async () => {
@@ -73,12 +68,6 @@ describe.skipIf(browserPath === null)("opfs backend (in Chromium)", () => {
       for (const result of await page.evaluate(() => window.runBackendCases())) {
         results.set(result.name, result);
       }
-      for (const result of await page.evaluate(() => window.runObjectCases())) {
-        objectResults.set(result.name, result);
-      }
-      for (const result of await page.evaluate(() => window.runOpfsCases())) {
-        opfsResults.set(result.name, result);
-      }
     } finally {
       await browser.close();
     }
@@ -100,16 +89,4 @@ describe.skipIf(browserPath === null)("opfs backend (in Chromium)", () => {
   for (const c of backendCases) {
     it(c.name, () => report(results.get(c.name)));
   }
-
-  describe("what only OPFS can show", () => {
-    for (const c of opfsCases) {
-      it(c.name, () => report(opfsResults.get(c.name)));
-    }
-  });
-
-  describe("FolderObjectStore over OPFS", () => {
-    for (const c of folderObjectCases) {
-      it(c.name, () => report(objectResults.get(c.name)));
-    }
-  });
 });
