@@ -60,7 +60,7 @@ SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
 | --- | --- | --- |
 | Event envelope, IDs and canonical order | [ES §§3–4](event-store.md#the-event) | [VE identifiers](vault-events.md#identifier-and-reference-vocabulary) |
 | Process-durable success and commit API | [ES §2.1](event-store.md#commit-and-durability-terminology), [ES §10](event-store.md#vault-interface) | [DD boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
-| SQLite ownership, transactions and maintenance | [SQ §§6–9](vault-sqlite.md#objects-and-streams) | [VE receive-lock scope](vault-events.md#receipt-and-relationship-evidence) |
+| SQLite ownership, transactions and maintenance | [SQ §§6–9](vault-sqlite.md#objects-and-streams) | [VE operation-lock scope](vault-events.md#receipt-and-relationship-evidence) |
 | Raw CID identity and object API | [DO §§3–6](dasl-objects.md#accepted-dasl-cids) | [SQ object rows](vault-sqlite.md#objects-and-streams) |
 | Export, validation, restore and import | [SQ §§10–12](vault-sqlite.md#snapshot-and-export) | [ES interchange](event-store.md#interchange) |
 | Metadata, wrapper and local control | [SQ §4](vault-sqlite.md#identity-and-keystore), [SQ §7](vault-sqlite.md#local-state-and-projections) | [ES typed API](event-store.md#metadata-and-keystore), [VE open](vault-events.md#open-the-writable-full-runtime) |

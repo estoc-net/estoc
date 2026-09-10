@@ -294,7 +294,8 @@ counts as a duplicate; a different value for an accepted ID reports a conflict
 without overwriting either source. Reject/report malformed envelopes rather
 than partially reinterpreting them. Accept all new valid events and positions
 in one transaction, updating or invalidating any caches. Retrying the same
-input is idempotent. Full-vault import also accepts required objects atomically.
+input is idempotent. Full-vault import also publishes staged objects and repairs
+atomically.
 
 <a id="forked-author"></a>
 
@@ -440,6 +441,8 @@ rule. New objects, repairs, the entire event batch and local positions publish
 in one transaction under the batch rules above. Validation failure or rollback
 publishes no objects, repairs or events; private preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
+Use [import](#import-into-an-existing-vault) to repair objects retained by existing
+events without accepting new events.
 
 Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
 snapshot's immutable metadata; `events` provides `scan`, `damaged` and
@@ -496,7 +499,8 @@ canonical duplicate/conflict, own-author fork, known payload,
 [receipt-integrity](vault-events.md#message-in) and erasure rules. Every root
 retained by a newly accepted source event in the prospective union must have
 verified source bytes or [sound accepted target bytes](dasl-objects.md#read-operations).
-An erased reference does not require bytes. Under [SQ §12.2](vault-sqlite.md#import),
+A reference the union's [held-root fold](vault-events.md#held-roots) does not hold
+requires no bytes. Under [SQ §12.2](vault-sqlite.md#import),
 stage every union-held object that is absent or known damaged in the target and
 has verified source bytes, even if there are no new events. Missing or damaged
 roots retained only by existing target events and absent from the source do not

@@ -241,8 +241,9 @@ Consume and hash sources with bounded buffers before publication. Large inputs
 may use private temporary files or staging tables; their layout is not part of
 this format. Public reads and folds MUST NOT see preparation as accepted data.
 Copy verified bytes into the common object tables in the transaction that
-accepts their references. A full `Vault.commit` rejects a supplied object not
-referenced by any of its drafts; no orphan-grace workflow is required.
+accepts their references or repairs the objects. A full `Vault.commit` rejects
+a supplied object not referenced by any of its drafts; no orphan-grace workflow
+is required.
 
 <a id="reads-damage-and-collection"></a>
 
@@ -261,7 +262,7 @@ physical-version protocol is prescribed.
 Missing chunks, wrong lengths and hash mismatches are reported as damage, never
 policy erasure or success. Read and presence operations follow
 [DO §6.3](dasl-objects.md#read-operations). Work requiring damaged content stays
-deferred until verified repair. Repair may run in maintenance mode and follows
+deferred until verified repair. Repair follows
 [DO §6.2](dasl-objects.md#putobject)'s replacement rule: after readers are quiesced,
 replace the object's metadata and complete chunk set in the enclosing acceptance
 transaction. Failed validation or rollback preserves the existing damage state.
@@ -470,16 +471,17 @@ history absent from that snapshot is outside the phase-1 contract.
 Validate and pin the complete source **before taking the target operation lock**.
 Then, under that lock, require a ready unlocked target with equal `user_version`,
 `vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
-and `ForkedAuthor` checks, and compute the prospective union and held roots with
-erasure closure. The target wins event-ID content conflicts, which are reported;
-distinct valid facts remain in the union.
+and `ForkedAuthor` checks, and compute the prospective union and its held roots
+under [VE §12.3](vault-events.md#held-roots). The target wins event-ID content
+conflicts, which are reported; distinct valid facts remain in the union.
 
 For every root retained in the prospective union by a newly accepted source
 event, require verified source bytes or
 [sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort.
 New events have IDs absent from the target after duplicate/conflict and fork
-checks. Apply erasure closure before this requirement; erased references do not
-require bytes.
+checks. Compute that fold before this requirement; a reference the union fold
+does not hold requires no bytes, including an erased reference or an envelope
+released by submission, retirement or terminal failure.
 
 For every union-held CID with verified source bytes, stage those bytes if the
 target object is absent or known damaged, even when there are no new events.
@@ -488,7 +490,7 @@ bytes, leave any absence or known damage unchanged; it does not block import.
 Stage no unheld objects and do not publish staging early. Import reuses sound
 target objects without rehashing them. Implementations MAY offer a separate
 verification pass that rehashes accepted objects in the target session to
-discover damage before maintenance import. Successful import does not certify
+discover damage before import. Successful import does not certify
 the integrity of reused target bytes or repair every existing target object.
 
 Quiesce readers before repair under [DO §6.2](dasl-objects.md#putobject).
@@ -606,10 +608,12 @@ physical-version guarantees are recorded in the suite's section history.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> A fork or unavailable root retained by a newly accepted source event
-    after union erasure closure aborts without semantic writes. An erased source
-    reference requires no bytes. Missing or known-damaged roots retained only by
-    existing target events do not block import when the source lacks their bytes;
-    those objects remain absent or damaged.
+    after the union's held-root fold aborts without semantic writes. A source
+    reference the union fold does not hold requires no bytes, including erased
+    references and envelopes released by submission, retirement or terminal
+    failure. Missing or known-damaged roots retained only by existing target
+    events do not block import when the source lacks their bytes; those objects
+    remain absent or damaged.
 37. <a id="sq-37"></a> Import fills absent union-held objects and repairs known-damaged
     ones whenever the verified source has their bytes, including when all events
     are duplicates. It does not revive erasures or require unrelated target-only
