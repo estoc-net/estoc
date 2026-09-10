@@ -471,24 +471,32 @@ history absent from that snapshot is outside the phase-1 contract.
 Validate and pin the complete source **before taking the target operation lock**.
 Then, under that lock, require a ready unlocked target with equal `user_version`,
 `vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
-and `ForkedAuthor` checks, and compute the prospective union and its held-root fold
-under [VE §12.3](vault-events.md#held-roots). The target wins event-ID content
-conflicts, which are reported; distinct valid facts remain in the union.
+and `ForkedAuthor` checks. The target wins event-ID content conflicts, which are
+reported; distinct valid facts remain in the union. Let `targetBeforeImport` be
+the accepted target event set under that lock before any import writes, and
+`union` the prospective accepted event union. Compute `heldRoots` for both sets
+under [VE §12.3](vault-events.md#held-roots). Newly accepted source events have
+IDs absent from the target after duplicate/conflict and fork checks.
 
-For every root retained in the prospective union by a newly accepted source
-event, require verified source bytes or
-[sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort.
-New events have IDs absent from the target after duplicate/conflict and fork
-checks. Compute that fold before this requirement; a reference the union fold
-does not hold requires no bytes, including an erased reference or an envelope
-released by submission, retirement or terminal failure.
-If conflicting evidence in the union makes a newly accepted event retain a root
-released by the source fold, the same byte requirement applies.
+```text
+requiredRoots =
+    roots retained by newly accepted source events in union
+    ∪ (heldRoots(union) − heldRoots(targetBeforeImport))
+```
+
+For every root in `requiredRoots`, require verified source bytes or
+[sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort
+before publication. Compute both folds before checking bytes. A reference the
+union fold does not hold requires no bytes, including an erased reference or
+an envelope released by submission, retirement or terminal failure.
+Conflicting evidence may make newly accepted source events retain roots their
+source released, or make existing target events retain roots absent from
+`heldRoots(targetBeforeImport)`. Both cases are subject to this requirement.
 
 For every union-held CID with verified source bytes, stage those bytes if the
 target object is absent or known damaged, even when there are no new events.
-If a root is retained only by existing target events and the source lacks its
-bytes, leave any absence or known damage unchanged; it does not block import.
+If a union-held root is outside `requiredRoots` and the source lacks its bytes,
+leave any absence or known damage unchanged; it does not block import.
 Stage no unheld objects and do not publish staging early. Import reuses sound
 target objects without rehashing them. Implementations MAY offer a separate
 verification pass that rehashes accepted objects in the target session to
@@ -609,13 +617,24 @@ physical-version guarantees are recorded in the suite's section history.
     querying application data, including when only reading metadata.
 34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
-36. <a id="sq-36"></a> A fork or unavailable root retained by a newly accepted source event
-    after the union's held-root fold aborts without semantic writes. A source
-    reference the union fold does not hold requires no bytes, including erased
-    references and envelopes released by submission, retirement or terminal
-    failure. Missing or known-damaged roots retained only by existing target
-    events do not block import when the source lacks their bytes; those objects
-    remain absent or damaged.
+36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
+    bytes nor sound accepted target bytes, aborts without semantic writes. Check
+    both roots retained by newly accepted source events in the union and roots
+    held by the union but not by the target before import.
+    Exercise two complete inputs with different event IDs for the two intents
+    and no current-author fork: the target has outbound `M`, prepared package `P`
+    with envelope `E`, and valid `delivery.submitted(M, P)`; `E` was released and
+    collected. The source has a different `message.out` intent for `M` and all its held bytes,
+    but no `P` or `E`. The union's intent conflict makes the existing target
+    package retain `E` again, so import rejects before publication and preserves
+    the target. Swap source and target and require the same rejection, now with
+    the newly accepted source package retaining `E`.
+    A source reference the union fold does not hold requires no bytes, including
+    erased references and envelopes released by submission, retirement or
+    terminal failure. An otherwise-valid import succeeds when an unrelated root
+    was already held by the target and remains held in the union, no newly
+    accepted event retains it, and its bytes are absent or known damaged with
+    no source bytes available; that root remains absent or damaged.
 37. <a id="sq-37"></a> Import fills absent union-held objects and repairs known-damaged
     ones whenever the verified source has their bytes, including when all events
     are duplicates. It does not revive erasures or require unrelated target-only

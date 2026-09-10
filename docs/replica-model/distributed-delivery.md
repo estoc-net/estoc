@@ -264,7 +264,7 @@ The following table is normative. "Committed" means process-durable success.
 
 | Step | Required committed evidence | Permitted next action |
 | --- | --- | --- |
-| Object acceptance | Complete verified objects under the commit's operation lock | Append the referencing batch before releasing the lock |
+| Vault commit | Verified supplied objects, repairs, the complete referencing event batch and local positions published in one transaction under the operation lock | Resolve the commit and allow actions authorized by the committed events |
 | Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
 | Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under [vault-events.md section 6.2](vault-events.md#relationship-bound) | Submit that exact package |
 | Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under [vault-events.md section 12.3](vault-events.md#held-roots) |
@@ -277,7 +277,9 @@ The terminal pre-vault path creates no `message.in`, peer ACK, contact or
 handler effect. An ACK never substitutes for a missing `delivery.submitted`
 event or retains a completed outbound's envelope for a later duplicate.
 
-Object acceptance and event append use `Vault.commit` under [event-store.md section 10](event-store.md#vault-interface).
+Prepared object bytes are not committed evidence. Object acceptance, repairs and
+event append share the single `Vault.commit` transaction defined by
+[event-store.md section 10](event-store.md#vault-interface).
 
 <a id="send-an-ordinary-message"></a>
 

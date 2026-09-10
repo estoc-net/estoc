@@ -497,14 +497,20 @@ validation and atomic same-anchor union. Validate source-only properties before
 taking the target lock; perform target-dependent checks under it. Apply
 canonical duplicate/conflict, own-author fork, known payload,
 [receipt-integrity](vault-events.md#message-in) and erasure rules. Every root
-retained by a newly accepted source event in the prospective union must have
-verified source bytes or [sound accepted target bytes](dasl-objects.md#read-operations).
-A reference the union's [held-root fold](vault-events.md#held-roots) does not hold
-requires no bytes. Under [SQ §12.2](vault-sqlite.md#import),
-stage every union-held object that is absent or known damaged in the target and
-has verified source bytes, even if there are no new events. Missing or damaged
-roots retained only by existing target events and absent from the source do not
-block import; their state remains unchanged. Reusing target objects does not
+retained by a newly accepted source event in the prospective union, and every
+root held by the union but not by the target before import, must have verified
+source bytes or [sound accepted target bytes](dasl-objects.md#read-operations);
+otherwise abort before publication. Compute the target-before-import and
+prospective-union [held-root folds](vault-events.md#held-roots) under the target
+lock. This includes roots newly held because conflicting union evidence prevents
+release, even when only existing target events retain them. A reference the
+union fold does not hold requires no bytes.
+
+Under [SQ §12.2](vault-sqlite.md#import), stage every union-held object that is
+absent or known damaged in the target and has verified source bytes, even if
+there are no new events. For union-held roots outside the byte requirements
+above, missing or known-damaged target bytes do not block import when the source
+lacks them; their state remains unchanged. Reusing target objects does not
 rehash them.
 
 One transaction publishes staged objects and repairs with all new events.
