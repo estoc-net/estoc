@@ -454,7 +454,7 @@ authored the history. Valid conflicting semantic facts remain facts.
 
 Validate a complete source and its recovery credential/anchor. Build a new
 runtime in an unused destination using application-owned DDL, adopting the
-wrapper and preserving every event ID, author, canonical byte and required
+wrapper and preserving every event ID, author, canonical byte and held
 object. Rebuilding copies validated logical values without copying source free
 pages or adopting source SQL. Assign fresh replica/generation IDs and local
 positions. Keep it unready until integrity/completeness checks pass; publish readiness in one transaction.
@@ -471,7 +471,7 @@ history absent from that snapshot is outside the phase-1 contract.
 Validate and pin the complete source **before taking the target operation lock**.
 Then, under that lock, require a ready unlocked target with equal `user_version`,
 `vault_meta.vault_version` and `vault_meta.anchor`. Apply target duplicate/conflict
-and `ForkedAuthor` checks, and compute the prospective union and its held roots
+and `ForkedAuthor` checks, and compute the prospective union and its held-root fold
 under [VE §12.3](vault-events.md#held-roots). The target wins event-ID content
 conflicts, which are reported; distinct valid facts remain in the union.
 
@@ -482,6 +482,8 @@ New events have IDs absent from the target after duplicate/conflict and fork
 checks. Compute that fold before this requirement; a reference the union fold
 does not hold requires no bytes, including an erased reference or an envelope
 released by submission, retirement or terminal failure.
+If conflicting evidence in the union makes a newly accepted event retain a root
+released by the source fold, the same byte requirement applies.
 
 For every union-held CID with verified source bytes, stage those bytes if the
 target object is absent or known damaged, even when there are no new events.

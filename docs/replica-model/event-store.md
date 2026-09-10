@@ -441,8 +441,8 @@ rule. New objects, repairs, the entire event batch and local positions publish
 in one transaction under the batch rules above. Validation failure or rollback
 publishes no objects, repairs or events; private preparation may remain.
 `commit([], drafts)` is the only local write path when no new objects are needed.
-Use [import](#import-into-an-existing-vault) to repair objects retained by existing
-events without accepting new events.
+Use [import](#import-into-an-existing-vault) to fill or repair absent or
+known-damaged objects retained by existing events without accepting new events.
 
 Portable snapshot inspection returns a read-only `Vault`. Its `metadata` is the
 snapshot's immutable metadata; `events` provides `scan`, `damaged` and
