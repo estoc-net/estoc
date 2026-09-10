@@ -70,7 +70,10 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * time in the order issued, each whole from its first step to its last,
  * as the lock runs operations: a commit issued while a collection pass
  * computes its keep set lands after the pass, so what the pass decided
- * to keep is what it deletes against.
+ * to keep is what it deletes against. The view lives as long as the
+ * operation: one it issued and did not wait for still finishes before
+ * the lock is released, and one issued after the operation ended —
+ * through a view kept past it — is refused.
  */
 export interface Held extends Vault {
   /** The store's `ingest`, for validated import and restore. */
@@ -137,6 +140,11 @@ export class WriterLock {
       });
   }
 
+  /** Resolved once every operation queued so far has finished, however it ended. */
+  idle(): Promise<void> {
+    return this.tail;
+  }
+
   /** Is an operation holding the lock right now? For diagnostics and tests. */
   get held(): boolean {
     return this.holders > 0;
@@ -165,6 +173,36 @@ type Enter = <T>(op: () => Promise<T>) => Promise<T>;
 
 /** What a view does around each mutation: the facade takes the lock; the held view queues it behind the operation's other mutations; a keep callback's view refuses it. */
 type Mutate = Enter;
+
+/**
+ * The span of one operation under the lock, as its held views see it:
+ * mutations queued one behind another while it runs; once it has
+ * ended, no further mutation and no further `open` — a view kept past
+ * its operation would otherwise run without the lock — and `end`
+ * resolves when every mutation accepted before then has finished, so
+ * the lock is released after them, not before.
+ */
+class Operation {
+  private readonly mutations = new WriterLock();
+  private ended = false;
+
+  enter<T>(op: () => Promise<T>): Promise<T> {
+    return this.ended ? refuse("an operation after the one holding the lock ended") : op();
+  }
+
+  mutate<T>(op: () => Promise<T>): Promise<T> {
+    return this.ended ? refuse("a mutation after the operation holding the lock ended") : this.mutations.run(op);
+  }
+
+  end(): Promise<void> {
+    this.ended = true;
+    return this.mutations.idle();
+  }
+}
+
+function refuse<T>(what: string): Promise<T> {
+  return Promise.reject(new UnsupportedOperation(what));
+}
 
 /** What each read that takes no lock asks first: nothing, or a throw refusing it. */
 type Check = () => void;
@@ -285,34 +323,32 @@ class View implements Vault {
   }
 }
 
-/** A mutation issued inside a keep callback would wait on the collection pass that is waiting on the callback: refused before it touches anything. */
 function refuseInKeep<T>(): Promise<T> {
-  return Promise.reject(new UnsupportedOperation("a mutation inside a keep callback"));
+  return refuse("a mutation inside a keep callback");
 }
 
 /**
  * The view an operation works through while it holds the lock: the
  * vault's members entering nothing, its mutations queued one behind
- * another, plus the runtime's primitives. One per runtime, handed to
- * every locked operation; the keep callback of each collection pass
- * gets `reading`, the same view with its mutations refused.
+ * another, plus the runtime's primitives. One per locked operation,
+ * living as long as it; the keep callback of each collection pass gets
+ * `reading`, the same view with its mutations refused.
  */
 class HeldView extends View implements Held {
   private readonly reading: Held;
 
-  static forOperations(stores: Stores, metadata: VaultMetadata): HeldView {
-    const lock = new WriterLock();
-    return new HeldView(stores, metadata, (op) => lock.run(op), new HeldView(stores, metadata, refuseInKeep));
+  static forOperation(stores: Stores, metadata: VaultMetadata, operation: Operation): HeldView {
+    const enter: Enter = (op) => operation.enter(op);
+    return new HeldView(stores, metadata, enter, (op) => operation.mutate(op), new HeldView(stores, metadata, enter, refuseInKeep));
   }
 
-  private constructor(stores: Stores, metadata: VaultMetadata, mutate: Mutate, reading?: Held) {
-    super(stores, metadata, (op) => op(), mutate);
+  private constructor(stores: Stores, metadata: VaultMetadata, enter: Enter, mutate: Mutate, reading?: Held) {
+    super(stores, metadata, enter, mutate);
     this.reading = reading ?? this;
   }
 
-  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    const read = await readAll(events);
-    return this.mutate(() => ingestRead(this.stores.events, read));
+  ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
+    return this.mutate(async () => ingestRead(this.stores.events, await readAll(events)));
   }
 
   collect(keep: KeepUnderLock): Promise<Collected> {
@@ -393,7 +429,6 @@ export class Runtime implements VaultRuntime {
   readonly keystore: KeystoreAccess;
   readonly stores: Stores;
   readonly vault: Vault;
-  private readonly held: HeldView;
   private readonly guard: (when: "enter" | "run" | "read") => void;
 
   constructor(options: RuntimeOptions) {
@@ -403,7 +438,6 @@ export class Runtime implements VaultRuntime {
     this.metadata = checkMetadata(options.metadata);
     this.stores = options.stores;
     this.guard = options.guard ?? (() => undefined);
-    this.held = HeldView.forOperations(this.stores, this.metadata);
     this.vault = new View(
       this.stores,
       this.metadata,
@@ -427,7 +461,14 @@ export class Runtime implements VaultRuntime {
   }
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
-    return this.enter(() => op(this.held));
+    return this.enter(async () => {
+      const operation = new Operation();
+      try {
+        return await op(HeldView.forOperation(this.stores, this.metadata, operation));
+      } finally {
+        await operation.end();
+      }
+    });
   }
 
   collect(keep: KeepUnderLock): Promise<Collected> {

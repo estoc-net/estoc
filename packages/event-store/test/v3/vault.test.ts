@@ -14,8 +14,10 @@ import {
   ObjectTooLarge,
   Runtime,
   UnreferencedObject,
+  UnsupportedOperation,
   WriterLock,
   type Cid,
+  type Collected,
   type Draft,
   type Event,
   type Held,
@@ -738,11 +740,13 @@ describe("the held view (nested calls share the lock)", () => {
     });
   });
 
-  it("an ingest issued through the held view queues with its commits: the input is read first, then it lands in order", async () => {
+  it("an ingest issued through the held view queues with its commits in the order issued, its input read in its turn: neither overtakes the other", async () => {
     const { vault } = open();
     const other = new MemoryVault({ metadata: META, author: authorN(2) });
     const [foreign] = await other.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const [foreign2] = await other.vault.commit([], [draft([HELLO_CID], { n: 2 })]);
     await vault.locked(async (held) => {
+      // a commit first, still reading its source: the ingest waits
       const g = gate();
       const committing = held.commit([{ cid: HELLO_CID, source: gated(HELLO, g) }], [draft([HELLO_CID])]);
       const ingesting = held.ingest([foreign]);
@@ -750,8 +754,104 @@ describe("the held view (nested calls share the lock)", () => {
       g.open();
       expect(await committing).toHaveLength(1);
       expect(await ingesting).toMatchObject({ added: 1, duplicates: 0 });
-      expect((await all(held.events.scan())).map((e) => e.author)).toEqual([authorN(1), authorN(2)]);
+      // an ingest first, its input paused: the commit waits, and lands after it
+      const entered = gate();
+      const resume = gate();
+      const source = (async function* () {
+        entered.open();
+        await resume.wait;
+        yield foreign2;
+      })();
+      const { token } = await held.events.changes();
+      const ingesting2 = held.ingest(source);
+      await entered.wait;
+      const committing2 = held.commit([], [draft([HELLO_CID], { n: 3 })]);
+      expect(await settled(committing2)).toBe(false);
+      resume.open();
+      expect(await ingesting2).toMatchObject({ added: 1 });
+      expect(await committing2).toHaveLength(1);
+      const accepted = await all((await held.events.changes(undefined, token)).events);
+      expect(accepted.map((e) => e.author)).toEqual([authorN(2), authorN(1)]);
     });
+  });
+
+  it("a mutation the operation issued and did not wait for finishes before the lock is released, even when the operation itself failed", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    const computed = gate();
+    const resume = gate();
+    let collecting!: Promise<Collected>;
+    const locked = vault.locked(async (held) => {
+      const invalid = held.commit([], [{ type: "", data: {} } as unknown as Draft]);
+      collecting = held.collect(async (view) => {
+        const keep = await rootsOf(view);
+        computed.open();
+        await resume.wait;
+        return keep;
+      });
+      return Promise.all([invalid, collecting]);
+    });
+    await computed.wait;
+    expect(await settled(locked)).toBe(false); // the operation's own promise rejected, its collection pass has not ended
+    expect(vault.lock.held).toBe(true);
+    const committing = v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    expect(await settled(committing)).toBe(false);
+    resume.open();
+    expect(await collecting).toEqual({ removed: [] });
+    await expect(locked).rejects.toThrow(InvalidEvent);
+    expect(await committing).toHaveLength(1);
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(await all(v.events.scan())).toHaveLength(1);
+    expect(vault.lock.held).toBe(false);
+  });
+
+  it("a held view kept past its operation refuses a mutation and an open: nothing runs without the lock", async () => {
+    const { vault } = open();
+    await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const kept = await vault.locked(async (held) => held);
+    expect(vault.lock.held).toBe(false);
+    for (const attempt of [
+      () => kept.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]),
+      () => kept.ingest([]),
+      () => kept.collect(() => []),
+      () => kept.objects.open(HELLO_CID),
+      () => kept.objects.read(HELLO_CID, 5),
+      () => kept.locked((again) => again.commit([], [draft([HELLO_CID])])),
+    ]) {
+      await expect(attempt()).rejects.toThrow(UnsupportedOperation);
+    }
+    expect(await kept.objects.has(HELLO_CID)).toBe(true);
+    expect(await all(kept.events.scan())).toHaveLength(1);
+    expect(await vault.vault.objects.has(WORLD_CID)).toBe(false);
+    // the next operation gets a view of its own
+    expect(await vault.locked((held) => held.commit([], [draft([HELLO_CID])]))).toHaveLength(1);
+  });
+
+  it("a keep callback's ingest is refused before its source is asked for anything: a source that counts is untouched, one that throws is never reached", async () => {
+    const { vault } = open();
+    let pulled = 0;
+    const counting = (async function* () {
+      pulled += 1;
+      yield {};
+    })();
+    const throwing = (async function* () {
+      pulled += 1;
+      throw new Error("source consumed");
+    })();
+    const errors: string[] = [];
+    expect(
+      await vault.collect(async (view) => {
+        for (const source of [counting, throwing]) {
+          await view.ingest(source).then(
+            () => errors.push("landed"),
+            (err: Error) => errors.push(err.name)
+          );
+        }
+        return [];
+      })
+    ).toEqual({ removed: [] });
+    expect(errors).toEqual(["UnsupportedOperation", "UnsupportedOperation"]);
+    expect(pulled).toBe(0);
   });
 
   it("a keep callback computes from reads: a commit, ingest or collect through its view is refused before touching anything", async () => {

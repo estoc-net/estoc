@@ -42,7 +42,8 @@ object no draft names as a root before reading a byte and publishes its
 objects and events together or not at all — and `VaultRuntime`, what a
 host opens: `locked(op)`, the vault-wide writer lock, whose operation
 works through `Held`, the same vault sharing the held lock, its
-mutations run one at a time in the order issued;
+mutations run one at a time in the order issued and finished before
+the lock is released, the view refusing them once the operation ended;
 `collect(keep)`, the keep set a function called only under the lock,
 through a view that reads and refuses to mutate;
 `ingest`; and `keystore`, the `KeystoreAccess` to the wrapped seed —
