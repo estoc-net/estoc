@@ -54,10 +54,10 @@ export { mint, type Minted } from "./mint.js";
 
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
-export type { ByteSource, ObjectInfo, Collected, ObjectStore } from "./objects.js";
+export type { ByteSource, ObjectInfo, Collected, ObjectStore, Preparation } from "./objects.js";
 export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource } from "./objects.js";
 
-export { MemoryObjectStore, type MemoryObjectStoreOptions, DEFAULT_MAX_OBJECT_BYTES, DEFAULT_EXTENT_BYTES } from "./memory-objects.js";
+export { MemoryObjectStore, MemoryPreparation, type MemoryObjectStoreOptions, DEFAULT_MAX_OBJECT_BYTES, DEFAULT_EXTENT_BYTES } from "./memory-objects.js";
 
 export type { VaultMetadata, WrappedSeed, KeystoreAccess } from "./keystore.js";
 export { checkMetadata, checkWrappedSeed } from "./keystore.js";

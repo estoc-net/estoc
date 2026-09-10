@@ -7,11 +7,15 @@
  * whole, the bytes handed back are rehashed on the way out, an object a read finds
  * damaged is known damaged from then on, and collection deletes exactly the unkept.
  *
- * Every step that changes what is held is synchronous, so the serialization the vault
- * asks of its writer lock holds by construction; a vault runtime still holds its lock
- * around `collect` for the commit boundary, which is its to keep, not this store's.
- * A stream open when its object is replaced or collected reads the bytes it opened on
- * to their end: complete, and verified against the CID before it completes.
+ * A put verifies its bytes as they stream, into memory of its own, and lands them in
+ * one synchronous step; `prepare` splits the two, so a vault commit verifies its
+ * objects where no read sees them and publishes them in the same step as its events.
+ * Every step that changes what is held is synchronous: two operations may verify at
+ * once, and each lands only what it verified, never another's. A vault runtime still
+ * holds its lock around `collect` for the commit boundary, which is its to keep, not
+ * this store's. A stream open when its object is replaced or collected reads the
+ * bytes it opened on to their end: complete, and verified against the CID before it
+ * completes.
  */
 
 import { compareBytes, type DaslCid } from "@estoc/dasl";
@@ -19,7 +23,7 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { DamagedObject, DigestMismatch, ObjectTooLarge } from "./errors.js";
 import type { Cid } from "./event.js";
-import { hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore } from "./objects.js";
+import { hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore, type Preparation } from "./objects.js";
 
 /** The accepted-size bound a store has when given none: 1 GiB. */
 export const DEFAULT_MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
@@ -43,9 +47,8 @@ interface Held {
 export class MemoryObjectStore implements ObjectStore {
   private readonly maxObjectBytes: number;
   private readonly extentBytes: number;
-  /** every accepted object, by CID text */
   private readonly held = new Map<string, Held>();
-  /** the accepted objects a read of this session found not to hash to their CID, by CID text */
+  /** the accepted objects a read of this session found not to hash to their CID */
   private readonly damaged = new Set<string>();
 
   constructor(options: MemoryObjectStoreOptions = {}) {
@@ -57,15 +60,20 @@ export class MemoryObjectStore implements ObjectStore {
   async putRaw(source: ByteSource): Promise<ObjectInfo> {
     const packer = new Packer(this.extentBytes);
     const { cid, size } = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
-    return this.accept(cid, packer.extents(), size);
+    return this.accept({ cid, extents: packer.extents(), size });
   }
 
   async putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo> {
-    const want = rawCidOf(cid); // the CID checked before a byte is read
+    return this.accept(await this.verify(cid, source));
+  }
+
+  /** `source` hashed into extents of this store's size, its CID checked before a byte is read; `DigestMismatch` when the bytes are not `cid`'s. */
+  private async verify(cid: Cid, source: ByteSource): Promise<Held> {
+    const want = rawCidOf(cid);
     const packer = new Packer(this.extentBytes);
     const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
-    if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text); // nothing accepted
-    return this.accept(want, packer.extents(), got.size);
+    if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text);
+    return { cid: want, extents: packer.extents(), size: got.size };
   }
 
   /**
@@ -76,32 +84,28 @@ export class MemoryObjectStore implements ObjectStore {
    * keeps reading them and, finding them damaged, fails without
    * touching the new ones.
    */
-  private accept(cid: DaslCid, extents: Uint8Array[], size: number): ObjectInfo {
-    const have = this.held.get(cid.text);
-    if (have !== undefined && !this.damaged.has(cid.text)) return info(have.cid, have.size);
-    this.held.set(cid.text, { cid, extents, size });
-    this.damaged.delete(cid.text);
-    return info(cid, size);
+  private accept(verified: Held): ObjectInfo {
+    const have = this.held.get(verified.cid.text);
+    if (have !== undefined && !this.damaged.has(verified.cid.text)) return info(have.cid, have.size);
+    this.held.set(verified.cid.text, verified);
+    this.damaged.delete(verified.cid.text);
+    return info(verified.cid, verified.size);
   }
 
   /**
-   * Undo everything `body` accepted if it throws: what was held, and
-   * what was known damaged, are as they were before it ran. For the
-   * vault's commit, whose objects and events publish together or not
-   * at all.
+   * A preparation over this store: what is put through it is verified
+   * now and held by the preparation alone until `publish`, one
+   * synchronous step that accepts each prepared object under
+   * `putObject`'s rules. Dropped unpublished, it leaves the store as
+   * it was. Two preparations in flight are two: each publishes only
+   * what it verified.
    */
-  async transaction<T>(body: () => Promise<T>): Promise<T> {
-    const held = new Map(this.held);
-    const damaged = new Set(this.damaged);
-    try {
-      return await body();
-    } catch (err) {
-      this.held.clear();
-      for (const [cid, object] of held) this.held.set(cid, object);
-      this.damaged.clear();
-      for (const cid of damaged) this.damaged.add(cid);
-      throw err;
-    }
+  prepare(): MemoryPreparation {
+    return new MemoryPreparation(
+      (cid, source) => this.verify(cid, source),
+      (cid) => this.has(cid),
+      (verified) => this.accept(verified)
+    );
   }
 
   /** The object `cid` names, or null for absence; `DamagedObject` for one known damaged. Every read starts here. */
@@ -194,11 +198,8 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   async collect(keep: Iterable<Cid>): Promise<Collected> {
-    // Every keep CID checked before anything is touched; then one
-    // synchronous pass: kept objects are left alone, damaged or not,
-    // and every other goes.
     const kept = new Set<string>();
-    for (const cid of keep) kept.add(rawCidOf(cid).text);
+    for (const cid of keep) kept.add(rawCidOf(cid).text); // every keep CID checked before anything is touched
     const removed: Cid[] = [];
     for (const cid of this.held.keys()) {
       if (kept.has(cid)) continue;
@@ -222,6 +223,38 @@ export class MemoryObjectStore implements ObjectStore {
     const extent = held.extents.find((e) => e.length > 0);
     if (extent === undefined) throw new Error(`${cid} has no bytes to damage`);
     extent[0] = (extent[0] as number) ^ 0x01;
+  }
+}
+
+/**
+ * The objects of one commit between verification and publication:
+ * verified into memory of their own, seen by no read of the store, and
+ * accepted all in one synchronous step when the commit publishes.
+ */
+export class MemoryPreparation implements Preparation {
+  private readonly prepared = new Map<string, Held>();
+
+  constructor(
+    private readonly verify: (cid: Cid, source: ByteSource) => Promise<Held>,
+    private readonly stored: (cid: Cid) => Promise<boolean>,
+    private readonly accept: (verified: Held) => ObjectInfo
+  ) {}
+
+  async putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo> {
+    const verified = await this.verify(cid, source);
+    this.prepared.set(verified.cid.text, verified);
+    return info(verified.cid, verified.size);
+  }
+
+  async has(cid: Cid): Promise<boolean> {
+    rawCidOf(cid);
+    return this.prepared.has(cid) || this.stored(cid);
+  }
+
+  /** Accept every prepared object, now, in one synchronous step; the preparation is empty after. */
+  publish(): void {
+    for (const verified of this.prepared.values()) this.accept(verified);
+    this.prepared.clear();
   }
 }
 

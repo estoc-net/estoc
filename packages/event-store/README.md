@@ -46,9 +46,11 @@ works through `Held`, the same vault sharing the held lock;
 `ingest`; and `keystore`, the `KeystoreAccess` to the wrapped seed —
 `read` a detached value, `rewrap` a replacement under the lock, the
 check that it opens to the same seed being the unlocked host's.
-`MemoryVault` is the two memory stores under one runtime; `Runtime`
-builds the same over any two, and over a backend's transaction when it
-has one.
+A commit's objects are verified into a `Preparation` no read sees and
+published in the transaction that appends its events, so the two land
+together or not at all. `MemoryVault` is the two memory stores under
+one runtime; `Runtime` builds the same over any two stores and the
+transaction that publishes them, which every backend supplies.
 
 Everything below is
 version 2, which stays until the vault switches over.

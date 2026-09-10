@@ -74,6 +74,22 @@ export interface ObjectStore {
   collect(keep: Iterable<Cid>): Promise<Collected>;
 }
 
+/**
+ * A commit's objects before they publish. Bytes put here are verified
+ * against their CID and held where no read of the store sees them —
+ * not `has`, not `stat`, not `list` — until the transaction they belong
+ * to publishes them, new objects and repairs alike, together with its
+ * events; a transaction that fails drops them and nothing of the store
+ * changes. A root check in the transaction asks `has` here, which counts
+ * what is prepared as present.
+ */
+export interface Preparation {
+  /** Verify `source` against `cid` under `putObject`'s rules and hold the bytes here, unpublished. */
+  putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
+  /** Prepared here, or accepted and sound in the store; `false` for absence, `DamagedObject` for known damage not repaired here. */
+  has(cid: Cid): Promise<boolean>;
+}
+
 // ---- CIDs ---------------------------------------------------------------
 
 /**

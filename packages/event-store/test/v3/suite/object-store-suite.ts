@@ -443,16 +443,18 @@ export function objectStoreSuite(name: string, open: OpenObjectStore): void {
         expect(await store.has(cid)).toBe(false);
         expect(await store.open(cid)).toBeNull();
         const parts = [first.value as Uint8Array];
+        let failed = false;
         try {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
             parts.push(value);
           }
-          expectBytes(join(parts), bytes); // completed: then with every byte
         } catch (err) {
-          expect(err).toBeInstanceOf(Error); // or failed, explicitly
+          expect(err).toBeInstanceOf(Error); // failed, explicitly
+          failed = true;
         }
+        if (!failed) expectBytes(join(parts), bytes); // or completed: then with every byte
       });
 
       it("an object a read finds not to hash to its CID fails that read and is known damaged from then on: has, stat, open, read and list all fail, other objects are untouched", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DamagedObject, DEFAULT_EXTENT_BYTES, DEFAULT_MAX_OBJECT_BYTES, MemoryObjectStore, chunksOf, type Cid, type ObjectStore } from "../../src/v3/index.js";
+import { DamagedObject, DEFAULT_EXTENT_BYTES, DEFAULT_MAX_OBJECT_BYTES, DigestMismatch, MemoryObjectStore, chunksOf, compareCids, type Cid, type ObjectStore } from "../../src/v3/index.js";
 import { all, expectBytes } from "./suite/helpers.js";
 import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
 
@@ -333,25 +333,58 @@ describe("MemoryObjectStore", () => {
     expect(await all(store.list())).toEqual([cid, other].sort());
   });
 
-  it("transaction: what the body accepted, replaced and marked is undone when it throws, and kept when it returns", async () => {
+  it("prepare: what is put through a preparation is verified now, seen by no read until publish, and dropped with it", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const kept = bytesOf(10, 9);
     const keptCid = (await store.putRaw(kept)).cid;
     store.damage(keptCid);
-    await expect(store.read(keptCid, 10)).rejects.toThrow(DamagedObject); // known damaged before the transaction
+    await expect(store.read(keptCid, 10)).rejects.toThrow(DamagedObject); // known damaged before the preparation
     const fresh = bytesOf(10, 10);
-    await expect(
-      store.transaction(async () => {
-        await store.putRaw(fresh);
-        await store.putObject(keptCid, kept); // a repair
-        expect(await store.has(keptCid)).toBe(true);
-        expect(await store.has(cidOf(fresh))).toBe(true);
-        throw new Error("rolled back");
-      })
-    ).rejects.toThrow("rolled back");
-    expect(await store.has(cidOf(fresh))).toBe(false);
-    await expect(store.has(keptCid)).rejects.toThrow(DamagedObject); // the repair went with the rollback
-    expect(await store.transaction(async () => (await store.putRaw(fresh)).cid)).toBe(cidOf(fresh));
-    expect(await store.has(cidOf(fresh))).toBe(true);
+    const freshCid = cidOf(fresh);
+    const dropped = store.prepare();
+    await expect(dropped.putObject(freshCid, kept)).rejects.toThrow(DigestMismatch);
+    expect(await dropped.putObject(freshCid, fresh)).toEqual({ cid: freshCid, codec: "raw", size: 10 });
+    await dropped.putObject(keptCid, kept); // a repair, prepared
+    expect(await dropped.has(freshCid)).toBe(true);
+    expect(await dropped.has(keptCid)).toBe(true);
+    expect(await dropped.has(cidOf(bytesOf(3, 3)))).toBe(false);
+    // the store sees none of it
+    expect(await store.has(freshCid)).toBe(false);
+    expect(await store.stat(freshCid)).toBeNull();
+    await expect(store.has(keptCid)).rejects.toThrow(DamagedObject);
+    await expect(all(store.list())).rejects.toThrow(DamagedObject);
+    // never published: as it was
+    expect(await store.has(freshCid)).toBe(false);
+    await expect(store.has(keptCid)).rejects.toThrow(DamagedObject);
+    // published: the new object lands, the repair replaces the damaged bytes
+    const published = store.prepare();
+    await published.putObject(freshCid, fresh);
+    await published.putObject(keptCid, kept);
+    published.publish();
+    expect(await store.has(freshCid)).toBe(true);
+    expectBytes(await store.read(keptCid, 10), kept);
+    expect(await all(store.list())).toEqual([freshCid, keptCid].sort(compareCids));
+  });
+
+  it("a preparation's `has` on a known damaged object not repaired in it fails as the store's does; two preparations each publish their own", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const damaged = bytesOf(10, 9);
+    const damagedCid = (await store.putRaw(damaged)).cid;
+    store.damage(damagedCid);
+    await expect(store.read(damagedCid, 10)).rejects.toThrow(DamagedObject);
+    const a = store.prepare();
+    const b = store.prepare();
+    await expect(a.has(damagedCid)).rejects.toThrow(DamagedObject);
+    const one = bytesOf(10, 10);
+    const two = bytesOf(10, 11);
+    await a.putObject(cidOf(one), one);
+    await b.putObject(cidOf(two), two);
+    expect(await a.has(cidOf(two))).toBe(false);
+    a.publish();
+    expect(await store.has(cidOf(one))).toBe(true);
+    expect(await store.has(cidOf(two))).toBe(false);
+    await expect(store.has(damagedCid)).rejects.toThrow(DamagedObject);
+    b.publish();
+    expect(await store.has(cidOf(two))).toBe(true);
   });
 });

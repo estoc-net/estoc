@@ -15,7 +15,7 @@ import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
 import { MemoryObjectStore } from "./memory-objects.js";
-import { chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectStore } from "./objects.js";
+import { chunksOf, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectStore, type Preparation } from "./objects.js";
 
 /** An object handed to `commit`: the bytes, and the raw CID they must hash to. */
 export type CommitObject = { cid: Cid; source: ByteSource };
@@ -138,15 +138,18 @@ export class WriterLock {
 // ---- the views ----------------------------------------------------------
 
 /**
- * The backend stores a runtime is built over. `transaction`, when a
- * backend has one, runs a commit's acceptances and appends so that a
- * throw inside publishes none of them; without it the stores publish
- * as they go.
+ * The backend stores a runtime is built over, and the transaction a
+ * commit publishes in. `body` prepares the commit's objects through
+ * `prepared` — verified, held where no read sees them — and returns
+ * the drafts to append; then the prepared objects, the repairs among
+ * them and the events publish as one, or, on a throw from `body` or
+ * from the append, nothing does. No backend publishes as it goes: a
+ * runtime refuses stores without it.
  */
 export interface Stores {
   events: EventStore;
   objects: ObjectStore;
-  transaction?: <T>(body: () => Promise<T>) => Promise<T>;
+  transaction<D extends JsonObject>(body: (prepared: Preparation) => Promise<Draft<D>[]>): Promise<Event<D>[]>;
 }
 
 /** How a view enters the lock: by taking it, or — already inside — by doing nothing. */
@@ -167,7 +170,6 @@ type Check = () => void;
 class View implements Vault {
   readonly events: VaultEvents;
   readonly objects: VaultObjects;
-  private readonly transaction: <T>(body: () => Promise<T>) => Promise<T>;
 
   constructor(
     protected readonly stores: Stores,
@@ -176,7 +178,6 @@ class View implements Vault {
     check: Check = () => undefined
   ) {
     const { events, objects } = stores;
-    this.transaction = stores.transaction ?? ((body) => body());
     this.events = {
       scan: async function* (filter) {
         check();
@@ -248,20 +249,25 @@ class View implements Vault {
 
   commit<D extends JsonObject>(objects: CommitObject[], drafts: Draft<D>[]): Promise<Event<D>[]> {
     return this.enter(async () => {
-      // Every draft and every CID checked, and every supplied object
+      // The batch is fixed first — the drafts validated into copies,
+      // the object descriptors copied — so what is checked is what is
+      // read: a source that grows the caller's array or rewrites a
+      // later descriptor while it streams changes nothing here. Every
+      // draft and every CID is checked, and every supplied object
       // matched to a root, before a byte is read: a bad batch accepts nothing.
       const clean = drafts.map((draft) => validateDraft(draft));
+      const batch = objects.map(({ cid, source }) => ({ cid, source }));
       const roots = new Set<Cid>(clean.flatMap((draft) => draft.roots));
-      for (const object of objects) {
+      for (const object of batch) {
         rawCidOf(object.cid);
         if (!roots.has(object.cid)) throw new UnreferencedObject(object.cid);
       }
-      return this.transaction(async () => {
-        for (const object of objects) await this.stores.objects.putObject(object.cid, object.source);
+      return this.stores.transaction<D>(async (prepared) => {
+        for (const object of batch) await prepared.putObject(object.cid, object.source);
         for (const root of sortCids(roots)) {
-          if (!(await this.stores.objects.has(root))) throw new MissingRoot(root);
+          if (!(await prepared.has(root))) throw new MissingRoot(root);
         }
-        return this.stores.events.appendAll(clean) as Promise<Event<D>[]>;
+        return clean as Draft<D>[];
       });
     });
   }
@@ -347,10 +353,10 @@ export interface RuntimeOptions {
 }
 
 /**
- * A runtime over any two stores, for one process: the lock, the facade
- * application code gets — a `Vault` with nothing else on it — and the
- * held view. What `MemoryVault` is, and what a persistent backend
- * builds once it has opened its stores.
+ * A runtime over any two stores and their transaction, for one
+ * process: the lock, the facade application code gets — a `Vault` with
+ * nothing else on it — and the held view. What `MemoryVault` is, and
+ * what a persistent backend builds once it has opened its stores.
  */
 export class Runtime implements VaultRuntime {
   readonly lock = new WriterLock();
@@ -364,6 +370,7 @@ export class Runtime implements VaultRuntime {
   private readonly guard: (when: "enter" | "run" | "read") => void;
 
   constructor(options: RuntimeOptions) {
+    if (typeof options.stores.transaction !== "function") throw new TypeError("a runtime's stores publish a commit in one transaction: `transaction` is missing");
     this.author = options.author;
     this.generation = options.generation;
     this.metadata = checkMetadata(options.metadata);
@@ -453,13 +460,15 @@ class MemoryKeystore implements KeystoreAccess {
 /**
  * The vault as maps in memory: `MemoryEventStore` and `MemoryObjectStore`
  * under one runtime and one lock. Nothing persists, so the process-durable
- * half of the store's promise is vacuous; the boundaries are not: a commit
- * publishes its objects and events together or not at all, a paused stream
- * blocks no writer, collection waits for the commit in flight and computes
- * its keep set only once it has the lock.
+ * half of the store's promise is vacuous; the boundaries are not: a
+ * commit's objects are verified in a preparation no read sees and
+ * published in the one synchronous step that accepts its events, so the
+ * two land together or not at all; a paused stream blocks no writer;
+ * collection waits for the commit in flight and computes its keep set
+ * only once it has the lock.
  */
 export class MemoryVault extends Runtime {
-  declare readonly stores: { events: MemoryEventStore; objects: MemoryObjectStore; transaction: <T>(body: () => Promise<T>) => Promise<T> };
+  declare readonly stores: Stores & { events: MemoryEventStore; objects: MemoryObjectStore };
 
   constructor(options: MemoryVaultOptions) {
     const now = options.now === undefined ? {} : { now: options.now };
@@ -472,7 +481,15 @@ export class MemoryVault extends Runtime {
       author: events.author,
       generation: events.generation,
       metadata: options.metadata,
-      stores: { events, objects, transaction: (body) => objects.transaction(body) },
+      stores: {
+        events,
+        objects,
+        transaction: async (body) => {
+          const prepared = objects.prepare();
+          const drafts = await body(prepared);
+          return events.appendAll(drafts, () => prepared.publish());
+        },
+      },
       keystore: (runtime) => new MemoryKeystore(options.wrapped, (op) => runtime.locked(() => op())),
     });
   }

@@ -24,9 +24,16 @@
   removes it (a sound object already held is idempotent, its bytes
   untouched); `Vault` gained `metadata` and lost `files`; `commit`
   refuses a supplied object no draft names as a root
-  (`UnreferencedObject`) before reading a byte, and publishes its
-  objects and events together or not at all — `MemoryVault` rolls its
-  object store back on failure; `VaultRuntime` gained `metadata` and
+  (`UnreferencedObject`) before reading a byte, fixes the batch it
+  checked before reading it, and publishes its objects and events
+  together or not at all: they are verified into a `Preparation` no
+  read sees — not `has`, `stat` or `list` — and published in the one
+  transaction that appends the events, a failure undoing only that
+  commit's own preparation; `Stores.transaction` is required, and
+  `Runtime` refuses stores without it; `MemoryObjectStore.prepare`
+  is new and its `transaction` gone; `MemoryEventStore.appendAll`
+  takes an optional `publish` step that lands with the batch;
+  `VaultRuntime` gained `metadata` and
   `keystore`, a `KeystoreAccess` whose `rewrap` runs under the writer
   lock; `Runtime` takes an options object; `MemoryVault` takes
   `metadata` and an optional `wrapped` seed; `VaultMetadata`,

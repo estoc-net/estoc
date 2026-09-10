@@ -125,8 +125,7 @@ export class NotAVault extends Error {
 /**
  * Another anchor DID than this vault's: the seed in hand does not derive
  * it — the wrong seed for this vault — or, for an import, the source
- * snapshot is another vault's. Refused before ownership is taken, any
- * local state made or any byte written.
+ * snapshot is another vault's.
  */
 export class AnchorMismatch extends Error {
   constructor(

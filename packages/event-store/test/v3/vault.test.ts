@@ -6,16 +6,20 @@ import {
   ForkedAuthor,
   InvalidCid,
   InvalidEvent,
+  MemoryEventStore,
+  MemoryObjectStore,
   MemoryVault,
   MissingRoot,
   NotAVault,
   ObjectTooLarge,
+  Runtime,
   UnreferencedObject,
   WriterLock,
   type Cid,
   type Draft,
   type Event,
   type Held,
+  type Stores,
   type VaultMetadata,
   type WrappedSeed,
 } from "../../src/v3/index.js";
@@ -87,13 +91,15 @@ function open(): { vault: MemoryVault; now: ReturnType<typeof clock> } {
 
 /** A stream drained after its object may have been collected or replaced: complete with exactly `bytes`, or failed — never anything else. */
 async function completeOrFailed(stream: ReadableStream<Uint8Array>, bytes: Uint8Array): Promise<"complete" | "failed"> {
+  let drained: Uint8Array;
   try {
-    expectBytes((await drain(stream)).bytes, bytes);
-    return "complete";
+    drained = (await drain(stream)).bytes;
   } catch (err) {
     expect(err).toBeInstanceOf(Error);
     return "failed";
   }
+  expectBytes(drained, bytes);
+  return "complete";
 }
 
 describe("WriterLock", () => {
@@ -332,6 +338,104 @@ describe("Vault.commit", () => {
     await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
     expect((await all(v.events.scan())).length).toBe(1);
   });
+
+  it("a commit's objects are seen by no read until its events land: not while a source is paused, and never when the commit fails", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]);
+    vault.stores.objects.damage(WORLD_CID);
+    await expect(v.objects.read(WORLD_CID, 5)).rejects.toThrow(DamagedObject); // known damaged from here on
+    const g = gate();
+    const committing = v.commit(
+      [
+        { cid: HELLO_CID, source: HELLO },
+        { cid: EMPTY_CID, source: gated(new Uint8Array(0), g) },
+        { cid: WORLD_CID, source: HELLO },
+      ],
+      [draft([HELLO_CID, WORLD_CID, EMPTY_CID])]
+    );
+    await tick();
+    expect(vault.lock.held).toBe(true);
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
+    expect(await v.objects.stat(HELLO_CID)).toBeNull();
+    await expect(all(v.objects.list())).rejects.toThrow(DamagedObject); // still the store as it was: WORLD damaged, no HELLO
+    expect(await all(v.events.scan())).toHaveLength(1);
+    g.open();
+    await expect(committing).rejects.toThrow(DigestMismatch); // WORLD's bytes were not its
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
+    await expect(v.objects.has(WORLD_CID)).rejects.toThrow(DamagedObject);
+    expect(await all(v.events.scan())).toHaveLength(1);
+    // the same batch, sound: nothing visible while paused, everything at once when it lands
+    const g2 = gate();
+    const landing = v.commit(
+      [
+        { cid: HELLO_CID, source: HELLO },
+        { cid: WORLD_CID, source: WORLD },
+        { cid: EMPTY_CID, source: gated(new Uint8Array(0), g2) },
+      ],
+      [draft([HELLO_CID, WORLD_CID, EMPTY_CID])]
+    );
+    await tick();
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
+    await expect(v.objects.has(WORLD_CID)).rejects.toThrow(DamagedObject); // the repair is prepared, not published
+    g2.open();
+    expect(await landing).toHaveLength(1);
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expectBytes(await v.objects.read(WORLD_CID, 5), WORLD);
+    expect(await all(v.objects.list())).toEqual([HELLO_CID, WORLD_CID, EMPTY_CID].sort());
+    expect(await all(v.events.scan())).toHaveLength(2);
+  });
+
+  it("a failing commit undoes only itself: damage a reader found meanwhile stays known, and a reused root known damaged still fails", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    vault.stores.objects.damage(HELLO_CID);
+    const reader = (await v.objects.open(HELLO_CID)) as ReadableStream<Uint8Array>; // opened before anything found the damage
+    const g = gate();
+    const failing = v.commit([{ cid: WORLD_CID, source: gated(HELLO, g) }], [draft([WORLD_CID])]);
+    await tick();
+    await expect(drain(reader)).rejects.toThrow(DamagedObject); // found while the commit is paused
+    await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
+    g.open();
+    await expect(failing).rejects.toThrow(DigestMismatch);
+    await expect(v.objects.has(HELLO_CID)).rejects.toThrow(DamagedObject);
+    await expect(v.objects.stat(HELLO_CID)).rejects.toThrow(DamagedObject);
+    await expect(v.commit([], [draft([HELLO_CID])])).rejects.toThrow(DamagedObject);
+    expect(await all(v.events.scan())).toHaveLength(1);
+  });
+
+  it("the batch is fixed before a byte is read: an object a source adds to the array, or a descriptor it rewrites, is not accepted", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    const objects: { cid: Cid; source: Uint8Array | AsyncIterable<Uint8Array> }[] = [];
+    const growing = async function* (): AsyncIterable<Uint8Array> {
+      objects.push({ cid: WORLD_CID, source: WORLD });
+      yield HELLO;
+    };
+    objects.push({ cid: HELLO_CID, source: growing() });
+    const events = await v.commit(objects, [draft([HELLO_CID])]);
+    expect(events).toHaveLength(1);
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await all(v.objects.list())).toEqual([HELLO_CID]);
+    // a later descriptor rewritten while the first streams: what was checked is what is read
+    const batch: { cid: Cid; source: Uint8Array | AsyncIterable<Uint8Array> }[] = [];
+    let readEmpty = 0;
+    const rewriting = async function* (): AsyncIterable<Uint8Array> {
+      (batch[1] as { cid: Cid; source: Uint8Array }).cid = WORLD_CID;
+      (batch[1] as { cid: Cid; source: Uint8Array }).source = WORLD;
+      yield HELLO;
+    };
+    const emptyCounted = async function* (): AsyncIterable<Uint8Array> {
+      readEmpty += 1;
+    };
+    batch.push({ cid: HELLO_CID, source: rewriting() }, { cid: EMPTY_CID, source: emptyCounted() });
+    expect(await v.commit(batch, [draft([HELLO_CID, EMPTY_CID])])).toHaveLength(1);
+    expect(readEmpty).toBe(1);
+    expect(await v.objects.has(EMPTY_CID)).toBe(true);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+  });
 });
 
 describe("Vault.objects reads", () => {
@@ -468,19 +572,21 @@ describe("collection", () => {
     for (let pass = 0; pass < 3; pass++) expect(await vault.collect(rootsOf)).toEqual({ removed: [] });
     expect(await vault.collect(rootsExcept(WORLD_CID))).toEqual({ removed: [WORLD_CID] });
     const rest: Uint8Array[] = [first];
+    let failed = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         rest.push(value);
       }
-      expectBytes(join(rest), WORLD);
     } catch (err) {
       expect(err).toBeInstanceOf(Error);
+      failed = true;
     }
+    if (!failed) expectBytes(join(rest), WORLD);
   });
 
-  it("collection waits for a commit paused between object acceptance and event append; the event then retains the object", async () => {
+  it("collection waits for a commit paused while its objects are prepared; the event then retains the object", async () => {
     const { vault } = open();
     const v = vault.vault;
     const g = gate();
@@ -493,7 +599,7 @@ describe("collection", () => {
     );
     await tick();
     expect(vault.lock.held).toBe(true);
-    expect(await vault.stores.objects.has(HELLO_CID)).toBe(true); // accepted, not yet referenced by any event: eligible if collection ran now
+    expect(await vault.stores.objects.has(HELLO_CID)).toBe(false); // verified, held by the preparation: nothing for collection to see
     const keeps: number[] = [];
     const collecting = vault.collect(async (held) => {
       keeps.push((await all(held.events.scan())).length);
@@ -574,6 +680,38 @@ describe("the held view (nested calls share the lock)", () => {
     expectBytes((await drain(result.stream)).bytes, HELLO);
   });
 
+  it("two commits in flight through one held view each publish their own: the one that fails undoes nothing of the one that landed", async () => {
+    const { vault } = open();
+    await vault.locked(async (held) => {
+      const g = gate();
+      const failing = held.commit([{ cid: WORLD_CID, source: gated(HELLO, g) }], [draft([WORLD_CID])]);
+      await tick();
+      const landed = await held.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+      expect(landed).toHaveLength(1);
+      expect(await held.objects.has(HELLO_CID)).toBe(true);
+      g.open();
+      await expect(failing).rejects.toThrow(DigestMismatch);
+      expect(await held.objects.has(HELLO_CID)).toBe(true);
+      expect(await held.objects.has(WORLD_CID)).toBe(false);
+      expect(await all(held.events.scan())).toEqual(landed);
+      // and the other way round: the one that lands, lands whole, whatever failed before it
+      const g2 = gate();
+      const failingFirst = held.commit([{ cid: WORLD_CID, source: gated(HELLO, g2) }], [draft([WORLD_CID])]);
+      await tick();
+      const g3 = gate();
+      const landingLater = held.commit([{ cid: EMPTY_CID, source: gated(new Uint8Array(0), g3) }], [draft([EMPTY_CID])]);
+      await tick();
+      g2.open();
+      await expect(failingFirst).rejects.toThrow(DigestMismatch);
+      expect(await held.objects.has(EMPTY_CID)).toBe(false);
+      g3.open();
+      expect(await landingLater).toHaveLength(1);
+      expect(await held.objects.has(EMPTY_CID)).toBe(true);
+      expect(await all(held.objects.list())).toEqual([HELLO_CID, EMPTY_CID].sort());
+      expect(await all(held.events.scan())).toHaveLength(2);
+    });
+  });
+
   it("a facade operation issued while the lock is held waits for it; a failure inside releases it", async () => {
     const { vault } = open();
     const v = vault.vault;
@@ -614,6 +752,45 @@ describe("the held view (nested calls share the lock)", () => {
     expect(await settled(v.objects.open(HELLO_CID))).toBe(false);
     g.open();
     await locked;
+  });
+});
+
+describe("Runtime", () => {
+  it("refuses stores without a transaction: two stores that publish as they go cannot make a vault", () => {
+    const events = new MemoryEventStore({ author: authorN(1) });
+    const objects = new MemoryObjectStore();
+    const keystore = () => ({ read: async () => WRAPPED, rewrap: async () => undefined });
+    const stores = { events, objects } as unknown as Stores;
+    expect(() => new Runtime({ author: events.author, generation: events.generation, metadata: META, stores, keystore })).toThrow(TypeError);
+    // the same two stores under a transaction: a commit that fails halfway leaves nothing behind
+    const runtime = new Runtime({
+      author: events.author,
+      generation: events.generation,
+      metadata: META,
+      stores: {
+        events,
+        objects,
+        transaction: async (body) => {
+          const prepared = objects.prepare();
+          const drafts = await body(prepared);
+          return events.appendAll(drafts, () => prepared.publish());
+        },
+      },
+      keystore,
+    });
+    return (async () => {
+      await expect(
+        runtime.vault.commit(
+          [
+            { cid: HELLO_CID, source: HELLO },
+            { cid: WORLD_CID, source: HELLO },
+          ],
+          [draft([HELLO_CID, WORLD_CID])]
+        )
+      ).rejects.toThrow(DigestMismatch);
+      expect(await runtime.vault.objects.has(HELLO_CID)).toBe(false);
+      expect(await all(runtime.vault.events.scan())).toEqual([]);
+    })();
   });
 });
 

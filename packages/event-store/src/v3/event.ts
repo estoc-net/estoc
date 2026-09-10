@@ -66,7 +66,7 @@ export interface Rejected {
 
 /** Storage material that could not be decoded as an event. */
 export interface Damaged {
-  /** where, in the store's own terms, e.g. `<segment path>:<line number>` */
+  /** where, in the store's own terms: a row, a position, a file and offset */
   where: string;
   bytes?: Uint8Array;
   error: string;
