@@ -10,9 +10,9 @@ as the code form of the
 [DASL object profile](../../docs/replica-model/dasl-objects.md) and the
 [SQLite vault](../../docs/replica-model/vault-sqlite.md). What is there
 so far is the model, its reference in memory, the SQLite driver the
-persistent stores are written against, and the vault's schema and
-opening over it; the stores themselves, and with them export, restore
-and import, come next.
+persistent stores are written against, the vault's schema and opening
+over it, and the event store over that; the object store, and with it
+the SQLite vault, export, restore and import, come next.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -184,6 +184,41 @@ a handle nobody can use. Everything a file must show is a `NotAVault`
 naming what it did not. The open cases in
 `test/v3/sqlite/open-cases.ts` run over both platforms, Node on files
 and Chromium in a Worker, a UTF-16 file among their inputs.
+
+Over an open runtime, the event store: `SqliteEventStore(db, { now })`
+over the connection, author, generation and writability an open handed
+back. An append is one `BEGIN IMMEDIATE` transaction on the runtime's
+own connection — the events as their canonical bytes beside the four
+columns that index them, a position each above `last_seq`, `last_seq`
+advanced by as many — so a batch lands whole or not at all and two
+writes never interleave; `appendAll(drafts, publish)` runs `publish`
+inside that transaction, before the events, which is how the SQLite
+vault will publish a commit's objects with its events, a throw from it
+rolling back what it wrote. `ingest` reads its whole input first,
+outside any transaction, then classifies each input against what is
+held — duplicate by canonical bytes, conflict, new — checks for a fork
+and accepts, in one transaction; the values it rejected are recorded
+once each in the runtime's `local_conflicts` table, which
+`conflicting()` reads back with the accepted value as `kept` and
+`clearConflicts()` empties. `scan` orders in SQL by `(at, event_id,
+author)` and reads every row before the first yield, one cut; `author`
+and `type` are conditions in SQL, the `data` filter is applied in code
+to the parsed event, exact primitive equality. `changes` joins the
+positions: a token is `{ generation, seq }`, the store generation and
+the position accepted last, valid across reopens for as long as the
+generation stands, and a malformed token, another generation's or a
+position past the last is `BadToken`. Every row read is decoded the
+same way — parsed strictly, validated, re-canonicalized and compared
+byte for byte, its four columns compared with the event's fields, the
+text columns read as stored bytes — and one that fails is damage: left
+out of every scan and delta, listed by `damaged()` as
+`events/<event_id>` (or the rowid, when the ID itself does not decode)
+with its bytes and what was wrong. Over an inspector's handle the
+store reads and refuses every write with `ReadOnlyVault` before it
+reads a source. `eventStoreSuite` runs over it in memory and on files;
+`test/v3/sqlite/events.test.ts` adds what only a database shows — the
+rows, the positions, a reopen, damage, the inspector, a process dying
+inside its transaction.
 
 Everything below is
 version 2, which stays until the vault switches over.

@@ -12,9 +12,9 @@
  * driver the persistent stores are written against — the contract and
  * the shared connection; the adapters live under `../node` and
  * `../browser` — and over it the vault's schema and how a database is
- * created, opened and checked before anything in it is trusted. The
- * SQLite stores themselves come next, and with them export, restore
- * and import. No event type.
+ * created, opened and checked before anything in it is trusted, and
+ * the event store over that runtime. The object store comes next, and
+ * with it the SQLite vault, export, restore and import. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -76,6 +76,8 @@ export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type Databas
 
 export type { Locked, RuntimeDatabase, PortableDatabase, CreateRuntimeOptions, OpenRuntimeOptions } from "./sqlite/open.js";
 export { createRuntime, openRuntime, openInspector, openPortable } from "./sqlite/open.js";
+
+export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase } from "./sqlite/events.js";
 
 export {
   InvalidJson,

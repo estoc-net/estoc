@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The SQLite event store.** `SqliteEventStore` in
+  `@estoc/event-store/v3`, over an open runtime's connection, author,
+  generation and writability: `append`/`appendAll` one `BEGIN
+  IMMEDIATE` transaction writing canonical bytes, indexed columns,
+  positions and `last_seq` together, with an optional `publish`
+  callback run inside it for the vault's commit; `ingest` reading its
+  input in full before one transaction that classifies, checks for a
+  fork and accepts, recording rejected values once each in the local
+  `local_conflicts` table for `conflicting()`, and `clearConflicts()`
+  to empty it; `scan` in canonical order over one cut with the
+  envelope filter in SQL and the `data` filter in code; `changes`
+  over positions with a `{ generation, seq }` token that survives a
+  reopen and refuses malformed, foreign-generation and future ones;
+  every row decoded strictly, re-canonicalized and compared with its
+  columns, damage left out of reads and listed by `damaged()` with
+  its place and bytes; writes refused with `ReadOnlyVault` over an
+  inspector. The conformance suite runs over it in memory and on
+  files.
 - **The SQLite vault's schema, and how it is created and opened.** In
   `@estoc/event-store/v3`: `createTables` and `checkSchema`, the five
   common `STRICT` tables plus a runtime's two control tables, checked
