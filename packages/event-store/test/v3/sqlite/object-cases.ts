@@ -17,6 +17,7 @@ import {
   openInspector,
   openRuntime,
   rawCidFromDigest,
+  hashSource,
   sortCids,
   type Cid,
   type OpenMode,
@@ -29,6 +30,8 @@ export interface ObjectHarness {
   /** A target no database exists at yet. */
   fresh(): string;
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
+  /** The bytes SQLite itself holds right now, where the platform reports it. */
+  memoryUsed?: () => number;
 }
 
 export interface ObjectCase {
@@ -148,11 +151,11 @@ export const objectCases: ObjectCase[] = [
     name: "a preparation is staged where no read sees it and lands with the transaction it publishes in, or not at all",
     run: async (h) => {
       const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
-      const store = new SqliteObjectStore(db, { chunkBytes: 4 });
-      const bytes = bytesOf(10, 2);
+      const store = new SqliteObjectStore(db);
+      const bytes = bytesOf(2 * MIB + 10, 2);
       const cid = cidOf(bytes);
       const prepared = store.prepare();
-      await prepared.putObject(cid, bytes);
+      await prepared.putObject(cid, chunked(bytes, 700_001));
       assert(await prepared.has(cid), "prepared here counts as present to the preparation");
       assertEqual(await store.has(cid), false, "not to the store");
       assertEqual(await store.stat(cid), null, "nor its metadata");
@@ -175,12 +178,12 @@ export const objectCases: ObjectCase[] = [
       prepared.discard();
       assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: 0 }], "discarded");
       const again = store.prepare();
-      await again.putObject(cid, chunked(bytes, 3));
+      await again.putObject(cid, chunked(bytes, MIB));
       db.driver.transaction("immediate", () => again.publish());
       again.settle();
       again.discard();
-      assertEqual(await store.stat(cid), { cid, codec: "raw", size: 10 }, "published");
-      assertBytes((await store.read(cid, 10)) as Uint8Array, bytes, "and read back");
+      assertEqual(await store.stat(cid), { cid, codec: "raw", size: bytes.length }, "published");
+      assertBytes((await store.read(cid, bytes.length)) as Uint8Array, bytes, "and read back");
       assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: 0 }], "nothing staged after");
       db.close();
     },
@@ -190,7 +193,7 @@ export const objectCases: ObjectCase[] = [
     run: async (h) => {
       const target = h.fresh();
       const db = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });
-      const store = new SqliteObjectStore(db, { chunkBytes: 4 });
+      const store = new SqliteObjectStore(db);
       const bytes = bytesOf(10, 3);
       const cid = cidOf(bytes);
       await store.putRaw(bytes);
@@ -218,6 +221,7 @@ export const objectCases: ObjectCase[] = [
       const [chunk] = rows(db.driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = 0", cid);
       assert(((chunk?.["bytes"] as Uint8Array)[0] as number) !== (bytes[0] as number), "the old, corrupt bytes are still there");
       assertEqual(await store.putObject(cid, chunked(bytes, 3)), { cid, codec: "raw", size: 10 }, "the repair");
+      assertEqual(rows(db.driver, "SELECT chunk_no, length(bytes) AS n FROM object_chunks WHERE cid = ?", cid), [{ chunk_no: 0, n: 10 }], "one chunk again");
       assertBytes((await store.read(cid, 10)) as Uint8Array, bytes, "sound again");
       assertEqual(await listed(store), sortCids([cid, other]), "listed again");
       assertEqual((await store.damaged()).length, 0, "no damage known");
@@ -235,28 +239,50 @@ export const objectCases: ObjectCase[] = [
     },
   },
   {
-    name: "a chunk missing, a size that does not add up or a chunk past the size is damage; the rest still read",
+    name: "an object whose chunks are not the layout — one missing, one short, one surplus, a chunk under an empty object, a size that is no count — is damage, and a verified put replaces the whole set",
     run: async (h) => {
       const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
-      const store = new SqliteObjectStore(db, { chunkBytes: 4 });
-      const objects = [1, 2, 3, 4].map((seed) => bytesOf(10, seed + 10));
-      const [missing, resized, extra, sound] = (await Promise.all(objects.map((bytes) => store.putRaw(bytes)))).map((info) => info.cid) as [Cid, Cid, Cid, Cid];
-      exec(db.driver, "DELETE FROM object_chunks WHERE cid = ? AND chunk_no = 1", missing);
-      exec(db.driver, "UPDATE objects SET size = 9 WHERE cid = ?", resized);
-      exec(db.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 3, x'00')", extra);
-      for (const [cid, what] of [
-        [missing, "a chunk missing"],
-        [resized, "the size changed"],
-        [extra, "a chunk past the size"],
-      ] as const) {
-        await assertRejects(() => store.read(cid, 10), "DamagedObject", `${what}: read`);
-        await expectDamaged(store, cid, what);
+      const store = new SqliteObjectStore(db);
+      const hello = new TextEncoder().encode("hello");
+      const long = bytesOf(2 * MIB + 10, 11);
+      const layout = (cid: Cid): unknown[] => rows(db.driver, "SELECT chunk_no, length(bytes) AS n FROM object_chunks WHERE cid = ? ORDER BY chunk_no", cid);
+      const cases: { what: string; bytes: Uint8Array; damage: (cid: Cid) => void; error: RegExp }[] = [
+        { what: "a chunk missing", bytes: long, damage: (cid) => exec(db.driver, "DELETE FROM object_chunks WHERE cid = ? AND chunk_no = 1", cid), error: /chunk 1 is missing/ },
+        { what: "a surplus chunk after the last", bytes: long, damage: (cid) => exec(db.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 3, x'00')", cid), error: /4 chunk\(s\) are stored where the object's 2097162 bytes take 3/ },
+        { what: "a surplus chunk after a gap", bytes: hello, damage: (cid) => exec(db.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 2, x'00')", cid), error: /2 chunk\(s\) are stored where the object's 5 bytes take 1/ },
+        { what: "a chunk under an empty object", bytes: new Uint8Array(0), damage: (cid) => exec(db.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 1, x'00')", cid), error: /1 chunk\(s\) are stored where the object's 0 bytes take 0/ },
+        {
+          what: "an interior chunk short of the chunk size",
+          bytes: hello,
+          damage: (cid) => {
+            exec(db.driver, "UPDATE object_chunks SET bytes = ? WHERE cid = ? AND chunk_no = 0", hello.subarray(0, 2), cid);
+            exec(db.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 1, ?)", cid, hello.subarray(2));
+          },
+          error: /chunk 0 holds 2 bytes, not the 5 the layout gives it/,
+        },
+        { what: "a size the chunks run past", bytes: long, damage: (cid) => exec(db.driver, "UPDATE objects SET size = 9 WHERE cid = ?", cid), error: /chunk 0 holds 1048576 bytes, not the 9/ },
+        { what: "a size past the safe integer range", bytes: hello, damage: (cid) => exec(db.driver, "UPDATE objects SET size = 9007199254740992 WHERE cid = ?", cid), error: /size 9007199254740992 is not a count/ },
+      ];
+      const sound = (await store.putRaw(bytesOf(10, 12))).cid;
+      for (const c of cases) {
+        const store = new SqliteObjectStore(db);
+        const cid = (await store.putRaw(chunked(c.bytes, 999_999))).cid;
+        const before = layout(cid);
+        c.damage(cid);
+        await assertRejects(() => store.read(cid, long.length), "DamagedObject", `${c.what}: read`);
+        await expectDamaged(store, cid, c.what);
+        const [damage] = await store.damaged();
+        assertEqual(damage?.where, `objects/${cid}`, `${c.what}: reported`);
+        assert(c.error.test(damage?.error ?? ""), `${c.what}: named: ${damage?.error ?? ""}`);
+        assertEqual(await store.putObject(cid, chunked(c.bytes, 999_999)), { cid, codec: "raw", size: c.bytes.length }, `${c.what}: the repair`);
+        assertEqual(layout(cid), before, `${c.what}: the layout is whole again`);
+        assertEqual(rows(db.driver, "SELECT size FROM objects WHERE cid = ?", cid), [{ size: c.bytes.length }], `${c.what}: the size too`);
+        assertBytes((await store.read(cid, c.bytes.length)) as Uint8Array, c.bytes, `${c.what}: and the bytes`);
+        assertEqual(await store.damaged(), [], `${c.what}: no damage known`);
+        exec(db.driver, "DELETE FROM object_chunks WHERE cid = ?", cid);
+        exec(db.driver, "DELETE FROM objects WHERE cid = ?", cid);
       }
-      const damage = await store.damaged();
-      assertEqual(damage.map((d) => d.where).sort(), [missing, resized, extra].map((cid) => `objects/${cid}`).sort(), "each reported");
-      assert(damage.some((d) => /1 chunk\(s\) hold 4 bytes, not the object's 10/.test(d.error)), "the missing chunk ends the walk: what was read before it is named");
-      assert(damage.some((d) => /run past the object's 9 bytes/.test(d.error)), "the resized object by its chunks running past");
-      assertBytes((await store.read(sound, 10)) as Uint8Array, objects[3] as Uint8Array, "the sound object");
+      assertBytes((await store.read(sound, 10)) as Uint8Array, bytesOf(10, 12), "the sound object read throughout");
       db.close();
     },
   },
@@ -264,11 +290,11 @@ export const objectCases: ObjectCase[] = [
     name: "collection deletes the unkept, damaged among them, keeps a damaged held object with its damage, and a stream open on a removed object fails explicitly",
     run: async (h) => {
       const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
-      const store = new SqliteObjectStore(db, { chunkBytes: 4 });
+      const store = new SqliteObjectStore(db);
       const keptDamaged = (await store.putRaw(bytesOf(10, 21))).cid;
       const goneDamaged = (await store.putRaw(bytesOf(10, 22))).cid;
       const kept = (await store.putRaw(bytesOf(10, 23))).cid;
-      const gone = (await store.putRaw(bytesOf(10, 24))).cid;
+      const gone = (await store.putRaw(bytesOf(MIB + 5, 24))).cid;
       corrupt(db.driver, keptDamaged);
       corrupt(db.driver, goneDamaged);
       await assertRejects(() => store.read(keptDamaged, 10), "DamagedObject", "found");
@@ -282,7 +308,7 @@ export const objectCases: ObjectCase[] = [
       assertEqual(await store.has(gone), false, "absent");
       assertEqual(await store.has(goneDamaged), false, "absent, its damage no longer reported as damage");
       await expectDamaged(store, keptDamaged, "the kept damaged object");
-      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM object_chunks"), [{ n: 6 }], "the chunks of the two kept objects");
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM object_chunks"), [{ n: 2 }], "the chunks of the two kept objects");
       assertEqual((await store.damaged()).map((d) => d.where), [`objects/${keptDamaged}`], "only the kept damage remains");
       await store.putObject(keptDamaged, bytesOf(10, 21));
       assertEqual(await listed(store), sortCids([kept, keptDamaged]), "both list once repaired");
@@ -316,6 +342,54 @@ export const objectCases: ObjectCase[] = [
       } finally {
         db.close();
       }
+    },
+  },
+  {
+    name: "staging goes to the temporary database's file under a bounded cache, so what SQLite holds does not grow with the object; a put past the staging bound is refused with nothing staged",
+    run: async (h) => {
+      const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
+      const store = new SqliteObjectStore(db, { maxStagedBytes: 40 * MIB });
+      assertEqual(rows(db.driver, "PRAGMA temp_store"), [{ temp_store: 1 }], "the temporary database is on a file");
+      const total = 24;
+      async function* reusing(): AsyncIterable<Uint8Array> {
+        const chunk = new Uint8Array(MIB); // one buffer, refilled: nothing here holds the object
+        for (let i = 0; i < total; i++) {
+          chunk.fill(i + 1);
+          yield chunk;
+        }
+      }
+      const { cid } = await hashSource(reusing(), total * MIB, () => undefined);
+      const samples: number[] = [];
+      async function* sampled(): AsyncIterable<Uint8Array> {
+        let i = 0;
+        for await (const chunk of reusing()) {
+          yield chunk;
+          i += 1;
+          if (i % 8 === 0 && h.memoryUsed !== undefined) samples.push(h.memoryUsed());
+        }
+      }
+      const prepared = store.prepare();
+      await prepared.putObject(cid.text as Cid, sampled());
+      assertEqual(rows(db.driver, "SELECT count(*) AS n, sum(length(bytes)) AS bytes FROM temp.staging_chunks"), [{ n: total, bytes: total * MIB }], "staged whole");
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM object_chunks"), [{ n: 0 }], "none accepted");
+      let note: string | undefined;
+      if (samples.length === 3) {
+        const [at8, , at24] = samples as [number, number, number];
+        note = `SQLite held ${samples.map((n) => `${(n / MIB).toFixed(1)} MiB`).join(", ")} at 8, 16 and 24 MiB staged`;
+        assert(at24 - at8 < 4 * MIB, `what SQLite holds does not grow with the staging: ${note}`);
+      }
+      const other = store.prepare();
+      await assertRejects(() => other.putObject(cid.text as Cid, reusing()), "StagingFull", "a second put past the bound");
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: total }], "nothing of it staged");
+      db.driver.transaction("immediate", () => prepared.publish());
+      prepared.settle();
+      prepared.discard();
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: 0 }], "the staging is empty once published");
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM object_chunks WHERE cid = ?", cid.text), [{ n: total }], "accepted");
+      assertEqual(await other.putObject(cid.text as Cid, reusing()), { cid: cid.text, codec: "raw", size: total * MIB }, "and the bound is free again");
+      other.discard();
+      db.close();
+      return note;
     },
   },
 ];

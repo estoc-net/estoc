@@ -1,26 +1,28 @@
 /**
  * The version-3 object store over an open SQLite runtime: the
- * `objects` table and the ordered chunks under each CID. A put is
- * hashed as it streams into a staging table in the connection's
- * temporary database — never the vault's file, and where no read of
- * the store looks — and accepted in one transaction that moves the
- * verified chunks under their CID; a vault commit prepares its objects
- * the same way and publishes them inside the transaction its events
- * land in. The connection is the runtime's, synchronous and owned
- * outright, so two writes never interleave and a write is never held
- * up by a reader: a stream open on an object that a repair replaces
- * or a collection pass removes meanwhile fails at its next chunk
- * rather than read bytes of two generations. Damage is what a read
- * finds — bytes that do not hash to the CID, a chunk missing, a size
- * that does not add up — and is known for the rest of the session,
- * until a verified put of the CID replaces the bytes.
+ * `objects` table and the chunks under each CID, 1 MiB each but the
+ * last. A put is hashed as it streams into a staging table in the
+ * connection's temporary database — a file of its own, never the
+ * vault's, with a small page cache, where no read of the store looks
+ * — under a bound on what may be staged at once, and accepted in one
+ * transaction that moves the verified chunks under their CID; a vault
+ * commit prepares its objects the same way and publishes them inside
+ * the transaction its events land in. The connection is the runtime's,
+ * synchronous and owned outright, so two writes never interleave and
+ * a write is never held up by a reader: a stream open on an object
+ * that a repair replaces or a collection pass removes meanwhile fails
+ * at its next chunk rather than read bytes of two generations. Damage
+ * is what a read finds — bytes that do not hash to the CID, a chunk
+ * missing, short or surplus, a size that is no count — and is known
+ * for the rest of the session, until a verified put of the CID
+ * replaces the object whole.
  */
 
 import type { DaslCid } from "@estoc/dasl";
 import { compareBytes } from "@estoc/dasl";
 import { sha256 } from "@noble/hashes/sha2";
 
-import { DamagedObject, DigestMismatch, InterruptedRead, ObjectTooLarge, ReadOnlyVault } from "../errors.js";
+import { DamagedObject, DigestMismatch, InterruptedRead, ObjectTooLarge, ReadOnlyVault, StagingFull } from "../errors.js";
 import type { Cid, Damaged } from "../event.js";
 import { DEFAULT_MAX_OBJECT_BYTES } from "../memory-objects.js";
 import { Packer, hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore, type Preparation } from "../objects.js";
@@ -28,14 +30,17 @@ import { decodeText, type SqliteDriver, type SqlRow } from "./driver.js";
 import type { RuntimeDatabase } from "./open.js";
 import { query, run } from "./schema.js";
 
-/** The chunk size of the format: 1 MiB, the most a chunk row may hold. */
+/** The chunk size of the format: every chunk of an object holds this many bytes but the last, which holds what remains, at least one. */
 export const CHUNK_BYTES = 1024 * 1024;
+
+/** The page cache the temporary database is allowed, in KiB: what staging may hold in memory beyond the chunk in hand before it goes to the file. */
+const STAGING_CACHE_KIB = 2048;
 
 export interface SqliteObjectStoreOptions {
   /** the largest object a put accepts; default 1 GiB */
   maxObjectBytes?: number;
-  /** the size objects are cut into chunks at, 1 MiB by default and at most: smaller only to put chunk boundaries inside a small object under test */
-  chunkBytes?: number;
+  /** the most bytes staged at once across every preparation in flight, a put past it refused with `StagingFull`; default 1 GiB */
+  maxStagedBytes?: number;
 }
 
 export type ObjectStoreDatabase = Pick<RuntimeDatabase, "driver" | "writable">;
@@ -67,8 +72,11 @@ export class SqliteObjectStore implements ObjectStore {
   private readonly driver: SqliteDriver;
   private readonly writable: boolean;
   private readonly maxObjectBytes: number;
-  private readonly chunkBytes: number;
+  private readonly maxStagedBytes: number;
   private staging = false;
+  /** The bytes staged under each token still staged. */
+  private readonly staged = new Map<number, number>();
+  private stagedBytes = 0;
   /** The objects a read of this session found damaged, by CID, with what was wrong. */
   private readonly damage = new Map<string, Damaged>();
   /**
@@ -86,8 +94,7 @@ export class SqliteObjectStore implements ObjectStore {
     this.driver = db.driver;
     this.writable = db.writable;
     this.maxObjectBytes = bound("maxObjectBytes", options.maxObjectBytes ?? DEFAULT_MAX_OBJECT_BYTES);
-    this.chunkBytes = bound("chunkBytes", options.chunkBytes ?? CHUNK_BYTES);
-    if (this.chunkBytes < 1 || this.chunkBytes > CHUNK_BYTES) throw new RangeError(`chunkBytes is between 1 and ${CHUNK_BYTES}`);
+    this.maxStagedBytes = bound("maxStagedBytes", options.maxStagedBytes ?? DEFAULT_MAX_OBJECT_BYTES);
   }
 
   async putRaw(source: ByteSource): Promise<ObjectInfo> {
@@ -101,7 +108,6 @@ export class SqliteObjectStore implements ObjectStore {
     return this.putAlone(want, source);
   }
 
-  /** One object staged, then accepted in a transaction of its own and settled: what a put outside any commit is. */
   private async putAlone(want: DaslCid | undefined, source: ByteSource): Promise<ObjectInfo> {
     const prepared = this.prepare();
     try {
@@ -135,22 +141,29 @@ export class SqliteObjectStore implements ObjectStore {
 
   /**
    * `source` consumed, hashed and cut into chunks staged under a fresh
-   * token as they stream, so no more than one chunk is held in memory;
-   * a source longer than the bound stops there. The CID is known at
-   * the end: for `putObject` it must be `want`, and a mismatch, a
-   * source that throws or one over the bound leaves nothing staged.
+   * token as they stream: the chunk in hand is the one held here, and
+   * the temporary database keeps its bounded cache and spills the rest
+   * to its file. A source longer than the object bound stops there, and
+   * one that would take what is staged across every preparation past
+   * the staging bound stops before the chunk that would. The CID is
+   * known at the end: for `putObject` it must be `want`, and a
+   * mismatch, a source that throws or one over either bound leaves
+   * nothing staged.
    */
   private async stage(want: DaslCid | undefined, source: ByteSource): Promise<Staged> {
     if (!this.staging) {
-      this.driver.exec(STAGING_DDL);
+      this.driver.exec(`${STAGING_DDL}; PRAGMA temp.cache_size = -${STAGING_CACHE_KIB}`);
       this.staging = true;
     }
     const token = ++tokens;
     const insert = this.driver.prepare("INSERT INTO temp.staging_chunks (token, chunk_no, bytes) VALUES (?, ?, ?)");
     let chunkNo = 0;
-    const packer = new Packer(this.chunkBytes, (chunk) => {
+    const packer = new Packer(CHUNK_BYTES, (chunk) => {
+      if (this.stagedBytes + chunk.length > this.maxStagedBytes) throw new StagingFull(this.maxStagedBytes, this.stagedBytes);
       insert.run(token, chunkNo, chunk);
       chunkNo += 1;
+      this.stagedBytes += chunk.length;
+      this.staged.set(token, (this.staged.get(token) ?? 0) + chunk.length);
     });
     try {
       const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
@@ -165,9 +178,10 @@ export class SqliteObjectStore implements ObjectStore {
     }
   }
 
-  /** Forgets the chunks staged under `token`; nothing when there are none. */
   private drop(token: number): void {
     if (this.staging) run(this.driver, "DELETE FROM temp.staging_chunks WHERE token = ?", token);
+    this.stagedBytes -= this.staged.get(token) ?? 0;
+    this.staged.delete(token);
   }
 
   /**
@@ -181,7 +195,7 @@ export class SqliteObjectStore implements ObjectStore {
    */
   private accept(staged: Staged): boolean {
     const cid = staged.cid.text;
-    const have = query(this.driver, "SELECT size FROM objects WHERE cid = ?", cid).length === 1;
+    const have = query(this.driver, "SELECT 1 AS present FROM objects WHERE cid = ?", cid).length === 1;
     const repair = have && this.damage.has(cid);
     if (have && !repair) {
       this.drop(staged.token);
@@ -206,15 +220,21 @@ export class SqliteObjectStore implements ObjectStore {
     return this.epochs.get(cid) ?? 0;
   }
 
-  /** What is accepted under `cid`, or null for absence; `DamagedObject` for one known damaged. Every read starts here. */
+  /**
+   * What is accepted under `cid`, or null for absence; `DamagedObject`
+   * for one known damaged. Every read starts here. The size is read as
+   * its decimal text: a stored integer the platform cannot hand over
+   * exactly is then this object's damage, not a failure of the read.
+   */
   private sound(cid: Cid): Present | null {
     rawCidOf(cid);
     if (this.damage.has(cid)) throw new DamagedObject(cid);
-    const [row] = query(this.driver, "SELECT size FROM objects WHERE cid = ?", cid);
+    const [row] = query(this.driver, "SELECT CAST(size AS TEXT) AS size FROM objects WHERE cid = ?", cid);
     if (row === undefined) return null;
-    const size = row["size"];
-    if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
-      this.condemn(cid, `size ${String(size)} is not a count`);
+    const text = row["size"];
+    const size = typeof text === "string" && /^(0|[1-9][0-9]{0,15})$/.test(text) ? Number(text) : Number.NaN;
+    if (!Number.isSafeInteger(size)) {
+      this.condemn(cid, `size ${String(text)} is not a count`);
       throw new DamagedObject(cid);
     }
     return { size, epoch: this.epoch(cid) };
@@ -230,12 +250,12 @@ export class SqliteObjectStore implements ObjectStore {
     // The stream pulls nothing until read (highWaterMark 0), one chunk
     // a pull, rehashing each on the way out; the read after the last
     // chunk verifies the size and the digest and fails on either.
-    const walk = new Walk(cid, present);
+    const read = new ObjectRead(cid, present);
     return new ReadableStream<Uint8Array>(
       {
         pull: (controller) => {
           try {
-            const chunk = this.next(walk);
+            const chunk = this.next(read);
             if (chunk === undefined) controller.close();
             else controller.enqueue(chunk);
           } catch (err) {
@@ -253,48 +273,44 @@ export class SqliteObjectStore implements ObjectStore {
     if (present === null) return null;
     if (present.size > maxBytes) throw new ObjectTooLarge(`${cid} is ${present.size} bytes, more than the ${maxBytes}-byte bound`); // before allocating
     const out = new Uint8Array(present.size);
-    const walk = new Walk(cid, present);
+    const read = new ObjectRead(cid, present);
     for (;;) {
-      const chunk = this.next(walk);
+      const chunk = this.next(read);
       if (chunk === undefined) return out;
-      out.set(chunk, walk.got - chunk.length);
+      out.set(chunk, read.got - chunk.length);
     }
   }
 
   /**
-   * The next chunk of `walk`, or `undefined` once the object has been
-   * read whole and verified. Chunks are read by number, contiguous
-   * from zero; where the numbering ends, the size and the digest are
-   * checked, and an object that fails either is known damaged from
-   * here on — if it is still the object the walk opened on. One that
-   * was replaced or removed meanwhile is a failed read, not damage.
+   * The next chunk of `read`, or `undefined` once the object has been
+   * read whole and verified as the format lays it out: chunks numbered
+   * from zero, each of the chunk size but the last, which holds what
+   * remains; as many chunks as that takes and no other; the bytes
+   * hashing to the CID. An object that fails any of it is known damaged
+   * from here on — if it is still the object the read opened on. One
+   * that was replaced or removed meanwhile is a failed read, not damage.
    */
-  private next(walk: Walk): Uint8Array | undefined {
-    if (this.epoch(walk.cid) !== walk.epoch) throw new InterruptedRead(walk.cid);
-    const [row] = query(this.driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", walk.cid, walk.chunks);
-    if (row !== undefined) {
+  private next(read: ObjectRead): Uint8Array | undefined {
+    if (this.epoch(read.cid) !== read.epoch) throw new InterruptedRead(read.cid);
+    const fail = (error: string): never => {
+      this.condemn(read.cid, error);
+      throw new DamagedObject(read.cid);
+    };
+    if (read.got < read.size) {
+      const [row] = query(this.driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", read.cid, read.chunks);
+      if (row === undefined) return fail(`chunk ${read.chunks} is missing: ${read.chunks} chunk(s) hold ${read.got} bytes of the object's ${read.size}`);
       const bytes = row["bytes"];
-      if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
-        this.condemn(walk.cid, `chunk ${walk.chunks} is not bytes`);
-        throw new DamagedObject(walk.cid);
-      }
-      if (walk.got + bytes.length > walk.size) {
-        this.condemn(walk.cid, `the chunks run past the object's ${walk.size} bytes`);
-        throw new DamagedObject(walk.cid);
-      }
-      walk.chunks += 1;
-      walk.got += bytes.length;
-      walk.hash.update(bytes);
+      if (!(bytes instanceof Uint8Array)) return fail(`chunk ${read.chunks} is not bytes`);
+      const expected = Math.min(CHUNK_BYTES, read.size - read.got);
+      if (bytes.length !== expected) return fail(`chunk ${read.chunks} holds ${bytes.length} bytes, not the ${expected} the layout gives it`);
+      read.chunks += 1;
+      read.got += bytes.length;
+      read.hash.update(bytes);
       return bytes;
     }
-    if (walk.got !== walk.size) {
-      this.condemn(walk.cid, `${walk.chunks} chunk(s) hold ${walk.got} bytes, not the object's ${walk.size}`);
-      throw new DamagedObject(walk.cid);
-    }
-    if (compareBytes(walk.hash.digest(), rawCidOf(walk.cid).digest) !== 0) {
-      this.condemn(walk.cid, "the bytes do not hash to the CID");
-      throw new DamagedObject(walk.cid);
-    }
+    const [count] = query(this.driver, "SELECT count(*) AS n FROM object_chunks WHERE cid = ?", read.cid);
+    if (count?.["n"] !== read.chunks) return fail(`${String(count?.["n"])} chunk(s) are stored where the object's ${read.size} bytes take ${read.chunks}`);
+    if (compareBytes(read.hash.digest(), rawCidOf(read.cid).digest) !== 0) return fail("the bytes do not hash to the CID");
     return undefined;
   }
 
@@ -447,8 +463,7 @@ export class SqlitePreparation implements Preparation {
   }
 }
 
-/** One read of an object from its first chunk: what has been read and hashed so far, and the epoch the read belongs to. */
-class Walk {
+class ObjectRead {
   readonly size: number;
   readonly epoch: number;
   readonly hash = sha256.create();

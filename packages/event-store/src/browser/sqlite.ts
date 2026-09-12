@@ -53,7 +53,7 @@ export interface SqlitePool {
   readonly directory: string;
   /** The databases in the pool, by name: the files SQLite keeps beside a database during a transaction are not among them. */
   names(): string[];
-  /** Opens `name` under `mode` and takes it: a second open of the same name is refused with `DatabaseBusy` until the first closes. The pool grows first when the database and its journal need more handles than it has. */
+  /** Opens `name` under `mode` and takes it: a second open of the same name is refused with `DatabaseBusy` until the first closes. The pool grows first when the database, its journal and, for a writable open, the connection's temporary database need more handles than it has. */
   open(name: string, mode: OpenMode): Promise<SqliteDriver>;
   /** The complete bytes of the database file `name`, which no connection may hold open: what a portable snapshot is delivered as. */
   exportFile(name: string): Promise<Uint8Array>;
@@ -176,7 +176,11 @@ class Pool implements SqlitePool {
       if (mode === "create" && exists) throw new DatabaseExists(target);
       if (mode !== "create" && !exists) throw new DatabaseMissing(target);
       if (this.open_.has(name)) throw new DatabaseBusy(target);
-      await this.reserve(exists ? 1 : 2);
+      // A database takes a handle, its rollback journal another while
+      // a transaction is open; a writable connection's temporary
+      // database, which the wasm build would otherwise keep in memory,
+      // is a file of the pool too, and its journal one more.
+      await this.reserve((exists ? 1 : 2) + (mode === "readonly" ? 0 : 2));
       const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
       const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
       let connection: WasmConnection;
@@ -184,6 +188,7 @@ class Pool implements SqlitePool {
         sqlite(this.sqlite3, () => {
           db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON");
           if (mode === "readonly") db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
+          else db.exec("PRAGMA temp_store = FILE");
           db.exec("PRAGMA application_id");
         });
         connection = new WasmConnection(this.sqlite3, db);
@@ -243,7 +248,7 @@ class Pool implements SqlitePool {
     return result;
   }
 
-  /** Grows the pool until `handles` more files fit: a database takes one, its rollback journal another while a transaction is open. Capacity persists in the directory, so the pool grows once. */
+  /** Grows the pool until `handles` more files fit. Capacity persists in the directory, so the pool grows once. */
   private async reserve(handles: number): Promise<void> {
     const spare = Number(this.util.getCapacity()) - Number(this.util.getFileCount());
     if (spare < handles) await this.util.addCapacity(handles - spare);

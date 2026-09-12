@@ -73,6 +73,7 @@ export function openNodeSqlite(path: string, options: NodeSqliteOptions): Sqlite
         probe(path, () => journalMode(db));
       } else {
         probe(path, () => db.exec("BEGIN IMMEDIATE; COMMIT"));
+        db.exec("PRAGMA temp_store = FILE");
         if (mode === "create" && !inMemory) db.exec(`PRAGMA journal_mode = ${options.journal ?? "wal"}`);
         db.exec(`PRAGMA synchronous = ${journalMode(db) === "wal" ? "NORMAL" : "FULL"}`);
       }

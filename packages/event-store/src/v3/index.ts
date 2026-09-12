@@ -81,6 +81,7 @@ export {
   ObjectTooLarge,
   DamagedObject,
   InterruptedRead,
+  StagingFull,
   MissingRoot,
   UnreferencedObject,
   UnsupportedOperation,

@@ -6,19 +6,28 @@
   `@estoc/event-store/v3`, over an open runtime's connection and
   writability: a put hashed as it streams and cut into the format's
   1 MiB chunks, staged in the connection's temporary database where
-  no read sees them, and accepted in one `BEGIN IMMEDIATE`
-  transaction that moves the chunks under the CID with the `objects`
-  row; a sound object already held left untouched, a known damaged
-  one replaced whole; `prepare()` giving the vault's commit a
+  no read sees them — a file on both platforms, `temp_store` set to
+  `FILE` by both adapters and the wasm pool reserving handles for it,
+  under a 2 MiB page cache, so memory does not grow with the object
+  — within `maxStagedBytes` across every preparation in flight, the
+  put past it refused with the new `StagingFull` and nothing of it
+  staged; accepted in one `BEGIN IMMEDIATE` transaction that moves
+  the chunks under the CID with the `objects` row; a sound object
+  already held left untouched, a known damaged one replaced whole;
+  `prepare()` giving the vault's commit a
   `SqlitePreparation` — `putObject` and `has` as the `Preparation`
   interface has them, `publish()` inside the commit's transaction,
   `settle()` after it has committed to clear the damage of what it
   repaired, `discard()` to drop what is still staged; `open`
-  streaming one chunk a pull and verifying size and digest after the
-  last, `read` the same walk into one buffer bounded before
-  allocation; damage of every kind a read can find — a wrong digest,
-  a chunk missing or past the size, a size that is no count, a key
-  that is no CID — known for the session, refusing `has`, `stat`,
+  streaming one chunk a pull, each checked against the layout the
+  size gives the object, and verifying after the last that no other
+  chunk is stored and the bytes hash to the CID, `read` the same walk
+  into one buffer bounded before allocation, the size read as text so
+  an integer past the safe range is damage rather than a failed read;
+  damage of every kind a read can find — a wrong digest, a chunk
+  missing, short or surplus, a chunk under an empty object, a size
+  that is no count, a key that is no CID — known for the session,
+  refusing `has`, `stat`,
   `open`, `read` and `list` with `DamagedObject` and listed by
   `damaged()`; a repair or a collection pass moving the CID's epoch
   so a stream open on the old bytes fails at its next chunk with the
@@ -26,9 +35,8 @@
   `collect` one transaction over the exact keep set, a damaged
   unheld object deleted with the rest and a kept one retained with
   its damage; every write refused with `ReadOnlyVault` over an
-  inspector. `chunkBytes` cuts smaller than 1 MiB for tests that
-  want chunk boundaries inside a small object. The conformance suite
-  runs over it in memory and on files, and
+  inspector. The chunk size is the format's, not a setting. The
+  conformance suite runs over it in memory and on files, and
   `test/v3/sqlite/object-cases.ts` runs on `node:sqlite` and in a
   Chromium Worker. The `Packer` the memory store cut extents with is
   now exported from the object model, handing each extent over as it
