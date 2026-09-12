@@ -22,7 +22,7 @@
  * back the same way with `decodeUtf8`, which checks the UTF-8 alone.
  */
 
-import { DatabaseClosed, InvalidSqlValue } from "../errors.js";
+import { DatabaseClosed, InvalidSqlValue, UncertainCommit } from "../errors.js";
 
 /** What a parameter or column value can be. An integral `number` in the safe range binds as INTEGER, any other finite `number` as REAL. */
 export type SqlValue = string | number | Uint8Array | null;
@@ -70,14 +70,19 @@ export interface SqliteDriver {
   prepare(sql: string): SqliteStatement;
   /**
    * `BEGIN <mode>`, `body`, `COMMIT`; a throw from `body` rolls back and
-   * rethrows. Transactions do not nest: a `transaction` inside one is
-   * an error, so a routine that needs a transaction either owns it or
-   * runs inside its caller's. `body` is synchronous, as the whole driver
-   * is: a transaction never spans an `await`.
+   * rethrows, and nothing of the transaction landed. A throw from the
+   * `COMMIT` itself is `UncertainCommit`: whether the transaction landed
+   * is unknown, and the connection refuses every call from then on
+   * until it is closed. Transactions do not nest: a `transaction`
+   * inside one is an error, so a routine that needs a transaction
+   * either owns it or runs inside its caller's. `body` is synchronous,
+   * as the whole driver is: a transaction never spans an `await`.
    */
   transaction<T>(mode: TransactionMode, body: () => T): T;
   /** Whether a transaction opened by `transaction` is in progress. */
   readonly inTransaction: boolean;
+  /** The commit whose outcome this connection could not learn, after which it does no work until closed; `undefined` while every transaction's outcome was known. */
+  readonly uncertain: UncertainCommit | undefined;
   /** Finalizes every statement, closes the connection and releases ownership. Idempotent. */
   close(): void;
 }
@@ -85,7 +90,8 @@ export interface SqliteDriver {
 /**
  * What an adapter provides: the platform's connection, unguarded. The
  * shared `Connection` above it checks values, tracks statements, keeps
- * transactions from nesting and refuses use after close.
+ * transactions from nesting, and refuses use after close and after a
+ * commit whose outcome it could not learn.
  */
 export interface RawConnection {
   readonly version: string;
@@ -174,6 +180,7 @@ export class Connection implements SqliteDriver {
   private readonly statements = new Set<Statement>();
   private closed = false;
   private transacting = false;
+  private stopped: UncertainCommit | undefined;
 
   constructor(
     private readonly raw: RawConnection,
@@ -185,6 +192,10 @@ export class Connection implements SqliteDriver {
 
   get inTransaction(): boolean {
     return this.transacting;
+  }
+
+  get uncertain(): UncertainCommit | undefined {
+    return this.stopped;
   }
 
   exec(sql: string): void {
@@ -214,8 +225,13 @@ export class Connection implements SqliteDriver {
     try {
       this.raw.exec("COMMIT");
     } catch (err) {
+      // SQLite may have written the transaction before failing to
+      // report it, or rolled it back itself; the ROLLBACK below undoes
+      // it where it is still open. Either way this connection cannot
+      // say what the file holds, and stops.
+      this.stopped = new UncertainCommit(err);
       this.rollback();
-      throw err;
+      throw this.stopped;
     }
     this.transacting = false;
     return result;
@@ -243,6 +259,7 @@ export class Connection implements SqliteDriver {
 
   private check(): void {
     if (this.closed) throw new DatabaseClosed();
+    if (this.stopped !== undefined) throw this.stopped;
   }
 }
 

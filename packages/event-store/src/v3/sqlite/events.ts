@@ -34,7 +34,7 @@ import type { JsonObject } from "../json.js";
 import { mint } from "../mint.js";
 import { decodeText, decodeUtf8, type SqliteDriver, type SqliteStatement, type SqlRow, type SqlValue } from "./driver.js";
 import type { RuntimeDatabase } from "./open.js";
-import { query, run } from "./schema.js";
+import { hasTable, query, run } from "./schema.js";
 
 export interface SqliteEventStoreOptions {
   /** the wall clock in Unix milliseconds; default `Date.now`, pinned by tests */
@@ -310,7 +310,7 @@ export class SqliteEventStore implements EventStore {
   }
 
   private hasConflictsTable(): boolean {
-    return query(this.driver, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'local_conflicts'").length === 1;
+    return hasTable(this.driver, "local_conflicts");
   }
 
   private decode(row: SqlRow): Decoded {
@@ -328,9 +328,12 @@ export class SqliteEventStore implements EventStore {
    * the survey a store makes once, before its first write, finds any.
    * A runtime's history changes through its owner alone, so one survey
    * per open covers what was there before, and every read after it
-   * reports what it meets.
+   * reports what it meets. Every write of the store asks this first;
+   * the vault asks it before a collection pass, whose keep set is
+   * folded from the history and cannot be trusted with deletion while
+   * that history is incomplete.
    */
-  private requireSound(): void {
+  requireSound(): void {
     if (this.damage === undefined && !this.surveyed) this.survey();
     if (this.damage !== undefined) throw new DamagedHistory(this.damage);
   }

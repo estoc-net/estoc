@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- **The SQLite vault.** `SqliteVault` in `@estoc/event-store/v3`, a
+  `Runtime` over an open runtime's `SqliteEventStore` and
+  `SqliteObjectStore`: a commit's objects prepared under the writer
+  lock while their sources stream, then published with their repairs,
+  the events and the positions in the one `BEGIN IMMEDIATE`
+  transaction of `appendAll`, the preparation settled after it, so
+  nothing lands unless everything does; the keystore over the lock;
+  `close()` admitting nothing more, waiting for what was admitted,
+  then closing the database and ownership. `vault.local` is the
+  runtime's own state in `local_*` tables made on first write:
+  `options` (JSON by key), `cache` (bytes by namespace and key) and
+  `trace` (entries in order, scanned by type and position, pruned by
+  age and count), with `clearCaches()` emptying the cache and the
+  trace only. The vault stops on damage to the history — commit,
+  ingest and collection refused with `DamagedHistory`, collection
+  because its keep set is folded from that history, reads and local
+  state going on — and on a commit of unknown outcome: a `COMMIT`
+  SQLite could not complete is the new `UncertainCommit`, after which
+  the driver's `Connection` refuses every call until closed
+  (`driver.uncertain` says so) and the vault with it, reads included,
+  until a reopen recovers what landed; `stopped` says which.
+  `openRuntime` takes `resetIdentity: true`, the recovery from
+  `ForkedAuthor`: after every check, one transaction gives the
+  runtime a fresh replica ID and generation and drops the cache, the
+  history and options untouched. `SqliteEventStore.requireSound()` is
+  public, for the vault's collection. The vault tests that hold for
+  any runtime move from `test/v3/vault.test.ts` into `vaultSuite`
+  (`test/v3/suite/vault-suite.ts`), run over the runtime in memory
+  and the SQLite vault in memory and on files; `vault-cases.ts` runs
+  on `node:sqlite` and in Chromium, and `vault.test.ts` kills a
+  committing process after each of its statements in turn.
 - **The SQLite object store.** `SqliteObjectStore` in
   `@estoc/event-store/v3`, over an open runtime's connection and
   writability: a put hashed as it streams and cut into the format's

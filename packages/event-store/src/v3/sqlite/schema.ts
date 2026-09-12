@@ -88,6 +88,11 @@ export function run(driver: SqliteDriver, sql: string, ...params: SqlValue[]): n
   }
 }
 
+/** Whether the schema has a table named `name`: for the tables a runtime makes on first use. The name is the runtime's own, never a file's. */
+export function hasTable(driver: SqliteDriver, name: string): boolean {
+  return query(driver, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?", name).length === 1;
+}
+
 type ColumnType = "INTEGER" | "TEXT" | "BLOB";
 
 interface Column {
