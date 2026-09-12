@@ -10,17 +10,25 @@
   without a NUL or an unpaired surrogate, safe integers, finite doubles,
   bytes and null, copies bytes at both boundaries, and refuses the rest
   as `InvalidSqlValue` before the statement runs; a stored integer
-  outside the safe range is `InvalidSqlValue` on read, never rounded;
-  what SQLite refuses is `SqliteError` with its result code. Opens are
+  outside the safe range is `InvalidSqlValue` on read, never rounded,
+  and so is stored text with a NUL or invalid UTF-8 where the adapter
+  sees the bytes (wasm), with `decodeText` for reading a foreign file's
+  text as `CAST(column AS BLOB)` on either platform; what SQLite refuses
+  is `SqliteError` with its result code. Opens are
   `create`/`readwrite`/`readonly` with `DatabaseExists`,
-  `DatabaseMissing`, `DatabaseBusy` and, after close, `DatabaseClosed`.
-  `openNodeSqlite` in `@estoc/event-store/node` is `node:sqlite` (Node
-  22.13+), ownership by SQLite's exclusive locking mode; `openSqlitePool`
-  in the new `@estoc/event-store/browser` is `@sqlite.org/sqlite-wasm`
-  over its OPFS access-handle pool in a Worker, ownership of the
-  directory by a Web Lock, with `exportFile`/`importFile` for the
-  portable snapshot to come. `Connection`, `RawConnection`/`RawStatement`,
-  `checkParams`, `exactInteger` and `ownBytes` are exported for a third
+  `DatabaseMissing`, `DatabaseBusy` and, after close, `DatabaseClosed`;
+  a `readonly` open excludes writers while it is open. `openNodeSqlite`
+  in `@estoc/event-store/node` is `node:sqlite` (Node 22.13+), ownership
+  by SQLite's exclusive locking mode, a read-only open of a WAL file
+  owning the file outright under `query_only`; `openSqlitePool` in the
+  new `@estoc/event-store/browser` is `@sqlite.org/sqlite-wasm` over its
+  OPFS access-handle pool in a Worker, ownership of the directory by a
+  Web Lock keyed by the directory's normalized spelling, databases
+  stored as `<name>.sqlite` so no name spells another's journal, a pool
+  that grows for opens and imports alike and refuses every call once
+  closed, with `exportFile`/`importFile` for the portable snapshot to
+  come. `Connection`, `RawConnection`/`RawStatement`, `checkParams`,
+  `decodeText`, `exactInteger` and `ownBytes` are exported for a third
   adapter. New dependency `@sqlite.org/sqlite-wasm`.
 - **v3 aligned with the SQLite specification; the folder vault retired.**
   The replica model's storage moved from a folder to one SQLite file

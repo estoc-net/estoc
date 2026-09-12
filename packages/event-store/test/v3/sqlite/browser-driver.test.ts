@@ -3,8 +3,9 @@
  * script are bundled with esbuild and served, with `sqlite3.wasm`, to a
  * headless Chromium over localhost (a secure context, which OPFS
  * needs); the page drives the Workers and the results come back — one
- * vitest case per driver case, plus the pool's own. Skipped, loudly,
- * when no Chromium is found; `ESTOC_BROWSER=/path/to/chrome` names one.
+ * vitest case per driver case, per pool case, and per case of the
+ * page's own. Skipped, loudly, when no Chromium is found;
+ * `ESTOC_BROWSER=/path/to/chrome` names one.
  */
 
 import { readFile } from "node:fs/promises";
@@ -17,6 +18,7 @@ import { chromium } from "playwright-core";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { findChromium } from "../../browser/chromium.js";
+import { poolCases } from "../../browser/pool-cases.js";
 import type { WorkerCaseResult } from "../../browser/sqlite-worker.js";
 import { driverCases } from "./driver-cases.js";
 
@@ -25,11 +27,10 @@ if (browserPath === null) {
   console.warn("SQLite driver cases in Chromium skipped: no Chromium found (set ESTOC_BROWSER to a Chrome or Chromium binary)");
 }
 
-const POOL_CASES = [
+const PAGE_CASES = [
   "the pool is refused on the main thread",
   "a second Worker is refused the directory another holds, and admitted once it is released",
   "a terminated Worker's directory frees up for the next",
-  "a database exports as a standalone file and imports back",
 ];
 
 describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)", () => {
@@ -95,7 +96,10 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
   for (const c of driverCases) {
     it(c.name, () => report(results.get(c.name)));
   }
-  for (const name of POOL_CASES) {
+  for (const c of poolCases) {
+    it(c.name, () => report(results.get(c.name)));
+  }
+  for (const name of PAGE_CASES) {
     it(name, () => report(results.get(name)));
   }
 });

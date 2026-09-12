@@ -69,15 +69,22 @@ any other finite number as a double, bytes (copied at both boundaries,
 so neither side holds the other's buffer), or null; anything else, a
 bigint or a boolean included, is `InvalidSqlValue` before the statement
 runs, and a stored integer outside the safe range is `InvalidSqlValue`
-on the read that meets it, never rounded. What SQLite itself refuses is
+on the read that meets it, never rounded. Stored text that is not text
+— a NUL inside, invalid UTF-8, which only a foreign file or a cast in
+SQL puts in a TEXT column — is `InvalidSqlValue` where the adapter can
+see the bytes (wasm); `node:sqlite` hands text over already cut at a
+NUL and repaired, so text of a file another party wrote is read as
+`CAST(column AS BLOB)` and decoded with `decodeText`, which refuses
+exactly that, on either platform. What SQLite itself refuses is
 `SqliteError` with its result code on either platform. An open is
 `create`, `readwrite` or `readonly`: a create needs a target nothing is
 at (`DatabaseExists`), the others one that exists (`DatabaseMissing`),
 and a writable open takes ownership — a second open of the same target,
 in this process or another, is `DatabaseBusy` until the first closes;
 a read-only open hardens the connection for a file another party wrote
-(no writes, no extension loading, `trusted_schema` off). After `close`
-every call is `DatabaseClosed`.
+(no writes, no extension loading, `trusted_schema` off) and excludes
+writers for as long as it is open. After `close` every call is
+`DatabaseClosed`.
 
 Two adapters. `openNodeSqlite(path, { mode, journal? })` under
 `@estoc/event-store/node` is `node:sqlite` (Node 22.13 or later; it
@@ -90,16 +97,25 @@ with `journal: "delete"` in a rollback journal with `synchronous=FULL`,
 the portable snapshot's, whose file must stand alone with
 rollback-format headers; a read-only open of a rollback-journal file
 keeps the shared lock its first read takes, so writers are excluded
-while other readers are not. `openSqlitePool({ directory })` under
-`@estoc/event-store/browser` is `@sqlite.org/sqlite-wasm` over its OPFS
-access-handle pool, in a Worker only: the pool owns one OPFS directory,
-`open(name, mode)` a database in it (the pool grows as databases and
-their journals need handles), `exportFile`/`importFile` deliver and take
-a complete database file, and ownership of the directory is a Web Lock
-taken before the pool is installed and held until `close`, so a second
-Worker of the origin is refused before it touches the directory. The
-driver cases in `test/v3/sqlite/driver-cases.ts` run over both: Node on
-a file and in memory, Chromium in a Worker.
+while other readers are not, and a read-only open of a WAL file takes
+the write lock as a writable open does — a WAL reader keeps no lock a
+writer would meet — and forbids writes through `query_only`, letting
+SQLite recover the WAL on open and checkpoint it on close.
+`openSqlitePool({ directory })` under `@estoc/event-store/browser` is
+`@sqlite.org/sqlite-wasm` over its OPFS access-handle pool, in a Worker
+only: the pool owns one OPFS directory, `open(name, mode)` a database
+in it (each stored as `<name>.sqlite`, so no name can spell the journal
+SQLite keeps beside another; the pool grows as databases, their
+journals and imports need handles), `exportFile`/`importFile` deliver
+and take a complete database file, and ownership of the directory is a
+Web Lock taken before the pool is installed and held until `close`, so
+a second Worker of the origin is refused before it touches the
+directory; the directory's one normalized spelling names both the lock
+and the VFS, so two spellings contend and two directories never share
+a pool, and a closed pool refuses every call. The driver cases in
+`test/v3/sqlite/driver-cases.ts` run over both, Node on a file and in
+memory and Chromium in a Worker; the pool's own cases are in
+`test/browser/pool-cases.ts`.
 
 Everything below is
 version 2, which stays until the vault switches over.

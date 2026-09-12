@@ -9,7 +9,7 @@
 
 import { sha256 } from "@noble/hashes/sha2";
 
-import type { OpenMode, SqliteDriver, SqlValue } from "../../../src/v3/sqlite/driver.js";
+import { decodeText, type OpenMode, type SqliteDriver, type SqlValue } from "../../../src/v3/sqlite/driver.js";
 
 export interface DriverHarness {
   /** A target no database exists at yet. */
@@ -134,6 +134,23 @@ export const driverCases: DriverCase[] = [
         assertEqual(count(db, "t"), 0, "nothing written");
         insert.run("🎉");
         assertEqual(count(db, "t"), 1, "a paired surrogate is a code point and passes");
+      }),
+  },
+  {
+    name: "text read as its stored bytes decodes exactly or is refused: how text of a file another party wrote is checked",
+    run: (h) =>
+      withFresh(h, "create", (db) => {
+        db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY, s TEXT NOT NULL) STRICT");
+        db.exec("INSERT INTO t VALUES (1, 'naïve 🎉'), (2, ''), (3, CAST(X'610062' AS TEXT)), (4, CAST(X'EDA080' AS TEXT)), (5, CAST(X'EFBBBF61' AS TEXT)), (6, CAST(X'FF' AS TEXT))");
+        const bytesOf = db.prepare("SELECT CAST(s AS BLOB) AS b FROM t WHERE k = ?");
+        const text = (k: number): string => decodeText(bytesOf.get(k)?.["b"] as Uint8Array, "s");
+        assertEqual(text(1), "naïve 🎉", "text back");
+        assertEqual(text(2), "", "empty text back");
+        assertEqual(db.prepare("SELECT length(CAST(s AS BLOB)) AS n FROM t WHERE k = 3").get(), { n: 3 }, "under the cast, the bytes past a NUL are all there");
+        assertThrows(() => text(3), "InvalidSqlValue", "a NUL inside");
+        assertThrows(() => text(4), "InvalidSqlValue", "an encoded surrogate is not UTF-8");
+        assertEqual(text(5), "\uFEFFa", "a byte order mark is a character and stays");
+        assertThrows(() => text(6), "InvalidSqlValue", "a stray byte");
       }),
   },
   {
@@ -276,6 +293,14 @@ export const driverCases: DriverCase[] = [
         assertThrows(() => select.all(), "Error", "a second query while one is in flight");
         it.return?.();
         assertEqual(select.all().length, 3, "and after it is returned");
+        const unstarted = select.iterate();
+        unstarted.return?.();
+        assertEqual(select.all().length, 3, "an iterator returned before its first row leaves the statement ready too");
+        assertEqual(unstarted.next(), { done: true, value: undefined }, "and is over");
+        const restarted = select.iterate();
+        assertEqual(restarted.next().value?.["k"], 1, "the next iteration starts from the first row");
+        restarted.return?.();
+        assertEqual(select.get()?.["k"], 1, "so does the next get");
         select.finalize();
         assertThrows(() => select.all(), "Error", "a finalized statement");
         select.finalize();

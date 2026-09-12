@@ -1,6 +1,6 @@
 /**
  * What runs in the page: spawns the Workers, drives them through the
- * driver cases and the pool's ownership and file exchange, and reports
+ * driver cases, the pool cases and the pool's ownership, and reports
  * every outcome as one list the test reads back. The page itself tries
  * the pool once, to see it refused outside a Worker.
  */
@@ -101,9 +101,7 @@ window.runSqliteSuite = async (): Promise<WorkerCaseResult[]> => {
         }
       })
     );
-    results.push(
-      await attempt("a database exports as a standalone file and imports back", async () => (await second.send({ cmd: "export-import", directory: "/exchange" })) as string)
-    );
+    results.push(...((await second.send({ cmd: "pool" })) as WorkerCaseResult[]));
   } finally {
     first.terminate();
     second.terminate();

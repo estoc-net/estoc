@@ -124,6 +124,26 @@ describe("node:sqlite driver and other processes", () => {
     expect(JSON.parse(after.output)).toEqual({ read: "ok", write: "ok" });
   });
 
+  it("a read-only connection of a WAL file owns it outright: no other connection reads or writes until it closes", async () => {
+    const file = onFile.fresh();
+    const db = openNodeSqlite(file, { mode: "create" });
+    db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT; INSERT INTO t VALUES (1)");
+    db.close();
+    const inspector = openNodeSqlite(file, { mode: "readonly" });
+    const probe = await otherProcess(file, "probe");
+    expect(JSON.parse(probe.output)).toEqual({ read: "code 5", write: "code 5" });
+    expect(() => inspector.exec("INSERT INTO t VALUES (2)")).toThrow(/readonly/);
+    expect(inspector.prepare("SELECT k FROM t").all()).toEqual([{ k: 1 }]);
+    expect(inspector.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    inspector.close();
+    expect(Array.from((await readFile(file)).subarray(18, 20)), "still a WAL file").toEqual([2, 2]);
+    const after = await otherProcess(file, "probe");
+    expect(JSON.parse(after.output)).toEqual({ read: "ok", write: "ok" });
+    const again = openNodeSqlite(file, { mode: "readwrite" });
+    expect(again.prepare("SELECT k FROM t").all()).toEqual([{ k: 1 }]);
+    again.close();
+  });
+
   it("this process is refused, read-write or read-only, while another holds the file", async () => {
     const file = onFile.fresh();
     openNodeSqlite(file, { mode: "create" }).close();

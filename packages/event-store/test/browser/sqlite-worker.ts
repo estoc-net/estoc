@@ -1,13 +1,13 @@
 /**
- * What runs in the Worker: the driver cases over the wasm pool, and the
- * pool's own behaviour — holding a directory against another Worker,
- * exporting and importing a file. Driven by messages from the page
- * script, which `../v3/sqlite/browser-driver.test.ts` bundles and
- * serves.
+ * What runs in the Worker: the driver cases over the wasm pool, the
+ * pool's own cases, and holding a directory against another Worker.
+ * Driven by messages from the page script, which
+ * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
  */
 
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
-import { assert, assertBytes, assertEqual, assertRejects, type DriverHarness, driverCases, pattern } from "../v3/sqlite/driver-cases.js";
+import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
+import { poolCases } from "./pool-cases.js";
 
 export interface WorkerCaseResult {
   name: string;
@@ -15,7 +15,7 @@ export interface WorkerCaseResult {
   note?: string;
 }
 
-export type WorkerRequest = { cmd: "cases"; directory: string } | { cmd: "hold"; directory: string } | { cmd: "release" } | { cmd: "export-import"; directory: string };
+export type WorkerRequest = { cmd: "cases"; directory: string } | { cmd: "pool" } | { cmd: "hold"; directory: string } | { cmd: "release" };
 
 export type WorkerCommand = WorkerRequest & { id: number };
 
@@ -48,29 +48,17 @@ async function runCases(directory: string): Promise<WorkerCaseResult[]> {
   return results;
 }
 
-/** A database written, exported as bytes, imported under another name and read back: the delivery and intake a portable snapshot takes. */
-async function exportImport(directory: string): Promise<string> {
-  const pool = await openSqlitePool({ directory });
-  const db = await pool.open("origin", "create");
-  db.exec("PRAGMA application_id = 1163088963; CREATE TABLE t (k INTEGER PRIMARY KEY, b BLOB NOT NULL) STRICT");
-  db.prepare("INSERT INTO t VALUES (?, ?)").run(1, pattern(3000, 9));
-  await assertRejects(() => pool.exportFile("origin"), "DatabaseBusy", "export while open");
-  db.close();
-  const bytes = await pool.exportFile("origin");
-  assertEqual(new TextDecoder().decode(bytes.subarray(0, 15)), "SQLite format 3", "a database file");
-  assertEqual([bytes[18], bytes[19]], [1, 1], "rollback-format headers");
-  assertEqual(bytes.byteLength % 4096, 0, "whole pages");
-  await pool.importFile("copy", bytes);
-  await assertRejects(() => pool.importFile("copy", bytes), "DatabaseExists", "import over an existing name");
-  assertEqual(pool.names(), ["copy", "origin"], "both in the pool");
-  const copy = await pool.open("copy", "readonly");
-  assertEqual(copy.prepare("PRAGMA application_id").get(), { application_id: 1163088963 }, "the header travelled");
-  assertBytes(copy.prepare("SELECT b FROM t WHERE k = 1").get()?.["b"] as Uint8Array, pattern(3000, 9), "the bytes travelled");
-  copy.close();
-  pool.remove("copy");
-  assertEqual(pool.names(), ["origin"], "removed");
-  await pool.close();
-  return `${bytes.byteLength} bytes`;
+async function runPoolCases(): Promise<WorkerCaseResult[]> {
+  const results: WorkerCaseResult[] = [];
+  for (const c of poolCases) {
+    try {
+      const note = await c.run(openSqlitePool);
+      results.push(note === undefined ? { name: c.name } : { name: c.name, note });
+    } catch (err) {
+      results.push({ name: c.name, error: describe(err) });
+    }
+  }
+  return results;
 }
 
 function describe(err: unknown): string {
@@ -81,6 +69,8 @@ async function handle(command: WorkerCommand): Promise<unknown> {
   switch (command.cmd) {
     case "cases":
       return runCases(command.directory);
+    case "pool":
+      return runPoolCases();
     case "hold": {
       held.set(command.directory, await openSqlitePool({ directory: command.directory }));
       return "held";
@@ -90,8 +80,6 @@ async function handle(command: WorkerCommand): Promise<unknown> {
       held.clear();
       return "released";
     }
-    case "export-import":
-      return exportImport(command.directory);
   }
 }
 

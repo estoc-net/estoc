@@ -68,7 +68,7 @@ export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Hel
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
 
 export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
-export { Connection, checkParams, exactInteger, ownBytes } from "./sqlite/driver.js";
+export { Connection, checkParams, decodeText, exactInteger, ownBytes } from "./sqlite/driver.js";
 
 export {
   InvalidJson,

@@ -7,8 +7,15 @@
  * carry values the same way: text, safe integers, doubles, bytes and
  * null, exactly or not at all. What a value must be to cross is decided
  * here, once, before the statement runs; what comes back is checked the
- * same way, so a stored integer the platform cannot represent fails the
- * read instead of rounding.
+ * same way where the platform lets the adapter see it, so a stored
+ * integer the platform cannot represent fails the read instead of
+ * rounding, and stored text that is not text — bytes with a NUL or
+ * invalid UTF-8, which only a foreign file or a cast in SQL can put in
+ * a TEXT column — fails the read wherever the adapter reads the bytes.
+ * `node:sqlite` does not: it hands text over as a string it has already
+ * cut at a NUL and repaired, so text of a file another party wrote is
+ * read there as `CAST(column AS BLOB)` and decoded with `decodeText`,
+ * which is the rule for validating any foreign file on either platform.
  */
 
 import { DatabaseClosed, InvalidSqlValue } from "../errors.js";
@@ -27,9 +34,13 @@ export type TransactionMode = "deferred" | "immediate" | "exclusive";
  * process or another, is refused with `DatabaseBusy` until this one
  * closes. A `readonly` open excludes writers for as long as it is open
  * and hardens the connection for a file another party wrote — no
- * writes, no extension loading, untrusted schema — but shares the file
- * with other readers where the platform can: an immutable snapshot may
- * be validated and delivered at once.
+ * writes, no extension loading, untrusted schema. A rollback-journal
+ * file, which is what a portable snapshot is, it shares with other
+ * readers where the platform can, so an immutable snapshot may be
+ * validated and delivered at once; a WAL file it owns as a writable
+ * open would, since a WAL reader cannot keep writers out any other way,
+ * and lets SQLite recover the WAL on open and checkpoint it on close as
+ * any owner does.
  */
 export type OpenMode = "create" | "readwrite" | "readonly";
 
@@ -137,7 +148,18 @@ export function ownBytes(bytes: Uint8Array): Uint8Array {
   return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : new Uint8Array(bytes);
 }
 
-/** The driver over a `RawConnection`: what both adapters share. */
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** The string the stored TEXT `bytes` are, or `InvalidSqlValue` when they hold a NUL or are not UTF-8: the read-side twin of the check `checkParams` makes on a string going in. */
+export function decodeText(bytes: Uint8Array, column: string): string {
+  if (bytes.includes(0)) throw new InvalidSqlValue(`column ${column}: the stored text has a NUL and cannot cross a SQLite text boundary intact`);
+  try {
+    return STRICT_UTF8.decode(bytes);
+  } catch {
+    throw new InvalidSqlValue(`column ${column}: the stored text is not valid UTF-8 and cannot be read exactly`);
+  }
+}
+
 export class Connection implements SqliteDriver {
   readonly version: string;
   private readonly statements = new Set<Statement>();
@@ -195,7 +217,7 @@ export class Connection implements SqliteDriver {
     try {
       this.raw.exec("ROLLBACK");
     } catch {
-      // A failed COMMIT has usually rolled back already; the transaction is over either way.
+      // SQLite rolls some failed commits back itself, and this ROLLBACK then fails for having nothing to undo; the caller gets the error that started it.
     }
   }
 
@@ -217,7 +239,7 @@ export class Connection implements SqliteDriver {
 
 class Statement implements SqliteStatement {
   private finalized = false;
-  private iterating = false;
+  private current: IterableIterator<SqlRow> | undefined;
 
   constructor(
     private readonly raw: RawStatement,
@@ -241,23 +263,43 @@ class Statement implements SqliteStatement {
 
   iterate(...params: SqlValue[]): IterableIterator<SqlRow> {
     this.check();
-    if (this.iterating) throw new Error("the statement is already iterating: finish or return that iteration first");
-    const bound = checkParams(params);
-    this.iterating = true;
-    return this.pull(bound);
-  }
-
-  private *pull(bound: SqlValue[]): IterableIterator<SqlRow> {
-    try {
-      yield* this.raw.rows(bound);
-    } finally {
-      this.iterating = false;
-    }
+    if (this.current !== undefined) throw new Error("the statement is already iterating: finish or return that iteration first");
+    const rows = this.raw.rows(checkParams(params));
+    this.current = rows;
+    const done = (): void => {
+      if (this.current === rows) this.current = undefined;
+    };
+    const iterator: IterableIterator<SqlRow> = {
+      next: () => {
+        let result: IteratorResult<SqlRow>;
+        try {
+          result = rows.next();
+        } catch (err) {
+          done();
+          throw err;
+        }
+        if (result.done === true) done();
+        return result;
+      },
+      return: (value?: unknown) => {
+        done();
+        return rows.return?.(value) ?? { done: true, value };
+      },
+      throw: (err?: unknown) => {
+        done();
+        if (rows.throw === undefined) throw err;
+        return rows.throw(err);
+      },
+      [Symbol.iterator]: () => iterator,
+    };
+    return iterator;
   }
 
   finalize(): void {
     if (this.finalized) return;
     this.finalized = true;
+    this.current?.return?.();
+    this.current = undefined;
     this.onFinalize(this);
     this.raw.finalize();
   }

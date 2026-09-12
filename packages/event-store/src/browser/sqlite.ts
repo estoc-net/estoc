@@ -19,6 +19,7 @@ import type { Database, PreparedStatement, SAHPoolUtil, Sqlite3Static } from "@s
 import { DatabaseBusy, DatabaseExists, DatabaseMissing, SqliteError } from "../v3/errors.js";
 import {
   Connection,
+  decodeText,
   exactInteger,
   ownBytes,
   type OpenMode,
@@ -30,7 +31,7 @@ import {
 } from "../v3/sqlite/driver.js";
 
 export interface SqlitePoolOptions {
-  /** The OPFS directory the pool owns, such as `/estoc/vaults`. Everything in it is the pool's: put nothing else there. */
+  /** The OPFS directory the pool owns, such as `/estoc/vaults`: one or more path segments under the OPFS root, none `.` or `..`. Everything in it is the pool's: put nothing else there. */
   directory: string;
   /** Where `sqlite3.wasm` is served from, when not beside the script that bundles the module. */
   wasmUrl?: string;
@@ -39,19 +40,35 @@ export interface SqlitePoolOptions {
 /** A name in the pool: one path segment, no separators. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/**
+ * The file a name is stored as. SQLite names the files it keeps beside
+ * a database by appending to the database's name — `-journal`, `-wal`
+ * and so on — so the names of databases must not be able to spell
+ * each other's sidecars: a database file always ends in the suffix, a
+ * sidecar never does.
+ */
+const SUFFIX = ".sqlite";
+
 export interface SqlitePool {
   readonly directory: string;
-  /** The databases in the pool, by name. */
+  /** The databases in the pool, by name: the files SQLite keeps beside a database during a transaction are not among them. */
   names(): string[];
   /** Opens `name` under `mode` and takes it: a second open of the same name is refused with `DatabaseBusy` until the first closes. The pool grows first when the database and its journal need more handles than it has. */
   open(name: string, mode: OpenMode): Promise<SqliteDriver>;
   /** The complete bytes of the database file `name`, which no connection may hold open: what a portable snapshot is delivered as. */
   exportFile(name: string): Promise<Uint8Array>;
-  /** Puts `bytes`, a complete SQLite database file, into the pool as `name`, which must not exist yet. */
+  /**
+   * Puts `bytes`, a complete SQLite database file, into the pool as
+   * `name`, which must not exist yet; the pool grows first when it has
+   * no handle to spare. The bytes are the caller's to validate before
+   * they come here: they are stored as they are except the two file
+   * format version bytes, which the pool sets to the rollback journal's,
+   * so whatever the source's headers were is not visible afterwards.
+   */
   importFile(name: string, bytes: Uint8Array): Promise<void>;
   /** Deletes the database `name`, which no connection may hold open. */
   remove(name: string): void;
-  /** Releases the pool's handles so another Worker may install over the directory. Every connection must be closed first. */
+  /** Releases the pool's handles so another Worker may install over the directory. Every connection must be closed first. Afterwards every call is refused: the directory is the next owner's. */
   close(): Promise<void>;
 }
 
@@ -82,15 +99,17 @@ export async function openSqlitePool(options: SqlitePoolOptions): Promise<Sqlite
   if (!("WorkerGlobalScope" in globalThis) || "window" in globalThis) {
     throw new Error("the SQLite pool runs in a Worker only: OPFS synchronous access handles are not available on the main thread");
   }
-  const directory = options.directory.replace(/\/+$/, "");
-  const lock = await takeLock(`estoc-sqlite-pool:${directory}`);
+  const directory = directoryOf(options.directory);
+  // One key names the directory to both the lock and the VFS registry, so two spellings of one directory contend for one lock and two directories never share a pool.
+  const key = `estoc-sqlite-pool:${directory}`;
+  const lock = await takeLock(key);
   if (lock === undefined) throw new DatabaseBusy(directory);
   try {
     const sqlite3 = await loadRuntime(options.wasmUrl);
     let util: SAHPoolUtil;
     try {
       const install = sqlite3.installOpfsSAHPoolVfs as (options: { name: string; directory: string; forceReinitIfPreviouslyFailed: boolean }) => Promise<SAHPoolUtil>;
-      util = await install({ name: `estoc${directory.replace(/[^A-Za-z0-9]+/g, "-")}`, directory, forceReinitIfPreviouslyFailed: true });
+      util = await install({ name: key, directory, forceReinitIfPreviouslyFailed: true });
       if (util.isPaused()) await util.unpauseVfs();
     } catch (err) {
       if ((err as { name?: string }).name === "NoModificationAllowedError") throw new DatabaseBusy(directory);
@@ -101,6 +120,15 @@ export async function openSqlitePool(options: SqlitePoolOptions): Promise<Sqlite
     lock();
     throw err;
   }
+}
+
+/** `input` as the one spelling of the directory it names: the segments the pool walks from the OPFS root, which it takes with or without a leading slash and with any run of slashes between. */
+function directoryOf(input: string): string {
+  const segments = input.split("/").filter((segment) => segment !== "");
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`${JSON.stringify(input)} is not a pool directory: one or more path segments under the OPFS root, none '.' or '..'`);
+  }
+  return `/${segments.join("/")}`;
 }
 
 /** The lock `name`, held until the returned release is called; `undefined` when someone holds it already. */
@@ -120,6 +148,8 @@ function takeLock(name: string): Promise<(() => void) | undefined> {
 
 class Pool implements SqlitePool {
   private readonly open_ = new Set<string>();
+  private pending = 0;
+  private closed = false;
 
   constructor(
     private readonly sqlite3: Sqlite3Static,
@@ -129,57 +159,84 @@ class Pool implements SqlitePool {
   ) {}
 
   names(): string[] {
+    this.live();
     return this.util
       .getFileNames()
-      .filter((path) => path.startsWith("/") && NAME.test(path.slice(1)))
-      .map((path) => path.slice(1))
+      .filter((path) => path.startsWith("/") && path.endsWith(SUFFIX))
+      .map((path) => path.slice(1, -SUFFIX.length))
+      .filter((name) => NAME.test(name))
       .sort();
   }
 
   async open(name: string, mode: OpenMode): Promise<SqliteDriver> {
     const path = pathOf(name);
     const target = `${this.directory}/${name}`;
-    const exists = this.util.getFileNames().includes(path);
-    if (mode === "create" && exists) throw new DatabaseExists(target);
-    if (mode !== "create" && !exists) throw new DatabaseMissing(target);
-    if (this.open_.has(name)) throw new DatabaseBusy(target);
-    await this.reserve(exists ? 1 : 2);
-    if (this.open_.has(name)) throw new DatabaseBusy(target);
-    const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
-    const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
+    this.pending++;
     try {
-      sqlite(this.sqlite3, () => {
-        db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON");
-        if (mode === "readonly") db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
-        db.exec("PRAGMA application_id");
-      });
-    } catch (err) {
-      db.close();
-      throw err;
+      this.live();
+      const exists = this.has(path);
+      if (mode === "create" && exists) throw new DatabaseExists(target);
+      if (mode !== "create" && !exists) throw new DatabaseMissing(target);
+      if (this.open_.has(name)) throw new DatabaseBusy(target);
+      await this.reserve(exists ? 1 : 2);
+      this.live();
+      if (this.open_.has(name)) throw new DatabaseBusy(target);
+      const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
+      const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
+      try {
+        sqlite(this.sqlite3, () => {
+          db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON");
+          if (mode === "readonly") db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
+          db.exec("PRAGMA application_id");
+        });
+      } catch (err) {
+        db.close();
+        throw err;
+      }
+      this.open_.add(name);
+      return new Connection(new WasmConnection(this.sqlite3, db), mode, () => this.open_.delete(name));
+    } finally {
+      this.pending--;
     }
-    this.open_.add(name);
-    return new Connection(new WasmConnection(this.sqlite3, db), mode, () => this.open_.delete(name));
   }
 
   async exportFile(name: string): Promise<Uint8Array> {
+    const path = pathOf(name);
+    this.live();
     this.requireClosed(name);
-    return ownBytes(await this.util.exportFile(pathOf(name)));
+    if (!this.has(path)) throw new DatabaseMissing(`${this.directory}/${name}`);
+    return ownBytes(await this.util.exportFile(path));
   }
 
   async importFile(name: string, bytes: Uint8Array): Promise<void> {
     const path = pathOf(name);
-    if (this.util.getFileNames().includes(path)) throw new DatabaseExists(`${this.directory}/${name}`);
-    await this.util.importDb(path, bytes);
+    const target = `${this.directory}/${name}`;
+    this.pending++;
+    try {
+      this.live();
+      if (this.has(path)) throw new DatabaseExists(target);
+      await this.reserve(1);
+      this.live();
+      if (this.has(path)) throw new DatabaseExists(target);
+      await this.util.importDb(path, bytes);
+    } finally {
+      this.pending--;
+    }
   }
 
   remove(name: string): void {
+    const path = pathOf(name);
+    this.live();
     this.requireClosed(name);
-    if (!this.util.unlink(pathOf(name))) throw new DatabaseMissing(`${this.directory}/${name}`);
+    if (!this.util.unlink(path)) throw new DatabaseMissing(`${this.directory}/${name}`);
   }
 
   async close(): Promise<void> {
+    if (this.closed) return;
     if (this.open_.size > 0) throw new Error(`the pool still has ${this.open_.size} connection(s) open: close them before the pool`);
+    if (this.pending > 0) throw new Error(`the pool still has ${this.pending} open or import in progress: let it finish before closing the pool`);
     this.util.pauseVfs();
+    this.closed = true;
     this.releaseLock();
   }
 
@@ -187,6 +244,14 @@ class Pool implements SqlitePool {
   private async reserve(handles: number): Promise<void> {
     const spare = Number(this.util.getCapacity()) - Number(this.util.getFileCount());
     if (spare < handles) await this.util.addCapacity(handles - spare);
+  }
+
+  private has(path: string): boolean {
+    return this.util.getFileNames().includes(path);
+  }
+
+  private live(): void {
+    if (this.closed) throw new Error(`the pool over ${this.directory} is closed: the directory belongs to whoever opens it next`);
   }
 
   private requireClosed(name: string): void {
@@ -206,7 +271,7 @@ function sqlite<T>(sqlite3: Sqlite3Static, body: () => T): T {
 
 function pathOf(name: string): string {
   if (!NAME.test(name)) throw new Error(`${JSON.stringify(name)} is not a database name: one path segment of letters, digits, '.', '_' and '-'`);
-  return `/${name}`;
+  return `/${name}${SUFFIX}`;
 }
 
 class WasmConnection implements RawConnection {
@@ -276,7 +341,7 @@ class WasmStatement implements RawStatement {
     if (params.length > 0) this.statement.bind([...params]);
   }
 
-  /** The current row, each INTEGER read as the 64-bit value it is and checked, so a stored integer outside the safe range fails here instead of arriving rounded. */
+  /** The current row, each INTEGER read as the 64-bit value it is and each TEXT as its stored bytes, both checked: an integer outside the safe range or text that is not text fails here instead of arriving rounded or repaired. */
   private row(): SqlRow {
     const { capi } = this.sqlite3;
     const pointer = this.statement.pointer as number;
@@ -284,9 +349,20 @@ class WasmStatement implements RawStatement {
     this.columns.forEach((column, i) => {
       const type = capi.sqlite3_column_type(pointer, i);
       if (type === capi.SQLITE_INTEGER) out[column] = exactInteger(capi.sqlite3_column_int64(pointer, i), column);
-      else if (type === capi.SQLITE_BLOB) out[column] = ownBytes(this.statement.getBlob(i) ?? new Uint8Array(0));
+      else if (type === capi.SQLITE_BLOB) out[column] = this.bytes(i);
+      else if (type === capi.SQLITE_TEXT) out[column] = decodeText(this.bytes(i), column);
       else out[column] = this.statement.get(i) as SqlValue;
     });
     return out;
+  }
+
+  /** Column `i`'s stored bytes, copied out of wasm memory: the BLOB, or the UTF-8 of a TEXT, which SQLite hands over unconverted. */
+  private bytes(i: number): Uint8Array {
+    const { capi, wasm } = this.sqlite3;
+    const pointer = this.statement.pointer as number;
+    const n = capi.sqlite3_column_bytes(pointer, i);
+    if (n === 0) return new Uint8Array(0);
+    const at = Number(capi.sqlite3_column_blob(pointer, i));
+    return wasm.heap8u().slice(at, at + n);
   }
 }
