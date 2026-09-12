@@ -19,17 +19,20 @@
   `DatabaseMissing`, `DatabaseBusy` and, after close, `DatabaseClosed`;
   a `readonly` open excludes writers while it is open. `openNodeSqlite`
   in `@estoc/event-store/node` is `node:sqlite` (Node 22.13+), ownership
-  by SQLite's exclusive locking mode, a read-only open of a WAL file
-  owning the file outright under `query_only`; `openSqlitePool` in the
+  by SQLite's exclusive locking mode with no descriptor opened beside
+  SQLite's, a read-only open of a WAL file owning the file outright
+  under `query_only`; `openSqlitePool` in the
   new `@estoc/event-store/browser` is `@sqlite.org/sqlite-wasm` over its
   OPFS access-handle pool in a Worker, ownership of the directory by a
   Web Lock keyed by the directory's normalized spelling, databases
   stored as `<name>.sqlite` so no name spells another's journal, a pool
-  that grows for opens and imports alike and refuses every call once
-  closed, with `exportFile`/`importFile` for the portable snapshot to
-  come. `Connection`, `RawConnection`/`RawStatement`, `checkParams`,
-  `decodeText`, `exactInteger` and `ownBytes` are exported for a third
-  adapter. New dependency `@sqlite.org/sqlite-wasm`.
+  that grows for opens and imports alike — one at a time, so two
+  started together never take one name or count one spare handle twice
+  — and refuses every call once closed, with `exportFile`/`importFile`
+  for the portable snapshot to come. `Connection`,
+  `RawConnection`/`RawStatement`, `checkParams`, `decodeText`,
+  `exactInteger` and `ownBytes` are exported for a third adapter. New
+  dependency `@sqlite.org/sqlite-wasm`.
 - **v3 aligned with the SQLite specification; the folder vault retired.**
   The replica model's storage moved from a folder to one SQLite file
   (`docs/replica-model/vault-sqlite.md`; `vault-folder.md` is gone), and

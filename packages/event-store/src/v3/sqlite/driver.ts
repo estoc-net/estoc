@@ -38,9 +38,9 @@ export type TransactionMode = "deferred" | "immediate" | "exclusive";
  * file, which is what a portable snapshot is, it shares with other
  * readers where the platform can, so an immutable snapshot may be
  * validated and delivered at once; a WAL file it owns as a writable
- * open would, since a WAL reader cannot keep writers out any other way,
- * and lets SQLite recover the WAL on open and checkpoint it on close as
- * any owner does.
+ * open would, since a WAL reader cannot keep writers out any other way.
+ * Either way SQLite recovers what a journal left on open, as it does
+ * for any connection, and the read-only connection commits nothing.
  */
 export type OpenMode = "create" | "readwrite" | "readonly";
 

@@ -53,10 +53,11 @@ for (const [name, harness] of [
 }
 
 /**
- * A second process, with `node:sqlite` alone: `hold` opens the file and
- * keeps SQLite's exclusive lock until told to quit; `probe` opens it,
- * tries a read and a write, and reports each as `ok` or the SQLite
- * result code.
+ * A second process, with `node:sqlite` alone: `hold` opens the file,
+ * keeps SQLite's exclusive lock, says so, and quits when told; `probe`
+ * opens it, tries a read and a write, closes, and reports each try as
+ * `ok` or the SQLite result code. A probe's report arrives with its
+ * exit, so the file is free again when the report is read.
  */
 const OTHER_PROCESS = `
   const { DatabaseSync } = require("node:sqlite");
@@ -71,30 +72,40 @@ const OTHER_PROCESS = `
     process.stdin.on("data", () => { db.close(); process.exit(0); });
     process.stdin.on("end", () => { db.close(); process.exit(0); });
   } else {
-    process.stdout.write(JSON.stringify({ read: attempt("SELECT count(*) FROM sqlite_master"), write: attempt("CREATE TABLE IF NOT EXISTS probe (x INTEGER) STRICT") }) + "\\n");
+    const report = { read: attempt("SELECT count(*) FROM sqlite_master"), write: attempt("CREATE TABLE IF NOT EXISTS probe (x INTEGER) STRICT") };
+    db.close();
+    process.stdout.write(JSON.stringify(report) + "\\n");
   }
 `;
 
-function otherProcess(file: string, role: "hold" | "probe"): Promise<{ output: string; quit: () => Promise<void> }> {
+interface Holder {
+  quit: () => Promise<void>;
+}
+
+interface Report {
+  read: string;
+  write: string;
+}
+
+function otherProcess(file: string, role: "hold"): Promise<Holder>;
+function otherProcess(file: string, role: "probe"): Promise<Report>;
+function otherProcess(file: string, role: "hold" | "probe"): Promise<Holder | Report> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--no-warnings", "-e", OTHER_PROCESS, file, role], { stdio: ["pipe", "pipe", "inherit"] });
     let output = "";
+    const exited = new Promise<number | null>((done) => child.on("exit", done));
+    const quit = async (): Promise<void> => {
+      child.stdin.end("quit");
+      await exited;
+    };
     child.stdout.on("data", (chunk: Buffer) => {
       output += chunk.toString();
-      if (output.includes("\n")) {
-        resolve({
-          output: output.trim(),
-          quit: () =>
-            new Promise((done) => {
-              child.on("exit", () => done());
-              child.stdin.end("quit");
-            }),
-        });
-      }
+      if (role === "hold" && output.includes("\n")) resolve({ quit });
     });
     child.on("error", reject);
-    child.on("exit", (code) => {
-      if (!output.includes("\n")) reject(new Error(`the other process exited with ${code} saying ${JSON.stringify(output)}`));
+    void exited.then((code) => {
+      if (code === 0 && role === "probe") resolve(JSON.parse(output) as Report);
+      else reject(new Error(`the other process, as ${role}, exited with ${code} saying ${JSON.stringify(output)}`));
     });
   });
 }
@@ -105,11 +116,27 @@ describe("node:sqlite driver and other processes", () => {
       const file = onFile.fresh();
       const db = openNodeSqlite(file, { mode: "create", journal });
       db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT");
-      const probe = await otherProcess(file, "probe");
-      expect(JSON.parse(probe.output), journal).toEqual({ read: "code 5", write: "code 5" });
+      expect(await otherProcess(file, "probe"), journal).toEqual({ read: "code 5", write: "code 5" });
       db.close();
-      const after = await otherProcess(file, "probe");
-      expect(JSON.parse(after.output), `${journal} after close`).toEqual({ read: "ok", write: "ok" });
+      expect(await otherProcess(file, "probe"), `${journal} after close`).toEqual({ read: "ok", write: "ok" });
+    }
+  });
+
+  it("an open this process is refused leaves the owner's lock as it was, in either journal mode", async () => {
+    for (const journal of ["wal", "delete"] as const) {
+      const file = onFile.fresh();
+      const owner = openNodeSqlite(file, { mode: "create", journal });
+      owner.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT; INSERT INTO t VALUES (1)");
+      expect(await otherProcess(file, "probe"), journal).toEqual({ read: "code 5", write: "code 5" });
+      expect(() => openNodeSqlite(file, { mode: "readonly" }), journal).toThrow(DatabaseBusy);
+      expect(() => openNodeSqlite(file, { mode: "readwrite" }), journal).toThrow(DatabaseBusy);
+      expect(await otherProcess(file, "probe"), `${journal} after the refusals`).toEqual({ read: "code 5", write: "code 5" });
+      owner.prepare("INSERT INTO t VALUES (2)").run();
+      expect(owner.prepare("SELECT k FROM t").all(), journal).toEqual([{ k: 1 }, { k: 2 }]);
+      owner.close();
+      const again = openNodeSqlite(file, { mode: "readwrite" });
+      expect(again.prepare("SELECT k FROM t").all(), `${journal} after the owner closed`).toEqual([{ k: 1 }, { k: 2 }]);
+      again.close();
     }
   });
 
@@ -117,11 +144,13 @@ describe("node:sqlite driver and other processes", () => {
     const file = onFile.fresh();
     openNodeSqlite(file, { mode: "create", journal: "delete" }).close();
     const reader = openNodeSqlite(file, { mode: "readonly" });
-    const probe = await otherProcess(file, "probe");
-    expect(JSON.parse(probe.output)).toEqual({ read: "ok", write: "code 5" });
+    expect(await otherProcess(file, "probe")).toEqual({ read: "ok", write: "code 5" });
+    const another = openNodeSqlite(file, { mode: "readonly" });
+    expect(another.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+    another.close();
+    expect(await otherProcess(file, "probe"), "after a second reader closed").toEqual({ read: "ok", write: "code 5" });
     reader.close();
-    const after = await otherProcess(file, "probe");
-    expect(JSON.parse(after.output)).toEqual({ read: "ok", write: "ok" });
+    expect(await otherProcess(file, "probe")).toEqual({ read: "ok", write: "ok" });
   });
 
   it("a read-only connection of a WAL file owns it outright: no other connection reads or writes until it closes", async () => {
@@ -130,15 +159,15 @@ describe("node:sqlite driver and other processes", () => {
     db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT; INSERT INTO t VALUES (1)");
     db.close();
     const inspector = openNodeSqlite(file, { mode: "readonly" });
-    const probe = await otherProcess(file, "probe");
-    expect(JSON.parse(probe.output)).toEqual({ read: "code 5", write: "code 5" });
+    expect(await otherProcess(file, "probe")).toEqual({ read: "code 5", write: "code 5" });
+    expect(() => openNodeSqlite(file, { mode: "readonly" })).toThrow(DatabaseBusy);
     expect(() => inspector.exec("INSERT INTO t VALUES (2)")).toThrow(/readonly/);
+    expect(() => inspector.exec("PRAGMA user_version = 7")).toThrow(/readonly/);
     expect(inspector.prepare("SELECT k FROM t").all()).toEqual([{ k: 1 }]);
     expect(inspector.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
     inspector.close();
     expect(Array.from((await readFile(file)).subarray(18, 20)), "still a WAL file").toEqual([2, 2]);
-    const after = await otherProcess(file, "probe");
-    expect(JSON.parse(after.output)).toEqual({ read: "ok", write: "ok" });
+    expect(await otherProcess(file, "probe")).toEqual({ read: "ok", write: "ok" });
     const again = openNodeSqlite(file, { mode: "readwrite" });
     expect(again.prepare("SELECT k FROM t").all()).toEqual([{ k: 1 }]);
     again.close();
@@ -148,7 +177,6 @@ describe("node:sqlite driver and other processes", () => {
     const file = onFile.fresh();
     openNodeSqlite(file, { mode: "create" }).close();
     const holder = await otherProcess(file, "hold");
-    expect(holder.output).toBe("held");
     try {
       expect(() => openNodeSqlite(file, { mode: "readwrite" })).toThrow(DatabaseBusy);
       expect(() => openNodeSqlite(file, { mode: "readonly" })).toThrow(DatabaseBusy);

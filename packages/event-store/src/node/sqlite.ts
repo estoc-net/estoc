@@ -5,7 +5,7 @@
  * ExperimentalWarning on first use.
  */
 
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, statSync } from "node:fs";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
 import { DatabaseBusy, DatabaseExists, DatabaseMissing, InvalidSqlValue, SqliteError } from "../v3/errors.js";
@@ -29,7 +29,7 @@ export interface NodeSqliteOptions {
    * `synchronous=FULL` is the portable snapshot's, whose file must
    * stand alone with rollback-format headers. A `readwrite` open keeps
    * the journal the file has and sets `synchronous` to match; a
-   * `readonly` open changes no page and leaves the journal mode alone.
+   * `readonly` open commits nothing and leaves the journal mode alone.
    */
   journal?: "wal" | "delete";
 }
@@ -44,15 +44,16 @@ const MEMORY = ":memory:";
  * A writable open takes the write lock with an empty immediate
  * transaction — no page is written — so a second open anywhere, this
  * process or another, meets `SQLITE_BUSY` at its first statement and
- * is refused with `DatabaseBusy`. A `readonly` open of a rollback-journal
- * file — a portable snapshot — is a read-only handle that keeps the
- * shared lock its first read takes: writers are excluded for as long as
- * it is open, other readers are not. A `readonly` open of a WAL file
- * takes the write lock exactly as a writable open does, since a WAL
- * reader keeps no lock that a writer would meet, and then forbids every
- * write through `query_only`; SQLite recovers the WAL on open and
- * checkpoints it on close, as it would for any last connection. Either
- * disables extension loading and trusts no schema.
+ * is refused with `DatabaseBusy`. A `readonly` open forbids every
+ * write through `query_only`, disables extension loading, trusts no
+ * schema, and takes the lock its first read leaves it with: on a
+ * rollback-journal file — a portable snapshot — the shared lock, so
+ * writers are excluded for as long as it is open and other readers
+ * are not; on a WAL file the exclusive lock, since a WAL reader keeps
+ * no lock a writer would meet, with SQLite recovering the WAL on open
+ * and checkpointing it on close as it would for any last connection.
+ * Every handle is SQLite's own: a file descriptor opened beside SQLite's
+ * and closed would take this process's locks on the file with it.
  */
 export function openNodeSqlite(path: string, options: NodeSqliteOptions): SqliteDriver {
   requireNodeSqlite();
@@ -62,20 +63,16 @@ export function openNodeSqlite(path: string, options: NodeSqliteOptions): Sqlite
     if (mode === "create") reserve(path);
     else if (!exists(path)) throw new DatabaseMissing(path);
   }
-  const readOnlyHandle = mode === "readonly" && (inMemory || !isWal(path));
-  const db = sqlite(() => new DatabaseSync(path, { readOnly: readOnlyHandle, allowExtension: false, enableForeignKeyConstraints: true }));
+  const db = sqlite(() => new DatabaseSync(path, { allowExtension: false, enableForeignKeyConstraints: true }));
   try {
     db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE");
-    if (readOnlyHandle) {
+    if (mode === "readonly") {
       db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
-      probe(path, () => db.prepare("PRAGMA application_id").get());
+      probe(path, () => journalMode(db));
     } else {
       probe(path, () => db.exec("BEGIN IMMEDIATE; COMMIT"));
-      if (mode === "readonly") db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
-      else {
-        if (mode === "create" && !inMemory) db.exec(`PRAGMA journal_mode = ${options.journal ?? "wal"}`);
-        db.exec(`PRAGMA synchronous = ${journalMode(db) === "wal" ? "NORMAL" : "FULL"}`);
-      }
+      if (mode === "create" && !inMemory) db.exec(`PRAGMA journal_mode = ${options.journal ?? "wal"}`);
+      db.exec(`PRAGMA synchronous = ${journalMode(db) === "wal" ? "NORMAL" : "FULL"}`);
     }
   } catch (err) {
     db.close();
@@ -108,17 +105,6 @@ function exists(path: string): boolean {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw err;
-  }
-}
-
-/** Whether the file's header says WAL: byte 18, the file format write version, is 2 for WAL and 1 for a rollback journal. A file too short to have a header is an empty database, which is not in WAL. */
-function isWal(path: string): boolean {
-  const fd = openSync(path, "r");
-  try {
-    const header = new Uint8Array(19);
-    return readSync(fd, header, 0, header.length, 0) === header.length && header[18] === 2;
-  } finally {
-    closeSync(fd);
   }
 }
 

@@ -99,7 +99,7 @@ export async function openSqlitePool(options: SqlitePoolOptions): Promise<Sqlite
   if (!("WorkerGlobalScope" in globalThis) || "window" in globalThis) {
     throw new Error("the SQLite pool runs in a Worker only: OPFS synchronous access handles are not available on the main thread");
   }
-  const directory = directoryOf(options.directory);
+  const directory = normalizeDirectory(options.directory);
   // One key names the directory to both the lock and the VFS registry, so two spellings of one directory contend for one lock and two directories never share a pool.
   const key = `estoc-sqlite-pool:${directory}`;
   const lock = await takeLock(key);
@@ -122,8 +122,7 @@ export async function openSqlitePool(options: SqlitePoolOptions): Promise<Sqlite
   }
 }
 
-/** `input` as the one spelling of the directory it names: the segments the pool walks from the OPFS root, which it takes with or without a leading slash and with any run of slashes between. */
-function directoryOf(input: string): string {
+function normalizeDirectory(input: string): string {
   const segments = input.split("/").filter((segment) => segment !== "");
   if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
     throw new Error(`${JSON.stringify(input)} is not a pool directory: one or more path segments under the OPFS root, none '.' or '..'`);
@@ -150,6 +149,7 @@ class Pool implements SqlitePool {
   private readonly open_ = new Set<string>();
   private pending = 0;
   private closed = false;
+  private turn: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly sqlite3: Sqlite3Static,
@@ -171,16 +171,12 @@ class Pool implements SqlitePool {
   async open(name: string, mode: OpenMode): Promise<SqliteDriver> {
     const path = pathOf(name);
     const target = `${this.directory}/${name}`;
-    this.pending++;
-    try {
-      this.live();
+    return this.inTurn(async () => {
       const exists = this.has(path);
       if (mode === "create" && exists) throw new DatabaseExists(target);
       if (mode !== "create" && !exists) throw new DatabaseMissing(target);
       if (this.open_.has(name)) throw new DatabaseBusy(target);
       await this.reserve(exists ? 1 : 2);
-      this.live();
-      if (this.open_.has(name)) throw new DatabaseBusy(target);
       const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
       const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
       try {
@@ -195,9 +191,7 @@ class Pool implements SqlitePool {
       }
       this.open_.add(name);
       return new Connection(new WasmConnection(this.sqlite3, db), mode, () => this.open_.delete(name));
-    } finally {
-      this.pending--;
-    }
+    });
   }
 
   async exportFile(name: string): Promise<Uint8Array> {
@@ -210,18 +204,11 @@ class Pool implements SqlitePool {
 
   async importFile(name: string, bytes: Uint8Array): Promise<void> {
     const path = pathOf(name);
-    const target = `${this.directory}/${name}`;
-    this.pending++;
-    try {
-      this.live();
-      if (this.has(path)) throw new DatabaseExists(target);
+    return this.inTurn(async () => {
+      if (this.has(path)) throw new DatabaseExists(`${this.directory}/${name}`);
       await this.reserve(1);
-      this.live();
-      if (this.has(path)) throw new DatabaseExists(target);
       await this.util.importDb(path, bytes);
-    } finally {
-      this.pending--;
-    }
+    });
   }
 
   remove(name: string): void {
@@ -238,6 +225,20 @@ class Pool implements SqlitePool {
     this.util.pauseVfs();
     this.closed = true;
     this.releaseLock();
+  }
+
+  /**
+   * Runs `body` once every open and import started before it has
+   * finished: each looks at the names and the spare handles before it
+   * takes a name and a handle, and two that looked together would both
+   * find a name free or both count one spare handle as theirs.
+   */
+  private inTurn<T>(body: () => Promise<T>): Promise<T> {
+    this.live();
+    this.pending++;
+    const result = this.turn.then(body).finally(() => this.pending--);
+    this.turn = result.catch(() => undefined);
+    return result;
   }
 
   /** Grows the pool until `handles` more files fit: a database takes one, its rollback journal another while a transaction is open. Capacity persists in the directory, so the pool grows once. */

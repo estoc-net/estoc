@@ -1,11 +1,8 @@
 /**
  * What the wasm pool itself must do, beyond the driver cases its
- * connections pass: keep names apart from the files SQLite puts beside
- * them, keep directories apart from each other, stay dead once closed,
- * grow for an import, refuse stored text that is not text, and carry a
- * database out and back in as bytes. Run in the Worker by
- * `sqlite-worker.ts`; the cases take the pool opener so this module
- * loads without the wasm runtime, for the test that lists their names.
+ * connections pass. Run in the Worker by `sqlite-worker.ts`; the cases
+ * take the pool opener so this module loads without the wasm runtime,
+ * for the test that lists their names.
  */
 
 import type { SqlitePool, SqlitePoolOptions } from "../../src/browser.js";
@@ -114,6 +111,48 @@ export const poolCases: PoolCase[] = [
       last.close();
       await pool.close();
       return `${copies.length} copies of ${bytes.byteLength} bytes`;
+    },
+  },
+  {
+    name: "imports started together all land, past the handles the pool had",
+    run: async (open) => {
+      const pool = await open({ directory: "/import-together" });
+      const db = await pool.open("origin", "create");
+      db.exec("CREATE TABLE marker (v INTEGER NOT NULL) STRICT; INSERT INTO marker VALUES (3)");
+      db.close();
+      const bytes = await pool.exportFile("origin");
+      const copies = Array.from({ length: 8 }, (_, i) => `copy-${i}`);
+      await Promise.all(copies.map((name) => pool.importFile(name, bytes)));
+      assertEqual(pool.names(), [...copies, "origin"].sort(), "every copy landed");
+      for (const name of copies) {
+        const copy = await pool.open(name, "readonly");
+        assertEqual(copy.prepare("SELECT v FROM marker").all(), [{ v: 3 }], `${name} reads`);
+        copy.close();
+      }
+      await pool.close();
+    },
+  },
+  {
+    name: "an import and a create of one name started together: one lands, the other is refused, whichever is first",
+    run: async (open) => {
+      const pool = await open({ directory: "/import-or-create" });
+      const db = await pool.open("origin", "create");
+      db.exec("CREATE TABLE marker (v TEXT NOT NULL) STRICT; INSERT INTO marker VALUES ('imported')");
+      db.close();
+      const bytes = await pool.exportFile("origin");
+      const outcomes = await Promise.allSettled([pool.importFile("target", bytes), pool.open("target", "create").then((created) => created.close())]);
+      const refused = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+      assertEqual(refused.length, 1, "exactly one refused");
+      assertEqual((refused[0]?.reason as Error).name, "DatabaseExists", "and refused as taken");
+      const target = await pool.open("target", "readonly");
+      const rows = target.prepare("SELECT name FROM sqlite_master WHERE name = 'marker'").all();
+      assertEqual(rows.length, outcomes[0]?.status === "fulfilled" ? 1 : 0, "the import's content, when the import was the one that landed");
+      if (outcomes[0]?.status === "fulfilled") assertEqual(target.prepare("SELECT v FROM marker").all(), [{ v: "imported" }], "intact");
+      target.close();
+      const backwards = await Promise.allSettled([pool.open("target-2", "create").then((created) => created.close()), pool.importFile("target-2", bytes)]);
+      assertEqual(backwards.map((outcome) => outcome.status), ["fulfilled", "rejected"], "started the other way round, the create lands and the import is refused");
+      assertEqual(((backwards[1] as PromiseRejectedResult).reason as Error).name, "DatabaseExists", "as taken");
+      await pool.close();
     },
   },
   {

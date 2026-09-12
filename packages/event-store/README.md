@@ -95,12 +95,14 @@ connection as `SQLITE_BUSY` at its first statement; a create leaves the
 file in WAL with `synchronous=NORMAL`, the runtime's configuration, or
 with `journal: "delete"` in a rollback journal with `synchronous=FULL`,
 the portable snapshot's, whose file must stand alone with
-rollback-format headers; a read-only open of a rollback-journal file
-keeps the shared lock its first read takes, so writers are excluded
-while other readers are not, and a read-only open of a WAL file takes
-the write lock as a writable open does — a WAL reader keeps no lock a
-writer would meet — and forbids writes through `query_only`, letting
-SQLite recover the WAL on open and checkpoint it on close.
+rollback-format headers; a read-only open forbids writes through
+`query_only` and keeps the lock its first read leaves it with — on a
+rollback-journal file the shared lock, so writers are excluded while
+other readers are not; on a WAL file the exclusive lock, since a WAL
+reader keeps no lock a writer would meet — letting SQLite recover the
+WAL on open and checkpoint it on close. Every handle is SQLite's own:
+a descriptor opened beside SQLite's and closed would take the
+process's locks on the file with it.
 `openSqlitePool({ directory })` under `@estoc/event-store/browser` is
 `@sqlite.org/sqlite-wasm` over its OPFS access-handle pool, in a Worker
 only: the pool owns one OPFS directory, `open(name, mode)` a database
