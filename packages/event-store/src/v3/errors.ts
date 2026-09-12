@@ -92,6 +92,20 @@ export class DamagedObject extends Error {
   }
 }
 
+/**
+ * A stream open on an object when a repair replaced its bytes or a
+ * collection pass removed it: what was handed out so far is not the
+ * object, and the read fails here rather than complete on bytes of two
+ * generations. Not damage — nothing is recorded — and not absence: the
+ * caller opens the object again for what is held now, if anything is.
+ */
+export class InterruptedRead extends Error {
+  constructor(readonly cid: string) {
+    super(`the object ${cid} was replaced or collected while the read was open`);
+    this.name = "InterruptedRead";
+  }
+}
+
 /** A draft root `commit` was given that names no present accepted object: nothing was appended. */
 export class MissingRoot extends Error {
   constructor(readonly cid: string) {

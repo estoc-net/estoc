@@ -1,6 +1,6 @@
 /**
  * What runs in the Worker: the driver cases over the wasm pool, the
- * vault open cases and the event store cases, the pool's own cases,
+ * vault open cases, the event and object store cases, the pool's own cases,
  * and holding a directory against another Worker.
  * Driven by messages from the page script, which
  * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
@@ -9,6 +9,7 @@
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
 import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
 import { eventCases } from "../v3/sqlite/event-cases.js";
+import { objectCases } from "../v3/sqlite/object-cases.js";
 import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
 import { poolCases } from "./pool-cases.js";
 
@@ -66,7 +67,7 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     utf16,
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of [...openCases, ...eventCases]) {
+  for (const c of [...openCases, ...eventCases, ...objectCases]) {
     try {
       const note = await c.run(harness);
       results.push(note === undefined ? { name: c.name } : { name: c.name, note });

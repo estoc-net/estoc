@@ -49,7 +49,7 @@ export { mint, type Minted } from "./mint.js";
 export { MemoryEventStore, type MemoryEventStoreOptions } from "./memory-events.js";
 
 export type { ByteSource, ObjectInfo, Collected, ObjectStore, Preparation } from "./objects.js";
-export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource } from "./objects.js";
+export { rawCidOf, rawCidFromDigest, compareCids, sortCids, chunksOf, hashSource, Packer } from "./objects.js";
 
 export { MemoryObjectStore, MemoryPreparation, type MemoryObjectStoreOptions, DEFAULT_MAX_OBJECT_BYTES, DEFAULT_EXTENT_BYTES } from "./memory-objects.js";
 
@@ -69,6 +69,8 @@ export { createRuntime, openRuntime, openInspector, openPortable } from "./sqlit
 
 export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase } from "./sqlite/events.js";
 
+export { SqliteObjectStore, SqlitePreparation, CHUNK_BYTES, type SqliteObjectStoreOptions, type ObjectStoreDatabase } from "./sqlite/objects.js";
+
 export {
   InvalidJson,
   InvalidEvent,
@@ -78,6 +80,7 @@ export {
   DigestMismatch,
   ObjectTooLarge,
   DamagedObject,
+  InterruptedRead,
   MissingRoot,
   UnreferencedObject,
   UnsupportedOperation,

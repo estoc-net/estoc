@@ -233,6 +233,54 @@ two platforms' SQLite must agree on, run on `node:sqlite` and in a
 Chromium Worker: a NUL in a type, damage stopping writes across a
 reopen, a sparse batch.
 
+Over the same runtime, the object store: `SqliteObjectStore(db, {
+maxObjectBytes, chunkBytes })` over the connection and writability of
+an open handle. A put is hashed as it streams and cut into chunks —
+1 MiB, the format's, the last shorter — staged as they arrive in a
+table of the connection's temporary database, never the vault's file
+and where no read of the store looks, so no more than one chunk is
+held in memory; the CID is known at the end, checked against the one
+`putObject` was given, and the chunks then move under it in one
+`BEGIN IMMEDIATE` transaction with the `objects` row, so an object is
+visible whole or not at all and a source that fails, one over the
+bound or a digest that does not match leaves nothing staged. An
+object already held and sound is one object still, its bytes
+untouched; one known damaged is replaced whole. `prepare()` splits
+the two for the vault's commit: a `SqlitePreparation` stages what is
+put through it, counts it present to its own `has`, and is accepted
+by `publish()` inside the transaction the commit lands in — the
+`publish` callback of `SqliteEventStore.appendAll` — then `settle()`
+once that has committed, which is when the damage of what it
+repaired is cleared, a rollback keeping the old bytes and their
+damage, and `discard()` in any case. `open` streams one chunk a
+pull, rehashing on the way out, and the read after the last verifies
+the size and the digest; `read` is the same walk into one buffer,
+refused before allocation when the object is over `maxBytes`. What a
+read finds wrong — bytes that do not hash to the CID, a chunk
+missing, a chunk past the size, a size that is no count, a key that
+is no CID — is damage known for the rest of the session: `has`,
+`stat`, `open` and `read` of that CID fail with `DamagedObject`,
+`list` fails on reaching it, `damaged()` lists it as `objects/<cid>`
+(or by rowid, when the key is no CID) with what was wrong; nothing
+is persisted, and a reopen finds it again by the read that meets it.
+A write never waits for a reader: a repair or a collection pass
+moves the CID's epoch, and a stream open on the old bytes fails at
+its next chunk with `InterruptedRead` — not damage, not absence —
+rather than read on into bytes of two generations. `collect(keep)`
+checks every keep CID, then deletes every other object and its
+chunks in one transaction, a damaged one among them, and reports the
+CIDs removed in binary-CID order; a kept damaged object stays, its
+damage still known. Over an inspector's handle every write is
+refused with `ReadOnlyVault` before a source is read.
+`objectStoreSuite` runs over it in memory and on files;
+`test/v3/sqlite/objects.test.ts` adds what only a database shows —
+the staging beside a read, a stream across a repair, a key that is
+no CID, a process dying inside its acceptance — and
+`test/v3/sqlite/object-cases.ts` what the two platforms' SQLite must
+agree on, run on `node:sqlite` and in a Chromium Worker: the chunk
+rows, a reopen, a preparation rolled back, damage of each kind,
+collection under an open stream, the inspector.
+
 Everything below is
 version 2, which stays until the vault switches over.
 
