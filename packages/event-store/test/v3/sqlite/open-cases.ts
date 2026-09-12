@@ -119,7 +119,7 @@ export const openCases: OpenCase[] = [
     },
   },
   {
-    name: "a schema object bearing the name of SQLite's page table, or one SQLite would resolve to it, is refused before the encoding is read",
+    name: "a schema object bearing the name of SQLite's page table, or one SQLite would resolve to it, is refused before SQLite's page table is queried",
     run: async (h) => {
       const rename = (as: "TEXT" | "BLOB", suffix: string): string =>
         `UPDATE sqlite_master SET name = CAST(CAST(name AS BLOB) || x'${suffix}' AS ${as}), tbl_name = CAST(CAST(tbl_name AS BLOB) || x'${suffix}' AS ${as}) WHERE name = 'sqlite_dbpage'`;
