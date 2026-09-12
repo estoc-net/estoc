@@ -52,6 +52,9 @@ interface Staged {
   token: number;
 }
 
+/** What accepting a staged object did: held it as new, replaced known-damaged bytes with it, or dropped it for a sound object already held. */
+type Accepted = "new" | "repaired" | "kept";
+
 /** What `sound` finds under a CID: the accepted size, and the epoch a read of it belongs to. */
 interface Present {
   size: number;
@@ -192,13 +195,13 @@ export class SqliteObjectStore implements ObjectStore {
    * new — and reported as a repair, for the caller to clear the damage
    * once the transaction has committed.
    */
-  private accept(staged: Staged): boolean {
+  private accept(staged: Staged): Accepted {
     const cid = staged.cid.text;
     const have = query(this.driver, "SELECT 1 AS present FROM objects WHERE cid = ?", cid).length === 1;
     const repair = have && this.damage.has(cid);
     if (have && !repair) {
       this.drop(staged.token);
-      return false;
+      return "kept";
     }
     if (repair) {
       this.move(cid);
@@ -208,7 +211,7 @@ export class SqliteObjectStore implements ObjectStore {
     run(this.driver, "INSERT INTO objects (cid, size) VALUES (?, ?)", cid, staged.size);
     run(this.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) SELECT ?, chunk_no, bytes FROM temp.staging_chunks WHERE token = ? ORDER BY chunk_no", cid, staged.token);
     this.drop(staged.token);
-    return repair;
+    return repair ? "repaired" : "new";
   }
 
   private move(cid: string): void {
@@ -398,7 +401,7 @@ export interface PreparationSteps {
   stage(want: DaslCid | undefined, source: ByteSource): Promise<Staged>;
   has(cid: Cid): Promise<boolean>;
   inTransaction(): boolean;
-  accept(staged: Staged): boolean;
+  accept(staged: Staged): Accepted;
   drop(token: number): void;
   forgive(cid: string): void;
 }
@@ -441,12 +444,16 @@ export class SqlitePreparation implements Preparation {
     return this.staged.has(cid) || this.steps.has(cid);
   }
 
-  /** Accepts every staged object, inside the caller's transaction; a repair among them is noted for `settle`. */
-  publish(): void {
+  /** Accepts every staged object, inside the caller's transaction; a repair among them is noted for `settle`. Returns how many landed — new or repaired — as opposed to being dropped for an object already held sound. */
+  publish(): number {
     if (!this.steps.inTransaction()) throw new Error("a preparation publishes inside the transaction its commit lands in");
+    let landed = 0;
     for (const staged of this.staged.values()) {
-      if (this.steps.accept(staged)) this.repaired.push(staged.cid.text);
+      const accepted = this.steps.accept(staged);
+      if (accepted === "repaired") this.repaired.push(staged.cid.text);
+      if (accepted !== "kept") landed += 1;
     }
+    return landed;
   }
 
   /** After the transaction committed: the repaired objects are sound again, and nothing is staged. */

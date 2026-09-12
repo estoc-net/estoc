@@ -73,6 +73,9 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  */
 export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
+/** What an ingest publishes beside its events: objects put through the preparation, verified and held unseen until the transaction that accepts the events. */
+export type Stage = (prepared: Preparation) => Promise<void>;
+
 /**
  * The vault as an operation holding the writer lock sees it: the same
  * interface, every call sharing the held lock instead of taking it — a
@@ -94,8 +97,14 @@ export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>
  * check.
  */
 export interface Held extends Vault {
-  /** The store's `ingest`, for validated import and restore. */
-  ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested>;
+  /**
+   * The store's `ingest`, for validated import: `events` read whole,
+   * then classified and accepted in one transaction, together with
+   * whatever `stage` put through the preparation it is given — the
+   * objects an import verified against the source, published with the
+   * events they are held by, or not at all.
+   */
+  ingest(events: AsyncIterable<unknown> | Iterable<unknown>, stage?: Stage): Promise<Ingested>;
   /** One collection pass: `keep` is called here, under the lock, then the unkept are deleted. */
   collect(keep: KeepUnderLock): Promise<Collected>;
   /** Run `op` under the lock already held: nested, shares it. */
@@ -117,6 +126,8 @@ export interface VaultRuntime {
   readonly generation: string;
   /** The vault's identity; the same object `vault.metadata` is. */
   readonly metadata: VaultMetadata;
+  /** Whether writes are admitted: false over an inspector, which refuses every write with `ReadOnlyVault`. */
+  readonly writable: boolean;
   /** The wrapped seed: read by whoever unlocks, rewrapped under the lock. */
   readonly keystore: KeystoreAccess;
   /** The vault, as application code gets it: each operation takes the writer lock for itself. */
@@ -186,6 +197,13 @@ export interface Stores {
   events: EventStore;
   objects: ObjectStore;
   transaction<D extends JsonObject>(body: (prepared: Preparation) => Promise<Draft<D>[]>): Promise<Event<D>[]>;
+  /**
+   * The same for an ingest: `body` prepares objects and returns the
+   * events to ingest, already in canonical form; the events are
+   * classified and accepted, and the prepared objects published, in
+   * one transaction, or nothing is.
+   */
+  ingestion(body: (prepared: Preparation) => Promise<Event[]>): Promise<Ingested>;
 }
 
 /** How a view enters the lock: by taking it, or — already inside — by doing nothing. */
@@ -384,8 +402,8 @@ class HeldView extends View implements Held {
     this.reading = reading ?? this;
   }
 
-  ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
-    return this.mutate(async () => ingestRead(this.stores.events, await readAll(events)));
+  ingest(events: AsyncIterable<unknown> | Iterable<unknown>, stage?: Stage): Promise<Ingested> {
+    return this.mutate(async () => ingestRead(this.stores, await readAll(events), stage));
   }
 
   collect(keep: KeepUnderLock): Promise<Collected> {
@@ -429,9 +447,12 @@ async function readAll(events: AsyncIterable<unknown> | Iterable<unknown>): Prom
   return read;
 }
 
-/** Ingest what `readAll` read: the events to the store, under the lock the caller holds; the rejected reported with the store's own. */
-async function ingestRead(events: EventStore, read: Read): Promise<Ingested> {
-  const outcome = await events.ingest(read.events);
+/** Ingest what `readAll` read: the events to the store in one transaction with what `stage` prepares, under the lock the caller holds; the rejected reported with the store's own. */
+async function ingestRead(stores: Stores, read: Read, stage?: Stage): Promise<Ingested> {
+  const outcome = await stores.ingestion(async (prepared) => {
+    await stage?.(prepared);
+    return read.events;
+  });
   return read.rejected.length === 0 ? outcome : { ...outcome, rejected: [...read.rejected, ...outcome.rejected] };
 }
 
@@ -444,6 +465,8 @@ export interface RuntimeOptions {
   stores: Stores;
   /** The keystore over the runtime's lock: called once, with the runtime whose `locked` a rewrap runs under. */
   keystore: (runtime: VaultRuntime) => KeystoreAccess;
+  /** Whether the stores admit writes; true when left out. What the runtime says of itself, so an import or a restore can refuse an inspector before reading a source. */
+  writable?: boolean;
   /**
    * Asked as each operation asks for the lock, before it queues
    * (`"enter"`), again as it takes the lock (`"run"`), and by each read
@@ -468,6 +491,7 @@ export class Runtime implements VaultRuntime {
   readonly author: AuthorId;
   readonly generation: string;
   readonly metadata: VaultMetadata;
+  readonly writable: boolean;
   readonly keystore: KeystoreAccess;
   readonly stores: Stores;
   readonly vault: Vault;
@@ -475,9 +499,11 @@ export class Runtime implements VaultRuntime {
 
   constructor(options: RuntimeOptions) {
     if (typeof options.stores.transaction !== "function") throw new TypeError("a runtime's stores publish a commit in one transaction: `transaction` is missing");
+    if (typeof options.stores.ingestion !== "function") throw new TypeError("a runtime's stores publish an ingest in one transaction: `ingestion` is missing");
     this.author = options.author;
     this.generation = options.generation;
     this.metadata = checkMetadata(options.metadata);
+    this.writable = options.writable ?? true;
     this.stores = options.stores;
     this.guard = options.guard ?? (() => undefined);
     this.vault = new View(
@@ -520,7 +546,7 @@ export class Runtime implements VaultRuntime {
   async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
     this.guard("enter"); // inside an async function: a throw here is this promise's rejection
     const read = await readAll(events);
-    return this.locked(() => ingestRead(this.stores.events, read));
+    return this.locked(() => ingestRead(this.stores, read));
   }
 }
 
@@ -600,6 +626,11 @@ export class MemoryVault extends Runtime {
           const prepared = objects.prepare();
           const drafts = await body(prepared);
           return events.appendAll(drafts, () => prepared.publish());
+        },
+        ingestion: async (body) => {
+          const prepared = objects.prepare();
+          const incoming = await body(prepared);
+          return events.ingest(incoming, () => prepared.publish());
         },
       },
       keystore: (runtime) => new MemoryKeystore(options.wrapped, (op) => runtime.locked(() => op())),

@@ -12,7 +12,7 @@ import type { Cid } from "../event.js";
 import type { Collected } from "../objects.js";
 import { Runtime, type Stores } from "../vault.js";
 import { SqliteEventStore } from "./events.js";
-import { SqliteLocalState, type LocalState } from "./local.js";
+import { SqliteLocalState, dropCache, type LocalState } from "./local.js";
 import { SqliteObjectStore, type SqliteObjectStoreOptions } from "./objects.js";
 import type { RuntimeDatabase } from "./open.js";
 
@@ -44,8 +44,6 @@ class HistoryBoundObjects extends SqliteObjectStore {
 export class SqliteVault extends Runtime {
   declare readonly stores: Stores & { events: SqliteEventStore; objects: SqliteObjectStore };
   readonly local: LocalState;
-  /** Whether writes are admitted: false over an inspector, whose every write is `ReadOnlyVault`. */
-  readonly writable: boolean;
   private readonly db: RuntimeDatabase;
   private readonly closing: { promise: Promise<void> | undefined };
 
@@ -79,6 +77,20 @@ export class SqliteVault extends Runtime {
             prepared.discard();
           }
         },
+        ingestion: async (body) => {
+          const prepared = objects.prepare();
+          try {
+            const incoming = await body(prepared);
+            const outcome = await events.ingest(incoming, (adding) => {
+              // The cache is what was built from the accepted state; once that state changes under it, it is dropped in the same transaction.
+              if (prepared.publish() + adding > 0) dropCache(db.driver);
+            });
+            prepared.settle();
+            return outcome;
+          } finally {
+            prepared.discard();
+          }
+        },
       },
       keystore: (runtime) => {
         const access = db.keystore((op) => runtime.locked(() => op()));
@@ -90,11 +102,11 @@ export class SqliteVault extends Runtime {
           rewrap: (next) => access.rewrap(next),
         };
       },
+      writable: db.writable,
       guard,
     });
     this.db = db;
     this.closing = closing;
-    this.writable = db.writable;
     this.local = new SqliteLocalState(db.driver, db.writable, () => guard("read"), now ?? Date.now);
   }
 

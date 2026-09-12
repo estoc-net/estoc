@@ -26,6 +26,7 @@ import type { WorkerCaseResult } from "../../browser/sqlite-worker.js";
 import { driverCases } from "./driver-cases.js";
 import { eventCases } from "./event-cases.js";
 import { exportCases } from "./export-cases.js";
+import { importCases } from "./import-cases.js";
 import { objectCases } from "./object-cases.js";
 import { openCases } from "./open-cases.js";
 import { utf16Forged, utf16Snapshot } from "./utf16.js";
@@ -121,6 +122,9 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of exportCases) {
+    it(c.name, () => report(results.get(c.name)));
+  }
+  for (const c of importCases) {
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of poolCases) {

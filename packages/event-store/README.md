@@ -13,7 +13,7 @@ so far is the model, its reference in memory, the SQLite driver the
 persistent stores are written against, the vault's schema and opening
 over it, the event store and the object store over that, the SQLite
 vault over both, and the portable snapshot: export, its validation
-and its inspection; restore and import come next.
+and its inspection, restore and import.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -439,6 +439,72 @@ adds what only a path shows: no sidecar beside the file whatever
 journal the destination was created with, two readers holding it at
 once, an inspector's export, a destination that is not fresh, and a
 file torn under its schema.
+
+Restore and import, both from a snapshot the caller has opened with
+`openPortable` — bounding the file with `maxFileBytes` where it
+should be — and closes afterwards. `restoreVault(source, open, {
+heldRoots, anchor })` builds a new runtime from the snapshot's
+values: the snapshot is validated in full and the credential's anchor
+— given outright, or as the function that unlocks the snapshot's
+wrapper and derives it — compared with the snapshot's own, nothing
+made on a failure of either; then `open("create")` makes the
+destination, laid in one transaction as a runtime with `ready = 0` —
+the schema, the metadata, the wrapper adopted, a fresh replica ID and
+store generation, every event under a fresh position in canonical
+order — and filled object by object through the snapshot's own read,
+rehashed and chunked as an export writes them; checked against what
+validation counted and set ready in one transaction; and handed back
+open, `{ runtime, events, eventBytes, objects, objectBytes }`, for
+the host to build a `SqliteVault` over and reconstruct what the
+events say is unfinished before it runs. No page of the source is
+copied and no SQL of it run. A failure once the destination is made
+closes it and leaves it unready, opening as nothing, for the caller
+to remove; no seed is minted. `importVault(target, source, {
+heldRoots })` merges a snapshot of the same vault into any open
+runtime — the SQLite vault, or the vault in memory, since it works
+through `VaultRuntime` and `Held` — and returns `{ added, duplicates,
+conflicts, objects, repaired }`. Outside the target's lock: an
+inspector is refused with `ReadOnlyVault` before the source is read
+(`VaultRuntime.writable` is new for it); the snapshot is validated in
+full; its anchor is compared with the target's, `AnchorMismatch` for
+another vault's; and its events and object listing are read into
+memory, so the lock never waits on the source. Under the lock: a
+damaged target history is `DamagedHistory`; each source event is
+classified against what the target holds — a duplicate, a conflict
+the target wins and reports, or new — and a new or conflicting event
+under the target's own author is `ForkedAuthor`, the whole import
+refused with nothing written, the recovery being an identity reset;
+the fold runs on the target as it is and on the prospective union,
+held as a vault in memory; every root a new event retains in the
+union, and every root the union holds that the target did not, must
+have bytes in the source or bytes the target holds sound as far as
+it knows — nothing is rehashed — else `IncompleteImport` names each
+and nothing is written; every union-held object the target lacks or
+knows damaged, whose bytes the source has, is staged through the
+target's preparation, verified as it streams, even when no event is
+new; a union-held root outside those requirements that the source
+lacks stays as it is, absent or damaged. Then `Held.ingest(events,
+stage)` — the `stage` callback is new, and `Stores.ingestion` with
+it, the ingest counterpart of `transaction` — publishes the staged
+objects and repairs with every new event and its position in one
+transaction, dropping `local_cache` when anything landed; the
+target's identity, wrapper, options and trace stay. The same snapshot
+again adds nothing and, with nothing to repair and no conflict to
+record, writes nothing. `test/v3/sqlite/import-cases.ts` runs on
+`node:sqlite` and in a Chromium Worker: a restore's runtime checked
+row by row and run on; its refusals before and after the destination
+is made; an import's union, what it reports and keeps, the repeat
+that writes nothing, and the vault in memory as a target; a fork from
+a cloned runtime file, and the import after the identity reset; the
+roots the union requires bytes for, crossed in both directions by a
+fold with a contestable release, and the root held before and after
+that needs none; what an import fills and repairs, damage forgotten
+by a reopen and found again, and the released root it does not
+revive; the source validated before the lock, another vault's
+snapshot and an inspector refused; and an import interrupted at every
+statement of its transaction, or at its `COMMIT`, leaving the whole
+old union or the whole new. `test/v3/sqlite/import.test.ts` adds a
+restore into a destination of either journal.
 
 Everything below is
 version 2, which stays until the vault switches over.

@@ -114,7 +114,13 @@ export class MemoryEventStore implements EventStore {
     return event;
   }
 
-  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
+  /**
+   * `publish`, when given, runs once the input is classified and the
+   * fork check has passed, in the same synchronous step that accepts
+   * the new events, with how many there are: what it publishes lands
+   * with them, and a throw from it accepts none.
+   */
+  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>, publish?: (adding: number) => void): Promise<Ingested> {
     // Read everything first: validation and canonical form are
     // the input's own and need no lock. Then, under the writer lock,
     // classify each input against what is held — duplicate, conflict,
@@ -156,6 +162,7 @@ export class MemoryEventStore implements EventStore {
         staged.set(incoming.event.eventId, incoming);
       }
       if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
+      publish?.(staged.size);
       for (const incoming of staged.values()) {
         this.accept(incoming.event, incoming.text);
         outcome.added += 1;

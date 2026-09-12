@@ -148,7 +148,13 @@ export class SqliteEventStore implements EventStore {
     return last;
   }
 
-  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>): Promise<Ingested> {
+  /**
+   * `publish`, when given, runs inside the transaction once the input
+   * is classified and the fork check has passed, before the new events
+   * are accepted, with how many there are: what it writes lands with
+   * them, and a throw from it accepts none.
+   */
+  async ingest(events: AsyncIterable<unknown> | Iterable<unknown>, publish?: (adding: number) => void): Promise<Ingested> {
     // Read everything first: validation and canonical form are the
     // input's own and need no transaction, which must not wait on a
     // source. Then, in one transaction, classify each input against
@@ -198,6 +204,7 @@ export class SqliteEventStore implements EventStore {
         lookup.finalize();
       }
       if (forked.length > 0) throw new ForkedAuthor(this.author, forked);
+      publish?.(staged.size);
       this.accept([...staged.values()]);
       this.remember(outcome.conflicts);
       outcome.added = staged.size;
