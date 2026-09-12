@@ -158,6 +158,69 @@ export class VaultClosed extends Error {
   }
 }
 
+/**
+ * A value the SQLite driver cannot carry exactly, refused before the
+ * statement runs: an integer outside the safe range, a non-finite
+ * number, a bigint, a boolean, `undefined`, an object, a string with a
+ * NUL or an unpaired surrogate; or a stored integer outside the safe
+ * range, refused on read rather than rounded.
+ */
+export class InvalidSqlValue extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidSqlValue";
+  }
+}
+
+/**
+ * What SQLite itself refused or could not do — a constraint, a strict
+ * type, a read-only database, an I/O error — as one class on every
+ * platform, with SQLite's result code (the extended one where the
+ * platform reports it). A store above decides what it means; the
+ * driver only carries it.
+ */
+export class SqliteError extends Error {
+  constructor(
+    readonly code: number,
+    message: string
+  ) {
+    super(message);
+    this.name = "SqliteError";
+  }
+}
+
+/** Another connection holds the database open — this process, another process, another worker — and this open was refused: ownership is one connection at a time. */
+export class DatabaseBusy extends Error {
+  constructor(readonly target: string) {
+    super(`${target}: another connection holds this database open`);
+    this.name = "DatabaseBusy";
+  }
+}
+
+/** A `create` open whose target already exists: a create never overwrites, and an open never creates. */
+export class DatabaseExists extends Error {
+  constructor(readonly target: string) {
+    super(`${target}: already exists; create refuses an existing target`);
+    this.name = "DatabaseExists";
+  }
+}
+
+/** A `readwrite` or `readonly` open whose target does not exist: an open never creates. */
+export class DatabaseMissing extends Error {
+  constructor(readonly target: string) {
+    super(`${target}: no database there; open never creates one`);
+    this.name = "DatabaseMissing";
+  }
+}
+
+/** A call on a driver connection after `close`: its statements are finalized and its ownership released. */
+export class DatabaseClosed extends Error {
+  constructor() {
+    super("the database connection is closed");
+    this.name = "DatabaseClosed";
+  }
+}
+
 /** An export could not select a complete cut: damage or a conflict in the event set, or a held root missing or damaged; nothing was published. */
 export class IncompleteSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {

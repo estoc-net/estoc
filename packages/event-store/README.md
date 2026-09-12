@@ -9,8 +9,9 @@ as the code form of the
 [event store](../../docs/replica-model/event-store.md), the
 [DASL object profile](../../docs/replica-model/dasl-objects.md) and the
 [SQLite vault](../../docs/replica-model/vault-sqlite.md). What is there
-so far is the model and its reference in memory; the SQLite vault, and
-with it export, restore and import, come next.
+so far is the model, its reference in memory, and the SQLite driver the
+persistent stores are written against; the stores themselves, and with
+them export, restore and import, come next.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -57,6 +58,66 @@ published in the transaction that appends its events, so the two land
 together or not at all. `MemoryVault` is the two memory stores under
 one runtime; `Runtime` builds the same over any two stores and the
 transaction that publishes them, which every backend supplies.
+
+Under the stores to come, the SQLite driver: `SqliteDriver` — one
+synchronous connection, `prepare`d statements with positional
+parameters (`run`, `get`, `all`, `iterate`), `exec`, and `transaction`,
+which does not nest and never spans an `await` — and what a value must
+be to cross it, decided once in `checkParams` for both adapters: text
+without a NUL or an unpaired surrogate, an integer in the safe range,
+any other finite number as a double, bytes (copied at both boundaries,
+so neither side holds the other's buffer), or null; anything else, a
+bigint or a boolean included, is `InvalidSqlValue` before the statement
+runs, and a stored integer outside the safe range is `InvalidSqlValue`
+on the read that meets it, never rounded. Stored text that is not text
+— a NUL inside, invalid UTF-8, which only a foreign file or a cast in
+SQL puts in a TEXT column — is `InvalidSqlValue` where the adapter can
+see the bytes (wasm); `node:sqlite` hands text over already cut at a
+NUL and repaired, so text of a file another party wrote is read as
+`CAST(column AS BLOB)` and decoded with `decodeText`, which refuses
+exactly that, on either platform. What SQLite itself refuses is
+`SqliteError` with its result code on either platform. An open is
+`create`, `readwrite` or `readonly`: a create needs a target nothing is
+at (`DatabaseExists`), the others one that exists (`DatabaseMissing`),
+and a writable open takes ownership — a second open of the same target,
+in this process or another, is `DatabaseBusy` until the first closes;
+a read-only open hardens the connection for a file another party wrote
+(no writes, no extension loading, `trusted_schema` off) and excludes
+writers for as long as it is open. After `close` every call is
+`DatabaseClosed`.
+
+Two adapters. `openNodeSqlite(path, { mode, journal? })` under
+`@estoc/event-store/node` is `node:sqlite` (Node 22.13 or later; it
+prints an ExperimentalWarning on first use): ownership is SQLite's
+exclusive locking mode, taken by an empty immediate transaction so no
+page is written before the vault is validated, and met by any other
+connection as `SQLITE_BUSY` at its first statement; a create leaves the
+file in WAL with `synchronous=NORMAL`, the runtime's configuration, or
+with `journal: "delete"` in a rollback journal with `synchronous=FULL`,
+the portable snapshot's, whose file must stand alone with
+rollback-format headers; a read-only open forbids writes through
+`query_only` and keeps the lock its first read leaves it with — on a
+rollback-journal file the shared lock, so writers are excluded while
+other readers are not; on a WAL file the exclusive lock, since a WAL
+reader keeps no lock a writer would meet — letting SQLite recover the
+WAL on open and checkpoint it on close. Every handle is SQLite's own:
+a descriptor opened beside SQLite's and closed would take the
+process's locks on the file with it.
+`openSqlitePool({ directory })` under `@estoc/event-store/browser` is
+`@sqlite.org/sqlite-wasm` over its OPFS access-handle pool, in a Worker
+only: the pool owns one OPFS directory, `open(name, mode)` a database
+in it (each stored as `<name>.sqlite`, so no name can spell the journal
+SQLite keeps beside another; the pool grows as databases, their
+journals and imports need handles), `exportFile`/`importFile` deliver
+and take a complete database file, and ownership of the directory is a
+Web Lock taken before the pool is installed and held until `close`, so
+a second Worker of the origin is refused before it touches the
+directory; the directory's one normalized spelling names both the lock
+and the VFS, so two spellings contend and two directories never share
+a pool, and a closed pool refuses every call. The driver cases in
+`test/v3/sqlite/driver-cases.ts` run over both, Node on a file and in
+memory and Chromium in a Worker; the pool's own cases are in
+`test/browser/pool-cases.ts`.
 
 Everything below is
 version 2, which stays until the vault switches over.

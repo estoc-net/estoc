@@ -22,6 +22,10 @@
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
     }
   },
   "files": [
@@ -50,6 +54,7 @@
     "@estoc/dasl": "workspace:^",
     "@ipld/dag-pb": "^4.1.7",
     "@noble/hashes": "^1.8.0",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "fflate": "^0.8.2",
     "ipfs-unixfs": "^13.0.0",
     "ipfs-unixfs-importer": "^17.0.1",
