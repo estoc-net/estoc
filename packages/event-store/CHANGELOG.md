@@ -22,8 +22,9 @@
   through the vault's read, rehashed and chunked, 8 MiB a transaction,
   checked against the cut, set ready and closed, and only then is the
   lock released; outside it the file is reopened read-only and
-  validated, without a file bound since the export built it from a
-  bounded cut, and what validation found — `{ events, eventBytes,
+  validated with no file bound — the file is the one the export just
+  built and closed, within `maxBytes` when one was given — and what
+  validation found — `{ events, eventBytes,
   objects, objectBytes }` — is returned. A source failing mid-copy is
   `IncompleteSnapshot`, the destination left unready.
   `openPortable(driver, { maxFileBytes })` bounds its input before
@@ -49,7 +50,9 @@
   usable as a `KeepUnderLock`; known-payload validation is the fold's.
   `EventStore.tally()` — `{ events, bytes }`, the rows counted and
   their canonical bytes summed with no event loaded — is new on both
-  stores and on `Held`, for the export's bound.
+  stores and on `Held`, for the export's bound: SQLite sums the
+  column's lengths, the store in memory keeps a running total moved
+  as each event is accepted, so neither allocates to answer.
   The event store's row decoding, filter SQL and column list are
   exported from its module for the portable reader (`decodeEventRow`,
   `readEventRows`, `eventFilterSql`, `EVENT_COLUMNS`).

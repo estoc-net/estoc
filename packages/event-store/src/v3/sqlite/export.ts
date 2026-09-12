@@ -62,8 +62,9 @@ interface Cut {
  * — then the destination is created, laid as a portable database with
  * `ready = 0`, filled, checked against the cut, set ready, and
  * closed. Outside the lock: the file is reopened read-only and
- * validated in full — a file this export just built from a bounded
- * cut, so without a bound of its own — and closed. A source that
+ * validated in full — with no file bound: the file is the one this
+ * export just built and closed, within `maxBytes` when the caller
+ * gave one — and closed. A source that
  * fails while its bytes are copied is `IncompleteSnapshot` too, the
  * destination left unready. A conflict recorded against an event is a
  * local diagnostic, not damage: the accepted value is exported and

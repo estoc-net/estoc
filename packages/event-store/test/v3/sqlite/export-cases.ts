@@ -107,6 +107,22 @@ function expectedValidated(events: Event[], objects: number, objectBytes: number
   return { events: events.length, eventBytes: events.reduce((n, e) => n + canonicalEventBytes(e).length, 0), objects, objectBytes };
 }
 
+/** Every `TextEncoder.encode` from now until `restore`, counted. */
+function countingEncodes(): { count(): number; restore(): void } {
+  const encode = TextEncoder.prototype.encode;
+  let count = 0;
+  TextEncoder.prototype.encode = function (this: TextEncoder, input?: string): Uint8Array {
+    count += 1;
+    return encode.call(this, input);
+  };
+  return {
+    count: () => count,
+    restore: () => {
+      TextEncoder.prototype.encode = encode;
+    },
+  };
+}
+
 /** `driver` with every statement watched for the largest BLOB it ever handed back. */
 function observing(driver: SqliteDriver): { driver: SqliteDriver; largest(): number; reset(): void } {
   let largest = 0;
@@ -461,9 +477,28 @@ export const exportCases: ExportCase[] = [
       assertEqual(await exportVault(vault, destination(h, target), { heldRoots: counting, maxBytes: payload.eventBytes }), payload, "at the bound");
       await vault.close();
       const memory = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
-      const inMemory = await memory.vault.commit([], Array.from({ length: 8 }, (_, i) => draft([], { i, text: "x".repeat(128 * 1024) })));
+      const inMemory = await memory.vault.commit([], [draft([], { text: "x".repeat(4 * MIB) })]);
       const weight = expectedValidated(inMemory, 0, 0).eventBytes;
-      await assertRejects(() => exportVault(memory as VaultRuntime, destination(h, h.fresh()), { heldRoots: rootsOf, maxBytes: weight - 1 }), "SnapshotTooLarge", "the vault in memory tallies the same way");
+      const refusedInMemory = destination(h, h.fresh());
+      let foldedInMemory = 0;
+      const encoded = countingEncodes();
+      try {
+        await assertRejects(
+          () =>
+            exportVault(memory as VaultRuntime, refusedInMemory, {
+              heldRoots: async (v) => {
+                foldedInMemory += 1;
+                return rootsOf(v);
+              },
+              maxBytes: weight - 1,
+            }),
+          "SnapshotTooLarge",
+          "the vault in memory tallies the same way"
+        );
+      } finally {
+        encoded.restore();
+      }
+      assertEqual([refusedInMemory.created, foldedInMemory, encoded.count()], [0, 0, 0], "no destination made, no fold run, no held text encoded to weigh it");
     },
   },
   {
