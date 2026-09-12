@@ -8,7 +8,7 @@
   1 MiB chunks, staged in the connection's temporary database where
   no read sees them — a file on both platforms, `temp_store` set to
   `FILE` by both adapters and the wasm pool keeping, for every
-  connection open, the handles its journal and temporary files will
+  connection open, the handles its journals and temporary files will
   take, so no open or import in between takes them — under a 2 MiB
   page cache, so memory does not grow with the object
   — within `maxStagedBytes` across every preparation in flight, the

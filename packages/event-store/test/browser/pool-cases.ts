@@ -180,7 +180,39 @@ export const poolCases: PoolCase[] = [
       await putAndRead(4, big, 104);
       for (let i = 0; i < 5; i++) await putAndRead(i, 1024 * 1024 + 1, 200 + i);
       for (const vault of vaults) vault.close();
-      assertEqual(pool.names(), ["vault-0", "vault-1", "vault-2", "vault-3", "vault-4"], "the databases, their temporary files gone with the connections");
+      assertEqual(pool.names(), ["vault-0", "vault-1", "vault-2", "vault-3", "vault-4"], "the databases");
+      await pool.close();
+    },
+  },
+  {
+    name: "a repair whose statement journal outgrows memory finds its handle: with the pool's spare handles taken by imports beside the open connection, a damaged 32 MiB object is put again with its bytes, read back whole and no longer damaged",
+    run: async (open) => {
+      const pool = await open({ directory: "/capacity-repair" });
+      const template = await pool.open("template", "create");
+      template.exec("CREATE TABLE marker (v INTEGER NOT NULL) STRICT");
+      template.close();
+      const bytes = await pool.exportFile("template");
+      const vault = createRuntime(await pool.open("vault", "create"), { metadata: META, wrapped: WRAPPED });
+      for (let i = 0; i < 3; i++) await pool.importFile(`copy-${i}`, bytes);
+      const store = new SqliteObjectStore(vault);
+      const size = 32 * 1024 * 1024;
+      const object = pattern(size, 31);
+      const info = await store.putRaw(object);
+      const damage = vault.driver.prepare("UPDATE object_chunks SET bytes = X'00' WHERE cid = ? AND chunk_no = 0");
+      try {
+        damage.run(info.cid);
+      } finally {
+        damage.finalize();
+      }
+      await assertRejects(() => store.read(info.cid, size), "DamagedObject", "the read that finds the damage");
+      await assertRejects(() => store.has(info.cid), "DamagedObject", "presence while damaged");
+      assertEqual((await store.putObject(info.cid, object)).size, size, "the repair");
+      const back = await store.read(info.cid, size);
+      if (back === null) throw new Error("the repaired object is not there");
+      assertBytes(back, object, "the bytes back");
+      assertEqual(await store.has(info.cid), true, "sound again");
+      vault.close();
+      assertEqual(pool.names(), ["copy-0", "copy-1", "copy-2", "template", "vault"], "the databases");
       await pool.close();
     },
   },
