@@ -119,13 +119,23 @@ export const openCases: OpenCase[] = [
     },
   },
   {
-    name: "a schema object bearing the name of SQLite's page table is refused before the encoding is read",
+    name: "a schema object bearing the name of SQLite's page table, or one SQLite would resolve to it, is refused before the encoding is read",
     run: async (h) => {
-      for (const [what, ddl] of [
-        ["a table", "CREATE TABLE sqlite_dbpage (pgno INTEGER, data BLOB); INSERT INTO sqlite_dbpage VALUES (1, zeroblob(56) || x'00000001')"],
-        ["a table in capitals", "CREATE TABLE SQLITE_DBPAGE (pgno INTEGER, data BLOB)"],
-        ["a view whose SQL cannot be run", "CREATE VIEW sqlite_dbpage AS SELECT 1 AS pgno, abs(-9223372036854775808) AS data"],
-        ["a table whose name is stored as a blob", "CREATE TABLE sqlite_dbpage (pgno INTEGER, data BLOB); UPDATE sqlite_master SET name = CAST(name AS BLOB), tbl_name = CAST(tbl_name AS BLOB) WHERE name = 'sqlite_dbpage'"],
+      const rename = (as: "TEXT" | "BLOB", suffix: string): string =>
+        `UPDATE sqlite_master SET name = CAST(CAST(name AS BLOB) || x'${suffix}' AS ${as}), tbl_name = CAST(CAST(tbl_name AS BLOB) || x'${suffix}' AS ${as}) WHERE name = 'sqlite_dbpage'`;
+      const namesake = (name = "sqlite_dbpage"): string => `the schema has an object named ${name}: a name reserved for SQLite's own`;
+      const nul = "column sqlite_master.name: the stored text has a NUL and cannot cross a SQLite text boundary intact";
+      const table = "CREATE TABLE sqlite_dbpage (pgno INTEGER, data BLOB); INSERT INTO sqlite_dbpage VALUES (1, zeroblob(56) || x'00000001')";
+      const view = "CREATE VIEW sqlite_dbpage AS SELECT 1 AS pgno, abs(-9223372036854775808) AS data";
+      for (const [what, ddl, refusal] of [
+        ["a table", table, namesake()],
+        ["a table in capitals", "CREATE TABLE SQLITE_DBPAGE (pgno INTEGER, data BLOB)", namesake("SQLITE_DBPAGE")],
+        ["a view whose SQL cannot be run", view, namesake()],
+        ["a table whose name is stored as a blob", `${table}; ${rename("BLOB", "")}`, namesake()],
+        ["a table whose stored name runs past a NUL", `${table}; ${rename("TEXT", "0078")}`, nul],
+        ["a table whose stored name ends in a NUL", `${table}; ${rename("TEXT", "00")}`, nul],
+        ["a view whose stored name runs past a NUL", `${view}; ${rename("TEXT", "0078")}`, nul],
+        ["a view whose blob name runs past a NUL", `${view}; ${rename("BLOB", "0078")}`, nul],
       ]) {
         const target = await snapshot(h, (db) => db.exec(`PRAGMA writable_schema = ON; ${ddl}; PRAGMA writable_schema = OFF`));
         for (const [how, attempt] of [
@@ -137,7 +147,7 @@ export const openCases: OpenCase[] = [
             (await attempt()).close();
           } catch (err) {
             assert(err instanceof Error && err.name === "NotAVault", `${what}, ${how}: threw ${String(err)}`);
-            assert(err.message === "the schema has an object named sqlite_dbpage: a name reserved for SQLite's own", `${what}, ${how}: refused with ${err.message}`);
+            assert(err.message === refusal, `${what}, ${how}: refused with ${err.message}`);
             continue;
           }
           throw new Error(`${what}, ${how}: opened`);

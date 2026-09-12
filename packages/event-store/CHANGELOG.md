@@ -15,9 +15,10 @@
   wrapper, anchor (given, or derived by the caller's unlock) and
   control in that order and writing nothing, the text encoding read
   from `PRAGMA encoding` or, on a build without UTF-16 such as the
-  wasm one, from the file header through `sqlite_dbpage` — a file
-  whose schema names an object `sqlite_dbpage` refused before that
-  read on every platform — the singleton rows required to be the ones keyed 1, positions required
+  wasm one, from the file header through `sqlite_dbpage` — every
+  schema name read as bytes first and a file refused where one has a
+  NUL, is not UTF-8 or is `sqlite_dbpage` in any case, before that
+  read and on every platform — the singleton rows required to be the ones keyed 1, positions required
   positive; `openInspector` doing the same without the seed on a
   connection set to refuse every write, taking only a `readwrite`
   driver so it owns the file on every platform; `openPortable`

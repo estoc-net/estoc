@@ -172,8 +172,10 @@ function checkRuntime(driver: SqliteDriver): VaultMetadata {
 function checkHeader(driver: SqliteDriver): void {
   const applicationId = pragma(driver, "application_id");
   if (applicationId !== APPLICATION_ID) throw new NotAVault(`application_id ${String(applicationId)} is not a vault's`);
-  const encoding = textEncoding(driver);
-  if (encoding !== "UTF-8") throw new NotAVault(`the database is encoded ${encoding}, not UTF-8`);
+  const reported = pragma(driver, "encoding");
+  if (reported !== undefined) requireUtf8(reported);
+  checkNames(driver);
+  if (reported === undefined) requireUtf8(headerEncoding(driver));
   const version = pragma(driver, "user_version");
   if (version !== SCHEMA_VERSION) throw new NotAVault(`schema version ${String(version)} is not supported; this reader opens version ${SCHEMA_VERSION}`);
 }
@@ -182,27 +184,41 @@ function pragma(driver: SqliteDriver, name: string): SqlValue | undefined {
   return query(driver, `PRAGMA ${name}`)[0]?.[name];
 }
 
+function requireUtf8(encoding: SqlValue): void {
+  if (encoding !== "UTF-8") throw new NotAVault(`the database is encoded ${String(encoding)}, not UTF-8`);
+}
+
+const PAGE_TABLE = /^sqlite_dbpage$/i;
+
+/**
+ * Every name in the schema, main and temp, read as its stored bytes.
+ * SQLite resolves a name as a NUL-terminated string compared without
+ * regard to ASCII case, so what a query reaches is decided by the bytes
+ * before any NUL: a name that does not decode as text, or that is the
+ * page table's, is refused as one only `writable_schema` could have
+ * written. Runs ahead of the header read that consults that table, and
+ * where no such read is needed all the same, so every platform refuses
+ * the same file for the same reason. The pattern's `i` folds ASCII
+ * only, as SQLite does.
+ */
+function checkNames(driver: SqliteDriver): void {
+  for (const row of query(driver, "SELECT CAST(name AS BLOB) AS name FROM sqlite_master UNION ALL SELECT CAST(name AS BLOB) AS name FROM sqlite_temp_master")) {
+    const name = text(row["name"], "sqlite_master.name");
+    if (PAGE_TABLE.test(name)) throw new NotAVault(`the schema has an object named ${name}: a name reserved for SQLite's own`);
+  }
+}
+
 const ENCODINGS: Record<number, string> = { 1: "UTF-8", 2: "UTF-16le", 3: "UTF-16be" };
 
 /**
- * The text encoding the file declares. `PRAGMA encoding` reports it
- * where SQLite was built with UTF-16 support; a build without reads
- * every file as UTF-8 and reports nothing, and there the declaration
- * is read from the file's own header, through `sqlite_dbpage` where
- * that build has it. A platform with neither is not trusted with a
- * file this reader did not write.
- *
- * A table or view of that name in the file would be what the query
- * reached instead of the page, its rows read or its SQL run before the
- * schema has been checked; SQLite only lets one be made with
- * `writable_schema` on. A file naming one, in any letter case, in the
- * main or the temp schema, is refused first, on every platform alike.
+ * The text encoding the file's header declares, for a build of SQLite
+ * without UTF-16 support: it reads every file as UTF-8 and `PRAGMA
+ * encoding` reports nothing, so the declaration is read from the
+ * header itself through `sqlite_dbpage`, where that build has it. A
+ * platform with neither is not trusted with a file this reader did not
+ * write.
  */
-function textEncoding(driver: SqliteDriver): string {
-  const [named] = query(driver, "SELECT count(*) AS n FROM (SELECT name FROM sqlite_master UNION ALL SELECT name FROM sqlite_temp_master) WHERE CAST(name AS TEXT) = 'sqlite_dbpage' COLLATE NOCASE");
-  if (named?.["n"] !== 0) throw new NotAVault("the schema has an object named sqlite_dbpage: a name reserved for SQLite's own");
-  const reported = pragma(driver, "encoding");
-  if (typeof reported === "string") return reported;
+function headerEncoding(driver: SqliteDriver): string {
   let header: SqlValue | undefined;
   try {
     header = query(driver, "SELECT substr(data, 57, 4) AS encoding FROM sqlite_dbpage WHERE pgno = 1")[0]?.["encoding"];
