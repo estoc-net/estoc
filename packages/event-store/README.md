@@ -60,7 +60,7 @@ together or not at all. `MemoryVault` is the two memory stores under
 one runtime; `Runtime` builds the same over any two stores and the
 transaction that publishes them, which every backend supplies.
 
-Under the stores to come, the SQLite driver: `SqliteDriver` — one
+Under the stores, the SQLite driver: `SqliteDriver` — one
 synchronous connection, `prepare`d statements with positional
 parameters (`run`, `get`, `all`, `iterate`), `exec`, and `transaction`,
 which does not nest and never spans an `await` — and what a value must
@@ -194,7 +194,7 @@ columns that index them, a position each above `last_seq`, `last_seq`
 advanced by as many — so a batch lands whole or not at all and two
 writes never interleave; `appendAll(drafts, publish)` runs `publish`
 inside that transaction, before the events, which is how the SQLite
-vault will publish a commit's objects with its events, a throw from it
+vault publishes a commit's objects with its events, a throw from it
 rolling back what it wrote. A batch is validated index by index, so a
 hole in a sparse array is refused like any value that is not a draft.
 `ingest` reads its whole input first,
@@ -313,10 +313,11 @@ runtime's lock, and the runtime's local state is `vault.local`:
 `options`, JSON by key, kept through every reopen and clearing;
 `cache`, bytes by namespace and key, dropped whole when the identity
 is reset; and `trace`, one entry a row in the order written, scanned
-by type and position and pruned by age and count — each in a
-`local_*` table made on its first write, so a runtime that uses none
-writes none, and `clearCaches()` empties the cache and the trace and
-nothing else. An inspector's vault reads all of it and refuses every
+by type and position and pruned by age and count, a position given
+out once and never again, so a scan `after` a position kept from
+before misses nothing written since — each in a `local_*` table made
+on its first write, so a runtime that uses none writes none, and
+`clearCaches()` empties the cache and the trace and nothing else. An inspector's vault reads all of it and refuses every
 write. The vault stops two ways, and `stopped` says which. Damage to
 the history — found by a read, or by the survey the event store makes
 before its first write and `stopped` asks for — refuses commit,

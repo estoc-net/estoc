@@ -297,6 +297,18 @@ class Statement implements SqliteStatement {
     };
     const iterator: IterableIterator<SqlRow> = {
       next: () => {
+        // Asked at every step, not only when the iterator was made: one
+        // taken before the connection stopped must not run the statement after.
+        try {
+          this.check();
+        } catch (err) {
+          if (this.current === rows) {
+            done();
+            rows.return?.();
+          }
+          throw err;
+        }
+        if (this.current !== rows) return { done: true, value: undefined };
         let result: IteratorResult<SqlRow>;
         try {
           result = rows.next();

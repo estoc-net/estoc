@@ -1,19 +1,10 @@
 /**
  * The version-3 vault over an open SQLite runtime: `SqliteEventStore`
  * and `SqliteObjectStore` on the runtime's one connection under one
- * `Runtime` — the writer lock, the facade application code gets, the
- * held view — with a commit's objects and events published in one
- * transaction, the keystore over the lock, and the runtime's local
- * state. The vault stops two ways. Damage to the history refuses
- * every write — commit, ingest, collection — while reads go on and
- * `damaged()` says what was found; the history is recovered by
- * restoring a validated snapshot into a new runtime. A commit whose
- * outcome SQLite could not report refuses everything, reads included,
- * until the vault is closed and opened again, since only the recovery
- * an open runs can say what landed. Closing admits nothing more,
- * waits for the operations already admitted, then closes the database,
- * which releases ownership; a stream still open fails at its next
- * chunk.
+ * `Runtime`, a commit's objects and events published in one
+ * transaction, the keystore and the runtime's local state behind the
+ * same admission guard as every other entry. What stops the vault, and
+ * how far, `stopped` says; what a close waits for, `close` says.
  */
 
 import { DamagedHistory, UncertainCommit, VaultClosed } from "../errors.js";
@@ -89,7 +80,16 @@ export class SqliteVault extends Runtime {
           }
         },
       },
-      keystore: (runtime) => db.keystore((op) => runtime.locked(() => op())),
+      keystore: (runtime) => {
+        const access = db.keystore((op) => runtime.locked(() => op()));
+        return {
+          read: async () => {
+            guard("read");
+            return access.read();
+          },
+          rewrap: (next) => access.rewrap(next),
+        };
+      },
       guard,
     });
     this.db = db;

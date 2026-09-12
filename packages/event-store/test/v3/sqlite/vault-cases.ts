@@ -13,7 +13,6 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import {
   Connection,
-  SqliteError,
   SqliteVault,
   canonicalEventBytes,
   chunksOf,
@@ -26,11 +25,10 @@ import {
   type Event,
   type Held,
   type OpenMode,
-  type RawConnection,
   type SqliteDriver,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
+import { assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
 
 export interface VaultHarness {
   /** A target no database exists at yet. */
@@ -135,30 +133,6 @@ async function make(h: VaultHarness, target: string, now: () => number): Promise
 async function reopen(h: VaultHarness, target: string, now: () => number, resetIdentity = false): Promise<Made> {
   const db = await openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR, resetIdentity });
   return { vault: new SqliteVault(db, { now }), driver: db.driver };
-}
-
-/**
- * `inner` as the raw connection of another `Connection`, so a case can
- * put itself between the driver's shared layer and the platform:
- * `COMMIT` fails with SQLite's I/O error while `failCommit` says so.
- */
-function rawOver(inner: SqliteDriver, failCommit: () => boolean): RawConnection {
-  return {
-    version: inner.version,
-    exec: (sql) => {
-      if (sql === "COMMIT" && failCommit()) throw new SqliteError(10, "disk I/O error");
-      inner.exec(sql);
-    },
-    prepare: (sql) => {
-      const statement = inner.prepare(sql);
-      return {
-        run: (params) => statement.run(...params).changes,
-        rows: (params) => statement.iterate(...params),
-        finalize: () => statement.finalize(),
-      };
-    },
-    close: () => inner.close(),
-  };
 }
 
 export const vaultCases: VaultCase[] = [
@@ -324,7 +298,7 @@ export const vaultCases: VaultCase[] = [
     },
   },
   {
-    name: "options, cache and trace live in local tables the schema check allows; prune keeps the newest within age and count; clearCaches empties the cache and the trace and keeps the options",
+    name: "options, cache and trace live in local tables the schema check allows; prune keeps the newest within age and count; clearCaches empties the cache and the trace and keeps the options; a trace position is never given out twice",
     run: async (h) => {
       const target = h.fresh();
       const c = clock();
@@ -378,18 +352,26 @@ export const vaultCases: VaultCase[] = [
       assertEqual(await vault.local.trace.prune({ keepMs: 60_000, capRows: 2 }), { pruned: 1 }, "pruned by count");
       assertEqual((await all(vault.local.trace.scan())).map((e) => e.seq), [4, 5], "what the cap kept");
       assertEqual((await vault.local.trace.append("late", {})).seq, 6, "the next seq continues");
-      assertEqual(rows(driver, "SELECT name FROM sqlite_master WHERE name LIKE 'local_%' ORDER BY name"), [{ name: "local_cache" }, { name: "local_options" }, { name: "local_trace" }], "the three tables");
+      assertEqual(rows(driver, "SELECT name FROM sqlite_master WHERE name LIKE 'local_%' ORDER BY name"), [{ name: "local_cache" }, { name: "local_options" }, { name: "local_trace" }, { name: "local_trace_state" }], "the local tables");
       await vault.local.clearCaches();
       assertEqual(await vault.local.cache.get("other", "x"), undefined, "the cache is emptied");
       assertEqual(await all(vault.local.trace.scan()), [], "the trace is emptied");
       assertEqual(await vault.local.options.get("a"), 0, "the options stay");
-      assertEqual((await vault.local.trace.append("after", {})).seq, 1, "the trace starts over");
+      assertEqual((await vault.local.trace.append("after", {})).seq, 7, "the trace continues past a clearing");
+      c.advance(2000);
+      assertEqual(await vault.local.trace.prune({ keepMs: 500, capRows: 10 }), { pruned: 1 }, "age empties the trace");
+      assertEqual((await vault.local.trace.append("aged", {})).seq, 8, "and the next seq continues");
+      assertEqual((await all(vault.local.trace.scan({ after: 7 }))).map((e) => e.seq), [8], "a position kept from before the emptying still reads what came after");
+      assertEqual(await vault.local.trace.prune({ keepMs: 60_000, capRows: 0 }), { pruned: 1 }, "a cap of zero empties the trace");
+      assertEqual((await vault.local.trace.append("capped", {})).seq, 9, "and the next seq continues");
       await vault.close();
       // the tables pass the runtime's schema check on reopen
       const { vault: again } = await reopen(h, target, c.now);
       try {
         assertEqual(await again.local.options.get("a"), 0, "the option after a reopen");
-        assertEqual((await all(again.local.trace.scan())).map((e) => e.type), ["after"], "the trace after a reopen");
+        assertEqual((await all(again.local.trace.scan())).map((e) => e.type), ["capped"], "the trace after a reopen");
+        assertEqual((await again.local.trace.append("reopened", {})).seq, 10, "the seq continues across a reopen");
+        assertEqual((await all(again.local.trace.scan({ after: 8 }))).map((e) => e.seq), [9, 10], "a position kept across the reopen reads what came after");
       } finally {
         await again.close();
       }
@@ -401,7 +383,7 @@ export const vaultCases: VaultCase[] = [
       const target = h.fresh();
       const c = clock();
       let failing = false;
-      const db = createRuntime(new Connection(rawOver(await h.open(target, "create"), () => failing), "create"), { metadata: META, wrapped: WRAPPED });
+      const db = createRuntime(new Connection(rawOver(await h.open(target, "create"), { failCommit: () => failing }), "create"), { metadata: META, wrapped: WRAPPED });
       const vault = new SqliteVault(db, { now: c.now });
       const [first] = await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
       await vault.local.options.set("kept", true);
@@ -434,11 +416,13 @@ export const vaultCases: VaultCase[] = [
     },
   },
   {
-    name: "close admits nothing more, lets the operation in flight finish, then releases ownership: a second open is refused before and succeeds after; a stream open across it fails at its next chunk",
+    name: "close admits nothing more, the keystore included, lets the operation in flight finish, then releases ownership: a second open is refused before and succeeds after; a stream open across it fails at its next chunk",
     run: async (h) => {
       const target = h.fresh();
       const c = clock();
-      const { vault } = await make(h, target, c.now);
+      const seen: string[] = [];
+      const db = createRuntime(new Connection(rawOver(await h.open(target, "create"), { seen }), "create"), { metadata: META, wrapped: WRAPPED });
+      const vault = new SqliteVault(db, { now: c.now });
       const big = bytesOf(2 * MIB + 3, 6);
       const bigCid = cidOf(big);
       await vault.vault.commit([{ cid: bigCid, source: big }], [draft([bigCid])]);
@@ -461,6 +445,10 @@ export const vaultCases: VaultCase[] = [
       await assertRejects(() => vault.vault.commit([], [draft([bigCid])]), "VaultClosed", "a commit after close");
       await assertRejects(() => all(vault.vault.events.scan()), "VaultClosed", "a read after close");
       await assertRejects(() => vault.local.options.keys(), "VaultClosed", "local state after close");
+      const mark = seen.length;
+      await assertRejects(() => vault.keystore.read(), "VaultClosed", "a keystore read after close");
+      await assertRejects(() => vault.keystore.rewrap(REWRAPPED), "VaultClosed", "a rewrap after close");
+      assert(!seen.slice(mark).some((sql) => sql.includes("keystore")), "neither reached the keystore table");
       assertEqual(vault.stopped?.name, "VaultClosed", "stopped by the close");
       resume();
       assertEqual((await inFlight).length, 1, "the commit admitted before the close lands");
