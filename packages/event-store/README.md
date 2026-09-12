@@ -360,14 +360,17 @@ runtime presents, into the destination `open` gives: a function of
 the platform's, `(mode) => openNodeSqlite(path, { mode })` or `(mode)
 => pool.open(name, mode)`, called once to `create` the target and
 once, after the writer has closed, to reopen the file `readonly`.
-Under the operation lock the cut is selected — the wrapper, every
-event in canonical order, and `heldRoots`, the caller's fold of the
-roots the events hold, each root's presence and size checked —
-refused as `IncompleteSnapshot` when the history has damage or a
-held root is absent or known damaged, and as `SnapshotTooLarge` when
-the events' canonical bytes and the held objects' bytes together pass
-`maxBytes`, nothing made in either case. A conflict on record is a
-local diagnostic, not damage: the accepted value is exported and the
+Under the operation lock the cut is selected — first the events'
+tally, their count and canonical bytes from what the store keeps
+beside them, refused as `SnapshotTooLarge` past `maxBytes` before an
+event is read; then the wrapper, every event in canonical order, and
+`heldRoots`, the caller's fold of the roots the events hold, each
+root's presence and size checked, refused as `IncompleteSnapshot`
+when the history has damage or a held root is absent or known
+damaged, and as `SnapshotTooLarge` when the events' bytes and the
+held objects' sizes together pass `maxBytes`, before a chunk is read
+— nothing made in any of these cases. A conflict on record is a local
+diagnostic, not damage: the accepted value is exported and the
 diagnostic is not. Then the destination is created, switched to a
 rollback journal with `synchronous=FULL`, laid in one transaction as
 a portable database with `ready = 0` — the five tables, the metadata,
@@ -377,7 +380,9 @@ format's 1 MiB chunks and written 8 MiB at a time in transactions of
 its own, then checked against the cut and set ready in one
 transaction, and closed; the lock is released only then. Outside the
 lock the file is reopened read-only and validated as a restore would
-validate it, and what the export returns is what validation found:
+validate it — without a file bound, since the export just built it
+from a bounded cut — and what the export returns is what validation
+found:
 the events and their bytes, the objects and theirs. The file is a new
 one, so no page of it ever held what is not in it: no control, no
 position, no local table, no unheld object. A source that fails while
@@ -385,7 +390,12 @@ its bytes are copied is `IncompleteSnapshot` too, the destination
 left unready for the caller to remove; the file's delivery — a path,
 or `pool.exportFile(name)` — is the caller's, once the export has
 returned, and a check for sidecars beside a path is the caller's too.
-`openPortable(driver)` now hands back, beside the metadata and the
+`openPortable(driver, { maxFileBytes })` bounds its input before
+anything else is read: the file's size as its header states it, the
+page count times the page size, which is all SQLite will read of it,
+refused as `SnapshotTooLarge` past the bound, so every row, column,
+chunk and check after it, the validation included, lies within what
+the caller allowed. It now hands back, beside the metadata and the
 wrapper, `vault`: the snapshot as a read-only `Vault` —
 `PortableVault` — scanning the immutable event set in canonical order
 from the five tables alone, its damage reported, its `conflicting`
@@ -396,13 +406,12 @@ anything; a closed snapshot refuses every read with `VaultClosed`.
 A CHECK the file declares is SQL the file supplied: the handle runs
 none of them, `integrity_check` included, and every value they would
 have constrained is checked by the reader. `validatePortable(portable,
-{ heldRoots, maxBytes })` is what a restore or an import runs on an
-open snapshot before trusting a byte of it, in order: SQLite's
-`foreign_key_check`; the bytes the tables declare, read from their
-record headers alone — the chunks holding no more than the objects
-declare, the events and objects together within `maxBytes`, so the
-bound is met before a canonical byte or a chunk is loaded; SQLite's
-`integrity_check`, which nothing is read past when it fails; every
+{ heldRoots })` is what a restore or an import runs on an open
+snapshot before trusting a byte of it, in order: SQLite's
+`foreign_key_check`; the chunks holding no more bytes than the
+objects declare, read from record headers alone, before a chunk is
+loaded; SQLite's `integrity_check`, which nothing is read past when
+it fails; every
 event row decoding to the event its columns name; every `objects` row
 keyed by a CID with a size that is a count; the object set equal to
 `heldRoots` folded from the snapshot's own events; and every object's
@@ -421,9 +430,10 @@ before and after the destination is made, and the conflict that is
 none; a commit, a collection pass and a rewrap waiting on the
 export's lock and landing after without touching the file; the vault
 in memory exporting into the same file; every way a snapshot that
-opens still fails validation; the bound counting the events; a chunk
-longer than its layout never loaded; and a file whose own CHECK every
-row violates, validated on its values. `test/v3/sqlite/export.test.ts`
+opens still fails validation; a file past the bound refused as it is opened; the bound
+counting the events, tallied before one is read; a chunk longer than
+its layout never loaded; and a file whose own CHECK every row
+violates, validated on its values. `test/v3/sqlite/export.test.ts`
 adds what only a path shows: no sidecar beside the file whatever
 journal the destination was created with, two readers holding it at
 once, an inspector's export, a destination that is not fresh, and a

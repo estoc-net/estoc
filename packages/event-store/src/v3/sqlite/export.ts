@@ -32,7 +32,7 @@ export type OpenDestination = (mode: "create" | "readonly") => Promise<SqliteDri
 export interface ExportOptions {
   /** The roots the vault's events hold, folded by the caller under the lock through the held view; what the snapshot carries besides the events. */
   heldRoots: HeldRoots;
-  /** The most bytes of events and objects together the export will copy; a cut holding more is refused with `SnapshotTooLarge` before the destination is made. Unbounded when left out. */
+  /** The most bytes of events and objects together the export will copy: the events' canonical bytes are tallied from what the store keeps beside them, before one is read, and the objects' sizes from their metadata, before a chunk is; a cut past it is `SnapshotTooLarge`, nothing read further and no destination made. Unbounded when left out. */
   maxBytes?: number;
 }
 
@@ -55,17 +55,19 @@ interface Cut {
 /**
  * Exports `runtime` to the destination `open` gives, and validates
  * the file it made. Under the lock: the cut is selected —
- * `IncompleteSnapshot` when the history has damage, or a held root is
- * absent or known damaged, `SnapshotTooLarge` when the events and the
- * held objects together pass `maxBytes`, nothing made in either case
+ * `SnapshotTooLarge` when the events' tally, before one is read, or
+ * the events and the held objects together, before a chunk is, pass
+ * `maxBytes`, `IncompleteSnapshot` when the history has damage or a
+ * held root is absent or known damaged, nothing made in either case
  * — then the destination is created, laid as a portable database with
  * `ready = 0`, filled, checked against the cut, set ready, and
- * closed. Outside the lock: the file is reopened read-only,
- * validated in full and closed. A source that fails while its bytes
- * are copied is `IncompleteSnapshot` too, the destination left
- * unready. A conflict recorded against an event is a local
- * diagnostic, not damage: the accepted value is exported and the
- * diagnostic is not.
+ * closed. Outside the lock: the file is reopened read-only and
+ * validated in full — a file this export just built from a bounded
+ * cut, so without a bound of its own — and closed. A source that
+ * fails while its bytes are copied is `IncompleteSnapshot` too, the
+ * destination left unready. A conflict recorded against an event is a
+ * local diagnostic, not damage: the accepted value is exported and
+ * the diagnostic is not.
  */
 export async function exportVault(runtime: VaultRuntime, open: OpenDestination, options: ExportOptions): Promise<Exported> {
   await runtime.locked(async (held) => {
@@ -82,13 +84,15 @@ export async function exportVault(runtime: VaultRuntime, open: OpenDestination, 
   });
   const portable = openPortable(await open("readonly"));
   try {
-    return await validatePortable(portable, options);
+    return await validatePortable(portable, { heldRoots: options.heldRoots });
   } finally {
     portable.close();
   }
 }
 
 async function select(runtime: VaultRuntime, held: Held, options: ExportOptions): Promise<Cut> {
+  const tallied = await held.tally();
+  if (options.maxBytes !== undefined && tallied.bytes > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, tallied.bytes);
   const problems: { where: string; error: string }[] = [];
   for (const damage of await held.events.damaged()) problems.push({ where: damage.where, error: damage.error });
   if (problems.length > 0) throw new IncompleteSnapshot(problems);

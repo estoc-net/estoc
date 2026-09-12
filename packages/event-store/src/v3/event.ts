@@ -113,6 +113,13 @@ export interface EventStore {
   damaged(): Promise<Damaged[]>;
   /** IDs met with more than one content; for the caller to surface. */
   conflicting(): Promise<Conflict[]>;
+  /** How much the store holds — every row counted, its canonical bytes summed — from what it keeps beside the events, no event loaded. */
+  tally(): Promise<EventTally>;
+}
+
+export interface EventTally {
+  events: number;
+  bytes: number;
 }
 
 // ---- identity -----------------------------------------------------------

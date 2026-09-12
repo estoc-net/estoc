@@ -22,6 +22,7 @@ export type {
   Filter,
   ChangeToken,
   Conflict,
+  EventTally,
   Rejected,
   Damaged,
   Ingested,
@@ -66,7 +67,7 @@ export { Connection, checkParams, decodeText, decodeUtf8, exactInteger, ownBytes
 export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type DatabaseKind } from "./sqlite/schema.js";
 
 export type { Locked, RuntimeDatabase, PortableDatabase, CreateRuntimeOptions, OpenRuntimeOptions } from "./sqlite/open.js";
-export { createRuntime, openRuntime, openInspector, openPortable } from "./sqlite/open.js";
+export { createRuntime, openRuntime, openInspector, openPortable, type OpenPortableOptions } from "./sqlite/open.js";
 
 export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase } from "./sqlite/events.js";
 

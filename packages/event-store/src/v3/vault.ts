@@ -10,7 +10,7 @@
  */
 
 import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject, UnsupportedOperation } from "./errors.js";
-import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested, type Rejected } from "./event.js";
+import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
 import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
@@ -100,6 +100,8 @@ export interface Held extends Vault {
   collect(keep: KeepUnderLock): Promise<Collected>;
   /** Run `op` under the lock already held: nested, shares it. */
   locked<T>(op: (held: Held) => Promise<T>): Promise<T>;
+  /** The store's `tally`: what an export bounds itself by before it reads an event. */
+  tally(): Promise<EventTally>;
 }
 
 /**
@@ -392,6 +394,10 @@ class HeldView extends View implements Held {
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
     return this.enter(() => op(this));
+  }
+
+  tally(): Promise<EventTally> {
+    return this.enter(() => this.stores.events.tally());
   }
 }
 

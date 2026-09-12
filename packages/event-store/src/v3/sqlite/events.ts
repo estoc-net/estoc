@@ -26,6 +26,7 @@ import {
   type Event,
   type EventId,
   type EventStore,
+  type EventTally,
   type Filter,
   type Ingested,
 } from "../event.js";
@@ -283,6 +284,11 @@ export class SqliteEventStore implements EventStore {
     });
     this.surveyed = true;
     return out;
+  }
+
+  async tally(): Promise<EventTally> {
+    const [row] = query(this.driver, "SELECT count(*) AS n, coalesce(sum(length(canonical)), 0) AS bytes FROM events");
+    return { events: Number(row?.["n"]), bytes: Number(row?.["bytes"]) };
   }
 
   async conflicting(): Promise<Conflict[]> {

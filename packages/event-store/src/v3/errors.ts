@@ -302,13 +302,13 @@ export class IncompleteSnapshot extends Error {
   }
 }
 
-/** A snapshot whose events and objects together pass the bound the caller set on what an export copies or a validation reads: refused before a byte of either is read. */
+/** A snapshot past the bound the caller set: on the file a portable open reads, or on the events and objects an export copies; refused before what the bound covers is read. */
 export class SnapshotTooLarge extends Error {
   constructor(
     readonly maxBytes: number,
     readonly bytes: number
   ) {
-    super(`the snapshot holds ${bytes} bytes of events and objects, more than the ${maxBytes}-byte bound`);
+    super(`the snapshot is ${bytes} bytes, more than the ${maxBytes}-byte bound`);
     this.name = "SnapshotTooLarge";
   }
 }

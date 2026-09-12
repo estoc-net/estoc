@@ -24,6 +24,7 @@ import {
   type Event,
   type EventId,
   type EventStore,
+  type EventTally,
   type Filter,
   type Ingested,
 } from "./event.js";
@@ -204,6 +205,12 @@ export class MemoryEventStore implements EventStore {
 
   async damaged(): Promise<Damaged[]> {
     return [];
+  }
+
+  async tally(): Promise<EventTally> {
+    let bytes = 0;
+    for (const { text } of this.held.values()) bytes += new TextEncoder().encode(text).length;
+    return { events: this.held.size, bytes };
   }
 
   async conflicting(): Promise<Conflict[]> {

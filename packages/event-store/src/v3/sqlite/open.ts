@@ -9,7 +9,7 @@
 
 import { v7 } from "uuid";
 
-import { AnchorMismatch, DamagedControl, NotAVault, ReadOnlyVault, SqliteError, VaultClosed } from "../errors.js";
+import { AnchorMismatch, DamagedControl, NotAVault, ReadOnlyVault, SnapshotTooLarge, SqliteError, VaultClosed } from "../errors.js";
 import { isUuidv7, type AuthorId } from "../event.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "../keystore.js";
 import type { Vault } from "../vault.js";
@@ -150,20 +150,36 @@ export function openInspector(driver: SqliteDriver): RuntimeDatabase {
   });
 }
 
+export interface OpenPortableOptions {
+  /**
+   * The most bytes the file may hold, as its header states them — the
+   * page count times the page size, which is all SQLite will read of
+   * it — checked before anything else is: what every row, column,
+   * chunk and check after it, the validation included, lies within.
+   * `SnapshotTooLarge` past it. Unbounded when left out.
+   */
+  maxFileBytes?: number;
+}
+
 /**
  * Opens the portable snapshot in `driver`, which was opened `readonly`
  * — no writes, no extensions, an untrusted schema, no constraint of
  * the file's evaluated — and checks it as far as its metadata and
- * wrapper: the file's identity and rollback-format headers, then the
- * schema, then the two rows that say what it is, and nothing else.
- * Whether its events and objects are what they claim is the
- * validation that comes after, on the same handle.
+ * wrapper: its size within `maxFileBytes`, the file's identity and
+ * rollback-format headers, then the schema, then the two rows that say
+ * what it is, and nothing else. Whether its events and objects are
+ * what they claim is the validation that comes after, on the same
+ * handle.
  */
-export function openPortable(driver: SqliteDriver): PortableDatabase {
+export function openPortable(driver: SqliteDriver, options: OpenPortableOptions = {}): PortableDatabase {
   return closingOnFailure(driver, () => {
     requireMode(driver, "readonly");
     // A CHECK the file declares is SQL the file supplied: not run, even by `integrity_check`. Every value it would have constrained is checked by the reader itself.
     driver.exec("PRAGMA ignore_check_constraints = ON");
+    if (options.maxFileBytes !== undefined) {
+      const bytes = Number(pragma(driver, "page_count")) * Number(pragma(driver, "page_size"));
+      if (!(bytes <= options.maxFileBytes)) throw new SnapshotTooLarge(options.maxFileBytes, bytes);
+    }
     checkHeader(driver);
     if (pragma(driver, "journal_mode") === "wal") throw new NotAVault("a WAL file is not a portable snapshot: one stands alone with rollback-format headers");
     checkSchema(driver, "portable");

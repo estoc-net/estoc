@@ -3,7 +3,7 @@
  * whether it is one. Nothing here writes.
  */
 
-import { DamagedObject, InvalidSnapshot, InvalidSqlValue, SnapshotTooLarge, SqliteError, UnsupportedOperation } from "../errors.js";
+import { DamagedObject, InvalidSnapshot, InvalidSqlValue, SqliteError, UnsupportedOperation } from "../errors.js";
 import { matches, type Cid, type Damaged, type Event, type Filter } from "../event.js";
 import type { VaultMetadata } from "../keystore.js";
 import { chunksOf, rawCidOf, sortCids } from "../objects.js";
@@ -91,8 +91,6 @@ export class PortableVault implements Vault {
 export interface ValidateOptions {
   /** The roots the snapshot's events hold, folded by the caller from the snapshot's own `vault`: the object set must be exactly these. */
   heldRoots: HeldRoots;
-  /** The most bytes of events and objects together the validation will read; a snapshot holding more is refused with `SnapshotTooLarge` before a byte of either is read. Unbounded when left out. */
-  maxBytes?: number;
 }
 
 /** What a validated snapshot holds: its events and their canonical bytes in all, its objects and their bytes in all. */
@@ -107,16 +105,16 @@ export interface Validated {
  * Checks that the open snapshot `portable` is a complete, sound
  * version-3 snapshot, and says what it holds; `InvalidSnapshot`
  * naming every problem found otherwise. In order: SQLite's foreign-key
- * check; the bytes the tables declare, from their lengths alone — the
- * chunks holding no more than the objects declare, events and objects
- * together within `maxBytes`; SQLite's integrity check, which nothing
+ * check; the chunks holding no more bytes than the objects declare,
+ * from record headers alone; SQLite's integrity check, which nothing
  * is read past when it fails; every event row decoding to the event
  * its columns name; every `objects` row keyed by a CID with a size
  * that is a count; the object set equal to `heldRoots` of the events,
  * folded by the caller; and every object's chunks read through,
  * contiguous and of the format's lengths, and hashing to the CID. What
  * SQLite itself cannot read is a problem like the others. Nothing is
- * written.
+ * written. The work is bounded by the file, which `openPortable`
+ * bounds when asked to: nothing here reads past it.
  */
 export async function validatePortable(portable: PortableDatabase, options: ValidateOptions): Promise<Validated> {
   try {
@@ -136,7 +134,6 @@ async function validate(portable: PortableDatabase, options: ValidateOptions): P
   if (problems.length > 0) throw new InvalidSnapshot(problems);
   const declared = declaredBytes(driver);
   if (declared.chunks > declared.objects) throw new InvalidSnapshot([{ where: "object_chunks", error: `hold ${declared.chunks} bytes where the objects declare ${declared.objects}` }]);
-  if (options.maxBytes !== undefined && declared.events + declared.objects > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, declared.events + declared.objects);
   const integrity = query(driver, "PRAGMA integrity_check").map((row) => String(row["integrity_check"]));
   if (integrity.length !== 1 || integrity[0] !== "ok") throw new InvalidSnapshot([{ where: "database", error: `integrity_check: ${integrity.join("; ")}` }]);
   for (const damage of await vault.events.damaged()) problems.push({ where: damage.where, error: damage.error });
@@ -186,8 +183,8 @@ async function validate(portable: PortableDatabase, options: ValidateOptions): P
 /**
  * The bytes the tables declare — canonical event bytes, object sizes,
  * chunk bytes — read from the record headers alone, which is what
- * `length()` of a BLOB column costs: what a bound is checked against
- * before any of them is loaded.
+ * `length()` of a BLOB column costs: compared before any of them is
+ * loaded, and reported.
  */
 function declaredBytes(driver: SqliteDriver): { events: number; objects: number; chunks: number } {
   const [row] = query(
