@@ -191,8 +191,16 @@ const ENCODINGS: Record<number, string> = { 1: "UTF-8", 2: "UTF-16le", 3: "UTF-1
  * is read from the file's own header, through `sqlite_dbpage` where
  * that build has it. A platform with neither is not trusted with a
  * file this reader did not write.
+ *
+ * A table or view of that name in the file would be what the query
+ * reached instead of the page, its rows read or its SQL run before the
+ * schema has been checked; SQLite only lets one be made with
+ * `writable_schema` on. A file naming one, in any letter case, in the
+ * main or the temp schema, is refused first, on every platform alike.
  */
 function textEncoding(driver: SqliteDriver): string {
+  const [named] = query(driver, "SELECT count(*) AS n FROM (SELECT name FROM sqlite_master UNION ALL SELECT name FROM sqlite_temp_master) WHERE CAST(name AS TEXT) = 'sqlite_dbpage' COLLATE NOCASE");
+  if (named?.["n"] !== 0) throw new NotAVault("the schema has an object named sqlite_dbpage: a name reserved for SQLite's own");
   const reported = pragma(driver, "encoding");
   if (typeof reported === "string") return reported;
   let header: SqlValue | undefined;

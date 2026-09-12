@@ -1,8 +1,8 @@
 /**
  * Creating and opening the vault over `node:sqlite`: the cross-platform
- * open cases on files, and what only a file on disk can show — a second
- * process, a damaged control row, a crash in the middle of a rewrap,
- * the file untouched by a refused open.
+ * open cases on files; what only a file on disk can show — a second
+ * process, a crash in the middle of a rewrap, the file untouched by a
+ * refused open; and the counterexamples run here alone, in one place.
  */
 
 import { spawn } from "node:child_process";
@@ -61,7 +61,6 @@ const open = (file: string, mode: OpenMode, journal?: "wal" | "delete"): SqliteD
 const create = (file: string, journal?: "wal" | "delete"): RuntimeDatabase => createRuntime(open(file, "create", journal), { metadata: META, wrapped: WRAPPED });
 const locked: Locked = (op) => new WriterLock().run(op);
 
-/** Runs `sql` on `file` through a connection of its own, closed after. */
 function alter(file: string, sql: string): void {
   const db = open(file, "readwrite");
   try {

@@ -38,12 +38,9 @@ export function checkMetadata(value: unknown): VaultMetadata {
 }
 
 /**
- * The profile of the wrapper `@estoc/keystore` version 3 seals a seed
- * in, as far as it can be checked without the passphrase: PBES2 with
- * HMAC-SHA-512 wrapping a 256-bit content key with AES key wrap, the
- * 32-byte seed under AES-256-GCM, and nothing else in the protected
- * header. The iteration bound is the one the package itself refuses to
- * unseal beyond.
+ * The wrapper `@estoc/keystore` version 3 seals a seed in, as far as it
+ * can be checked without the passphrase. The iteration bound is the one
+ * the package itself refuses to unseal beyond.
  */
 const PROFILE = {
   alg: "PBES2-HS512+A256KW",

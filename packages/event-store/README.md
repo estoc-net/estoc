@@ -153,7 +153,9 @@ every event (`DamagedControl` otherwise, and nothing is made up in
 their place) — and writes nothing. The text encoding is read from
 `PRAGMA encoding` where SQLite was built with UTF-16 support and from
 the file's header through `sqlite_dbpage` where it was not, as the
-wasm build is; a platform with neither is refused a file it did not
+wasm build is — a file whose schema names an object `sqlite_dbpage`,
+which only `writable_schema` allows, is refused before that read on
+every platform; a platform with neither is refused a file it did not
 write. The metadata and keystore rows are likewise the one keyed 1
 each: the file's own constraints are not trusted to have kept it so.
 `openInspector(driver)` applies the same checks without the seed on a

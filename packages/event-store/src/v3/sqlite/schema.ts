@@ -192,7 +192,7 @@ export function checkSchema(driver: SqliteDriver, kind: DatabaseKind): void {
 }
 
 function checkTable(driver: SqliteDriver, name: string, expected: TableShape, kind: DatabaseKind): void {
-  const listed = query(driver, "SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?", name);
+  const listed = query(driver, "SELECT strict FROM pragma_table_list(?) WHERE schema = 'main'", name);
   if (listed[0]?.["strict"] !== 1) throw new NotAVault(`table ${name} is not STRICT`);
   const columns = query(driver, 'SELECT CAST(name AS BLOB) AS name, CAST(type AS BLOB) AS type, "notnull" AS not_null, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid', name).map((row) => ({
     name: text(row["name"], `${name} column`),

@@ -3,7 +3,8 @@
  * as cases free of any test framework: run over `node:sqlite` by
  * `open.test.ts` and over the wasm pool in a Chromium Worker by
  * `browser-driver.test.ts`. What only a file on disk can show — a
- * second process, a damaged control row — stays in the Node test.
+ * second process, a crash mid-rewrap — is in the Node test, with the
+ * counterexamples run there alone.
  */
 
 import { createRuntime, createTables, openInspector, openPortable, openRuntime, type OpenMode, type SqliteDriver } from "../../../src/v3/index.js";
@@ -115,6 +116,33 @@ export const openCases: OpenCase[] = [
         notes.push(`${what}: ${refusals.join(", ")}`);
       }
       return notes.join("; ");
+    },
+  },
+  {
+    name: "a schema object bearing the name of SQLite's page table is refused before the encoding is read",
+    run: async (h) => {
+      for (const [what, ddl] of [
+        ["a table", "CREATE TABLE sqlite_dbpage (pgno INTEGER, data BLOB); INSERT INTO sqlite_dbpage VALUES (1, zeroblob(56) || x'00000001')"],
+        ["a table in capitals", "CREATE TABLE SQLITE_DBPAGE (pgno INTEGER, data BLOB)"],
+        ["a view whose SQL cannot be run", "CREATE VIEW sqlite_dbpage AS SELECT 1 AS pgno, abs(-9223372036854775808) AS data"],
+        ["a table whose name is stored as a blob", "CREATE TABLE sqlite_dbpage (pgno INTEGER, data BLOB); UPDATE sqlite_master SET name = CAST(name AS BLOB), tbl_name = CAST(tbl_name AS BLOB) WHERE name = 'sqlite_dbpage'"],
+      ]) {
+        const target = await snapshot(h, (db) => db.exec(`PRAGMA writable_schema = ON; ${ddl}; PRAGMA writable_schema = OFF`));
+        for (const [how, attempt] of [
+          ["portable", async () => openPortable(await h.open(target, "readonly"))],
+          ["runtime", async () => openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR })],
+          ["inspector", async () => openInspector(await h.open(target, "readwrite"))],
+        ] as const) {
+          try {
+            (await attempt()).close();
+          } catch (err) {
+            assert(err instanceof Error && err.name === "NotAVault", `${what}, ${how}: threw ${String(err)}`);
+            assert(err.message === "the schema has an object named sqlite_dbpage: a name reserved for SQLite's own", `${what}, ${how}: refused with ${err.message}`);
+            continue;
+          }
+          throw new Error(`${what}, ${how}: opened`);
+        }
+      }
     },
   },
   {
