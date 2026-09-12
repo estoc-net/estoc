@@ -191,3 +191,57 @@ export async function hashSource(
   }
   return { cid: rawCidFromDigest(hash.digest()), size };
 }
+
+/**
+ * Chunks of any size into extents of one size, each handed to `sealed`
+ * as soon as it is full and `finish` handing over whatever remains, so
+ * no more than one extent's worth of bytes is held here at a time and
+ * nothing is allocated ahead of the bytes that arrive. Each incoming
+ * chunk is copied — the caller may reuse its buffer — as `new
+ * Uint8Array(view)`, never `slice()`: a `Buffer` is a `Uint8Array`
+ * whose `slice` is a view, and what a store holds must be memory of its
+ * own, or the source could rewrite an accepted object.
+ */
+export class Packer {
+  private parts: Uint8Array[] = [];
+  private filled = 0;
+
+  constructor(
+    private readonly extentBytes: number,
+    private readonly sealed: (extent: Uint8Array) => void
+  ) {}
+
+  push(chunk: Uint8Array): void {
+    let at = 0;
+    while (at < chunk.length) {
+      const take = Math.min(this.extentBytes - this.filled, chunk.length - at);
+      this.parts.push(new Uint8Array(chunk.subarray(at, at + take)));
+      this.filled += take;
+      at += take;
+      if (this.filled === this.extentBytes) this.seal();
+    }
+  }
+
+  /** Seals the last extent, shorter than the rest; nothing for an empty object. */
+  finish(): void {
+    if (this.filled > 0) this.seal();
+  }
+
+  private seal(): void {
+    const extent = concat(this.parts, this.filled);
+    this.parts = [];
+    this.filled = 0;
+    this.sealed(extent);
+  }
+}
+
+function concat(parts: Uint8Array[], size: number): Uint8Array {
+  if (parts.length === 1) return parts[0] as Uint8Array;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}

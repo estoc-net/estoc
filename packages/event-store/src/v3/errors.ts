@@ -92,6 +92,33 @@ export class DamagedObject extends Error {
   }
 }
 
+/**
+ * A put refused because the bytes staged across every preparation in
+ * flight would pass the store's staging bound: the temporary space a
+ * store uses is bounded like an object's size is, and excess input is
+ * refused, not held. Nothing of this put is staged; the others stand.
+ */
+export class StagingFull extends Error {
+  constructor(readonly maxStagedBytes: number, staged: number) {
+    super(`${staged} bytes are staged across the preparations in flight; this put would take them past the ${maxStagedBytes}-byte staging bound`);
+    this.name = "StagingFull";
+  }
+}
+
+/**
+ * A stream open on an object when a repair replaced its bytes or a
+ * collection pass removed it: what was handed out so far is not the
+ * object, and the read fails here rather than complete on bytes of two
+ * generations. Not damage — nothing is recorded — and not absence: the
+ * caller opens the object again for what is held now, if anything is.
+ */
+export class InterruptedRead extends Error {
+  constructor(readonly cid: string) {
+    super(`the object ${cid} was replaced or collected while the read was open`);
+    this.name = "InterruptedRead";
+  }
+}
+
 /** A draft root `commit` was given that names no present accepted object: nothing was appended. */
 export class MissingRoot extends Error {
   constructor(readonly cid: string) {

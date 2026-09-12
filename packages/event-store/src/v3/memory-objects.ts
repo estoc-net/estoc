@@ -23,7 +23,7 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { DamagedObject, DigestMismatch, ObjectTooLarge } from "./errors.js";
 import type { Cid } from "./event.js";
-import { hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore, type Preparation } from "./objects.js";
+import { Packer, hashSource, rawCidOf, sortCids, type ByteSource, type Collected, type ObjectInfo, type ObjectStore, type Preparation } from "./objects.js";
 
 /** The accepted-size bound a store has when given none: 1 GiB. */
 export const DEFAULT_MAX_OBJECT_BYTES = 1024 * 1024 * 1024;
@@ -58,9 +58,11 @@ export class MemoryObjectStore implements ObjectStore {
   }
 
   async putRaw(source: ByteSource): Promise<ObjectInfo> {
-    const packer = new Packer(this.extentBytes);
+    const extents: Uint8Array[] = [];
+    const packer = new Packer(this.extentBytes, (extent) => extents.push(extent));
     const { cid, size } = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
-    return this.accept({ cid, extents: packer.extents(), size });
+    packer.finish();
+    return this.accept({ cid, extents, size });
   }
 
   async putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo> {
@@ -69,10 +71,12 @@ export class MemoryObjectStore implements ObjectStore {
 
   private async verify(cid: Cid, source: ByteSource): Promise<Held> {
     const want = rawCidOf(cid);
-    const packer = new Packer(this.extentBytes);
+    const extents: Uint8Array[] = [];
+    const packer = new Packer(this.extentBytes, (extent) => extents.push(extent));
     const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
+    packer.finish();
     if (got.cid.text !== want.text) throw new DigestMismatch(want.text, got.cid.text);
-    return { cid: want, extents: packer.extents(), size: got.size };
+    return { cid: want, extents, size: got.size };
   }
 
   /**
@@ -264,55 +268,4 @@ function info(cid: DaslCid, size: number): ObjectInfo {
 function bound(name: string, value: number): number {
   if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${name} is a non-negative integer`);
   return value;
-}
-
-/**
- * Chunks of any size into extents of one size: each incoming chunk is
- * copied — the caller may reuse its buffer — into the extent being
- * filled, sealed when full; the last extent is whatever remains. No
- * more than one extent's worth of bytes is unsealed at a time, and
- * nothing is allocated ahead of the bytes that arrive. The copy is `new
- * Uint8Array(view)`, never `slice()`: a `Buffer` is a `Uint8Array`
- * whose `slice` is a view, and what the store holds must be memory of
- * its own, or the source could rewrite an accepted object.
- */
-class Packer {
-  private readonly sealed: Uint8Array[] = [];
-  private parts: Uint8Array[] = [];
-  private filled = 0;
-
-  constructor(private readonly extentBytes: number) {}
-
-  push(chunk: Uint8Array): void {
-    let at = 0;
-    while (at < chunk.length) {
-      const take = Math.min(this.extentBytes - this.filled, chunk.length - at);
-      this.parts.push(new Uint8Array(chunk.subarray(at, at + take)));
-      this.filled += take;
-      at += take;
-      if (this.filled === this.extentBytes) this.seal();
-    }
-  }
-
-  private seal(): void {
-    this.sealed.push(concat(this.parts, this.filled));
-    this.parts = [];
-    this.filled = 0;
-  }
-
-  /** The extents so far; none for an empty object. */
-  extents(): Uint8Array[] {
-    return this.filled === 0 ? this.sealed : [...this.sealed, concat(this.parts, this.filled)];
-  }
-}
-
-function concat(parts: Uint8Array[], size: number): Uint8Array {
-  if (parts.length === 1) return parts[0] as Uint8Array;
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const part of parts) {
-    out.set(part, at);
-    at += part.length;
-  }
-  return out;
 }

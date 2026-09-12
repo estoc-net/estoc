@@ -1,14 +1,17 @@
 /**
  * What runs in the Worker: the driver cases over the wasm pool, the
- * vault open cases and the event store cases, the pool's own cases,
+ * vault open cases, the event and object store cases, the pool's own cases,
  * and holding a directory against another Worker.
  * Driven by messages from the page script, which
  * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
  */
 
+import type { Sqlite3Static } from "@sqlite.org/sqlite-wasm";
+
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
 import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
 import { eventCases } from "../v3/sqlite/event-cases.js";
+import { objectCases, type ObjectHarness } from "../v3/sqlite/object-cases.js";
 import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
 import { poolCases } from "./pool-cases.js";
 
@@ -59,14 +62,26 @@ async function runCases(directory: string): Promise<WorkerCaseResult[]> {
 async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; forged: Uint8Array }): Promise<WorkerCaseResult[]> {
   const pool = await openSqlitePool({ directory });
   let n = 0;
-  const harness: OpenHarness = {
+  // The runtime the pool was made over, for what SQLite holds: no part of the pool's interface.
+  const { sqlite3 } = pool as unknown as { sqlite3: Sqlite3Static };
+  const memoryUsed = (): number => {
+    const out = sqlite3.wasm.alloc(8);
+    try {
+      sqlite3.capi.sqlite3_status(sqlite3.capi.SQLITE_STATUS_MEMORY_USED, out, out + 4, 0);
+      return sqlite3.wasm.peek32(out);
+    } finally {
+      sqlite3.wasm.dealloc(out);
+    }
+  };
+  const harness: OpenHarness & ObjectHarness = {
     fresh: () => `vault-${n++}`,
     open: (target, mode) => pool.open(target, mode),
     importFile: (target, bytes) => pool.importFile(target, bytes),
     utf16,
+    memoryUsed,
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of [...openCases, ...eventCases]) {
+  for (const c of [...openCases, ...eventCases, ...objectCases]) {
     try {
       const note = await c.run(harness);
       results.push(note === undefined ? { name: c.name } : { name: c.name, note });
