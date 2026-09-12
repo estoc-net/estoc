@@ -10,7 +10,7 @@
  */
 
 import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject, UnsupportedOperation } from "./errors.js";
-import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type Ingested, type Rejected } from "./event.js";
+import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
 import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
@@ -61,6 +61,19 @@ export interface Vault {
 export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
 /**
+ * The roots the events of a vault hold, folded from what it reads
+ * through `vault`: what an export copies, and what a snapshot must
+ * hold exactly to validate. Computed by the caller, since only the
+ * vault's own folds know which roots an event retains and which it
+ * released; the runtime checks each CID. A `HeldRoots` serves as a
+ * `KeepUnderLock` too, reading through the held view. Whether every
+ * known payload is valid is decided here as well, by the layer that
+ * knows them: what the fold throws is what the export or validation
+ * fails with.
+ */
+export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
+
+/**
  * The vault as an operation holding the writer lock sees it: the same
  * interface, every call sharing the held lock instead of taking it — a
  * read nested inside a commit, an import or an export neither waits for
@@ -87,6 +100,8 @@ export interface Held extends Vault {
   collect(keep: KeepUnderLock): Promise<Collected>;
   /** Run `op` under the lock already held: nested, shares it. */
   locked<T>(op: (held: Held) => Promise<T>): Promise<T>;
+  /** The store's `tally`: what an export bounds itself by before it reads an event. */
+  tally(): Promise<EventTally>;
 }
 
 /**
@@ -379,6 +394,10 @@ class HeldView extends View implements Held {
 
   locked<T>(op: (held: Held) => Promise<T>): Promise<T> {
     return this.enter(() => op(this));
+  }
+
+  tally(): Promise<EventTally> {
+    return this.enter(() => this.stores.events.tally());
   }
 }
 

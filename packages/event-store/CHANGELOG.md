@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+- **The portable snapshot: export, validation, inspection.**
+  `exportVault(runtime, open, { heldRoots, maxBytes })` in
+  `@estoc/event-store/v3` builds a portable snapshot of any runtime —
+  the SQLite vault, an inspector's, the vault in memory — into the
+  destination `open` gives (`(mode) => openNodeSqlite(path, { mode })`,
+  `(mode) => pool.open(name, mode)`): under the operation lock the
+  cut is selected — the events' tally first, from what the store
+  keeps beside them, refused as the new `SnapshotTooLarge` past
+  `maxBytes` before an event is read; then the wrapper, every event,
+  the caller's `heldRoots` fold with each root present and sound,
+  refused as `IncompleteSnapshot` on damage or a root absent or known
+  damaged, or as `SnapshotTooLarge` when the events' bytes and the
+  objects' sizes together pass `maxBytes`, before a chunk is read —
+  nothing made; a conflict on record is a diagnostic, not damage, and
+  does not refuse the export. The destination is then created, put in a rollback
+  journal with `synchronous=FULL`, laid as a portable database with
+  `ready = 0` in one transaction, filled object by object streamed
+  through the vault's read, rehashed and chunked, 8 MiB a transaction,
+  checked against the cut, set ready and closed, and only then is the
+  lock released; outside it the file is reopened read-only and
+  validated with no file bound — the file is the one the export just
+  built and closed, its event and object payload within `maxBytes`
+  when one was given — and what validation found — `{ events, eventBytes,
+  objects, objectBytes }` — is returned. A source failing mid-copy is
+  `IncompleteSnapshot`, the destination left unready.
+  `openPortable(driver, { maxFileBytes })` bounds its input before
+  anything else is read — the page count times the page size, all
+  SQLite will read of the file — refusing `SnapshotTooLarge` past it,
+  so everything after, validation included, lies within the bound; it
+  now hands back `vault` too, the snapshot as
+  a read-only `Vault` (`PortableVault`): canonical scans from the
+  five tables, damage reported, `conflicting` empty, objects under
+  their read and damage rules, `changes` and `commit`
+  `UnsupportedOperation`, every read `VaultClosed` once closed; the
+  handle runs no CHECK the file declares (`ignore_check_constraints`),
+  `integrity_check` included. `validatePortable(portable, { heldRoots })`
+  runs, in order, `foreign_key_check`; the chunks holding no more
+  bytes than the objects declare, from record headers alone; `integrity_check`;
+  every event row's decoding; every `objects` row's key and size; the
+  object set against `heldRoots` of the snapshot's events; and every
+  object's chunks read through and rehashed, and throws
+  `InvalidSnapshot` naming every problem, a SQLite or driver refusal
+  among them. The object store asks a chunk's length before its bytes,
+  so a chunk longer than the layout gives it is refused unloaded.
+  `HeldRoots`, `(vault: Vault) => Iterable<Cid>`, is the fold's type,
+  usable as a `KeepUnderLock`; known-payload validation is the fold's.
+  `EventStore.tally()` — `{ events, bytes }`, the rows counted and
+  their canonical bytes summed with no event loaded — is new on both
+  stores and on `Held`, for the export's bound: SQLite sums the
+  column's lengths, the store in memory keeps a running total moved
+  as each event is accepted, so neither allocates to answer.
+  The event store's row decoding, filter SQL and column list are
+  exported from its module for the portable reader (`decodeEventRow`,
+  `readEventRows`, `eventFilterSql`, `EVENT_COLUMNS`).
+  `test/v3/sqlite/export-cases.ts` runs on `node:sqlite` and in a
+  Chromium Worker; `test/v3/sqlite/export.test.ts` adds what only a
+  path shows.
 - **The SQLite vault.** `SqliteVault` in `@estoc/event-store/v3`, a
   `Runtime` over an open runtime's `SqliteEventStore` and
   `SqliteObjectStore`: a commit's objects prepared under the writer

@@ -296,12 +296,14 @@ export class SqliteObjectStore implements ObjectStore {
       throw new DamagedObject(read.cid);
     };
     if (read.got < read.size) {
-      const [row] = query(this.driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", read.cid, read.chunks);
-      if (row === undefined) return fail(`chunk ${read.chunks} is missing: ${read.chunks} chunk(s) hold ${read.got} bytes of the object's ${read.size}`);
-      const bytes = row["bytes"];
-      if (!(bytes instanceof Uint8Array)) return fail(`chunk ${read.chunks} is not bytes`);
+      // The length is asked before the bytes: a chunk longer than the layout gives it is refused without being loaded.
+      const [found] = query(this.driver, "SELECT length(bytes) AS n FROM object_chunks WHERE cid = ? AND chunk_no = ?", read.cid, read.chunks);
+      if (found === undefined) return fail(`chunk ${read.chunks} is missing: ${read.chunks} chunk(s) hold ${read.got} bytes of the object's ${read.size}`);
       const expected = Math.min(CHUNK_BYTES, read.size - read.got);
-      if (bytes.length !== expected) return fail(`chunk ${read.chunks} holds ${bytes.length} bytes, not the ${expected} the layout gives it`);
+      if (found["n"] !== expected) return fail(`chunk ${read.chunks} holds ${String(found["n"])} bytes, not the ${expected} the layout gives it`);
+      const [row] = query(this.driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", read.cid, read.chunks);
+      const bytes = row?.["bytes"];
+      if (!(bytes instanceof Uint8Array)) return fail(`chunk ${read.chunks} is not bytes`);
       read.chunks += 1;
       read.got += bytes.length;
       read.hash.update(bytes);

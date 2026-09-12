@@ -2,10 +2,10 @@
  * `@estoc/event-store/v3` — the version-3 replica model as a library:
  * canonical JSON, the event envelope and its store, raw DASL objects
  * and theirs, the vault over both, and, for what persists, the SQLite
- * driver contract and the runtime's schema, opening, stores, local
- * state and vault. The
- * platform adapters live under `../node` and `../browser`. No event
- * type is defined here.
+ * driver contract, the runtime's schema, opening, stores, local
+ * state and vault, and the portable snapshot's export, validation
+ * and reader. The platform adapters live under `../node` and
+ * `../browser`. No event type is defined here.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -22,6 +22,7 @@ export type {
   Filter,
   ChangeToken,
   Conflict,
+  EventTally,
   Rejected,
   Damaged,
   Ingested,
@@ -57,7 +58,7 @@ export { MemoryObjectStore, MemoryPreparation, type MemoryObjectStoreOptions, DE
 export type { VaultMetadata, WrappedSeed, KeystoreAccess } from "./keystore.js";
 export { checkMetadata, checkWrappedSeed } from "./keystore.js";
 
-export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
+export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, HeldRoots, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
 
 export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
@@ -66,7 +67,7 @@ export { Connection, checkParams, decodeText, decodeUtf8, exactInteger, ownBytes
 export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type DatabaseKind } from "./sqlite/schema.js";
 
 export type { Locked, RuntimeDatabase, PortableDatabase, CreateRuntimeOptions, OpenRuntimeOptions } from "./sqlite/open.js";
-export { createRuntime, openRuntime, openInspector, openPortable } from "./sqlite/open.js";
+export { createRuntime, openRuntime, openInspector, openPortable, type OpenPortableOptions } from "./sqlite/open.js";
 
 export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase } from "./sqlite/events.js";
 
@@ -75,6 +76,10 @@ export { SqliteObjectStore, SqlitePreparation, CHUNK_BYTES, type SqliteObjectSto
 export type { LocalOptions, LocalCache, LocalTrace, LocalState, TraceEntry, TraceFilter, TracePolicy } from "./sqlite/local.js";
 
 export { SqliteVault, type SqliteVaultOptions } from "./sqlite/vault.js";
+
+export { PortableVault, validatePortable, type ValidateOptions, type Validated } from "./sqlite/portable.js";
+
+export { exportVault, type OpenDestination, type ExportOptions, type Exported } from "./sqlite/export.js";
 
 export {
   InvalidJson,
@@ -104,6 +109,7 @@ export {
   ReadOnlyVault,
   VaultClosed,
   IncompleteSnapshot,
+  SnapshotTooLarge,
   InvalidSnapshot,
   IncompleteImport,
 } from "./errors.js";

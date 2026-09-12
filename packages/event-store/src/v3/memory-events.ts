@@ -24,10 +24,11 @@ import {
   type Event,
   type EventId,
   type EventStore,
+  type EventTally,
   type Filter,
   type Ingested,
 } from "./event.js";
-import { canonicalText, parseStrict } from "./jcs.js";
+import { canonicalText, parseStrict, utf8Length } from "./jcs.js";
 import { deepFreeze, type JsonObject } from "./json.js";
 import { mint } from "./mint.js";
 
@@ -56,6 +57,8 @@ export class MemoryEventStore implements EventStore {
   private readonly held = new Map<EventId, Held>();
   /** the same events in the order they were accepted; an index into it is what a token names */
   private readonly accepted: Event[] = [];
+  /** the UTF-8 length of every held canonical text, summed as each is accepted: what `tally` reports without encoding one */
+  private bytes = 0;
   /** writes run one at a time: the vault's writer lock, as far as one store in memory needs it */
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -107,6 +110,7 @@ export class MemoryEventStore implements EventStore {
     deepFreeze(event);
     this.held.set(event.eventId, { event, text });
     this.accepted.push(event);
+    this.bytes += utf8Length(text);
     return event;
   }
 
@@ -204,6 +208,10 @@ export class MemoryEventStore implements EventStore {
 
   async damaged(): Promise<Damaged[]> {
     return [];
+  }
+
+  async tally(): Promise<EventTally> {
+    return { events: this.held.size, bytes: this.bytes };
   }
 
   async conflicting(): Promise<Conflict[]> {

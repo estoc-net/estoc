@@ -9,11 +9,13 @@
 
 import { v7 } from "uuid";
 
-import { AnchorMismatch, DamagedControl, NotAVault, ReadOnlyVault, SqliteError, VaultClosed } from "../errors.js";
+import { AnchorMismatch, DamagedControl, NotAVault, ReadOnlyVault, SnapshotTooLarge, SqliteError, VaultClosed } from "../errors.js";
 import { isUuidv7, type AuthorId } from "../event.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "../keystore.js";
+import type { Vault } from "../vault.js";
 import type { SqliteDriver, SqlValue } from "./driver.js";
 import { dropCache } from "./local.js";
+import { PortableVault } from "./portable.js";
 import { APPLICATION_ID, SCHEMA_VERSION, checkSchema, createTables, query, run, text, type DatabaseKind } from "./schema.js";
 
 /** Runs `op` under the vault's operation lock: what a rewrap is serialized by. */
@@ -35,11 +37,19 @@ export interface RuntimeDatabase {
   close(): void;
 }
 
-/** A portable snapshot, open read-only and checked as far as its metadata and wrapper: what validation and inspection go on from. */
+/**
+ * A portable snapshot, open read-only and checked as far as its
+ * metadata and wrapper: what validation and inspection go on from.
+ * `vault` reads it as a `Vault` — scans in canonical order, objects
+ * under their read and damage rules — that refuses `commit` and
+ * `changes`; whether it is complete is `validatePortable`'s to say.
+ */
 export interface PortableDatabase {
   readonly driver: SqliteDriver;
   readonly metadata: VaultMetadata;
   readonly wrapped: WrappedSeed;
+  readonly vault: Vault;
+  /** Closes the driver; afterwards every read through `vault` is `VaultClosed`, `commit` and `changes` refused as ever. Idempotent. */
   close(): void;
 }
 
@@ -140,18 +150,36 @@ export function openInspector(driver: SqliteDriver): RuntimeDatabase {
   });
 }
 
+export interface OpenPortableOptions {
+  /**
+   * The most bytes the file may hold, as its header states them — the
+   * page count times the page size, which is all SQLite will read of
+   * it — checked before anything else is: what every row, column,
+   * chunk and check after it, the validation included, lies within.
+   * `SnapshotTooLarge` past it. Unbounded when left out.
+   */
+  maxFileBytes?: number;
+}
+
 /**
  * Opens the portable snapshot in `driver`, which was opened `readonly`
- * — no writes, no extensions, an untrusted schema — and checks it as
- * far as its metadata and wrapper: the file's identity and
+ * — no writes, no extensions, an untrusted schema, no constraint of
+ * the file's evaluated — and checks it as far as its metadata and
+ * wrapper: its size within `maxFileBytes`, the file's identity and
  * rollback-format headers, then the schema, then the two rows that say
  * what it is, and nothing else. Whether its events and objects are
  * what they claim is the validation that comes after, on the same
  * handle.
  */
-export function openPortable(driver: SqliteDriver): PortableDatabase {
+export function openPortable(driver: SqliteDriver, options: OpenPortableOptions = {}): PortableDatabase {
   return closingOnFailure(driver, () => {
     requireMode(driver, "readonly");
+    // A CHECK the file declares is SQL the file supplied: not run, even by `integrity_check`. Every value it would have constrained is checked by the reader itself.
+    driver.exec("PRAGMA ignore_check_constraints = ON");
+    if (options.maxFileBytes !== undefined) {
+      const bytes = Number(pragma(driver, "page_count")) * Number(pragma(driver, "page_size"));
+      if (!(bytes <= options.maxFileBytes)) throw new SnapshotTooLarge(options.maxFileBytes, bytes);
+    }
     checkHeader(driver);
     if (pragma(driver, "journal_mode") === "wal") throw new NotAVault("a WAL file is not a portable snapshot: one stands alone with rollback-format headers");
     checkSchema(driver, "portable");
@@ -352,13 +380,22 @@ class Opened implements RuntimeDatabase {
 }
 
 class OpenedPortable implements PortableDatabase {
+  readonly vault: Vault;
+  private closed = false;
+
   constructor(
     readonly driver: SqliteDriver,
     readonly metadata: VaultMetadata,
     readonly wrapped: WrappedSeed
-  ) {}
+  ) {
+    this.vault = new PortableVault(driver, metadata, () => {
+      if (this.closed) throw new VaultClosed();
+    });
+  }
 
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
     this.driver.close();
   }
 }

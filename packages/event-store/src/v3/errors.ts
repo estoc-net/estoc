@@ -294,11 +294,22 @@ export class UncertainCommit extends Error {
   }
 }
 
-/** An export could not select a complete cut: damage or a conflict in the event set, or a held root missing or damaged; nothing was published. */
+/** An export could not select a complete cut: damage in the event set, or a held root missing or damaged; nothing was published. */
 export class IncompleteSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {
     super(`the export is incomplete and was not published: ${describe(problems)}`);
     this.name = "IncompleteSnapshot";
+  }
+}
+
+/** A snapshot past the bound the caller set: on the file a portable open reads, or on the events and objects an export copies; refused before what the bound covers is read. */
+export class SnapshotTooLarge extends Error {
+  constructor(
+    readonly maxBytes: number,
+    readonly bytes: number
+  ) {
+    super(`the snapshot is ${bytes} bytes, more than the ${maxBytes}-byte bound`);
+    this.name = "SnapshotTooLarge";
   }
 }
 

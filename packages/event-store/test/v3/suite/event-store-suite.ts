@@ -4,6 +4,7 @@ import {
   BadToken,
   ForkedAuthor,
   InvalidEvent,
+  canonicalize,
   compareEvents,
   isEventId,
   isUuidv7,
@@ -310,6 +311,26 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
       expect(inner.added).toBe(1);
       expect(inner.conflicts).toEqual([{ eventId: four?.eventId, kept: altered(four as Event), rejected: four }]);
       expect(await all(fresh.scan())).toEqual([altered(four as Event)]);
+    });
+
+    it("tally counts the rows held and sums their canonical bytes, multi-byte text by its UTF-8, and moves only when an event is accepted: not on a duplicate, a conflict, a rejected input or a batch refused as a fork", async () => {
+      const c = clock(T0);
+      const store = await open({ author: authorN(1), now: c.now });
+      expect(await store.tally()).toEqual({ events: 0, bytes: 0 });
+      const weight = (events: Event[]) => events.reduce((n, e) => n + canonicalize(e).length, 0);
+      const mine = await store.append({ type: "t", data: { text: "€😂" } });
+      expect(canonicalize(mine).length).toBeGreaterThan(JSON.stringify(mine).length);
+      const [one, two] = (await foreign(authorN(2), c.now, [{ type: "t", data: { n: 1 } }, { type: "t", data: { n: 2 } }])) as Event[];
+      await store.ingest([one]);
+      const held = { events: 2, bytes: weight([mine, one as Event]) };
+      expect(await store.tally()).toEqual(held);
+      const outcome = await store.ingest([reordered(one as Event), altered(one as Event), null]);
+      expect([outcome.duplicates, outcome.conflicts.length, outcome.rejected.length]).toEqual([1, 1, 1]);
+      expect(await store.tally()).toEqual(held);
+      await expect(store.ingest([two, altered(mine)])).rejects.toBeInstanceOf(ForkedAuthor);
+      expect(await store.tally()).toEqual(held);
+      expect(await store.ingest([two])).toMatchObject({ added: 1 });
+      expect(await store.tally()).toEqual({ events: 3, bytes: weight([mine, one as Event, two as Event]) });
     });
 
     it("what ingest hands back later is the event its canonical bytes parse to, whatever serialization arrived", async () => {
