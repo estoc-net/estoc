@@ -9,9 +9,10 @@ as the code form of the
 [event store](../../docs/replica-model/event-store.md), the
 [DASL object profile](../../docs/replica-model/dasl-objects.md) and the
 [SQLite vault](../../docs/replica-model/vault-sqlite.md). What is there
-so far is the model, its reference in memory, and the SQLite driver the
-persistent stores are written against; the stores themselves, and with
-them export, restore and import, come next.
+so far is the model, its reference in memory, the SQLite driver the
+persistent stores are written against, and the vault's schema and
+opening over it; the stores themselves, and with them export, restore
+and import, come next.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -118,6 +119,46 @@ a pool, and a closed pool refuses every call. The driver cases in
 `test/v3/sqlite/driver-cases.ts` run over both, Node on a file and in
 memory and Chromium in a Worker; the pool's own cases are in
 `test/browser/pool-cases.ts`.
+
+Over the driver, the vault's schema and its opening. `createTables`
+makes the five common tables — `vault_meta`, `keystore`, `events`,
+`objects`, `object_chunks`, all `STRICT` — and, for a runtime, the two
+control tables `store_state` and `event_positions`; `checkSchema`
+checks a database holds exactly that, structurally, through SQLite's
+own pragmas — names, columns, types, keys and references, not the SQL
+they were spelled with — with the schema's names read as their stored
+bytes and decoded, since a snapshot is a file another party wrote: a
+portable snapshot may have nothing beside the five tables and the
+indexes their constraints made; a runtime may add indexes, `local_*`
+tables and `ANALYZE` statistics; a view or a trigger is refused in
+either. `createRuntime(driver, { metadata, wrapped })` fills the empty
+database a `create` opened — application ID `ESTC`, schema version 1,
+the tables, the metadata, the wrapped seed as the UTF-8 of its compact
+JWE, fresh `replica_id` and `store_generation` — in one transaction,
+published ready, and hands the runtime back open. `openRuntime(driver,
+{ anchor })` checks a `readwrite` driver's database in order — the
+file's application ID, encoding and schema version; the metadata, so a
+snapshot or an unready file is told apart before its tables are; the
+schema; the wrapped seed; then the anchor, given outright or derived by
+a function that unlocks the wrapper the vault holds, against the
+vault's (`AnchorMismatch`); then the control, whose replica ID and
+generation are canonical UUIDv7s and whose `last_seq` and positions
+account for every event (`DamagedControl` otherwise, and nothing is
+made up in their place) — and writes nothing. `openInspector(driver)`
+applies the same checks without the seed, sets the connection to
+refuse every write, and keeps the driver's ownership. `openPortable
+(driver)` takes a `readonly` driver — no writes, no extensions, an
+untrusted schema — and checks the file's identity and its
+rollback-format headers, then the schema, then the two rows that say
+what it is, reading nothing else; whether its events and objects are
+what they claim is the validation to come. Each returns a handle with
+the driver, the metadata, for a runtime the local IDs and
+`keystore(locked)` — `read` any time, `rewrap` one transaction under
+the lock the caller runs it in — and `close`, after which every call
+is `VaultClosed`; a create or open that fails, for any reason, closes
+the driver it was given, so ownership never stays with a handle nobody
+can use. Everything a file must show is a `NotAVault` naming what it
+did not.
 
 Everything below is
 version 2, which stays until the vault switches over.

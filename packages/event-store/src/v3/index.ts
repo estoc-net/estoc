@@ -11,8 +11,10 @@
  * lock, the held view, and the vault in memory. Under it the SQLite
  * driver the persistent stores are written against — the contract and
  * the shared connection; the adapters live under `../node` and
- * `../browser`. The SQLite stores themselves come next, and with them
- * export, restore and import. No event type.
+ * `../browser` — and over it the vault's schema and how a database is
+ * created, opened and checked before anything in it is trusted. The
+ * SQLite stores themselves come next, and with them export, restore
+ * and import. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -70,6 +72,11 @@ export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vau
 export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
 export { Connection, checkParams, decodeText, exactInteger, ownBytes } from "./sqlite/driver.js";
 
+export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type DatabaseKind } from "./sqlite/schema.js";
+
+export type { Locked, RuntimeDatabase, PortableDatabase, CreateRuntimeOptions, OpenRuntimeOptions } from "./sqlite/open.js";
+export { createRuntime, openRuntime, openInspector, openPortable } from "./sqlite/open.js";
+
 export {
   InvalidJson,
   InvalidEvent,
@@ -89,6 +96,7 @@ export {
   DatabaseMissing,
   DatabaseClosed,
   NotAVault,
+  DamagedControl,
   AnchorMismatch,
   ReadOnlyVault,
   VaultClosed,

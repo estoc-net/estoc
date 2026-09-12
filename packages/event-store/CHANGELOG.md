@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The SQLite vault's schema, and how it is created and opened.** In
+  `@estoc/event-store/v3`: `createTables` and `checkSchema`, the five
+  common `STRICT` tables plus a runtime's two control tables, checked
+  structurally through SQLite's pragmas with the schema's names read as
+  stored bytes; `createRuntime` publishing schema, metadata, wrapped
+  seed and fresh local IDs in one transaction; `openRuntime` checking
+  header, metadata, schema, wrapper, anchor (given, or derived by the
+  caller's unlock) and control in that order and writing nothing;
+  `openInspector` doing the same without the seed on a connection set
+  to refuse every write; `openPortable` checking a read-only snapshot's
+  identity, rollback-format headers, schema and metadata rows and
+  nothing else. Handles carry the driver, the metadata, the local IDs
+  and `keystore(locked)`, whose `rewrap` is one transaction under the
+  caller's lock; a failed open closes its driver. New error
+  `DamagedControl`, for local control that is missing or does not
+  account for the events; `APPLICATION_ID` and `SCHEMA_VERSION`
+  exported.
 - **The SQLite driver, under the version-3 stores to come.** `SqliteDriver`
   in `@estoc/event-store/v3` — one synchronous connection, `exec`,
   `prepare` to a `SqliteStatement` (`run`, `get`, `all`, `iterate`,
