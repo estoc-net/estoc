@@ -775,34 +775,148 @@ describe("the held view (nested calls share the lock)", () => {
     });
   });
 
-  it("a mutation the operation issued and did not wait for finishes before the lock is released, even when the operation itself failed", async () => {
+  it("a mutation the operation issued and did not wait for finishes before the lock is released, even when the operation itself failed: a collection pass still reads its keep set after the failure", async () => {
     const { vault } = open();
     const v = vault.vault;
-    const computed = gate();
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await v.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]);
+    const entered = gate();
     const resume = gate();
     let collecting!: Promise<Collected>;
+    let heldWhileReading = false;
     const locked = vault.locked(async (held) => {
       const invalid = held.commit([], [{ type: "", data: {} } as unknown as Draft]);
       collecting = held.collect(async (view) => {
-        const keep = await rootsOf(view);
-        computed.open();
+        entered.open();
         await resume.wait;
-        return keep;
+        heldWhileReading = vault.lock.held;
+        return rootsExcept(WORLD_CID)(view);
       });
       return Promise.all([invalid, collecting]);
     });
-    await computed.wait;
+    await entered.wait;
     expect(await settled(locked)).toBe(false); // the operation's own promise rejected, its collection pass has not ended
     expect(vault.lock.held).toBe(true);
-    const committing = v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const committing = v.commit([], [draft([HELLO_CID])]);
     expect(await settled(committing)).toBe(false);
     resume.open();
-    expect(await collecting).toEqual({ removed: [] });
+    expect(await collecting).toEqual({ removed: [WORLD_CID] });
+    expect(heldWhileReading).toBe(true);
     await expect(locked).rejects.toThrow(InvalidEvent);
     expect(await committing).toHaveLength(1);
     expect(await v.objects.has(HELLO_CID)).toBe(true);
-    expect(await all(v.events.scan())).toHaveLength(1);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await all(v.events.scan())).toHaveLength(3);
     expect(vault.lock.held).toBe(false);
+  });
+
+  it("a collection pass the operation issued and returned without waiting for computes its keep set after the return: its reads, nested ones included, stay good until it has deleted, and the lock is released after", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    await v.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]);
+    const entered = gate();
+    const resume = gate();
+    let collecting!: Promise<Collected>;
+    let seen = 0;
+    const locked = vault.locked(async (held) => {
+      collecting = held.collect(async (view) => {
+        entered.open();
+        await resume.wait;
+        seen = await view.locked(async (nested) => (await all(nested.events.scan())).length);
+        expect(await view.objects.has(WORLD_CID)).toBe(true);
+        return rootsExcept(WORLD_CID)(view);
+      });
+      return "returned";
+    });
+    await entered.wait;
+    expect(await settled(locked)).toBe(false);
+    expect(vault.lock.held).toBe(true);
+    const committing = v.commit([], [draft([HELLO_CID])]);
+    expect(await settled(committing)).toBe(false);
+    resume.open();
+    expect(await collecting).toEqual({ removed: [WORLD_CID] });
+    expect(seen).toBe(2);
+    expect(await locked).toBe("returned");
+    expect(await committing).toHaveLength(1);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(vault.lock.held).toBe(false);
+  });
+
+  it("a collection pass still queued behind a paused commit when the operation returns gets its view when its turn comes, and reads through it", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    const issued = gate();
+    const resume = gate();
+    let committing!: Promise<Event[]>;
+    let collecting!: Promise<Collected>;
+    let heldWhileReading = false;
+    const locked = vault.locked(async (held) => {
+      committing = held.commit([{ cid: HELLO_CID, source: gated(HELLO, resume) }], [draft([HELLO_CID])]);
+      collecting = held.collect(async (view) => {
+        heldWhileReading = vault.lock.held;
+        return rootsOf(view);
+      });
+      issued.open();
+      return "returned";
+    });
+    await issued.wait;
+    expect(await settled(committing)).toBe(false);
+    expect(await settled(collecting)).toBe(false);
+    expect(await settled(locked)).toBe(false);
+    expect(vault.lock.held).toBe(true);
+    resume.open();
+    expect(await committing).toHaveLength(1);
+    expect(await collecting).toEqual({ removed: [] });
+    expect(heldWhileReading).toBe(true);
+    expect(await locked).toBe("returned");
+    expect(await v.objects.has(HELLO_CID)).toBe(true);
+    expect(vault.lock.held).toBe(false);
+  });
+
+  it("once the operation has returned, its view accepts no further mutation — so what the release waits on cannot grow — while its reads still land", async () => {
+    const { vault } = open();
+    const v = vault.vault;
+    await v.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
+    const entered = gate();
+    const resume = gate();
+    let collecting!: Promise<Collected>;
+    let outer!: Held;
+    const refused: string[] = [];
+    let seen = 0;
+    const locked = vault.locked(async (held) => {
+      outer = held;
+      collecting = held.collect(async (view) => {
+        entered.open();
+        await resume.wait;
+        for (const attempt of [
+          () => held.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID])]),
+          () => held.ingest([]),
+          () => held.collect(() => []),
+          () => held.locked((again) => again.commit([], [draft([HELLO_CID])])),
+        ]) {
+          await attempt().then(
+            () => refused.push("landed"),
+            (err: Error) => refused.push(err.name)
+          );
+        }
+        seen = await held.locked(async (nested) => (await all(nested.events.scan())).length);
+        expect(await held.objects.has(HELLO_CID)).toBe(true);
+        return rootsOf(view);
+      });
+      return "returned";
+    });
+    await entered.wait;
+    expect(vault.lock.held).toBe(true);
+    resume.open();
+    expect(await collecting).toEqual({ removed: [] });
+    expect(refused).toEqual(["UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation", "UnsupportedOperation"]);
+    expect(seen).toBe(1);
+    expect(await locked).toBe("returned");
+    expect(vault.lock.held).toBe(false);
+    expect(await v.objects.has(WORLD_CID)).toBe(false);
+    expect(await all(v.events.scan())).toHaveLength(1);
+    await expect(outer.objects.has(HELLO_CID)).rejects.toThrow(UnsupportedOperation);
   });
 
   it("a held view kept past its operation refuses every call — mutation, open, nested locked, read — before doing anything: nothing runs without the lock", async () => {

@@ -71,10 +71,14 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * as the lock runs operations: a commit issued while a collection pass
  * computes its keep set lands after the pass, so what the pass decided
  * to keep is what it deletes against. The view lives as long as the
- * operation: a mutation it issued and did not wait for still finishes
- * before the lock is released, and a view kept past its operation
- * refuses every call, reads included, since it is no longer inside the
- * lock and no longer the runtime's to check.
+ * operation, which ends in two steps. Once the operation's callback
+ * has returned, the view accepts no further mutation, but a mutation
+ * it issued and did not wait for still finishes before the lock is
+ * released, and reads through the view — a collection pass computing
+ * its keep set, nested reads included — stay good until it has. Once
+ * the last has finished, the view refuses every call, reads included,
+ * since it is no longer inside the lock and no longer the runtime's to
+ * check.
  */
 export interface Held extends Vault {
   /** The store's `ingest`, for validated import and restore. */
@@ -176,15 +180,20 @@ type Enter = <T>(op: () => Promise<T>) => Promise<T>;
 type Mutate = Enter;
 
 /**
- * The span of one operation under the lock, as its held views see it:
- * mutations queued one behind another while it runs; once it has
- * ended, nothing — a view kept past its operation would otherwise run
- * without the lock, and read past the runtime's guard — and `end`
- * resolves when every mutation accepted before then has finished, so
- * the lock is released after them, not before.
+ * The span of one operation under the lock, as its held views see it,
+ * with two boundaries rather than one. When the operation's callback
+ * has returned, it accepts no further mutation — the tail `end` waits
+ * on would otherwise grow behind it — while the mutations accepted
+ * before still run, and reads through its views stay good meanwhile,
+ * since the lock is still held: a collection pass queued or in flight
+ * computes its keep set through them. When the last accepted mutation
+ * has finished, the operation has ended, the lock is released after
+ * it, and a view kept past it refuses every call — it would otherwise
+ * run without the lock, and read past the runtime's guard.
  */
 class Operation {
   private readonly mutations = new WriterLock();
+  private returned = false;
   private ended = false;
 
   check(): void {
@@ -198,12 +207,14 @@ class Operation {
 
   async mutate<T>(op: () => Promise<T>): Promise<T> {
     this.check();
+    if (this.returned) throw new UnsupportedOperation("a mutation through a held view after its operation returned");
     return this.mutations.run(op);
   }
 
-  end(): Promise<void> {
+  async end(): Promise<void> {
+    this.returned = true;
+    await this.mutations.idle();
     this.ended = true;
-    return this.mutations.idle();
   }
 }
 

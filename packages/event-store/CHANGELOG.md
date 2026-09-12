@@ -36,11 +36,15 @@
   mutations an operation issues through `Held` — `commit`, `ingest`,
   `collect` — run one at a time in the order issued, so a commit
   issued while a collection pass computes its keep set lands after the
-  pass; a mutation the operation did not wait for still finishes before
-  the lock is released, and a `Held` kept past its operation refuses
-  every call — mutation, `open`, nested `locked`, read
-  (`UnsupportedOperation`) — since it is no longer inside the lock nor
-  the runtime's guard; the view a keep callback gets refuses a
+  pass; once the operation has returned, a `Held` accepts no further
+  mutation (`UnsupportedOperation`), but a mutation it accepted and the
+  operation did not wait for still finishes before the lock is
+  released, and reads through the view — a queued collection pass
+  computing its keep set — stay good until it has; once the last has
+  finished, a `Held` kept past its operation refuses every call —
+  mutation, `open`, nested `locked`, read (`UnsupportedOperation`) —
+  since it is no longer inside the lock nor the runtime's guard; the
+  view a keep callback gets refuses a
   mutation before touching its source rather than wait on the pass
   itself; `WriterLock.idle` is new;
   `VaultRuntime` gained `metadata` and
