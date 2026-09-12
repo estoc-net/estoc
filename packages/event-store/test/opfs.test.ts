@@ -6,7 +6,6 @@
  * found; `ESTOC_BROWSER=/path/to/chrome` names one.
  */
 
-import { existsSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -15,27 +14,10 @@ import { chromium } from "playwright-core";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { backendCases } from "./suite/backend-cases.js";
+import { findChromium } from "./browser/chromium.js";
 import type { CaseResult } from "./browser/opfs-entry.js";
 
-function findBrowser(): string | null {
-  const candidates = [
-    process.env["ESTOC_BROWSER"],
-    process.env["CHROME_BIN"],
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/usr/bin/google-chrome-stable",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  ];
-  for (const candidate of candidates) {
-    if (candidate !== undefined && candidate !== "" && existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-const browserPath = findBrowser();
+const browserPath = findChromium();
 if (browserPath === null) {
   console.warn("OPFS backend cases skipped: no Chromium found (set ESTOC_BROWSER to a Chrome or Chromium binary)");
 }

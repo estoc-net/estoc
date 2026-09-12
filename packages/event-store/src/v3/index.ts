@@ -8,9 +8,11 @@
  * store is measured against. Beside it the object model: raw DASL
  * objects, the `ObjectStore` interface, and the store in memory. Over
  * both the vault: its metadata and keystore, the interfaces, the writer
- * lock, the held view, and the vault in memory. No persistent store
- * yet: the SQLite vault comes next, and with it export, restore and
- * import. No event type.
+ * lock, the held view, and the vault in memory. Under it the SQLite
+ * driver the persistent stores are written against — the contract and
+ * the shared connection; the adapters live under `../node` and
+ * `../browser`. The SQLite stores themselves come next, and with them
+ * export, restore and import. No event type.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -65,6 +67,9 @@ export { checkMetadata, checkWrappedSeed } from "./keystore.js";
 export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
 
+export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
+export { Connection, checkParams, exactInteger, ownBytes } from "./sqlite/driver.js";
+
 export {
   InvalidJson,
   InvalidEvent,
@@ -77,6 +82,12 @@ export {
   MissingRoot,
   UnreferencedObject,
   UnsupportedOperation,
+  InvalidSqlValue,
+  SqliteError,
+  DatabaseBusy,
+  DatabaseExists,
+  DatabaseMissing,
+  DatabaseClosed,
   NotAVault,
   AnchorMismatch,
   ReadOnlyVault,

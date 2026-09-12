@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **The SQLite driver, under the version-3 stores to come.** `SqliteDriver`
+  in `@estoc/event-store/v3` — one synchronous connection, `exec`,
+  `prepare` to a `SqliteStatement` (`run`, `get`, `all`, `iterate`,
+  `finalize`), `transaction(mode, body)` that does not nest, `close` —
+  with the value rules both adapters share: `checkParams` admits text
+  without a NUL or an unpaired surrogate, safe integers, finite doubles,
+  bytes and null, copies bytes at both boundaries, and refuses the rest
+  as `InvalidSqlValue` before the statement runs; a stored integer
+  outside the safe range is `InvalidSqlValue` on read, never rounded;
+  what SQLite refuses is `SqliteError` with its result code. Opens are
+  `create`/`readwrite`/`readonly` with `DatabaseExists`,
+  `DatabaseMissing`, `DatabaseBusy` and, after close, `DatabaseClosed`.
+  `openNodeSqlite` in `@estoc/event-store/node` is `node:sqlite` (Node
+  22.13+), ownership by SQLite's exclusive locking mode; `openSqlitePool`
+  in the new `@estoc/event-store/browser` is `@sqlite.org/sqlite-wasm`
+  over its OPFS access-handle pool in a Worker, ownership of the
+  directory by a Web Lock, with `exportFile`/`importFile` for the
+  portable snapshot to come. `Connection`, `RawConnection`/`RawStatement`,
+  `checkParams`, `exactInteger` and `ownBytes` are exported for a third
+  adapter. New dependency `@sqlite.org/sqlite-wasm`.
 - **v3 aligned with the SQLite specification; the folder vault retired.**
   The replica model's storage moved from a folder to one SQLite file
   (`docs/replica-model/vault-sqlite.md`; `vault-folder.md` is gone), and
