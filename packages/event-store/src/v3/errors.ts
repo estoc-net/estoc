@@ -278,6 +278,22 @@ export class DatabaseClosed extends Error {
   }
 }
 
+/**
+ * A `COMMIT` SQLite could not complete, and a transaction whose outcome
+ * this connection therefore does not know: what it wrote may be in the
+ * file or not, and only the recovery a reopen runs can tell. The
+ * connection does no further work — every call after it fails with the
+ * same error — until it is closed, and the runtime over it stops the
+ * same way; drafts a commit minted must not be resubmitted blindly, as
+ * a retry mints new IDs for events that may already have landed.
+ */
+export class UncertainCommit extends Error {
+  constructor(readonly cause: unknown) {
+    super(`the outcome of a commit is unknown: ${cause instanceof Error ? cause.message : String(cause)}; nothing runs on this connection until it is closed and the vault reopened`);
+    this.name = "UncertainCommit";
+  }
+}
+
 /** An export could not select a complete cut: damage or a conflict in the event set, or a held root missing or damaged; nothing was published. */
 export class IncompleteSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {

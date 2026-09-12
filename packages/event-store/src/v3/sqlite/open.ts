@@ -13,6 +13,7 @@ import { AnchorMismatch, DamagedControl, NotAVault, ReadOnlyVault, SqliteError, 
 import { isUuidv7, type AuthorId } from "../event.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "../keystore.js";
 import type { SqliteDriver, SqlValue } from "./driver.js";
+import { dropCache } from "./local.js";
 import { APPLICATION_ID, SCHEMA_VERSION, checkSchema, createTables, query, run, text, type DatabaseKind } from "./schema.js";
 
 /** Runs `op` under the vault's operation lock: what a rewrap is serialized by. */
@@ -56,6 +57,16 @@ export interface OpenRuntimeOptions {
    * identity used: `AnchorMismatch` closes the open.
    */
   anchor: string | ((wrapped: WrappedSeed) => string | Promise<string>);
+  /**
+   * Give the runtime a fresh replica ID and store generation, its
+   * history untouched: the recovery from `ForkedAuthor`, where two
+   * writable copies shared one replica ID. Once the anchor is verified
+   * and the control checked, one transaction replaces both IDs and
+   * drops the cache, which may hold what was built for the old
+   * generation; events, positions, options and the keystore stay, and
+   * every change token of the old generation is refused from then on.
+   */
+  resetIdentity?: boolean;
 }
 
 const FORMAT = "estoc-sqlite";
@@ -90,8 +101,9 @@ export function createRuntime(driver: SqliteDriver, options: CreateRuntimeOption
 /**
  * Opens the runtime in `driver`, which was opened `readwrite` and so
  * owns the file, with SQLite's journal recovery already done. Nothing
- * is written; the anchor is checked before the control, and a failure
- * at any check closes the driver.
+ * is written unless the identity is to be reset, and that only after
+ * every check has passed; the anchor is checked before the control,
+ * and a failure at any check closes the driver.
  */
 export async function openRuntime(driver: SqliteDriver, options: OpenRuntimeOptions): Promise<RuntimeDatabase> {
   try {
@@ -100,7 +112,8 @@ export async function openRuntime(driver: SqliteDriver, options: OpenRuntimeOpti
     const wrapped = readWrapped(driver);
     const derived = typeof options.anchor === "string" ? options.anchor : await options.anchor(wrapped);
     if (derived !== metadata.anchor) throw new AnchorMismatch(metadata.anchor, derived);
-    const { author, generation } = checkControl(driver);
+    const control = checkControl(driver);
+    const { author, generation } = options.resetIdentity === true ? renewIdentity(driver) : control;
     return new Opened(driver, metadata, author, generation, true);
   } catch (err) {
     driver.close();
@@ -280,6 +293,16 @@ function checkControl(driver: SqliteDriver): { author: AuthorId; generation: str
   const unplaced = count(driver, "events WHERE event_id NOT IN (SELECT event_id FROM event_positions)");
   if (unplaced !== 0) throw new DamagedControl(`${unplaced} event(s) have no position`);
   return { author: author as AuthorId, generation };
+}
+
+function renewIdentity(driver: SqliteDriver): { author: AuthorId; generation: string } {
+  const author = v7() as AuthorId;
+  const generation = v7();
+  driver.transaction("immediate", () => {
+    if (run(driver, "UPDATE store_state SET replica_id = ?, store_generation = ? WHERE singleton = 1", author, generation) !== 1) throw new DamagedControl("the control row is gone");
+    dropCache(driver);
+  });
+  return { author, generation };
 }
 
 function count(driver: SqliteDriver, from: string): number {

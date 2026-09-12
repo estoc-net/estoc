@@ -2,7 +2,8 @@
  * `@estoc/event-store/v3` — the version-3 replica model as a library:
  * canonical JSON, the event envelope and its store, raw DASL objects
  * and theirs, the vault over both, and, for what persists, the SQLite
- * driver contract and the runtime's schema, opening and stores. The
+ * driver contract and the runtime's schema, opening, stores, local
+ * state and vault. The
  * platform adapters live under `../node` and `../browser`. No event
  * type is defined here.
  */
@@ -71,6 +72,10 @@ export { SqliteEventStore, type SqliteEventStoreOptions, type EventStoreDatabase
 
 export { SqliteObjectStore, SqlitePreparation, CHUNK_BYTES, type SqliteObjectStoreOptions, type ObjectStoreDatabase } from "./sqlite/objects.js";
 
+export type { LocalOptions, LocalCache, LocalTrace, LocalState, TraceEntry, TraceFilter, TracePolicy } from "./sqlite/local.js";
+
+export { SqliteVault, type SqliteVaultOptions } from "./sqlite/vault.js";
+
 export {
   InvalidJson,
   InvalidEvent,
@@ -91,6 +96,7 @@ export {
   DatabaseExists,
   DatabaseMissing,
   DatabaseClosed,
+  UncertainCommit,
   NotAVault,
   DamagedControl,
   DamagedHistory,

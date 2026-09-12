@@ -9,7 +9,8 @@
 
 import { sha256 } from "@noble/hashes/sha2";
 
-import { decodeText, type OpenMode, type SqliteDriver, type SqlValue } from "../../../src/v3/sqlite/driver.js";
+import { SqliteError } from "../../../src/v3/errors.js";
+import { Connection, decodeText, type OpenMode, type RawConnection, type SqliteDriver, type SqlValue } from "../../../src/v3/sqlite/driver.js";
 
 export interface DriverHarness {
   /** A target no database exists at yet. */
@@ -74,6 +75,41 @@ export function pattern(length: number, seed: number): Uint8Array {
     out[i] = s >>> 24;
   }
   return out;
+}
+
+/** What a case puts between the driver's shared layer and the platform. */
+export interface Interposed {
+  /** Whether a `COMMIT` fails with SQLite's I/O error. */
+  failCommit?: () => boolean;
+  /** Whether a failing `COMMIT` has in fact landed before it fails. */
+  landed?: boolean;
+  /** Every SQL text executed or prepared, in order. */
+  seen?: string[];
+}
+
+/** `inner` as the raw connection of another `Connection`, with `hooks` between the two. */
+export function rawOver(inner: SqliteDriver, hooks: Interposed = {}): RawConnection {
+  return {
+    version: inner.version,
+    exec: (sql) => {
+      hooks.seen?.push(sql);
+      if (sql === "COMMIT" && hooks.failCommit?.() === true) {
+        if (hooks.landed === true) inner.exec(sql);
+        throw new SqliteError(10, "disk I/O error");
+      }
+      inner.exec(sql);
+    },
+    prepare: (sql) => {
+      hooks.seen?.push(sql);
+      const statement = inner.prepare(sql);
+      return {
+        run: (params) => statement.run(...params).changes,
+        rows: (params) => statement.iterate(...params),
+        finalize: () => statement.finalize(),
+      };
+    },
+    close: () => inner.close(),
+  };
 }
 
 async function withFresh(harness: DriverHarness, mode: OpenMode, body: (db: SqliteDriver, target: string) => Promise<void> | void): Promise<void> {
@@ -401,14 +437,53 @@ export const driverCases: DriverCase[] = [
       const insert = db.prepare("INSERT INTO t VALUES (?)");
       const select = db.prepare("SELECT k FROM t");
       insert.run(1);
+      const pending = select.iterate();
       db.close();
       db.close();
+      assertThrows(() => pending.next(), "DatabaseClosed", "an iterator taken before the close");
       assertThrows(() => db.exec("SELECT 1"), "DatabaseClosed", "exec");
       assertThrows(() => db.exec("SELECT * FROM nowhere"), "DatabaseClosed", "before SQLite sees the statement");
       assertThrows(() => db.prepare("SELECT 1"), "DatabaseClosed", "prepare");
       assertThrows(() => insert.run(2), "DatabaseClosed", "a statement prepared before");
       assertThrows(() => select.all(), "DatabaseClosed", "a query prepared before");
       assertThrows(() => db.transaction("immediate", () => 1), "DatabaseClosed", "transaction");
+    },
+  },
+  {
+    name: "a COMMIT that fails stops the connection with UncertainCommit: every call refuses, an iterator taken before steps no further, and a reopen shows the transaction whole or not at all and nothing after",
+    needsPersistence: true,
+    run: async (h) => {
+      for (const landed of [false, true]) {
+        const target = h.fresh();
+        let failing = false;
+        const db = new Connection(rawOver(await h.open(target, "create"), { failCommit: () => failing, landed }), "create");
+        db.exec("CREATE TABLE t (k INTEGER PRIMARY KEY) STRICT");
+        const insert = db.prepare("INSERT INTO t VALUES (?) RETURNING k");
+        const select = db.prepare("SELECT k FROM t ORDER BY k");
+        db.transaction("immediate", () => insert.run(1));
+        const unstarted = insert.iterate(99);
+        const underWay = select.iterate();
+        assertEqual(underWay.next().value?.["k"], 1, "a read under way");
+        failing = true;
+        const outcome = landed ? "landed" : "not landed";
+        const err = assertThrows(() => db.transaction("immediate", () => insert.run(2)), "UncertainCommit", `the commit, ${outcome}`);
+        assert(db.uncertain === err, "the connection says what stopped it");
+        assert(assertThrows(() => unstarted.next(), "UncertainCommit", "an iterator taken before the stop, not yet started") === err, "with the same error");
+        assertThrows(() => underWay.next(), "UncertainCommit", "an iterator under way");
+        assertThrows(() => db.exec("SELECT 1"), "UncertainCommit", "exec");
+        assertThrows(() => select.all(), "UncertainCommit", "a query");
+        assertThrows(() => db.prepare("SELECT 1"), "UncertainCommit", "prepare");
+        assertThrows(() => db.transaction("immediate", () => 1), "UncertainCommit", "another transaction");
+        assertEqual(unstarted.return?.(), { done: true, value: undefined }, "returning an iterator still cleans up");
+        insert.finalize();
+        db.close();
+        const again = await h.open(target, "readwrite");
+        try {
+          assertEqual(again.prepare("SELECT k FROM t ORDER BY k").all(), landed ? [{ k: 1 }, { k: 2 }] : [{ k: 1 }], `what the file holds, ${outcome}`);
+        } finally {
+          again.close();
+        }
+      }
     },
   },
   {

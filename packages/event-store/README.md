@@ -11,8 +11,8 @@ as the code form of the
 [SQLite vault](../../docs/replica-model/vault-sqlite.md). What is there
 so far is the model, its reference in memory, the SQLite driver the
 persistent stores are written against, the vault's schema and opening
-over it, and the event store and the object store over that; the
-SQLite vault over both, then export, restore and import, come next.
+over it, the event store and the object store over that, and the
+SQLite vault over both; export, restore and import come next.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -60,7 +60,7 @@ together or not at all. `MemoryVault` is the two memory stores under
 one runtime; `Runtime` builds the same over any two stores and the
 transaction that publishes them, which every backend supplies.
 
-Under the stores to come, the SQLite driver: `SqliteDriver` — one
+Under the stores, the SQLite driver: `SqliteDriver` — one
 synchronous connection, `prepare`d statements with positional
 parameters (`run`, `get`, `all`, `iterate`), `exec`, and `transaction`,
 which does not nest and never spans an `await` — and what a value must
@@ -194,7 +194,7 @@ columns that index them, a position each above `last_seq`, `last_seq`
 advanced by as many — so a batch lands whole or not at all and two
 writes never interleave; `appendAll(drafts, publish)` runs `publish`
 inside that transaction, before the events, which is how the SQLite
-vault will publish a commit's objects with its events, a throw from it
+vault publishes a commit's objects with its events, a throw from it
 rolling back what it wrote. A batch is validated index by index, so a
 hole in a sparse array is refused like any value that is not a draft.
 `ingest` reads its whole input first,
@@ -298,6 +298,59 @@ the chunk rows, a reopen, a preparation rolled back, damage of each
 kind and its repair, collection under an open stream, the inspector,
 and staging on the file under a cache that does not grow with the
 object, measured where the platform reports what SQLite holds.
+
+Over both, the vault: `SqliteVault(db, { now, maxObjectBytes,
+maxStagedBytes })`, a `Runtime` — the writer lock, the `Vault` facade
+application code gets, the held view, `locked`, `collect` and
+`ingest` as the runtime in memory has them — whose commit publishes
+as one transaction: the objects prepared under the lock while the
+sources stream, the transaction opened only once every draft is
+minted, the prepared objects and their repairs published inside it
+ahead of the events and their positions, and the preparation settled
+after the commit, so a throw anywhere before the `COMMIT` leaves no
+object, no repair and no event. The keystore is the handle's over the
+runtime's lock, and the runtime's local state is `vault.local`:
+`options`, JSON by key, kept through every reopen and clearing;
+`cache`, bytes by namespace and key, dropped whole when the identity
+is reset; and `trace`, one entry a row in the order written, scanned
+by type and position and pruned by age and count, sequence numbers
+never reused, so retained entries appended later remain after an
+earlier cursor — each in a `local_*` table made on its first write, so
+a runtime that uses none writes none, and `clearCaches()` empties the
+cache and the trace, the sequence continuing, and nothing else. An inspector's vault reads all of it and refuses every
+write. The vault stops two ways, and `stopped` says which. Damage to
+the history — found by a read, or by the survey the event store makes
+before its first write and `stopped` asks for — refuses commit,
+ingest and collection with `DamagedHistory`, collection because its
+keep set is folded from that history, while reads, local state and
+rewrap go on; the history is recovered by restoring a validated
+snapshot into a new runtime. A `COMMIT` SQLite could not complete is
+`UncertainCommit`, thrown by the driver's shared `Connection`, which
+does no further work — every call after it fails the same way — until
+it is closed: whether the transaction landed is unknown to it, and
+only the recovery a reopen runs can tell, so the vault refuses
+everything, reads included, and drafts it minted are not resubmitted
+blindly. `close()` admits nothing more, waits for the operations
+already admitted, then closes the database and with it ownership; a
+stream still open fails at its next chunk. `openRuntime(driver, {
+anchor, resetIdentity: true })` is the recovery from `ForkedAuthor`:
+once every check has passed, one transaction gives the runtime a
+fresh replica ID and generation and drops the cache, the events,
+positions, objects, options and keystore staying and every token of
+the old generation refused. `vaultSuite` in `test/v3/suite/` is what
+any runtime must show through `Vault`, `VaultRuntime` and `Held` — a
+commit whole or not at all, damage and its repair, collection under
+open streams, the held view's ordering, rewrap under the lock, ingest
+as yielded — run over the runtime in memory and over the SQLite vault
+in memory and on files; `test/v3/sqlite/vault-cases.ts` is what the
+two platforms' SQLite must agree on, run on `node:sqlite` and in a
+Chromium Worker: the rows one commit leaves and a reopen finds, a
+refused commit leaving nothing, the identity reset, the history
+stopping writes, the local tables, a `COMMIT` that fails, ownership
+across close; and `test/v3/sqlite/vault.test.ts` bundles a process
+that commits through the vault and kills itself right after each of
+the commit's statements in turn, reopening the file after each to
+find the batch whole or not at all.
 
 Everything below is
 version 2, which stays until the vault switches over.

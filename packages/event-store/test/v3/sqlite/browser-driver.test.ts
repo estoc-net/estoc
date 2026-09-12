@@ -28,6 +28,7 @@ import { eventCases } from "./event-cases.js";
 import { objectCases } from "./object-cases.js";
 import { openCases } from "./open-cases.js";
 import { utf16Forged, utf16Snapshot } from "./utf16.js";
+import { vaultCases } from "./vault-cases.js";
 
 const browserPath = findChromium();
 if (browserPath === null) {
@@ -113,6 +114,9 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of objectCases) {
+    it(c.name, () => report(results.get(c.name)));
+  }
+  for (const c of vaultCases) {
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of poolCases) {

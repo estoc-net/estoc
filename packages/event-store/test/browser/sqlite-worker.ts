@@ -13,6 +13,7 @@ import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cas
 import { eventCases } from "../v3/sqlite/event-cases.js";
 import { objectCases, type ObjectHarness } from "../v3/sqlite/object-cases.js";
 import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
+import { vaultCases } from "../v3/sqlite/vault-cases.js";
 import { poolCases } from "./pool-cases.js";
 
 export interface WorkerCaseResult {
@@ -81,7 +82,7 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     memoryUsed,
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of [...openCases, ...eventCases, ...objectCases]) {
+  for (const c of [...openCases, ...eventCases, ...objectCases, ...vaultCases]) {
     try {
       const note = await c.run(harness);
       results.push(note === undefined ? { name: c.name } : { name: c.name, note });
