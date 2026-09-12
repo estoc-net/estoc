@@ -1,14 +1,9 @@
 /**
- * The portable snapshot of a running vault: a fresh database holding
- * the metadata, the wrapped seed, every event and exactly the held
- * objects of one cut, built under the operation lock so nothing moves
- * the cut, closed as a standalone rollback-journal file before the
- * lock is released, then reopened read-only and validated as a
- * restore would validate it. Any runtime exports this way — the
- * vault in memory too — since it reads through the interfaces every
- * runtime presents. What is laid is only what a portable snapshot
- * may hold: no control, no positions, no local table, no unheld
- * object, and no page that ever held one, since the file is new.
+ * The portable snapshot of a running vault, built into a fresh
+ * database — so no page of it ever held what is not in it — and
+ * validated as a restore would validate it. Any runtime exports this
+ * way, the vault in memory too, since it reads through the interfaces
+ * every runtime presents.
  */
 
 import { DamagedObject, IncompleteSnapshot, SnapshotTooLarge } from "../errors.js";
@@ -37,7 +32,7 @@ export type OpenDestination = (mode: "create" | "readonly") => Promise<SqliteDri
 export interface ExportOptions {
   /** The roots the vault's events hold, folded by the caller under the lock through the held view; what the snapshot carries besides the events. */
   heldRoots: HeldRoots;
-  /** The most bytes of objects the export will copy; a cut holding more is refused with `SnapshotTooLarge` before the destination is made. Unbounded when left out. */
+  /** The most bytes of events and objects together the export will copy; a cut holding more is refused with `SnapshotTooLarge` before the destination is made. Unbounded when left out. */
   maxBytes?: number;
 }
 
@@ -53,21 +48,24 @@ const BATCH_BYTES = 8 * CHUNK_BYTES;
 interface Cut {
   wrapped: WrappedSeed;
   events: Event[];
+  eventBytes: number;
   roots: { cid: Cid; size: number }[];
 }
 
 /**
  * Exports `runtime` to the destination `open` gives, and validates
  * the file it made. Under the lock: the cut is selected —
- * `IncompleteSnapshot` when the history has damage or a conflict, or
- * a held root is absent or known damaged, `SnapshotTooLarge` when
- * the held objects pass `maxBytes`, nothing made in either case —
- * then the destination is created, laid as a portable database with
+ * `IncompleteSnapshot` when the history has damage, or a held root is
+ * absent or known damaged, `SnapshotTooLarge` when the events and the
+ * held objects together pass `maxBytes`, nothing made in either case
+ * — then the destination is created, laid as a portable database with
  * `ready = 0`, filled, checked against the cut, set ready, and
  * closed. Outside the lock: the file is reopened read-only,
  * validated in full and closed. A source that fails while its bytes
  * are copied is `IncompleteSnapshot` too, the destination left
- * unready.
+ * unready. A conflict recorded against an event is a local
+ * diagnostic, not damage: the accepted value is exported and the
+ * diagnostic is not.
  */
 export async function exportVault(runtime: VaultRuntime, open: OpenDestination, options: ExportOptions): Promise<Exported> {
   await runtime.locked(async (held) => {
@@ -93,13 +91,16 @@ export async function exportVault(runtime: VaultRuntime, open: OpenDestination, 
 async function select(runtime: VaultRuntime, held: Held, options: ExportOptions): Promise<Cut> {
   const problems: { where: string; error: string }[] = [];
   for (const damage of await held.events.damaged()) problems.push({ where: damage.where, error: damage.error });
-  for (const conflict of await held.events.conflicting()) problems.push({ where: `events/${conflict.eventId}`, error: "another value was seen under this ID; clear the conflicts once they are understood" });
   if (problems.length > 0) throw new IncompleteSnapshot(problems);
   const wrapped = await runtime.keystore.read();
   const events: Event[] = [];
-  for await (const event of held.events.scan()) events.push(event);
+  let eventBytes = 0;
+  for await (const event of held.events.scan()) {
+    events.push(event);
+    eventBytes += canonicalEventBytes(event).length;
+  }
   const roots: Cut["roots"] = [];
-  let total = 0;
+  let objectBytes = 0;
   for (const cid of sortCids(checkedCids(await options.heldRoots(held)))) {
     let info;
     try {
@@ -114,11 +115,11 @@ async function select(runtime: VaultRuntime, held: Held, options: ExportOptions)
       continue;
     }
     roots.push({ cid, size: info.size });
-    total += info.size;
+    objectBytes += info.size;
   }
   if (problems.length > 0) throw new IncompleteSnapshot(problems);
-  if (options.maxBytes !== undefined && total > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, total);
-  return { wrapped, events, roots };
+  if (options.maxBytes !== undefined && eventBytes + objectBytes > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, eventBytes + objectBytes);
+  return { wrapped, events, eventBytes, roots };
 }
 
 /** The destination as a portable database, not yet ready: the schema, the metadata, the wrapper and every event, in one transaction. */
@@ -195,10 +196,11 @@ async function fill(writer: SqliteDriver, held: Held, roots: Cut["roots"]): Prom
   }
 }
 
-/** The destination checked against the cut — as many events, objects, bytes and chunks as were laid — and set ready, in one transaction. */
+/** The destination checked against the cut — as many events and their bytes, objects, bytes and chunks as were laid — and set ready, in one transaction. */
 function publish(writer: SqliteDriver, cut: Cut): void {
   const expected = {
     events: cut.events.length,
+    eventBytes: cut.eventBytes,
     objects: cut.roots.length,
     bytes: cut.roots.reduce((n, root) => n + root.size, 0),
     chunks: cut.roots.reduce((n, root) => n + Math.ceil(root.size / CHUNK_BYTES), 0),
@@ -206,9 +208,9 @@ function publish(writer: SqliteDriver, cut: Cut): void {
   writer.transaction("immediate", () => {
     const [row] = query(
       writer,
-      "SELECT (SELECT count(*) FROM events) AS events, (SELECT count(*) FROM objects) AS objects, (SELECT coalesce(sum(size), 0) FROM objects) AS bytes, (SELECT count(*) FROM object_chunks) AS chunks"
+      "SELECT (SELECT count(*) FROM events) AS events, (SELECT coalesce(sum(length(canonical)), 0) FROM events) AS event_bytes, (SELECT count(*) FROM objects) AS objects, (SELECT coalesce(sum(size), 0) FROM objects) AS bytes, (SELECT count(*) FROM object_chunks) AS chunks"
     );
-    const laid = { events: Number(row?.["events"]), objects: Number(row?.["objects"]), bytes: Number(row?.["bytes"]), chunks: Number(row?.["chunks"]) };
+    const laid = { events: Number(row?.["events"]), eventBytes: Number(row?.["event_bytes"]), objects: Number(row?.["objects"]), bytes: Number(row?.["bytes"]), chunks: Number(row?.["chunks"]) };
     if (JSON.stringify(laid) !== JSON.stringify(expected)) throw new Error(`the destination holds ${JSON.stringify(laid)} where the cut has ${JSON.stringify(expected)}`);
     if (run(writer, "UPDATE vault_meta SET ready = 1 WHERE singleton = 1") !== 1) throw new Error("the metadata row is gone");
   });

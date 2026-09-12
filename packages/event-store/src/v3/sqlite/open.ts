@@ -49,7 +49,7 @@ export interface PortableDatabase {
   readonly metadata: VaultMetadata;
   readonly wrapped: WrappedSeed;
   readonly vault: Vault;
-  /** Closes the driver; afterwards every call through `vault` is `VaultClosed`. Idempotent. */
+  /** Closes the driver; afterwards every read through `vault` is `VaultClosed`, `commit` and `changes` refused as ever. Idempotent. */
   close(): void;
 }
 
@@ -152,16 +152,18 @@ export function openInspector(driver: SqliteDriver): RuntimeDatabase {
 
 /**
  * Opens the portable snapshot in `driver`, which was opened `readonly`
- * — no writes, no extensions, an untrusted schema — and checks it as
- * far as its metadata and wrapper: the file's identity and
- * rollback-format headers, then the schema, then the two rows that say
- * what it is, and nothing else. Whether its events and objects are
- * what they claim is the validation that comes after, on the same
- * handle.
+ * — no writes, no extensions, an untrusted schema, no constraint of
+ * the file's evaluated — and checks it as far as its metadata and
+ * wrapper: the file's identity and rollback-format headers, then the
+ * schema, then the two rows that say what it is, and nothing else.
+ * Whether its events and objects are what they claim is the
+ * validation that comes after, on the same handle.
  */
 export function openPortable(driver: SqliteDriver): PortableDatabase {
   return closingOnFailure(driver, () => {
     requireMode(driver, "readonly");
+    // A CHECK the file declares is SQL the file supplied: not run, even by `integrity_check`. Every value it would have constrained is checked by the reader itself.
+    driver.exec("PRAGMA ignore_check_constraints = ON");
     checkHeader(driver);
     if (pragma(driver, "journal_mode") === "wal") throw new NotAVault("a WAL file is not a portable snapshot: one stands alone with rollback-format headers");
     checkSchema(driver, "portable");

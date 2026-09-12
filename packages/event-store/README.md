@@ -364,9 +364,11 @@ Under the operation lock the cut is selected — the wrapper, every
 event in canonical order, and `heldRoots`, the caller's fold of the
 roots the events hold, each root's presence and size checked —
 refused as `IncompleteSnapshot` when the history has damage or a
-conflict or a held root is absent or known damaged, and as
-`SnapshotTooLarge` when the held objects pass `maxBytes`, nothing
-made in either case; then the destination is created, switched to a
+held root is absent or known damaged, and as `SnapshotTooLarge` when
+the events' canonical bytes and the held objects' bytes together pass
+`maxBytes`, nothing made in either case. A conflict on record is a
+local diagnostic, not damage: the accepted value is exported and the
+diagnostic is not. Then the destination is created, switched to a
 rollback journal with `synchronous=FULL`, laid in one transaction as
 a portable database with `ready = 0` — the five tables, the metadata,
 the wrapper's bytes, every event — and filled object by object, each
@@ -376,44 +378,56 @@ its own, then checked against the cut and set ready in one
 transaction, and closed; the lock is released only then. Outside the
 lock the file is reopened read-only and validated as a restore would
 validate it, and what the export returns is what validation found:
-the events, the objects and their bytes. The file is a new one, so no
-page of it ever held what is not in it: no control, no position, no
-local table, no unheld object. A source that fails while its bytes
-are copied is `IncompleteSnapshot` too, the destination left unready
-for the caller to remove; the file's delivery — a path, or
-`pool.exportFile(name)` — is the caller's, once the export has
-returned, and a check for sidecars beside a path is the caller's
-too. `openPortable(driver)` now hands back, beside the metadata and
-the wrapper, `vault`: the snapshot as a read-only `Vault` —
+the events and their bytes, the objects and theirs. The file is a new
+one, so no page of it ever held what is not in it: no control, no
+position, no local table, no unheld object. A source that fails while
+its bytes are copied is `IncompleteSnapshot` too, the destination
+left unready for the caller to remove; the file's delivery — a path,
+or `pool.exportFile(name)` — is the caller's, once the export has
+returned, and a check for sidecars beside a path is the caller's too.
+`openPortable(driver)` now hands back, beside the metadata and the
+wrapper, `vault`: the snapshot as a read-only `Vault` —
 `PortableVault` — scanning the immutable event set in canonical order
 from the five tables alone, its damage reported, its `conflicting`
 always empty since no diagnostic travels, its objects under the
 ordinary read and damage rules, and `changes` and `commit` refused
 with `UnsupportedOperation`, neither consuming a source nor minting
-anything; a closed snapshot refuses every call with `VaultClosed`.
-`validatePortable(portable, { heldRoots, maxBytes })` is what a
-restore or an import runs on an open snapshot before trusting a byte
-of it, in order: SQLite's `integrity_check` and `foreign_key_check`,
-which nothing is read past when they fail; every event row decoding
-to the event its columns name; every `objects` row keyed by a CID
-with a size that is a count, their sizes in all within `maxBytes`;
-the object set equal to `heldRoots` folded from the snapshot's own
-events; and every object's chunks read through — contiguous, of the
-format's lengths, hashing to the CID — through a store of the call's
-own, so what was wrong with an object is what is reported; what
-SQLite itself cannot read is a problem like the others. Every problem
-found is in `InvalidSnapshot.problems`. `test/v3/sqlite/export-cases.ts`
-runs on `node:sqlite` and in a Chromium Worker: what a snapshot holds
-and what never enters it, checked in the file's raw bytes; the
-refusals before and after the destination is made; a commit, a
-collection pass and a rewrap waiting on the export's lock and landing
-after without touching the file; the vault in memory exporting into
-the same file; and every way a snapshot that opens still fails
-validation. `test/v3/sqlite/export.test.ts` adds what only a path
-shows: no sidecar beside the file whatever journal the destination
-was created with, two readers holding it at once, an inspector's
-export, a destination that is not fresh, and a file torn under its
-schema.
+anything; a closed snapshot refuses every read with `VaultClosed`.
+A CHECK the file declares is SQL the file supplied: the handle runs
+none of them, `integrity_check` included, and every value they would
+have constrained is checked by the reader. `validatePortable(portable,
+{ heldRoots, maxBytes })` is what a restore or an import runs on an
+open snapshot before trusting a byte of it, in order: SQLite's
+`foreign_key_check`; the bytes the tables declare, read from their
+record headers alone — the chunks holding no more than the objects
+declare, the events and objects together within `maxBytes`, so the
+bound is met before a canonical byte or a chunk is loaded; SQLite's
+`integrity_check`, which nothing is read past when it fails; every
+event row decoding to the event its columns name; every `objects` row
+keyed by a CID with a size that is a count; the object set equal to
+`heldRoots` folded from the snapshot's own events; and every object's
+chunks read through — each chunk's length asked before its bytes, so
+one longer than the layout gives it is refused unloaded — contiguous,
+of the format's lengths, hashing to the CID, through a store of the
+call's own, so what was wrong with an object is what is reported;
+what SQLite itself cannot read is a problem like the others. Every
+problem found is in `InvalidSnapshot.problems`. Whether the events'
+known payloads are valid is the fold's to decide, in the layer that
+knows them: what `heldRoots` throws is what the export or the
+validation fails with. `test/v3/sqlite/export-cases.ts` runs on
+`node:sqlite` and in a Chromium Worker: what a snapshot holds and
+what never enters it, checked in the file's raw bytes; the refusals
+before and after the destination is made, and the conflict that is
+none; a commit, a collection pass and a rewrap waiting on the
+export's lock and landing after without touching the file; the vault
+in memory exporting into the same file; every way a snapshot that
+opens still fails validation; the bound counting the events; a chunk
+longer than its layout never loaded; and a file whose own CHECK every
+row violates, validated on its values. `test/v3/sqlite/export.test.ts`
+adds what only a path shows: no sidecar beside the file whatever
+journal the destination was created with, two readers holding it at
+once, an inspector's export, a destination that is not fresh, and a
+file torn under its schema.
 
 Everything below is
 version 2, which stays until the vault switches over.

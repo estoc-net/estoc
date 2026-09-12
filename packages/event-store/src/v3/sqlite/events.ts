@@ -208,7 +208,7 @@ export class SqliteEventStore implements EventStore {
   private held(lookup: SqliteStatement, eventId: EventId): Held | undefined {
     const row = lookup.get(eventId);
     if (row === undefined) return undefined;
-    const decoded = this.note(decodeEventRow(row));
+    const decoded = this.noteDamage(decodeEventRow(row));
     if ("damage" in decoded) throw new DamagedHistory(decoded.damage);
     return { event: decoded.event, bytes: row["canonical"] as Uint8Array };
   }
@@ -264,7 +264,7 @@ export class SqliteEventStore implements EventStore {
   private select(sql: string, bound: SqlValue[], filter?: Filter): Event[] {
     const events: Event[] = [];
     readEventRows(this.driver, sql, bound, (decoded) => {
-      this.note(decoded);
+      this.noteDamage(decoded);
       if ("event" in decoded && matches(decoded.event, filter)) events.push(decoded.event);
     });
     return events;
@@ -278,7 +278,7 @@ export class SqliteEventStore implements EventStore {
   private survey(): Damaged[] {
     const out: Damaged[] = [];
     readEventRows(this.driver, `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`, [], (decoded) => {
-      this.note(decoded);
+      this.noteDamage(decoded);
       if ("damage" in decoded) out.push(decoded.damage);
     });
     this.surveyed = true;
@@ -289,7 +289,7 @@ export class SqliteEventStore implements EventStore {
     if (!this.hasConflictsTable()) return [];
     const out: Conflict[] = [];
     for (const row of query(this.driver, `SELECT ${EVENT_COLUMNS}, c.rejected AS rejected FROM local_conflicts c JOIN events e ON e.event_id = c.event_id ORDER BY c.seen`)) {
-      const kept = this.note(decodeEventRow(row));
+      const kept = this.noteDamage(decodeEventRow(row));
       if ("damage" in kept) continue; // its accepted value is `damaged()`'s to report
       out.push({ eventId: kept.event.eventId, kept: kept.event, rejected: parseStrict(row["rejected"] as Uint8Array) as Event });
     }
@@ -306,8 +306,7 @@ export class SqliteEventStore implements EventStore {
     return hasTable(this.driver, "local_conflicts");
   }
 
-  /** Remembers the damage `decoded` may be as the first this store met, and hands `decoded` back. */
-  private note(decoded: DecodedEventRow): DecodedEventRow {
+  private noteDamage(decoded: DecodedEventRow): DecodedEventRow {
     if ("damage" in decoded) this.damage ??= decoded.damage;
     return decoded;
   }

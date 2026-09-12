@@ -1,15 +1,9 @@
 /**
  * A portable snapshot read as a vault, and the validation that says
- * whether it is one: the read-only `Vault` over the five common tables
- * — no control, no positions, no local state — and, over an open
- * snapshot, the checks a restore or an import needs before it trusts
- * a byte of it: SQLite's own integrity and foreign-key checks, every
- * event's canonical bytes and columns, every object's chunks, lengths
- * and hash, and the object set equal to the held roots the caller
- * folds from the events. Nothing here writes.
+ * whether it is one. Nothing here writes.
  */
 
-import { DamagedObject, InvalidSnapshot, SnapshotTooLarge, SqliteError, UnsupportedOperation } from "../errors.js";
+import { DamagedObject, InvalidSnapshot, InvalidSqlValue, SnapshotTooLarge, SqliteError, UnsupportedOperation } from "../errors.js";
 import { matches, type Cid, type Damaged, type Event, type Filter } from "../event.js";
 import type { VaultMetadata } from "../keystore.js";
 import { chunksOf, rawCidOf, sortCids } from "../objects.js";
@@ -20,7 +14,6 @@ import { SqliteObjectStore } from "./objects.js";
 import type { PortableDatabase } from "./open.js";
 import { query } from "./schema.js";
 
-/** A thing wrong with a snapshot, by where it is. */
 type Problem = { where: string; error: string };
 
 /**
@@ -30,7 +23,7 @@ type Problem = { where: string; error: string };
  * travels; `objects` under the ordinary read and damage rules. It has
  * no author, no positions and no change frontier, so `changes` is
  * refused, and `commit` with it, neither consuming a source nor
- * minting anything. `check` is asked before every call: what the
+ * minting anything. `check` is asked before every read: what the
  * owner throws once the snapshot is closed.
  */
 export class PortableVault implements Vault {
@@ -98,37 +91,38 @@ export class PortableVault implements Vault {
 export interface ValidateOptions {
   /** The roots the snapshot's events hold, folded by the caller from the snapshot's own `vault`: the object set must be exactly these. */
   heldRoots: HeldRoots;
-  /** The most bytes of objects the validation will read; a snapshot holding more is refused with `SnapshotTooLarge` before a chunk is read. Unbounded when left out. */
+  /** The most bytes of events and objects together the validation will read; a snapshot holding more is refused with `SnapshotTooLarge` before a byte of either is read. Unbounded when left out. */
   maxBytes?: number;
 }
 
-/** What a validated snapshot holds: its events, its objects, and their bytes in all. */
+/** What a validated snapshot holds: its events and their canonical bytes in all, its objects and their bytes in all. */
 export interface Validated {
   events: number;
+  eventBytes: number;
   objects: number;
-  bytes: number;
+  objectBytes: number;
 }
 
 /**
  * Checks that the open snapshot `portable` is a complete, sound
  * version-3 snapshot, and says what it holds; `InvalidSnapshot`
- * naming every problem found otherwise. In order: SQLite's integrity
- * and foreign-key checks, which nothing is read past when they fail;
- * every event row decoding to the event its columns name; every
- * `objects` row keyed by a CID with a size that is a count, and their
- * sizes in all within `maxBytes`; the object set equal to
- * `heldRoots` of the events, folded by the caller; and every object's
- * chunks read through, contiguous and of the format's lengths, and
- * hashing to the CID. What SQLite itself cannot read is a problem
- * like the others. The snapshot is read through the handle it was
- * opened on, and nothing is written.
+ * naming every problem found otherwise. In order: SQLite's foreign-key
+ * check; the bytes the tables declare, from their lengths alone — the
+ * chunks holding no more than the objects declare, events and objects
+ * together within `maxBytes`; SQLite's integrity check, which nothing
+ * is read past when it fails; every event row decoding to the event
+ * its columns name; every `objects` row keyed by a CID with a size
+ * that is a count; the object set equal to `heldRoots` of the events,
+ * folded by the caller; and every object's chunks read through,
+ * contiguous and of the format's lengths, and hashing to the CID. What
+ * SQLite itself cannot read is a problem like the others. Nothing is
+ * written.
  */
 export async function validatePortable(portable: PortableDatabase, options: ValidateOptions): Promise<Validated> {
   try {
     return await validate(portable, options);
   } catch (err) {
-    // What SQLite itself could not read is the file's problem, reported as the rest are.
-    if (err instanceof SqliteError) throw new InvalidSnapshot([{ where: "database", error: err.message }]);
+    if (err instanceof SqliteError || err instanceof InvalidSqlValue) throw new InvalidSnapshot([{ where: "database", error: err.message }]);
     throw err;
   }
 }
@@ -136,15 +130,17 @@ export async function validatePortable(portable: PortableDatabase, options: Vali
 async function validate(portable: PortableDatabase, options: ValidateOptions): Promise<Validated> {
   const { driver, vault } = portable;
   const problems: Problem[] = [];
-  const integrity = query(driver, "PRAGMA integrity_check").map((row) => String(row["integrity_check"]));
-  if (integrity.length !== 1 || integrity[0] !== "ok") problems.push({ where: "database", error: `integrity_check: ${integrity.join("; ")}` });
   for (const row of query(driver, "PRAGMA foreign_key_check")) {
     problems.push({ where: `${String(row["table"])}/rowid ${String(row["rowid"])}`, error: `references a row ${String(row["parent"])} does not have` });
   }
   if (problems.length > 0) throw new InvalidSnapshot(problems);
+  const declared = declaredBytes(driver);
+  if (declared.chunks > declared.objects) throw new InvalidSnapshot([{ where: "object_chunks", error: `hold ${declared.chunks} bytes where the objects declare ${declared.objects}` }]);
+  if (options.maxBytes !== undefined && declared.events + declared.objects > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, declared.events + declared.objects);
+  const integrity = query(driver, "PRAGMA integrity_check").map((row) => String(row["integrity_check"]));
+  if (integrity.length !== 1 || integrity[0] !== "ok") throw new InvalidSnapshot([{ where: "database", error: `integrity_check: ${integrity.join("; ")}` }]);
   for (const damage of await vault.events.damaged()) problems.push({ where: damage.where, error: damage.error });
   const listed = new Map<Cid, number>();
-  let total = 0;
   for (const row of query(driver, "SELECT rowid AS rowid, CAST(cid AS BLOB) AS cid, CAST(size AS TEXT) AS size FROM objects")) {
     const where = `objects/rowid ${String(row["rowid"])}`;
     let cid: Cid;
@@ -160,10 +156,8 @@ async function validate(portable: PortableDatabase, options: ValidateOptions): P
       continue;
     }
     listed.set(cid, Number(size));
-    total += Number(size);
   }
   if (problems.length > 0) throw new InvalidSnapshot(problems);
-  if (options.maxBytes !== undefined && total > options.maxBytes) throw new SnapshotTooLarge(options.maxBytes, total);
   const held = new Set(sortCids(checkedCids(await options.heldRoots(vault))));
   for (const cid of listed.keys()) {
     if (!held.has(cid)) problems.push({ where: `objects/${cid}`, error: "not held by any event of the snapshot" });
@@ -186,10 +180,28 @@ async function validate(portable: PortableDatabase, options: ValidateOptions): P
   for (const damage of await objects.damaged()) problems.push({ where: damage.where, error: damage.error });
   if (problems.length > 0) throw new InvalidSnapshot(problems);
   const [counted] = query(driver, "SELECT count(*) AS n FROM events");
-  return { events: Number(counted?.["n"]), objects: listed.size, bytes: total };
+  return { events: Number(counted?.["n"]), eventBytes: declared.events, objects: listed.size, objectBytes: declared.objects };
 }
 
-/** `cids` with each checked to be a raw CID: `InvalidCid` names the first that is not. */
+/**
+ * The bytes the tables declare — canonical event bytes, object sizes,
+ * chunk bytes — read from the record headers alone, which is what
+ * `length()` of a BLOB column costs: what a bound is checked against
+ * before any of them is loaded.
+ */
+function declaredBytes(driver: SqliteDriver): { events: number; objects: number; chunks: number } {
+  const [row] = query(
+    driver,
+    "SELECT (SELECT coalesce(sum(length(canonical)), 0) FROM events) AS events, (SELECT coalesce(sum(size), 0) FROM objects) AS objects, (SELECT coalesce(sum(length(bytes)), 0) FROM object_chunks) AS chunks"
+  );
+  const counted = (name: string): number => {
+    const value = row?.[name];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new InvalidSnapshot([{ where: name, error: `declare ${String(value)} bytes, which is not a count` }]);
+    return value;
+  };
+  return { events: counted("events"), objects: counted("objects"), chunks: counted("chunks") };
+}
+
 export function checkedCids(cids: Iterable<Cid>): Cid[] {
   const out: Cid[] = [];
   for (const cid of cids) out.push(rawCidOf(cid).text as Cid);

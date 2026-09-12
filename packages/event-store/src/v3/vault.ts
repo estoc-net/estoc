@@ -66,7 +66,10 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * hold exactly to validate. Computed by the caller, since only the
  * vault's own folds know which roots an event retains and which it
  * released; the runtime checks each CID. A `HeldRoots` serves as a
- * `KeepUnderLock` too, reading through the held view.
+ * `KeepUnderLock` too, reading through the held view. Whether every
+ * known payload is valid is decided here as well, by the layer that
+ * knows them: what the fold throws is what the export or validation
+ * fails with.
  */
 export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
 

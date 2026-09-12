@@ -12,6 +12,7 @@
 
 import {
   MemoryVault,
+  canonicalEventBytes,
   exportVault,
   openPortable,
   validatePortable,
@@ -20,7 +21,11 @@ import {
   type HeldRoots,
   type OpenDestination,
   type PortableDatabase,
+  type SqlRow,
+  type SqlValue,
   type SqliteDriver,
+  type SqliteStatement,
+  type Validated,
   type VaultRuntime,
 } from "../../../src/v3/index.js";
 import { META, REWRAPPED, WRAPPED } from "../fixtures.js";
@@ -64,7 +69,6 @@ async function opened(h: ExportHarness, target: string): Promise<PortableDatabas
   return openPortable(await h.open(target, "readonly"));
 }
 
-/** Whether `bytes` contains `needle`. */
 function contains(bytes: Uint8Array, needle: Uint8Array): boolean {
   outer: for (let i = 0; i + needle.length <= bytes.length; i++) {
     for (let j = 0; j < needle.length; j++) if (bytes[i + j] !== needle[j]) continue outer;
@@ -96,6 +100,39 @@ function corruptChunk(driver: SqliteDriver, cid: Cid, chunkNo = 0): void {
 }
 
 const ids = (events: Event[]): string[] => events.map((e) => e.eventId).sort();
+
+/** What an export or a validation reports for `events` over `objects` holding `objectBytes`. */
+function report(events: Event[], objects: number, objectBytes: number): Validated {
+  return { events: events.length, eventBytes: events.reduce((n, e) => n + canonicalEventBytes(e).length, 0), objects, objectBytes };
+}
+
+/** `driver` with every statement watched for the largest BLOB it ever handed back. */
+function observing(driver: SqliteDriver): { driver: SqliteDriver; largest(): number } {
+  let largest = 0;
+  const bound = <T extends object>(target: T, property: string | symbol): unknown => {
+    const value = Reflect.get(target, property, target) as unknown;
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+  };
+  const watched = new Proxy(driver, {
+    get: (target, property) =>
+      property !== "prepare"
+        ? bound(target, property)
+        : (sql: string): SqliteStatement => {
+            const statement = target.prepare(sql);
+            return new Proxy(statement, {
+              get: (inner, member) =>
+                member !== "all"
+                  ? bound(inner, member)
+                  : (...params: SqlValue[]): SqlRow[] => {
+                      const rows = inner.all(...params);
+                      for (const row of rows) for (const value of Object.values(row)) if (value instanceof Uint8Array) largest = Math.max(largest, value.length);
+                      return rows;
+                    },
+            });
+          },
+  });
+  return { driver: watched, largest: () => largest };
+}
 
 /** A vault holding hello, the big object and the empty object under three events, exported to a fresh target; the vault closed. */
 async function exported(h: ExportHarness): Promise<{ target: string; events: Event[] }> {
@@ -148,7 +185,7 @@ export const exportCases: ExportCase[] = [
       const target = h.fresh();
       const open = destination(h, target);
       const heldRoots = rootsExcept(unheldCid);
-      assertEqual(await exportVault(vault, open, { heldRoots }), { events: 3, objects: 3, bytes: 5 + BIG.length }, "what the export reports");
+      assertEqual(await exportVault(vault, open, { heldRoots }), report(events, 3, 5 + BIG.length), "what the export reports");
       assertEqual(open.created, 1, "one destination made");
       const bytes = await h.fileBytes(target);
       for (const [what, needle] of [
@@ -171,7 +208,7 @@ export const exportCases: ExportCase[] = [
         assertEqual(rows(snapshot.driver, "SELECT type, name FROM sqlite_master WHERE type = 'table' ORDER BY name"), ["events", "keystore", "object_chunks", "objects", "vault_meta"].map((name) => ({ type: "table", name })), "the five tables and nothing else");
         assertEqual(rows(snapshot.driver, "PRAGMA journal_mode"), [{ journal_mode: "delete" }], "a rollback journal");
         assertEqual(rows(snapshot.driver, "SELECT kind, ready FROM vault_meta"), [{ kind: "portable", ready: 1 }], "portable and ready");
-        assertEqual(await validatePortable(snapshot, { heldRoots }), { events: 3, objects: 3, bytes: 5 + BIG.length }, "validated again");
+        assertEqual(await validatePortable(snapshot, { heldRoots }), report(events, 3, 5 + BIG.length), "validated again");
         const v = snapshot.vault;
         assertEqual(v.metadata, META, "the vault's metadata");
         assertEqual(ids(await all(v.events.scan())), ids(events), "every event, the one whose root was released included");
@@ -197,9 +234,9 @@ export const exportCases: ExportCase[] = [
       assertEqual(rows(driver, "SELECT count(*) AS n FROM objects"), [{ n: 4 }], "the runtime keeps the released object until it is collected");
       // the runtime moves on; the first file does not
       await vault.keystore.rewrap(REWRAPPED);
-      await vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID], { i: 3 })]);
+      const later = await vault.vault.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID], { i: 3 })]);
       const second = h.fresh();
-      assertEqual(await exportVault(vault, destination(h, second), { heldRoots }), { events: 4, objects: 4, bytes: 10 + BIG.length }, "the second export");
+      assertEqual(await exportVault(vault, destination(h, second), { heldRoots }), report([...events, ...later], 4, 10 + BIG.length), "the second export");
       assertBytes(await h.fileBytes(target), bytes, "the first file is as it was");
       const again = await opened(h, second);
       try {
@@ -212,7 +249,7 @@ export const exportCases: ExportCase[] = [
     },
   },
   {
-    name: "an export is refused before the destination is made when the history has damage or a conflict, a held root is absent or known damaged, or the cut passes the byte bound; a root whose bytes fail as they are copied leaves the destination unready",
+    name: "an export is refused before the destination is made when the history has damage, a held root is absent or known damaged, or the cut passes the byte bound, and not for a conflict on record; a root whose bytes fail as they are copied leaves the destination unready",
     run: async (h) => {
       const c = clock();
       const { vault, driver } = await make(h, h.fresh(), c.now);
@@ -232,10 +269,17 @@ export const exportCases: ExportCase[] = [
       assertEqual(await vault.ingest([foreign]), { added: 1, duplicates: 0, conflicts: [], rejected: [] }, "the foreign event");
       const conflicting = { ...(foreign as Event), data: { from: "other", altered: true } };
       assertEqual((await vault.ingest([conflicting])).conflicts.length, 1, "a conflict recorded");
-      assertEqual((await refused("a conflict")).map((p) => p.where), [`events/${foreign?.eventId}`], "the conflict named");
-      await vault.stores.events.clearConflicts();
       const fine = h.fresh();
-      assertEqual(await exportVault(vault, destination(h, fine), { heldRoots: rootsOf }), { events: 2, objects: 1, bytes: 5 }, "exported once the conflicts are cleared");
+      const accepted = await all(vault.vault.events.scan());
+      assertEqual(await exportVault(vault, destination(h, fine), { heldRoots: rootsOf }), report(accepted, 1, 5), "exported with the conflict on record: a diagnostic, not damage");
+      assertEqual((await vault.vault.events.conflicting()).length, 1, "the diagnostic stays with the runtime");
+      const carried = await opened(h, fine);
+      try {
+        assertEqual((await all(carried.vault.events.scan({ author: foreign?.author }))).map((e) => e.data), [foreign?.data], "the accepted value travels");
+        assertEqual(await carried.vault.events.conflicting(), [], "the diagnostic does not");
+      } finally {
+        carried.close();
+      }
       corruptChunk(driver, HELLO_CID);
       await assertRejects(() => vault.vault.objects.read(HELLO_CID, 5), "DamagedObject", "the damage found by a read");
       const damaged = await refused("a held root known damaged");
@@ -264,13 +308,14 @@ export const exportCases: ExportCase[] = [
     run: async (h) => {
       const c = clock();
       const { vault } = await make(h, h.fresh(), c.now);
-      const [first] = await vault.vault.commit(
+      const events = await vault.vault.commit(
         [
           { cid: HELLO_CID, source: HELLO },
           { cid: WORLD_CID, source: WORLD },
         ],
         [draft([HELLO_CID, WORLD_CID])]
       );
+      const [first] = events;
       let admit!: () => void;
       const gate = new Promise<void>((resolve) => {
         admit = resolve;
@@ -288,7 +333,7 @@ export const exportCases: ExportCase[] = [
       assertEqual([await settled(committing), await settled(collecting), await settled(rewrapping)], [false, false, false], "all three wait");
       assertEqual(await settled(exporting), false, "the export waits on the gate");
       admit();
-      assertEqual(await exporting, { events: 1, objects: 2, bytes: 10 }, "the export's cut");
+      assertEqual(await exporting, report(events, 2, 10), "the export's cut");
       const bytes = await h.fileBytes(target);
       assertEqual((await committing).length, 1, "the commit landed after");
       assertEqual(await collecting, { removed: [WORLD_CID] }, "the collection pass removed the world after");
@@ -300,7 +345,7 @@ export const exportCases: ExportCase[] = [
         assertEqual(snapshot.wrapped, WRAPPED, "the wrapper of the cut");
         assertEqual((await all(snapshot.vault.events.scan())).map((e) => e.eventId), [first?.eventId], "the event of the cut");
         assertBytes((await snapshot.vault.objects.read(WORLD_CID, 5)) as Uint8Array, WORLD, "the world, collected from the runtime since");
-        assertEqual(await validatePortable(snapshot, { heldRoots: rootsOf }), { events: 1, objects: 2, bytes: 10 }, "validated");
+        assertEqual(await validatePortable(snapshot, { heldRoots: rootsOf }), report(events, 2, 10), "validated");
       } finally {
         snapshot.close();
       }
@@ -320,7 +365,7 @@ export const exportCases: ExportCase[] = [
         [draft([HELLO_CID, BIG_CID]), draft([HELLO_CID])]
       );
       const target = h.fresh();
-      assertEqual(await exportVault(memory as VaultRuntime, destination(h, target), { heldRoots: rootsOf }), { events: 2, objects: 2, bytes: 5 + BIG.length }, "the export");
+      assertEqual(await exportVault(memory as VaultRuntime, destination(h, target), { heldRoots: rootsOf }), report(events, 2, 5 + BIG.length), "the export");
       const snapshot = await opened(h, target);
       try {
         assertEqual(snapshot.wrapped, WRAPPED, "the wrapper");
@@ -367,7 +412,8 @@ export const exportCases: ExportCase[] = [
           snapshot.close();
         }
       }
-      const { target } = await exported(h);
+      const { target, events } = await exported(h);
+      const payload = report(events, 3, BIG.length + 5);
       const snapshot = await opened(h, target);
       try {
         let read = 0;
@@ -375,11 +421,92 @@ export const exportCases: ExportCase[] = [
           read += 1;
           return rootsOf(v);
         };
-        const err = await assertRejects(() => validatePortable(snapshot, { heldRoots: counting, maxBytes: BIG.length }), "SnapshotTooLarge", "over the bound");
-        assertEqual([(err as unknown as { maxBytes: number; bytes: number }).maxBytes, (err as unknown as { bytes: number }).bytes], [BIG.length, BIG.length + 5], "the bound and the size");
+        const bound = payload.eventBytes + payload.objectBytes;
+        const err = await assertRejects(() => validatePortable(snapshot, { heldRoots: counting, maxBytes: bound - 1 }), "SnapshotTooLarge", "over the bound");
+        assertEqual([(err as unknown as { maxBytes: number; bytes: number }).maxBytes, (err as unknown as { bytes: number }).bytes], [bound - 1, bound], "the bound and the size");
         assertEqual(read, 0, "the roots were not folded");
-        assertEqual(await validatePortable(snapshot, { heldRoots: counting, maxBytes: BIG.length + 5 }), { events: 3, objects: 3, bytes: BIG.length + 5 }, "at the bound");
+        assertEqual(await validatePortable(snapshot, { heldRoots: counting, maxBytes: bound }), payload, "at the bound");
         await assertRejects(() => validatePortable(snapshot, { heldRoots: async () => ["nope" as Cid] }), "InvalidCid", "a fold that names no CID");
+      } finally {
+        snapshot.close();
+      }
+    },
+  },
+  {
+    name: "the bound counts the events: a history of large events and no object is refused at export before the destination is made, and at validation before a canonical byte is read",
+    run: async (h) => {
+      const c = clock();
+      const memory = new MemoryVault({ metadata: META, wrapped: WRAPPED, now: c.now });
+      const events = await memory.vault.commit(
+        [],
+        Array.from({ length: 8 }, (_, i) => draft([], { i, text: "x".repeat(128 * 1024) }))
+      );
+      const payload = report(events, 0, 0);
+      assert(payload.eventBytes > MIB, `the events weigh ${payload.eventBytes} bytes`);
+      const refused = destination(h, h.fresh());
+      const early = await assertRejects(() => exportVault(memory as VaultRuntime, refused, { heldRoots: rootsOf, maxBytes: payload.eventBytes - 1 }), "SnapshotTooLarge", "over the bound at export");
+      assertEqual((early as unknown as { bytes: number }).bytes, payload.eventBytes, "the events counted");
+      assertEqual(refused.created, 0, "no destination made");
+      const target = h.fresh();
+      assertEqual(await exportVault(memory as VaultRuntime, destination(h, target), { heldRoots: rootsOf, maxBytes: payload.eventBytes }), payload, "at the bound");
+      const watched = observing(await h.open(target, "readonly"));
+      const snapshot = openPortable(watched.driver);
+      try {
+        const late = await assertRejects(() => validatePortable(snapshot, { heldRoots: rootsOf, maxBytes: 0 }), "SnapshotTooLarge", "over the bound at validation");
+        assertEqual((late as unknown as { bytes: number }).bytes, payload.eventBytes, "the events counted again");
+        assert(watched.largest() < 64 * 1024, `a statement handed back ${watched.largest()} bytes before the refusal`);
+        assertEqual(await validatePortable(snapshot, { heldRoots: rootsOf, maxBytes: payload.eventBytes }), payload, "validated at the bound");
+      } finally {
+        snapshot.close();
+      }
+    },
+  },
+  {
+    name: "a chunk longer than the layout gives it is refused by its length: a read never loads it, and validation refuses the file before its integrity is checked",
+    run: async (h) => {
+      const { target } = await exported(h);
+      const oversized = 16 * MIB;
+      await altered(h, target, (d) => {
+        d.exec(`DROP TABLE object_chunks;
+          CREATE TABLE object_chunks (
+            cid TEXT COLLATE BINARY NOT NULL REFERENCES objects(cid) ON DELETE CASCADE,
+            chunk_no INTEGER NOT NULL,
+            bytes BLOB NOT NULL,
+            PRIMARY KEY (cid, chunk_no)
+          ) STRICT`);
+        exec(d, "INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, 0, zeroblob(?))", HELLO_CID, oversized);
+      });
+      const watched = observing(await h.open(target, "readonly"));
+      const snapshot = openPortable(watched.driver);
+      try {
+        await assertRejects(() => snapshot.vault.objects.read(HELLO_CID, 5), "DamagedObject", "a read of the object");
+        const err = await assertRejects(() => validatePortable(snapshot, { heldRoots: rootsOf }), "InvalidSnapshot", "validation");
+        const [problem] = (err as unknown as { problems: { where: string; error: string }[] }).problems;
+        assertEqual(problem?.where, "object_chunks", "placed at the chunk table");
+        assert(new RegExp(`hold ${oversized} bytes where the objects declare ${BIG.length + 5}`).test(problem?.error ?? ""), `the sums: ${problem?.error}`);
+        assert(watched.largest() <= MIB, `a statement handed back ${watched.largest()} bytes`);
+      } finally {
+        snapshot.close();
+      }
+    },
+  },
+  {
+    name: "a CHECK the file declares is neither trusted nor run: a file whose constraint every row violates validates on its values",
+    run: async (h) => {
+      const { target, events } = await exported(h);
+      await altered(h, target, (d) => {
+        const objects = rows(d, "SELECT cid, size FROM objects");
+        d.exec(`PRAGMA foreign_keys = OFF;
+          DROP TABLE objects;
+          CREATE TABLE objects (cid TEXT COLLATE BINARY PRIMARY KEY NOT NULL, size INTEGER NOT NULL CHECK (size < 0)) STRICT;
+          PRAGMA ignore_check_constraints = ON`);
+        for (const row of objects) exec(d, "INSERT INTO objects (cid, size) VALUES (?, ?)", row["cid"] as string, row["size"] as number);
+        d.exec("PRAGMA ignore_check_constraints = OFF");
+        assertEqual(rows(d, "PRAGMA integrity_check").length, objects.length, "the writer, which runs the constraint, sees every row violate it");
+      });
+      const snapshot = await opened(h, target);
+      try {
+        assertEqual(await validatePortable(snapshot, { heldRoots: rootsOf }), report(events, 3, BIG.length + 5), "validated on the values");
       } finally {
         snapshot.close();
       }

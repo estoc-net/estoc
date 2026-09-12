@@ -85,7 +85,7 @@ describe("exportVault on a path", () => {
     await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID])]);
     for (const journal of ["wal", "delete"] as const) {
       const target = fresh();
-      expect(await exportVault(vault, (mode) => openNodeSqlite(target, mode === "create" ? { mode, journal } : { mode }), { heldRoots: rootsOf })).toEqual({ events: 1, objects: 1, bytes: 5 });
+      expect(await exportVault(vault, (mode) => openNodeSqlite(target, mode === "create" ? { mode, journal } : { mode }), { heldRoots: rootsOf })).toEqual({ events: 1, eventBytes: expect.any(Number), objects: 1, objectBytes: 5 });
       expect(await exists(`${target}-journal`), `${journal}: no journal beside the file`).toBe(false);
       expect(await exists(`${target}-wal`), `${journal}: no WAL beside the file`).toBe(false);
       expect(await exists(`${target}-shm`), `${journal}: no shm beside the file`).toBe(false);
@@ -93,8 +93,8 @@ describe("exportVault on a path", () => {
       const first = openPortable(open(target, "readonly"));
       const second = openPortable(open(target, "readonly"));
       try {
-        expect(await validatePortable(first, { heldRoots: rootsOf })).toEqual({ events: 1, objects: 1, bytes: 5 });
-        expect(await validatePortable(second, { heldRoots: rootsOf })).toEqual({ events: 1, objects: 1, bytes: 5 });
+        expect(await validatePortable(first, { heldRoots: rootsOf })).toEqual({ events: 1, eventBytes: expect.any(Number), objects: 1, objectBytes: 5 });
+        expect(await validatePortable(second, { heldRoots: rootsOf })).toEqual({ events: 1, eventBytes: expect.any(Number), objects: 1, objectBytes: 5 });
       } finally {
         first.close();
         second.close();
@@ -109,7 +109,7 @@ describe("exportVault on a path", () => {
     const inspector = new SqliteVault(openInspector(open(file, "readwrite")));
     const target = fresh();
     try {
-      expect(await exportVault(inspector, at(target), { heldRoots: rootsOf })).toEqual({ events: 1, objects: 1, bytes: 5 });
+      expect(await exportVault(inspector, at(target), { heldRoots: rootsOf })).toEqual({ events: 1, eventBytes: expect.any(Number), objects: 1, objectBytes: 5 });
     } finally {
       await inspector.close();
     }
