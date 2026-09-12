@@ -67,7 +67,7 @@ export { compareLocalEvents, isLocalEvent, matchesLocal, type LocalEvent, type L
 
 // ---- the folder ----------------------------------------------------------
 
-export { walk, segmentsOf, VaultOwned, type VaultBackend, type Ownership } from "./backend/types.js";
+export { walk, segmentsOf, type VaultBackend } from "./backend/types.js";
 export { MemoryBackend, type MemoryBackendOptions } from "./backend/memory.js";
 export { OpfsBackend } from "./backend/opfs.js";
 export {

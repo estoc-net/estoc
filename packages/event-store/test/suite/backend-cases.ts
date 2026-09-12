@@ -43,36 +43,6 @@ async function rejects(work: Promise<unknown>, pattern: RegExp, what: string): P
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** `n` deterministic bytes from `seed`. */
-function bytesOf(n: number, seed: number): Uint8Array {
-  const out = new Uint8Array(n);
-  let s = (seed >>> 0) || 1;
-  for (let i = 0; i < n; i++) {
-    s ^= s << 13;
-    s ^= s >>> 17;
-    s ^= s << 5;
-    out[i] = s & 0xff;
-  }
-  return out;
-}
-
-/** `bytes` as a source of chunks of `size` (the last takes the rest). */
-async function* chunks(bytes: Uint8Array, size: number): AsyncIterable<Uint8Array> {
-  for (let at = 0; at < bytes.length; at += size) yield bytes.slice(at, Math.min(at + size, bytes.length));
-}
-
-/** Everything `stream` yields, as numbers; a stream that is null fails. */
-async function drain(stream: ReadableStream<Uint8Array> | null): Promise<number[]> {
-  if (stream === null) throw new Error("expected a stream, got null");
-  const reader = stream.getReader();
-  const out: number[] = [];
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return out;
-    for (const byte of value as Uint8Array) out.push(byte);
-  }
-}
-
 export const backendCases: BackendCase[] = [
   {
     name: "reads null for a missing file and [] for a missing dir",
@@ -185,20 +155,6 @@ export const backendCases: BackendCase[] = [
     },
   },
   {
-    name: "removes an empty directory, and refuses one with entries",
-    run: async (fresh) => {
-      const b = await fresh();
-      await b.write(".estoc/import/job/staged/a", enc.encode("x"));
-      await rejects(b.remove(".estoc/import/job"), /./, "removing a directory with entries");
-      same(text(await b.read(".estoc/import/job/staged/a")), "x", "the entry stands");
-      await b.remove(".estoc/import/job/staged/a");
-      await b.remove(".estoc/import/job/staged");
-      await b.remove(".estoc/import/job");
-      same(await b.dirs(".estoc/import"), [], "the directory is gone");
-      await b.remove(".estoc/import/job");
-    },
-  },
-  {
     name: "hands back copies, not its own buffers",
     run: async (fresh) => {
       const b = await fresh();
@@ -254,120 +210,6 @@ export const backendCases: BackendCase[] = [
       // and beside them everything still works
       await b.write("d/g", enc.encode("g"));
       same((await b.list("d")).sort(), ["f", "g"], "a sibling write");
-    },
-  },
-  {
-    name: "open: streams a file's bytes, null for a missing file or a directory, and a cancel is not an error",
-    run: async (fresh) => {
-      const b = await fresh();
-      same(await b.open("nope"), null, "open a missing file");
-      await b.write("d/f", enc.encode("file"));
-      same(await b.open("d"), null, "open a directory");
-      same(await b.open("d/f/under"), null, "open under a file");
-      const large = bytesOf(200 * 1024 + 7, 1);
-      await b.write("d/large", large);
-      same(await drain(await b.open("d/large")), [...large], "the bytes streamed, whole");
-      same(await drain(await b.open("d/f")), [...enc.encode("file")], "a small file");
-      await b.write("d/empty", new Uint8Array(0));
-      same(await drain(await b.open("d/empty")), [], "an empty file");
-      const stream = (await b.open("d/large")) as ReadableStream<Uint8Array>;
-      const reader = stream.getReader();
-      const first = await reader.read();
-      same(first.done, false, "a first chunk");
-      await reader.cancel();
-      same(await b.size("d/large"), large.length, "the file is untouched by a cancel");
-    },
-  },
-  {
-    name: "create: writes every chunk of a source in order, replaces, and a source that throws leaves what was there",
-    run: async (fresh) => {
-      const b = await fresh();
-      const bytes = bytesOf(150 * 1024 + 3, 2);
-      await b.create("o/new", chunks(bytes, 7_001));
-      same([...((await b.read("o/new")) as Uint8Array)], [...bytes], "created from chunks");
-      await b.create("o/new", chunks(enc.encode("replaced"), 3));
-      same(text(await b.read("o/new")), "replaced", "replaced whole");
-      async function* failing(): AsyncIterable<Uint8Array> {
-        yield enc.encode("half");
-        throw new Error("source gone");
-      }
-      await rejects(b.create("o/new", failing()), /source gone/, "the source's error");
-      same(text(await b.read("o/new")), "replaced", "the old file stands");
-      await rejects(b.create("o/fresh", failing()), /source gone/, "the source's error, fresh path");
-      same(await b.read("o/fresh"), null, "nothing landed where there was nothing");
-      same((await b.list("o")).sort(), ["new"], "no residue is listed beside it");
-      await b.create("o/empty", chunks(new Uint8Array(0), 1));
-      same(await b.size("o/empty"), 0, "an empty source makes an empty file");
-      await b.write("o/f", enc.encode("f"));
-      await rejects(b.create("o/f/under", chunks(enc.encode("x"), 1)), /./, "create below a file");
-      same(text(await b.read("o/f")), "f", "the file in the way is as it was");
-    },
-  },
-  {
-    name: "create to a fresh path shows nothing there — not even an empty file — until the source has ended",
-    run: async (fresh) => {
-      const b = await fresh();
-      let release!: () => void;
-      let started!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const ready = new Promise<void>((resolve) => {
-        started = resolve;
-      });
-      async function* slow(): AsyncIterable<Uint8Array> {
-        yield enc.encode("half");
-        started();
-        await gate;
-        yield enc.encode("-done");
-      }
-      const create = b.create("o/fresh", slow());
-      await ready;
-      same(await b.size("o/fresh"), null, "nothing at the path while the source waits");
-      same(await b.read("o/fresh"), null, "nor to read");
-      release();
-      await create;
-      same(text(await b.read("o/fresh")), "half-done", "whole once the source has ended");
-      same((await b.list("o")).sort(), ["fresh"], "and nothing left beside it");
-    },
-  },
-  {
-    name: "rename: moves a file, making parents, over an existing file whole; a missing source is an error",
-    run: async (fresh) => {
-      const b = await fresh();
-      const bytes = bytesOf(100 * 1024 + 1, 3);
-      await b.write("staging/x", bytes);
-      await b.rename("staging/x", "objects/deep/y");
-      same(await b.read("staging/x"), null, "the source is gone");
-      same([...((await b.read("objects/deep/y")) as Uint8Array)], [...bytes], "the target has the bytes");
-      same(await b.list("staging"), [], "nothing left in the source directory");
-      await b.write("staging/z", enc.encode("new"));
-      await b.rename("staging/z", "objects/deep/y");
-      same(text(await b.read("objects/deep/y")), "new", "replaced over an existing file");
-      same(await b.read("staging/z"), null, "and the source is gone");
-      same((await b.list("objects/deep")).sort(), ["y"], "one file there");
-      await rejects(b.rename("staging/nope", "objects/w"), /./, "no source");
-      same(await b.read("objects/w"), null, "nothing appeared");
-      await rejects(b.rename("staging/../x", "objects/w"), /unsafe/, "an unsafe source path");
-    },
-  },
-  {
-    name: "own: exclusive under one name — a second take is VaultOwned, refused at once; release lets the next take it; releasing twice is fine; another name is another vault",
-    run: async (fresh) => {
-      const b = await fresh();
-      const first = await b.own(".estoc/local/owner.pid");
-      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "a second take while the first holds");
-      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "and again: nothing waits, nothing is stolen");
-      const other = await b.own("other/local/owner.pid");
-      await other.release();
-      await first.release();
-      await first.release();
-      const second = await b.own(".estoc/local/owner.pid");
-      await rejects(b.own(".estoc/local/owner.pid"), /owned elsewhere/, "the second holds now");
-      await second.release();
-      const third = await b.own(".estoc/local/owner.pid");
-      await third.release();
-      await rejects(b.own("../owner"), /relative|segment/, "a name outside the root");
     },
   },
   {

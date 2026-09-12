@@ -1,4 +1,4 @@
-import { VaultOwned, segmentsOf, tempName, type Ownership, type VaultBackend } from "./types.js";
+import { segmentsOf, type VaultBackend } from "./types.js";
 
 /**
  * A vault inside the Origin Private File System, rooted at any directory
@@ -11,26 +11,9 @@ import { VaultOwned, segmentsOf, tempName, type Ownership, type VaultBackend } f
  * last line, which the folder store reports and heals. `modified` is the
  * file's `lastModified`, which a rewrite renews.
  *
- * A streamed `create` over an existing file is one `createWritable()` too,
- * closed once the source has ended and aborted — the swap file discarded,
- * the original kept — when it throws. Over a path with no file, getting a
- * handle would make an empty file visible before the source has ended, so
- * the source is written to a temp sibling and moved into place by
- * `FileSystemFileHandle.move()`, which is atomic and replaces a file at the
- * destination. `rename` is `move` too. Where the platform has no `move`, a
- * fresh destination cannot be filled atomically at all: `create` and
- * `rename` to one refuse before touching it, and only `rename` over an
- * existing file — a copy through `createWritable()`, atomic on close, then a
- * removal of the source — still works. `open` is the file's own `stream()`.
- *
  * `createWritable()` is what this needs from the platform; browsers that
  * only offer OPFS through sync access handles in workers are not served by
  * this adapter yet — the constructor says so up front.
- *
- * Ownership is a Web Lock, exclusive, named for the one path from the
- * origin's storage root through this directory to the name given, asked for
- * with `ifAvailable` so a held lock refuses at once; the browser releases it
- * when the holding page goes away. No file is made.
  */
 export class OpfsBackend implements VaultBackend {
   constructor(private readonly root: FileSystemDirectoryHandle) {
@@ -105,59 +88,6 @@ export class OpfsBackend implements VaultBackend {
     }
   }
 
-  async open(path: string): Promise<ReadableStream<Uint8Array> | null> {
-    const handle = await this.file(path, false);
-    if (handle === null) {
-      return null;
-    }
-    return (await handle.getFile()).stream() as ReadableStream<Uint8Array>;
-  }
-
-  async create(path: string, source: AsyncIterable<Uint8Array>): Promise<void> {
-    const existing = await this.file(path, false);
-    if (existing !== null) {
-      await fill(existing, source);
-      return;
-    }
-    // No file there yet: written beside its place under a temp name and
-    // moved in whole, so nothing stands at `path` until the source has
-    // ended. Without `move` there is no way to do that.
-    const segments = segmentsOf(path);
-    const name = segments.pop() as string;
-    const dir = (await this.dir(segments, true)) as FileSystemDirectoryHandle;
-    if (!hasMove()) throw noMove(`create ${JSON.stringify(path)}`);
-    const tmpName = tempName(name);
-    const tmp = await dir.getFileHandle(tmpName, { create: true });
-    try {
-      await fill(tmp, source);
-      await (tmp as Movable).move(dir, name);
-    } catch (err) {
-      await dir.removeEntry(tmpName).catch(() => undefined);
-      throw err;
-    }
-  }
-
-  async rename(from: string, to: string): Promise<void> {
-    const source = await this.file(from, false);
-    if (source === null) {
-      throw new Error(`no such file: ${JSON.stringify(from)}`);
-    }
-    const segments = segmentsOf(to);
-    const name = segments.pop() as string;
-    const dir = (await this.dir(segments, true)) as FileSystemDirectoryHandle;
-    if (hasMove()) {
-      await (source as Movable).move(dir, name); // atomic, over a file at the destination too
-      return;
-    }
-    // No `move`: a file already at the destination can be replaced whole
-    // through its own writable, which is atomic on close; a fresh
-    // destination cannot be, and is refused untouched.
-    const target = await this.file(to, false);
-    if (target === null) throw noMove(`rename to ${JSON.stringify(to)}`);
-    await fill(target, streamChunks((await source.getFile()).stream() as ReadableStream<Uint8Array>));
-    await this.remove(from);
-  }
-
   async remove(path: string): Promise<void> {
     const segments = segmentsOf(path);
     const name = segments.pop() as string;
@@ -204,93 +134,6 @@ export class OpfsBackend implements VaultBackend {
       }
     }
     return names;
-  }
-
-  async own(path: string): Promise<Ownership> {
-    segmentsOf(path);
-    const locks = (navigator as { locks?: LockManager }).locks;
-    if (locks === undefined || typeof locks.request !== "function") throw new Error("Web Locks are not available here: a vault cannot be owned");
-    const name = await this.lockName(path);
-    let free!: () => void;
-    const freed = new Promise<void>((resolve) => {
-      free = resolve;
-    });
-    let granted!: (held: boolean) => void;
-    const grant = new Promise<boolean>((resolve) => {
-      granted = resolve;
-    });
-    // The lock is held for as long as the callback runs: until `release`.
-    const request = locks.request(name, { ifAvailable: true }, async (lock) => {
-      granted(lock !== null);
-      if (lock !== null) await freed;
-    });
-    request.catch(() => granted(false));
-    if (!(await grant)) {
-      await request.catch(() => undefined);
-      throw new VaultOwned(path, "another page holds it");
-    }
-    let released = false;
-    return {
-      release: async () => {
-        if (released) return;
-        released = true;
-        free();
-        await request;
-      },
-    };
-  }
-
-  /**
-   * The lock's name: the one path from the origin's storage root through
-   * this directory to `path`, whatever handle and base it was reached
-   * by — two backends over one place, one rooted higher with a
-   * deeper base, name the same lock. A directory the storage root cannot
-   * place is refused ownership: there is no name for it that another
-   * opener would agree on.
-   */
-  private async lockName(path: string): Promise<string> {
-    const storage = await navigator.storage.getDirectory();
-    const rel = typeof storage.resolve === "function" ? await storage.resolve(this.root) : null;
-    if (rel === null) throw new Error("this directory is not under the origin's storage root: a vault there cannot be owned");
-    return `estoc-vault:/${[...rel, ...segmentsOf(path)].join("/")}`;
-  }
-}
-
-type Movable = FileSystemFileHandle & { move: (dir: FileSystemDirectoryHandle, name: string) => Promise<void> };
-
-/** Does the platform give file handles `move()`? Chromium does; not every browser with `createWritable()` does. */
-function hasMove(): boolean {
-  return typeof (FileSystemFileHandle.prototype as { move?: unknown }).move === "function";
-}
-
-function noMove(what: string): Error {
-  return new Error(`${what}: OPFS here has no FileSystemFileHandle.move(), so a file cannot be put in place whole`);
-}
-
-/** `handle`'s contents replaced by every chunk of `source`, atomically on close; on a throw the swap file is discarded and the file is as it was. */
-async function fill(handle: FileSystemFileHandle, source: AsyncIterable<Uint8Array>): Promise<void> {
-  const writable = await handle.createWritable();
-  try {
-    for await (const chunk of source) {
-      await writable.write(chunk as unknown as ArrayBufferView<ArrayBuffer>);
-    }
-  } catch (err) {
-    await writable.abort().catch(() => undefined);
-    throw err;
-  }
-  await writable.close();
-}
-
-async function* streamChunks(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
-  const reader = stream.getReader();
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      yield value;
-    }
-  } finally {
-    reader.releaseLock();
   }
 }
 

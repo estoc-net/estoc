@@ -1,7 +1,7 @@
 /**
  * The version-3 event, its identity, time and order, and the store
- * interface. The model with no store behind it: what a folder, a
- * database and a map in memory must all agree on. No event type is
+ * interface. The model with no store behind it: what a database and
+ * a map in memory must both agree on. No event type is
  * known here; what an event means is `@estoc/vault`'s.
  */
 
@@ -66,7 +66,7 @@ export interface Rejected {
 
 /** Storage material that could not be decoded as an event. */
 export interface Damaged {
-  /** where, in the store's own terms, e.g. `<segment path>:<line number>` */
+  /** where, in the store's own terms: a row, a position, a file and offset */
   where: string;
   bytes?: Uint8Array;
   error: string;

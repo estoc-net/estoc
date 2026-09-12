@@ -76,19 +76,28 @@ export class MemoryEventStore implements EventStore {
     return event as Event<D>;
   }
 
-  async appendAll<D extends JsonObject>(drafts: Draft<D>[]): Promise<Event<D>[]> {
+  /**
+   * `drafts` appended as one batch; `publish`, when given, runs in the
+   * same synchronous step, after the batch is minted and before any of
+   * it is accepted: what it lands and the events land together. A throw
+   * from the clock, the generator or `publish` accepts no event, and
+   * undoes nothing `publish` did before throwing — so `publish` must
+   * finish synchronously and leave nothing visible when it throws. How
+   * the vault in memory publishes a commit's objects with its events.
+   */
+  async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
     const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
-    if (clean.length === 0) return [];
+    if (clean.length === 0 && publish === undefined) return [];
     return this.serialise(() => {
-      // One clock reading and one `at` for the batch; a throw from the clock
-      // or the generator lands before any event does.
+      // One clock reading and one `at` for the batch. Every event of
+      // the batch is brought to the form its canonical bytes parse to
+      // before any is accepted, so what append returns is what scan
+      // and another store's ingest hand out.
       const { at, eventIds } = mint(clean.length, this.now);
-      // Every event of the batch is brought to the form its canonical
-      // bytes parse to before any is accepted, so what append
-      // returns is what scan and another store's ingest hand out.
       const held = clean.map((draft, i) =>
         canonical({ eventId: eventIds[i], at, author: this.author, type: draft.type, roots: draft.roots, data: draft.data })
       );
+      publish?.();
       return held.map((h) => this.accept(h.event, h.text)) as Event<D>[];
     });
   }

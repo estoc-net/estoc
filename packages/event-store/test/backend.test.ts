@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { tempName, unfinishedWriteOf } from "../src/backend/types.js";
 import { MemoryBackend } from "../src/index.js";
 import { FsBackend } from "../src/node.js";
 import { backendSuite } from "./suite/backend-suite.js";
@@ -51,24 +50,6 @@ describe("memory backend", () => {
 });
 
 describe("fs backend on disk", () => {
-  it("writes a whole file beside its place under the name `tempName` gives, which `unfinishedWriteOf` reads back, so that what a process that dies mid-write leaves is known by name", async () => {
-    const dir = await tempDir();
-    const b = new FsBackend(dir);
-    let beside: string[] = [];
-    await b.create("a/b.txt", (async function* () {
-      yield new Uint8Array([1]);
-      beside = await b.list("a");
-      yield new Uint8Array([2]);
-    })());
-    expect(beside.length).toBe(1);
-    expect(unfinishedWriteOf(beside[0] as string)).toBe("b.txt");
-    expect(await b.list("a")).toEqual(["b.txt"]);
-    expect(unfinishedWriteOf(tempName("b.txt"))).toBe("b.txt");
-    expect(unfinishedWriteOf(tempName("journal.json"))).toBe("journal.json");
-    expect(tempName("b.txt")).not.toBe(tempName("b.txt"));
-    for (const other of ["b.txt", "b.txt.tmp", "b.txt.abc.tmp", "b.txt.0123456789ab.tmp.1", ".0123456789ab.tmp"]) expect(unfinishedWriteOf(other), other).toBeNull();
-  });
-
   it("keeps the mode of a file it replaces", async () => {
     const dir = await tempDir();
     const backend = new FsBackend(dir);

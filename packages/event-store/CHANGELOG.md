@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+- **v3 aligned with the SQLite specification; the folder vault retired.**
+  The replica model's storage moved from a folder to one SQLite file
+  (`docs/replica-model/vault-sqlite.md`; `vault-folder.md` is gone), and
+  what was built for the folder goes with it: `FolderEventStore`,
+  `FolderObjectStore`, `FolderVault`, `FolderReader`, the folder layout,
+  segments, replica file and local stores, `exportVault`/`restoreFolder`/
+  `importFolder` and the barrier under `import/`, the pid-file ownership
+  protocol, and the `open`/`create`/`rename`/`own` members the
+  `VaultBackend` had grown for them (`VaultOwned` and `Ownership` too);
+  `FileStore`, `checkPath` and `MemoryFileStore`, since the model has no
+  portable files any more; `LatchRegistry`, since the model has no read
+  latch. The SQLite vault is written next, in `src/v3/sqlite/`; until
+  then `@estoc/event-store/v3` is the model and its reference in memory.
+  What stays changed to match: `ObjectStore.collect` returns
+  `{ removed }` — the exact unkept set, deleted at once, no orphan grace,
+  no `young`; a read that finds an object's bytes not to hash to its CID
+  makes it known damaged for the session — `has`, `stat`, `open` and
+  `read` fail with `DamagedObject`, `list` fails on reaching it — until
+  `putObject`/`putRaw` replace it with verified bytes or collection
+  removes it (a sound object already held is idempotent, its bytes
+  untouched); `Vault` gained `metadata` and lost `files`; `commit`
+  refuses a supplied object no draft names as a root
+  (`UnreferencedObject`) before reading a byte, fixes the batch it
+  checked before reading it, and publishes its objects and events
+  together or not at all: they are verified into a `Preparation` no
+  read sees — not `has`, `stat` or `list` — and published in the one
+  transaction that appends the events, a failure undoing only that
+  commit's own preparation; `Stores.transaction` is required, and
+  `Runtime` refuses stores without it; `MemoryObjectStore.prepare`
+  is new and its `transaction` gone; `MemoryEventStore.appendAll`
+  takes an optional `publish` step that lands with the batch; the
+  mutations an operation issues through `Held` — `commit`, `ingest`,
+  `collect` — run one at a time in the order issued, so a commit
+  issued while a collection pass computes its keep set lands after the
+  pass; once the operation has returned, a `Held` accepts no further
+  mutation (`UnsupportedOperation`), but a mutation it accepted and the
+  operation did not wait for still finishes before the lock is
+  released, and reads through the view — a queued collection pass
+  computing its keep set — stay good until it has; once the last has
+  finished, a `Held` kept past its operation refuses every call —
+  mutation, `open`, nested `locked`, read (`UnsupportedOperation`) —
+  since it is no longer inside the lock nor the runtime's guard; the
+  view a keep callback gets refuses a
+  mutation before touching its source rather than wait on the pass
+  itself; `WriterLock.idle` is new;
+  `VaultRuntime` gained `metadata` and
+  `keystore`, a `KeystoreAccess` whose `rewrap` runs under the writer
+  lock; `Runtime` takes an options object; `MemoryVault` takes
+  `metadata` and an optional `wrapped` seed; `VaultMetadata`,
+  `WrappedSeed`, `checkMetadata` and `checkWrappedSeed` are new;
+  `UnsupportedOperation` is new, for the read-only snapshot view to
+  come; `DamagedLayout`, `PendingImport`, `Unprotected` and
+  `UnsettledRead` are gone. The entries below that describe the folder
+  (A06–A10) are history: what they added is no longer in the package.
+
 - **`@estoc/event-store/v3`**: the version-3 event model of
   `docs/replica-model/event-store.md`, built beside version 2 until the
   vault switches over (v3 A02). RFC 8785 canonical JSON — `canonicalize`

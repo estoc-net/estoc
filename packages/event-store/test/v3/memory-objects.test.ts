@@ -1,18 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  DamagedObject,
-  DEFAULT_EXTENT_BYTES,
-  DEFAULT_GRACE_MS,
-  DEFAULT_MAX_OBJECT_BYTES,
-  LatchRegistry,
-  MemoryObjectStore,
-  chunksOf,
-  type Cid,
-  type ObjectStore,
-} from "../../src/v3/index.js";
-import { expectBytes } from "./suite/helpers.js";
-import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, join, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
+import { DamagedObject, DEFAULT_EXTENT_BYTES, DEFAULT_MAX_OBJECT_BYTES, DigestMismatch, MemoryObjectStore, chunksOf, compareCids, type Cid, type ObjectStore } from "../../src/v3/index.js";
+import { all, expectBytes } from "./suite/helpers.js";
+import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "./suite/object-store-suite.js";
 
 objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) => {
   const store = new MemoryObjectStore(options);
@@ -22,9 +12,9 @@ objectStoreSuite("MemoryObjectStore", async (options: OpenObjectOptions = {}) =>
 /**
  * `inner` with its output streams cut into chunks of at most `n` bytes
  * — for the first 256 chunks of each stream; 64 KiB after that, so a
- * large object does not come out in millions — the latch untouched: a
- * store that chunks its output otherwise than by extent, which the
- * suite must accept just the same.
+ * large object does not come out in millions: a store that chunks its
+ * output otherwise than by extent, which the suite must accept just the
+ * same.
  */
 function rechunked(inner: ObjectStore, n: number): ObjectStore {
   return {
@@ -63,28 +53,22 @@ function rechunked(inner: ObjectStore, n: number): ObjectStore {
  * `inner` with each output stream closed together with its last chunk:
  * the inner stream is read one chunk ahead, so its verification and
  * EOF come before the last chunk is handed out, and the outer stream
- * closes on that same pull. The outer stream holds a latch of its own
- * in the store's registry until it closes, fails or is cancelled. A
- * store that completes with the last chunk rather than on the read
- * after it, which the suite must accept just the same.
+ * closes on that same pull. A store that completes with the last chunk
+ * rather than on the read after it, which the suite must accept just
+ * the same.
  */
-function closingOnLast(inner: MemoryObjectStore): ObjectStore {
+function closingOnLast(inner: ObjectStore): ObjectStore {
   return {
     ...passthrough(inner),
     open: async (cid) => {
       const stream = await inner.open(cid);
       if (stream === null) return null;
-      const release = inner.latches.acquire(cid);
       const reader = stream.getReader();
-      let ahead = await reader.read().catch((err: unknown) => {
-        release();
-        throw err;
-      });
+      let ahead = await reader.read();
       return new ReadableStream<Uint8Array>(
         {
           pull: async (controller) => {
             if (ahead.done) {
-              release();
               controller.close();
               return;
             }
@@ -92,20 +76,13 @@ function closingOnLast(inner: MemoryObjectStore): ObjectStore {
             try {
               ahead = await reader.read();
             } catch (err) {
-              release();
               controller.error(err);
               return;
             }
             controller.enqueue(chunk);
-            if (ahead.done) {
-              release();
-              controller.close();
-            }
+            if (ahead.done) controller.close();
           },
-          cancel: async (reason) => {
-            release();
-            await reader.cancel(reason);
-          },
+          cancel: (reason) => reader.cancel(reason),
         },
         { highWaterMark: 0 }
       );
@@ -117,37 +94,31 @@ function closingOnLast(inner: MemoryObjectStore): ObjectStore {
  * `inner` with every object verified before a byte of it is handed
  * out: `open` reads the inner stream to its end once — its check — and
  * throws `DamagedObject` from `open` itself if that fails; otherwise it
- * opens the object again and passes it through. A latch of the outer
- * stream's own covers the gap between the two. A store that does not
+ * opens the object again and passes it through. A store that does not
  * verify lazily, which the suite must accept just the same.
  */
-function verifyingFirst(inner: MemoryObjectStore): ObjectStore {
+function verifyingFirst(inner: ObjectStore): ObjectStore {
   return {
     ...passthrough(inner),
     open: async (cid) => {
       const check = await inner.open(cid);
       if (check === null) return null;
-      const release = inner.latches.acquire(cid);
-      try {
-        for await (const _ of chunksOf(check)) {
-          // read to the end: the verification
-        }
-        const stream = (await inner.open(cid)) as ReadableStream<Uint8Array>;
-        const reader = stream.getReader();
-        return new ReadableStream<Uint8Array>(
-          {
-            pull: async (controller) => {
-              const { done, value } = await reader.read();
-              if (done) controller.close();
-              else controller.enqueue(value);
-            },
-            cancel: (reason) => reader.cancel(reason),
-          },
-          { highWaterMark: 0 }
-        );
-      } finally {
-        release();
+      for await (const _ of chunksOf(check)) {
+        // read to the end: the verification
       }
+      const stream = (await inner.open(cid)) as ReadableStream<Uint8Array>;
+      const reader = stream.getReader();
+      return new ReadableStream<Uint8Array>(
+        {
+          pull: async (controller) => {
+            const { done, value } = await reader.read();
+            if (done) controller.close();
+            else controller.enqueue(value);
+          },
+          cancel: (reason) => reader.cancel(reason),
+        },
+        { highWaterMark: 0 }
+      );
     },
   };
 }
@@ -191,26 +162,18 @@ objectStoreSuite("MemoryObjectStore, output in 3-byte chunks", async (options: O
 });
 
 describe("MemoryObjectStore", () => {
-  it("has its defaults: an hour of grace, 1 GiB accepted, 1 MiB extents, a registry of its own", () => {
-    expect(DEFAULT_GRACE_MS).toBe(3_600_000);
+  it("has its defaults: 1 GiB accepted, 1 MiB extents", () => {
     expect(DEFAULT_MAX_OBJECT_BYTES).toBe(1 << 30);
     expect(DEFAULT_EXTENT_BYTES).toBe(1 << 20);
-    const a = new MemoryObjectStore();
-    const b = new MemoryObjectStore();
-    expect(a.latches).toBeInstanceOf(LatchRegistry);
-    expect(a.latches).not.toBe(b.latches);
-    const shared = new LatchRegistry();
-    expect(new MemoryObjectStore({ latches: shared }).latches).toBe(shared);
   });
 
   it("refuses a bound that is not a non-negative integer, and an extent size of zero", () => {
     for (const bad of [-1, 1.5, NaN, Infinity]) {
-      expect(() => new MemoryObjectStore({ graceMs: bad })).toThrow(RangeError);
       expect(() => new MemoryObjectStore({ maxObjectBytes: bad })).toThrow(RangeError);
       expect(() => new MemoryObjectStore({ extentBytes: bad })).toThrow(RangeError);
     }
     expect(() => new MemoryObjectStore({ extentBytes: 0 })).toThrow(RangeError);
-    expect(() => new MemoryObjectStore({ graceMs: 0, maxObjectBytes: 0, extentBytes: 1 })).not.toThrow();
+    expect(() => new MemoryObjectStore({ maxObjectBytes: 0, extentBytes: 1 })).not.toThrow();
   });
 
   it("streams an object out one extent per chunk, whatever chunks it came in", async () => {
@@ -225,7 +188,8 @@ describe("MemoryObjectStore", () => {
     const one = new MemoryObjectStore({ extentBytes: 1 << 20 });
     const single = (await one.putRaw(chunked(bytes, [1, 2, 3]))).cid;
     expect((await drain((await one.open(single)) as ReadableStream<Uint8Array>)).chunks).toBe(1);
-    expect((await drain((await one.open(EMPTY_CID)) ?? (await one.putRaw(new Uint8Array(0)), (await one.open(EMPTY_CID)) as ReadableStream<Uint8Array>))).chunks).toBe(0);
+    await one.putRaw(new Uint8Array(0));
+    expect((await drain((await one.open(EMPTY_CID)) as ReadableStream<Uint8Array>)).chunks).toBe(0);
   });
 
   it("a large object comes out in as many extents as it spans — one, when the extent is larger than the object", async () => {
@@ -291,14 +255,17 @@ describe("MemoryObjectStore", () => {
     expect(await one.has(HELLO_CID)).toBe(true);
   });
 
-  it("a put over a damaged object that nothing has read replaces its bytes; the old bytes' reader fails, the new bytes stay", async () => {
+  it("a put over an object known damaged replaces its bytes; over one whose damage nothing has found yet it is idempotent, and the next read finds the damage", async () => {
     const store = new MemoryObjectStore({ extentBytes: 2 });
     const bytes = bytesOf(10, 5);
     const cid = (await store.putRaw(bytes)).cid;
     store.damage(cid);
-    expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 });
+    expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 }); // sound as far as the store knows: the held bytes stay
+    await expect(store.read(cid, 10)).rejects.toThrow(DamagedObject);
+    expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 10 }); // known damaged: replaced
     expectBytes(await store.read(cid, 10), bytes);
     store.damage(cid);
+    await expect(store.read(cid, 10)).rejects.toThrow(DamagedObject);
     expect(await store.putRaw(chunked(bytes, [3, 3, 3]))).toEqual({ cid, codec: "raw", size: 10 });
     expectBytes(await store.read(cid, 10), bytes);
     const streamed = await drain((await store.open(cid)) as ReadableStream<Uint8Array>);
@@ -306,22 +273,7 @@ describe("MemoryObjectStore", () => {
     expect(streamed.chunks).toBe(5);
   });
 
-  it("this store completes on the read after the last chunk, not with it — every byte handed out, the object is still latched until the reader sees the end", async () => {
-    const store = new MemoryObjectStore({ graceMs: 0, extentBytes: 4 });
-    const bytes = bytesOf(10, 6);
-    const cid = (await store.putRaw(bytes)).cid;
-    const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
-    const parts: Uint8Array[] = [];
-    for (let i = 0; i < 3; i++) parts.push((await reader.read()).value as Uint8Array);
-    expectBytes(join(parts), bytes);
-    expect(store.latches.count(cid)).toBe(1);
-    expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-    expect((await reader.read()).done).toBe(true);
-    expect(store.latches.count(cid)).toBe(0);
-    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
-  });
-
-  it("this store verifies lazily — a damaged chunk goes out before the failure; a put that repairs the object meanwhile is left alone by the old reader's failure", async () => {
+  it("this store verifies lazily — a damaged chunk goes out before the failure; a repair meanwhile is left alone by the old reader's failure", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const bytes = bytesOf(10, 7);
     const cid = (await store.putRaw(bytes)).cid;
@@ -329,7 +281,8 @@ describe("MemoryObjectStore", () => {
     const reader = ((await store.open(cid)) as ReadableStream<Uint8Array>).getReader();
     const first = (await reader.read()).value as Uint8Array;
     expect(first).not.toEqual(bytes.slice(0, 4)); // the damaged chunk, out before anything checked it
-    await store.putObject(cid, bytes);
+    await expect(store.read(cid, 10)).rejects.toThrow(DamagedObject); // another read finds the damage: known now
+    await store.putObject(cid, bytes); // and repairs it
     let failed: unknown;
     try {
       for (;;) {
@@ -339,20 +292,18 @@ describe("MemoryObjectStore", () => {
       failed = err;
     }
     expect(failed).toBeInstanceOf(DamagedObject);
-    expect(store.latches.count(cid)).toBe(0);
-    expect(await store.has(cid)).toBe(true);
+    expect(await store.has(cid)).toBe(true); // the repair stands: the old reader's failure did not mark it
     expectBytes(await store.read(cid, 10), bytes);
   });
 
-  it("a stream pulls nothing until it is read: an opened, unread stream hands out no bytes and stays latched", async () => {
-    const store = new MemoryObjectStore({ graceMs: 0, extentBytes: 4 });
-    const cid = (await store.putRaw(bytesOf(10, 2))).cid;
+  it("a stream open on an object that is collected meanwhile completes with the bytes it opened on", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const bytes = bytesOf(10, 8);
+    const cid = (await store.putRaw(bytes)).cid;
     const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(store.latches.count(cid)).toBe(1);
-    expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-    await stream.cancel();
-    expect(store.latches.count(cid)).toBe(0);
+    expect(await store.collect([])).toEqual({ removed: [cid] });
+    expectBytes((await drain(stream)).bytes, bytes);
+    expect(await store.has(cid)).toBe(false);
   });
 
   it("damage: flips a byte of a held object in place; refuses an absent object and one with no bytes", async () => {
@@ -364,82 +315,76 @@ describe("MemoryObjectStore", () => {
     store.damage(HELLO_CID);
     expect(await store.has(HELLO_CID)).toBe(true);
     await expect(store.read(HELLO_CID, 5)).rejects.toThrow("no longer hash");
-    expect(await store.has(HELLO_CID)).toBe(false);
+    await expect(store.has(HELLO_CID)).rejects.toThrow(DamagedObject);
     expect(await store.has(EMPTY_CID)).toBe(true);
   });
 
-  it("a read that finds damage evicts that object only; a put of the same CID afterwards is a fresh acceptance", async () => {
-    const store = new MemoryObjectStore({ graceMs: 0 });
+  it("a read that finds damage marks that object only; a put of the same CID afterwards repairs it", async () => {
+    const store = new MemoryObjectStore();
     const bytes = bytesOf(30, 3);
     const cid = (await store.putRaw(bytes)).cid;
     const other = (await store.putRaw(bytesOf(30, 4))).cid;
     store.damage(cid);
-    await expect(store.read(cid, 30)).rejects.toThrow();
+    await expect(store.read(cid, 30)).rejects.toThrow(DamagedObject);
     expect(await store.has(other)).toBe(true);
+    await expect(all(store.list())).rejects.toThrow(DamagedObject);
     expect(await store.putObject(cid, bytes)).toEqual({ cid, codec: "raw", size: 30 });
     expectBytes(await store.read(cid, 30), bytes);
-  });
-});
-
-/** `globalThis[name]` replaced by a Proxy whose `construct` may throw, for the length of `run` (fault injection). */
-async function withConstructFault<T>(name: "Uint8Array" | "ReadableStream", shouldThrow: (args: unknown[]) => boolean, run: () => Promise<T>): Promise<T> {
-  const Real = globalThis[name] as unknown as new (...args: unknown[]) => unknown;
-  (globalThis as Record<string, unknown>)[name] = new Proxy(Real, {
-    construct: (target, args, newTarget) => {
-      if (shouldThrow(args)) throw new RangeError(`injected: new ${name}(...)`);
-      return Reflect.construct(target, args, newTarget);
-    },
-  });
-  try {
-    return await run();
-  } finally {
-    (globalThis as Record<string, unknown>)[name] = Real;
-  }
-}
-
-describe("MemoryObjectStore open releases the latch on every failure", () => {
-  const T0 = "2026-09-07T10:00:00.000Z";
-
-  async function orphaned(): Promise<{ store: MemoryObjectStore; cid: Cid; bytes: Uint8Array }> {
-    const store = new MemoryObjectStore({ now: () => new Date(T0).getTime(), graceMs: 0 });
-    const bytes = new TextEncoder().encode("hello");
-    const { cid } = await store.putRaw(bytes);
-    return { store, cid, bytes };
-  }
-
-  it("a chunk copy that throws fails the stream with that error, releases the latch, and the object is collectable", async () => {
-    const { store, cid, bytes } = await orphaned();
-    const stream = (await store.open(cid)) as ReadableStream<Uint8Array>;
-    expect(store.latches.count(cid)).toBe(1);
-    const reader = stream.getReader();
-    await withConstructFault(
-      "Uint8Array",
-      (args) => args.length === 1 && args[0] instanceof Uint8Array && args[0].length === bytes.length,
-      async () => {
-        await expect(reader.read()).rejects.toThrow(/injected/);
-      }
-    );
-    reader.releaseLock();
-    await expect(stream.cancel()).rejects.toThrow(/injected/); // an errored stream: cancel rejects, and releases nothing — the store already did
-    expect(store.latches.count(cid)).toBe(0);
-    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+    expect(await all(store.list())).toEqual([cid, other].sort());
   });
 
-  it("a stream that cannot be built rejects open, releases the latch, and holds another reader's latch on the same CID", async () => {
-    const { store, cid, bytes } = await orphaned();
-    const other = (await store.open(cid)) as ReadableStream<Uint8Array>;
-    expect(store.latches.count(cid)).toBe(1);
-    await withConstructFault(
-      "ReadableStream",
-      () => true,
-      async () => {
-        await expect(store.open(cid)).rejects.toThrow(/injected/);
-      }
-    );
-    expect(store.latches.count(cid)).toBe(1);
-    expect(await store.collect([])).toEqual({ unlinked: [], young: [] });
-    expectBytes((await drain(other)).bytes, bytes);
-    expect(store.latches.count(cid)).toBe(0);
-    expect(await store.collect([])).toEqual({ unlinked: [cid], young: [] });
+  it("prepare: what is put through a preparation is verified now, seen by no read until publish, and dropped with it", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const kept = bytesOf(10, 9);
+    const keptCid = (await store.putRaw(kept)).cid;
+    store.damage(keptCid);
+    await expect(store.read(keptCid, 10)).rejects.toThrow(DamagedObject); // known damaged before the preparation
+    const fresh = bytesOf(10, 10);
+    const freshCid = cidOf(fresh);
+    const dropped = store.prepare();
+    await expect(dropped.putObject(freshCid, kept)).rejects.toThrow(DigestMismatch);
+    expect(await dropped.putObject(freshCid, fresh)).toEqual({ cid: freshCid, codec: "raw", size: 10 });
+    await dropped.putObject(keptCid, kept); // a repair, prepared
+    expect(await dropped.has(freshCid)).toBe(true);
+    expect(await dropped.has(keptCid)).toBe(true);
+    expect(await dropped.has(cidOf(bytesOf(3, 3)))).toBe(false);
+    // the store sees none of it
+    expect(await store.has(freshCid)).toBe(false);
+    expect(await store.stat(freshCid)).toBeNull();
+    await expect(store.has(keptCid)).rejects.toThrow(DamagedObject);
+    await expect(all(store.list())).rejects.toThrow(DamagedObject);
+    // never published: as it was
+    expect(await store.has(freshCid)).toBe(false);
+    await expect(store.has(keptCid)).rejects.toThrow(DamagedObject);
+    // published: the new object lands, the repair replaces the damaged bytes
+    const published = store.prepare();
+    await published.putObject(freshCid, fresh);
+    await published.putObject(keptCid, kept);
+    published.publish();
+    expect(await store.has(freshCid)).toBe(true);
+    expectBytes(await store.read(keptCid, 10), kept);
+    expect(await all(store.list())).toEqual([freshCid, keptCid].sort(compareCids));
+  });
+
+  it("a preparation's `has` on a known damaged object not repaired in it fails as the store's does; two preparations each publish their own", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const damaged = bytesOf(10, 9);
+    const damagedCid = (await store.putRaw(damaged)).cid;
+    store.damage(damagedCid);
+    await expect(store.read(damagedCid, 10)).rejects.toThrow(DamagedObject);
+    const a = store.prepare();
+    const b = store.prepare();
+    await expect(a.has(damagedCid)).rejects.toThrow(DamagedObject);
+    const one = bytesOf(10, 10);
+    const two = bytesOf(10, 11);
+    await a.putObject(cidOf(one), one);
+    await b.putObject(cidOf(two), two);
+    expect(await a.has(cidOf(two))).toBe(false);
+    a.publish();
+    expect(await store.has(cidOf(one))).toBe(true);
+    expect(await store.has(cidOf(two))).toBe(false);
+    await expect(store.has(damagedCid)).rejects.toThrow(DamagedObject);
+    b.publish();
+    expect(await store.has(cidOf(two))).toBe(true);
   });
 });

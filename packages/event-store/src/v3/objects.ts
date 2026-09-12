@@ -1,11 +1,10 @@
 /**
  * The version-3 object model: raw DASL objects, whole-resource identity
- * however large, the `ObjectStore` interface and the read latch every
- * store shares with its collector. The model with no store behind it:
- * the byte-source shapes, incremental hashing to a raw CID, the checks
- * every CID argument passes, and the latch registry. What an object
- * means is nobody's business here — bytes in, the same bytes out, under
- * the one CID that names them.
+ * however large, and the `ObjectStore` interface. The model with no
+ * store behind it: the byte-source shapes, incremental hashing to a raw
+ * CID, and the checks every CID argument passes. What an object means
+ * is nobody's business here — bytes in, the same bytes out, under the
+ * one CID that names them.
  */
 
 import { RAW_CODE, cidFromBytes, compareBytes, parseCid, type DaslCid } from "@estoc/dasl";
@@ -24,10 +23,9 @@ export type ObjectInfo = {
   size: number;
 };
 
-/** `unlinked`: made unavailable by this pass; `young`: unkept, but within grace, so seen again next pass. */
+/** The CIDs a collection pass deleted: unique, in binary-CID byte order. */
 export interface Collected {
-  unlinked: Cid[];
-  young: Cid[];
+  removed: Cid[];
 }
 
 /**
@@ -43,23 +41,53 @@ export interface Collected {
 export interface ObjectStore {
   /** Store exact bytes as one whole-resource raw DASL object: hashed as they stream, visible only once complete. */
   putRaw(source: ByteSource): Promise<ObjectInfo>;
-  /** Verify and atomically accept exact bytes under an expected CID: nothing is visible until the whole stream matches; a match on an object already held is idempotent. */
+  /**
+   * Verify and atomically accept exact bytes under an expected CID:
+   * nothing is visible until the whole stream matches. A match on a
+   * sound object already held is idempotent, its bytes untouched; on
+   * one known damaged it replaces the bytes whole and clears the
+   * damage, and a mismatch leaves both as they were.
+   */
   putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
-  /** The exact bytes of an accepted object as a stream, or `null`; latched against collection until the stream completes, fails or is cancelled. */
+  /**
+   * The exact bytes of an accepted object as a stream, rehashed on the
+   * way out — a mismatch fails the stream before it completes — or
+   * `null` for absence; `DamagedObject` for an object known damaged.
+   * The bytes are complete or the stream fails: collection or a repair
+   * meanwhile never makes it a truncated or mixed read.
+   */
   open(cid: Cid): Promise<ReadableStream<Uint8Array> | null>;
-  /** The whole object, or `null`; throws `ObjectTooLarge` before allocating when it is larger than `maxBytes`. */
+  /** The whole object, `null` for absence, `DamagedObject` for known damage; throws `ObjectTooLarge` before allocating when it is larger than `maxBytes`. */
   read(cid: Cid, maxBytes: number): Promise<Uint8Array | null>;
+  /** The metadata of an accepted object, `null` for absence, `DamagedObject` for known damage. */
   stat(cid: Cid): Promise<ObjectInfo | null>;
+  /** Accepted presence; `false` for absence only, `DamagedObject` for known damage. */
   has(cid: Cid): Promise<boolean>;
-  /** Every accepted object, in binary-CID byte order, over a snapshot. */
+  /** Every accepted object, in binary-CID byte order, over a snapshot; fails on reaching one known damaged, yielding neither it nor a list without it. */
   list(): AsyncIterable<Cid>;
   /**
-   * Unlink every accepted object not in `keep` whose orphan grace has
-   * elapsed and that no read latches: the exact set, no traversal; an
-   * invalid CID in `keep` fails the pass before it begins. Both arrays
-   * unique, in binary-CID byte order.
+   * Delete every accepted object not in `keep`: the exact set, no
+   * traversal, no age; an invalid CID in `keep` fails the pass before
+   * it begins. A kept object known damaged stays, its damage still
+   * known; an unkept one goes like any other and is in `removed`.
    */
   collect(keep: Iterable<Cid>): Promise<Collected>;
+}
+
+/**
+ * A commit's objects before they publish. Bytes put here are verified
+ * against their CID and held where no read of the store sees them —
+ * not `has`, not `stat`, not `list` — until the transaction they belong
+ * to publishes them, new objects and repairs alike, together with its
+ * events; a transaction that fails drops them and nothing of the store
+ * changes. A root check in the transaction asks `has` here, which counts
+ * what is prepared as present.
+ */
+export interface Preparation {
+  /** Verify `source` against `cid` under `putObject`'s rules and hold the bytes here, unpublished. */
+  putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
+  /** Prepared here, or accepted and sound in the store; `false` for absence, `DamagedObject` for known damage not repaired here. */
+  has(cid: Cid): Promise<boolean>;
 }
 
 // ---- CIDs ---------------------------------------------------------------
@@ -162,47 +190,4 @@ export async function hashSource(
     sink(chunk);
   }
   return { cid: rawCidFromDigest(hash.digest()), size };
-}
-
-// ---- latches ------------------------------------------------------------
-
-/**
- * The per-CID read latch: a count of the reads active on each object,
- * shared by every handle over one object namespace and consulted by its
- * collector, which skips a latched CID without waiting. A latch is held
- * from `open`'s presence check until the stream completes, fails or is
- * cancelled — never released by idle time — and a vault runtime
- * registers and checks it under its writer lock. Local read protection
- * only; not a retention reference.
- */
-export class LatchRegistry {
-  private readonly counts = new Map<Cid, number>();
-
-  /** Hold `cid`; the returned function releases this one hold, once — calling it again does nothing. */
-  acquire(cid: Cid): () => void {
-    this.counts.set(cid, (this.counts.get(cid) ?? 0) + 1);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const count = (this.counts.get(cid) ?? 1) - 1;
-      if (count === 0) this.counts.delete(cid);
-      else this.counts.set(cid, count);
-    };
-  }
-
-  /** Is any read of `cid` active? */
-  isLatched(cid: Cid): boolean {
-    return this.counts.has(cid);
-  }
-
-  /** How many reads of `cid` are active. */
-  count(cid: Cid): number {
-    return this.counts.get(cid) ?? 0;
-  }
-
-  /** Every latched CID, in binary-CID byte order; for diagnostics. */
-  latched(): Cid[] {
-    return sortCids(this.counts.keys());
-  }
 }
