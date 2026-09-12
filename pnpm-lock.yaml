@@ -275,6 +275,9 @@ importers:
       '@estoc/folder-object':
         specifier: workspace:^
         version: link:../folder-object
+      '@estoc/keystore':
+        specifier: workspace:^
+        version: link:../keystore
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1

@@ -179,18 +179,20 @@ class Pool implements SqlitePool {
       await this.reserve(exists ? 1 : 2);
       const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
       const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
+      let connection: WasmConnection;
       try {
         sqlite(this.sqlite3, () => {
           db.exec("PRAGMA busy_timeout = 0; PRAGMA foreign_keys = ON");
           if (mode === "readonly") db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
           db.exec("PRAGMA application_id");
         });
+        connection = new WasmConnection(this.sqlite3, db);
       } catch (err) {
         db.close();
         throw err;
       }
       this.open_.add(name);
-      return new Connection(new WasmConnection(this.sqlite3, db), mode, () => this.open_.delete(name));
+      return new Connection(connection, mode, () => this.open_.delete(name));
     });
   }
 
@@ -282,7 +284,7 @@ class WasmConnection implements RawConnection {
     private readonly sqlite3: Sqlite3Static,
     private readonly db: Database
   ) {
-    this.version = String(db.selectValue("SELECT sqlite_version()"));
+    this.version = String(sqlite(sqlite3, () => db.selectValue("SELECT sqlite_version()")));
   }
 
   exec(sql: string): void {

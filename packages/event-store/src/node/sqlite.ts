@@ -64,21 +64,25 @@ export function openNodeSqlite(path: string, options: NodeSqliteOptions): Sqlite
     else if (!exists(path)) throw new DatabaseMissing(path);
   }
   const db = sqlite(() => new DatabaseSync(path, { allowExtension: false, enableForeignKeyConstraints: true }));
+  let connection: NodeConnection;
   try {
-    db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE");
-    if (mode === "readonly") {
-      db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
-      probe(path, () => journalMode(db));
-    } else {
-      probe(path, () => db.exec("BEGIN IMMEDIATE; COMMIT"));
-      if (mode === "create" && !inMemory) db.exec(`PRAGMA journal_mode = ${options.journal ?? "wal"}`);
-      db.exec(`PRAGMA synchronous = ${journalMode(db) === "wal" ? "NORMAL" : "FULL"}`);
-    }
+    connection = sqlite(() => {
+      db.exec("PRAGMA busy_timeout = 0; PRAGMA locking_mode = EXCLUSIVE");
+      if (mode === "readonly") {
+        db.exec("PRAGMA trusted_schema = OFF; PRAGMA query_only = ON");
+        probe(path, () => journalMode(db));
+      } else {
+        probe(path, () => db.exec("BEGIN IMMEDIATE; COMMIT"));
+        if (mode === "create" && !inMemory) db.exec(`PRAGMA journal_mode = ${options.journal ?? "wal"}`);
+        db.exec(`PRAGMA synchronous = ${journalMode(db) === "wal" ? "NORMAL" : "FULL"}`);
+      }
+      return new NodeConnection(db);
+    });
   } catch (err) {
     db.close();
     throw err;
   }
-  return new Connection(new NodeConnection(db), mode);
+  return new Connection(connection, mode);
 }
 
 function requireNodeSqlite(): void {

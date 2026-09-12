@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@estoc/folder-object": "workspace:^",
+    "@estoc/keystore": "workspace:^",
     "@types/node": "^22.20.1",
     "esbuild": "^0.25.12",
     "playwright-core": "^1.62.1",

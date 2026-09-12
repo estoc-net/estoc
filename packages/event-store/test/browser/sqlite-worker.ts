@@ -1,12 +1,14 @@
 /**
  * What runs in the Worker: the driver cases over the wasm pool, the
- * pool's own cases, and holding a directory against another Worker.
+ * vault open cases, the pool's own cases, and holding a directory
+ * against another Worker.
  * Driven by messages from the page script, which
  * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
  */
 
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
 import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
+import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
 import { poolCases } from "./pool-cases.js";
 
 export interface WorkerCaseResult {
@@ -15,7 +17,12 @@ export interface WorkerCaseResult {
   note?: string;
 }
 
-export type WorkerRequest = { cmd: "cases"; directory: string } | { cmd: "pool" } | { cmd: "hold"; directory: string } | { cmd: "release" };
+export type WorkerRequest =
+  | { cmd: "cases"; directory: string }
+  | { cmd: "open"; directory: string; utf16: { snapshot: number[]; forged: number[] } }
+  | { cmd: "pool" }
+  | { cmd: "hold"; directory: string }
+  | { cmd: "release" };
 
 export type WorkerCommand = WorkerRequest & { id: number };
 
@@ -48,6 +55,32 @@ async function runCases(directory: string): Promise<WorkerCaseResult[]> {
   return results;
 }
 
+async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; forged: Uint8Array }): Promise<WorkerCaseResult[]> {
+  const pool = await openSqlitePool({ directory });
+  let n = 0;
+  const harness: OpenHarness = {
+    fresh: () => `vault-${n++}`,
+    open: (target, mode) => pool.open(target, mode),
+    importFile: (target, bytes) => pool.importFile(target, bytes),
+    utf16,
+  };
+  const results: WorkerCaseResult[] = [];
+  for (const c of openCases) {
+    try {
+      const note = await c.run(harness);
+      results.push(note === undefined ? { name: c.name } : { name: c.name, note });
+    } catch (err) {
+      results.push({ name: c.name, error: describe(err) });
+    }
+  }
+  try {
+    await pool.close();
+  } catch (err) {
+    results.push({ name: "the pool closes once the open cases have closed their connections", error: describe(err) });
+  }
+  return results;
+}
+
 async function runPoolCases(): Promise<WorkerCaseResult[]> {
   const results: WorkerCaseResult[] = [];
   for (const c of poolCases) {
@@ -69,6 +102,8 @@ async function handle(command: WorkerCommand): Promise<unknown> {
   switch (command.cmd) {
     case "cases":
       return runCases(command.directory);
+    case "open":
+      return runOpenCases(command.directory, { snapshot: new Uint8Array(command.utf16.snapshot), forged: new Uint8Array(command.utf16.forged) });
     case "pool":
       return runPoolCases();
     case "hold": {

@@ -142,6 +142,20 @@ export class AnchorMismatch extends Error {
   }
 }
 
+/**
+ * A runtime whose local control — the replica ID, the store generation,
+ * the positions every accepted event has — is missing or does not
+ * account for its events. The vault is not opened and nothing is made
+ * up in its place: its history is recovered by restoring a snapshot
+ * into a new runtime.
+ */
+export class DamagedControl extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DamagedControl";
+  }
+}
+
 /** A write on a vault opened read-only: nothing was written. */
 export class ReadOnlyVault extends Error {
   constructor(what: string) {
