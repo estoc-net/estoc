@@ -9,13 +9,17 @@
  * here, once, before the statement runs; what comes back is checked the
  * same way where the platform lets the adapter see it, so a stored
  * integer the platform cannot represent fails the read instead of
- * rounding, and stored text that is not text — bytes with a NUL or
- * invalid UTF-8, which only a foreign file or a cast in SQL can put in
- * a TEXT column — fails the read wherever the adapter reads the bytes.
- * `node:sqlite` does not: it hands text over as a string it has already
- * cut at a NUL and repaired, so text of a file another party wrote is
- * read there as `CAST(column AS BLOB)` and decoded with `decodeText`,
- * which is the rule for validating any foreign file on either platform.
+ * rounding. A string crosses the parameter and column boundary only
+ * without a NUL: `checkParams` refuses one going in, and stored text
+ * holding a NUL or invalid UTF-8 — which only a foreign file or a cast
+ * in SQL can put in a TEXT column — fails the read wherever the adapter
+ * reads the bytes. `node:sqlite` does not: it hands text over as a
+ * string it has already cut at a NUL and repaired, so text of a file
+ * another party wrote is read there as `CAST(column AS BLOB)` and
+ * decoded with `decodeText`, the rule for a foreign file's names and
+ * metadata on either platform. A store that must keep every JSON
+ * string, a NUL included, stores it as bytes cast to TEXT and reads it
+ * back the same way with `decodeUtf8`, which checks the UTF-8 alone.
  */
 
 import { DatabaseClosed, InvalidSqlValue } from "../errors.js";

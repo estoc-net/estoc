@@ -313,7 +313,6 @@ export class SqliteEventStore implements EventStore {
     return query(this.driver, "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'local_conflicts'").length === 1;
   }
 
-  /** The event `row` holds, or its damage, which the store then remembers. */
   private decode(row: SqlRow): Decoded {
     const decoded = decode(row);
     if ("damage" in decoded) this.damage ??= decoded.damage;
