@@ -3,8 +3,8 @@
  * script are bundled with esbuild and served, with `sqlite3.wasm`, to a
  * headless Chromium over localhost (a secure context, which OPFS
  * needs); the page drives the Workers and the results come back — one
- * vitest case per driver case, per open case, per event case, per pool case, and per
- * case of the page's own. The one input the Worker cannot make for
+ * vitest case per driver, open, event, object, vault, export and pool
+ * case, and per case of the page's own. The one input the Worker cannot make for
  * itself, a UTF-16 database, is made here with Node's SQLite. Skipped, loudly, when no Chromium is found;
  * `ESTOC_BROWSER=/path/to/chrome` names one.
  */
@@ -25,6 +25,7 @@ import { poolCases } from "../../browser/pool-cases.js";
 import type { WorkerCaseResult } from "../../browser/sqlite-worker.js";
 import { driverCases } from "./driver-cases.js";
 import { eventCases } from "./event-cases.js";
+import { exportCases } from "./export-cases.js";
 import { objectCases } from "./object-cases.js";
 import { openCases } from "./open-cases.js";
 import { utf16Forged, utf16Snapshot } from "./utf16.js";
@@ -117,6 +118,9 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of vaultCases) {
+    it(c.name, () => report(results.get(c.name)));
+  }
+  for (const c of exportCases) {
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of poolCases) {

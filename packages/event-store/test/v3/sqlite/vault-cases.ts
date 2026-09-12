@@ -23,9 +23,9 @@ import {
   type Cid,
   type Draft,
   type Event,
-  type Held,
   type OpenMode,
   type SqliteDriver,
+  type Vault,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
 import { assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
@@ -41,13 +41,13 @@ export interface VaultCase {
   run(harness: VaultHarness): Promise<string | void>;
 }
 
-const MIB = 1024 * 1024;
-const T0 = Date.parse("2026-09-12T10:00:00.000Z");
-const HELLO = new TextEncoder().encode("hello");
-const HELLO_CID = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
+export const MIB = 1024 * 1024;
+export const T0 = Date.parse("2026-09-12T10:00:00.000Z");
+export const HELLO = new TextEncoder().encode("hello");
+export const HELLO_CID = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
 
 /** `n` deterministic bytes from `seed`. */
-function bytesOf(n: number, seed: number): Uint8Array {
+export function bytesOf(n: number, seed: number): Uint8Array {
   const out = new Uint8Array(n);
   let s = (seed >>> 0) || 1;
   for (let i = 0; i < n; i++) {
@@ -59,13 +59,13 @@ function bytesOf(n: number, seed: number): Uint8Array {
   return out;
 }
 
-function cidOf(bytes: Uint8Array): Cid {
+export function cidOf(bytes: Uint8Array): Cid {
   return rawCidFromDigest(sha256(bytes)).text as Cid;
 }
 
-const draft = (roots: Cid[] = [], data: Record<string, unknown> = {}): Draft => ({ type: "test.event", roots, data: { n: 1, ...data } });
+export const draft = (roots: Cid[] = [], data: Record<string, unknown> = {}): Draft => ({ type: "test.event", roots, data: { n: 1, ...data } });
 
-function rows(driver: SqliteDriver, sql: string, ...params: (string | number | Uint8Array)[]): Record<string, unknown>[] {
+export function rows(driver: SqliteDriver, sql: string, ...params: (string | number | Uint8Array)[]): Record<string, unknown>[] {
   const statement = driver.prepare(sql);
   try {
     return statement.all(...params);
@@ -74,7 +74,7 @@ function rows(driver: SqliteDriver, sql: string, ...params: (string | number | U
   }
 }
 
-function exec(driver: SqliteDriver, sql: string, ...params: (string | number | Uint8Array)[]): void {
+export function exec(driver: SqliteDriver, sql: string, ...params: (string | number | Uint8Array)[]): void {
   const statement = driver.prepare(sql);
   try {
     statement.run(...params);
@@ -83,13 +83,13 @@ function exec(driver: SqliteDriver, sql: string, ...params: (string | number | U
   }
 }
 
-async function all<T>(items: AsyncIterable<T>): Promise<T[]> {
+export async function all<T>(items: AsyncIterable<T>): Promise<T[]> {
   const out: T[] = [];
   for await (const item of items) out.push(item);
   return out;
 }
 
-async function drain(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+export async function drain(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   for await (const chunk of chunksOf(stream)) parts.push(chunk);
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -102,35 +102,35 @@ async function drain(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
 }
 
 /** A clock the case moves by hand. */
-function clock(): { now: () => number; advance: (ms: number) => void } {
+export function clock(): { now: () => number; advance: (ms: number) => void } {
   let t = T0;
   return { now: () => t, advance: (ms) => (t += ms) };
 }
 
 /** Every root of every event: the type-independent keep set. */
-async function rootsOf(held: Held): Promise<Cid[]> {
+export async function rootsOf(vault: Vault): Promise<Cid[]> {
   const roots: Cid[] = [];
-  for await (const event of held.events.scan()) roots.push(...event.roots);
+  for await (const event of vault.events.scan()) roots.push(...event.roots);
   return roots;
 }
 
 /** Cuts the stored canonical bytes of `event` short, as a torn write would. */
-function damageEvent(driver: SqliteDriver, event: Event): void {
+export function damageEvent(driver: SqliteDriver, event: Event): void {
   exec(driver, "UPDATE events SET canonical = ? WHERE event_id = ?", canonicalEventBytes(event).slice(0, -3), event.eventId);
 }
 
 /** The vault over the runtime database, and the connection under it, for what a case reads straight from the tables. */
-interface Made {
+export interface Made {
   vault: SqliteVault;
   driver: SqliteDriver;
 }
 
-async function make(h: VaultHarness, target: string, now: () => number): Promise<Made> {
+export async function make(h: VaultHarness, target: string, now: () => number): Promise<Made> {
   const db = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });
   return { vault: new SqliteVault(db, { now }), driver: db.driver };
 }
 
-async function reopen(h: VaultHarness, target: string, now: () => number, resetIdentity = false): Promise<Made> {
+export async function reopen(h: VaultHarness, target: string, now: () => number, resetIdentity = false): Promise<Made> {
   const db = await openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR, resetIdentity });
   return { vault: new SqliteVault(db, { now }), driver: db.driver };
 }

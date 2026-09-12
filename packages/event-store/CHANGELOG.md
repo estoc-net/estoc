@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **The portable snapshot: export, validation, inspection.**
+  `exportVault(runtime, open, { heldRoots, maxBytes })` in
+  `@estoc/event-store/v3` builds a portable snapshot of any runtime —
+  the SQLite vault, an inspector's, the vault in memory — into the
+  destination `open` gives (`(mode) => openNodeSqlite(path, { mode })`,
+  `(mode) => pool.open(name, mode)`): under the operation lock the
+  cut is selected — the wrapper, every event, the caller's `heldRoots`
+  fold with each root present and sound — and refused as
+  `IncompleteSnapshot` on damage, a conflict or a root absent or
+  known damaged, or as the new `SnapshotTooLarge` past `maxBytes`,
+  nothing made; the destination is then created, put in a rollback
+  journal with `synchronous=FULL`, laid as a portable database with
+  `ready = 0` in one transaction, filled object by object streamed
+  through the vault's read, rehashed and chunked, 8 MiB a transaction,
+  checked against the cut, set ready and closed, and only then is the
+  lock released; outside it the file is reopened read-only and
+  validated, and the counts validation found are returned. A source
+  failing mid-copy is `IncompleteSnapshot`, the destination left
+  unready. `openPortable(driver)` now hands back `vault` too, the
+  snapshot as a read-only `Vault` (`PortableVault`): canonical scans
+  from the five tables, damage reported, `conflicting` empty,
+  objects under their read and damage rules, `changes` and `commit`
+  `UnsupportedOperation`, everything `VaultClosed` once closed.
+  `validatePortable(portable, { heldRoots, maxBytes })` runs, in
+  order, `integrity_check` and `foreign_key_check`, every event row's
+  decoding, every `objects` row's key and size and their sum against
+  `maxBytes`, the object set against `heldRoots` of the snapshot's
+  events, and every object's chunks read through and rehashed, and
+  throws `InvalidSnapshot` naming every problem, a SQLite refusal
+  among them. `HeldRoots`, `(vault: Vault) => Iterable<Cid>`, is the
+  fold's type, usable as a `KeepUnderLock`. The event store's row
+  decoding, filter SQL and column list are exported from its module
+  for the portable reader (`decodeEventRow`, `readEventRows`,
+  `eventFilterSql`, `EVENT_COLUMNS`). `test/v3/sqlite/export-cases.ts`
+  runs on `node:sqlite` and in a Chromium Worker;
+  `test/v3/sqlite/export.test.ts` adds what only a path shows.
 - **The SQLite vault.** `SqliteVault` in `@estoc/event-store/v3`, a
   `Runtime` over an open runtime's `SqliteEventStore` and
   `SqliteObjectStore`: a commit's objects prepared under the writer

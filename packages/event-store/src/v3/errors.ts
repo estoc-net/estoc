@@ -302,6 +302,17 @@ export class IncompleteSnapshot extends Error {
   }
 }
 
+/** A snapshot larger than the bound the caller set on what an export copies or a validation reads: refused before a byte of any object is read, so the bound is on work, not on memory, which is bounded regardless. */
+export class SnapshotTooLarge extends Error {
+  constructor(
+    readonly maxBytes: number,
+    readonly bytes: number
+  ) {
+    super(`the snapshot holds ${bytes} bytes of objects, more than the ${maxBytes}-byte bound`);
+    this.name = "SnapshotTooLarge";
+  }
+}
+
 /** A restore's source is not a valid version-3 snapshot; nothing was published. */
 export class InvalidSnapshot extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {

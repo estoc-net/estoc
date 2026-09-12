@@ -1,7 +1,8 @@
 /**
  * What runs in the Worker: the driver cases over the wasm pool, the
- * vault open cases, the event and object store cases, the pool's own cases,
- * and holding a directory against another Worker.
+ * vault open cases, the event and object store cases, the vault and
+ * export cases, the pool's own cases, and holding a directory against
+ * another Worker.
  * Driven by messages from the page script, which
  * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
  */
@@ -11,6 +12,7 @@ import type { Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
 import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
 import { eventCases } from "../v3/sqlite/event-cases.js";
+import { exportCases, type ExportHarness } from "../v3/sqlite/export-cases.js";
 import { objectCases, type ObjectHarness } from "../v3/sqlite/object-cases.js";
 import { type OpenHarness, openCases } from "../v3/sqlite/open-cases.js";
 import { vaultCases } from "../v3/sqlite/vault-cases.js";
@@ -74,15 +76,16 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
       sqlite3.wasm.dealloc(out);
     }
   };
-  const harness: OpenHarness & ObjectHarness = {
+  const harness: OpenHarness & ObjectHarness & ExportHarness = {
     fresh: () => `vault-${n++}`,
     open: (target, mode) => pool.open(target, mode),
     importFile: (target, bytes) => pool.importFile(target, bytes),
+    fileBytes: (target) => pool.exportFile(target),
     utf16,
     memoryUsed,
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of [...openCases, ...eventCases, ...objectCases, ...vaultCases]) {
+  for (const c of [...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases]) {
     try {
       const note = await c.run(harness);
       results.push(note === undefined ? { name: c.name } : { name: c.name, note });

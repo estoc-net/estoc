@@ -61,6 +61,16 @@ export interface Vault {
 export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Cid>;
 
 /**
+ * The roots the events of a vault hold, folded from what it reads
+ * through `vault`: what an export copies, and what a snapshot must
+ * hold exactly to validate. Computed by the caller, since only the
+ * vault's own folds know which roots an event retains and which it
+ * released; the runtime checks each CID. A `HeldRoots` serves as a
+ * `KeepUnderLock` too, reading through the held view.
+ */
+export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
+
+/**
  * The vault as an operation holding the writer lock sees it: the same
  * interface, every call sharing the held lock instead of taking it — a
  * read nested inside a commit, an import or an export neither waits for

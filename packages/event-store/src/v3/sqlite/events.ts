@@ -51,14 +51,14 @@ interface Held {
 
 type IngestInput = { held: Held } | { rejected: { value: unknown; error: string } };
 
-type Decoded = { event: Event } | { damage: Damaged };
+export type DecodedEventRow = { event: Event } | { damage: Damaged };
 
 /**
- * The columns of `events` as `decode` reads them, from the table as
- * `e`: text as its stored bytes, since a JSON string may hold what a
- * SQLite text value cannot carry across the boundary, a NUL.
+ * The columns of `events` as `decodeEventRow` reads them, from the
+ * table as `e`: text as its stored bytes, since a JSON string may hold
+ * what a SQLite text value cannot carry across the boundary, a NUL.
  */
-const COLUMNS = "e.rowid AS rowid, CAST(e.event_id AS BLOB) AS event_id, CAST(e.at AS BLOB) AS at, CAST(e.author AS BLOB) AS author, CAST(e.type AS BLOB) AS type, e.canonical AS canonical";
+export const EVENT_COLUMNS = "e.rowid AS rowid, CAST(e.event_id AS BLOB) AS event_id, CAST(e.at AS BLOB) AS at, CAST(e.author AS BLOB) AS author, CAST(e.type AS BLOB) AS type, e.canonical AS canonical";
 
 const CONFLICTS_DDL = `CREATE TABLE IF NOT EXISTS local_conflicts (
   seen     INTEGER PRIMARY KEY,
@@ -169,7 +169,7 @@ export class SqliteEventStore implements EventStore {
       const outcome: Ingested = { added: 0, duplicates: 0, conflicts: [], rejected: [] };
       const staged = new Map<EventId, Held>();
       const forked: Event[] = [];
-      const lookup = this.driver.prepare(`SELECT ${COLUMNS} FROM events e WHERE e.event_id = ?`);
+      const lookup = this.driver.prepare(`SELECT ${EVENT_COLUMNS} FROM events e WHERE e.event_id = ?`);
       try {
         for (const item of read) {
           if ("rejected" in item) {
@@ -208,7 +208,7 @@ export class SqliteEventStore implements EventStore {
   private held(lookup: SqliteStatement, eventId: EventId): Held | undefined {
     const row = lookup.get(eventId);
     if (row === undefined) return undefined;
-    const decoded = this.decode(row);
+    const decoded = this.note(decodeEventRow(row));
     if ("damage" in decoded) throw new DamagedHistory(decoded.damage);
     return { event: decoded.event, bytes: row["canonical"] as Uint8Array };
   }
@@ -226,18 +226,17 @@ export class SqliteEventStore implements EventStore {
   }
 
   async *scan(filter?: Filter): AsyncIterable<Event> {
-    // Read whole before the first yield: one cut, which a write during the walk does not move.
-    const { conditions, bound } = envelope(filter);
-    const events = this.select(`SELECT ${COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.event_id, e.author`, bound, filter);
+    const { conditions, bound } = eventFilterSql(filter);
+    const events = this.select(`SELECT ${EVENT_COLUMNS} FROM events e${conditions.length === 0 ? "" : ` WHERE ${conditions.join(" AND ")}`} ORDER BY e.at, e.event_id, e.author`, bound, filter);
     for (const event of events) yield event;
   }
 
   async changes(filter?: Filter, since?: ChangeToken): Promise<{ token: ChangeToken; events: AsyncIterable<Event> }> {
     const upper = this.lastSeq();
     const from = since === undefined ? 0 : this.place(since, upper);
-    const { conditions, bound } = envelope(filter);
+    const { conditions, bound } = eventFilterSql(filter);
     const events = this.select(
-      `SELECT ${COLUMNS} FROM event_positions p JOIN events e ON e.event_id = p.event_id WHERE p.accepted_seq > ? AND p.accepted_seq <= ?${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY p.accepted_seq`,
+      `SELECT ${EVENT_COLUMNS} FROM event_positions p JOIN events e ON e.event_id = p.event_id WHERE p.accepted_seq > ? AND p.accepted_seq <= ?${conditions.map((c) => ` AND ${c}`).join("")} ORDER BY p.accepted_seq`,
       [from, upper, ...bound],
       filter
     );
@@ -261,19 +260,13 @@ export class SqliteEventStore implements EventStore {
     return seq;
   }
 
-  /**
-   * The events the rows of `sql` decode to that match `filter`, read
-   * in full now. The SQL conditions only narrow the rows read; the
-   * filter itself is applied to the decoded event, so that a match is
-   * exactly what the filter says, whatever SQLite made of the bound
-   * values. A row that does not decode is left out.
-   */
+  /** The events the rows of `sql` decode to that match `filter`, read in full now; the damage met on the way is remembered. */
   private select(sql: string, bound: SqlValue[], filter?: Filter): Event[] {
     const events: Event[] = [];
-    for (const row of query(this.driver, sql, ...bound)) {
-      const decoded = this.decode(row);
+    readEventRows(this.driver, sql, bound, (decoded) => {
+      this.note(decoded);
       if ("event" in decoded && matches(decoded.event, filter)) events.push(decoded.event);
-    }
+    });
     return events;
   }
 
@@ -284,10 +277,10 @@ export class SqliteEventStore implements EventStore {
   /** Every row of `events` decoded, the damage found listed; after it, a store that found none is known sound. */
   private survey(): Damaged[] {
     const out: Damaged[] = [];
-    for (const row of query(this.driver, `SELECT ${COLUMNS} FROM events e ORDER BY e.rowid`)) {
-      const decoded = this.decode(row);
+    readEventRows(this.driver, `SELECT ${EVENT_COLUMNS} FROM events e ORDER BY e.rowid`, [], (decoded) => {
+      this.note(decoded);
       if ("damage" in decoded) out.push(decoded.damage);
-    }
+    });
     this.surveyed = true;
     return out;
   }
@@ -295,8 +288,8 @@ export class SqliteEventStore implements EventStore {
   async conflicting(): Promise<Conflict[]> {
     if (!this.hasConflictsTable()) return [];
     const out: Conflict[] = [];
-    for (const row of query(this.driver, `SELECT ${COLUMNS}, c.rejected AS rejected FROM local_conflicts c JOIN events e ON e.event_id = c.event_id ORDER BY c.seen`)) {
-      const kept = this.decode(row);
+    for (const row of query(this.driver, `SELECT ${EVENT_COLUMNS}, c.rejected AS rejected FROM local_conflicts c JOIN events e ON e.event_id = c.event_id ORDER BY c.seen`)) {
+      const kept = this.note(decodeEventRow(row));
       if ("damage" in kept) continue; // its accepted value is `damaged()`'s to report
       out.push({ eventId: kept.event.eventId, kept: kept.event, rejected: parseStrict(row["rejected"] as Uint8Array) as Event });
     }
@@ -313,8 +306,8 @@ export class SqliteEventStore implements EventStore {
     return hasTable(this.driver, "local_conflicts");
   }
 
-  private decode(row: SqlRow): Decoded {
-    const decoded = decode(row);
+  /** Remembers the damage `decoded` may be as the first this store met, and hands `decoded` back. */
+  private note(decoded: DecodedEventRow): DecodedEventRow {
     if ("damage" in decoded) this.damage ??= decoded.damage;
     return decoded;
   }
@@ -352,12 +345,13 @@ function canonical(value: unknown): Held {
 }
 
 /**
- * The event a row holds, or the damage it is: bytes that are not
- * canonical JSON, do not validate as an event, are not the event's
- * own canonical bytes, or disagree with the columns beside them. The
- * damage is placed by the row's ID when that is text, else by rowid.
+ * The event a row of `EVENT_COLUMNS` holds, or the damage it is: bytes
+ * that are not canonical JSON, do not validate as an event, are not
+ * the event's own canonical bytes, or disagree with the columns beside
+ * them. The damage is placed by the row's ID when that is text, else
+ * by rowid.
  */
-function decode(row: SqlRow): Decoded {
+export function decodeEventRow(row: SqlRow): DecodedEventRow {
   const canonical = row["canonical"];
   const bytes = canonical instanceof Uint8Array ? canonical : undefined;
   let where = `events/rowid ${String(row["rowid"])}`;
@@ -383,8 +377,21 @@ function decode(row: SqlRow): Decoded {
   }
 }
 
+/**
+ * Every row of `sql`, a selection of `EVENT_COLUMNS` with `bound`
+ * bound, decoded and handed to `each` in the order SQLite returns
+ * them; the rows are read whole before the first is handed over, one
+ * cut, which a write during the walk does not move. The SQL only
+ * narrows the rows read: a filter is applied to the decoded event by
+ * the caller, so that a match is exactly what the filter says,
+ * whatever SQLite made of the bound values.
+ */
+export function readEventRows(driver: SqliteDriver, sql: string, bound: SqlValue[], each: (decoded: DecodedEventRow) => void): void {
+  for (const row of query(driver, sql, ...bound)) each(decodeEventRow(row));
+}
+
 /** The SQL that narrows `events` as `e` to `filter`'s author and type, and the values it binds — as bytes cast to text, which carries a NUL where a bound string cannot. */
-function envelope(filter: Filter | undefined): { conditions: string[]; bound: SqlValue[] } {
+export function eventFilterSql(filter: Filter | undefined): { conditions: string[]; bound: SqlValue[] } {
   const conditions: string[] = [];
   const bound: SqlValue[] = [];
   if (filter?.author !== undefined) {
