@@ -125,40 +125,62 @@ makes the five common tables — `vault_meta`, `keystore`, `events`,
 `objects`, `object_chunks`, all `STRICT` — and, for a runtime, the two
 control tables `store_state` and `event_positions`; `checkSchema`
 checks a database holds exactly that, structurally, through SQLite's
-own pragmas — names, columns, types, keys and references, not the SQL
-they were spelled with — with the schema's names read as their stored
-bytes and decoded, since a snapshot is a file another party wrote: a
-portable snapshot may have nothing beside the five tables and the
-indexes their constraints made; a runtime may add indexes, `local_*`
-tables and `ANALYZE` statistics; a view or a trigger is refused in
-either. `createRuntime(driver, { metadata, wrapped })` fills the empty
-database a `create` opened — application ID `ESTC`, schema version 1,
-the tables, the metadata, the wrapped seed as the UTF-8 of its compact
-JWE, fresh `replica_id` and `store_generation` — in one transaction,
+own pragmas — names, columns, types, primary and unique keys with their
+collation and direction, references with both their actions — and,
+since no pragma reports a column's collation, by comparing through
+each text column that it collates byte for byte; the SQL the tables
+were spelled with is not what is checked, and the schema's names are
+read as their stored bytes and decoded, since a snapshot is a file
+another party wrote. A portable snapshot may have nothing beside the
+five tables and the indexes their constraints made; a runtime may add
+indexes, `local_*` tables and `ANALYZE` statistics; a view or a
+trigger is refused in either, and a table named like an inherited
+property of an object is an extra table like any other.
+`createRuntime(driver, { metadata, wrapped })` fills the empty database
+a `create` opened — application ID `ESTC`, schema version 1, the
+tables, the metadata, the wrapped seed as the UTF-8 of its compact JWE,
+fresh `replica_id` and `store_generation` — in one transaction,
 published ready, and hands the runtime back open. `openRuntime(driver,
 { anchor })` checks a `readwrite` driver's database in order — the
-file's application ID, encoding and schema version; the metadata, so a
-snapshot or an unready file is told apart before its tables are; the
-schema; the wrapped seed; then the anchor, given outright or derived by
-a function that unlocks the wrapper the vault holds, against the
-vault's (`AnchorMismatch`); then the control, whose replica ID and
-generation are canonical UUIDv7s and whose `last_seq` and positions
-account for every event (`DamagedControl` otherwise, and nothing is
-made up in their place) — and writes nothing. `openInspector(driver)`
-applies the same checks without the seed, sets the connection to
-refuse every write, and keeps the driver's ownership. `openPortable
-(driver)` takes a `readonly` driver — no writes, no extensions, an
-untrusted schema — and checks the file's identity and its
-rollback-format headers, then the schema, then the two rows that say
-what it is, reading nothing else; whether its events and objects are
-what they claim is the validation to come. Each returns a handle with
-the driver, the metadata, for a runtime the local IDs and
-`keystore(locked)` — `read` any time, `rewrap` one transaction under
-the lock the caller runs it in — and `close`, after which every call
-is `VaultClosed`; a create or open that fails, for any reason, closes
-the driver it was given, so ownership never stays with a handle nobody
-can use. Everything a file must show is a `NotAVault` naming what it
-did not.
+file's application ID, text encoding and schema version; the metadata,
+so a snapshot or an unready file is told apart before its tables are;
+the schema; the wrapped seed; then the anchor, given outright or
+derived by a function that unlocks the wrapper the vault holds,
+against the vault's (`AnchorMismatch`); then the control, whose row is
+the one keyed 1, whose replica ID and generation are canonical
+UUIDv7s, and whose `last_seq` and positions, all positive, account for
+every event (`DamagedControl` otherwise, and nothing is made up in
+their place) — and writes nothing. The text encoding is read from
+`PRAGMA encoding` where SQLite was built with UTF-16 support and from
+the file's header through `sqlite_dbpage` where it was not, as the
+wasm build is; a platform with neither is refused a file it did not
+write. The metadata and keystore rows are likewise the one keyed 1
+each: the file's own constraints are not trusted to have kept it so.
+`openInspector(driver)` applies the same checks without the seed on a
+connection set to refuse every write; it takes only a `readwrite`
+driver, the one mode that owns the file outright on every platform,
+since a `readonly` driver may share a rollback-journal file with other
+readers and a runtime's inspector must not. `openPortable(driver)`
+takes a `readonly` driver — no writes, no extensions, an untrusted
+schema — and checks the file's identity and its rollback-format
+headers, then the schema, then the two rows that say what it is,
+reading nothing else; whether its events and objects are what they
+claim is the validation to come. The wrapped seed is checked against
+the keystore package's profile as far as it can be without the
+passphrase — `PBES2-HS512+A256KW` over `A256GCM`, an iteration count
+the package would accept, a salt of at least 8 bytes, nothing else in
+the protected header, and segments of the lengths a wrapped 256-bit key,
+a 96-bit nonce, a 32-byte seed and a 128-bit tag have — not just the
+shape of a compact JWE. Each open returns a handle with the driver,
+the metadata, for a runtime the local IDs and `keystore(locked)` —
+`read` any time, `rewrap` one transaction under the lock the caller
+runs it in, no statement held past either — and `close`, after which
+every call is `VaultClosed`; a create or open that fails, for any
+reason, closes the driver it was given, so ownership never stays with
+a handle nobody can use. Everything a file must show is a `NotAVault`
+naming what it did not. The open cases in
+`test/v3/sqlite/open-cases.ts` run over both platforms, Node on files
+and Chromium in a Worker, a UTF-16 file among their inputs.
 
 Everything below is
 version 2, which stays until the vault switches over.

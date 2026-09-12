@@ -5,20 +5,33 @@
 - **The SQLite vault's schema, and how it is created and opened.** In
   `@estoc/event-store/v3`: `createTables` and `checkSchema`, the five
   common `STRICT` tables plus a runtime's two control tables, checked
-  structurally through SQLite's pragmas with the schema's names read as
-  stored bytes; `createRuntime` publishing schema, metadata, wrapped
-  seed and fresh local IDs in one transaction; `openRuntime` checking
-  header, metadata, schema, wrapper, anchor (given, or derived by the
-  caller's unlock) and control in that order and writing nothing;
-  `openInspector` doing the same without the seed on a connection set
-  to refuse every write; `openPortable` checking a read-only snapshot's
-  identity, rollback-format headers, schema and metadata rows and
-  nothing else. Handles carry the driver, the metadata, the local IDs
-  and `keystore(locked)`, whose `rewrap` is one transaction under the
-  caller's lock; a failed open closes its driver. New error
-  `DamagedControl`, for local control that is missing or does not
-  account for the events; `APPLICATION_ID` and `SCHEMA_VERSION`
-  exported.
+  structurally through SQLite's pragmas — columns, types, keys with
+  collation and direction, references with both actions — and each text
+  column probed to collate byte for byte, with the schema's names read
+  as stored bytes and the whitelist a map, so a table named like an
+  inherited property is refused like any other; `createRuntime`
+  publishing schema, metadata, wrapped seed and fresh local IDs in one
+  transaction; `openRuntime` checking header, metadata, schema,
+  wrapper, anchor (given, or derived by the caller's unlock) and
+  control in that order and writing nothing, the text encoding read
+  from `PRAGMA encoding` or, on a build without UTF-16 such as the
+  wasm one, from the file header through `sqlite_dbpage`, the
+  singleton rows required to be the ones keyed 1, positions required
+  positive; `openInspector` doing the same without the seed on a
+  connection set to refuse every write, taking only a `readwrite`
+  driver so it owns the file on every platform; `openPortable`
+  checking a read-only snapshot's identity, rollback-format headers,
+  schema and metadata rows and nothing else. `checkWrappedSeed` now
+  checks the keystore package's JWE profile — algorithms, iteration
+  bound, salt, header parameters, segment lengths — not just the
+  shape. Handles carry the driver, the metadata, the local IDs and
+  `keystore(locked)`, whose `rewrap` is one transaction under the
+  caller's lock and which holds no statement past a call; a failed
+  open closes its driver. New error `DamagedControl`, for local
+  control that is missing or does not account for the events;
+  `APPLICATION_ID` and `SCHEMA_VERSION` exported. The open cases run
+  on Node and in Chromium. New dev dependency `@estoc/keystore`, for
+  a wrapper fixture the package itself sealed.
 - **The SQLite driver, under the version-3 stores to come.** `SqliteDriver`
   in `@estoc/event-store/v3` — one synchronous connection, `exec`,
   `prepare` to a `SqliteStatement` (`run`, `get`, `all`, `iterate`,

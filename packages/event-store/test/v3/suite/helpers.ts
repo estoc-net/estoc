@@ -2,6 +2,9 @@ import { expect } from "vitest";
 
 import type { AuthorId, Event, EventId } from "../../../src/v3/index.js";
 
+export { ANCHOR, META, WRAPPED, REWRAPPED } from "../fixtures.js";
+
+
 /** A clock in Unix milliseconds the test moves by hand. */
 export function clock(start: string): { now: () => number; advance: (ms: number) => void; set: (iso: string) => void } {
   let t = new Date(start).getTime();

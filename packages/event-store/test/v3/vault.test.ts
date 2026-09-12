@@ -25,15 +25,13 @@ import {
   type VaultMetadata,
   type WrappedSeed,
 } from "../../src/v3/index.js";
-import { all, authorN, clock, expectBytes } from "./suite/helpers.js";
+import { META, REWRAPPED, WRAPPED, all, authorN, clock, expectBytes } from "./suite/helpers.js";
 import { EMPTY_CID, HELLO_CID, bytesOf, chunked, cidOf, drain, join } from "./suite/object-store-suite.js";
 
 const T0 = "2026-09-07T10:00:00.000Z";
 const HELLO = new TextEncoder().encode("hello");
 const WORLD = new TextEncoder().encode("world");
 const WORLD_CID = cidOf(WORLD);
-const META: VaultMetadata = { version: 3, anchor: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK" };
-const WRAPPED: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJQQkVTMi1IUzI1NitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.a.b.c.d" };
 
 const draft = (roots: Cid[] = [], data: Record<string, unknown> = {}): Draft => ({ type: "test.event", roots, data: { n: 1, ...data } });
 
@@ -1150,7 +1148,7 @@ describe("VaultRuntime.keystore", () => {
 
   it("rewrap replaces the wrapper under the lock: it waits for the operation holding it, and read sees the replacement after", async () => {
     const { vault } = open();
-    const next: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..iv.ct.tag" };
+    const next = REWRAPPED;
     const g = gate();
     const locked = vault.locked(() => g.wait);
     await tick();

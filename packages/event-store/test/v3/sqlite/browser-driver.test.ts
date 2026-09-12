@@ -3,15 +3,18 @@
  * script are bundled with esbuild and served, with `sqlite3.wasm`, to a
  * headless Chromium over localhost (a secure context, which OPFS
  * needs); the page drives the Workers and the results come back — one
- * vitest case per driver case, per pool case, and per case of the
- * page's own. Skipped, loudly, when no Chromium is found;
+ * vitest case per driver case, per open case, per pool case, and per
+ * case of the page's own. The one input the Worker cannot make for
+ * itself, a UTF-16 database, is made here with Node's SQLite. Skipped, loudly, when no Chromium is found;
  * `ESTOC_BROWSER=/path/to/chrome` names one.
  */
 
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import http from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright-core";
@@ -21,6 +24,8 @@ import { findChromium } from "../../browser/chromium.js";
 import { poolCases } from "../../browser/pool-cases.js";
 import type { WorkerCaseResult } from "../../browser/sqlite-worker.js";
 import { driverCases } from "./driver-cases.js";
+import { openCases } from "./open-cases.js";
+import { utf16Forged, utf16Snapshot } from "./utf16.js";
 
 const browserPath = findChromium();
 if (browserPath === null) {
@@ -53,6 +58,9 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
     const worker = await bundle("../../browser/sqlite-worker.ts", "esm");
     const wasm = await readFile(createRequire(import.meta.url).resolve("@sqlite.org/sqlite-wasm/sqlite3.wasm"));
     const html = `<!doctype html><meta charset="utf-8"><title>sqlite</title><script>${page}</script>`;
+    const dir = await mkdtemp(path.join(tmpdir(), "estoc-utf16-"));
+    const utf16 = { snapshot: Array.from(await utf16Snapshot(path.join(dir, "snapshot.sqlite"))), forged: Array.from(await utf16Forged(path.join(dir, "forged.sqlite"))) };
+    await rm(dir, { recursive: true, force: true });
     server = http.createServer((req, res) => {
       if (req.url === "/worker.js") {
         res.setHeader("content-type", "text/javascript; charset=utf-8");
@@ -75,7 +83,7 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
         if (message.type() === "error" || message.type() === "warning") console.error(`browser ${message.type()}:`, message.text());
       });
       await tab.goto(`http://127.0.0.1:${port}/`);
-      for (const result of await tab.evaluate(() => window.runSqliteSuite())) {
+      for (const result of await tab.evaluate((bytes) => window.runSqliteSuite(bytes), utf16)) {
         results.set(result.name, result);
         if (result.note !== undefined) console.info(`in Chromium: ${result.name}: ${result.note}`);
       }
@@ -94,6 +102,9 @@ describe.skipIf(browserPath === null)("sqlite-wasm driver (in a Chromium Worker)
   }
 
   for (const c of driverCases) {
+    it(c.name, () => report(results.get(c.name)));
+  }
+  for (const c of openCases) {
     it(c.name, () => report(results.get(c.name)));
   }
   for (const c of poolCases) {

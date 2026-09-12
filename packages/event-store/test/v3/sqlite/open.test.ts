@@ -1,15 +1,15 @@
 /**
- * Creating and opening the vault in SQLite over `node:sqlite`: what a
- * create publishes, what an open checks and in what order, what an
- * inspector and a portable open refuse, the keystore under the lock,
- * and what a failed open leaves behind — the file as it was, and its
- * ownership released.
+ * Creating and opening the vault over `node:sqlite`: the cross-platform
+ * open cases on files, and what only a file on disk can show — a second
+ * process, a damaged control row, a crash in the middle of a rewrap,
+ * the file untouched by a refused open.
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createSeedKeystore } from "@estoc/keystore";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { openNodeSqlite } from "../../../src/node.js";
@@ -24,6 +24,7 @@ import {
   ReadOnlyVault,
   VaultClosed,
   WriterLock,
+  checkWrappedSeed,
   createRuntime,
   createTables,
   openInspector,
@@ -36,18 +37,19 @@ import {
   type VaultMetadata,
   type WrappedSeed,
 } from "../../../src/v3/index.js";
+import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
+import { openCases, type OpenHarness } from "./open-cases.js";
+import { utf16Forged, utf16Snapshot } from "./utf16.js";
 
-const ANCHOR = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-const META: VaultMetadata = { version: 3, anchor: ANCHOR };
-const WRAPPED: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJQQkVTMi1IUzI1NitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.a.b.c.d" };
-const REWRAPPED: WrappedSeed = { version: 3, seedJwe: "eyJhbGciOiJQQkVTMi1IUzI1NitBMjU2S1ciLCJlbmMiOiJBMjU2R0NNIn0.e.f.g.h" };
 const EVENT_ID = "01924f2e-8f6b-7c3a-9d1e-2b4c6a8e0f13";
 
 let dir: string;
+let utf16: { snapshot: Uint8Array; forged: Uint8Array };
 let n = 0;
 
 beforeAll(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "estoc-open-"));
+  utf16 = { snapshot: await utf16Snapshot(path.join(dir, "utf16-snapshot.sqlite")), forged: await utf16Forged(path.join(dir, "utf16-forged.sqlite")) };
 });
 
 afterAll(async () => {
@@ -56,10 +58,10 @@ afterAll(async () => {
 
 const fresh = (): string => path.join(dir, `vault-${n++}.sqlite`);
 const open = (file: string, mode: OpenMode, journal?: "wal" | "delete"): SqliteDriver => openNodeSqlite(file, journal === undefined ? { mode } : { mode, journal });
-const create = (file: string): RuntimeDatabase => createRuntime(open(file, "create"), { metadata: META, wrapped: WRAPPED });
+const create = (file: string, journal?: "wal" | "delete"): RuntimeDatabase => createRuntime(open(file, "create", journal), { metadata: META, wrapped: WRAPPED });
 const locked: Locked = (op) => new WriterLock().run(op);
 
-/** Runs `sql` on `file` through a connection of its own, closed after: how a test damages what a create made. */
+/** Runs `sql` on `file` through a connection of its own, closed after. */
 function alter(file: string, sql: string): void {
   const db = open(file, "readwrite");
   try {
@@ -69,7 +71,7 @@ function alter(file: string, sql: string): void {
   }
 }
 
-/** A database made by hand: `body` gets an empty file to fill, in a rollback journal so it can also be read as a snapshot. */
+/** A database made by hand, in a rollback journal so it can be read as a snapshot too. */
 function handmade(body: (db: SqliteDriver) => void): string {
   const file = fresh();
   const db = open(file, "create", "delete");
@@ -81,7 +83,6 @@ function handmade(body: (db: SqliteDriver) => void): string {
   return file;
 }
 
-/** The rows a ready vault of `kind` has, with the tables of `kind`. */
 function fill(db: SqliteDriver, kind: "runtime" | "portable", meta: { format?: string; version?: number; ready?: number; anchor?: string } = {}): SqliteDriver {
   db.exec(`PRAGMA application_id = 1163088963; PRAGMA user_version = 1`);
   createTables(db, kind);
@@ -91,10 +92,39 @@ function fill(db: SqliteDriver, kind: "runtime" | "portable", meta: { format?: s
   return db;
 }
 
+/** The runtime's tables with the constraints the schema's DDL has left out, so values the constraints would stop can be put in. */
+function fillLoose(db: SqliteDriver, format: string, version: number, kind: string, ready: number): void {
+  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1");
+  db.exec("CREATE TABLE vault_meta (singleton INTEGER PRIMARY KEY, format TEXT NOT NULL, vault_version INTEGER NOT NULL, kind TEXT NOT NULL, ready INTEGER NOT NULL, anchor TEXT NOT NULL) STRICT");
+  db.prepare("INSERT INTO vault_meta VALUES (1, ?, ?, ?, ?, ?)").run(format, version, kind, ready, ANCHOR);
+}
+
 async function rejectsWith(promise: Promise<unknown>, type: new (...args: never[]) => Error, message: string | RegExp, what?: string): Promise<void> {
   await expect(promise, what).rejects.toBeInstanceOf(type);
   await expect(promise, what).rejects.toThrow(message);
 }
+
+/** How many statements `driver` still holds: what a leak of one per call would grow. */
+function retained(driver: SqliteDriver): number {
+  return (driver as unknown as { statements: Set<unknown> }).statements.size;
+}
+
+describe("the open cases on node:sqlite files", () => {
+  const harness: OpenHarness = {
+    fresh,
+    open: async (target, mode) => open(target, mode, mode === "create" ? "delete" : undefined),
+    importFile: (target, bytes) => writeFile(target, bytes),
+    get utf16() {
+      return utf16;
+    },
+  };
+  for (const c of openCases) {
+    it(c.name, async () => {
+      const note = await c.run(harness);
+      if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
+    });
+  }
+});
 
 describe("createRuntime", () => {
   it("publishes schema, metadata, wrapper and fresh control in one step, and hands the runtime back open", async () => {
@@ -213,7 +243,9 @@ describe("openRuntime", () => {
       { name: "another vault version", file: handmade((db) => fillLoose(db, "estoc-sqlite", 4, "runtime", 1)), message: /vault version 4/ },
       { name: "a portable snapshot", file: handmade((db) => fill(db, "portable")), message: /a portable one, not a runtime/ },
       { name: "an unready runtime", file: handmade((db) => fill(db, "runtime", { ready: 0 })), message: /not ready/ },
-      { name: "no metadata row", file: handmade((db) => fill(db, "runtime", {}) && db.exec("DELETE FROM vault_meta")), message: /vault_meta has 0 rows/ },
+      { name: "no metadata row", file: handmade((db) => fill(db, "runtime").exec("DELETE FROM vault_meta")), message: /vault_meta has 0 rows/ },
+      { name: "a metadata row keyed other than 1", file: handmade((db) => fill(db, "runtime").exec("PRAGMA ignore_check_constraints = ON; UPDATE vault_meta SET singleton = 2")), message: /vault_meta's row is keyed 2, not 1/ },
+      { name: "a keystore row keyed other than 1", file: handmade((db) => fill(db, "runtime").exec("PRAGMA ignore_check_constraints = ON; UPDATE keystore SET singleton = 2")), message: /keystore's row is keyed 2, not 1/ },
       { name: "an anchor that is not a DID", file: handmade((db) => fill(db, "runtime", { anchor: "nobody" })), message: /anchor is a DID/ },
     ];
     for (const c of cases) {
@@ -225,7 +257,7 @@ describe("openRuntime", () => {
           return ANCHOR;
         },
       });
-      await rejectsWith(failed, NotAVault, c.message);
+      await rejectsWith(failed, NotAVault, c.message, c.name);
       expect(asked, `${c.name}: the seed is not asked for`).toBe(false);
       expect(() => driver.exec("SELECT 1"), `${c.name}: the driver is closed`).toThrow(DatabaseClosed);
     }
@@ -234,6 +266,7 @@ describe("openRuntime", () => {
   it("checks the schema structurally: what is missing, what is extra, what a runtime may add", async () => {
     const refused: [string, string, RegExp][] = [
       ["an extra table", "CREATE TABLE scratch (x INTEGER) STRICT", /table scratch is not in the runtime schema/],
+      ["a table named like an inherited property", 'CREATE TABLE "constructor" (x INTEGER) STRICT', /table constructor is not in the runtime schema/],
       ["a view", "CREATE VIEW recent AS SELECT event_id FROM events", /the schema has a view, recent/],
       ["a trigger", "CREATE TRIGGER t AFTER INSERT ON events BEGIN SELECT 1; END", /the schema has a trigger, t/],
       ["a missing column", "ALTER TABLE events DROP COLUMN type", /table events is not schema version 1's/],
@@ -251,40 +284,72 @@ describe("openRuntime", () => {
     const file = fresh();
     create(file).close();
     alter(file, "CREATE TABLE local_notes (k TEXT PRIMARY KEY, v BLOB) STRICT; CREATE INDEX events_by_author ON events (author, at); ANALYZE");
-    expect(await hasTable(file, "sqlite_stat1"), "ANALYZE left its table").toBe(true);
+    const stats = open(file, "readonly");
+    expect(stats.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name = 'sqlite_stat1'").get(), "ANALYZE left its table").toEqual({ n: 1 });
+    stats.close();
     const vault = await openRuntime(open(file, "readwrite"), { anchor: ANCHOR });
     vault.close();
   });
 
-  it("refuses a table whose type differs even when the names agree, and one that is not STRICT", async () => {
-    const wrongType = handmade((db) => {
+  it("refuses a table whose type, collation, key or reference differs even when the names agree, and one that is not STRICT", async () => {
+    const remade = (table: string, ddl: string): string =>
+      handmade((db) => {
+        fill(db, "runtime");
+        db.exec(`DROP TABLE ${table}; ${ddl}`);
+      });
+    const cases: [string, string, RegExp][] = [
+      ["a column of another type", remade("objects", "CREATE TABLE objects (cid TEXT PRIMARY KEY NOT NULL, size TEXT NOT NULL) STRICT"), /expected cid TEXT NOT NULL PK1, size INTEGER NOT NULL, KEY\(cid\); found cid TEXT NOT NULL PK1, size TEXT NOT NULL, KEY\(cid\)/],
+      ["a table that is not STRICT", remade("objects", "CREATE TABLE objects (cid TEXT PRIMARY KEY NOT NULL, size INTEGER NOT NULL)"), /table objects is not STRICT/],
+      [
+        "a reference without its ON DELETE",
+        remade("object_chunks", "CREATE TABLE object_chunks (cid TEXT NOT NULL REFERENCES objects(cid), chunk_no INTEGER NOT NULL, bytes BLOB NOT NULL, PRIMARY KEY (cid, chunk_no)) STRICT"),
+        /ON UPDATE NO ACTION ON DELETE CASCADE; found .* ON UPDATE NO ACTION ON DELETE NO ACTION/,
+      ],
+      [
+        "a reference with an ON UPDATE",
+        remade("object_chunks", "CREATE TABLE object_chunks (cid TEXT NOT NULL REFERENCES objects(cid) ON UPDATE CASCADE ON DELETE CASCADE, chunk_no INTEGER NOT NULL, bytes BLOB NOT NULL, PRIMARY KEY (cid, chunk_no)) STRICT"),
+        /found .* ON UPDATE CASCADE ON DELETE CASCADE/,
+      ],
+      ["a key that collates NOCASE", remade("objects", "CREATE TABLE objects (cid TEXT COLLATE NOCASE PRIMARY KEY NOT NULL, size INTEGER NOT NULL) STRICT"), /found cid TEXT NOT NULL PK1, size INTEGER NOT NULL, KEY\(cid COLLATE NOCASE\)/],
+      ["a key that orders descending", remade("objects", "CREATE TABLE objects (cid TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (cid DESC)) STRICT"), /KEY\(cid DESC\)/],
+      [
+        "a column that collates NOCASE",
+        remade("events", "CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT COLLATE NOCASE NOT NULL, canonical BLOB NOT NULL) STRICT"),
+        /table events: column type does not compare as BINARY/,
+      ],
+      [
+        "a column that collates RTRIM",
+        remade("events", "CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT COLLATE RTRIM NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT"),
+        /table events: column at does not compare as BINARY/,
+      ],
+      ["a UNIQUE the schema does not have", remade("store_state", "CREATE TABLE store_state (singleton INTEGER PRIMARY KEY, replica_id TEXT NOT NULL UNIQUE, store_generation TEXT NOT NULL, last_seq INTEGER NOT NULL) STRICT"), /found .* KEY\(replica_id\)/],
+    ];
+    for (const [name, file, message] of cases) {
+      await rejectsWith(openRuntime(open(file, "readwrite"), { anchor: ANCHOR }), NotAVault, message, name);
+    }
+    const spelled = handmade((db) => {
       fill(db, "runtime");
-      db.exec("DROP TABLE objects; CREATE TABLE objects (cid TEXT PRIMARY KEY NOT NULL, size TEXT NOT NULL) STRICT");
+      db.exec("DROP TABLE objects; create   table objects(cid text collate binary not null primary key,size integer not null)strict");
     });
-    await rejectsWith(openRuntime(open(wrongType, "readwrite"), { anchor: ANCHOR }), NotAVault, /table objects is not schema version 1's: expected cid TEXT NOT NULL PK1, size INTEGER NOT NULL; found cid TEXT NOT NULL PK1, size TEXT NOT NULL/);
-    const loose = handmade((db) => {
-      fill(db, "runtime");
-      db.exec("DROP TABLE objects; CREATE TABLE objects (cid TEXT PRIMARY KEY NOT NULL, size INTEGER NOT NULL)");
-    });
-    await rejectsWith(openRuntime(open(loose, "readwrite"), { anchor: ANCHOR }), NotAVault, /table objects is not STRICT/);
-    const noCascade = handmade((db) => {
-      fill(db, "runtime");
-      db.exec("DROP TABLE object_chunks; CREATE TABLE object_chunks (cid TEXT NOT NULL REFERENCES objects(cid), chunk_no INTEGER NOT NULL, bytes BLOB NOT NULL, PRIMARY KEY (cid, chunk_no)) STRICT");
-    });
-    await rejectsWith(openRuntime(open(noCascade, "readwrite"), { anchor: ANCHOR }), NotAVault, /ON DELETE CASCADE; found .* ON DELETE NO ACTION/);
+    const vault = await openRuntime(open(spelled, "readwrite"), { anchor: ANCHOR });
+    vault.close();
   });
 
   it("refuses damaged control rather than making any up", async () => {
+    const event = `INSERT INTO events VALUES ('${EVENT_ID}', '2026-09-12T00:00:00.000Z', '${EVENT_ID}', 'x', X'7B7D')`;
     const cases: [string, string, RegExp][] = [
       ["no control row", "DELETE FROM store_state", /store_state has 0 rows/],
+      ["a control row keyed other than 1", "PRAGMA ignore_check_constraints = ON; UPDATE store_state SET singleton = 2", /store_state's row is keyed 2, not 1/],
       ["a replica ID that is not a UUIDv7", "UPDATE store_state SET replica_id = 'replica'", /replica_id "replica" is not a canonical UUIDv7/],
       ["a generation that is not a UUIDv7", `UPDATE store_state SET store_generation = '${EVENT_ID.replace("-7", "-4")}'`, /store_generation .* is not a canonical UUIDv7/],
       ["a last_seq above the positions", "UPDATE store_state SET last_seq = 5", /last_seq is 5 but the highest position is 0/],
-      ["an event without a position", `INSERT INTO events VALUES ('${EVENT_ID}', '2026-09-12T00:00:00.000Z', '${EVENT_ID}', 'x', X'7B7D')`, /1 events have 0 positions/],
+      ["an event without a position", event, /1 events have 0 positions/],
+      ["a position last_seq does not cover", `${event}; INSERT INTO event_positions VALUES (3, '${EVENT_ID}')`, /last_seq is 0 but the highest position is 3/],
+      ["a position of zero", `PRAGMA ignore_check_constraints = ON; ${event}; INSERT INTO event_positions VALUES (0, '${EVENT_ID}'); UPDATE store_state SET last_seq = 0`, /position 0 is not positive/],
       [
-        "a position last_seq does not cover",
-        `INSERT INTO events VALUES ('${EVENT_ID}', '2026-09-12T00:00:00.000Z', '${EVENT_ID}', 'x', X'7B7D'); INSERT INTO event_positions VALUES (3, '${EVENT_ID}')`,
-        /last_seq is 0 but the highest position is 3/,
+        "a negative position beside a good one",
+        `PRAGMA ignore_check_constraints = ON; ${event}; INSERT INTO events VALUES ('${EVENT_ID.replace("13", "14")}', '2026-09-12T00:00:00.000Z', '${EVENT_ID}', 'x', X'7B7D'); INSERT INTO event_positions VALUES (-1, '${EVENT_ID}'), (1, '${EVENT_ID.replace("13", "14")}'); UPDATE store_state SET last_seq = 1`,
+        /position -1 is not positive/,
       ],
     ];
     for (const [name, sql, message] of cases) {
@@ -292,12 +357,12 @@ describe("openRuntime", () => {
       create(file).close();
       alter(file, sql);
       const driver = open(file, "readwrite");
-      await rejectsWith(openRuntime(driver, { anchor: ANCHOR }), DamagedControl, message);
+      await rejectsWith(openRuntime(driver, { anchor: ANCHOR }), DamagedControl, message, name);
       expect(() => driver.exec("SELECT 1"), name).toThrow(DatabaseClosed);
     }
     const file = fresh();
     create(file).close();
-    alter(file, `INSERT INTO events VALUES ('${EVENT_ID}', '2026-09-12T00:00:00.000Z', '${EVENT_ID}', 'x', X'7B7D'); INSERT INTO event_positions VALUES (1, '${EVENT_ID}'); UPDATE store_state SET last_seq = 1`);
+    alter(file, `${event}; INSERT INTO event_positions VALUES (1, '${EVENT_ID}'); UPDATE store_state SET last_seq = 1`);
     const vault = await openRuntime(open(file, "readwrite"), { anchor: ANCHOR });
     vault.close();
   });
@@ -314,6 +379,52 @@ describe("openRuntime", () => {
       await holder.quit();
     }
     (await openRuntime(open(file, "readwrite"), { anchor: ANCHOR })).close();
+  });
+});
+
+describe("the wrapped seed", () => {
+  it("is what the keystore package seals: a fresh one passes, and rewraps", async () => {
+    const { doc } = await createSeedKeystore("a passphrase for this test only");
+    const sealed: WrappedSeed = { version: 3, seedJwe: doc.seedJwe };
+    expect(checkWrappedSeed(sealed)).toEqual(sealed);
+    const file = fresh();
+    const vault = createRuntime(open(file, "create"), { metadata: META, wrapped: sealed });
+    await vault.keystore(locked).rewrap(WRAPPED);
+    expect(await vault.keystore(locked).read()).toEqual(WRAPPED);
+    vault.close();
+  }, 30_000);
+
+  it("is checked against the package's profile, not just its shape", () => {
+    const header = (fields: Record<string, unknown>): string => Buffer.from(JSON.stringify(fields)).toString("base64url");
+    const [good, encryptedKey, iv, ciphertext, tag] = WRAPPED.seedJwe.split(".") as [string, string, string, string, string];
+    const profile = { alg: "PBES2-HS512+A256KW", enc: "A256GCM", p2c: 220000, p2s: "znUl9VydtY3Zu_3jCbgHEQ" };
+    const rest = `${encryptedKey}.${iv}.${ciphertext}.${tag}`;
+    const cases: [string, string, RegExp][] = [
+      ["an empty header", `e30.${rest}`, /header has nothing/],
+      ["an empty header with empty segments", "e30....", /header has nothing/],
+      ["another key algorithm", `${header({ ...profile, alg: "PBES2-HS256+A256KW" })}.${rest}`, /alg "PBES2-HS256\+A256KW" is not PBES2-HS512\+A256KW/],
+      ["direct encryption", `${header({ alg: "dir", enc: "A256GCM", p2c: 1, p2s: profile.p2s })}.${rest}`, /alg "dir"/],
+      ["another content encryption", `${header({ ...profile, enc: "A128GCM" })}.${rest}`, /enc "A128GCM" is not A256GCM/],
+      ["a missing iteration count", `${header({ alg: profile.alg, enc: profile.enc, p2s: profile.p2s })}.${rest}`, /header has alg, enc, p2s; the profile has alg, enc, p2c and p2s/],
+      ["an extra header parameter", `${header({ ...profile, zip: "DEF" })}.${rest}`, /header has alg, enc, p2c, p2s, zip/],
+      ["too many iterations", `${header({ ...profile, p2c: 5_000_001 })}.${rest}`, /p2c 5000001 is not an iteration count/],
+      ["a fractional iteration count", `${header({ ...profile, p2c: 1.5 })}.${rest}`, /p2c 1.5/],
+      ["a short salt", `${header({ ...profile, p2s: "AAAA" })}.${rest}`, /p2s is not a salt of at least 8 bytes/],
+      ["a header that is not JSON", `${Buffer.from("{").toString("base64url")}.${rest}`, /header is not JSON/],
+      ["a header that is an array", `${Buffer.from("[]").toString("base64url")}.${rest}`, /header is an object/],
+      ["an empty encrypted key", `${good}..${iv}.${ciphertext}.${tag}`, /encrypted key is 0 bytes, not 40/],
+      ["a short initialization vector", `${good}.${encryptedKey}.AAAA.${ciphertext}.${tag}`, /initialization vector is 3 bytes, not 12/],
+      ["a ciphertext of another length", `${good}.${encryptedKey}.${iv}.${Buffer.alloc(33).toString("base64url")}.${tag}`, /ciphertext is 33 bytes, not 32/],
+      ["a short tag", `${good}.${encryptedKey}.${iv}.${ciphertext}.AA`, /authentication tag is 1 bytes, not 16/],
+      ["a segment that is not base64url", `${good}.${encryptedKey}.${iv}.${ciphertext}.${tag}=`, /segment 5 is not base64url/],
+      ["four segments", `${good}.${encryptedKey}.${iv}.${ciphertext}`, /five segments/],
+    ];
+    for (const [name, seedJwe, message] of cases) {
+      expect(() => checkWrappedSeed({ version: 3, seedJwe }), name).toThrow(NotAVault);
+      expect(() => checkWrappedSeed({ version: 3, seedJwe }), name).toThrow(message);
+    }
+    const stored = handmade((db) => fill(db, "portable").prepare("UPDATE keystore SET seed_jwe = ?").run(new TextEncoder().encode("e30....")));
+    expect(() => openPortable(open(stored, "readonly"))).toThrow(/header has nothing/);
   });
 });
 
@@ -358,6 +469,17 @@ describe("the keystore", () => {
     vault.close();
   });
 
+  it("holds no statement past a call: a thousand reads and rewraps leave the connection as the open left it", async () => {
+    const vault = create(fresh());
+    const keystore = vault.keystore(locked);
+    const opened = retained(vault.driver);
+    for (let i = 0; i < 1000; i++) await keystore.read();
+    for (let i = 0; i < 100; i++) await keystore.rewrap(i % 2 === 0 ? REWRAPPED : WRAPPED);
+    expect(retained(vault.driver)).toBe(opened);
+    expect(opened).toBe(0);
+    vault.close();
+  });
+
   it("refuses every call after close", async () => {
     const vault = create(fresh());
     const keystore = vault.keystore(locked);
@@ -370,48 +492,54 @@ describe("the keystore", () => {
 });
 
 describe("openInspector", () => {
-  it("opens a runtime to read, writes nothing, mints nothing, and keeps a second owner out", async () => {
-    const file = fresh();
-    const made = create(file);
-    const { author, generation } = made;
-    made.close();
-    const before = await readFile(file);
-    const inspector = openInspector(open(file, "readwrite"));
-    expect(inspector.writable).toBe(false);
-    expect({ author: inspector.author, generation: inspector.generation }).toEqual({ author, generation });
-    expect(inspector.metadata).toEqual(META);
-    expect(await inspector.keystore(locked).read()).toEqual(WRAPPED);
-    await expect(inspector.keystore(locked).rewrap(REWRAPPED)).rejects.toBeInstanceOf(ReadOnlyVault);
-    expect(() => inspector.driver.exec("UPDATE store_state SET last_seq = 1")).toThrow(/readonly/);
-    expect(() => inspector.driver.exec("PRAGMA user_version = 2")).toThrow(/readonly/);
-    expect(() => open(file, "readwrite")).toThrow(DatabaseBusy);
-    expect(() => open(file, "readonly")).toThrow(DatabaseBusy);
-    inspector.close();
-    expect(Array.from(await readFile(file))).toEqual(Array.from(before));
+  it("opens a runtime to read, writes nothing, mints nothing, and keeps a second owner out, in either journal mode", async () => {
+    for (const journal of ["wal", "delete"] as const) {
+      const file = fresh();
+      const made = create(file, journal);
+      const { author, generation } = made;
+      made.close();
+      const before = await readFile(file);
+      const inspector = openInspector(open(file, "readwrite"));
+      expect(inspector.writable, journal).toBe(false);
+      expect({ author: inspector.author, generation: inspector.generation }, journal).toEqual({ author, generation });
+      expect(inspector.metadata, journal).toEqual(META);
+      expect(await inspector.keystore(locked).read(), journal).toEqual(WRAPPED);
+      await expect(inspector.keystore(locked).rewrap(REWRAPPED), journal).rejects.toBeInstanceOf(ReadOnlyVault);
+      expect(() => inspector.driver.exec("UPDATE store_state SET last_seq = 1"), journal).toThrow(/readonly/);
+      expect(() => inspector.driver.exec("PRAGMA user_version = 2"), journal).toThrow(/readonly/);
+      expect(() => open(file, "readwrite"), `${journal}: a second inspector`).toThrow(DatabaseBusy);
+      expect(() => open(file, "readonly"), `${journal}: a reader`).toThrow(DatabaseBusy);
+      expect(await probeInAnotherProcess(file), `${journal}: another process`).toEqual({ read: "code 5", write: "code 5" });
+      expect(inspector.author, `${journal}: the inspector is unaffected by the refusals`).toBe(author);
+      inspector.close();
+      expect(Array.from(await readFile(file)), journal).toEqual(Array.from(before));
+    }
   });
 
-  it("takes a read-only driver too, and applies the same checks", async () => {
+  it("takes only a driver opened readwrite, and applies the checks a run does", () => {
     const file = fresh();
-    create(file).close();
-    const inspector = openInspector(open(file, "readonly"));
-    expect(inspector.writable).toBe(false);
-    expect(() => open(file, "readwrite"), "a WAL runtime is owned outright by its read-only inspector").toThrow(DatabaseBusy);
-    inspector.close();
+    create(file, "delete").close();
+    const readonly = open(file, "readonly");
+    expect(() => openInspector(readonly), "a read-only driver may share a rollback-journal file with other readers").toThrow(TypeError);
+    expect(() => readonly.exec("SELECT 1")).toThrow(DatabaseClosed);
     alter(file, "DELETE FROM store_state");
-    expect(() => openInspector(open(file, "readonly"))).toThrow(DamagedControl);
+    expect(() => openInspector(open(file, "readwrite"))).toThrow(DamagedControl);
     const snapshot = handmade((db) => fill(db, "portable"));
-    expect(() => openInspector(open(snapshot, "readonly"))).toThrow(/a portable one, not a runtime/);
+    expect(() => openInspector(open(snapshot, "readwrite"))).toThrow(/a portable one, not a runtime/);
     expect(() => openInspector(open(fresh(), "create"))).toThrow(TypeError);
   });
 });
 
 describe("openPortable", () => {
-  it("opens a snapshot read-only, as far as its metadata and wrapper", () => {
+  it("opens a snapshot read-only, as far as its metadata and wrapper, sharing it with other readers", async () => {
     const file = handmade((db) => fill(db, "portable"));
     const snapshot = openPortable(open(file, "readonly"));
     expect(snapshot.metadata).toEqual(META);
     expect(snapshot.wrapped).toEqual(WRAPPED);
     expect(() => snapshot.driver.exec("DELETE FROM events")).toThrow(/readonly/);
+    const another = openPortable(open(file, "readonly"));
+    another.close();
+    expect(await probeInAnotherProcess(file)).toEqual({ read: "ok", write: "code 5" });
     snapshot.close();
     expect(() => snapshot.driver.exec("SELECT 1")).toThrow(DatabaseClosed);
   });
@@ -426,15 +554,18 @@ describe("openPortable", () => {
     const cases: [string, string, RegExp][] = [
       ["an empty database", handmade(() => undefined), /application_id 0/],
       ["a runtime", handmade((db) => fill(db, "runtime")), /table event_positions is not in the portable schema/],
-      ["a runtime's kind", handmade((db) => fill(db, "portable") && db.exec("UPDATE vault_meta SET kind = 'runtime'")), /a runtime one, not a portable/],
+      ["a runtime's kind", handmade((db) => fill(db, "portable").exec("UPDATE vault_meta SET kind = 'runtime'")), /a runtime one, not a portable/],
       ["an unready snapshot", handmade((db) => fill(db, "portable", { ready: 0 })), /not ready/],
-      ["a view, before the bad metadata under it", handmade((db) => fill(db, "portable", { ready: 0 }) && db.exec("CREATE VIEW v AS SELECT 1")), /the schema has a view, v/],
-      ["a trigger", handmade((db) => fill(db, "portable") && db.exec("CREATE TRIGGER t AFTER INSERT ON events BEGIN SELECT 1; END")), /the schema has a trigger, t/],
-      ["an index a constraint did not make", handmade((db) => fill(db, "portable") && db.exec("CREATE INDEX i ON events (author)")), /table events has an index a constraint did not make/],
-      ["ANALYZE statistics", handmade((db) => fill(db, "portable") && db.exec("ANALYZE")), /table sqlite_stat1 is not in the portable schema/],
-      ["a local table", handmade((db) => fill(db, "portable") && db.exec("CREATE TABLE local_notes (k TEXT) STRICT")), /table local_notes is not in the portable schema/],
-      ["a wrapper that is not a compact JWE", handmade((db) => fill(db, "portable") && db.exec("UPDATE keystore SET seed_jwe = X'00'")), /keystore.seed_jwe/],
-      ["no wrapper", handmade((db) => fill(db, "portable") && db.exec("DELETE FROM keystore")), /keystore has 0 rows/],
+      ["a metadata row keyed other than 1", handmade((db) => fill(db, "portable").exec("PRAGMA ignore_check_constraints = ON; UPDATE vault_meta SET singleton = 2")), /vault_meta's row is keyed 2, not 1/],
+      ["a keystore row keyed other than 1", handmade((db) => fill(db, "portable").exec("PRAGMA ignore_check_constraints = ON; UPDATE keystore SET singleton = 2")), /keystore's row is keyed 2, not 1/],
+      ["a view, before the bad metadata under it", handmade((db) => fill(db, "portable", { ready: 0 }).exec("CREATE VIEW v AS SELECT 1")), /the schema has a view, v/],
+      ["a trigger", handmade((db) => fill(db, "portable").exec("CREATE TRIGGER t AFTER INSERT ON events BEGIN SELECT 1; END")), /the schema has a trigger, t/],
+      ["an index a constraint did not make", handmade((db) => fill(db, "portable").exec("CREATE INDEX i ON events (author)")), /table events has an index a constraint did not make/],
+      ["ANALYZE statistics", handmade((db) => fill(db, "portable").exec("ANALYZE")), /table sqlite_stat1 is not in the portable schema/],
+      ["a local table", handmade((db) => fill(db, "portable").exec("CREATE TABLE local_notes (k TEXT) STRICT")), /table local_notes is not in the portable schema/],
+      ["a table named __proto__", handmade((db) => fill(db, "portable").exec('CREATE TABLE "__proto__" (secret BLOB) STRICT')), /table __proto__ is not in the portable schema/],
+      ["a wrapper that is not a compact JWE", handmade((db) => fill(db, "portable").exec("UPDATE keystore SET seed_jwe = X'00'")), /keystore.seed_jwe/],
+      ["no wrapper", handmade((db) => fill(db, "portable").exec("DELETE FROM keystore")), /keystore has 0 rows/],
     ];
     for (const [name, file, message] of cases) {
       const driver = open(file, "readonly");
@@ -455,40 +586,30 @@ describe("openPortable", () => {
   });
 });
 
-/** The vault filled with tables whose constraints are looser than the schema's, so the values the checks refuse can be put in. */
-function fillLoose(db: SqliteDriver, format: string, version: number, kind: string, ready: number): void {
-  db.exec("PRAGMA application_id = 1163088963; PRAGMA user_version = 1");
-  db.exec("CREATE TABLE vault_meta (singleton INTEGER PRIMARY KEY, format TEXT NOT NULL, vault_version INTEGER NOT NULL, kind TEXT NOT NULL, ready INTEGER NOT NULL, anchor TEXT NOT NULL) STRICT");
-  db.prepare("INSERT INTO vault_meta VALUES (1, ?, ?, ?, ?, ?)").run(format, version, kind, ready, ANCHOR);
-}
-
-async function hasTable(file: string, name: string): Promise<boolean> {
-  const db = open(file, "readonly");
-  try {
-    return db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(name)?.["n"] === 1;
-  } finally {
-    db.close();
-  }
-}
-
 /**
  * Another process on the file with `node:sqlite` alone. `hold` takes
- * SQLite's exclusive lock, says so and quits when told. `rewrap`
- * begins a transaction, writes the replacement wrapper, and exits
- * without committing: the interruption a crash is, as far as the file
- * can tell.
+ * SQLite's exclusive lock, says so and quits when told. `probe` tries a
+ * read and a write and reports each as `ok` or the result code, with
+ * its exit. `rewrap` begins a transaction, writes the replacement
+ * wrapper and exits without committing: the interruption a crash is,
+ * as far as the file can tell.
  */
 const OTHER_PROCESS = `
   const { DatabaseSync } = require("node:sqlite");
   const [file, role, arg] = process.argv.slice(1);
   const db = new DatabaseSync(file);
   db.exec("PRAGMA busy_timeout = 0");
+  const attempt = (sql) => { try { db.exec(sql); return "ok"; } catch (err) { return "code " + err.errcode; } };
   if (role === "hold") {
     db.exec("PRAGMA locking_mode = EXCLUSIVE");
     db.exec("BEGIN IMMEDIATE; COMMIT");
     process.stdout.write("held\\n");
     process.stdin.on("data", () => { db.close(); process.exit(0); });
     process.stdin.on("end", () => { db.close(); process.exit(0); });
+  } else if (role === "probe") {
+    const report = { read: attempt("SELECT count(*) FROM sqlite_master"), write: attempt("CREATE TABLE IF NOT EXISTS probe (x INTEGER) STRICT") };
+    db.close();
+    process.stdout.write(JSON.stringify(report) + "\\n");
   } else {
     db.exec("BEGIN IMMEDIATE");
     db.prepare("UPDATE keystore SET seed_jwe = ? WHERE singleton = 1").run(Buffer.from(arg));
@@ -497,33 +618,47 @@ const OTHER_PROCESS = `
   }
 `;
 
+function otherProcess(file: string, role: string, arg = "", stdin: "pipe" | "ignore" = "ignore"): { child: ReturnType<typeof spawn>; exited: Promise<number | null>; output: () => string } {
+  const child = spawn(process.execPath, ["--no-warnings", "-e", OTHER_PROCESS, file, role, arg], { stdio: [stdin, "pipe", "inherit"] });
+  let output = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+  });
+  const exited = new Promise<number | null>((done, reject) => {
+    child.on("error", reject);
+    child.on("exit", done);
+  });
+  return { child, exited, output: () => output };
+}
+
 function holdInAnotherProcess(file: string): Promise<{ quit: () => Promise<void> }> {
+  const { child, exited, output } = otherProcess(file, "hold", "", "pipe");
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--no-warnings", "-e", OTHER_PROCESS, file, "hold"], { stdio: ["pipe", "pipe", "inherit"] });
-    const exited = new Promise<number | null>((done) => child.on("exit", done));
-    let output = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-      if (output.includes("\n")) {
+    child.stdout?.on("data", () => {
+      if (output().includes("\n")) {
         resolve({
           quit: async () => {
-            child.stdin.end("quit");
+            child.stdin?.end("quit");
             await exited;
           },
         });
       }
     });
-    child.on("error", reject);
     void exited.then((code) => {
       if (code !== 0) reject(new Error(`the holder exited with ${code}`));
-    });
+    }, reject);
   });
 }
 
-function interruptRewrapInAnotherProcess(file: string, seedJwe: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--no-warnings", "-e", OTHER_PROCESS, file, "rewrap", seedJwe], { stdio: ["ignore", "inherit", "inherit"] });
-    child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`the rewrap process exited with ${code}`))));
-  });
+async function probeInAnotherProcess(file: string): Promise<{ read: string; write: string }> {
+  const { exited, output } = otherProcess(file, "probe");
+  const code = await exited;
+  if (code !== 0) throw new Error(`the probe exited with ${code} saying ${JSON.stringify(output())}`);
+  return JSON.parse(output()) as { read: string; write: string };
+}
+
+async function interruptRewrapInAnotherProcess(file: string, seedJwe: string): Promise<void> {
+  const { exited } = otherProcess(file, "rewrap", seedJwe);
+  const code = await exited;
+  if (code !== 0) throw new Error(`the rewrap process exited with ${code}`);
 }

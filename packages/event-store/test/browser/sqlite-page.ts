@@ -1,6 +1,7 @@
 /**
  * What runs in the page: spawns the Workers, drives them through the
- * driver cases, the pool cases and the pool's ownership, and reports
+ * driver cases, the open cases, the pool cases and the pool's
+ * ownership, and reports
  * every outcome as one list the test reads back. The page itself tries
  * the pool once, to see it refused outside a Worker.
  */
@@ -10,7 +11,7 @@ import type { WorkerCaseResult, WorkerReply, WorkerRequest } from "./sqlite-work
 
 declare global {
   interface Window {
-    runSqliteSuite: () => Promise<WorkerCaseResult[]>;
+    runSqliteSuite: (utf16: { snapshot: number[]; forged: number[] }) => Promise<WorkerCaseResult[]>;
   }
 }
 
@@ -56,7 +57,7 @@ async function attempt(name: string, body: () => Promise<string | void>): Promis
   }
 }
 
-window.runSqliteSuite = async (): Promise<WorkerCaseResult[]> => {
+window.runSqliteSuite = async (utf16: { snapshot: number[]; forged: number[] }): Promise<WorkerCaseResult[]> => {
   const results: WorkerCaseResult[] = [];
   results.push(
     await attempt("the pool is refused on the main thread", async () => {
@@ -73,6 +74,7 @@ window.runSqliteSuite = async (): Promise<WorkerCaseResult[]> => {
   const second = new Driven();
   try {
     results.push(...((await first.send({ cmd: "cases", directory: "/cases" })) as WorkerCaseResult[]));
+    results.push(...((await first.send({ cmd: "open", directory: "/open", utf16 })) as WorkerCaseResult[]));
     results.push(
       await attempt("a second Worker is refused the directory another holds, and admitted once it is released", async () => {
         await first.send({ cmd: "hold", directory: "/owned" });
