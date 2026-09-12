@@ -322,9 +322,12 @@ class View implements Vault {
       // read: a source that grows the caller's array or rewrites a
       // later descriptor while it streams changes nothing here. Every
       // draft and every CID is checked, and every supplied object
-      // matched to a root, before a byte is read: a bad batch accepts nothing.
-      const clean = drafts.map((draft) => validateDraft(draft));
-      const batch = objects.map(({ cid, source }) => ({ cid, source }));
+      // matched to a root, before a byte is read: a bad batch accepts
+      // nothing. `Array.from` visits every index, so a hole in a
+      // sparse array is refused like any value that is not a draft or
+      // a descriptor.
+      const clean = Array.from(drafts, (draft) => validateDraft(draft));
+      const batch = Array.from(objects, (object) => ({ cid: object.cid, source: object.source }));
       const roots = new Set<Cid>(clean.flatMap((draft) => draft.roots));
       for (const object of batch) {
         rawCidOf(object.cid);

@@ -1,20 +1,10 @@
 /**
- * `@estoc/event-store/v3` — the version-3 event model of the replica
- * model, built beside version 2 until the vault switches over: RFC 8785
- * canonical JSON and the strict parser, the six-field envelope and its
- * validation, identity, time and canonical order, the store interface,
- * and minting — `at` from the clock, `eventId` from `uuid`'s standard
- * UUIDv7 generator; and the store in memory, the reference every other
- * store is measured against. Beside it the object model: raw DASL
- * objects, the `ObjectStore` interface, and the store in memory. Over
- * both the vault: its metadata and keystore, the interfaces, the writer
- * lock, the held view, and the vault in memory. Under it the SQLite
- * driver the persistent stores are written against — the contract and
- * the shared connection; the adapters live under `../node` and
- * `../browser` — and over it the vault's schema and how a database is
- * created, opened and checked before anything in it is trusted, and
- * the event store over that runtime. The object store comes next, and
- * with it the SQLite vault, export, restore and import. No event type.
+ * `@estoc/event-store/v3` — the version-3 replica model as a library:
+ * canonical JSON, the event envelope and its store, raw DASL objects
+ * and theirs, the vault over both, and, for what persists, the SQLite
+ * driver contract and the runtime's schema, opening and stores. The
+ * platform adapters live under `../node` and `../browser`. No event
+ * type is defined here.
  */
 
 export type { JsonPrimitive, JsonValue, JsonObject } from "./json.js";
@@ -70,7 +60,7 @@ export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, Hel
 export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
 
 export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
-export { Connection, checkParams, decodeText, exactInteger, ownBytes } from "./sqlite/driver.js";
+export { Connection, checkParams, decodeText, decodeUtf8, exactInteger, ownBytes } from "./sqlite/driver.js";
 
 export { APPLICATION_ID, SCHEMA_VERSION, createTables, checkSchema, type DatabaseKind } from "./sqlite/schema.js";
 
@@ -99,6 +89,7 @@ export {
   DatabaseClosed,
   NotAVault,
   DamagedControl,
+  DamagedHistory,
   AnchorMismatch,
   ReadOnlyVault,
   VaultClosed,

@@ -9,7 +9,7 @@
 
 import { createRuntime, createTables, openInspector, openPortable, openRuntime, type OpenMode, type SqliteDriver } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertEqual, assertThrows } from "./driver-cases.js";
+import { assert, assertEqual, assertRejects, assertThrows } from "./driver-cases.js";
 
 export interface OpenHarness {
   /** A target no database exists at yet. */
@@ -164,6 +164,28 @@ export const openCases: OpenCase[] = [
         const refused = assertThrows(() => openPortable(driver), "NotAVault", name);
         assert(refused.message === `table ${name} is not in the portable schema`, `${name}: ${refused.message}`);
       }
+    },
+  },
+  {
+    name: "a table made WITHOUT ROWID is not the schema's, in either kind: refused before any write, the target released",
+    run: async (h) => {
+      const ddl = "DROP TABLE events; CREATE TABLE events (event_id TEXT PRIMARY KEY NOT NULL, at TEXT NOT NULL, author TEXT NOT NULL, type TEXT NOT NULL, canonical BLOB NOT NULL) STRICT, WITHOUT ROWID";
+      const expected = "table events is WITHOUT ROWID: a vault's tables keep their rowid";
+      const target = h.fresh();
+      const made = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });
+      made.driver.exec(ddl);
+      made.close();
+      const runtime = await assertRejects(async () => openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR }), "NotAVault", "runtime");
+      assert(runtime.message === expected, runtime.message);
+      const inspectorDriver = await h.open(target, "readwrite");
+      const inspector = assertThrows(() => openInspector(inspectorDriver), "NotAVault", "inspector");
+      assert(inspector.message === expected, inspector.message);
+      const released = await h.open(target, "readwrite");
+      released.close();
+      const portable = await snapshot(h, (db) => db.exec(ddl));
+      const portableDriver = await h.open(portable, "readonly");
+      const refused = assertThrows(() => openPortable(portableDriver), "NotAVault", "portable");
+      assert(refused.message === expected, refused.message);
     },
   },
   {

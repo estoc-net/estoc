@@ -16,6 +16,7 @@ import { openNodeSqlite } from "../../../src/node.js";
 import {
   BadToken,
   DamagedControl,
+  DamagedHistory,
   ForkedAuthor,
   ReadOnlyVault,
   SqliteEventStore,
@@ -33,6 +34,7 @@ import {
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
 import { eventStoreSuite, type OpenOptions } from "../suite/event-store-suite.js";
 import { all, altered, authorN, clock, expectBytes, reordered } from "../suite/helpers.js";
+import { eventCases } from "./event-cases.js";
 
 const T0 = "2026-09-12T10:00:00.000Z";
 const RAW_HELLO = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
@@ -103,6 +105,15 @@ function retained(driver: SqliteDriver): number {
 
 eventStoreSuite("SqliteEventStore in memory", async (options = {}) => create(":memory:", options).store);
 eventStoreSuite("SqliteEventStore on a file", async (options = {}) => create(fresh(), options).store);
+
+describe("the event cases on node:sqlite files", () => {
+  for (const c of eventCases) {
+    it(c.name, async () => {
+      const note = await c.run({ fresh, open: async (target, mode) => open(target, mode) });
+      if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
+    });
+  }
+});
 
 describe("SqliteEventStore", () => {
   it("stores each event as its canonical bytes, without a newline, beside columns that agree with them", async () => {
@@ -284,12 +295,13 @@ describe("SqliteEventStore", () => {
     expect(await all(store.scan())).toEqual([sound]);
     expect(await all(store.scan({ type: "t" }))).toEqual([sound]);
     expect(await all((await store.changes()).events)).toEqual([sound]);
-    await expect(store.ingest([reordered(notCanonical)]), "what is held under a damaged row cannot be told").rejects.toThrow(/is damaged, the stored bytes are not the event's canonical bytes/);
+    await expect(store.ingest([reordered(notCanonical)]), "a history with damage accepts no write").rejects.toBeInstanceOf(DamagedHistory);
+    await expect(store.ingest([reordered(notCanonical)])).rejects.toThrow(/is damaged, .*: the history is incomplete/);
     expect(db.driver.inTransaction).toBe(false);
     db.close();
   });
 
-  it("a row whose bytes are not bytes, or whose ID is not text, is damage named by its rowid", async () => {
+  it("a row whose ID holds a NUL is damage named by its rowid, the ID being no name", async () => {
     const { db, store } = create(":memory:");
     const event = await store.append({ type: "t", data: {} });
     db.driver.exec("PRAGMA foreign_keys = OFF");

@@ -153,6 +153,11 @@ const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 /** The string the stored TEXT `bytes` are, or `InvalidSqlValue` when they hold a NUL or are not UTF-8: the read-side twin of the check `checkParams` makes on a string going in. */
 export function decodeText(bytes: Uint8Array, column: string): string {
   if (bytes.includes(0)) throw new InvalidSqlValue(`column ${column}: the stored text has a NUL and cannot cross a SQLite text boundary intact`);
+  return decodeUtf8(bytes, column);
+}
+
+/** The string the stored `bytes` are as UTF-8, a NUL included, or `InvalidSqlValue` when they are not UTF-8: for text a store wrote as bytes cast to TEXT, so that every JSON string can be stored and compared. */
+export function decodeUtf8(bytes: Uint8Array, column: string): string {
   try {
     return STRICT_UTF8.decode(bytes);
   } catch {

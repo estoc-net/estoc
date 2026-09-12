@@ -11,6 +11,7 @@ import {
   timestampOf,
   type AuthorId,
   type Cid,
+  type Draft,
   type Event,
   type EventStore,
   type Filter,
@@ -144,6 +145,44 @@ export function eventStoreSuite(name: string, open: OpenStore): void {
         await expect(store.appendAll([{ type: "t", data: {} }, draft as never]), `batch with draft #${i}`).rejects.toBeInstanceOf(InvalidEvent);
       }
       expect(await all(store.scan())).toEqual([held]);
+    });
+
+    it("a batch with a hole — a sparse array — is refused whole, as a draft that is not an object, and the store is as it was", async () => {
+      const store = await open();
+      const held = await store.append({ type: "t", data: {} });
+      const { token } = await store.changes();
+      const trailing: Draft[] = [{ type: "t", data: {} }];
+      trailing.length = 2;
+      const leading: Draft[] = [];
+      leading[1] = { type: "t", data: {} };
+      const middle: Draft[] = [{ type: "t", data: {} }, { type: "t", data: {} }, { type: "t", data: {} }];
+      Reflect.deleteProperty(middle, 1);
+      const holes = new Array<Draft>(2);
+      for (const [i, batch] of [trailing, leading, middle, holes].entries()) {
+        await expect(store.appendAll(batch), `batch #${i}`).rejects.toBeInstanceOf(InvalidEvent);
+      }
+      expect(await all(store.scan())).toEqual([held]);
+      expect((await store.changes()).token).toBe(token);
+    });
+
+    it("a type or a string value holding a NUL is stored, filtered and handed back as it is; a filter no event can equal matches nothing", async () => {
+      const c = clock(T0);
+      const store = await open({ author: authorN(1), now: c.now });
+      const type = "a\u0000b";
+      const own = await store.append({ type, data: { s: "\u0000" } });
+      const replacement = await store.append({ type: "\uFFFD", data: {} });
+      const [other] = await foreign(authorN(2), c.now, [{ type, data: {} }]);
+      expect((await store.ingest([other])).added).toBe(1);
+      expect(await all(store.scan({ type }))).toEqual([own, other as Event].sort(compareEvents));
+      expect(await all(store.scan({ type: "a" }))).toEqual([]);
+      expect(await all(store.scan({ type: "a\u0000" }))).toEqual([]);
+      expect(await all(store.scan({ data: { s: "\u0000" } }))).toEqual([own]);
+      expect(await all(store.scan({ author: authorN(2), type }))).toEqual([other]);
+      expect(await all((await store.changes({ type })).events)).toHaveLength(2);
+      expect(await all(store.scan({ type: "\uFFFD" }))).toEqual([replacement]);
+      expect(await all(store.scan({ type: "\uD800" })), "an unpaired surrogate is in no event, and is not the replacement character").toEqual([]);
+      expect(await all(store.scan({ author: "\uD800" as AuthorId }))).toEqual([]);
+      expect(await store.damaged()).toEqual([]);
     });
 
     it("one appendAll of 5000 drafts in one millisecond — one `at`, 5000 distinct IDs, input order back", async () => {

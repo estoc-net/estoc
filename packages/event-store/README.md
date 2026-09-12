@@ -126,7 +126,8 @@ makes the five common tables — `vault_meta`, `keystore`, `events`,
 control tables `store_state` and `event_positions`; `checkSchema`
 checks a database holds exactly that, structurally, through SQLite's
 own pragmas — names, columns, types, primary and unique keys with their
-collation and direction, references with both their actions — and,
+collation and direction, references with both their actions, no table
+`WITHOUT ROWID` — and,
 since no pragma reports a column's collation, by comparing through
 each text column that it collates byte for byte; the SQL the tables
 were spelled with is not what is checked, and the schema's names are
@@ -194,7 +195,9 @@ advanced by as many — so a batch lands whole or not at all and two
 writes never interleave; `appendAll(drafts, publish)` runs `publish`
 inside that transaction, before the events, which is how the SQLite
 vault will publish a commit's objects with its events, a throw from it
-rolling back what it wrote. `ingest` reads its whole input first,
+rolling back what it wrote. A batch is validated index by index, so a
+hole in a sparse array is refused like any value that is not a draft.
+`ingest` reads its whole input first,
 outside any transaction, then classifies each input against what is
 held — duplicate by canonical bytes, conflict, new — checks for a fork
 and accepts, in one transaction; the values it rejected are recorded
@@ -202,8 +205,10 @@ once each in the runtime's `local_conflicts` table, which
 `conflicting()` reads back with the accepted value as `kept` and
 `clearConflicts()` empties. `scan` orders in SQL by `(at, event_id,
 author)` and reads every row before the first yield, one cut; `author`
-and `type` are conditions in SQL, the `data` filter is applied in code
-to the parsed event, exact primitive equality. `changes` joins the
+and `type` narrow the rows in SQL, bound as bytes cast to text so that
+a NUL in a type is stored and compared as itself, and the whole filter
+is then applied in code to the parsed event, exact primitive equality,
+so a match is exactly what the filter says. `changes` joins the
 positions: a token is `{ generation, seq }`, the store generation and
 the position accepted last, valid across reopens for as long as the
 generation stands, and a malformed token, another generation's or a
@@ -213,12 +218,20 @@ byte for byte, its four columns compared with the event's fields, the
 text columns read as stored bytes — and one that fails is damage: left
 out of every scan and delta, listed by `damaged()` as
 `events/<event_id>` (or the rowid, when the ID itself does not decode)
-with its bytes and what was wrong. Over an inspector's handle the
-store reads and refuses every write with `ReadOnlyVault` before it
+with its bytes and what was wrong. Damage makes the history
+incomplete, and the store then accepts no write: every read remembers
+the damage it meets, a store surveys every row once before its first
+write, and from either `append`, `appendAll` — its `publish` never
+run — and `ingest` refuse with `DamagedHistory` until a validated
+snapshot is restored into a new runtime. Over an inspector's handle
+the store reads and refuses every write with `ReadOnlyVault` before it
 reads a source. `eventStoreSuite` runs over it in memory and on files;
 `test/v3/sqlite/events.test.ts` adds what only a database shows — the
 rows, the positions, a reopen, damage, the inspector, a process dying
-inside its transaction.
+inside its transaction — and `test/v3/sqlite/event-cases.ts` what the
+two platforms' SQLite must agree on, run on `node:sqlite` and in a
+Chromium Worker: a NUL in a type, damage stopping writes across a
+reopen, a sparse batch.
 
 Everything below is
 version 2, which stays until the vault switches over.
