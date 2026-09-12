@@ -3,6 +3,8 @@
  * for; a store above wraps or reports them, never reinterprets.
  */
 
+import type { Damaged } from "./event.js";
+
 /**
  * Text that is not I-JSON, or a value that cannot be serialized under
  * RFC 8785: a duplicate member, an unpaired surrogate, a non-finite
@@ -153,6 +155,20 @@ export class DamagedControl extends Error {
   constructor(message: string) {
     super(message);
     this.name = "DamagedControl";
+  }
+}
+
+/**
+ * A write refused because an accepted event no longer decodes to what
+ * its row names: the history is incomplete, and a vault does not
+ * build on it — no event is accepted, published or collected until a
+ * validated snapshot is restored into a new runtime. Reads still work,
+ * and `damaged()` lists what was found.
+ */
+export class DamagedHistory extends Error {
+  constructor(readonly damage: Damaged) {
+    super(`${damage.where} is damaged, ${damage.error}: the history is incomplete and the vault accepts no write until a validated snapshot is restored into a new runtime`);
+    this.name = "DamagedHistory";
   }
 }
 

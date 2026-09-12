@@ -86,7 +86,7 @@ export class MemoryEventStore implements EventStore {
    * the vault in memory publishes a commit's objects with its events.
    */
   async appendAll<D extends JsonObject>(drafts: Draft<D>[], publish?: () => void): Promise<Event<D>[]> {
-    const clean = drafts.map((draft) => validateDraft(draft)); // every draft checked before anything lands
+    const clean = Array.from(drafts, (draft) => validateDraft(draft)); // every index visited, a hole refused as a draft that is not an object
     if (clean.length === 0 && publish === undefined) return [];
     return this.serialise(() => {
       // One clock reading and one `at` for the batch. Every event of

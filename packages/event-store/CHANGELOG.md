@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- **The SQLite event store.** `SqliteEventStore` in
+  `@estoc/event-store/v3`, over an open runtime's connection, author,
+  generation and writability: `append`/`appendAll` one `BEGIN
+  IMMEDIATE` transaction writing canonical bytes, indexed columns,
+  positions and `last_seq` together, with an optional `publish`
+  callback run inside it for the vault's commit; `ingest` reading its
+  input in full before one transaction that classifies, checks for a
+  fork and accepts, recording rejected values once each in the local
+  `local_conflicts` table for `conflicting()`, and `clearConflicts()`
+  to empty it; `scan` in canonical order over one cut with the
+  envelope filter in SQL and the `data` filter in code; `changes`
+  over positions with a `{ generation, seq }` token that survives a
+  reopen and refuses malformed, foreign-generation and future ones;
+  every row decoded strictly, re-canonicalized and compared with its
+  columns, damage left out of reads and listed by `damaged()` with
+  its place and bytes, and once met — by any read, or by the survey a
+  store makes before its first write — every write refused with the
+  new `DamagedHistory`, `publish` included, until a validated snapshot
+  is restored; a type holding a NUL stored and compared as bytes cast
+  to text, read back through the new `decodeUtf8`; writes refused with
+  `ReadOnlyVault` over an inspector. The conformance suite runs over
+  it in memory and on files, and `test/v3/sqlite/event-cases.ts` runs
+  on `node:sqlite` and in a Chromium Worker. Every batch entry —
+  `appendAll` here and in memory, `Vault.commit`'s drafts and objects
+  — is validated index by index, so a hole in a sparse array is
+  refused. `checkSchema` refuses a table made `WITHOUT ROWID`.
 - **The SQLite vault's schema, and how it is created and opened.** In
   `@estoc/event-store/v3`: `createTables` and `checkSchema`, the five
   common `STRICT` tables plus a runtime's two control tables, checked

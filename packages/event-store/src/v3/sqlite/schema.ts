@@ -192,8 +192,9 @@ export function checkSchema(driver: SqliteDriver, kind: DatabaseKind): void {
 }
 
 function checkTable(driver: SqliteDriver, name: string, expected: TableShape, kind: DatabaseKind): void {
-  const listed = query(driver, "SELECT strict FROM pragma_table_list(?) WHERE schema = 'main'", name);
-  if (listed[0]?.["strict"] !== 1) throw new NotAVault(`table ${name} is not STRICT`);
+  const [listed] = query(driver, "SELECT strict, wr FROM pragma_table_list(?) WHERE schema = 'main'", name);
+  if (listed?.["strict"] !== 1) throw new NotAVault(`table ${name} is not STRICT`);
+  if (listed["wr"] !== 0) throw new NotAVault(`table ${name} is WITHOUT ROWID: a vault's tables keep their rowid`);
   const columns = query(driver, 'SELECT CAST(name AS BLOB) AS name, CAST(type AS BLOB) AS type, "notnull" AS not_null, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid', name).map((row) => ({
     name: text(row["name"], `${name} column`),
     type: text(row["type"], `${name} column type`).toUpperCase() as ColumnType,

@@ -18,6 +18,7 @@ import {
   WriterLock,
   type Cid,
   type Collected,
+  type CommitObject,
   type Draft,
   type Event,
   type Held,
@@ -285,6 +286,13 @@ describe("Vault.commit", () => {
     const { vault } = open();
     const v = vault.vault;
     await expect(v.commit([], [draft(), draft(), { type: "x", roots: ["nope" as Cid], data: {} }])).rejects.toThrow(InvalidEvent);
+    const sparse: Draft[] = [draft()];
+    sparse.length = 2;
+    await expect(v.commit([], sparse), "a hole among the drafts").rejects.toThrow(InvalidEvent);
+    const sparseObjects: CommitObject[] = [{ cid: HELLO_CID, source: HELLO }];
+    sparseObjects.length = 2;
+    await expect(v.commit(sparseObjects, [draft([HELLO_CID])]), "a hole among the objects").rejects.toThrow(TypeError);
+    expect(await v.objects.has(HELLO_CID)).toBe(false);
     expect(await all(v.events.scan())).toEqual([]);
     const events = await v.commit([], [draft(), draft(), draft()]);
     expect(events.length).toBe(3);
