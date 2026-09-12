@@ -74,8 +74,7 @@ export class SqliteObjectStore implements ObjectStore {
   private readonly maxObjectBytes: number;
   private readonly maxStagedBytes: number;
   private staging = false;
-  /** The bytes staged under each token still staged. */
-  private readonly staged = new Map<number, number>();
+  private readonly stagedBytesByToken = new Map<number, number>();
   private stagedBytes = 0;
   /** The objects a read of this session found damaged, by CID, with what was wrong. */
   private readonly damage = new Map<string, Damaged>();
@@ -163,7 +162,7 @@ export class SqliteObjectStore implements ObjectStore {
       insert.run(token, chunkNo, chunk);
       chunkNo += 1;
       this.stagedBytes += chunk.length;
-      this.staged.set(token, (this.staged.get(token) ?? 0) + chunk.length);
+      this.stagedBytesByToken.set(token, (this.stagedBytesByToken.get(token) ?? 0) + chunk.length);
     });
     try {
       const got = await hashSource(source, this.maxObjectBytes, (chunk) => packer.push(chunk));
@@ -180,8 +179,8 @@ export class SqliteObjectStore implements ObjectStore {
 
   private drop(token: number): void {
     if (this.staging) run(this.driver, "DELETE FROM temp.staging_chunks WHERE token = ?", token);
-    this.stagedBytes -= this.staged.get(token) ?? 0;
-    this.staged.delete(token);
+    this.stagedBytes -= this.stagedBytesByToken.get(token) ?? 0;
+    this.stagedBytesByToken.delete(token);
   }
 
   /**

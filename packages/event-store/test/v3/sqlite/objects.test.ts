@@ -166,7 +166,7 @@ describe("SqliteObjectStore", () => {
   });
 
   it("bounds what is staged across every preparation in flight: the put that would pass the bound is refused before the chunk that would, nothing of it staged, and what the others staged counts until they publish or are dropped", async () => {
-    const { db, store } = create(":memory:", { maxObjectBytes: 10 * CHUNK_BYTES });
+    const { db } = create(":memory:", { maxObjectBytes: 10 * CHUNK_BYTES });
     const bounded = new SqliteObjectStore(db, { maxStagedBytes: 3 * CHUNK_BYTES });
     const a = bytesOf(2 * CHUNK_BYTES, 61);
     const first = bounded.prepare();
@@ -192,7 +192,6 @@ describe("SqliteObjectStore", () => {
     first.settle();
     expect(staged(db.driver)).toBe(0);
     expect((await bounded.putRaw(bytesOf(3 * CHUNK_BYTES, 65))).size).toBe(3 * CHUNK_BYTES);
-    expect(store).toBeInstanceOf(SqliteObjectStore); // the unbounded store over the same connection, untouched
     db.close();
   });
 

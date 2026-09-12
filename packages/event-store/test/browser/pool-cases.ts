@@ -6,6 +6,8 @@
  */
 
 import type { SqlitePool, SqlitePoolOptions } from "../../src/browser.js";
+import { SqliteObjectStore, createRuntime } from "../../src/v3/index.js";
+import { META, WRAPPED } from "../v3/fixtures.js";
 import { assertEqual, assertRejects, assertThrows, assertBytes, pattern } from "../v3/sqlite/driver-cases.js";
 
 export type OpenPool = (options: SqlitePoolOptions) => Promise<SqlitePool>;
@@ -152,6 +154,33 @@ export const poolCases: PoolCase[] = [
       const backwards = await Promise.allSettled([pool.open("target-2", "create").then((created) => created.close()), pool.importFile("target-2", bytes)]);
       assertEqual(backwards.map((outcome) => outcome.status), ["fulfilled", "rejected"], "started the other way round, the create lands and the import is refused");
       assertEqual(((backwards[1] as PromiseRejectedResult).reason as Error).name, "DatabaseExists", "as taken");
+      await pool.close();
+    },
+  },
+  {
+    name: "connections kept open keep the handles their staging and journals will take: each in turn stages and accepts an object past the temporary cache, another opens after them, and every one still writes",
+    run: async (open) => {
+      const pool = await open({ directory: "/capacity-held" });
+      const vaults: ReturnType<typeof createRuntime>[] = [];
+      for (let i = 0; i < 4; i++) vaults.push(createRuntime(await pool.open(`vault-${i}`, "create"), { metadata: META, wrapped: WRAPPED }));
+      const big = 8 * 1024 * 1024;
+      const putAndRead = async (i: number, size: number, seed: number): Promise<void> => {
+        const vault = vaults[i];
+        if (vault === undefined) throw new Error(`no vault ${i}`);
+        const store = new SqliteObjectStore(vault);
+        const bytes = pattern(size, seed);
+        const info = await store.putRaw(bytes);
+        assertEqual(info.size, size, `vault ${i}: the put`);
+        const back = await store.read(info.cid, size);
+        if (back === null) throw new Error(`vault ${i}: the object is not there`);
+        assertBytes(back, bytes, `vault ${i}: the bytes back`);
+      };
+      for (let i = 0; i < 4; i++) await putAndRead(i, big, 100 + i);
+      vaults.push(createRuntime(await pool.open("vault-4", "create"), { metadata: META, wrapped: WRAPPED }));
+      await putAndRead(4, big, 104);
+      for (let i = 0; i < 5; i++) await putAndRead(i, 1024 * 1024 + 1, 200 + i);
+      for (const vault of vaults) vault.close();
+      assertEqual(pool.names(), ["vault-0", "vault-1", "vault-2", "vault-3", "vault-4"], "the databases, their temporary files gone with the connections");
       await pool.close();
     },
   },

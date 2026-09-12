@@ -49,11 +49,32 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
  */
 const SUFFIX = ".sqlite";
 
+/** What SQLite appends to a database's name for its rollback journal. */
+const JOURNAL = "-journal";
+
+/**
+ * The files a writable connection creates under names of SQLite's
+ * choosing as it works, each taking a handle of the pool: its
+ * temporary database — a file, since the wasm build would otherwise
+ * keep it in memory — and that database's journal. Its rollback
+ * journal, named after the database, is the third file it creates.
+ */
+const TEMPORARY_FILES = 2;
+
 export interface SqlitePool {
   readonly directory: string;
   /** The databases in the pool, by name: the files SQLite keeps beside a database during a transaction are not among them. */
   names(): string[];
-  /** Opens `name` under `mode` and takes it: a second open of the same name is refused with `DatabaseBusy` until the first closes. The pool grows first when the database, its journal and, for a writable open, the connection's temporary database need more handles than it has. */
+  /**
+   * Opens `name` under `mode` and takes it: a second open of the same
+   * name is refused with `DatabaseBusy` until the first closes. The
+   * pool grows first when the database and what the connection may
+   * create beside it need more handles than it has to spare, where the
+   * handles the other open connections may still take are not spare:
+   * a writable connection creates its rollback journal, its temporary
+   * database and that database's journal as it works, and no open or
+   * import in between may take the handles they will need.
+   */
   open(name: string, mode: OpenMode): Promise<SqliteDriver>;
   /** The complete bytes of the database file `name`, which no connection may hold open: what a portable snapshot is delivered as. */
   exportFile(name: string): Promise<Uint8Array>;
@@ -146,7 +167,8 @@ function takeLock(name: string): Promise<(() => void) | undefined> {
 }
 
 class Pool implements SqlitePool {
-  private readonly open_ = new Set<string>();
+  /** The open connections by name, and whether each may write. */
+  private readonly open_ = new Map<string, boolean>();
   private pending = 0;
   private closed = false;
   private turn: Promise<unknown> = Promise.resolve();
@@ -176,11 +198,7 @@ class Pool implements SqlitePool {
       if (mode === "create" && exists) throw new DatabaseExists(target);
       if (mode !== "create" && !exists) throw new DatabaseMissing(target);
       if (this.open_.has(name)) throw new DatabaseBusy(target);
-      // A database takes a handle, its rollback journal another while
-      // a transaction is open; a writable connection's temporary
-      // database, which the wasm build would otherwise keep in memory,
-      // is a file of the pool too, and its journal one more.
-      await this.reserve((exists ? 1 : 2) + (mode === "readonly" ? 0 : 2));
+      await this.reserve((exists ? 0 : 1) + (mode === "readonly" ? 0 : 1 + TEMPORARY_FILES));
       const PoolDb = this.util.OpfsSAHPoolDb as unknown as new (options: { filename: string; flags: string }) => Database;
       const db = sqlite(this.sqlite3, () => new PoolDb({ filename: path, flags: mode === "create" ? "c" : mode === "readwrite" ? "w" : "r" }));
       let connection: WasmConnection;
@@ -196,7 +214,7 @@ class Pool implements SqlitePool {
         db.close();
         throw err;
       }
-      this.open_.add(name);
+      this.open_.set(name, mode !== "readonly");
       return new Connection(connection, mode, () => this.open_.delete(name));
     });
   }
@@ -248,10 +266,34 @@ class Pool implements SqlitePool {
     return result;
   }
 
-  /** Grows the pool until `handles` more files fit. Capacity persists in the directory, so the pool grows once. */
+  /** Grows the pool until `handles` more files fit beside the files it holds and the ones its open connections may still create. Capacity persists in the directory, so the pool grows once. */
   private async reserve(handles: number): Promise<void> {
-    const spare = Number(this.util.getCapacity()) - Number(this.util.getFileCount());
+    const spare = Number(this.util.getCapacity()) - Number(this.util.getFileCount()) - this.outstanding();
     if (spare < handles) await this.util.addCapacity(handles - spare);
+  }
+
+  /**
+   * The handles the open writable connections may still take. Each
+   * creates its rollback journal when a transaction first writes, its
+   * temporary database when something is first staged there, and that
+   * database's journal once the journal outgrows memory, and holds the
+   * temporary ones until it closes. What is created already is among
+   * the pool's files: a journal is told by its name, and every
+   * temporary file present is some open writable connection's, so what
+   * they may still create between them is their count of temporary
+   * files less those present.
+   */
+  private outstanding(): number {
+    const files = this.util.getFileNames();
+    let journals = 0;
+    let writable = 0;
+    for (const [name, writes] of this.open_) {
+      if (!writes) continue;
+      writable += 1;
+      if (!files.includes(`${pathOf(name)}${JOURNAL}`)) journals += 1;
+    }
+    const temporary = files.filter((path) => !path.endsWith(SUFFIX) && !path.endsWith(JOURNAL)).length;
+    return journals + Math.max(0, TEMPORARY_FILES * writable - temporary);
   }
 
   private has(path: string): boolean {
