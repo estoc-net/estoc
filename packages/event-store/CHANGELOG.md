@@ -23,8 +23,8 @@
   checked against the cut, set ready and closed, and only then is the
   lock released; outside it the file is reopened read-only and
   validated with no file bound — the file is the one the export just
-  built and closed, within `maxBytes` when one was given — and what
-  validation found — `{ events, eventBytes,
+  built and closed, its event and object payload within `maxBytes`
+  when one was given — and what validation found — `{ events, eventBytes,
   objects, objectBytes }` — is returned. A source failing mid-copy is
   `IncompleteSnapshot`, the destination left unready.
   `openPortable(driver, { maxFileBytes })` bounds its input before

@@ -107,7 +107,6 @@ function expectedValidated(events: Event[], objects: number, objectBytes: number
   return { events: events.length, eventBytes: events.reduce((n, e) => n + canonicalEventBytes(e).length, 0), objects, objectBytes };
 }
 
-/** Every `TextEncoder.encode` from now until `restore`, counted. */
 function countingEncodes(): { count(): number; restore(): void } {
   const encode = TextEncoder.prototype.encode;
   let count = 0;

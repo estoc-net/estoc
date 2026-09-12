@@ -381,8 +381,9 @@ its own, then checked against the cut and set ready in one
 transaction, and closed; the lock is released only then. Outside the
 lock the file is reopened read-only and validated as a restore would
 validate it — with no file bound: the file is the one the export just
-built and closed, within `maxBytes` when one was given — and what the
-export returns is what validation found:
+built and closed, and its event and object payload is within
+`maxBytes` when one was given — and what the export returns is what
+validation found:
 the events and their bytes, the objects and theirs. The file is a new
 one, so no page of it ever held what is not in it: no control, no
 position, no local table, no unheld object. A source that fails while

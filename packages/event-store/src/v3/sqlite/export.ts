@@ -63,10 +63,10 @@ interface Cut {
  * `ready = 0`, filled, checked against the cut, set ready, and
  * closed. Outside the lock: the file is reopened read-only and
  * validated in full — with no file bound: the file is the one this
- * export just built and closed, within `maxBytes` when the caller
- * gave one — and closed. A source that
- * fails while its bytes are copied is `IncompleteSnapshot` too, the
- * destination left unready. A conflict recorded against an event is a
+ * export just built and closed, and its event and object payload is
+ * within `maxBytes` when the caller gave one — and closed. A source
+ * that fails while its bytes are copied is `IncompleteSnapshot` too,
+ * the destination left unready. A conflict recorded against an event is a
  * local diagnostic, not damage: the accepted value is exported and
  * the diagnostic is not.
  */
