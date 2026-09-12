@@ -7,9 +7,7 @@
  * and key, dropped whole when the identity is reset since what it was
  * built for may have changed; the trace is what happened here —
  * delivery attempts, diagnostics — one row an entry in the order
- * written, pruned by age and by count, each entry's place given out
- * once and never again, so a reader that kept the place it reached
- * misses nothing written after it. Each table is made on the first
+ * written, pruned by age and by count. Each table is made on the first
  * write to it, so a runtime that uses none writes none; an inspector
  * reads what is there and writes nothing.
  */
@@ -37,10 +35,10 @@ export interface LocalCache {
   clear(namespace?: string): Promise<void>;
 }
 
-/** One entry of the trace: its place in the trace, which no entry before or after it shares, when it was written by the runtime's clock, what it is and what it says. */
+/** One entry of the trace: its sequence number, when it was written by the runtime's clock, what it is and what it says. */
 export type TraceEntry<D extends JsonObject = JsonObject> = { seq: number; at: string; type: string; data: D };
 
-/** The entries of `type`, after the one at `after`; either left out constrains nothing. A place is never given out twice — not after a prune, a clearing or a reopen — so `after` a place reached earlier skips nothing written since. */
+/** The entries of `type`, after the one at `after`; either left out constrains nothing. */
 export type TraceFilter = { type?: string; after?: number };
 
 /** What a prune keeps: entries no older than `keepMs`, and no more than the newest `capRows` of them. */
@@ -50,6 +48,7 @@ export interface TracePolicy {
 }
 
 export interface LocalTrace {
+  /** Writes the entry under the next sequence number. Sequence numbers are never reused, not after a prune, a clearing or a reopen, so retained entries appended later remain after an earlier cursor. */
   append(type: string, data: JsonObject): Promise<TraceEntry>;
   /** The entries `filter` selects, in the order written, over a fixed cut. */
   scan(filter?: TraceFilter): AsyncIterable<TraceEntry>;
@@ -60,7 +59,7 @@ export interface LocalState {
   readonly options: LocalOptions;
   readonly cache: LocalCache;
   readonly trace: LocalTrace;
-  /** Empties the cache and the trace; the next trace entry still takes the place after the last one written. The options, the identity, the control and the keystore stay. */
+  /** Empties the cache and the trace; the trace's sequence numbers continue. The options, the identity, the control and the keystore stay. */
   clearCaches(): Promise<void>;
 }
 

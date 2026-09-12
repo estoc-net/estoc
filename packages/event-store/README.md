@@ -313,11 +313,11 @@ runtime's lock, and the runtime's local state is `vault.local`:
 `options`, JSON by key, kept through every reopen and clearing;
 `cache`, bytes by namespace and key, dropped whole when the identity
 is reset; and `trace`, one entry a row in the order written, scanned
-by type and position and pruned by age and count, a position given
-out once and never again, so a scan `after` a position kept from
-before misses nothing written since — each in a `local_*` table made
-on its first write, so a runtime that uses none writes none, and
-`clearCaches()` empties the cache and the trace and nothing else. An inspector's vault reads all of it and refuses every
+by type and position and pruned by age and count, sequence numbers
+never reused, so retained entries appended later remain after an
+earlier cursor — each in a `local_*` table made on its first write, so
+a runtime that uses none writes none, and `clearCaches()` empties the
+cache and the trace, the sequence continuing, and nothing else. An inspector's vault reads all of it and refuses every
 write. The vault stops two ways, and `stopped` says which. Damage to
 the history — found by a read, or by the survey the event store makes
 before its first write and `stopped` asks for — refuses commit,
