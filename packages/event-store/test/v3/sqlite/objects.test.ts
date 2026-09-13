@@ -34,6 +34,7 @@ import { ANCHOR, META, WRAPPED } from "../fixtures.js";
 import { all, expectBytes } from "../suite/helpers.js";
 import { bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "../suite/object-store-suite.js";
 import { objectCases } from "./object-cases.js";
+import { objectStoreOpener } from "./suite-openers.js";
 
 let dir: string;
 let n = 0;
@@ -99,14 +100,8 @@ function retained(driver: SqliteDriver): number {
 
 const staged = (driver: SqliteDriver): number => Number(rows(driver, "SELECT count(*) AS n FROM temp.staging_chunks")[0]?.["n"]);
 
-objectStoreSuite("SqliteObjectStore in memory", async (options = {}) => {
-  const { db, store } = create(":memory:", options);
-  return { store, corrupt: (cid) => corrupt(db.driver, cid) };
-});
-objectStoreSuite("SqliteObjectStore on a file", async (options = {}) => {
-  const { db, store } = create(fresh(), options);
-  return { store, corrupt: (cid) => corrupt(db.driver, cid) };
-});
+objectStoreSuite("SqliteObjectStore in memory", objectStoreOpener({ fresh: () => ":memory:", open }));
+objectStoreSuite("SqliteObjectStore on a file", objectStoreOpener({ fresh, open }));
 
 describe("the object cases on node:sqlite files", () => {
   for (const c of objectCases) {

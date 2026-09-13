@@ -65,7 +65,10 @@
   "devDependencies": {
     "@estoc/folder-object": "workspace:^",
     "@estoc/keystore": "workspace:^",
+    "@types/chai": "^5.2.2",
     "@types/node": "^22.20.1",
+    "@vitest/expect": "3.2.7",
+    "chai": "^5.3.3",
     "esbuild": "^0.25.12",
     "playwright-core": "^1.62.1",
     "typescript": "~5.8.0",

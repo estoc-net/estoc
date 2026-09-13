@@ -70,6 +70,11 @@ describe("the export cases on node:sqlite files", () => {
     fresh,
     open: async (target, mode) => open(target, mode),
     fileBytes: async (target) => new Uint8Array(await readFile(target)),
+    memoryUsed: () => {
+      (globalThis as { gc?: () => void }).gc?.();
+      const { heapUsed, arrayBuffers } = process.memoryUsage();
+      return heapUsed + arrayBuffers;
+    },
   };
   for (const c of exportCases) {
     it(c.name, async () => {

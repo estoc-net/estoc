@@ -1,17 +1,31 @@
 /**
  * What runs in the page: spawns the Workers, drives them through the
- * driver cases, the open cases, the pool cases and the pool's
- * ownership, and reports
- * every outcome as one list the test reads back. The page itself tries
- * the pool once, to see it refused outside a Worker.
+ * driver cases, the open cases, the conformance suites, the exchange
+ * of a snapshot with the other platform, the pool cases and the pool's
+ * ownership, and reports every outcome as one list the test reads
+ * back, with what the exchange made. The page itself tries the pool
+ * once, to see it refused outside a Worker.
  */
 
 import { openSqlitePool } from "../../src/browser.js";
-import type { WorkerCaseResult, WorkerReply, WorkerRequest } from "./sqlite-worker.js";
+import type { Exchanged, WorkerCaseResult, WorkerReply, WorkerRequest } from "./sqlite-worker.js";
+
+export interface SuiteInput {
+  utf16: { snapshot: number[]; forged: number[] };
+  /** A portable snapshot the other platform exported. */
+  snapshot: number[];
+}
+
+export interface SuiteOutput {
+  results: WorkerCaseResult[];
+  /** The tests the conformance suites collected, in order, each with its outcome. */
+  suites: WorkerCaseResult[];
+  exchanged: Exchanged;
+}
 
 declare global {
   interface Window {
-    runSqliteSuite: (utf16: { snapshot: number[]; forged: number[] }) => Promise<WorkerCaseResult[]>;
+    runSqliteSuite: (input: SuiteInput) => Promise<SuiteOutput>;
   }
 }
 
@@ -57,7 +71,7 @@ async function attempt(name: string, body: () => Promise<string | void>): Promis
   }
 }
 
-window.runSqliteSuite = async (utf16: { snapshot: number[]; forged: number[] }): Promise<WorkerCaseResult[]> => {
+window.runSqliteSuite = async ({ utf16, snapshot }: SuiteInput): Promise<SuiteOutput> => {
   const results: WorkerCaseResult[] = [];
   results.push(
     await attempt("the pool is refused on the main thread", async () => {
@@ -75,6 +89,8 @@ window.runSqliteSuite = async (utf16: { snapshot: number[]; forged: number[] }):
   try {
     results.push(...((await first.send({ cmd: "cases", directory: "/cases" })) as WorkerCaseResult[]));
     results.push(...((await first.send({ cmd: "open", directory: "/open", utf16 })) as WorkerCaseResult[]));
+    const suites = (await first.send({ cmd: "suites", directory: "/suites" })) as WorkerCaseResult[];
+    const exchanged = (await first.send({ cmd: "exchange", directory: "/crossing", snapshot })) as Exchanged;
     results.push(
       await attempt("a second Worker is refused the directory another holds, and admitted once it is released", async () => {
         await first.send({ cmd: "hold", directory: "/owned" });
@@ -104,9 +120,9 @@ window.runSqliteSuite = async (utf16: { snapshot: number[]; forged: number[] }):
       })
     );
     results.push(...((await second.send({ cmd: "pool" })) as WorkerCaseResult[]));
+    return { results, suites, exchanged };
   } finally {
     first.terminate();
     second.terminate();
   }
-  return results;
 };

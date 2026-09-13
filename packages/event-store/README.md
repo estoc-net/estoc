@@ -13,7 +13,9 @@ so far is the model, its reference in memory, the SQLite driver the
 persistent stores are written against, the vault's schema and opening
 over it, the event store and the object store over that, the SQLite
 vault over both, and the portable snapshot: export, its validation
-and its inspection, restore and import.
+and its inspection, restore and import — the whole of it run in a
+Chromium Worker as it is on Node, one snapshot exchanged between the
+two.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -536,6 +538,57 @@ refused; and an import interrupted at every statement of its
 transaction, or at its `COMMIT`, leaving the whole old union or the
 whole new. `test/v3/sqlite/import.test.ts` adds a restore into a
 destination of either journal.
+
+The two platforms, side by side. The three conformance suites —
+`eventStoreSuite`, `objectStoreSuite`, `vaultSuite` — run over the
+wasm pool in the Chromium Worker as they run over `node:sqlite` in
+memory and on files, through the same openers
+(`test/v3/sqlite/suite-openers.ts`); the Worker's bundle gets the
+`vitest` the suites import from `test/browser/vitest-stand-in.ts`,
+whose `describe` and `it` collect the tests for the Worker to run one
+at a time and whose `expect` is vitest's own matchers over chai, so a
+suite asserts in the Worker exactly what it asserts under vitest, and
+`test/v3/sqlite/browser-driver.test.ts` reports each collected test
+as a case of its own. One portable snapshot crosses between them
+(`test/v3/sqlite/exchange.ts`): a sample vault — text with control
+characters and numbers of every JSON kind in the events' data, a
+type outside ASCII, a second author's event, the empty object, one
+across a chunk boundary and one of bytes that are no text — is
+exported on Node, inspected there, sent to the Worker, and inspected
+there to the same values: the metadata, the wrapper, what validation
+counted, every event as scanned and every object's key, codec, size
+and bytes as read; the Worker restores it, commits one more event
+over one more object and exports again, and that file, sent back,
+inspects on Node as it did in the Worker and imports into the sample
+vault as exactly the one event and the one object. An object of 64
+MiB streams through a commit, a read, an export and a restore on
+both platforms under a source that reuses one buffer, with what the
+platform holds sampled on the way: in the Worker SQLite's own count
+(`sqlite3_status`), where the commit fills the wasm build's 16 MiB
+page cache once and nothing grows after; on Node what JavaScript
+holds once garbage is collected (the heap and the array buffers,
+`--expose-gc` given to vitest's forks for the collection), flat
+throughout — the resident set is not measured, since glibc keeps
+what the transient mebibyte buffers were freed into. The bound is on
+growth: none across the second half of the commit or of the read,
+none from the commit to the restore, and less than half the object
+in all.
+
+The durability configuration on each platform, reported by the
+driver case that checks it. On `node:sqlite`, foreign keys are
+enforced by the binding's default, a created runtime runs in WAL
+with `synchronous=NORMAL` — durable against a crash of the process,
+consistent after a loss of power, the last transactions possibly
+lost — and a portable snapshot is built in a rollback journal
+(`journal_mode=DELETE`) with `synchronous=FULL`, so the file stands
+alone; a restore's destination is a created runtime and runs as one.
+In the Worker, foreign keys are enabled on every connection, and the
+pool's databases run in a rollback journal with `synchronous=FULL`,
+the wasm build's defaults over the access-handle pool, whose sync is
+the handle's flush; a snapshot built there is in the same journal.
+On both, the temporary database is on a file (`temp_store=FILE`),
+and `journal_mode=OFF` or `MEMORY` and `synchronous=OFF` are never
+set.
 
 Everything below is
 version 2, which stays until the vault switches over.

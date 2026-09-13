@@ -13,11 +13,12 @@ import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { openNodeSqlite } from "../../../src/node.js";
-import { SqliteVault, createRuntime, openRuntime, type AuthorId, type Cid, type OpenMode, type RuntimeDatabase, type SqliteDriver, type SqlValue } from "../../../src/v3/index.js";
+import { SqliteVault, createRuntime, openRuntime, type OpenMode, type SqliteDriver } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
 import { all } from "../suite/helpers.js";
 import { HELLO_CID, cidOf } from "../suite/object-store-suite.js";
-import { vaultSuite, type VaultUnderTest } from "../suite/vault-suite.js";
+import { vaultSuite } from "../suite/vault-suite.js";
+import { vaultOpener } from "./suite-openers.js";
 import { vaultCases } from "./vault-cases.js";
 
 const HELLO = new TextEncoder().encode("hello");
@@ -36,49 +37,8 @@ afterAll(async () => {
 const fresh = (): string => path.join(dir, `vault-${n++}.sqlite`);
 const open = (target: string, mode: OpenMode): SqliteDriver => openNodeSqlite(target, { mode });
 
-function rows(driver: SqliteDriver, sql: string, ...params: SqlValue[]): Record<string, unknown>[] {
-  const statement = driver.prepare(sql);
-  try {
-    return statement.all(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-function exec(driver: SqliteDriver, sql: string, ...params: SqlValue[]): void {
-  const statement = driver.prepare(sql);
-  try {
-    statement.run(...params);
-  } finally {
-    statement.finalize();
-  }
-}
-
-/** `db` as the runtime of `author`: the control row rewritten, as a test names its replicas. */
-function authoredAs(db: RuntimeDatabase, author: AuthorId): RuntimeDatabase {
-  exec(db.driver, "UPDATE store_state SET replica_id = ?", author);
-  return { driver: db.driver, metadata: db.metadata, author, generation: db.generation, writable: db.writable, keystore: (locked) => db.keystore(locked), close: () => db.close() };
-}
-
-/** Flips one byte of the first chunk of `cid`, as a bad sector would. */
-function corrupt(driver: SqliteDriver, cid: Cid): void {
-  const [row] = rows(driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = 0", cid);
-  if (row === undefined) throw new Error(`${cid} has no bytes to damage`);
-  const bytes = new Uint8Array(row["bytes"] as Uint8Array);
-  bytes[0] = (bytes[0] as number) ^ 0x01;
-  exec(driver, "UPDATE object_chunks SET bytes = ? WHERE cid = ? AND chunk_no = 0", bytes, cid);
-}
-
-function opener(target: () => string) {
-  return async ({ author, now }: { author: AuthorId; now: () => number }): Promise<VaultUnderTest> => {
-    const db = authoredAs(createRuntime(open(target(), "create"), { metadata: META, wrapped: WRAPPED }), author);
-    const vault = new SqliteVault(db, { now });
-    return { vault, corrupt: async (cid) => corrupt(db.driver, cid) };
-  };
-}
-
-vaultSuite("SqliteVault in memory", opener(() => ":memory:"));
-vaultSuite("SqliteVault on a file", opener(fresh));
+vaultSuite("SqliteVault in memory", vaultOpener({ fresh: () => ":memory:", open }));
+vaultSuite("SqliteVault on a file", vaultOpener({ fresh, open }));
 
 describe("the vault cases on node:sqlite files", () => {
   for (const c of vaultCases) {

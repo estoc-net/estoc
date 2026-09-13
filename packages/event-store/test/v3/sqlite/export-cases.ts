@@ -6,8 +6,10 @@
  * SQLite must agree on: what a snapshot holds and what never enters
  * it, the refusals before and after the destination is made, the cut
  * held against the operations waiting on the lock, the vault in
- * memory exporting into the same file, and every way a snapshot that
- * opens can still fail validation.
+ * memory exporting into the same file, every way a snapshot that
+ * opens can still fail validation, and an object of 64 MiB streamed
+ * through a commit, a read, an export and a restore under bounded
+ * memory.
  */
 
 import {
@@ -16,7 +18,9 @@ import {
   canonicalEventBytes,
   createRuntime,
   exportVault,
+  hashSource,
   openPortable,
+  restoreVault,
   validatePortable,
   type Cid,
   type Event,
@@ -30,13 +34,15 @@ import {
   type Validated,
   type VaultRuntime,
 } from "../../../src/v3/index.js";
-import { META, REWRAPPED, WRAPPED } from "../fixtures.js";
+import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
 import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
 import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, corruptChunk, damageEvent, draft, exec, make, rootsOf, rows, type VaultHarness } from "./vault-cases.js";
 
 export interface ExportHarness extends VaultHarness {
   /** The complete bytes of the file at `target`, which no connection holds open. */
   fileBytes(target: string): Promise<Uint8Array>;
+  /** What the platform reports as held, in bytes: SQLite's own count where the runtime exposes it; where it does not, what JavaScript holds once garbage is collected. */
+  memoryUsed?: () => number;
 }
 
 export interface ExportCase {
@@ -538,6 +544,77 @@ export const exportCases: ExportCase[] = [
       } finally {
         snapshot.close();
       }
+    },
+  },
+  {
+    name: "an object of 64 MiB streams through a commit, a read, an export and a restore, and what the platform holds stays bounded throughout",
+    run: async (h) => {
+      const total = 64;
+      const piece = new Uint8Array(MIB); // one buffer, refilled: nothing here holds the object
+      async function* source(): AsyncIterable<Uint8Array> {
+        for (let i = 0; i < total; i++) {
+          piece.fill(i + 1);
+          yield piece;
+        }
+      }
+      const { cid } = await hashSource(source(), total * MIB, () => undefined);
+      const id = cid.text as Cid;
+      const held: [string, number][] = [];
+      const sample = (at: string): void => {
+        if (h.memoryUsed !== undefined) held.push([at, h.memoryUsed()]);
+      };
+      const { vault } = await make(h, h.fresh(), clock().now);
+      sample("before");
+      let fed = 0;
+      async function* sampled(): AsyncIterable<Uint8Array> {
+        for await (const chunk of source()) {
+          yield chunk;
+          if (++fed % 32 === 0) sample(`${fed} MiB into the commit`);
+        }
+      }
+      await vault.vault.commit([{ cid: id, source: sampled() }], [draft([id])]);
+      sample("after the commit");
+      const stream = await vault.vault.objects.open(id);
+      assert(stream !== null, "readable");
+      const reader = stream.getReader();
+      let offset = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (let i = 0; i < value.length; ) {
+          const mebibyte = Math.floor((offset + i) / MIB);
+          const end = Math.min(value.length, (mebibyte + 1) * MIB - offset);
+          for (; i < end; i++) if (value[i] !== mebibyte + 1) throw new Error(`byte ${offset + i} read back as ${value[i]}, not ${mebibyte + 1}`);
+        }
+        const before = offset;
+        offset += value.length;
+        if (Math.floor(offset / (32 * MIB)) > Math.floor(before / (32 * MIB))) sample(`${Math.floor(offset / MIB)} MiB into the read`);
+      }
+      assertEqual(offset, total * MIB, "read whole");
+      const target = h.fresh();
+      const exported = await exportVault(vault, destination(h, target), { heldRoots: rootsOf });
+      assertEqual(exported.objectBytes, total * MIB, "exported whole");
+      sample("after the export");
+      const snapshot = await opened(h, target);
+      const restored = await restoreVault(snapshot, destination(h, h.fresh()), { heldRoots: rootsOf, anchor: ANCHOR });
+      snapshot.close();
+      assertEqual([restored.objects, restored.objectBytes], [1, total * MIB], "restored whole");
+      restored.runtime.close();
+      sample("after the restore");
+      await vault.close();
+      if (held.length === 0) return;
+      const note = held.map(([at, n]) => `${at}: ${(n / MIB).toFixed(1)} MiB`).join(", ");
+      const at = (mark: string): number => {
+        const found = held.find(([name]) => name === mark);
+        if (found === undefined) throw new Error(`no sample ${mark}: ${note}`);
+        return found[1];
+      };
+      const grewBy = (from: string, to: string): number => at(to) - at(from);
+      assert(grewBy("32 MiB into the commit", "64 MiB into the commit") < 4 * MIB, `the second half of the commit's source held no more than the first: ${note}`);
+      assert(grewBy("32 MiB into the read", "64 MiB into the read") < 4 * MIB, `the second half of the read held no more than the first: ${note}`);
+      assert(grewBy("after the commit", "after the restore") < 4 * MIB, `the export and the restore held no more than the commit left: ${note}`);
+      assert(grewBy("before", "after the restore") < 32 * MIB, `less than half the object held in all, a page cache filled by the commit being a fixed cost: ${note}`);
+      return note;
     },
   },
 ];

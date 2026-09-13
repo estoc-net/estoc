@@ -627,4 +627,22 @@ export const driverCases: DriverCase[] = [
       third.close();
     },
   },
+  {
+    name: "a writable connection keeps foreign keys enforced and a journal SQLite recovers from under a synchronous setting that is not OFF, as the platform reports them",
+    needsPersistence: true,
+    run: async (h) => {
+      const db = await h.open(h.fresh(), "create");
+      try {
+        const pragma = (name: string): unknown => Object.values(db.prepare(`PRAGMA ${name}`).get() ?? {})[0];
+        assertEqual(pragma("foreign_keys"), 1, "foreign keys");
+        const journal = String(pragma("journal_mode"));
+        assert(journal === "wal" || journal === "delete", `a journal SQLite recovers from, not ${journal}`);
+        const synchronous = Number(pragma("synchronous"));
+        assert(synchronous >= 1, `synchronous is not OFF: ${synchronous}`);
+        return `journal_mode=${journal}, synchronous=${["OFF", "NORMAL", "FULL", "EXTRA"][synchronous] ?? synchronous}`;
+      } finally {
+        db.close();
+      }
+    },
+  },
 ];
