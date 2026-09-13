@@ -253,7 +253,7 @@ describe("readVaultEvent", () => {
     rejects("message.out", OUT_DATA, [BODY, PHOTO, PHOTO]);
     accepts("message.out", { ...OUT_DATA, attachmentCids: [] }, [BODY]);
     accepts("message.out", { ...OUT_DATA, attachmentCids: [BODY, PHOTO] }, [BODY, PHOTO]);
-    rejects("message.out", { ...OUT_DATA, attachmentCids: [PHOTO, PHOTO] }, [BODY, PHOTO], /attachmentCids is distinct/);
+    rejects("message.out", { ...OUT_DATA, attachmentCids: [PHOTO, PHOTO] }, [BODY, PHOTO], /attachmentCids must be distinct/);
     rejects("message.in", IN_DATA, [BODY]);
   });
 });
@@ -263,21 +263,44 @@ describe("identifiers in payloads", () => {
     rejects("contact.deleted", { contactId: CONTACT.toUpperCase() }, [], /UUIDv5 or UUIDv7/);
     accepts("contact.deleted", { contactId: "ebbdeefb-e443-5e14-9cc9-2c468826de1c" });
     rejects("mediation.selected", { mediationId: R }, [], /UUIDv7/);
-    rejects("relationship.contactAssigned", { relationshipId: MEDIATION, contactId: CONTACT }, [], /relationshipId is a canonical UUIDv5/);
-    rejects("relationship.bound", { relationshipId: R, localDidId: DID_ID, peerResolutionEventId: R }, [], /peerResolutionEventId is an event ID/);
-    rejects("delivery.acknowledged", { ...ALL["delivery.acknowledged"][0], ackMessageId: OUT }, [], /ackMessageId is a canonical UUIDv5/);
+    rejects("relationship.contactAssigned", { relationshipId: MEDIATION, contactId: CONTACT }, [], /relationshipId must be a canonical UUIDv5/);
+    rejects("relationship.bound", { relationshipId: R, localDidId: DID_ID, peerResolutionEventId: R }, [], /peerResolutionEventId must be an event ID/);
+    rejects("delivery.acknowledged", { ...ALL["delivery.acknowledged"][0], ackMessageId: OUT }, [], /ackMessageId must be a canonical UUIDv5/);
   });
 
   it("checks DIDs, DID URLs, key names, public keys, CIDs and hashes by their spelling", () => {
     const resolved = ALL["peer.resolved"][0] as Loose;
     accepts("peer.resolved", { ...resolved, presentedDid: LONG, did: SHORT }, [DOC]);
-    rejects("peer.resolved", { ...resolved, did: LONG }, [DOC], /did is a canonical DID/);
-    rejects("peer.resolved", { ...resolved, presentedDid: "bob.example" }, [DOC], /presentedDid is a DID/);
+    rejects("peer.resolved", { ...resolved, did: LONG }, [DOC], /did must be a canonical DID/);
+    rejects("peer.resolved", { ...resolved, presentedDid: "bob.example" }, [DOC], /presentedDid must be a DID/);
     rejects("peer.resolved", { ...resolved, did: "did:Web:bob" }, [DOC]);
-    rejects("peer.resolved", { ...resolved, authenticationMethodIds: ["#authentication-0"] }, [DOC], /authenticationMethodIds\[0\] is a DID URL/);
+    rejects("peer.resolved", { ...resolved, authenticationMethodIds: ["#authentication-0"] }, [DOC], /authenticationMethodIds\[0\] must be a DID URL/);
+    for (const url of [
+      "did:web:bob.example/path/%41?versionTime=2026-01-01T00:00:00Z&x=/a?b#key-1",
+      "did:example:123?service=agent&relativeRef=/x",
+      "did:example:123#frag:with@sub!$&'()*+,;=~",
+      `${LONG}#key`,
+      "did:web:bob.example/",
+      "did:web:bob.example?#",
+    ]) {
+      accepts("peer.resolved", { ...resolved, authenticationMethodIds: [url] }, [DOC]);
+    }
+    for (const url of [
+      "did:web:bob.example#key with spaces",
+      "did:web:bob.example#key#second",
+      "did:web:bob.example/%zz#key",
+      "did:web:bob.example#key\nnext",
+      "did:web:bob.example?q=%4",
+      "did:web:bob.example/p%",
+      "did:web:bob.example#k\u00e9",
+      "did:web:bob.example/[x]",
+      "did:web:bob.example#key\\",
+    ]) {
+      rejects("peer.resolved", { ...resolved, authenticationMethodIds: [url] }, [DOC], /authenticationMethodIds\[0\] must be a DID URL/);
+    }
     rejects("peer.resolved", { ...resolved, keyAgreementMethodIds: [resolved.keyAgreementMethodIds, resolved.keyAgreementMethodIds].flat() }, [DOC], /distinct/);
     accepts("peer.resolved", { ...resolved, authenticationMethodIds: [], service: null }, [DOC]);
-    rejects("peer.resolved", { ...resolved, localKeyName: "did/x/key-agreement" }, [DOC], /localKeyName is a vault key name/);
+    rejects("peer.resolved", { ...resolved, localKeyName: "did/x/key-agreement" }, [DOC], /localKeyName must be a vault key name/);
     rejects("peer.resolved", { ...resolved, localKeyName: `did/${DID_ID}/signing` }, [DOC]);
     accepts("peer.resolved", { ...resolved, localKeyName: `mediation/${MEDIATION}/me` }, [DOC]);
     rejects("peer.resolved", { ...resolved, peerPublicKey: PEER_KEY.slice(0, -1) }, [DOC], /canonical public key/);
@@ -326,13 +349,13 @@ describe("rules between members", () => {
   it("a transition moves to another DID or DID entity, and a merge names two contacts", () => {
     const peer = ALL["relationship.peerTransitioned"][0] as Loose;
     rejects("relationship.peerTransitioned", { ...peer, toDid: peer.fromDid, presentedToDid: peer.fromDid }, [], /fromDid and toDid differ/);
-    rejects("relationship.peerTransitioned", { ...peer, toDid: peer.presentedToDid }, [], /toDid is a canonical DID/);
+    rejects("relationship.peerTransitioned", { ...peer, toDid: peer.presentedToDid }, [], /toDid must be a canonical DID/);
     const local = ALL["relationship.localTransitioned"][0] as Loose;
     rejects("relationship.localTransitioned", { ...local, toDidId: DID_ID }, [], /differ/);
     accepts("relationship.localTransitioned", { ...local, triggerEventId: SOURCE_IN });
     rejects("contact.merged", { contactId: CONTACT, fromContactId: CONTACT }, [], /two contacts/);
     rejects("contact.created", { contactId: CONTACT, because: "policy" }, [], /one of "user", "automatic"/);
-    rejects("contact.flag", { contactId: CONTACT, flag: "pinned", value: "yes" }, [], /value is a boolean/);
+    rejects("contact.flag", { contactId: CONTACT, flag: "pinned", value: "yes" }, [], /value must be a boolean/);
     rejects("contact.flag", { contactId: CONTACT, flag: "", value: true });
   });
 
@@ -344,6 +367,15 @@ describe("rules between members", () => {
     rejects("delivery.failed", { messageId: OUT, scope: "package", packageId: PACKAGE, code: "expired" }, [], /expired is message-scoped/);
     rejects("delivery.failed", { messageId: OUT, scope: "message", packageId: PACKAGE, code: "peer-key-changed" }, [], /before any package/);
     rejects("delivery.failed", { messageId: OUT, scope: "all", packageId: null, code: "x" });
+  });
+
+  it("message.prepared names the sender entity's own key-agreement key", () => {
+    const prepared = ALL["message.prepared"][0] as Loose;
+    const EARLY = "4734b126-9706-5c8f-b971-91a5afb9c1d4";
+    accepts("message.prepared", { ...prepared, senderDidId: EARLY, localKeyName: `did/${EARLY}/key-agreement` }, [ENVELOPE]);
+    for (const localKeyName of [`did/${DID_ID2}/key-agreement`, `did/${DID_ID}/authentication`, `mediation/${MEDIATION}/me`]) {
+      rejects("message.prepared", { ...prepared, localKeyName }, [ENVELOPE], /localKeyName is the sender entity's key-agreement key/);
+    }
   });
 
   it("message.erased releases at least one root, each once", () => {
@@ -400,7 +432,7 @@ describe("message.out", () => {
     rejects("message.out", { ...AUTOMATIC, effectKey: KEY_OF_PURE_ACK.slice(0, -1) + "V" }, [BODY], /effectKey is not the key/);
     rejects("message.out", { ...AUTOMATIC, messageId: OUT }, [BODY], /messageId is derived from its key/);
     rejects("message.out", { ...AUTOMATIC, executionId: null }, [BODY], /all null or all present/);
-    rejects("message.out", { ...AUTOMATIC, executionId: OUT }, [BODY], /executionId is a canonical UUIDv5/);
+    rejects("message.out", { ...AUTOMATIC, executionId: OUT }, [BODY], /executionId must be a canonical UUIDv5/);
     rejects("message.out", { ...AUTOMATIC, handlerId: "" }, [BODY]);
   });
 });
@@ -425,14 +457,24 @@ describe("message.in", () => {
     accepts("message.in", { ...IN_DATA, pleaseAck: null, ack: [OUT, OUT], headers: { lang: "en" }, fromPrior: JWT, thid: "t", pthid: OOB, signedBy: "did:web:bob.example#authentication-0" }, [BODY, PHOTO]);
     accepts("message.in", { ...IN_DATA, receivedVia: { mediationId: null, deliveryId: null }, bytes: 0 }, [BODY, PHOTO]);
     accepts("message.in", { ...IN_DATA, presentedDid: LONG, did: SHORT, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO]);
-    rejects("message.in", { ...IN_DATA, did: LONG, presentedDid: LONG }, [BODY, PHOTO], /did is a canonical DID/);
+    rejects("message.in", { ...IN_DATA, did: LONG, presentedDid: LONG }, [BODY, PHOTO], /did must be a canonical DID/);
     rejects("message.in", { ...IN_DATA, headers: { please_ack: [] } }, [BODY, PHOTO], /reserved header/);
-    rejects("message.in", { ...IN_DATA, bytes: -1 }, [BODY, PHOTO], /bytes is a non-negative integer/);
+    rejects("message.in", { ...IN_DATA, bytes: -1 }, [BODY, PHOTO], /bytes must be a non-negative integer/);
     rejects("message.in", { ...IN_DATA, receivedVia: { mediationId: MEDIATION } }, [BODY, PHOTO], /receivedVia\.deliveryId is missing/);
     rejects("message.in", { ...IN_DATA, receivedVia: { mediationId: R, deliveryId: null } }, [BODY, PHOTO]);
     rejects("message.in", { ...IN_DATA, createdTime: 5, expiresTime: 4 }, [BODY, PHOTO], /expiresTime/);
     rejects("message.in", { ...IN_DATA, wireMessageId: "" }, [BODY, PHOTO]);
     rejects("message.in", { ...IN_DATA, fromPrior: "" }, [BODY, PHOTO]);
+  });
+
+  it("an authenticated observation keeps its binding unless a carried proof stands in, and a proof names no transition", () => {
+    accepts("message.in", IN_DATA, [BODY, PHOTO]);
+    accepts("message.in", { ...IN_DATA, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO]);
+    accepts("message.in", { ...IN_DATA, fromPrior: JWT }, [BODY, PHOTO]);
+    accepts("message.in", { ...IN_DATA, fromPrior: JWT, relationshipBindingEventId: null }, [BODY, PHOTO]);
+    rejects("message.in", { ...IN_DATA, relationshipBindingEventId: null }, [BODY, PHOTO], /keeps its relationship binding/);
+    rejects("message.in", { ...IN_DATA, relationshipBindingEventId: null, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO], /keeps its relationship binding/);
+    rejects("message.in", { ...IN_DATA, fromPrior: JWT, peerTransitionEventId: RESOLVED2 }, [BODY, PHOTO], /names no peer transition/);
   });
 
   it("an anonymous observation has no sender evidence and the ID its local key and wire ID derive", () => {

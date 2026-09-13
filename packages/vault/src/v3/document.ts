@@ -8,7 +8,7 @@
  * bytes and the same hashes.
  */
 
-import { InvalidJson, canonicalize, isJsonObject, isRawCid, parseStrict, rawCidFromDigest, type JsonObject, type JsonValue } from "@estoc/event-store/v3";
+import { InvalidJson, canonicalText, canonicalize, isJsonObject, isRawCid, parseStrict, rawCidFromDigest, type JsonObject, type JsonValue } from "@estoc/event-store/v3";
 import { sha256 } from "@noble/hashes/sha2";
 import { base64url, base64urlnopad } from "@scure/base";
 
@@ -75,8 +75,8 @@ export function messageRoots(bodyCid: Cid, attachmentCids: readonly Cid[]): Cid[
  * that disagrees with the inline content is refused.
  */
 export function storeMessage(body: unknown, attachments: unknown): StoredMessage {
-  if (!isJsonObject(body)) throw new InvalidPlaintext("body is a JSON object");
-  if (attachments !== undefined && !Array.isArray(attachments)) throw new InvalidPlaintext("attachments is an array");
+  if (!isJsonObject(body)) throw new InvalidPlaintext("body must be a JSON object");
+  if (attachments !== undefined && !Array.isArray(attachments)) throw new InvalidPlaintext("attachments must be an array");
   const payloads = new Map<Cid, Uint8Array>();
   const stored: StoredAttachment[] = [];
   (attachments ?? []).forEach((attachment, i) => {
@@ -108,7 +108,7 @@ function canonicalDocument(document: StoredMessageDocument): Uint8Array {
 }
 
 function storeAttachment(value: unknown, at: string): { descriptor: StoredAttachment; payload: StoredObject | null } {
-  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} is a JSON object`);
+  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} must be a JSON object`);
   const members = descriptorMembers(value, at);
   const { data, payload } = storeData(value.data, `${at}.data`);
   let byteCount: number | null = members.byte_count;
@@ -125,7 +125,7 @@ function storeAttachment(value: unknown, at: string): { descriptor: StoredAttach
 function descriptorMembers(value: JsonObject, at: string): Omit<StoredAttachment, "data"> {
   return {
     id: nullable(value.id, `${at}.id`, (id, where) => {
-      if (typeof id !== "string" || !UNRESERVED.test(id)) throw new InvalidPlaintext(`${where} is a non-empty string of URI unreserved characters`);
+      if (typeof id !== "string" || !UNRESERVED.test(id)) throw new InvalidPlaintext(`${where} must be a non-empty string of URI unreserved characters`);
       return id;
     }),
     description: nullable(value.description, `${at}.description`, text),
@@ -133,18 +133,18 @@ function descriptorMembers(value: JsonObject, at: string): Omit<StoredAttachment
     media_type: nullable(value.media_type, `${at}.media_type`, text),
     format: nullable(value.format, `${at}.format`, text),
     lastmod_time: nullable(value.lastmod_time, `${at}.lastmod_time`, (time, where) => {
-      if (!Number.isSafeInteger(time)) throw new InvalidPlaintext(`${where} is an integer`);
+      if (!Number.isSafeInteger(time)) throw new InvalidPlaintext(`${where} must be an integer`);
       return time as number;
     }),
     byte_count: nullable(value.byte_count, `${at}.byte_count`, (count, where) => {
-      if (!Number.isSafeInteger(count) || (count as number) < 0) throw new InvalidPlaintext(`${where} is a non-negative integer`);
+      if (!Number.isSafeInteger(count) || (count as number) < 0) throw new InvalidPlaintext(`${where} must be a non-negative integer`);
       return count as number;
     }),
   };
 }
 
 function storeData(value: unknown, at: string): { data: StoredAttachmentData; payload: StoredObject | null } {
-  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} is a JSON object`);
+  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} must be a JSON object`);
   const carriers = CARRIERS.filter((carrier) => Object.hasOwn(value, carrier));
   if (carriers.length !== 1) {
     throw new InvalidPlaintext(`${at} carries exactly one of base64, json and links, not ${carriers.length === 0 ? "none" : carriers.join(" and ")}`);
@@ -166,25 +166,25 @@ function nullable<T>(value: unknown, at: string, check: (value: unknown, at: str
 }
 
 function text(value: unknown, at: string): string {
-  if (typeof value !== "string") throw new InvalidPlaintext(`${at} is a string`);
+  if (typeof value !== "string") throw new InvalidPlaintext(`${at} must be a string`);
   return value;
 }
 
 function multihash(value: unknown, at: string): string {
-  if (typeof value !== "string" || value === "") throw new InvalidPlaintext(`${at} is a non-empty multihash string`);
+  if (typeof value !== "string" || value === "") throw new InvalidPlaintext(`${at} must be a non-empty multihash string`);
   return value;
 }
 
 function links(value: unknown, at: string): string[] {
   if (!Array.isArray(value) || value.length === 0 || !value.every((link) => typeof link === "string" && link !== "")) {
-    throw new InvalidPlaintext(`${at} is a non-empty array of non-empty strings`);
+    throw new InvalidPlaintext(`${at} must be a non-empty array of non-empty strings`);
   }
   return [...(value as string[])];
 }
 
 /** Base64url as DIDComm attachments carry it, padded or not; the standard alphabet is refused. */
 function decodeBase64(value: unknown, at: string): Uint8Array {
-  if (typeof value !== "string") throw new InvalidPlaintext(`${at} is a string`);
+  if (typeof value !== "string") throw new InvalidPlaintext(`${at} must be a string`);
   try {
     return value.includes("=") ? base64url.decode(value) : base64urlnopad.decode(value);
   } catch (err) {
@@ -204,12 +204,13 @@ function canonicalJson(value: unknown, at: string): Uint8Array {
 /**
  * `value` as a stored message document read back from its object:
  * exactly the closed shape `storeMessage` writes, or `InvalidPlaintext`.
- * The payload roots are named, not checked for presence.
+ * The payload roots are named, not checked for presence; what the
+ * payload bytes must be is checked when they are put back on the wire.
  */
 export function readStoredDocument(value: unknown): StoredMessageDocument {
-  if (!isJsonObject(value) || !exactly(value, ["attachments", "body"])) throw new InvalidPlaintext("a stored document has exactly body and attachments");
-  if (!isJsonObject(value.body)) throw new InvalidPlaintext("body is a JSON object");
-  if (!Array.isArray(value.attachments)) throw new InvalidPlaintext("attachments is an array");
+  if (!isJsonObject(value) || !exactly(value, ["attachments", "body"])) throw new InvalidPlaintext("a stored document must have exactly body and attachments");
+  if (!isJsonObject(value.body)) throw new InvalidPlaintext("body must be a JSON object");
+  if (!Array.isArray(value.attachments)) throw new InvalidPlaintext("attachments must be an array");
   return { body: value.body, attachments: value.attachments.map((attachment, i) => readStoredAttachment(attachment, `attachments[${i}]`)) };
 }
 
@@ -218,22 +219,32 @@ const INLINE_DATA_MEMBERS = ["hash", "jws", "kind", "root"];
 const LINKS_DATA_MEMBERS = ["hash", "jws", "kind", "links"];
 
 function readStoredAttachment(value: unknown, at: string): StoredAttachment {
-  if (!isJsonObject(value) || !exactly(value, DESCRIPTOR_MEMBERS)) throw new InvalidPlaintext(`${at} has exactly the stored descriptor members`);
-  return { ...descriptorMembers(value, at), data: readStoredData(value.data, `${at}.data`) };
+  if (!isJsonObject(value) || !exactly(value, DESCRIPTOR_MEMBERS)) throw new InvalidPlaintext(`${at} must have exactly the stored descriptor members`);
+  const members = descriptorMembers(value, at);
+  const data = readStoredData(value.data, `${at}.data`);
+  if (data.kind !== "links" && members.byte_count === null) throw new InvalidPlaintext(`${at}.byte_count must be the length of the inline ${data.kind} payload`);
+  return { ...members, data };
 }
 
 function readStoredData(value: unknown, at: string): StoredAttachmentData {
-  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} is a JSON object`);
+  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} must be a JSON object`);
   const { kind } = value;
   const jws = value.jws === undefined ? null : value.jws;
   if (kind === "links") {
-    if (!exactly(value, LINKS_DATA_MEMBERS)) throw new InvalidPlaintext(`${at} has exactly the stored links members`);
+    if (!exactly(value, LINKS_DATA_MEMBERS)) throw new InvalidPlaintext(`${at} must have exactly the stored links members`);
     return { kind, links: links(value.links, `${at}.links`), hash: multihash(value.hash, `${at}.hash`), jws };
   }
-  if (kind !== "base64" && kind !== "json") throw new InvalidPlaintext(`${at}.kind is base64, json or links`);
-  if (!exactly(value, INLINE_DATA_MEMBERS)) throw new InvalidPlaintext(`${at} has exactly the stored ${kind} members`);
-  if (!isRawCid(value.root)) throw new InvalidPlaintext(`${at}.root is a raw DASL CID`);
+  if (kind !== "base64" && kind !== "json") throw new InvalidPlaintext(`${at}.kind must be base64, json or links`);
+  if (!exactly(value, INLINE_DATA_MEMBERS)) throw new InvalidPlaintext(`${at} must have exactly the stored ${kind} members`);
+  if (!isRawCid(value.root)) throw new InvalidPlaintext(`${at}.root must be a raw DASL CID`);
   return { kind, root: value.root, hash: nullable(value.hash, `${at}.hash`, multihash), jws };
+}
+
+/** The JSON value of a stored payload, which must be its own RFC 8785 serialization. */
+function canonicalJsonPayload(payload: Uint8Array, root: Cid): JsonValue {
+  const value = parseStrict(payload);
+  if (canonicalText(value) !== new TextDecoder().decode(payload)) throw new InvalidPlaintext(`the JSON payload ${root} is not in canonical form`);
+  return value;
 }
 
 function exactly(value: JsonObject, members: readonly string[]): boolean {
@@ -245,7 +256,10 @@ function exactly(value: JsonObject, members: readonly string[]): boolean {
  * A stored descriptor as the wire carries it: absent members omitted,
  * inline content re-encoded from its payload bytes — base64url without
  * padding, or the JSON the canonical bytes parse to. The payload is
- * the object `data.root` names; a links descriptor takes none.
+ * the object `data.root` names, as long as `byte_count`, and for JSON
+ * already canonical; a links descriptor takes none. A payload that
+ * fails those is refused rather than re-normalized, since `storeMessage`
+ * on the other side would derive another document from it.
  */
 export function wireAttachment(stored: StoredAttachment, payload: Uint8Array | null): JsonObject {
   const wire: JsonObject = {};
@@ -260,8 +274,9 @@ export function wireAttachment(stored: StoredAttachment, payload: Uint8Array | n
   } else {
     if (payload === null) throw new InvalidPlaintext(`a ${kind} attachment needs its payload bytes`);
     if (rawCidOfBytes(payload) !== stored.data.root) throw new InvalidPlaintext(`the payload is not the object ${stored.data.root}`);
+    if (payload.length !== stored.byte_count) throw new InvalidPlaintext(`the payload is ${payload.length} bytes, not the stored byte_count ${stored.byte_count}`);
     if (kind === "base64") data.base64 = base64urlnopad.encode(payload);
-    else data.json = parseStrict(payload);
+    else data.json = canonicalJsonPayload(payload, stored.data.root);
   }
   if (stored.data.hash !== null) data.hash = stored.data.hash;
   if (stored.data.jws !== null) data.jws = stored.data.jws;

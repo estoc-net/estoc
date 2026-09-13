@@ -10,7 +10,7 @@
 import { isEventId, isJsonObject, isRawCid, type Draft, type Event } from "@estoc/event-store/v3";
 
 import { InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey } from "./errors.js";
-import { automaticMessageId, effectKey, inboundMessageId, mediationKeyName, parseDecimalOrdinal } from "./ids.js";
+import { automaticMessageId, didKeyName, effectKey, inboundMessageId, mediationKeyName, parseDecimalOrdinal } from "./ids.js";
 import { messageRoots } from "./document.js";
 import { checkHeaders } from "./projection.js";
 import { parsePublicKey } from "./public-key.js";
@@ -60,7 +60,7 @@ class Fault extends Error {}
 type Check<T> = (value: unknown, at: string) => T;
 
 function fail(at: string, what: string): never {
-  throw new Fault(`${at} is ${what}`);
+  throw new Fault(`${at} must be ${what}`);
 }
 
 const text: Check<string> = (value, at) => (typeof value === "string" ? value : fail(at, "a string"));
@@ -95,11 +95,8 @@ const headers: Check<VaultData["message.out"]["headers"]> = (value, at) => {
   }
 };
 
-/** A locally minted entity ID: UUIDv7. */
 const minted = <T extends string>(): Check<T> => (value, at) => (isMintedId(value) ? (value as T) : fail(at, "a canonical UUIDv7"));
-/** A derived entity ID: UUIDv5. */
 const derived = <T extends string>(): Check<T> => (value, at) => (isDerivedId(value) ? (value as T) : fail(at, "a canonical UUIDv5"));
-/** An entity ID a rule may mint or derive. */
 const entity = <T extends string>(): Check<T> => (value, at) => (isEntityId(value) ? (value as T) : fail(at, "a canonical UUIDv5 or UUIDv7"));
 const ref = <T extends string>(): Check<EventReference<T>> => (value, at) => (isEventId(value) ? (value as EventReference<T>) : fail(at, "an event ID"));
 
@@ -126,7 +123,6 @@ const arrayOf =
 type Shape = { readonly [member: string]: Check<unknown> };
 type Of<S extends Shape> = { [M in keyof S]: S[M] extends Check<infer T> ? T : never };
 
-/** An object with exactly the members of `shape`, each checked. */
 const shape =
   <S extends Shape>(members: S): Check<Of<S>> =>
   (value, at) => {
@@ -142,7 +138,6 @@ const shape =
     return out as Of<S>;
   };
 
-/** `shape`, then rules between members. */
 const checked =
   <T>(check: Check<T>, rules: (data: T) => void): Check<T> =>
   (value, at) => {
@@ -262,6 +257,12 @@ const messageIn = checked(
       if (data.relationshipBindingEventId !== null || data.peerTransitionEventId !== null) throw new Fault("an anonymous observation has no relationship evidence");
       const messageId = inboundMessageId({ localKeyName: data.localKeyName }, data.wireMessageId);
       if (data.messageId !== messageId) throw new Fault(`an anonymous observation's messageId is derived from its local key and wire ID: ${messageId}`);
+      return;
+    }
+    if (data.fromPrior === null) {
+      if (data.relationshipBindingEventId === null) throw new Fault("an authenticated proof-free observation keeps its relationship binding");
+    } else if (data.peerTransitionEventId !== null) {
+      throw new Fault("a carried proof is the transition evidence itself and names no peer transition");
     }
   }
 ) as Check<VaultData["message.in"]>;
@@ -382,18 +383,24 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
   "profile.shared": schema(shape({ relationshipId: idMembers.relationshipId, sourceEventId: ref<"message.out">() }), none),
   "message.out": schema(messageOut, contentRoots),
   "message.prepared": schema(
-    shape({
-      messageId: entity<MessageId>(),
-      packageId: idMembers.packageId,
-      senderDidId: idMembers.didId,
-      localKeyName: keyName,
-      recipientDid: did,
-      peerResolutionEventId: ref<"peer.resolved">(),
-      fromPrior: nullable(compactJwt),
-      intentHash: hash,
-      plaintextHash: hash,
-      envelopeCid: cid,
-    }),
+    checked(
+      shape({
+        messageId: entity<MessageId>(),
+        packageId: idMembers.packageId,
+        senderDidId: idMembers.didId,
+        localKeyName: keyName,
+        recipientDid: did,
+        peerResolutionEventId: ref<"peer.resolved">(),
+        fromPrior: nullable(compactJwt),
+        intentHash: hash,
+        plaintextHash: hash,
+        envelopeCid: cid,
+      }),
+      (data) => {
+        const expected = didKeyName(data.senderDidId, "key-agreement");
+        if (data.localKeyName !== expected) throw new Fault(`localKeyName is the sender entity's key-agreement key, ${expected}`);
+      }
+    ),
     (data) => [data.envelopeCid]
   ),
   "message.packageRetired": schema(

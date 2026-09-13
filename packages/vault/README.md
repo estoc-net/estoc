@@ -25,9 +25,27 @@ reserved keystore names) and the canonical public-key value
 as base58btc multibase, from a JWK or from its base58btc multibase form,
 Ed25519 and X25519 raw, the Weierstrass curves as compressed points that
 `@noble/curves` has verified lie on the curve; `@scure/base` does the
-base58btc and base64url, `multiformats` the multicodec prefix). Every published
-identifier and public-key vector of those documents is a test in
-`test/v3/`.
+base58btc and base64url, `multiformats` the multicodec prefix), the event
+schemas (`schema.ts`: `readVaultEvent` / `readVaultDraft` / `vaultDraft`
+accept an event of one of the 33 version-3 types — the closed member set
+of its payload, each member's type, nullability and spelling, the rules
+between members such as a package naming its sender entity's
+key-agreement key or an authenticated proof-free receipt keeping its
+relationship binding, and the `roots` the type retains — or throw
+`InvalidPayload`; what a schema cannot see, whether a referenced event
+exists or a JWT verifies, is the folds' and the runtime's, never inferred
+here), the stored message document (`document.ts`: `storeMessage`
+normalizes a DIDComm `body` and `attachments` into the closed stored
+form with its payload objects and roots, `readStoredDocument` reads that
+form back, `wireAttachment` puts a descriptor back on the wire only from
+a payload of the stored byte count that is, for JSON, already canonical)
+and the projections (`projection.ts`: `readPlaintext` takes a plaintext
+apart into intent, stored content and addressing, `semanticProjection` /
+`intentProjection` / `intentHash` / `plaintextHash` are the hashes the
+events carry, `wirePlaintext` is the inverse of `readPlaintext`, and
+`expandPleaseAck` / `requestsAck` read `please_ack` without rewriting
+it). Every published identifier and public-key vector of those documents
+is a test in `test/v3/`.
 
 A version-2 vault is an event log — one append-only log per device,
 merged by union — and everything a person sees in it is a *fold* over

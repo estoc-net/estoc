@@ -126,16 +126,16 @@ describe("readPlaintext", () => {
     expect(() => readPlaintext({ ...base, id: "" })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, type: 3 })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, typ: "application/json" })).toThrow(InvalidPlaintext);
-    expect(() => readPlaintext({ ...base, from: "bob" })).toThrow(/from is a DID/);
-    expect(() => readPlaintext({ ...base, to: BOB })).toThrow(/to is an array/);
-    expect(() => readPlaintext({ ...base, to: ["nope"] })).toThrow(/to\[0\] is a DID/);
+    expect(() => readPlaintext({ ...base, from: "bob" })).toThrow(/from must be a DID/);
+    expect(() => readPlaintext({ ...base, to: BOB })).toThrow(/to must be an array/);
+    expect(() => readPlaintext({ ...base, to: ["nope"] })).toThrow(/to\[0\] must be a DID/);
     expect(() => readPlaintext({ ...base, thid: "" })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, created_time: "1788442800" })).toThrow(InvalidPlaintext);
-    expect(() => readPlaintext({ ...base, created_time: 10, expires_time: 10 })).toThrow(/expires_time is later/);
+    expect(() => readPlaintext({ ...base, created_time: 10, expires_time: 10 })).toThrow(/expires_time must be later/);
     expect(() => readPlaintext({ ...base, please_ack: "" })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, ack: [1] })).toThrow(InvalidPlaintext);
     expect(() => readPlaintext({ ...base, from_prior: "not.a-jwt" })).toThrow(/compact JWT/);
-    expect(() => readPlaintext({ ...base, body: [] })).toThrow(/body is a JSON object/);
+    expect(() => readPlaintext({ ...base, body: [] })).toThrow(/body must be a JSON object/);
     expect(() => readPlaintext("{}")).toThrow(InvalidPlaintext);
   });
 });
@@ -226,6 +226,22 @@ describe("checkHeaders", () => {
     }
     expect(() => checkHeaders([])).toThrow(InvalidPlaintext);
     expect(() => checkHeaders(null)).toThrow(InvalidPlaintext);
+  });
+
+  it("keeps a header named __proto__, which JSON may carry, as an own member of the intent and of the wire plaintext", () => {
+    const bare = readPlaintext(JSON.parse('{"id":"m","type":"t","body":{}}'));
+    expect(() => checkHeaders(JSON.parse('{"__proto__":1}'))).not.toThrow();
+    for (const literal of ["1", '"x"', "null", '{"custom":1}']) {
+      const read = readPlaintext(JSON.parse(`{"id":"m","type":"t","body":{},"__proto__":${literal}}`));
+      expect(Object.hasOwn(read.intent.headers, "__proto__")).toBe(true);
+      expect(Object.getOwnPropertyDescriptor(read.intent.headers, "__proto__")?.value).toEqual(JSON.parse(literal));
+      expect(Object.getPrototypeOf(read.intent.headers)).toBe(Object.prototype);
+      expect(read.intentHash).not.toBe(bare.intentHash);
+      expect(read.plaintextHash).not.toBe(bare.plaintextHash);
+      const wire = wirePlaintext(read.intent, { from: BOB, to: [ALICE], fromPrior: null }, () => new Uint8Array());
+      expect(Object.hasOwn(wire, "__proto__")).toBe(true);
+      expect(readPlaintext(wire).intentHash).toBe(read.intentHash);
+    }
   });
 });
 

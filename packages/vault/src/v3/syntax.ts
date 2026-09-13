@@ -7,8 +7,16 @@
 
 // DID Core ABNF: `did:` a method name of lowercase letters and digits, then
 // colon-separated segments of ALPHA / DIGIT / "." / "-" / "_" / pct-encoded.
-const DID = /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+$/;
-const DID_URL = /^(did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+)(?:\/[^?#]*)?(?:\?[^#]*)?(?:#.*)?$/;
+const DID_SYNTAX = "did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+";
+const DID = new RegExp(`^${DID_SYNTAX}$`);
+// A DID URL is a DID followed by RFC 3986 path-abempty, query and fragment
+// (DID Core §3.2): every component is built from pchar, so a percent sign
+// must begin a two-digit escape, and a space or a second `#` is not a URL.
+// The only general URL parser in the platform, WHATWG `URL`, escapes and
+// normalizes what it is given instead of refusing it, so it cannot decide
+// whether the exact spelling is one.
+const PCHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})";
+const DID_URL = new RegExp(`^${DID_SYNTAX}(?:/${PCHAR}*)*(?:\\?(?:${PCHAR}|[/?])*)?(?:#(?:${PCHAR}|[/?])*)?$`);
 /** The did:peer numalgo-4 spellings: the short form is `4` and a base58btc multihash, the long form adds the encoded document. */
 const PEER4_SHORT = /^did:peer:4z[1-9A-HJ-NP-Za-km-z]+$/;
 const PEER4_LONG = /^did:peer:4z[1-9A-HJ-NP-Za-km-z]+:z[1-9A-HJ-NP-Za-km-z]+$/;
@@ -26,11 +34,8 @@ export const isDid = (value: unknown): value is string => typeof value === "stri
 export const isDidUrl = (value: unknown): value is string => typeof value === "string" && DID_URL.test(value);
 export const isPeer4Short = (value: unknown): value is string => typeof value === "string" && PEER4_SHORT.test(value);
 export const isPeer4Long = (value: unknown): value is string => typeof value === "string" && PEER4_LONG.test(value);
-/** A minted entity ID: canonical lowercase UUIDv7. */
 export const isMintedId = (value: unknown): value is string => typeof value === "string" && UUID_V7.test(value);
-/** A derived entity ID: canonical lowercase UUIDv5. */
 export const isDerivedId = (value: unknown): value is string => typeof value === "string" && UUID_V5.test(value);
-/** An entity ID a rule may either mint or derive. */
 export const isEntityId = (value: unknown): value is string => typeof value === "string" && UUID_V5_OR_V7.test(value);
 export const isKeyName = (value: unknown): value is string => typeof value === "string" && KEY_NAME.test(value);
 export const isCompactJwt = (value: unknown): value is string => typeof value === "string" && COMPACT_JWT.test(value);

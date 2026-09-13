@@ -76,7 +76,7 @@ export type ReadPlaintext = {
 
 /** `headers` of an intent: a JSON object with no reserved member. */
 export function checkHeaders(value: unknown, at = "headers"): AdditionalHeaders {
-  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} is a JSON object`);
+  if (!isJsonObject(value)) throw new InvalidPlaintext(`${at} must be a JSON object`);
   for (const name of Object.keys(value)) {
     if (RESERVED.has(name)) throw new InvalidPlaintext(`${at} carries the reserved header ${JSON.stringify(name)}`);
   }
@@ -164,17 +164,17 @@ export function intentOfOutbound(data: MessageOut, document: StoredMessageDocume
  * never carries it.
  */
 export function readPlaintext(value: unknown): ReadPlaintext {
-  if (!isJsonObject(value)) throw new InvalidPlaintext("a plaintext is a JSON object");
+  if (!isJsonObject(value)) throw new InvalidPlaintext("a plaintext must be a JSON object");
   if (Object.hasOwn(value, "return_route")) throw new InvalidPlaintext("return_route is not allowed in a vault plaintext");
   const id = nonEmpty(value.id, "id");
   const type = nonEmpty(value.type, "type");
   const typ = optional(value.typ, "typ", (typ, at) => {
-    if (typ !== PLAINTEXT_TYP) throw new InvalidPlaintext(`${at} is ${JSON.stringify(PLAINTEXT_TYP)}`);
+    if (typ !== PLAINTEXT_TYP) throw new InvalidPlaintext(`${at} must be ${JSON.stringify(PLAINTEXT_TYP)}`);
     return typ;
   });
   const from = optional(value.from, "from", did);
   const to = optional(value.to, "to", (to, at) => {
-    if (!Array.isArray(to)) throw new InvalidPlaintext(`${at} is an array of DIDs`);
+    if (!Array.isArray(to)) throw new InvalidPlaintext(`${at} must be an array of DIDs`);
     return to.map((entry, i) => did(entry, `${at}[${i}]`));
   });
   const thid = optional(value.thid, "thid", nonEmpty);
@@ -182,19 +182,16 @@ export function readPlaintext(value: unknown): ReadPlaintext {
   const createdTime = optional(value.created_time, "created_time", epochSeconds);
   const expiresTime = optional(value.expires_time, "expires_time", epochSeconds);
   if (createdTime !== null && expiresTime !== null && expiresTime <= createdTime) {
-    throw new InvalidPlaintext("expires_time is later than created_time");
+    throw new InvalidPlaintext("expires_time must be later than created_time");
   }
   const pleaseAck = optional(value.please_ack, "please_ack", strings);
   const ack = optional(value.ack, "ack", strings) ?? [];
   const fromPrior = optional(value.from_prior, "from_prior", (jwt, at) => {
-    if (!isCompactJwt(jwt)) throw new InvalidPlaintext(`${at} is a compact JWT`);
+    if (!isCompactJwt(jwt)) throw new InvalidPlaintext(`${at} must be a compact JWT`);
     return jwt;
   });
   const stored = storeMessage(value.body, value.attachments);
-  const headers: AdditionalHeaders = {};
-  for (const [name, member] of Object.entries(value)) {
-    if (!RESERVED.has(name)) headers[name] = member;
-  }
+  const headers: AdditionalHeaders = Object.fromEntries(Object.entries(value).filter(([name]) => !RESERVED.has(name)));
   const intent: Intent = { id, type, thid, pthid, document: stored.document, createdTime, expiresTime, pleaseAck, ack, headers };
   return { plaintext: value, plaintextHash: plaintextHash(value), intent, intentHash: intentHash(intent), stored, typ, from, to, fromPrior };
 }
@@ -204,22 +201,22 @@ function optional<T>(value: unknown, at: string, check: (value: unknown, at: str
 }
 
 function nonEmpty(value: unknown, at: string): string {
-  if (typeof value !== "string" || value === "") throw new InvalidPlaintext(`${at} is a non-empty string`);
+  if (typeof value !== "string" || value === "") throw new InvalidPlaintext(`${at} must be a non-empty string`);
   return value;
 }
 
 function did(value: unknown, at: string): Did {
-  if (!isDid(value)) throw new InvalidPlaintext(`${at} is a DID`);
+  if (!isDid(value)) throw new InvalidPlaintext(`${at} must be a DID`);
   return value as Did;
 }
 
 function epochSeconds(value: unknown, at: string): EpochSeconds {
-  if (!isEpochSeconds(value)) throw new InvalidPlaintext(`${at} is an integer count of seconds`);
+  if (!isEpochSeconds(value)) throw new InvalidPlaintext(`${at} must be an integer count of seconds`);
   return value;
 }
 
 function strings(value: unknown, at: string): string[] {
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) throw new InvalidPlaintext(`${at} is an array of strings`);
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) throw new InvalidPlaintext(`${at} must be an array of strings`);
   return [...(value as string[])];
 }
 

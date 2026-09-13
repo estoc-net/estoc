@@ -5,34 +5,16 @@
  */
 
 import { sha256 } from "@noble/hashes/sha2";
+import { base32nopad } from "@scure/base";
 import bs58 from "bs58";
 
 import { PEER_KEY } from "./types.js";
 
-const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const LENGTH = 26;
-
-function base32lower(bytes: Uint8Array): string {
-  let out = "";
-  let bits = 0;
-  let value = 0;
-  for (const byte of bytes) {
-    value = (value << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      out += BASE32[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) {
-    out += BASE32[(value << (5 - bits)) & 31];
-  }
-  return out;
-}
 
 /** The fingerprint of a multicodec-prefixed public key. */
 export function fingerprint(prefixedKey: Uint8Array): string {
-  return base32lower(sha256(prefixedKey)).slice(0, LENGTH);
+  return base32nopad.encode(sha256(prefixedKey)).toLowerCase().slice(0, LENGTH);
 }
 
 /**

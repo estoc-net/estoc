@@ -140,9 +140,9 @@ describe("storeMessage", () => {
   });
 
   it("requires a body object and an attachments array", () => {
-    expect(() => storeMessage("hello", [])).toThrow(/body is a JSON object/);
+    expect(() => storeMessage("hello", [])).toThrow(/body must be a JSON object/);
     expect(() => storeMessage(null, [])).toThrow(InvalidPlaintext);
-    expect(() => storeMessage(BODY, {})).toThrow(/attachments is an array/);
+    expect(() => storeMessage(BODY, {})).toThrow(/attachments must be an array/);
     expect(() => storeMessage(BODY, [null])).toThrow(InvalidPlaintext);
     expect(() => storeMessage({ bad: "\ud800" }, [])).toThrow(/not I-JSON/);
   });
@@ -165,11 +165,21 @@ describe("readStoredDocument", () => {
     const { format: _format, ...missing } = descriptor;
     expect(() => readStoredDocument({ ...document, attachments: [missing] })).toThrow(/exactly the stored descriptor members/);
     expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, id: "urn:x" }] })).toThrow(/unreserved/);
-    expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, data: { ...data, kind: "inline" } }] })).toThrow(/kind is base64, json or links/);
+    expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, data: { ...data, kind: "inline" } }] })).toThrow(/kind must be base64, json or links/);
     expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, data: { ...data, root: "bafy" } }] })).toThrow(/raw DASL CID/);
     expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, data: { ...data, links: ["x"] } }] })).toThrow(/exactly the stored base64 members/);
     expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, data: { kind: "links", links: ["x"], hash: null, jws: null } }] })).toThrow(/multihash/);
     expect(() => readStoredDocument({ ...document, attachments: [{ ...descriptor, byte_count: -2 }] })).toThrow(InvalidPlaintext);
+  });
+
+  it("requires the byte count of inline content, which only a links descriptor may leave unknown", () => {
+    const stored = storeMessage(BODY, [photo(), { data: { json: [1] } }, { data: { links: ["x"], hash: "h" } }]);
+    const document = parseStrict(stored.bytes) as { body: object; attachments: Record<string, unknown>[] };
+    const [base64, json, links] = document.attachments as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
+    expect(links.byte_count).toBeNull();
+    expect(readStoredDocument(document)).toEqual(stored.document);
+    expect(() => readStoredDocument({ ...document, attachments: [{ ...base64, byte_count: null }] })).toThrow(/byte_count must be the length of the inline base64 payload/);
+    expect(() => readStoredDocument({ ...document, attachments: [{ ...json, byte_count: null }] })).toThrow(/byte_count must be the length of the inline json payload/);
   });
 });
 
@@ -203,5 +213,16 @@ describe("wireAttachment", () => {
     const descriptor = storeMessage(BODY, [photo()]).document.attachments[0] as StoredAttachment;
     expect(() => wireAttachment(descriptor, encoder.encode("not the photo"))).toThrow(/not the object/);
     expect(() => wireAttachment(descriptor, null)).toThrow(/needs its payload/);
+  });
+
+  it("refuses a payload the descriptor's byte count or canonical form disagrees with, instead of emitting what a receiver would store differently", () => {
+    const stored = storeMessage(BODY, [{ data: { json: { z: 1, a: 2 } } }]);
+    const json = stored.document.attachments[0] as StoredAttachment;
+    const payload = (stored.payloads[0] as { bytes: Uint8Array }).bytes;
+    expect(() => wireAttachment({ ...json, byte_count: payload.length + 1 }, payload)).toThrow(/not the stored byte_count/);
+    const uncanonical = encoder.encode('{"z":1,"a":2}');
+    const renamed = { ...json, data: { ...json.data, root: rawCidOfBytes(uncanonical) } } as StoredAttachment;
+    expect(() => wireAttachment(renamed, uncanonical)).toThrow(/not in canonical form/);
+    expect(storeMessage(BODY, [wireAttachment(json, payload)]).document).toEqual(stored.document);
   });
 });
