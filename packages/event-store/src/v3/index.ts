@@ -58,8 +58,8 @@ export { MemoryObjectStore, MemoryPreparation, type MemoryObjectStoreOptions, DE
 export type { VaultMetadata, WrappedSeed, KeystoreAccess } from "./keystore.js";
 export { checkMetadata, checkWrappedSeed } from "./keystore.js";
 
-export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, HeldRoots, Stage, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
-export { WriterLock, Runtime, MemoryVault, type MemoryVaultOptions } from "./vault.js";
+export type { CommitObject, VaultEvents, VaultObjects, Vault, KeepUnderLock, HeldRoots, Retained, RetainedRoots, Stage, Held, VaultRuntime, Stores, RuntimeOptions } from "./vault.js";
+export { WriterLock, Runtime, MemoryVault, heldRootsOf, type MemoryVaultOptions } from "./vault.js";
 
 export type { SqlValue, SqlRow, TransactionMode, OpenMode, SqliteStatement, SqliteDriver, RawConnection, RawStatement } from "./sqlite/driver.js";
 export { Connection, checkParams, decodeText, decodeUtf8, exactInteger, ownBytes } from "./sqlite/driver.js";

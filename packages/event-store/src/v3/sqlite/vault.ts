@@ -13,7 +13,7 @@ import type { Collected } from "../objects.js";
 import { Runtime, type Stores } from "../vault.js";
 import { SqliteEventStore } from "./events.js";
 import { SqliteLocalState, dropCache, type LocalState } from "./local.js";
-import { SqliteObjectStore, type SqliteObjectStoreOptions } from "./objects.js";
+import { SqliteObjectStore, type SqliteObjectStoreOptions, type SqlitePreparation } from "./objects.js";
 import type { RuntimeDatabase } from "./open.js";
 
 export interface SqliteVaultOptions extends SqliteObjectStoreOptions {
@@ -59,6 +59,10 @@ export class SqliteVault extends Runtime {
     const { now, ...objectOptions } = options;
     const events = new SqliteEventStore(db, now === undefined ? {} : { now });
     const objects = new HistoryBoundObjects(db, objectOptions, events);
+    // The cache is what was built from the accepted state; once that state changes under it — an object landed or repaired, an event accepted — it is dropped in the same transaction.
+    const publish = (prepared: SqlitePreparation, adding: number): void => {
+      if (prepared.publish() + adding > 0) dropCache(db.driver);
+    };
     super({
       author: db.author,
       generation: db.generation,
@@ -70,7 +74,7 @@ export class SqliteVault extends Runtime {
           const prepared = objects.prepare();
           try {
             const drafts = await body(prepared);
-            const published = await events.appendAll(drafts, () => prepared.publish());
+            const published = await events.appendAll(drafts, () => publish(prepared, drafts.length));
             prepared.settle();
             return published;
           } finally {
@@ -81,10 +85,7 @@ export class SqliteVault extends Runtime {
           const prepared = objects.prepare();
           try {
             const incoming = await body(prepared);
-            const outcome = await events.ingest(incoming, (adding) => {
-              // The cache is what was built from the accepted state; once that state changes under it, it is dropped in the same transaction.
-              if (prepared.publish() + adding > 0) dropCache(db.driver);
-            });
+            const outcome = await events.ingest(incoming, (adding) => publish(prepared, adding));
             prepared.settle();
             return outcome;
           } finally {

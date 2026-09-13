@@ -366,6 +366,29 @@ describe("MemoryObjectStore", () => {
     expect(await all(store.list())).toEqual([freshCid, keptCid].sort(compareCids));
   });
 
+  it("an object a preparation declares reused is checked again as it publishes: known damaged by then, the publication throws and nothing prepared lands; prepared as well, the repair goes through", async () => {
+    const store = new MemoryObjectStore({ extentBytes: 4 });
+    const kept = bytesOf(10, 12);
+    const keptCid = (await store.putRaw(kept)).cid;
+    const fresh = bytesOf(10, 13);
+    const freshCid = cidOf(fresh);
+    const prepared = store.prepare();
+    await prepared.putObject(freshCid, fresh);
+    expect(await prepared.has(keptCid)).toBe(true);
+    prepared.reuse(keptCid);
+    store.damage(keptCid);
+    await expect(store.read(keptCid, 10)).rejects.toThrow(DamagedObject);
+    expect(() => prepared.publish()).toThrow(DamagedObject);
+    expect(await store.has(freshCid)).toBe(false);
+    const repairing = store.prepare();
+    await repairing.putObject(freshCid, fresh);
+    await repairing.putObject(keptCid, kept);
+    repairing.reuse(keptCid);
+    repairing.publish();
+    expectBytes(await store.read(keptCid, 10), kept);
+    expect(await store.has(freshCid)).toBe(true);
+  });
+
   it("a preparation's `has` on a known damaged object not repaired in it fails as the store's does; two preparations each publish their own", async () => {
     const store = new MemoryObjectStore({ extentBytes: 4 });
     const damaged = bytesOf(10, 9);

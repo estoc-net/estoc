@@ -321,12 +321,7 @@ export class InvalidSnapshot extends Error {
   }
 }
 
-/**
- * An import could not make a complete merged view: damage or a conflict
- * in the target's event set, a root the merged set requires with valid
- * bytes in neither the source nor the target, or a source object whose
- * bytes do not spell its name. Nothing was published.
- */
+/** A root the union requires with acceptable bytes in neither the target — sound as far as it knows — nor the source. Nothing was published. */
 export class IncompleteImport extends Error {
   constructor(readonly problems: { where: string; error: string }[]) {
     super(`the import is incomplete and was not published: ${describe(problems)}`);

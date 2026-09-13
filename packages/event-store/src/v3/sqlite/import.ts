@@ -14,14 +14,14 @@
 import { AnchorMismatch, DamagedHistory, DamagedObject, ForkedAuthor, IncompleteImport, InvalidSnapshot, ReadOnlyVault } from "../errors.js";
 import type { Cid, Conflict, Event, EventId } from "../event.js";
 import { canonicalText } from "../jcs.js";
-import { sortCids } from "../objects.js";
-import { MemoryVault, type Held, type HeldRoots, type VaultRuntime } from "../vault.js";
+import { rawCidOf, sortCids } from "../objects.js";
+import { MemoryVault, heldRootsOf, type Held, type Retained, type RetainedRoots, type Vault, type VaultRuntime } from "../vault.js";
 import type { PortableDatabase } from "./open.js";
-import { checkedCids, validatePortable } from "./portable.js";
+import { validatePortable } from "./portable.js";
 
 export interface ImportOptions {
-  /** The roots a set of events holds, folded by the caller: run on the snapshot for its validation, on the target before the import and on the prospective union, each through the vault it is handed. */
-  heldRoots: HeldRoots;
+  /** The retention the events of a vault hold, folded by the caller: run on the snapshot for its validation, on the target before the import and on the prospective union, each through the vault it is handed. */
+  retainedRoots: RetainedRoots;
 }
 
 export interface Imported {
@@ -43,29 +43,37 @@ export interface Imported {
  * before a byte of the source is read; the snapshot is validated in
  * full, its anchor compared with the target's (`AnchorMismatch` for
  * another vault's), and its events and object listing read into
- * memory, so the lock never waits on the source. Under the lock: a damaged target
- * history refuses the import (`DamagedHistory`); each source event is
- * classified against what the target holds — a duplicate, a conflict
- * the target wins, or new — and a new or conflicting event under the
- * target's own author is a fork that refuses the whole import with
- * nothing written (`ForkedAuthor`); the caller's fold is run on the
- * target as it is and on the prospective union; every root a new
- * event retains in the union, and every root the union holds that the
- * target did not, must have verified bytes in the source or sound
- * accepted bytes in the target, else `IncompleteImport` names each and
- * nothing is written; and every union-held object the target lacks
- * or knows damaged, whose bytes the source has, is staged — verified
- * as it streams — even when no event is new. A union-held root
- * outside those requirements that the source lacks is left as it is,
- * absent or damaged. Then one transaction publishes the staged
- * objects and repairs with every new event and its position. A
- * target object reused is not rehashed; the target's identity,
- * wrapper and local state stay. Importing the same snapshot again
- * adds nothing and, when nothing is to be repaired, writes nothing.
+ * memory. Under the lock: a damaged target history refuses the import
+ * (`DamagedHistory`); each source event is classified against what
+ * the target holds — a duplicate, a conflict the target wins, or new
+ * — and a new or conflicting event under the target's own author is a
+ * fork that refuses the whole import with nothing written
+ * (`ForkedAuthor`); the caller's fold is run on the target as it is
+ * and on the prospective union; every root a new event retains in the
+ * union, and every root the union holds that the target did not, must
+ * have verified bytes in the source or sound accepted bytes in the
+ * target, else `IncompleteImport` names each and nothing is written;
+ * and every union-held object the target lacks or knows damaged,
+ * whose bytes the source has, is staged — verified as it streams, the
+ * source's bytes awaited under the lock but outside any transaction —
+ * even when no event is new. A union-held root outside those
+ * requirements that the source lacks is left as it is, absent or
+ * damaged. Then one transaction publishes the staged objects and
+ * repairs with every new event and its position. A target object
+ * reused is not rehashed, but it is checked once more in that
+ * transaction: a read outside the lock may have found it damaged
+ * while the source streamed, and the import then plans again with
+ * that damage known — staging the repair when the source has the
+ * bytes, refusing as `IncompleteImport` when the root is required and
+ * it does not — rather than accept an event over bytes known
+ * damaged. The target's identity, wrapper and local state stay.
+ * Importing the same snapshot again adds nothing and, when nothing is
+ * to be repaired, writes nothing.
  */
 export async function importVault(target: VaultRuntime, source: PortableDatabase, options: ImportOptions): Promise<Imported> {
+  if (typeof options.retainedRoots !== "function") throw new TypeError("an import takes `retainedRoots`, the caller's fold of the retention edge by edge");
   if (!target.writable) throw new ReadOnlyVault("import");
-  await validatePortable(source, { heldRoots: options.heldRoots });
+  await validatePortable(source, { heldRoots: heldRootsOf(options.retainedRoots) });
   if (source.metadata.anchor !== target.metadata.anchor) throw new AnchorMismatch(target.metadata.anchor, source.metadata.anchor, "source");
   const incoming: Event[] = [];
   for await (const event of source.vault.events.scan()) incoming.push(event);
@@ -74,37 +82,51 @@ export async function importVault(target: VaultRuntime, source: PortableDatabase
   return target.locked(async (held) => {
     const [damage] = await held.events.damaged();
     if (damage !== undefined) throw new DamagedHistory(damage);
-    const plan = await planned(target, held, incoming, offered, options.heldRoots);
-    const objects = plan.staged.filter((object) => !object.repair).length;
-    const repaired = plan.staged.length - objects;
-    if (plan.fresh.length === 0 && plan.staged.length === 0 && plan.conflicts.length === 0) return { added: 0, duplicates: plan.duplicates, conflicts: [], objects, repaired };
-    const outcome = await held.ingest(incoming, async (prepared) => {
-      for (const { cid } of plan.staged) {
-        const stream = await source.vault.objects.open(cid);
-        if (stream === null) throw new InvalidSnapshot([{ where: `objects/${cid}`, error: "gone between the snapshot's listing and its reading" }]);
-        await prepared.putObject(cid, stream);
+    for (;;) {
+      const plan = await planned(target, held, incoming, offered, options.retainedRoots);
+      const objects = plan.staged.filter((object) => !object.repair).length;
+      const repaired = plan.staged.length - objects;
+      if (plan.fresh.length === 0 && plan.staged.length === 0 && plan.conflicts.length === 0) return { added: 0, duplicates: plan.duplicates, conflicts: [], objects, repaired };
+      let sourceRead = false;
+      try {
+        const outcome = await held.ingest(incoming, async (prepared) => {
+          for (const { cid } of plan.staged) {
+            const stream = await source.vault.objects.open(cid);
+            if (stream === null) throw new InvalidSnapshot([{ where: `objects/${cid}`, error: "gone between the snapshot's listing and its reading" }]);
+            await prepared.putObject(cid, stream);
+          }
+          sourceRead = true;
+          for (const cid of plan.reused) prepared.reuse(cid);
+        });
+        return { added: outcome.added, duplicates: outcome.duplicates, conflicts: outcome.conflicts, objects, repaired };
+      } catch (err) {
+        // With the source read, `DamagedObject` is the publication refusing a reused object a read found damaged meanwhile: the transaction rolled back and the staging dropped, the import plans again.
+        if (!sourceRead || !(err instanceof DamagedObject)) throw err;
+        if (!offered.has(err.cid as Cid)) throw new IncompleteImport([{ where: `objects/${err.cid}`, error: NOT_IN_SOURCE }]);
       }
-    });
-    return { added: outcome.added, duplicates: outcome.duplicates, conflicts: outcome.conflicts, objects, repaired };
+    }
   });
 }
 
-/** What an import decided under the lock: the events to accept, how the rest were classified, and the objects to stage. */
-interface Plan {
+const NOT_IN_SOURCE = "required by the union, known damaged in the target and not in the source";
+
+interface ImportPlan {
   fresh: Event[];
   duplicates: number;
   conflicts: Conflict[];
   staged: { cid: Cid; repair: boolean }[];
+  /** the union-held objects the target holds sound and the import relies on as they are: those the source could replace, and those the union requires */
+  reused: Cid[];
 }
 
-async function planned(target: VaultRuntime, held: Held, incoming: Event[], offered: Set<Cid>, heldRoots: HeldRoots): Promise<Plan> {
+async function planned(target: VaultRuntime, held: Held, incoming: Event[], offered: Set<Cid>, retainedRoots: RetainedRoots): Promise<ImportPlan> {
   const before: Event[] = [];
   const have = new Map<EventId, Event>();
   for await (const event of held.events.scan()) {
     before.push(event);
     have.set(event.eventId, event);
   }
-  const plan: Plan = { fresh: [], duplicates: 0, conflicts: [], staged: [] };
+  const plan: ImportPlan = { fresh: [], duplicates: 0, conflicts: [], staged: [], reused: [] };
   const forked: Event[] = [];
   for (const event of incoming) {
     const kept = have.get(event.eventId);
@@ -126,24 +148,38 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   }
   if (forked.length > 0) throw new ForkedAuthor(target.author, forked);
   // Both folds before any byte is checked: what the union holds decides what must have bytes, and what the target held decides which of those are newly held.
-  const heldBefore = new Set(checkedCids(await heldRoots(held)));
+  const heldBefore = rootsOf(await retention(retainedRoots, held));
   const union = new MemoryVault({ metadata: target.metadata });
   await union.ingest([...before, ...plan.fresh]);
-  const heldAfter = new Set(checkedCids(await heldRoots(union.vault)));
+  const unionRetains = await retention(retainedRoots, union.vault);
+  const heldAfter = rootsOf(unionRetains);
+  const fresh = new Set(plan.fresh.map((event) => event.eventId));
   const required = new Set<Cid>();
-  for (const event of plan.fresh) for (const root of event.roots) if (heldAfter.has(root)) required.add(root);
+  for (const { eventId, root } of unionRetains) if (fresh.has(eventId)) required.add(root);
   for (const root of heldAfter) if (!heldBefore.has(root)) required.add(root);
   const problems: { where: string; error: string }[] = [];
   for (const cid of sortCids(heldAfter)) {
     const state = await stateOf(held, cid);
-    if (state === "sound") continue;
-    if (offered.has(cid)) plan.staged.push({ cid, repair: state === "damaged" });
+    if (state === "sound") {
+      if (offered.has(cid) || required.has(cid)) plan.reused.push(cid);
+    } else if (offered.has(cid)) plan.staged.push({ cid, repair: state === "damaged" });
     else if (required.has(cid)) {
-      problems.push({ where: `objects/${cid}`, error: state === "absent" ? "required by the union, but in neither the target nor the source" : "required by the union, known damaged in the target and not in the source" });
+      problems.push({ where: `objects/${cid}`, error: state === "absent" ? "required by the union, but in neither the target nor the source" : NOT_IN_SOURCE });
     }
   }
   if (problems.length > 0) throw new IncompleteImport(problems);
   return plan;
+}
+
+/** The fold run on `vault`, each root checked as a CID. */
+async function retention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {
+  const out: Retained[] = [];
+  for (const { eventId, root } of await retainedRoots(vault)) out.push({ eventId, root: rawCidOf(root).text as Cid });
+  return out;
+}
+
+function rootsOf(retained: Retained[]): Set<Cid> {
+  return new Set(retained.map(({ root }) => root));
 }
 
 /** What the target holds under `cid`: sound accepted bytes as far as the target knows — nothing is rehashed — or nothing, or bytes it knows damaged. */

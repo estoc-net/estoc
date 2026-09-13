@@ -107,6 +107,9 @@ export class MemoryObjectStore implements ObjectStore {
     return new MemoryPreparation(
       (cid, source) => this.verify(cid, source),
       (cid) => this.has(cid),
+      (cid) => {
+        if (this.damaged.has(cid)) throw new DamagedObject(cid);
+      },
       (verified) => this.accept(verified)
     );
   }
@@ -232,14 +235,18 @@ export class MemoryObjectStore implements ObjectStore {
 /**
  * The objects of one commit between verification and publication:
  * verified into memory of their own, seen by no read of the store, and
- * accepted all in one synchronous step when the commit publishes.
+ * accepted all in one synchronous step when the commit publishes, once
+ * every object declared reused has been checked against the damage
+ * the store knows by then.
  */
 export class MemoryPreparation implements Preparation {
   private readonly prepared = new Map<string, Held>();
+  private readonly reused = new Set<string>();
 
   constructor(
     private readonly verify: (cid: Cid, source: ByteSource) => Promise<Held>,
     private readonly stored: (cid: Cid) => Promise<boolean>,
+    private readonly check: (cid: Cid) => void,
     private readonly accept: (verified: Held) => ObjectInfo
   ) {}
 
@@ -254,10 +261,17 @@ export class MemoryPreparation implements Preparation {
     return this.prepared.has(cid) || this.stored(cid);
   }
 
-  /** Accept every prepared object, now, in one synchronous step; the preparation is empty after. */
+  reuse(cid: Cid): void {
+    rawCidOf(cid);
+    this.reused.add(cid);
+  }
+
+  /** Checks every object declared reused, then accepts every prepared object, in one synchronous step; a throw accepts nothing, and the preparation is empty after a success. */
   publish(): void {
+    for (const cid of this.reused) if (!this.prepared.has(cid)) this.check(cid as Cid);
     for (const verified of this.prepared.values()) this.accept(verified);
     this.prepared.clear();
+    this.reused.clear();
   }
 }
 

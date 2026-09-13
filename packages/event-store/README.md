@@ -57,7 +57,12 @@ through a view that reads and refuses to mutate;
 check that it opens to the same seed being the unlocked host's.
 A commit's objects are verified into a `Preparation` no read sees and
 published in the transaction that appends its events, so the two land
-together or not at all. `MemoryVault` is the two memory stores under
+together or not at all; a root the commit reuses rather than puts is
+declared to the preparation with `reuse` and checked once more as it
+publishes, since a read outside the lock may have found it damaged
+between the root check and the transaction, and the commit then
+fails with `DamagedObject` rather than accept an event over bytes
+known damaged. `MemoryVault` is the two memory stores under
 one runtime; `Runtime` builds the same over any two stores and the
 transaction that publishes them, which every backend supplies.
 
@@ -256,9 +261,13 @@ over either bound or a digest that does not match leaves nothing
 staged. An object already held and sound is one object still, its
 bytes untouched; one known damaged is replaced whole. `prepare()` splits
 the two for the vault's commit: a `SqlitePreparation` stages what is
-put through it, counts it present to its own `has`, and is accepted
-by `publish()` inside the transaction the commit lands in — the
-`publish` callback of `SqliteEventStore.appendAll` — then `settle()`
+put through it, counts it present to its own `has`, notes what the
+commit declares `reuse`d, and is accepted by `publish()` inside the
+transaction the commit lands in — the `publish` callback of
+`SqliteEventStore.appendAll` — which first checks every reused
+object against the damage known by then, refusing the transaction
+with `DamagedObject`, unless the object is staged as well, which
+repairs it; then `settle()`
 once that has committed, which is when the damage of what it
 repaired is cleared, a rollback keeping the old bytes and their
 damage, and `discard()` in any case. `open` streams one chunk a
@@ -312,7 +321,9 @@ after the commit, so a throw anywhere before the `COMMIT` leaves no
 object, no repair and no event. The keystore is the handle's over the
 runtime's lock, and the runtime's local state is `vault.local`:
 `options`, JSON by key, kept through every reopen and clearing;
-`cache`, bytes by namespace and key, dropped whole when the identity
+`cache`, bytes by namespace and key, dropped whole in the transaction
+of every commit or import that lands an event, an object or a repair
+— what it was built from has changed under it — and when the identity
 is reset; and `trace`, one entry a row in the order written, scanned
 by type and position and pruned by age and count, sequence numbers
 never reused, so retained entries appended later remain after an
@@ -460,51 +471,71 @@ events say is unfinished before it runs. No page of the source is
 copied and no SQL of it run. A failure once the destination is made
 closes it and leaves it unready, opening as nothing, for the caller
 to remove; no seed is minted. `importVault(target, source, {
-heldRoots })` merges a snapshot of the same vault into any open
+retainedRoots })` merges a snapshot of the same vault into any open
 runtime — the SQLite vault, or the vault in memory, since it works
 through `VaultRuntime` and `Held` — and returns `{ added, duplicates,
-conflicts, objects, repaired }`. Outside the target's lock: an
-inspector is refused with `ReadOnlyVault` before the source is read
-(`VaultRuntime.writable` is new for it); the snapshot is validated in
-full; its anchor is compared with the target's, `AnchorMismatch` for
-another vault's; and its events and object listing are read into
-memory, so the lock never waits on the source. Under the lock: a
-damaged target history is `DamagedHistory`; each source event is
-classified against what the target holds — a duplicate, a conflict
-the target wins and reports, or new — and a new or conflicting event
-under the target's own author is `ForkedAuthor`, the whole import
-refused with nothing written, the recovery being an identity reset;
-the fold runs on the target as it is and on the prospective union,
-held as a vault in memory; every root a new event retains in the
-union, and every root the union holds that the target did not, must
-have bytes in the source or bytes the target holds sound as far as
-it knows — nothing is rehashed — else `IncompleteImport` names each
-and nothing is written; every union-held object the target lacks or
-knows damaged, whose bytes the source has, is staged through the
-target's preparation, verified as it streams, even when no event is
+conflicts, objects, repaired }`. Its fold is a `RetainedRoots`, the
+retention edge by edge — each event, each root of its own it still
+retains — rather than the `HeldRoots` an export takes, because the
+roots an import requires bytes for are those the *new* events retain
+in the union, and a root one event released may be held by another
+under the same CID: only the edge tells which event holds it;
+`heldRootsOf(retainedRoots)` is the same fold as a `HeldRoots`, for
+the export, the validation and the collection pass. Outside the
+target's lock: an inspector is refused with `ReadOnlyVault` before
+the source is read (`VaultRuntime.writable` is new for it); the
+snapshot is validated in full; its anchor is compared with the
+target's, `AnchorMismatch` for another vault's; and its events and
+object listing are read into memory. Under the lock: a damaged
+target history is `DamagedHistory`; each source event is classified
+against what the target holds — a duplicate, a conflict the target
+wins and reports, or new — and a new or conflicting event under the
+target's own author is `ForkedAuthor`, the whole import refused with
+nothing written, the recovery being an identity reset; the fold runs
+on the target as it is and on the prospective union, held as a vault
+in memory; every root a new event retains in the union, and every
+root the union holds that the target did not, must have bytes in the
+source or bytes the target holds sound as far as it knows — nothing
+is rehashed — else `IncompleteImport` names each and nothing is
+written; every union-held object the target lacks or knows damaged,
+whose bytes the source has, is staged through the target's
+preparation, verified as it streams — the source's bytes awaited
+under the lock, but outside any transaction — even when no event is
 new; a union-held root outside those requirements that the source
 lacks stays as it is, absent or damaged. Then `Held.ingest(events,
 stage)` — the `stage` callback is new, and `Stores.ingestion` with
 it, the ingest counterpart of `transaction` — publishes the staged
 objects and repairs with every new event and its position in one
-transaction, dropping `local_cache` when anything landed; the
-target's identity, wrapper, options and trace stay. The same snapshot
-again adds nothing and, with nothing to repair and no conflict to
-record, writes nothing. `test/v3/sqlite/import-cases.ts` runs on
+transaction, dropping `local_cache` when anything landed. Every
+target object the import reuses that the source could replace or the
+union requires is declared `reuse`d to the preparation, so the
+transaction checks it once more: a read outside the lock may have
+found it damaged while the source streamed, and the publication then
+refuses, the staging dropped, and the import plans again with that
+damage known — the repair among the staged when the source has the
+bytes, `IncompleteImport` when the root is required and it does not
+— rather than accept an event over bytes known damaged. The target's
+identity, wrapper, options and trace stay. The same snapshot again
+adds nothing and, with nothing to repair and no conflict to record,
+writes nothing. `test/v3/sqlite/import-cases.ts` runs on
 `node:sqlite` and in a Chromium Worker: a restore's runtime checked
 row by row and run on; its refusals before and after the destination
 is made; an import's union, what it reports and keeps, the repeat
 that writes nothing, and the vault in memory as a target; a fork from
 a cloned runtime file, and the import after the identity reset; the
 roots the union requires bytes for, crossed in both directions by a
-fold with a contestable release, and the root held before and after
-that needs none; what an import fills and repairs, damage forgotten
-by a reopen and found again, and the released root it does not
-revive; the source validated before the lock, another vault's
-snapshot and an inspector refused; and an import interrupted at every
-statement of its transaction, or at its `COMMIT`, leaving the whole
-old union or the whole new. `test/v3/sqlite/import.test.ts` adds a
-restore into a destination of either journal.
+fold with a contestable release, the root held before and after that
+needs none, and the root a new event names but the fold released
+beside the target's own reference to it, absent or damaged; what an
+import fills and repairs, damage forgotten by a reopen and found
+again, and the released root it does not revive; a reused object
+found damaged while the source streams, repaired by the import
+planned again or refusing it with nothing written; the source
+validated before the lock, another vault's snapshot and an inspector
+refused; and an import interrupted at every statement of its
+transaction, or at its `COMMIT`, leaving the whole old union or the
+whole new. `test/v3/sqlite/import.test.ts` adds a restore into a
+destination of either journal.
 
 Everything below is
 version 2, which stays until the vault switches over.

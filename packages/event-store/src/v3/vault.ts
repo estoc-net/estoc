@@ -10,7 +10,7 @@
  */
 
 import { MissingRoot, NotAVault, ObjectTooLarge, UnreferencedObject, UnsupportedOperation } from "./errors.js";
-import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
+import { canonicalEvent, validateDraft, type AuthorId, type Cid, type Draft, type Event, type EventId, type EventStore, type EventTally, type Ingested, type Rejected } from "./event.js";
 import type { JsonObject } from "./json.js";
 import { checkMetadata, checkWrappedSeed, type KeystoreAccess, type VaultMetadata, type WrappedSeed } from "./keystore.js";
 import { MemoryEventStore } from "./memory-events.js";
@@ -41,10 +41,11 @@ export interface Vault {
    * a supplied object no draft names as a root (`UnreferencedObject`)
    * before reading a byte, accept every supplied object under
    * `putObject`'s rules, require every draft root — new or reused — to
-   * name a present accepted object (`MissingRoot` otherwise), then
-   * append the drafts as one all-or-nothing batch and return the
-   * events. A failure at any step publishes nothing: no object, no
-   * repair, no event.
+   * name a present accepted object (`MissingRoot` otherwise; a root
+   * reused is checked again in the transaction, `DamagedObject` should
+   * a read have found it damaged meanwhile), then append the drafts as
+   * one all-or-nothing batch and return the events. A failure at any
+   * step publishes nothing: no object, no repair, no event.
    */
   commit(objects: CommitObject[], drafts: Draft[]): Promise<Event[]>;
 }
@@ -72,6 +73,32 @@ export type KeepUnderLock = (held: Held) => Promise<Iterable<Cid>> | Iterable<Ci
  * fails with.
  */
 export type HeldRoots = (vault: Vault) => Promise<Iterable<Cid>> | Iterable<Cid>;
+
+/** One edge of retention: an accepted event, and a root it retains in the vault the fold read. */
+export type Retained = { eventId: EventId; root: Cid };
+
+/**
+ * The retention the events of a vault hold, edge by edge, folded from
+ * what it reads through `vault`: for each accepted event, each root
+ * of its `roots` it still retains — every root, for an event no rule
+ * releases; none of a package's once its release is in evidence, and
+ * so on as the caller's folds have it. What `HeldRoots` is the
+ * projection of, kept apart where an import needs to know which
+ * event retains a root: a root one event released may still be held
+ * by another under the same CID, and only the edge tells whether the
+ * new event, or an old one, is what holds it. The runtime checks each
+ * CID.
+ */
+export type RetainedRoots = (vault: Vault) => Promise<Iterable<Retained>> | Iterable<Retained>;
+
+/** The roots `retained` holds, as a `HeldRoots`: the same fold for an export, a validation or a collection pass. */
+export function heldRootsOf(retained: RetainedRoots): HeldRoots {
+  return async (vault) => {
+    const roots = new Set<Cid>();
+    for (const { root } of await retained(vault)) roots.add(root);
+    return roots;
+  };
+}
 
 /** What an ingest publishes beside its events: objects put through the preparation, verified and held unseen until the transaction that accepts the events. */
 export type Stage = (prepared: Preparation) => Promise<void>;
@@ -370,6 +397,7 @@ class View implements Vault {
         for (const object of batch) await prepared.putObject(object.cid, object.source);
         for (const root of sortCids(roots)) {
           if (!(await prepared.has(root))) throw new MissingRoot(root);
+          prepared.reuse(root);
         }
         return clean as Draft<D>[];
       });

@@ -32,7 +32,7 @@ import {
 } from "../../../src/v3/index.js";
 import { META, REWRAPPED, WRAPPED } from "../fixtures.js";
 import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
-import { HELLO, HELLO_CID, MIB, all, bytesOf, cidOf, clock, damageEvent, draft, exec, make, rootsOf, rows, type VaultHarness } from "./vault-cases.js";
+import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, corruptChunk, damageEvent, draft, exec, make, rootsOf, rows, type VaultHarness } from "./vault-cases.js";
 
 export interface ExportHarness extends VaultHarness {
   /** The complete bytes of the file at `target`, which no connection holds open. */
@@ -46,8 +46,6 @@ export interface ExportCase {
 
 const EMPTY = new Uint8Array(0);
 const EMPTY_CID = cidOf(EMPTY);
-const WORLD = new TextEncoder().encode("world");
-const WORLD_CID = cidOf(WORLD);
 const BIG = bytesOf(2 * MIB + 7, 11);
 const BIG_CID = cidOf(BIG);
 
@@ -90,15 +88,6 @@ export async function settled(p: Promise<unknown>): Promise<boolean> {
   );
   for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setTimeout(resolve, 1));
   return done;
-}
-
-/** Flips one byte of chunk `chunkNo` of `cid`, as a bad sector would. */
-export function corruptChunk(driver: SqliteDriver, cid: Cid, chunkNo = 0): void {
-  const [row] = rows(driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", cid, chunkNo);
-  if (row === undefined) throw new Error(`${cid} has no chunk ${chunkNo}`);
-  const bytes = new Uint8Array(row["bytes"] as Uint8Array);
-  bytes[0] = (bytes[0] as number) ^ 0x01;
-  exec(driver, "UPDATE object_chunks SET bytes = ? WHERE cid = ? AND chunk_no = ?", bytes, cid, chunkNo);
 }
 
 const ids = (events: Event[]): string[] => events.map((e) => e.eventId).sort();
