@@ -562,17 +562,28 @@ over one more object and exports again, and that file, sent back,
 inspects on Node as it did in the Worker and imports into the sample
 vault as exactly the one event and the one object. An object of 64
 MiB streams through a commit, a read, an export and a restore on
-both platforms under a source that reuses one buffer, with what the
-platform holds sampled on the way: in the Worker SQLite's own count
-(`sqlite3_status`), where the commit fills the wasm build's 16 MiB
-page cache once and nothing grows after; on Node what JavaScript
-holds once garbage is collected (the heap and the array buffers,
-`--expose-gc` given to vitest's forks for the collection), flat
-throughout — the resident set is not measured, since glibc keeps
-what the transient mebibyte buffers were freed into. The bound is on
-growth: none across the second half of the commit or of the read,
-none from the commit to the restore, and less than half the object
-in all.
+both platforms under a source that reuses one buffer, with what
+JavaScript holds once garbage is collected — the heap and the
+backing stores of its array buffers — sampled on the way: on Node
+from `process.memoryUsage`, `--expose-gc` given to vitest's forks for
+the collection; in the Worker from outside it, over the DevTools
+protocol the test exposes to the page before it loads
+(`Target.exposeDevToolsProtocol`), which attaches to the Worker's
+target by name, collects its garbage and reads `Runtime.getHeapUsage`
+(`test/browser/sqlite-page.ts`). Both collect twice, since the
+backing stores a collection frees are swept after it. The resident
+set is not measured, since glibc keeps what the transient mebibyte
+buffers were freed into, and SQLite's own count is not, since it
+sees nothing JavaScript holds. While the export and the restore copy,
+their source is watched from the test's side and what is held sampled
+every mebibyte read, the most of those the copy's sample: the batch
+an export gathers before a transaction, seen while it is held. The
+bound is on growth: none across the second half of the commit or of
+the read, a batch's worth at most while a copy runs, none from the
+commit to the restore, and less than half the object in all. A
+second case turns the measure on itself: with a copy of every chunk
+kept as it passes through, every bound breaks on both platforms, and
+once the copies are let go what is held falls back to where it began.
 
 The durability configuration on each platform, reported by the
 driver case that checks it. On `node:sqlite`, foreign keys are

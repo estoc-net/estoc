@@ -11,9 +11,10 @@
  * here with Node's SQLite — a UTF-16 database, and a portable snapshot
  * of a sample vault, which the Worker inspects, restores, extends and
  * exports back, for the snapshot it made to be inspected and imported
- * here: the two platforms exchanging one format, each way. Skipped,
- * loudly, when no Chromium is found; `ESTOC_BROWSER=/path/to/chrome`
- * names one.
+ * here: the two platforms exchanging one format, each way. The page
+ * is given the DevTools protocol before it loads, to measure what its
+ * Workers hold. Skipped, loudly, when no Chromium is found;
+ * `ESTOC_BROWSER=/path/to/chrome` names one.
  */
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -24,7 +25,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { chromium } from "playwright-core";
+import { type Browser, chromium } from "playwright-core";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { openNodeSqlite } from "../../../src/node.js";
@@ -79,6 +80,16 @@ async function bundle(entry: string, format: "iife" | "esm", alias: Record<strin
   return out.outputFiles[0]?.text ?? "";
 }
 
+/** Gives the page a channel to the DevTools protocol, as `window.devtools`, so it can measure what its Workers hold; done before the page loads. */
+async function exposeDevTools(browser: Browser): Promise<void> {
+  const session = await browser.newBrowserCDPSession();
+  const { targetInfos } = await session.send("Target.getTargets");
+  const page = targetInfos.find((info) => info.type === "page");
+  if (page === undefined) throw new Error("no page target to expose the DevTools protocol to");
+  await session.send("Target.exposeDevToolsProtocol", { targetId: page.targetId, bindingName: "devtools" });
+  await session.detach();
+}
+
 /** Everything the browser is given, everything it reports, and the sample as inspected here. */
 async function inChromium(executablePath: string): Promise<Outcome> {
   const dir = await mkdtemp(path.join(tmpdir(), "estoc-browser-"));
@@ -124,6 +135,7 @@ async function inChromium(executablePath: string): Promise<Outcome> {
   let expired: ReturnType<typeof setTimeout> | undefined;
   try {
     const tab = await browser.newPage();
+    await exposeDevTools(browser);
     tab.on("pageerror", (err) => console.error("page error:", err));
     tab.on("console", (message) => {
       if (message.type() === "error" || message.type() === "warning") console.error(`browser ${message.type()}:`, message.text());

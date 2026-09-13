@@ -1,14 +1,11 @@
 /**
- * What runs in the Worker: the driver cases over the wasm pool, the
- * vault open cases, the event and object store cases, the vault,
- * export and import cases, the three conformance suites, a portable
- * snapshot's exchange with the other platform, the pool's own cases,
- * and holding a directory against another Worker.
- * Driven by messages from the page script, which
- * `../v3/sqlite/browser-driver.test.ts` bundles and serves.
+ * What runs in the Worker: every case and suite the platform-neutral
+ * test files define, over the wasm pool, and holding a directory
+ * against another Worker. Driven by messages from the page script,
+ * which `../v3/sqlite/browser-driver.test.ts` bundles and serves; what
+ * the Worker cannot measure for itself — the memory it holds — it asks
+ * the page for.
  */
-
-import type { Sqlite3Static } from "@sqlite.org/sqlite-wasm";
 
 import { openSqlitePool, type SqlitePool } from "../../src/browser.js";
 import { assert, type DriverHarness, driverCases } from "../v3/sqlite/driver-cases.js";
@@ -52,20 +49,31 @@ export type WorkerCommand = WorkerRequest & { id: number };
 
 export type WorkerReply = { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };
 
+/** What the Worker asks the page, which measures the Worker from outside: the bytes JavaScript holds here once garbage is collected. */
+export type WorkerAsk = { ask: "memory"; id: number };
+
+export type PageAnswer = { answer: number; bytes: number } | { answer: number; error: string };
+
 const held = new Map<string, SqlitePool>();
 
-/** What SQLite holds, from the runtime the pool was made over: no part of the pool's interface. */
-function memoryUsedIn(pool: SqlitePool): () => number {
-  const { sqlite3 } = pool as unknown as { sqlite3: Sqlite3Static };
-  return () => {
-    const out = sqlite3.wasm.alloc(8);
-    try {
-      sqlite3.capi.sqlite3_status(sqlite3.capi.SQLITE_STATUS_MEMORY_USED, out, out + 4, 0);
-      return sqlite3.wasm.peek32(out);
-    } finally {
-      sqlite3.wasm.dealloc(out);
-    }
-  };
+const asked = new Map<number, { resolve: (bytes: number) => void; reject: (err: Error) => void }>();
+let nextAsk = 1;
+
+function memoryUsed(): Promise<number> {
+  const id = nextAsk++;
+  return new Promise((resolve, reject) => {
+    asked.set(id, { resolve, reject });
+    const ask: WorkerAsk = { ask: "memory", id };
+    self.postMessage(ask);
+  });
+}
+
+function answered(answer: PageAnswer): void {
+  const waiting = asked.get(answer.answer);
+  asked.delete(answer.answer);
+  if (waiting === undefined) return;
+  if ("bytes" in answer) waiting.resolve(answer.bytes);
+  else waiting.reject(new Error(answer.error));
 }
 
 async function attempt(results: WorkerCaseResult[], name: string, body: () => Promise<string | void>): Promise<void> {
@@ -104,7 +112,7 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     importFile: (target, bytes) => pool.importFile(target, bytes),
     fileBytes: (target) => pool.exportFile(target),
     utf16,
-    memoryUsed: memoryUsedIn(pool),
+    memoryUsed,
   };
   const results: WorkerCaseResult[] = [];
   for (const c of [...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases, ...importCases]) await attempt(results, c.name, () => c.run(harness));
@@ -196,7 +204,11 @@ async function handle(command: WorkerCommand): Promise<unknown> {
   }
 }
 
-self.onmessage = async (event: MessageEvent<WorkerCommand>) => {
+self.onmessage = async (event: MessageEvent<WorkerCommand | PageAnswer>) => {
+  if ("answer" in event.data) {
+    answered(event.data);
+    return;
+  }
   const { id } = event.data;
   try {
     assert("WorkerGlobalScope" in globalThis, "this is a worker");

@@ -2,14 +2,8 @@
  * Export, portable validation and inspection on whatever the
  * platform's driver is, as cases free of any test framework: run over
  * `node:sqlite` by `export.test.ts` and over the wasm pool in a
- * Chromium Worker by `browser-driver.test.ts`. What the two platforms'
- * SQLite must agree on: what a snapshot holds and what never enters
- * it, the refusals before and after the destination is made, the cut
- * held against the operations waiting on the lock, the vault in
- * memory exporting into the same file, every way a snapshot that
- * opens can still fail validation, and an object of 64 MiB streamed
- * through a commit, a read, an export and a restore under bounded
- * memory.
+ * Chromium Worker by `browser-driver.test.ts`, where the two
+ * platforms' SQLite must agree.
  */
 
 import {
@@ -24,6 +18,7 @@ import {
   validatePortable,
   type Cid,
   type Event,
+  type Held,
   type HeldRoots,
   type OpenDestination,
   type PortableDatabase,
@@ -41,8 +36,8 @@ import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, co
 export interface ExportHarness extends VaultHarness {
   /** The complete bytes of the file at `target`, which no connection holds open. */
   fileBytes(target: string): Promise<Uint8Array>;
-  /** What the platform reports as held, in bytes: SQLite's own count where the runtime exposes it; where it does not, what JavaScript holds once garbage is collected. */
-  memoryUsed?: () => number;
+  /** What JavaScript holds on the platform, in bytes, once garbage is collected: the heap and the backing stores of its array buffers; not what SQLite's wasm build allocates within its own memory. */
+  memoryUsed?: () => number | Promise<number>;
 }
 
 export interface ExportCase {
@@ -117,13 +112,15 @@ function countingEncodes(): { count(): number; restore(): void } {
   };
 }
 
+/** `target`'s member, a method bound to it: what a proxy hands through for everything it does not replace. */
+const bound = <T extends object>(target: T, property: string | symbol): unknown => {
+  const value = Reflect.get(target, property, target) as unknown;
+  return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+};
+
 /** `driver` with every statement watched for the largest BLOB it ever handed back. */
 function observing(driver: SqliteDriver): { driver: SqliteDriver; largest(): number; reset(): void } {
   let largest = 0;
-  const bound = <T extends object>(target: T, property: string | symbol): unknown => {
-    const value = Reflect.get(target, property, target) as unknown;
-    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-  };
   const watched = new Proxy(driver, {
     get: (target, property) =>
       property !== "prepare"
@@ -177,6 +174,177 @@ export async function altered(h: ExportHarness, target: string, body: (driver: S
   } finally {
     driver.close();
   }
+}
+
+type Sample = [at: string, bytes: number];
+
+function sampleAt(samples: Sample[], mark: string): number {
+  const found = samples.find(([at]) => at === mark);
+  if (found === undefined) throw new Error(`no sample ${mark}`);
+  return found[1];
+}
+
+/**
+ * What may grow from one sample to the next when a 64 MiB object
+ * streams through: next to nothing across the second half of a
+ * stream, a batch of chunks while a copy runs, nothing the export or
+ * the restore leaves behind, and in all less than half the object — a
+ * page cache filled by the commit being a fixed cost.
+ */
+const BOUNDS: { from: string; to: string; limit: number; or: string }[] = [
+  { from: "32 MiB into the commit", to: "64 MiB into the commit", limit: 4 * MIB, or: "the second half of the commit's source held no more than the first" },
+  { from: "32 MiB into the read", to: "64 MiB into the read", limit: 4 * MIB, or: "the second half of the read held no more than the first" },
+  { from: "after the commit", to: "most during the export", limit: 16 * MIB, or: "the export held a batch of chunks at most while it copied" },
+  { from: "after the commit", to: "most during the restore", limit: 16 * MIB, or: "the restore held a batch of chunks at most while it copied" },
+  { from: "after the commit", to: "after the restore", limit: 4 * MIB, or: "the export and the restore held no more than the commit left" },
+  { from: "before", to: "after the restore", limit: 32 * MIB, or: "less than half the object held in all" },
+];
+
+function brokenBounds(samples: Sample[]): string[] {
+  return BOUNDS.filter(({ from, to, limit }) => sampleAt(samples, to) - sampleAt(samples, from) >= limit).map(
+    ({ from, to, limit, or }) => `${or}: ${((sampleAt(samples, to) - sampleAt(samples, from)) / MIB).toFixed(1)} MiB from ${from} to ${to}, the bound ${limit / MIB} MiB`
+  );
+}
+
+/** `stream` handing its chunks on, `seen` told of each and `mark` awaited every `every` bytes: a copy's source, watched while the copy still holds what it read. */
+function watched(stream: ReadableStream<Uint8Array>, every: number, seen: ((chunk: Uint8Array) => void) | undefined, mark: () => Promise<void>): ReadableStream<Uint8Array> {
+  let read = 0;
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      async transform(chunk, controller) {
+        seen?.(chunk);
+        controller.enqueue(chunk);
+        const before = read;
+        read += chunk.length;
+        if (Math.floor(read / every) > Math.floor(before / every)) await mark();
+      },
+    })
+  );
+}
+
+type Watch = (stream: ReadableStream<Uint8Array>) => ReadableStream<Uint8Array>;
+
+/** `holder` with the streams its `objects.open` hands out wrapped by `watch`; everything else is the holder's own. */
+function openingWatched<T extends { objects: { open(cid: Cid): Promise<ReadableStream<Uint8Array> | null> } }>(holder: T, watch: Watch): T {
+  const objects = new Proxy(holder.objects, {
+    get: (target, property) =>
+      property !== "open"
+        ? bound(target, property)
+        : async (cid: Cid): Promise<ReadableStream<Uint8Array> | null> => {
+            const stream = await target.open(cid);
+            return stream === null ? null : watch(stream);
+          },
+  });
+  return new Proxy(holder, { get: (target, property) => (property === "objects" ? objects : bound(target, property)) });
+}
+
+/** `runtime` whose locked operations read objects through `watch`: what an export copies, seen from the source's side. */
+function readsWatched(runtime: VaultRuntime, watch: Watch): VaultRuntime {
+  return new Proxy(runtime, {
+    get: (target, property) =>
+      property !== "locked" ? bound(target, property) : <T>(op: (held: Held) => Promise<T>): Promise<T> => target.locked((held) => op(openingWatched(held, watch))),
+  });
+}
+
+/** `snapshot` whose vault reads objects through `watch`: what a restore copies, seen from the source's side. */
+function snapshotWatched(snapshot: PortableDatabase, watch: Watch): PortableDatabase {
+  const vault = openingWatched(snapshot.vault, watch);
+  return new Proxy(snapshot, { get: (target, property) => (property === "vault" ? vault : bound(target, property)) });
+}
+
+interface Streamed {
+  samples: Sample[];
+  /** The bounds broken; none when what was held stayed bounded, or when the platform measures nothing. */
+  broken: string[];
+  note: string;
+}
+
+const OBJECT_MIB = 64;
+
+/**
+ * An object of 64 MiB committed from a source that reuses one buffer,
+ * read back whole, exported and restored, with what the platform
+ * holds sampled on the way — and, while the export and the restore
+ * copy, every mebibyte read from their source, the most of those
+ * kept as the sample of the copy. `retain` is given every chunk that
+ * passes through, in every phase: what a store or a copy that kept
+ * the object would look like to the measure.
+ */
+async function streamedThrough(h: ExportHarness, retain?: (chunk: Uint8Array) => void): Promise<Streamed> {
+  const measure = h.memoryUsed;
+  const piece = new Uint8Array(MIB); // one buffer, refilled: nothing here holds the object
+  async function* source(): AsyncIterable<Uint8Array> {
+    for (let i = 0; i < OBJECT_MIB; i++) {
+      piece.fill(i + 1);
+      yield piece;
+    }
+  }
+  const { cid } = await hashSource(source(), OBJECT_MIB * MIB, () => undefined);
+  const id = cid.text as Cid;
+  const samples: Sample[] = [];
+  const sample = async (at: string): Promise<void> => {
+    if (measure !== undefined) samples.push([at, await measure()]);
+  };
+  /** A copy's source watched, the most held at any of its samples recorded once the copy is done. */
+  const copying = (what: string): { watch: Watch; done(): void } => {
+    let most = 0;
+    return {
+      watch: (stream) =>
+        watched(stream, MIB, retain, async () => {
+          if (measure !== undefined) most = Math.max(most, await measure());
+        }),
+      done: () => {
+        if (measure !== undefined) samples.push([`most during the ${what}`, most]);
+      },
+    };
+  };
+  const { vault } = await make(h, h.fresh(), clock().now);
+  await sample("before");
+  let fed = 0;
+  async function* sampled(): AsyncIterable<Uint8Array> {
+    for await (const chunk of source()) {
+      retain?.(chunk);
+      yield chunk;
+      if (++fed % 32 === 0) await sample(`${fed} MiB into the commit`);
+    }
+  }
+  await vault.vault.commit([{ cid: id, source: sampled() }], [draft([id])]);
+  await sample("after the commit");
+  const stream = await vault.vault.objects.open(id);
+  assert(stream !== null, "readable");
+  const reader = stream.getReader();
+  let offset = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    retain?.(value);
+    for (let i = 0; i < value.length; ) {
+      const mebibyte = Math.floor((offset + i) / MIB);
+      const end = Math.min(value.length, (mebibyte + 1) * MIB - offset);
+      for (; i < end; i++) if (value[i] !== mebibyte + 1) throw new Error(`byte ${offset + i} read back as ${value[i]}, not ${mebibyte + 1}`);
+    }
+    const before = offset;
+    offset += value.length;
+    if (Math.floor(offset / (32 * MIB)) > Math.floor(before / (32 * MIB))) await sample(`${Math.floor(offset / MIB)} MiB into the read`);
+  }
+  assertEqual(offset, OBJECT_MIB * MIB, "read whole");
+  const target = h.fresh();
+  const exporting = copying("export");
+  const exported = await exportVault(readsWatched(vault, exporting.watch), destination(h, target), { heldRoots: rootsOf });
+  exporting.done();
+  assertEqual(exported.objectBytes, OBJECT_MIB * MIB, "exported whole");
+  await sample("after the export");
+  const snapshot = await opened(h, target);
+  const restoring = copying("restore");
+  const restored = await restoreVault(snapshotWatched(snapshot, restoring.watch), destination(h, h.fresh()), { heldRoots: rootsOf, anchor: ANCHOR });
+  restoring.done();
+  snapshot.close();
+  assertEqual([restored.objects, restored.objectBytes], [1, OBJECT_MIB * MIB], "restored whole");
+  restored.runtime.close();
+  await sample("after the restore");
+  await vault.close();
+  const note = samples.map(([at, n]) => `${at}: ${(n / MIB).toFixed(1)} MiB`).join(", ");
+  return { samples, broken: measure === undefined ? [] : brokenBounds(samples), note };
 }
 
 export const exportCases: ExportCase[] = [
@@ -549,72 +717,24 @@ export const exportCases: ExportCase[] = [
   {
     name: "an object of 64 MiB streams through a commit, a read, an export and a restore, and what the platform holds stays bounded throughout",
     run: async (h) => {
-      const total = 64;
-      const piece = new Uint8Array(MIB); // one buffer, refilled: nothing here holds the object
-      async function* source(): AsyncIterable<Uint8Array> {
-        for (let i = 0; i < total; i++) {
-          piece.fill(i + 1);
-          yield piece;
-        }
-      }
-      const { cid } = await hashSource(source(), total * MIB, () => undefined);
-      const id = cid.text as Cid;
-      const held: [string, number][] = [];
-      const sample = (at: string): void => {
-        if (h.memoryUsed !== undefined) held.push([at, h.memoryUsed()]);
-      };
-      const { vault } = await make(h, h.fresh(), clock().now);
-      sample("before");
-      let fed = 0;
-      async function* sampled(): AsyncIterable<Uint8Array> {
-        for await (const chunk of source()) {
-          yield chunk;
-          if (++fed % 32 === 0) sample(`${fed} MiB into the commit`);
-        }
-      }
-      await vault.vault.commit([{ cid: id, source: sampled() }], [draft([id])]);
-      sample("after the commit");
-      const stream = await vault.vault.objects.open(id);
-      assert(stream !== null, "readable");
-      const reader = stream.getReader();
-      let offset = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        for (let i = 0; i < value.length; ) {
-          const mebibyte = Math.floor((offset + i) / MIB);
-          const end = Math.min(value.length, (mebibyte + 1) * MIB - offset);
-          for (; i < end; i++) if (value[i] !== mebibyte + 1) throw new Error(`byte ${offset + i} read back as ${value[i]}, not ${mebibyte + 1}`);
-        }
-        const before = offset;
-        offset += value.length;
-        if (Math.floor(offset / (32 * MIB)) > Math.floor(before / (32 * MIB))) sample(`${Math.floor(offset / MIB)} MiB into the read`);
-      }
-      assertEqual(offset, total * MIB, "read whole");
-      const target = h.fresh();
-      const exported = await exportVault(vault, destination(h, target), { heldRoots: rootsOf });
-      assertEqual(exported.objectBytes, total * MIB, "exported whole");
-      sample("after the export");
-      const snapshot = await opened(h, target);
-      const restored = await restoreVault(snapshot, destination(h, h.fresh()), { heldRoots: rootsOf, anchor: ANCHOR });
-      snapshot.close();
-      assertEqual([restored.objects, restored.objectBytes], [1, total * MIB], "restored whole");
-      restored.runtime.close();
-      sample("after the restore");
-      await vault.close();
-      if (held.length === 0) return;
-      const note = held.map(([at, n]) => `${at}: ${(n / MIB).toFixed(1)} MiB`).join(", ");
-      const at = (mark: string): number => {
-        const found = held.find(([name]) => name === mark);
-        if (found === undefined) throw new Error(`no sample ${mark}: ${note}`);
-        return found[1];
-      };
-      const grewBy = (from: string, to: string): number => at(to) - at(from);
-      assert(grewBy("32 MiB into the commit", "64 MiB into the commit") < 4 * MIB, `the second half of the commit's source held no more than the first: ${note}`);
-      assert(grewBy("32 MiB into the read", "64 MiB into the read") < 4 * MIB, `the second half of the read held no more than the first: ${note}`);
-      assert(grewBy("after the commit", "after the restore") < 4 * MIB, `the export and the restore held no more than the commit left: ${note}`);
-      assert(grewBy("before", "after the restore") < 32 * MIB, `less than half the object held in all, a page cache filled by the commit being a fixed cost: ${note}`);
-      return note;
+      const { broken, note } = await streamedThrough(h);
+      assert(broken.length === 0, `${broken.join("; ")} — ${note}`);
+      return h.memoryUsed === undefined ? undefined : note;
+    },
+  },
+  {
+    name: "the measure sees what is held: with a copy of every chunk the 64 MiB object passes through kept, every bound breaks, and once the copies are let go what is held falls back",
+    run: async (h) => {
+      if (h.memoryUsed === undefined) return;
+      const kept: Uint8Array[] = [];
+      const { samples, broken, note } = await streamedThrough(h, (chunk) => kept.push(new Uint8Array(chunk)));
+      const retained = kept.reduce((n, chunk) => n + chunk.length, 0);
+      kept.length = 0;
+      const released = await h.memoryUsed();
+      assertEqual(broken.length, BOUNDS.length, `every bound broken with ${retained / MIB} MiB kept — broken: ${broken.join("; ")} — ${note}`);
+      const before = sampleAt(samples, "before");
+      assert(released - before < 32 * MIB, `what was held fell back once the copies were let go: ${((released - before) / MIB).toFixed(1)} MiB over before — ${note}`);
+      return `${retained / MIB} MiB kept broke ${broken.length} bounds; let go, ${((released - before) / MIB).toFixed(1)} MiB over before`;
     },
   },
 ];

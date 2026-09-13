@@ -174,6 +174,34 @@ export function blobSuite(name: string, open: OpenBlobs): void {
       expect(await store.getBlock(HELLO_CID)).toEqual(enc.encode("hello"));
     });
 
+    it("copies the bytes themselves, not what the input's own slice hands back — a Node Buffer's is a view onto its memory", async () => {
+      // A Uint8Array whose `slice` is a view, as `Buffer.prototype.slice` is: what a store is given in Node
+      class Viewing extends Uint8Array {
+        override slice(start?: number, end?: number): this {
+          return this.subarray(start, end) as this;
+        }
+      }
+      const store = await open();
+      const viaBlock = new Viewing(enc.encode("hello"));
+      const pending = store.putBlock(HELLO_CID, viaBlock);
+      viaBlock[0] = 0x48; // before the check has run
+      await pending;
+      viaBlock[1] = 0x45; // and after the put has completed
+      expect(await store.getBlock(HELLO_CID)).toEqual(enc.encode("hello"));
+      expect(await store.has(HELLO_CID)).toBe(true);
+      const viaPut = new Viewing(enc.encode("world"));
+      const putting = store.put(viaPut);
+      viaPut[0] = 0x57;
+      const root = await putting;
+      viaPut[1] = 0x4f;
+      expect(root).toBe(await nameOf(RAW_CODE, enc.encode("world")));
+      expect(await store.get(root)).toEqual(enc.encode("world"));
+      const out = (await store.get(root)) as Uint8Array;
+      out[0] = 0x57;
+      expect(await store.get(root)).toEqual(enc.encode("world"));
+      expect(await store.getBlock(root)).toEqual(enc.encode("world"));
+    });
+
     it("get throws on a root that names a directory, not a file", async () => {
       const store = await open();
       const dir = pbNode(new UnixFS({ type: "directory" }));

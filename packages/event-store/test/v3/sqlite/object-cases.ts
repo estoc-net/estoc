@@ -31,8 +31,8 @@ export interface ObjectHarness {
   /** A target no database exists at yet. */
   fresh(): string;
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
-  /** The bytes SQLite itself holds right now, where the platform reports it. */
-  memoryUsed?: () => number;
+  /** What JavaScript holds on the platform, in bytes, once garbage is collected: the heap and the backing stores of its array buffers; not what SQLite's wasm build allocates within its own memory. */
+  memoryUsed?: () => number | Promise<number>;
 }
 
 export interface ObjectCase {
@@ -380,7 +380,7 @@ export const objectCases: ObjectCase[] = [
     },
   },
   {
-    name: "staging goes to the temporary database's file under a bounded cache, so what SQLite holds does not grow with the object; a put past the staging bound is refused with nothing staged",
+    name: "staging goes to the temporary database's file under a bounded cache, so what is held does not grow with the object; a put past the staging bound is refused with nothing staged",
     run: async (h) => {
       const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
       const store = new SqliteObjectStore(db, { maxStagedBytes: 40 * MIB });
@@ -400,7 +400,7 @@ export const objectCases: ObjectCase[] = [
         for await (const chunk of reusing()) {
           yield chunk;
           i += 1;
-          if (i % 8 === 0 && h.memoryUsed !== undefined) samples.push(h.memoryUsed());
+          if (i % 8 === 0 && h.memoryUsed !== undefined) samples.push(await h.memoryUsed());
         }
       }
       const prepared = store.prepare();
@@ -410,8 +410,8 @@ export const objectCases: ObjectCase[] = [
       let note: string | undefined;
       if (samples.length === 3) {
         const [at8, , at24] = samples as [number, number, number];
-        note = `SQLite held ${samples.map((n) => `${(n / MIB).toFixed(1)} MiB`).join(", ")} at 8, 16 and 24 MiB staged`;
-        assert(at24 - at8 < 4 * MIB, `what SQLite holds does not grow with the staging: ${note}`);
+        note = `held ${samples.map((n) => `${(n / MIB).toFixed(1)} MiB`).join(", ")} at 8, 16 and 24 MiB staged`;
+        assert(at24 - at8 < 4 * MIB, `what is held does not grow with the staging: ${note}`);
       }
       const other = store.prepare();
       await assertRejects(() => other.putObject(cid.text as Cid, reusing()), "StagingFull", "a second put past the bound");

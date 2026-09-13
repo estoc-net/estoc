@@ -27,6 +27,7 @@ import {
   type SqliteDriver,
 } from "../../../src/v3/index.js";
 import { META, WRAPPED } from "../fixtures.js";
+import { heldOnNode } from "./node-memory.js";
 import { all } from "../suite/helpers.js";
 import { exportCases, type ExportHarness } from "./export-cases.js";
 import { HELLO, HELLO_CID, draft, rootsOf } from "./vault-cases.js";
@@ -70,11 +71,7 @@ describe("the export cases on node:sqlite files", () => {
     fresh,
     open: async (target, mode) => open(target, mode),
     fileBytes: async (target) => new Uint8Array(await readFile(target)),
-    memoryUsed: () => {
-      (globalThis as { gc?: () => void }).gc?.();
-      const { heapUsed, arrayBuffers } = process.memoryUsage();
-      return heapUsed + arrayBuffers;
-    },
+    memoryUsed: heldOnNode,
   };
   for (const c of exportCases) {
     it(c.name, async () => {
