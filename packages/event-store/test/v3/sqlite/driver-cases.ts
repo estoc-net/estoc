@@ -20,14 +20,31 @@ export interface DriverHarness {
   persistent: boolean;
 }
 
-export interface DriverCase {
+export interface Case {
   name: string;
+  /** Moves tens of mebibytes through the platform's storage: seconds where the others take milliseconds. */
+  large?: true;
+}
+
+export interface DriverCase extends Case {
   needsPersistence?: true;
   /** Returns a note for the report — a timing — or nothing. */
   run(harness: DriverHarness): Promise<string | void>;
 }
 
 export const MIB = 1024 * 1024;
+
+/**
+ * What a platform holds, in bytes, as a harness reports it: what
+ * JavaScript holds once garbage is collected — the heap and the backing
+ * stores of its array buffers — and, where the platform's SQLite is the
+ * wasm build, what SQLite's own allocator holds, which is outside those
+ * backing stores; `node:sqlite` exposes no such count.
+ */
+export interface MemoryHeld {
+  javascript: number;
+  sqlite?: number;
+}
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -488,6 +505,7 @@ export const driverCases: DriverCase[] = [
   },
   {
     name: "mebibyte chunks go in and come back whole",
+    large: true,
     run: async (h) => {
       const target = h.fresh();
       const db = await h.open(target, "create");
@@ -625,6 +643,24 @@ export const driverCases: DriverCase[] = [
       second.close();
       const third = await h.open(target, "readwrite");
       third.close();
+    },
+  },
+  {
+    name: "a writable connection keeps foreign keys enforced and a journal SQLite recovers from under a synchronous setting that is not OFF, as the platform reports them",
+    needsPersistence: true,
+    run: async (h) => {
+      const db = await h.open(h.fresh(), "create");
+      try {
+        const pragma = (name: string): unknown => Object.values(db.prepare(`PRAGMA ${name}`).get() ?? {})[0];
+        assertEqual(pragma("foreign_keys"), 1, "foreign keys");
+        const journal = String(pragma("journal_mode"));
+        assert(journal === "wal" || journal === "delete", `a journal SQLite recovers from, not ${journal}`);
+        const synchronous = Number(pragma("synchronous"));
+        assert(synchronous >= 1, `synchronous is not OFF: ${synchronous}`);
+        return `journal_mode=${journal}, synchronous=${["OFF", "NORMAL", "FULL", "EXTRA"][synchronous] ?? synchronous}`;
+      } finally {
+        db.close();
+      }
     },
   },
 ];

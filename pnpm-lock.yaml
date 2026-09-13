@@ -278,9 +278,18 @@ importers:
       '@estoc/keystore':
         specifier: workspace:^
         version: link:../keystore
+      '@types/chai':
+        specifier: ^5.2.2
+        version: 5.2.3
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      '@vitest/expect':
+        specifier: 3.2.7
+        version: 3.2.7
+      chai:
+        specifier: ^5.3.3
+        version: 5.3.3
       esbuild:
         specifier: ^0.25.12
         version: 0.25.12

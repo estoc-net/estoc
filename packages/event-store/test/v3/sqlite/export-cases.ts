@@ -2,12 +2,8 @@
  * Export, portable validation and inspection on whatever the
  * platform's driver is, as cases free of any test framework: run over
  * `node:sqlite` by `export.test.ts` and over the wasm pool in a
- * Chromium Worker by `browser-driver.test.ts`. What the two platforms'
- * SQLite must agree on: what a snapshot holds and what never enters
- * it, the refusals before and after the destination is made, the cut
- * held against the operations waiting on the lock, the vault in
- * memory exporting into the same file, and every way a snapshot that
- * opens can still fail validation.
+ * Chromium Worker by `browser-driver.test.ts`, where the two
+ * platforms' SQLite must agree.
  */
 
 import {
@@ -16,10 +12,13 @@ import {
   canonicalEventBytes,
   createRuntime,
   exportVault,
+  hashSource,
   openPortable,
+  restoreVault,
   validatePortable,
   type Cid,
   type Event,
+  type Held,
   type HeldRoots,
   type OpenDestination,
   type PortableDatabase,
@@ -30,17 +29,19 @@ import {
   type Validated,
   type VaultRuntime,
 } from "../../../src/v3/index.js";
-import { META, REWRAPPED, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
+import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects, type MemoryHeld } from "./driver-cases.js";
 import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, corruptChunk, damageEvent, draft, exec, make, rootsOf, rows, type VaultHarness } from "./vault-cases.js";
 
 export interface ExportHarness extends VaultHarness {
   /** The complete bytes of the file at `target`, which no connection holds open. */
   fileBytes(target: string): Promise<Uint8Array>;
+  memoryUsed?: () => MemoryHeld | Promise<MemoryHeld>;
+  /** Deletes the database at `target`, which no connection holds open: a case that made a large one gives the space back, where space is scarce. */
+  remove?(target: string): void | Promise<void>;
 }
 
-export interface ExportCase {
-  name: string;
+export interface ExportCase extends Case {
   run(harness: ExportHarness): Promise<string | void>;
 }
 
@@ -111,13 +112,15 @@ function countingEncodes(): { count(): number; restore(): void } {
   };
 }
 
+/** `target`'s member, a method bound to it: what a proxy hands through for everything it does not replace. */
+const bound = <T extends object>(target: T, property: string | symbol): unknown => {
+  const value = Reflect.get(target, property, target) as unknown;
+  return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+};
+
 /** `driver` with every statement watched for the largest BLOB it ever handed back. */
 function observing(driver: SqliteDriver): { driver: SqliteDriver; largest(): number; reset(): void } {
   let largest = 0;
-  const bound = <T extends object>(target: T, property: string | symbol): unknown => {
-    const value = Reflect.get(target, property, target) as unknown;
-    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-  };
   const watched = new Proxy(driver, {
     get: (target, property) =>
       property !== "prepare"
@@ -171,6 +174,221 @@ export async function altered(h: ExportHarness, target: string, body: (driver: S
   } finally {
     driver.close();
   }
+}
+
+type Sample = [at: string, held: MemoryHeld];
+
+function sampleAt(samples: Sample[], mark: string, of: keyof MemoryHeld): number {
+  const found = samples.find(([at]) => at === mark);
+  if (found === undefined) throw new Error(`no sample ${mark}`);
+  const value = found[1][of];
+  if (value === undefined) throw new Error(`no ${of} in the sample ${mark}`);
+  return value;
+}
+
+/** The page cache the wasm build gives a connection by default, and fills as the connection reads or writes: what a connection costs SQLite's allocator while it is open. */
+const CONNECTION_CACHE = 16 * MIB;
+
+interface Bound {
+  of: keyof MemoryHeld;
+  from: string;
+  to: string;
+  limit: number;
+  or: string;
+}
+
+/**
+ * What may grow from one sample to the next while a 64 MiB object
+ * streams through, for what JavaScript holds and for what SQLite's
+ * allocator holds where it is measured. The margins are 4 MiB: chunks
+ * in flight and a little of the allocator's own.
+ */
+const BOUNDS: Bound[] = [
+  { of: "javascript", from: "32 MiB into the commit", to: "64 MiB into the commit", limit: 4 * MIB, or: "the second half of the commit's source held no more than the first" },
+  { of: "javascript", from: "32 MiB into the read", to: "64 MiB into the read", limit: 4 * MIB, or: "the second half of the read held no more than the first" },
+  { of: "javascript", from: "after the commit", to: "most during the export", limit: 16 * MIB, or: "the export held a batch of chunks at most while it copied" },
+  { of: "javascript", from: "after the commit", to: "most during the restore", limit: 16 * MIB, or: "the restore held a batch of chunks at most while it copied" },
+  { of: "javascript", from: "after the commit", to: "after the restore", limit: 4 * MIB, or: "the export and the restore held no more than the commit left" },
+  { of: "javascript", from: "before", to: "after the restore", limit: 32 * MIB, or: "less than half the object held in all" },
+  { of: "sqlite", from: "32 MiB into the commit", to: "64 MiB into the commit", limit: 4 * MIB, or: "SQLite spilled the second half of the staging to the temporary file as it did the first" },
+  { of: "sqlite", from: "32 MiB into the read", to: "64 MiB into the read", limit: 4 * MIB, or: "SQLite held no more of the second half of the read than of the first" },
+  { of: "sqlite", from: "after the commit", to: "most during the export", limit: CONNECTION_CACHE + 4 * MIB, or: "SQLite held the destination connection's cache at most while the export copied" },
+  { of: "sqlite", from: "after the commit", to: "most during the restore", limit: 2 * CONNECTION_CACHE + 4 * MIB, or: "SQLite held the snapshot's and the destination's connection caches at most while the restore copied" },
+  { of: "sqlite", from: "after the commit", to: "after the restore", limit: 4 * MIB, or: "SQLite freed what the export and the restore had it hold" },
+  { of: "sqlite", from: "before", to: "after the restore", limit: CONNECTION_CACHE + 8 * MIB, or: "SQLite held the vault's connection cache the commit filled, and its staging cache, and little else" },
+];
+
+/** The bounds `samples` measure — every JavaScript bound, the SQLite bounds when the platform reports SQLite — that they break. */
+function brokenBounds(samples: Sample[]): Bound[] {
+  const measured = (of: keyof MemoryHeld): boolean => samples.every(([, held]) => held[of] !== undefined);
+  return BOUNDS.filter(({ of, from, to, limit }) => measured(of) && sampleAt(samples, to, of) - sampleAt(samples, from, of) >= limit);
+}
+
+const described = (samples: Sample[], bounds: Bound[]): string =>
+  bounds.map(({ of, from, to, limit, or }) => `${or}: ${((sampleAt(samples, to, of) - sampleAt(samples, from, of)) / MIB).toFixed(1)} MiB from ${from} to ${to}, the bound ${limit / MIB} MiB`).join("; ");
+
+const shown = (held: MemoryHeld): string => `${(held.javascript / MIB).toFixed(1)}${held.sqlite === undefined ? "" : ` / SQLite ${(held.sqlite / MIB).toFixed(1)}`}`;
+
+/** `stream` handing its chunks on, `seen` told of each and `mark` awaited every `every` bytes: a copy's source, watched while the copy still holds what it read. */
+function watched(stream: ReadableStream<Uint8Array>, every: number, seen: ((chunk: Uint8Array) => void) | undefined, mark: () => Promise<void>): ReadableStream<Uint8Array> {
+  let read = 0;
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      async transform(chunk, controller) {
+        seen?.(chunk);
+        controller.enqueue(chunk);
+        const before = read;
+        read += chunk.length;
+        if (Math.floor(read / every) > Math.floor(before / every)) await mark();
+      },
+    })
+  );
+}
+
+type Watch = (stream: ReadableStream<Uint8Array>) => ReadableStream<Uint8Array>;
+
+/** `holder` with the streams its `objects.open` hands out wrapped by `watch`; everything else is the holder's own. */
+function openingWatched<T extends { objects: { open(cid: Cid): Promise<ReadableStream<Uint8Array> | null> } }>(holder: T, watch: Watch): T {
+  const objects = new Proxy(holder.objects, {
+    get: (target, property) =>
+      property !== "open"
+        ? bound(target, property)
+        : async (cid: Cid): Promise<ReadableStream<Uint8Array> | null> => {
+            const stream = await target.open(cid);
+            return stream === null ? null : watch(stream);
+          },
+  });
+  return new Proxy(holder, { get: (target, property) => (property === "objects" ? objects : bound(target, property)) });
+}
+
+/** `runtime` whose locked operations read objects through `watch`: what an export copies, seen from the source's side. */
+function readsWatched(runtime: VaultRuntime, watch: Watch): VaultRuntime {
+  return new Proxy(runtime, {
+    get: (target, property) =>
+      property !== "locked" ? bound(target, property) : <T>(op: (held: Held) => Promise<T>): Promise<T> => target.locked((held) => op(openingWatched(held, watch))),
+  });
+}
+
+/** `snapshot` whose vault reads objects through `watch`: what a restore copies, seen from the source's side. */
+function snapshotWatched(snapshot: PortableDatabase, watch: Watch): PortableDatabase {
+  const vault = openingWatched(snapshot.vault, watch);
+  return new Proxy(snapshot, { get: (target, property) => (property === "vault" ? vault : bound(target, property)) });
+}
+
+interface Streamed {
+  samples: Sample[];
+  /** The bounds broken; none when what was held stayed bounded, or when the platform measures nothing. */
+  broken: Bound[];
+  note: string;
+}
+
+interface Watching {
+  /** Given every chunk that passes through, in every phase: what a store or a copy that kept the object would look like to the measure. */
+  retain?: (chunk: Uint8Array) => void;
+  /** Given every connection the flow opens, the vault's own first: what a connection told to hold the object would look like. */
+  connected?: (driver: SqliteDriver) => void;
+}
+
+const OBJECT_MIB = 64;
+
+/**
+ * An object of 64 MiB committed from a source that reuses one buffer,
+ * read back whole, exported and restored, with what the platform
+ * holds sampled on the way — and, while the export and the restore
+ * copy, every mebibyte read from their source, the most of those
+ * kept as the sample of the copy.
+ */
+async function streamedThrough(given: ExportHarness, { retain, connected }: Watching = {}): Promise<Streamed> {
+  const measure = given.memoryUsed;
+  const h: ExportHarness =
+    connected === undefined
+      ? given
+      : {
+          ...given,
+          open: async (target, mode) => {
+            const driver = await given.open(target, mode);
+            connected(driver);
+            return driver;
+          },
+        };
+  const piece = new Uint8Array(MIB); // one buffer, refilled: nothing here holds the object
+  async function* source(): AsyncIterable<Uint8Array> {
+    for (let i = 0; i < OBJECT_MIB; i++) {
+      piece.fill(i + 1);
+      yield piece;
+    }
+  }
+  const { cid } = await hashSource(source(), OBJECT_MIB * MIB, () => undefined);
+  const id = cid.text as Cid;
+  const samples: Sample[] = [];
+  const sample = async (at: string): Promise<void> => {
+    if (measure !== undefined) samples.push([at, await measure()]);
+  };
+  const more = (a: MemoryHeld, b: MemoryHeld): MemoryHeld => ({ javascript: Math.max(a.javascript, b.javascript), ...(a.sqlite === undefined && b.sqlite === undefined ? {} : { sqlite: Math.max(a.sqlite ?? 0, b.sqlite ?? 0) }) });
+  /** A copy's source watched, the most held at any of its samples recorded once the copy is done. */
+  const copying = (what: string): { watch: Watch; done(): void } => {
+    let most: MemoryHeld = { javascript: 0 };
+    return {
+      watch: (stream) =>
+        watched(stream, MIB, retain, async () => {
+          if (measure !== undefined) most = more(most, await measure());
+        }),
+      done: () => {
+        if (measure !== undefined) samples.push([`most during the ${what}`, most]);
+      },
+    };
+  };
+  const own = h.fresh();
+  const { vault } = await make(h, own, clock().now);
+  await sample("before");
+  let fed = 0;
+  async function* sampled(): AsyncIterable<Uint8Array> {
+    for await (const chunk of source()) {
+      retain?.(chunk);
+      yield chunk;
+      if (++fed % 32 === 0) await sample(`${fed} MiB into the commit`);
+    }
+  }
+  await vault.vault.commit([{ cid: id, source: sampled() }], [draft([id])]);
+  await sample("after the commit");
+  const stream = await vault.vault.objects.open(id);
+  assert(stream !== null, "readable");
+  const reader = stream.getReader();
+  let offset = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    retain?.(value);
+    for (let i = 0; i < value.length; ) {
+      const mebibyte = Math.floor((offset + i) / MIB);
+      const end = Math.min(value.length, (mebibyte + 1) * MIB - offset);
+      for (; i < end; i++) if (value[i] !== mebibyte + 1) throw new Error(`byte ${offset + i} read back as ${value[i]}, not ${mebibyte + 1}`);
+    }
+    const before = offset;
+    offset += value.length;
+    if (Math.floor(offset / (32 * MIB)) > Math.floor(before / (32 * MIB))) await sample(`${Math.floor(offset / MIB)} MiB into the read`);
+  }
+  assertEqual(offset, OBJECT_MIB * MIB, "read whole");
+  const target = h.fresh();
+  const exporting = copying("export");
+  const exported = await exportVault(readsWatched(vault, exporting.watch), destination(h, target), { heldRoots: rootsOf });
+  exporting.done();
+  assertEqual(exported.objectBytes, OBJECT_MIB * MIB, "exported whole");
+  await sample("after the export");
+  const snapshot = await opened(h, target);
+  const restoring = copying("restore");
+  const restoredTo = h.fresh();
+  const restored = await restoreVault(snapshotWatched(snapshot, restoring.watch), destination(h, restoredTo), { heldRoots: rootsOf, anchor: ANCHOR });
+  restoring.done();
+  snapshot.close();
+  assertEqual([restored.objects, restored.objectBytes], [1, OBJECT_MIB * MIB], "restored whole");
+  restored.runtime.close();
+  await sample("after the restore");
+  await vault.close();
+  await sample("after the close");
+  for (const made of [own, target, restoredTo]) await h.remove?.(made);
+  const note = samples.map(([at, held]) => `${at}: ${shown(held)} MiB`).join(", ");
+  return { samples, broken: measure === undefined ? [] : brokenBounds(samples), note };
 }
 
 export const exportCases: ExportCase[] = [
@@ -538,6 +756,49 @@ export const exportCases: ExportCase[] = [
       } finally {
         snapshot.close();
       }
+    },
+  },
+  {
+    name: "an object of 64 MiB streams through a commit, a read, an export and a restore, and what the platform holds stays bounded throughout",
+    large: true,
+    run: async (h) => {
+      const { samples, broken, note } = await streamedThrough(h);
+      assert(broken.length === 0, `${described(samples, broken)} — ${note}`);
+      return h.memoryUsed === undefined ? undefined : note;
+    },
+  },
+  {
+    name: "the measure of JavaScript sees what it holds: with a copy of every chunk the 64 MiB object passes through kept, every JavaScript bound breaks and no SQLite bound, and once the copies are let go what is held falls back",
+    large: true,
+    run: async (h) => {
+      if (h.memoryUsed === undefined) return;
+      const kept: Uint8Array[] = [];
+      const { samples, broken, note } = await streamedThrough(h, { retain: (chunk) => kept.push(new Uint8Array(chunk)) });
+      const retained = kept.reduce((n, chunk) => n + chunk.length, 0);
+      kept.length = 0;
+      const released = (await h.memoryUsed()).javascript;
+      const javascript = broken.filter(({ of }) => of === "javascript");
+      assertEqual(javascript.length, BOUNDS.filter(({ of }) => of === "javascript").length, `every JavaScript bound broken with ${retained / MIB} MiB kept — broken: ${described(samples, broken)} — ${note}`);
+      assertEqual(broken.length - javascript.length, 0, `no SQLite bound broken by what JavaScript kept — broken: ${described(samples, broken)} — ${note}`);
+      const before = sampleAt(samples, "before", "javascript");
+      assert(released - before < 32 * MIB, `what JavaScript held fell back once the copies were let go: ${((released - before) / MIB).toFixed(1)} MiB over before — ${note}`);
+      return `${retained / MIB} MiB kept broke ${javascript.length} bounds; let go, ${((released - before) / MIB).toFixed(1)} MiB over before`;
+    },
+  },
+  {
+    name: "the measure of SQLite sees what it holds: with every connection's cache the size of the object, the vault's own connection, the export's destination and the restore's two connections keep the object in SQLite's allocator and their bounds break, no JavaScript bound does, and closing frees it",
+    large: true,
+    run: async (h) => {
+      if (h.memoryUsed === undefined || (await h.memoryUsed()).sqlite === undefined) return;
+      const { samples, broken, note } = await streamedThrough(h, { connected: (driver) => driver.exec(`PRAGMA cache_size = -${128 * 1024}`) });
+      // The staging's cache the store sets after the connection opens, so the commit stays bounded; the read finds the object cached already; the export, the restore and the vault's own cache fill.
+      const filling = BOUNDS.filter(({ of, from, to }) => of === "sqlite" && (to === "most during the export" || to === "most during the restore" || from === "before"));
+      for (const bound of filling) assert(broken.includes(bound), `${bound.or}: expected to break with the caches enlarged, held — ${note}`);
+      assertEqual(broken.filter(({ of }) => of === "javascript").length, 0, `no JavaScript bound broken by what SQLite cached — broken: ${described(samples, broken)} — ${note}`);
+      const before = sampleAt(samples, "before", "sqlite");
+      const closed = sampleAt(samples, "after the close", "sqlite");
+      assert(closed - before < 4 * MIB, `what SQLite held fell back once the connections closed: ${((closed - before) / MIB).toFixed(1)} MiB over before — ${note}`);
+      return `caches enlarged broke ${broken.length} SQLite bounds: ${described(samples, broken)}; closed, ${((closed - before) / MIB).toFixed(1)} MiB over before`;
     },
   },
 ];

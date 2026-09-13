@@ -60,11 +60,13 @@ export function ancestorsOf(path: string): string[] {
   return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
+/** Copies in and out by `new Uint8Array(bytes)`, never `slice()`, which on a Node `Buffer` is a view onto the caller's memory. */
 export class MemoryFileStore implements FileStore {
   private readonly files = new Map<string, Uint8Array>();
 
   async read(path: string): Promise<Uint8Array | null> {
-    return this.files.get(checkFilePath(path))?.slice() ?? null;
+    const held = this.files.get(checkFilePath(path));
+    return held === undefined ? null : new Uint8Array(held);
   }
 
   async write(path: string, bytes: Uint8Array): Promise<void> {
@@ -79,7 +81,7 @@ export class MemoryFileStore implements FileStore {
         throw new Error(`${path} is a directory (${have}): cannot write it as a file`);
       }
     }
-    this.files.set(path, bytes.slice());
+    this.files.set(path, new Uint8Array(bytes));
   }
 
   async list(): Promise<string[]> {

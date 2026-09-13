@@ -35,6 +35,7 @@ import { ANCHOR, META, WRAPPED } from "../fixtures.js";
 import { eventStoreSuite, type OpenOptions } from "../suite/event-store-suite.js";
 import { all, altered, authorN, clock, expectBytes, reordered } from "../suite/helpers.js";
 import { eventCases } from "./event-cases.js";
+import { eventStoreOpener } from "./suite-openers.js";
 
 const T0 = "2026-09-12T10:00:00.000Z";
 const RAW_HELLO = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
@@ -103,8 +104,8 @@ function retained(driver: SqliteDriver): number {
   return (driver as unknown as { statements: Set<unknown> }).statements.size;
 }
 
-eventStoreSuite("SqliteEventStore in memory", async (options = {}) => create(":memory:", options).store);
-eventStoreSuite("SqliteEventStore on a file", async (options = {}) => create(fresh(), options).store);
+eventStoreSuite("SqliteEventStore in memory", eventStoreOpener({ fresh: () => ":memory:", open }));
+eventStoreSuite("SqliteEventStore on a file", eventStoreOpener({ fresh, open }));
 
 describe("the event cases on node:sqlite files", () => {
   for (const c of eventCases) {

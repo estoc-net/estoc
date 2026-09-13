@@ -7,6 +7,16 @@ import { storeSuite } from "./suite/store-suite.js";
 storeSuite("memory", async (options) => new MemoryEventStore(options));
 blobSuite("memory", async (options) => new MemoryBlobStore(options));
 
+describe("memory: BlobStore", () => {
+  it("copies a Buffer's bytes, whose slice is a view onto the caller's memory", async () => {
+    const store = new MemoryBlobStore();
+    const input = Buffer.from("hello");
+    const root = await store.put(input);
+    input[0] = 0x6a;
+    expect(await store.get(root)).toEqual(new TextEncoder().encode("hello"));
+  });
+});
+
 describe("memory: FileStore", () => {
   it("reads back what it wrote, by path, and lists paths in order", async () => {
     const files = new MemoryFileStore();
@@ -20,6 +30,17 @@ describe("memory: FileStore", () => {
     expect(await files.list()).toEqual(["config.json", "state/b.json"]);
     await files.write("config.json", new Uint8Array([5]));
     expect(await files.read("config.json")).toEqual(new Uint8Array([5]));
+  });
+
+  it("copies a Buffer's bytes, whose slice is a view onto the caller's memory, and hands out copies", async () => {
+    const files = new MemoryFileStore();
+    const input = Buffer.from([1, 2, 3]);
+    await files.write("f", input);
+    input[0] = 9;
+    const read = (await files.read("f")) as Uint8Array;
+    expect(Array.from(read)).toEqual([1, 2, 3]);
+    read[1] = 8;
+    expect(Array.from((await files.read("f")) as Uint8Array)).toEqual([1, 2, 3]);
   });
 
   it("takes a file's path and no other, and never a file and a directory of one name", async () => {

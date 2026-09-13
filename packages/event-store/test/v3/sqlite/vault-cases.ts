@@ -31,7 +31,7 @@ import {
   type Vault,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
 
 export interface VaultHarness {
   /** A target no database exists at yet. */
@@ -39,8 +39,7 @@ export interface VaultHarness {
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
 }
 
-export interface VaultCase {
-  name: string;
+export interface VaultCase extends Case {
   run(harness: VaultHarness): Promise<string | void>;
 }
 

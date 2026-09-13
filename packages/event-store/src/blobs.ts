@@ -46,6 +46,12 @@ interface Held {
   written: number;
 }
 
+/**
+ * Copies by `new Uint8Array(bytes)`, never `slice()`: a Node `Buffer` is
+ * a `Uint8Array` whose `slice` is a view onto the same memory, and what
+ * the store holds must be memory of its own, or the caller could
+ * rewrite a block it had accepted.
+ */
 export class MemoryBlobStore implements BlobStore {
   private readonly blocks = new Map<string, Held>();
   private readonly clock: () => Date;
@@ -75,7 +81,7 @@ export class MemoryBlobStore implements BlobStore {
   async put(bytes: Uint8Array): Promise<string> {
     // Copy before the first await: the chunks the hasher yields are views
     // of its input, and a caller may reuse the buffer once the call returns.
-    const { root, blocks } = await hashFile(bytes.slice());
+    const { root, blocks } = await hashFile(new Uint8Array(bytes));
     return this.serialise(() => {
       for (const [cid, block] of blocks) {
         this.hold(cid, block);
@@ -90,7 +96,7 @@ export class MemoryBlobStore implements BlobStore {
 
   async putBlock(cid: string, bytes: Uint8Array): Promise<void> {
     // One copy, taken before the first await, is what is checked and what is kept.
-    const own = bytes.slice();
+    const own = new Uint8Array(bytes);
     await checkBlock(cid, own);
     return this.serialise(() => {
       this.hold(cid, own);
@@ -98,7 +104,10 @@ export class MemoryBlobStore implements BlobStore {
   }
 
   getBlock(cid: string): Promise<Uint8Array | null> {
-    return this.serialise(() => this.blocks.get(cid)?.bytes.slice() ?? null);
+    return this.serialise(() => {
+      const held = this.blocks.get(cid);
+      return held === undefined ? null : new Uint8Array(held.bytes);
+    });
   }
 
   has(cid: string): Promise<boolean> {

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **The SQLite vault in Chromium, as on Node.** The three conformance
+  suites — `eventStoreSuite`, `objectStoreSuite`, `vaultSuite` — now
+  run over the wasm pool in the Chromium Worker as they run over
+  `node:sqlite`, through openers the two share
+  (`test/v3/sqlite/suite-openers.ts`); the Worker's bundle takes the
+  `vitest` the suites import from `test/browser/vitest-stand-in.ts`,
+  which collects the tests and asserts with vitest's own matchers over
+  chai (`@vitest/expect` and `chai` join the dev dependencies), and the
+  Chromium run reports every collected test as a case. A portable
+  snapshot of a sample vault crosses between the platforms each way
+  (`test/v3/sqlite/exchange.ts`): exported on Node, it inspects in the
+  Worker to the same logical values; restored, extended and exported
+  there, it inspects on Node to the same and imports into the sample
+  vault as the one event and the one object it added. An object of
+  64 MiB streams through a commit, a read, an export and a restore on
+  both platforms with what the platform holds sampled — SQLite's own
+  count in the Worker, JavaScript's after a collection on Node,
+  vitest's forks given `--expose-gc` — and bounded to grow with none of
+  it. A driver case reports each platform's durability configuration —
+  foreign keys enforced, the journal one SQLite recovers from,
+  `synchronous` not off — and the README states it: WAL with
+  `synchronous=NORMAL` for a runtime on Node, a rollback journal with
+  `synchronous=FULL` for a snapshot on Node and for everything in the
+  Worker.
 - **The portable snapshot: export, validation, inspection.**
   `exportVault(runtime, open, { heldRoots, maxBytes })` in
   `@estoc/event-store/v3` builds a portable snapshot of any runtime —

@@ -13,7 +13,9 @@ so far is the model, its reference in memory, the SQLite driver the
 persistent stores are written against, the vault's schema and opening
 over it, the event store and the object store over that, the SQLite
 vault over both, and the portable snapshot: export, its validation
-and its inspection, restore and import.
+and its inspection, restore and import — the whole of it run in a
+Chromium Worker as it is on Node, one snapshot exchanged between the
+two.
 
 The event model: RFC 8785 canonical JSON and a strict parser; the
 six-field envelope `eventId`/`at`/`author`/`type`/`roots`/`data` and its
@@ -124,7 +126,14 @@ and the VFS, so two spellings contend and two directories never share
 a pool, and a closed pool refuses every call. The driver cases in
 `test/v3/sqlite/driver-cases.ts` run over both, Node on a file and in
 memory and Chromium in a Worker; the pool's own cases are in
-`test/browser/pool-cases.ts`.
+`test/browser/pool-cases.ts`. In Chromium the page spawns the Workers
+all at once, each over a directory of its own: a case marked `large`
+— one moving tens of mebibytes — gets a Worker to itself and the rest
+of its list share one, so the run takes as long as its slowest
+Worker rather than the sum of every case (`test/browser/sqlite-page.ts`);
+on Node the large cases alone get the long time limit. The browser runs a profile
+on disk, whose storage quota follows the disk; an ephemeral context's
+follows memory and runs out under the large cases' databases at once.
 
 Over the driver, the vault's schema and its opening. `createTables`
 makes the five common tables — `vault_meta`, `keystore`, `events`,
@@ -536,6 +545,83 @@ refused; and an import interrupted at every statement of its
 transaction, or at its `COMMIT`, leaving the whole old union or the
 whole new. `test/v3/sqlite/import.test.ts` adds a restore into a
 destination of either journal.
+
+The two platforms, side by side. The three conformance suites —
+`eventStoreSuite`, `objectStoreSuite`, `vaultSuite` — run over the
+wasm pool in the Chromium Worker as they run over `node:sqlite` in
+memory and on files, through the same openers
+(`test/v3/sqlite/suite-openers.ts`); the Worker's bundle gets the
+`vitest` the suites import from `test/browser/vitest-stand-in.ts`,
+whose `describe` and `it` collect the tests for the Worker to run one
+at a time and whose `expect` is vitest's own matchers over chai, so a
+suite asserts in the Worker exactly what it asserts under vitest, and
+`test/v3/sqlite/browser-driver.test.ts` reports each collected test
+as a case of its own. One portable snapshot crosses between them
+(`test/v3/sqlite/exchange.ts`): a sample vault — text with control
+characters and numbers of every JSON kind in the events' data, a
+type outside ASCII, a second author's event, the empty object, one
+across a chunk boundary and one of bytes that are no text — is
+exported on Node, inspected there, sent to the Worker, and inspected
+there to the same values: the metadata, the wrapper, what validation
+counted, every event as scanned and every object's key, codec, size
+and bytes as read; the Worker restores it, commits one more event
+over one more object and exports again, and that file, sent back,
+inspects on Node as it did in the Worker and imports into the sample
+vault as exactly the one event and the one object. An object of 64
+MiB streams through a commit, a read, an export and a restore on
+both platforms under a source that reuses one buffer, with what the
+platform holds sampled on the way, in two measures. What JavaScript
+holds once garbage is collected — the heap and the backing stores of
+its array buffers — on Node from `process.memoryUsage`, the collector
+taken from V8 at run time (`test/v3/sqlite/node-memory.ts`); in the Worker from
+outside it, over the DevTools protocol the test exposes to the page
+before it loads (`Target.exposeDevToolsProtocol`), which attaches to
+the Worker's target by name, collects its garbage and reads
+`Runtime.getHeapUsage` (`test/browser/sqlite-page.ts`); both collect
+twice, since the backing stores a collection frees are swept after
+it. And what SQLite's allocator holds, which is outside those backing
+stores: `sqlite3_status` on the wasm build, where the Worker reads
+it; `node:sqlite` exposes no such count, so on Node only the first
+measure is taken. The resident set is not measured, since glibc
+keeps what the transient mebibyte buffers were freed into. While
+the export and the restore copy, their source is watched from the
+test's side and what is held sampled every mebibyte read, the most of
+those the copy's sample: the batch an export gathers before a
+transaction, seen while it is held. The bounds are on growth, one
+table for each measure (`test/v3/sqlite/export-cases.ts`). For
+JavaScript: none across the second half of the commit or of the
+read, a batch's worth at most while a copy runs, none from the
+commit to the restore, and less than half the object in all. For
+SQLite: none across the second half of the commit, whose staging
+spills to the temporary file, or of the read; a connection's page
+cache — 16 MiB, the wasm build's default — while the export copies
+into its destination, two while the restore reads its snapshot and
+writes its destination, both freed when they close; and in all the
+vault's own cache the commit fills, its staging cache, and little
+else. Two cases turn the measures on themselves: with a copy of
+every chunk kept as it passes through, every JavaScript bound breaks
+on both platforms and no SQLite bound, and once the copies are let
+go what is held falls back; with every connection's cache enlarged
+to the object, the export's, the restore's and the vault's own
+SQLite bounds break and no JavaScript bound, and closing frees it.
+The staging case does the same for the temporary cache: told to
+cache the staging, SQLite is seen to hold it.
+
+The durability configuration on each platform, reported by the
+driver case that checks it. On `node:sqlite`, foreign keys are
+enforced by the binding's default, a created runtime runs in WAL
+with `synchronous=NORMAL` — durable against a crash of the process,
+consistent after a loss of power, the last transactions possibly
+lost — and a portable snapshot is built in a rollback journal
+(`journal_mode=DELETE`) with `synchronous=FULL`, so the file stands
+alone; a restore's destination is a created runtime and runs as one.
+In the Worker, foreign keys are enabled on every connection, and the
+pool's databases run in a rollback journal with `synchronous=FULL`,
+the wasm build's defaults over the access-handle pool, whose sync is
+the handle's flush; a snapshot built there is in the same journal.
+On both, the temporary database is on a file (`temp_store=FILE`),
+and `journal_mode=OFF` or `MEMORY` and `synchronous=OFF` are never
+set.
 
 Everything below is
 version 2, which stays until the vault switches over.

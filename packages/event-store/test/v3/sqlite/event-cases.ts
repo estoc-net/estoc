@@ -9,7 +9,7 @@
 
 import { SqliteEventStore, compareEvents, createRuntime, openRuntime, type Draft, type Event, type OpenMode, type SqliteDriver } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
 
 export interface EventHarness {
   /** A target no database exists at yet. */
@@ -17,8 +17,7 @@ export interface EventHarness {
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
 }
 
-export interface EventCase {
-  name: string;
+export interface EventCase extends Case {
   run(harness: EventHarness): Promise<string | void>;
 }
 

@@ -50,8 +50,9 @@ export class FolderBlobStore implements BlobStore {
 
   async put(bytes: Uint8Array): Promise<string> {
     this.ctx.guard();
-    // Copy before the first await: the chunks are views of the input.
-    const { root, blocks } = await hashFile(bytes.slice());
+    // Copy before the first await: the chunks are views of the input. By
+    // `new Uint8Array`, never `slice()`, which on a Node `Buffer` is a view.
+    const { root, blocks } = await hashFile(new Uint8Array(bytes));
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
       // leaves before root, and a block already here is rewritten so its time is renewed
@@ -72,7 +73,7 @@ export class FolderBlobStore implements BlobStore {
 
   async putBlock(cid: string, bytes: Uint8Array): Promise<void> {
     this.ctx.guard();
-    const own = bytes.slice();
+    const own = new Uint8Array(bytes);
     await checkBlock(cid, own);
     return this.ctx.serial.run(async () => {
       this.ctx.alive();
