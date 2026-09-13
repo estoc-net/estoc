@@ -90,11 +90,13 @@ event set, checked by shuffling; what needs the seed, whether an
 entity's document carries the keys its ID derives, is `verifyDidKeys` /
 `verifyMediationKeys` beside the fold, whose verdicts are handed back
 in, `foldWithSeed` doing both in one motion, and what needs the retained
-documents, whether a transition's proof verifies against the exact
-predecessor, is `verifyTransitions`, `foldRelationshipsVerified` doing
-both; until the seed has confirmed an entity it is pending, never live,
-and until a proof has been checked its edge is deferred, never
-applied). Every published
+documents, whether a resolution's snapshot is its document's and
+whether a transition's proof verifies against the exact predecessor,
+is `verifyResolutions` / `verifyTransitions`,
+`foldRelationshipsVerified` doing all of it; until the seed has
+confirmed an entity it is pending, never live, and until a snapshot or
+a proof has been checked what rests on it is deferred, never applied).
+Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
 there too.

@@ -97,16 +97,28 @@
   must hold together: resolution at the local DID's key-agreement key,
   distinct addresses deriving the ID — and folds the two chains from
   it. The local chain follows `relationship.localTransitioned`, the
-  peer chain `relationship.peerTransitioned`; at each node the one edge
-  leaving it is checked for everything the evidence here can settle (a
-  cycle, competing successors, a successor entity in conflict, a
-  predecessor snapshot that is not the chain's document, a successor
-  resolution that says otherwise, a local key outside the local
-  history, a carrier bound elsewhere, a trigger that confirms nothing,
-  a proof found invalid) before it waits for what is absent (the proof
-  check, the successor's creation or resolution, the predecessor's
-  confirmation, the carrier, a rooted prefix); equal edges are one, and
-  no timestamp ever picks a branch. Each relationship exposes
+  peer chain `relationship.peerTransitioned`; every edge is judged on
+  its own evidence first — a successor entity in conflict, a
+  predecessor or successor reference of another type, a successor
+  resolution that says otherwise or whose snapshot is not its
+  document's, a local key outside a complete local history, a carrier
+  bound elsewhere or whose observation group disputes the intent, a
+  trigger that confirms nothing, a proof found invalid are its own
+  conflicts; the proof check, the successor's creation or resolution
+  and its snapshot verdict, a witnessing observation that derives its
+  message ID from its resolution, the predecessor's confirmation by
+  input scoped to this relationship are what it waits for — and only
+  then are equal edges merged, so a contradiction in one duplicate is
+  never covered by another; at each node the one class leaving it is
+  applied, a cycle or a predecessor snapshot that is not the chain's
+  document conflicts, competing classes conflict, and no timestamp
+  ever picks a branch. A local edge's predecessor is confirmed only by
+  an observation whose scope in the relationship is complete: a root
+  sender under the pinned root document, a successor under the applied
+  transition it names, or a carrier under the applied transition it
+  witnesses, bound or not; since that scope comes from the peer chain
+  and a peer edge's key from the local chain, the two are folded
+  together until neither grows. Each relationship exposes
   `localChain`, `peerChain`, `currentLocalDidId`, `currentPeerDid`,
   `recipientKeyNames`, the one `contactId` or a conflict of several,
   `deferred` and `faults`. The fold exposes every transition's status,
@@ -115,12 +127,16 @@
   a conflict for each — `retainedDidIds` for `requiredReceivingSet`,
   and the pending claims a proof-free delivery must wait at: a committed
   carrier whose proof names its sender and has no applied transition,
-  or a deferred edge. `verifyTransitions` checks every proof beside the
-  fold against the exact predecessor document — a local edge's against
-  the predecessor entity's own, a peer edge's against the named prior
-  resolution's, derived from a numalgo-4 long form or read from the
-  object store — and `foldRelationshipsVerified` folds with the
-  verdicts in; an unchecked edge is deferred, never applied.
+  or a deferred edge at every pair it would add. Beside the fold,
+  `verifyResolutions` checks every `peer.resolved` snapshot against its
+  own document — derived from a numalgo-4 long form or read from the
+  object store under its CID — for the method IDs it enumerates and
+  the key it authenticates, and `verifyTransitions` checks every proof
+  against the exact predecessor document, a local edge's against the
+  predecessor entity's own, a peer edge's against the named prior
+  resolution's; `foldRelationshipsVerified` folds with both verdicts
+  in. An unchecked root snapshot leaves the binding standing on
+  nothing, an unchecked edge is deferred, never applied.
   `fromPriorClaims` reads a proof's claims without verifying it.
   `bindingHolds` is now shared with the invitation fold.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s

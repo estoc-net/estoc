@@ -170,7 +170,7 @@ export {
   requiredReceivingSet,
 } from "./fold/routes.js";
 export {
-  type ProofCheck,
+  type EvidenceCheck,
   type LocalNode,
   type PeerNode,
   type TransitionStatus,
@@ -181,6 +181,7 @@ export {
   type ReadObject,
   foldRelationships,
   bindingHolds,
+  verifyResolutions,
   verifyTransitions,
   foldRelationshipsVerified,
 } from "./fold/relationships.js";
