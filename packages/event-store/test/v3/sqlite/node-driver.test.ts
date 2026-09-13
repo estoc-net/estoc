@@ -26,6 +26,8 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+const LARGE_CASE_TIME_LIMIT = 120_000;
+
 const onFile: DriverHarness = {
   fresh: () => path.join(dir, `db-${n++}.sqlite`),
   open: async (target, mode) => openNodeSqlite(target, { mode }),
@@ -44,10 +46,14 @@ for (const [name, harness] of [
 ] as const) {
   describe(`node:sqlite driver ${name}`, () => {
     for (const c of driverCases) {
-      it.skipIf(c.needsPersistence === true && !harness.persistent)(c.name, async () => {
-        const note = await c.run(harness);
-        if (note !== undefined) console.info(`${name}: ${c.name}: ${note}`);
-      });
+      it.skipIf(c.needsPersistence === true && !harness.persistent)(
+        c.name,
+        async () => {
+          const note = await c.run(harness);
+          if (note !== undefined) console.info(`${name}: ${c.name}: ${note}`);
+        },
+        c.large ? LARGE_CASE_TIME_LIMIT : undefined
+      );
     }
   });
 }

@@ -129,9 +129,9 @@ memory and Chromium in a Worker; the pool's own cases are in
 `test/browser/pool-cases.ts`. In Chromium the page spawns the Workers
 all at once, each over a directory of its own: a case marked `large`
 — one moving tens of mebibytes — gets a Worker to itself and the rest
-of its list share one, so the run takes as long as its longest case
-rather than the sum (`test/browser/sqlite-page.ts`); on Node the
-large cases alone get the long time limit. The browser runs a profile
+of its list share one, so the run takes as long as its slowest
+Worker rather than the sum of every case (`test/browser/sqlite-page.ts`);
+on Node the large cases alone get the long time limit. The browser runs a profile
 on disk, whose storage quota follows the disk; an ephemeral context's
 follows memory and runs out under the large cases' databases at once.
 
