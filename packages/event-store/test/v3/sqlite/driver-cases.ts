@@ -29,6 +29,18 @@ export interface DriverCase {
 
 export const MIB = 1024 * 1024;
 
+/**
+ * What a platform holds, in bytes, as a harness reports it: what
+ * JavaScript holds once garbage is collected — the heap and the backing
+ * stores of its array buffers — and, where the platform's SQLite is the
+ * wasm build, what SQLite's own allocator holds, which is outside those
+ * backing stores; `node:sqlite` exposes no such count.
+ */
+export interface MemoryHeld {
+  javascript: number;
+  sqlite?: number;
+}
+
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }

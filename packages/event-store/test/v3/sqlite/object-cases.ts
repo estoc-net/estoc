@@ -25,14 +25,13 @@ import {
   type SqliteDriver,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects, assertThrows } from "./driver-cases.js";
+import { assert, assertBytes, assertEqual, assertRejects, assertThrows, type MemoryHeld } from "./driver-cases.js";
 
 export interface ObjectHarness {
   /** A target no database exists at yet. */
   fresh(): string;
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
-  /** What JavaScript holds on the platform, in bytes, once garbage is collected: the heap and the backing stores of its array buffers; not what SQLite's wasm build allocates within its own memory. */
-  memoryUsed?: () => number | Promise<number>;
+  memoryUsed?: () => MemoryHeld | Promise<MemoryHeld>;
 }
 
 export interface ObjectCase {
@@ -380,7 +379,7 @@ export const objectCases: ObjectCase[] = [
     },
   },
   {
-    name: "staging goes to the temporary database's file under a bounded cache, so what is held does not grow with the object; a put past the staging bound is refused with nothing staged",
+    name: "staging goes to the temporary database's file under a bounded cache, so neither what JavaScript nor what SQLite holds grows with the object — and told to cache the whole staging, SQLite does; a put past the staging bound is refused with nothing staged",
     run: async (h) => {
       const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
       const store = new SqliteObjectStore(db, { maxStagedBytes: 40 * MIB });
@@ -394,24 +393,50 @@ export const objectCases: ObjectCase[] = [
         }
       }
       const { cid } = await hashSource(reusing(), total * MIB, () => undefined);
-      const samples: number[] = [];
-      async function* sampled(): AsyncIterable<Uint8Array> {
-        let i = 0;
-        for await (const chunk of reusing()) {
-          yield chunk;
-          i += 1;
-          if (i % 8 === 0 && h.memoryUsed !== undefined) samples.push(await h.memoryUsed());
-        }
-      }
+      /** The source, what the platform holds sampled into `samples` at 8, 16 and 24 MiB staged. */
+      const sampled = (samples: MemoryHeld[]): AsyncIterable<Uint8Array> =>
+        (async function* () {
+          let i = 0;
+          for await (const chunk of reusing()) {
+            yield chunk;
+            i += 1;
+            if (i % 8 === 0 && h.memoryUsed !== undefined) samples.push(await h.memoryUsed());
+          }
+        })();
+      const grew = (samples: MemoryHeld[], of: keyof MemoryHeld): number | undefined => {
+        const [at8, , at24] = samples;
+        return at8?.[of] === undefined || at24?.[of] === undefined ? undefined : at24[of] - at8[of];
+      };
+      const shown = (samples: MemoryHeld[]): string => samples.map((held) => `${(held.javascript / MIB).toFixed(1)}${held.sqlite === undefined ? "" : ` / SQLite ${(held.sqlite / MIB).toFixed(1)}`}`).join(", ");
+      const samples: MemoryHeld[] = [];
       const prepared = store.prepare();
-      await prepared.putObject(cid.text as Cid, sampled());
+      await prepared.putObject(cid.text as Cid, sampled(samples));
       assertEqual(rows(db.driver, "SELECT count(*) AS n, sum(length(bytes)) AS bytes FROM temp.staging_chunks"), [{ n: total, bytes: total * MIB }], "staged whole");
       assertEqual(rows(db.driver, "SELECT count(*) AS n FROM object_chunks"), [{ n: 0 }], "none accepted");
       let note: string | undefined;
       if (samples.length === 3) {
-        const [at8, , at24] = samples as [number, number, number];
-        note = `held ${samples.map((n) => `${(n / MIB).toFixed(1)} MiB`).join(", ")} at 8, 16 and 24 MiB staged`;
-        assert(at24 - at8 < 4 * MIB, `what is held does not grow with the staging: ${note}`);
+        note = `held ${shown(samples)} MiB at 8, 16 and 24 MiB staged`;
+        const javascript = grew(samples, "javascript");
+        assert(javascript !== undefined && javascript < 4 * MIB, `what JavaScript holds does not grow with the staging: ${note}`);
+        const sqlite = grew(samples, "sqlite");
+        if (sqlite !== undefined) {
+          assert(sqlite < 4 * MIB, `what SQLite holds does not grow with the staging: ${note}`);
+          // The same staging under a temporary cache the size of the object: the bound above is the cache's doing, and the measure sees the cache fill.
+          const caching = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
+          try {
+            const cachingStore = new SqliteObjectStore(caching, { maxStagedBytes: 40 * MIB });
+            const small = bytesOf(16, 3);
+            await cachingStore.prepare().putObject(cidOf(small), small); // the first staging sets the temporary database's bounded cache; enlarged from here
+            caching.driver.exec(`PRAGMA temp.cache_size = -${32 * 1024}`);
+            const cached: MemoryHeld[] = [];
+            await cachingStore.prepare().putObject(cid.text as Cid, sampled(cached));
+            const cachedSqlite = grew(cached, "sqlite");
+            assert(cachedSqlite !== undefined && cachedSqlite >= 12 * MIB, `told to cache the staging, SQLite holds it: held ${shown(cached)} MiB at 8, 16 and 24 MiB staged`);
+            note += `; told to cache, SQLite held ${shown(cached)} MiB`;
+          } finally {
+            caching.close();
+          }
+        }
       }
       const other = store.prepare();
       await assertRejects(() => other.putObject(cid.text as Cid, reusing()), "StagingFull", "a second put past the bound");
