@@ -380,6 +380,9 @@ importers:
 
   packages/vault:
     dependencies:
+      '@estoc/did-peer':
+        specifier: workspace:^
+        version: link:../did-peer
       '@estoc/event-store':
         specifier: workspace:^
         version: link:../event-store
@@ -398,6 +401,12 @@ importers:
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
+      ipaddr.js:
+        specifier: ^2.5.0
+        version: 2.5.0
+      jose:
+        specifier: ^6.0.0
+        version: 6.2.9
       multiformats:
         specifier: ^14.0.5
         version: 14.0.5

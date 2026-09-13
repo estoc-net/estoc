@@ -1,9 +1,11 @@
 /**
- * The spellings the payload schemas check: what a DID, a DID URL, a
- * UUID of a given version, a key name, a message hash and a compact JWT
- * look like. Syntax only — whether a DID resolves or a JWT verifies is
+ * The spellings the payload schemas and the documents check: what a
+ * DID, a DID URL, a URI, a UUID of a given version, a key name, a
+ * message hash and a compact JWT look like. Syntax only — whether a DID resolves or a JWT verifies is
  * for the code that holds the evidence.
  */
+
+import ipaddr from "ipaddr.js";
 
 // DID Core ABNF: `did:` a method name of lowercase letters and digits, then
 // colon-separated segments of ALPHA / DIGIT / "." / "-" / "_" / pct-encoded.
@@ -16,7 +18,33 @@ const DID = new RegExp(`^${DID_SYNTAX}$`);
 // normalizes what it is given instead of refusing it, so it cannot decide
 // whether the exact spelling is one.
 const PCHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})";
-const DID_URL = new RegExp(`^${DID_SYNTAX}(?:/${PCHAR}*)*(?:\\?(?:${PCHAR}|[/?])*)?(?:#(?:${PCHAR}|[/?])*)?$`);
+const QUERY_OR_FRAGMENT = `(?:${PCHAR}|[/?])*`;
+const DID_URL = new RegExp(`^${DID_SYNTAX}(?:/${PCHAR}*)*(?:\\?${QUERY_OR_FRAGMENT})?(?:#${QUERY_OR_FRAGMENT})?$`);
+// RFC 3986 §3 URI: scheme, then an authority with path-abempty or a path
+// that is absolute, rootless or empty, then query and fragment. The host is
+// an IP literal, an IPv4 address or a reg-name; the last two share one
+// character set, so one alternative covers both. A bracketed literal is
+// captured and checked apart: `ipaddr.js` decides whether it is an IPv6
+// address, since the grammar of groups, `::` and an embedded IPv4 tail is
+// not a character set, and the URI layer adds what the library does not
+// hold to: the tail in strict dotted decimal, no zone identifier, and
+// IPvFuture under its own grammar.
+const REG_CHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=-]|%[0-9A-Fa-f]{2})";
+const HOST = `(?:\\[([^\\]]*)\\]|${REG_CHAR}*)`;
+const AUTHORITY = `(?:(?:${REG_CHAR}|:)*@)?${HOST}(?::[0-9]*)?`;
+const HIER_PART = `(?://${AUTHORITY}(?:/${PCHAR}*)*|/(?:${PCHAR}+(?:/${PCHAR}*)*)?|${PCHAR}+(?:/${PCHAR}*)*|)`;
+const URI = new RegExp(`^[A-Za-z][A-Za-z0-9+.-]*:${HIER_PART}(?:\\?${QUERY_OR_FRAGMENT})?(?:#${QUERY_OR_FRAGMENT})?$`);
+const IPV_FUTURE = /^[vV][0-9A-Fa-f]+\.[A-Za-z0-9._~!$&'()*+,;=:-]+$/;
+const IPV6_CHARS = /^[0-9A-Fa-f:.]+$/;
+const DEC_OCTET = "(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])";
+const IPV4 = new RegExp(`^${DEC_OCTET}(?:\\.${DEC_OCTET}){3}$`);
+
+function isIpLiteral(literal: string): boolean {
+  if (IPV_FUTURE.test(literal)) return true;
+  if (!IPV6_CHARS.test(literal) || !ipaddr.IPv6.isValid(literal)) return false;
+  return !literal.includes(".") || IPV4.test(literal.slice(literal.lastIndexOf(":") + 1));
+}
+
 /** The did:peer numalgo-4 spellings: the short form is `4` and a base58btc multihash, the long form adds the encoded document. */
 const PEER4_SHORT = /^did:peer:4z[1-9A-HJ-NP-Za-km-z]+$/;
 const PEER4_LONG = /^did:peer:4z[1-9A-HJ-NP-Za-km-z]+:z[1-9A-HJ-NP-Za-km-z]+$/;
@@ -32,6 +60,11 @@ const RECEIPT_ORDINAL = /^[1-9][0-9]*$/;
 
 export const isDid = (value: unknown): value is string => typeof value === "string" && DID.test(value);
 export const isDidUrl = (value: unknown): value is string => typeof value === "string" && DID_URL.test(value);
+export const isUri = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  const match = URI.exec(value);
+  return match !== null && (match[1] === undefined || isIpLiteral(match[1]));
+};
 export const isPeer4Short = (value: unknown): value is string => typeof value === "string" && PEER4_SHORT.test(value);
 export const isPeer4Long = (value: unknown): value is string => typeof value === "string" && PEER4_LONG.test(value);
 export const isMintedId = (value: unknown): value is string => typeof value === "string" && UUID_V7.test(value);

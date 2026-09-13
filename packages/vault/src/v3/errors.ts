@@ -32,3 +32,35 @@ export class InvalidPayload extends Error {
     this.name = "InvalidPayload";
   }
 }
+
+/** A DID document, or a numalgo-4 long form, that the resolution rules refuse. */
+export class InvalidDidDocument extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidDidDocument";
+  }
+}
+
+/** A `from_prior` JWT that the pinned predecessor document does not authorize. */
+export class InvalidFromPrior extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidFromPrior";
+  }
+}
+
+/** The seed in hand does not derive what the vault records: its anchor, or a DID entity's spelling. */
+export class IdentityMismatch extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IdentityMismatch";
+  }
+}
+
+/** A `Keys` whose seed has been dropped; nothing derives any more. */
+export class Locked extends Error {
+  constructor() {
+    super("the keys are locked");
+    this.name = "Locked";
+  }
+}
