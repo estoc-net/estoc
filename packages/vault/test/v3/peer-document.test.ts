@@ -116,10 +116,10 @@ describe("peerResolution", () => {
     refused({ ...INPUT, verificationMethod: [{ id: "did:web:unrelated.example#key-1", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
     refused({ ...INPUT, authentication: [{ id: "did:web:unrelated.example#e", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
     refused({ ...INPUT, verificationMethod: 1 }, /verificationMethod is an array/);
-    refused({ ...INPUT, verificationMethod: [{ type: "Multikey", publicKeyMultibase: ED_KEY }] }, /verificationMethod is an array of verification methods/);
-    refused({ ...INPUT, authentication: [1] }, /authentication is an array of references/);
-    refused({ ...INPUT, service: ["#service"] }, /service is an array of services with an id and a type/);
-    refused({ ...INPUT, alsoKnownAs: [1] }, /alsoKnownAs is an array of strings/);
+    refused({ ...INPUT, verificationMethod: [{ type: "Multikey", publicKeyMultibase: ED_KEY }] }, /verificationMethod\[0\] has a string id/);
+    refused({ ...INPUT, authentication: [1] }, /authentication\[0\] is an object/);
+    refused({ ...INPUT, service: ["#service"] }, /service\[0\] is an object/);
+    refused({ ...INPUT, alsoKnownAs: [1] }, /alsoKnownAs\[0\] is a string/);
     refused({ ...INPUT, authentication: ["#nope"] }, /references no verification method/);
     refused({ ...INPUT, keyAgreement: ["key-2"] }, /DID URL or a fragment reference/);
   });
@@ -131,23 +131,69 @@ describe("peerResolution", () => {
     };
     const patched = (base: JsonObject, patch: Record<string, unknown>): JsonObject => Object.fromEntries(Object.entries({ ...base, ...patch }).filter(([, value]) => value !== undefined)) as JsonObject;
     const method = (patch: Record<string, unknown>): JsonObject => ({ ...INPUT, verificationMethod: [patched({ id: "#key-1", type: "Multikey", publicKeyMultibase: ED_KEY }, patch), { id: "#key-2", type: "Multikey", publicKeyMultibase: X_KEY }] });
-    const shape = /verificationMethod is an array of verification methods/;
-    refused(method({ type: 7 }), shape);
-    refused(method({ type: undefined }), shape);
-    refused(method({ controller: 7 }), shape);
-    refused(method({ controller: "bob.example" }), shape);
-    refused(method({ publicKeyMultibase: undefined }), shape);
-    refused(method({ publicKeyJwk: { kty: "OKP" } }), shape);
-    refused({ ...INPUT, authentication: [{ id: "#embedded", publicKeyMultibase: ED_KEY2 }] }, /authentication is an array of references or embedded verification methods/);
+    refused(method({ type: 7 }), /verificationMethod\[0\] has a string type/);
+    refused(method({ type: undefined }), /verificationMethod\[0\] has a string type/);
+    refused(method({ controller: 7 }), /verificationMethod\[0\] has a DID controller if any/);
+    refused(method({ controller: "bob.example" }), /verificationMethod\[0\] has a DID controller if any/);
+    refused(method({ publicKeyMultibase: undefined }), /verificationMethod\[0\] carries one of publicKeyMultibase and publicKeyJwk/);
+    refused(method({ publicKeyJwk: { kty: "OKP" } }), /verificationMethod\[0\] carries one of publicKeyMultibase and publicKeyJwk/);
+    refused(method({ publicKeyMultibase: 7 }), /verificationMethod\[0\] has a string publicKeyMultibase/);
+    refused(method({ publicKeyMultibase: undefined, publicKeyJwk: "x" }), /verificationMethod\[0\] has an object publicKeyJwk/);
+    refused({ ...INPUT, authentication: [{ id: "#embedded", publicKeyMultibase: ED_KEY2 }] }, /authentication\[0\] has a string type/);
     const service = (patch: Record<string, unknown>): JsonObject => ({ ...INPUT, service: [patched({ id: "#service", type: "DIDCommMessaging", serviceEndpoint: "https://a.example" }, patch)] });
     refused(service({ id: "#bad id" }), /service\[0\]\.id is a DID URL or a fragment reference/);
     refused(service({ id: "#bad%escape" }), /service\[0\]\.id is a DID URL or a fragment reference/);
     refused(service({ id: "service" }), /service\[0\]\.id is a DID URL or a fragment reference/);
-    refused(service({ type: undefined }), /services with an id and a type/);
-    refused(service({ type: [] }), /services with an id and a type/);
+    refused(service({ type: undefined }), /service\[0\] has a type, a string or strings/);
+    refused(service({ type: [] }), /service\[0\] has a type, a string or strings/);
     refused({ ...INPUT, service: [...(INPUT["service"] as JsonObject[]), { id: "#service", type: "LinkedDomains", serviceEndpoint: "https://bob.example" }] }, /two services are/);
     for (const relationship of ["assertionMethod", "capabilityInvocation", "capabilityDelegation"]) refused({ ...INPUT, [relationship]: ["#absent"] }, /references no verification method/);
     refused(service({ id: "did:web:bob.example#svc" }), /Service id must be a relative reference/);
+  });
+});
+
+describe("peerResolution on key material and service endpoints", () => {
+  const refused = (document: JsonObject, message: RegExp) => {
+    expect(() => peerResolution(encodeLongForm(document))).toThrow(message);
+    expect(() => canonicalDidOf(encodeLongForm(document))).toThrow(InvalidDidDocument);
+  };
+  const jwk = { kty: "OKP", crv: "Ed25519", x: base64urlnopad.encode(ED_PUBLIC) };
+  const withJwk = (patch: JsonObject): JsonObject => ({ ...INPUT, verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: { ...jwk, ...patch } }, ...(INPUT["verificationMethod"] as JsonObject[]).slice(1)] });
+
+  it("refuses a publicKeyJwk carrying any private or symmetric member, listed or embedded, and keeps one with public members and metadata", () => {
+    refused(withJwk({ d: base64urlnopad.encode(new Uint8Array(32).fill(1)) }), /verificationMethod\[0\] has a publicKeyJwk without the private member d/);
+    for (const member of ["p", "q", "dp", "dq", "qi", "oth", "k"]) refused(withJwk({ [member]: "x" }), new RegExp(`without the private member ${member}`));
+    refused({ ...INPUT, authentication: [{ id: "#e", type: "JsonWebKey2020", publicKeyJwk: { ...jwk, d: "x" } }] }, /authentication\[0\] has a publicKeyJwk without the private member d/);
+    const resolved = peerResolution(encodeLongForm(withJwk({ kid: "k1", alg: "EdDSA", use: "sig", key_ops: ["verify"] })));
+    expect(methodPublicKey(resolved.document, `${resolved.presentedDid}#key-1` as DidUrl)).toBe(ED_KEY);
+  });
+
+  const service = (endpoint: unknown): JsonObject => {
+    const other: Record<string, unknown> = { id: "#other", type: "LinkedDomains" };
+    if (endpoint !== undefined) other["serviceEndpoint"] = endpoint;
+    return { ...INPUT, service: [...(INPUT["service"] as JsonObject[]), other as JsonObject] };
+  };
+
+  it("requires every service, DIDComm or not, to carry an endpoint: a URI, an object, or a non-empty array of either", () => {
+    refused(service(undefined), /service\[1\] has a serviceEndpoint that is a URI or an object/);
+    refused(service(7), /service\[1\] has a serviceEndpoint that is a URI or an object/);
+    refused(service(null), /service\[1\] has a serviceEndpoint that is a URI or an object/);
+    refused(service([]), /service\[1\] has a serviceEndpoint that is not empty/);
+    refused(service(["https://a.example", 7]), /service\[1\] has a serviceEndpoint that is a URI or an object/);
+    refused(service("not a URI"), /service\[1\] has a serviceEndpoint that is a URI/);
+    for (const endpoint of ["https://a.example", { origins: ["https://a.example"] }, ["https://a.example", { uri: "wss://b.example" }]]) {
+      const resolved = peerResolution(encodeLongForm(service(endpoint)));
+      expect((resolved.document["service"] as JsonObject[])[1]?.["serviceEndpoint"]).toEqual(endpoint);
+    }
+  });
+
+  it("holds a string endpoint to RFC 3986 URI syntax", () => {
+    for (const uri of ["did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc", "https://a.example:8443/p/q?x=1&y#frag", "wss://[::1]:9/x", "http://user:pw@10.0.0.1/", "mailto:bob@example.com", "urn:uuid:019b2a54-05bd-74ef-b8ac-e8375cb776c2", "file:///tmp/x", "https://a.example/%E4%B8%AD", "a:"]) {
+      expect(() => peerResolution(encodeLongForm(service(uri))), uri).not.toThrow();
+    }
+    for (const bad of ["not a URI", "https://a.example/a b", "https://a.example/%zz", "//no-scheme.example", "1http://a.example", "https://a.example/#a#b", "https://a.exam ple/", "https:// a.example/", ""]) {
+      expect(() => peerResolution(encodeLongForm(service(bad))), JSON.stringify(bad)).toThrow(/serviceEndpoint that is a URI/);
+    }
   });
 });
 

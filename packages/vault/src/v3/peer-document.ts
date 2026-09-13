@@ -17,7 +17,7 @@ import { varint } from "multiformats";
 import { rawCidOfBytes } from "./document.js";
 import { InvalidDidDocument, InvalidPublicKey } from "./errors.js";
 import { canonicalPublicKey } from "./public-key.js";
-import { isDid, isDidUrl } from "./syntax.js";
+import { isDid, isDidUrl, isUri } from "./syntax.js";
 import type { Cid, Did, DidUrl, PublicKey } from "./types.js";
 
 /** The retained resolution of one numalgo-4 long form: the canonical DID, the presented spelling, and the document as object, bytes and root. */
@@ -29,36 +29,69 @@ const MULTICODEC_JSON = 0x0200;
 const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"] as const;
 export type VerificationRelationship = (typeof RELATIONSHIPS)[number];
 
-/** A verification method as a document must spell one: an id, a type, an explicit controller only as a DID, and exactly one of the two key encodings. */
-function isMethod(entry: unknown): boolean {
-  if (!isJsonObject(entry) || typeof entry["id"] !== "string" || typeof entry["type"] !== "string") return false;
+/** The members a JWK carries only when it holds a private or symmetric key. */
+const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+/**
+ * What is wrong with an entry as a verification method, or null. Whether
+ * the key it carries is of a supported type is decided where that key is
+ * used, so a method of a type this vault never uses does not fail the
+ * document.
+ */
+function methodFault(entry: unknown): string | null {
+  if (!isJsonObject(entry)) return "is an object";
+  if (typeof entry["id"] !== "string") return "has a string id";
+  if (typeof entry["type"] !== "string") return "has a string type";
   const controller = entry["controller"];
-  if (controller !== undefined && !isDid(controller)) return false;
+  if (controller !== undefined && !isDid(controller)) return "has a DID controller if any";
   const multibase = entry["publicKeyMultibase"];
   const jwk = entry["publicKeyJwk"];
-  return (typeof multibase === "string" && jwk === undefined) || (isJsonObject(jwk) && multibase === undefined);
+  if ((multibase === undefined) === (jwk === undefined)) return "carries one of publicKeyMultibase and publicKeyJwk";
+  if (multibase !== undefined && typeof multibase !== "string") return "has a string publicKeyMultibase";
+  if (jwk !== undefined) {
+    if (!isJsonObject(jwk)) return "has an object publicKeyJwk";
+    const secret = PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
+    if (secret !== undefined) return `has a publicKeyJwk without the private member ${secret}`;
+  }
+  return null;
 }
 
-function isService(entry: unknown): boolean {
-  if (!isJsonObject(entry) || typeof entry["id"] !== "string") return false;
+function endpointFault(endpoint: unknown): string | null {
+  if (typeof endpoint === "string") return isUri(endpoint) ? null : "has a serviceEndpoint that is a URI";
+  if (isJsonObject(endpoint)) return null;
+  return "has a serviceEndpoint that is a URI or an object";
+}
+
+function serviceFault(entry: unknown): string | null {
+  if (!isJsonObject(entry)) return "is an object";
+  if (typeof entry["id"] !== "string") return "has a string id";
   const type = entry["type"];
-  return typeof type === "string" || (Array.isArray(type) && type.length > 0 && type.every((t) => typeof t === "string"));
+  if (typeof type !== "string" && !(Array.isArray(type) && type.length > 0 && type.every((t) => typeof t === "string"))) return "has a type, a string or strings";
+  const endpoint = entry["serviceEndpoint"];
+  if (Array.isArray(endpoint)) {
+    if (endpoint.length === 0) return "has a serviceEndpoint that is not empty";
+    return endpoint.map(endpointFault).find((fault) => fault !== null) ?? null;
+  }
+  return endpointFault(endpoint);
 }
 
 function shaped(document: JsonObject): void {
-  const arrayOf = (member: string, each: (entry: unknown) => boolean, what: string) => {
+  const each = (member: string, faultOf: (entry: unknown) => string | null) => {
     const entries = document[member];
     if (entries === undefined) return;
-    if (!Array.isArray(entries) || !entries.every(each)) throw new InvalidDidDocument(`${member} is an array of ${what}`);
+    if (!Array.isArray(entries)) throw new InvalidDidDocument(`${member} is an array`);
+    entries.forEach((entry, i) => {
+      const fault = faultOf(entry);
+      if (fault !== null) throw new InvalidDidDocument(`${member}[${i}] ${fault}`);
+    });
   };
-  arrayOf("alsoKnownAs", (entry) => typeof entry === "string", "strings");
-  arrayOf("verificationMethod", isMethod, "verification methods: an id, a type, a DID controller if any, one of publicKeyMultibase and publicKeyJwk");
-  arrayOf("service", isService, "services with an id and a type");
-  for (const relationship of RELATIONSHIPS) arrayOf(relationship, (entry) => typeof entry === "string" || isMethod(entry), "references or embedded verification methods");
+  each("alsoKnownAs", (entry) => (typeof entry === "string" ? null : "is a string"));
+  each("verificationMethod", methodFault);
+  each("service", serviceFault);
+  for (const relationship of RELATIONSHIPS) each(relationship, (entry) => (typeof entry === "string" ? null : methodFault(entry)));
 }
 
-/** Each service under its absolute ID; two services may not share one. */
-function serviceIds(document: JsonObject, base: Did): void {
+function validateServiceIds(document: JsonObject, base: Did): void {
   const seen = new Set<DidUrl>();
   entriesOf(document, "service").forEach((service, i) => {
     const id = absolute((service as JsonObject)["id"], base, `service[${i}].id`);
@@ -137,7 +170,7 @@ function retainedDocumentOf(longFormDid: string): JsonObject {
     if (Array.isArray(entries)) document[member] = entries.map((entry) => withDefaultController(entry, long));
   }
   for (const relationship of RELATIONSHIPS) authorizedMethodIds(document, relationship);
-  serviceIds(document, long);
+  validateServiceIds(document, long);
   return document;
 }
 

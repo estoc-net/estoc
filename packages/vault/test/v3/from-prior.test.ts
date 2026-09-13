@@ -86,6 +86,19 @@ describe("signFromPrior over a recorded document", () => {
     expect((await verifyFromPrior(jwt, { did: resolution.did, document: resolution.document })).methodId).toBe(`${longFormDid}#auth`);
   });
 
+  it("refuses a recorded predecessor whose document leaks the entity's private key, and signs nothing for it", async () => {
+    const { keys, successor } = await setup();
+    const { inputDocument } = await mintDid(keys, PREDECESSOR, ROUTE);
+    const { authentication } = await keys.didKeys(PREDECESSOR);
+    const methods = inputDocument["verificationMethod"] as JsonObject[];
+    const leaking: JsonObject = { ...inputDocument, verificationMethod: [{ id: "#key-1", type: "JsonWebKey2020", publicKeyJwk: authentication.privateJwk() }, methods[1] as JsonObject] };
+    const longFormDid = encodeLongForm(leaking) as Did;
+    const recorded = { didId: PREDECESSOR, did: longToShort(longFormDid) as Did, longFormDid };
+    await expect(checkDidCreated(keys, recorded, ROUTE)).rejects.toThrow(/without the private member d/);
+    await expect(signFromPrior(keys, recorded, successor.longFormDid, IAT)).rejects.toThrow(InvalidFromPrior);
+    await expect(signFromPrior(keys, recorded, successor.longFormDid, IAT)).rejects.toThrow(/without the private member d/);
+  });
+
   it("refuses to sign for a predecessor whose document does not carry the entity's authentication key", async () => {
     const { keys, successor } = await setup();
     const other = await mintDid(keys, "019b2a70-0000-7000-8000-000000000000" as DidId, ROUTE);
