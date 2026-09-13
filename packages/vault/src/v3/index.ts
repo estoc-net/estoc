@@ -32,8 +32,6 @@ export type {
 
 export { InvalidIdentifier, InvalidPublicKey } from "./errors.js";
 
-export { encodeBase64Url, decodeBase64Url } from "./base64url.js";
-
 export {
   NAMESPACE_PURPOSES,
   type NamespacePurpose,

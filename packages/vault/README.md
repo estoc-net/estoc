@@ -22,9 +22,12 @@ an execution from a relationship and a wire ID, an effect key over the
 tagged producing tuple and the automatic message ID it names, the
 reserved keystore names) and the canonical public-key value
 (`public-key.ts`: the did:key encoding of the complete type-tagged key
-as base58btc multibase, from a JWK or from any multibase form, Ed25519
-and X25519 raw, the Weierstrass curves as compressed points). Every
-published vector of those documents is a test in `test/v3/`.
+as base58btc multibase, from a JWK or from its base58btc multibase form,
+Ed25519 and X25519 raw, the Weierstrass curves as compressed points that
+`@noble/curves` has verified lie on the curve; `@scure/base` does the
+base58btc and base64url). Every published
+identifier and public-key vector of those documents is a test in
+`test/v3/`.
 
 A version-2 vault is an event log — one append-only log per device,
 merged by union — and everything a person sees in it is a *fold* over

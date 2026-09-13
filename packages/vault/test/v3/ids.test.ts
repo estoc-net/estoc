@@ -187,12 +187,16 @@ describe("effectKey and automaticMessageId", () => {
     expect(automaticMessageId(keys[0] as EffectKey)).toBe(automaticMessageId(effectKey(base)));
   });
 
-  it("refuses an empty member, U+0000 in a handler ID or kind, and an ordinal that is not canonical decimal", () => {
+  it("refuses an empty member, U+0000, an unpaired surrogate or a noncharacter in a handler ID or kind, and an ordinal that is not canonical decimal", () => {
     const base = { executionId: pureAckExecution, ...PURE_ACK };
     expect(() => effectKey({ ...base, executionId: "" as ExecutionId })).toThrow(InvalidIdentifier);
     expect(() => effectKey({ ...base, handlerId: "" })).toThrow(InvalidIdentifier);
     expect(() => effectKey({ ...base, handlerId: "a\0b" })).toThrow(InvalidIdentifier);
     expect(() => effectKey({ ...base, effectKind: "pure\0ack" })).toThrow(InvalidIdentifier);
+    expect(() => effectKey({ ...base, handlerId: "handler-\ud800" })).toThrow(InvalidIdentifier);
+    expect(() => effectKey({ ...base, effectKind: "kind-\udfff" })).toThrow(InvalidIdentifier);
+    expect(() => effectKey({ ...base, handlerId: "handler-\uffff" })).toThrow(InvalidIdentifier);
+    expect(effectKey({ ...base, handlerId: "handler-\ufffd" })).not.toBe(effectKey({ ...base, handlerId: "handler-\u{10000}" }));
     expect(() => effectKey({ ...base, ordinal: "01" as never })).toThrow(InvalidIdentifier);
     expect(() => automaticMessageId("" as EffectKey)).toThrow(InvalidIdentifier);
   });

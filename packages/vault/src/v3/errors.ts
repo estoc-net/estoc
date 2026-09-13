@@ -1,5 +1,3 @@
-/** What the version-3 vault model throws. Each names the rule it stands for. */
-
 /** An input to a deterministic derivation that the derivation does not accept. */
 export class InvalidIdentifier extends Error {
   constructor(message: string) {

@@ -43,7 +43,9 @@
   "dependencies": {
     "@estoc/event-store": "workspace:^",
     "@estoc/keystore": "workspace:^",
+    "@noble/curves": "^1.9.0",
     "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.0",
     "bs58": "^6.0.0",
     "uuid": "^11.1.1"
   },

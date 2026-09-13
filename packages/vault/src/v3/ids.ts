@@ -7,11 +7,11 @@
  * specifies, never a payload or an API object standing in for it.
  */
 
-import { canonicalize, type JsonValue } from "@estoc/event-store/v3";
+import { canonicalize, forbiddenIn, type JsonValue } from "@estoc/event-store/v3";
 import { sha256 } from "@noble/hashes/sha2";
+import { base64urlnopad } from "@scure/base";
 import { v5 as uuidv5 } from "uuid";
 
-import { encodeBase64Url } from "./base64url.js";
 import { InvalidIdentifier } from "./errors.js";
 import type {
   ContactId,
@@ -133,13 +133,11 @@ export function executionId(relationship: RelationshipId, wireMessageId: WireMes
 
 const DECIMAL_ORDINAL = /^(0|[1-9][0-9]*)$/;
 
-/** The stored form of an effect ordinal. */
 export function decimalOrdinal(ordinal: number): DecimalOrdinal {
   if (!Number.isSafeInteger(ordinal) || ordinal < 0) throw new InvalidIdentifier(`not a non-negative integer ordinal: ${ordinal}`);
   return String(ordinal) as DecimalOrdinal;
 }
 
-/** `text` as a stored ordinal, or a throw when it is not one. */
 export function parseDecimalOrdinal(text: string): DecimalOrdinal {
   if (!DECIMAL_ORDINAL.test(text)) throw new InvalidIdentifier(`not a canonical decimal ordinal: ${JSON.stringify(text)}`);
   return text as DecimalOrdinal;
@@ -157,10 +155,17 @@ const EFFECT_TAG = "estoc/effect/3\0";
 
 function effectMember(value: string, what: string): string {
   if (value.length === 0 || value.includes("\0")) throw new InvalidIdentifier(`${what} must be non-empty without U+0000`);
+  const fault = forbiddenIn(value);
+  if (fault !== null) throw new InvalidIdentifier(`${what}: ${fault}`);
   return value;
 }
 
-/** The idempotency key of an effect: SHA-256 over its tagged, NUL-separated tuple. */
+/**
+ * The idempotency key of an effect: SHA-256 over its tagged, NUL-separated
+ * tuple. The handler ID and kind must be text an event can carry — an
+ * unpaired surrogate would encode as U+FFFD and make distinct inputs one
+ * key — so they are refused here, before the event layer would refuse them.
+ */
 export function effectKey(tuple: EffectTuple): EffectKey {
   const transcript = [
     EFFECT_TAG + nonEmpty(tuple.executionId, "execution ID"),
@@ -168,7 +173,7 @@ export function effectKey(tuple: EffectTuple): EffectKey {
     effectMember(tuple.effectKind, "effect kind"),
     parseDecimalOrdinal(tuple.ordinal),
   ].join("\0");
-  return encodeBase64Url(sha256(encoder.encode(transcript))) as EffectKey;
+  return base64urlnopad.encode(sha256(encoder.encode(transcript))) as EffectKey;
 }
 
 /** The message ID, and so the wire ID, of the one response an effect key names. */

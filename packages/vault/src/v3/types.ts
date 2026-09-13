@@ -22,7 +22,6 @@ export type RelationshipId = EntityId<"relationship">;
 export type DidId = EntityId<"did">;
 export type RouteId = EntityId<"route">;
 export type MediationId = EntityId<"mediation">;
-/** One prepared package. */
 export type PackageId = EntityId<"package">;
 /** A relationship-scoped automatic execution. */
 export type ExecutionId = EntityId<"execution">;
@@ -34,7 +33,6 @@ export type ReplicaId = AuthorId;
 export type WireMessageId = string & { readonly __wireMessageId: unique symbol };
 /** A scoped mediator delivery. */
 export type DeliveryId = string & { readonly __deliveryId: unique symbol };
-/** A vault keystore name. */
 export type KeyName = string & { readonly __keyName: unique symbol };
 /** A complete canonical public-key value. */
 export type PublicKey = string & { readonly __publicKey: unique symbol };
