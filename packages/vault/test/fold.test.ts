@@ -43,7 +43,7 @@ describe("v2 fold: the scene", () => {
     expect(contact?.claimedName).toBe("Bob R.");
     expect(contact?.addressedAs).toBe(scene.keys.k2);
     expect(contact?.keys.map((key) => [key.key, key.implicit])).toEqual([
-      [scene.keys.k1, true], // the invitation he took: the fold adds it (§7.4)
+      [scene.keys.k1, true], // the invitation he took: the fold adds it
       [scene.keys.k2, false],
     ]);
     expect(contact?.keys[1]?.did).toBe("did:peer:4k2");

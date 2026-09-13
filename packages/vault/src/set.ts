@@ -1,8 +1,8 @@
 /**
- * The event set a fold reads (vault-events.md §7): every event once, by
+ * The event set a fold reads: every event once, by
  * eid, in whatever order it came; the vault's own types read, the rest
- * kept for their `blobs` (§8.3). Order-free by construction — a fold asks
- * for a type's events sorted, and canonical order (event-store.md §3) is
+ * kept for their `blobs`. Order-free by construction — a fold asks
+ * for a type's events sorted, and canonical order is
  * a property of the events, not of their arrival.
  */
 
@@ -13,7 +13,7 @@ import { Malformed, readVaultEvent, type VaultEvent, type VaultType } from "./ty
 
 export class EventSet {
   private readonly held = new Map<string, VaultEvent>();
-  /** events of a type this document does not name, and malformed ones: their roots are held for the vault's life (§8.3) */
+  /** events of a type this version does not name, and malformed ones: their roots are held for the vault's life */
   private readonly others = new Map<string, Event>();
   private readonly byType = new Map<VaultType, VaultEvent[]>();
   private readonly sorted = new Map<VaultType, VaultEvent[]>();
@@ -89,7 +89,7 @@ export class EventSet {
   }
 }
 
-/** The last of `events` in canonical order, or null: what a latest-wins field is (§1 principle 4). */
+/** The last of `events` in canonical order, or null: what a latest-wins field is. */
 export function latest<E extends Event>(events: readonly E[]): E | null {
   let best: E | null = null;
   for (const event of events) {

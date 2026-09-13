@@ -19,7 +19,7 @@ beforeAll(async () => {
   whole = dump(foldOf(scene.events));
 });
 
-describe("v2 fold: principle 6 (event-store.md §1)", () => {
+describe("v2 fold: the projection is a function of the set", () => {
   it("shuffled arrival folds to the same projection", () => {
     for (const seed of [1, 2, 3, 4, 5]) {
       expect(dump(foldOf(shuffle(scene.events, seed))), `seed ${seed}`).toEqual(whole);

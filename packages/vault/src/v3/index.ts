@@ -6,7 +6,8 @@
  * the vault's own keys and DIDs, the retained peer document, the
  * `from_prior` proof, and the first folds: the event set they read,
  * the authors and label, the mediations, the routes and local DIDs,
- * the invitations and the contacts' own decisions.
+ * the relationships with their chains and address index, the
+ * invitations and the contacts' own decisions.
  */
 
 export type {
@@ -142,7 +143,7 @@ export {
   methodPublicKey,
 } from "./peer-document.js";
 
-export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, verifyFromPrior } from "./from-prior.js";
+export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, fromPriorClaims, verifyFromPrior } from "./from-prior.js";
 
 export { VaultEventSet, type InvalidVaultEvent, type Resolved, latest, groupBy, samePayload } from "./fold/set.js";
 export { type AuthorActivity, foldAuthors, foldLabel } from "./fold/author.js";
@@ -168,5 +169,21 @@ export {
   foldWithSeed,
   requiredReceivingSet,
 } from "./fold/routes.js";
+export {
+  type EvidenceCheck,
+  type LocalNode,
+  type PeerNode,
+  type TransitionStatus,
+  type Relationship,
+  type PendingClaim,
+  type RelationshipFold,
+  type RelationshipFoldOptions,
+  type ReadObject,
+  foldRelationships,
+  bindingHolds,
+  verifyResolutions,
+  verifyTransitions,
+  foldRelationshipsVerified,
+} from "./fold/relationships.js";
 export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";

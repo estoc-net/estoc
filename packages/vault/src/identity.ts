@@ -1,8 +1,8 @@
 /**
- * The identity operations (vault-events.md §2, §5) against
+ * The identity operations against
  * `@estoc/keystore` v3: one seed, keys derived by name, the log the
  * truth about which names exist and `keystore.json`'s `keys[]` a cache
- * of it (vault-folder.md §6.2). Every mint appends the event that names
+ * of it. Every mint appends the event that names
  * the key first and writes the cache second — a crash between the two
  * leaves a name the log derives on demand, never a key nobody references.
  *
@@ -81,7 +81,7 @@ export class Keys<M extends MintedDid = MintedDid> {
     return keys;
   }
 
-  /** The identity's anchor: the did:key the key named `anchor` derives (§2). */
+  /** The identity's anchor: the did:key the key named `anchor` derives. */
   static async anchorOf(seedKey: SeedKey): Promise<{ key: string; did: string }> {
     const identity = await deriveIdentity(seedKey, KEY_ANCHOR);
     return { key: KEY_ANCHOR, did: identity.did };
@@ -122,7 +122,7 @@ export class Keys<M extends MintedDid = MintedDid> {
   }
 
   /**
-   * Mint a DID of ours to hand to people (§2, §5): the key `did/<id>`,
+   * Mint a DID of ours to hand to people: the key `did/<id>`,
    * `did.minted` appended (the record), the cache written after.
    * `mediation` is the arrangement whose routing DID goes in its service,
    * or null for a DID only ever picked up from.
@@ -139,7 +139,7 @@ export class Keys<M extends MintedDid = MintedDid> {
   }
 
   /**
-   * This device's arrangement with one mediator (§5): mint the mediation
+   * This device's arrangement with one mediator: mint the mediation
    * id and the `me` key (no service — its mail is picked up, never
    * pushed), append `mediation.created`, cache after. `granted` and
    * `retired` are plain observations and decisions: `drafts` and the wire.
@@ -155,7 +155,7 @@ export class Keys<M extends MintedDid = MintedDid> {
   }
 
   /**
-   * Rebuild the key cache from the log (§2): every `did.minted` and
+   * Rebuild the key cache from the log: every `did.minted` and
    * `mediation.created` name, and the anchor, derived and listed.
    * Returns the names that were missing.
    */

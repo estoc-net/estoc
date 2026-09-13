@@ -90,7 +90,7 @@ export interface Scene {
 type ChannelPair = { myKey: string | null; peerKey: string | null };
 
 /**
- * A vault two devices wrote (vault-events.md, most types at least once):
+ * A vault two devices wrote, most event types at least once:
  * an invitation taken by bob, his rotation to a second DID, a second
  * contact merged in, one erase, mediation, extensions, a foreign-type
  * line and a malformed one.

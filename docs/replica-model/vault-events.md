@@ -1231,6 +1231,12 @@ and exact `fromPrior`; its derived `peerPublicKey` equals this event's
 below uses that same complete witness and the named predecessor/successor
 snapshots.
 
+The transition stands on its own named evidence and one complete witness:
+that witness's own row under [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) is complete,
+and no observation of its message ID group contradicts its row or the
+group's intent. An observation of that group whose evidence is still absent
+defers the group's effects under [section 10.6](#inbound-message-and-execution-fold), not this transition.
+
 The verifier MUST use the named historical resolution snapshot. A network
 fetch of a newer `did:web` document is not a substitute unless the raw CID of
 its canonical bytes exactly matches the pinned document CID. Missing snapshot
@@ -1290,6 +1296,11 @@ proof with a different successor document CID is a transition conflict, not a
 second authorization. Equivalent resolution events for the same exact document
 do not change the key set. Import checks this evidence without selecting a
 winner by arrival order.
+
+A proof-free successor observation whose frozen `peerTransitionEventId` names
+an equal edge — same relationship, predecessor, compact proof, successor DID
+and successor document CID — of an applied transition is scoped by that
+transition's node; the named edge itself still waits for its own evidence.
 
 The peer chain is rooted at the binding's pinned canonical peer DID. A later
 edge continues a reachable predecessor in that same chain; its successor must
@@ -1351,6 +1362,15 @@ edge waits for confirmation of its predecessor, so the peer can verify the
 next proof. Import validates confirmation using the rooted prefix without this
 edge or its descendants, not event timestamps. Receipt at another historical
 local address does not confirm this predecessor or successor.
+
+The confirming observation's own row is judged against that prefix. A
+duplicate of its message committed at the successor this edge adds, or at any
+later node of the chain, is scoped by the history this edge and its
+descendants add; it neither confirms this predecessor nor withholds the
+confirmation the predecessor's own observation supplies. Its absent scope
+defers only that message's effects. A duplicate at a key that no node and no
+edge of R names contradicts the group, this edge and every edge this
+observation confirms.
 
 `fromPrior` is one byte-stable compact JWT under
 [DIDComm DID Rotation](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation).
@@ -2769,9 +2789,14 @@ Derive scopes per observation and check row and message ID-group consistency und
 committed observations are never re-evaluated against later transitions.
 Their historical scope and existing unfinished work do not depend on today's
 current peer end. This does not bypass the ordinary evidence/conflict checks.
-An unresolved observation defers the whole group; distinct relationship
-scopes in the same message ID group conflict under that rule. Neither case
-permits per-observation execution or ACK processing.
+An unresolved observation defers the whole group's execution and ACK
+processing; distinct relationship scopes in the same message ID group
+conflict under that rule. Neither case permits per-observation execution or
+ACK processing. Whether a transition or a predecessor confirmation that a
+complete observation of the group supplies stands is decided under
+[sections 6.4](#relationship-peertransitioned) and [6.5](#relationship-localtransitioned)
+from that observation's own row and the group's contradictions, not from
+another observation's wait.
 
 Union authenticated message ID groups into one logical message only when they have
 the same wire ID, resolve to the same unique validated relationship scope,
@@ -3857,3 +3882,22 @@ There is no migration requirement from an earlier event vocabulary.
      late; an ineligible earlier observation cannot donate its timestamp.
      Shuffled enumeration and event import produce the same receiptInstant and
      late, independently of which eligible witness was used for lifting.
+
+### Group waits and transition validity (VE-140–VE-141)
+
+140. <a id="ve-140"></a> A peer transition whose carrier's own row is complete applies while an
+     equal edge of the same message ID group lacks its prior snapshot, and R
+     has no conflict. An observation whose only matching carrier edge lacks
+     required evidence waits. A proof-free observation naming an equal edge
+     is scoped by an applied transition under [section 6.4](#relationship-peertransitioned)
+     even while the named edge waits. The group's execution and ACK
+     processing wait if any observation remains unresolved. Supplying the
+     missing snapshot applies the waiting edge; a snapshot that contradicts
+     conflicts the group and the applied edge alike. The result is the same
+     in every import order.
+141. <a id="ve-141"></a> A local edge confirmed by an observation at its predecessor stays
+     applied when a duplicate of that message, repacked to the successor
+     after the rotation, is committed under the same message ID: the
+     duplicate is scoped by the successor node the edge adds, with a null or
+     a named trigger, in every import order. A duplicate at a key that no
+     node and no edge of R names conflicts the group and the edge.

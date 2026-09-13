@@ -1,5 +1,5 @@
 /**
- * The peer key (vault-events.md §3): the fingerprint of a public key we
+ * The peer key: the fingerprint of a public key we
  * only ever see — `base32lower(sha256(multicodec-prefixed raw public
  * key))[0:26]`, the hash of the bytes a `did:key` of that key encodes.
  */

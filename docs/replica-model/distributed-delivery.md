@@ -854,7 +854,7 @@ of these rows:
 | Observation | Immutable evidence and authorization | Scope |
 | --- | --- | --- |
 | Proof-free root sender | `relationshipBindingEventId` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransitionEventId == null` | R |
-| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge whose `toDid` and exact successor document authorize the observed DID/key | R |
+| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge, or an edge equal to an applied one under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned), whose `toDid` and exact successor document authorize the observed DID/key | R |
 | Carried `fromPrior` | A valid `relationship.peerTransitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
 
 These rows do not inspect public/private policy or message type. Lookup hints
@@ -870,6 +870,19 @@ For each message ID group, every valid observation must derive the same R: diffe
 Rs conflict, any unresolved observation defers the group, and neither permits
 per-observation effects. Retain previous committed receipts/effects without
 reassigning their identities when a later conflict appears.
+
+Scope is judged one observation at a time against the validated histories of
+R as folded from every committed event. An observation waits while a
+reference it names, or the node its local key or its sender belongs to, is
+not yet validated; it contradicts when what it names is present and disagrees
+with its row. Its local key is outside R when neither a node of
+`localChain(R)` nor any committed `relationship.localTransitioned` of R names
+that key's DID as a successor; a key that only an unapplied edge names waits.
+A waiting observation defers its group's execution and ACK processing. It
+does not defer the transitions or predecessor confirmations that complete
+observations of the same group supply, nor those observations' own scope. A
+contradicting observation conflicts the group and everything the group
+witnesses or confirms.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
@@ -1356,3 +1369,12 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Time in the evidence wait consumes neither
     resolver attempts nor its local retention stop. No local retention timeout
     clears the pending claim.
+
+### Group waits and transition validity (DD-70)
+
+70. <a id="dd-70"></a> A waiting observation of a message ID group suspends that group's
+    execution and ACK processing; a transition or predecessor confirmation
+    that a complete observation of the same group supplies applies
+    regardless. Only a contradiction propagates from the group to the
+    transition, and it propagates to every edge the group witnesses or
+    confirms.
