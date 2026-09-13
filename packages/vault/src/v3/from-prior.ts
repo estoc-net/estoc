@@ -14,9 +14,9 @@ import { base64urlnopad } from "@scure/base";
 import { SignJWT, compactVerify, decodeProtectedHeader, importJWK } from "jose";
 
 import { InvalidDidDocument, InvalidFromPrior } from "./errors.js";
-import { AUTHENTICATION_METHOD, type Keys } from "./identity.js";
+import type { Keys } from "./identity.js";
 import { didKeyName } from "./ids.js";
-import { authorizedMethodIds, canonicalDidOf, methodPublicKey, splitDidUrl } from "./peer-document.js";
+import { authorizedMethodIds, canonicalDidOf, methodPublicKey, peerResolution, splitDidUrl, type PeerResolution } from "./peer-document.js";
 import { decodePublicKey } from "./public-key.js";
 import { isCompactJwt, isDid, isDidUrl } from "./syntax.js";
 import type { Did, DidId, DidUrl, PublicKey } from "./types.js";
@@ -33,22 +33,36 @@ export type VerifiedFromPrior = FromPriorClaims & { methodId: DidUrl; publicKey:
 export type PinnedResolution = { did: Did; document: JsonObject };
 
 /**
- * Sign that the successor continues the predecessor: `iss` and `kid`
- * are the predecessor's long form, `sub` the successor's, and the
- * signature the predecessor entity's authentication key.
+ * Sign that the successor continues the predecessor: `iss` is the
+ * predecessor's long form, `sub` the successor's, `kid` the method of
+ * the predecessor's own document that carries the entity's
+ * authentication key, whatever fragment that document gave it, and the
+ * signature that key's.
  */
 export async function signFromPrior(keys: Keys, predecessor: { didId: DidId; longFormDid: Did }, successorLongFormDid: Did, iat: number): Promise<string> {
   if (!isLongForm(predecessor.longFormDid) || !isLongForm(successorLongFormDid)) throw new InvalidFromPrior("iss and sub are did:peer:4 long forms");
   if (canonical(predecessor.longFormDid) === canonical(successorLongFormDid)) throw new InvalidFromPrior("the successor is another DID");
   if (!Number.isSafeInteger(iat)) throw new InvalidFromPrior("iat is an integer");
   const key = await keys.signing(didKeyName(predecessor.didId, "authentication"));
+  const document = resolution(predecessor.longFormDid).document;
+  const kid = authorizedMethodIds(document, "authentication").find((id) => splitDidUrl(id)[0] === predecessor.longFormDid && methodPublicKey(document, id) === key.publicKey);
+  if (kid === undefined) throw new InvalidFromPrior(`${predecessor.longFormDid} authorizes no authentication method carrying the entity's key`);
   const privateKey = await importJWK(key.privateJwk(), FROM_PRIOR_ALG);
   return new SignJWT({})
-    .setProtectedHeader({ alg: FROM_PRIOR_ALG, typ: "JWT", kid: predecessor.longFormDid + AUTHENTICATION_METHOD })
+    .setProtectedHeader({ alg: FROM_PRIOR_ALG, typ: "JWT", kid })
     .setIssuer(predecessor.longFormDid)
     .setSubject(successorLongFormDid)
     .setIssuedAt(iat)
     .sign(privateKey);
+}
+
+function resolution(longFormDid: string): PeerResolution {
+  try {
+    return peerResolution(longFormDid);
+  } catch (err) {
+    if (err instanceof InvalidDidDocument) throw new InvalidFromPrior(err.message);
+    throw err;
+  }
 }
 
 function claimsOf(jwt: string, kid: DidUrl): FromPriorClaims {

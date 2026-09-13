@@ -1,4 +1,5 @@
 import type { JsonObject } from "@estoc/event-store/v3";
+import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { importSeed } from "@estoc/keystore";
 import { base64urlnopad } from "@scure/base";
 import { SignJWT, decodeProtectedHeader, importJWK } from "jose";
@@ -9,6 +10,7 @@ import {
   InvalidFromPrior,
   KEY_AGREEMENT_METHOD,
   Keys,
+  checkDidCreated,
   didKeyName,
   mintDid,
   peerResolution,
@@ -66,6 +68,28 @@ describe("signFromPrior", () => {
     await expect(signFromPrior(keys, predecessor, successor.did, IAT)).rejects.toThrow(InvalidFromPrior);
     await expect(signFromPrior(keys, predecessor, predecessor.longFormDid, IAT)).rejects.toThrow(InvalidFromPrior);
     await expect(signFromPrior(keys, predecessor, successor.longFormDid, 1.5)).rejects.toThrow(InvalidFromPrior);
+  });
+});
+
+describe("signFromPrior over a recorded document", () => {
+  it("names the method the predecessor's own document gives its authentication key, whatever its fragment, so the proof verifies against that document", async () => {
+    const { keys, successor } = await setup();
+    const { inputDocument } = await mintDid(keys, PREDECESSOR, ROUTE);
+    const methods = inputDocument["verificationMethod"] as JsonObject[];
+    const renamed: JsonObject = { ...inputDocument, verificationMethod: [{ ...(methods[0] as JsonObject), id: "#auth" }, { ...(methods[1] as JsonObject), id: "#agree" }], authentication: ["#auth"], keyAgreement: ["#agree"] };
+    const longFormDid = encodeLongForm(renamed) as Did;
+    const recorded = { didId: PREDECESSOR, did: longToShort(longFormDid) as Did, longFormDid };
+    await checkDidCreated(keys, recorded, ROUTE);
+    const jwt = await signFromPrior(keys, recorded, successor.longFormDid, IAT);
+    expect(decodeProtectedHeader(jwt).kid).toBe(`${longFormDid}#auth`);
+    const resolution = peerResolution(longFormDid);
+    expect((await verifyFromPrior(jwt, { did: resolution.did, document: resolution.document })).methodId).toBe(`${longFormDid}#auth`);
+  });
+
+  it("refuses to sign for a predecessor whose document does not carry the entity's authentication key", async () => {
+    const { keys, successor } = await setup();
+    const other = await mintDid(keys, "019b2a70-0000-7000-8000-000000000000" as DidId, ROUTE);
+    await expect(signFromPrior(keys, { didId: PREDECESSOR, longFormDid: other.longFormDid }, successor.longFormDid, IAT)).rejects.toThrow(/authorizes no authentication method carrying the entity's key/);
   });
 });
 

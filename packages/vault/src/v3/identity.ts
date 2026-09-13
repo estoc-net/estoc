@@ -1,7 +1,7 @@
 /**
  * The vault's own keys and communication DIDs. One seed derives every
  * key by name: the anchor that is the vault's identity, the two keys of
- * each communication-DID entity and the one key of each mediation
+ * each communication-DID entity and the one key name of each mediation
  * arrangement. Each name derives an Ed25519 key and, separately under
  * the keystore's own domain, an X25519 key; a key-agreement use takes
  * the latter, never a conversion of the former. Nothing derived
@@ -35,7 +35,7 @@ export interface LocalKey {
   privateJwk(): OkpPrivateJwk;
 }
 
-/** The two keys of a communication-DID entity, or the two uses of a mediation arrangement's one key. */
+/** The two keys of a communication-DID entity, or the two keys a mediation arrangement's one name derives. */
 export type DidKeys = { authentication: LocalKey; keyAgreement: LocalKey };
 
 function localKey(name: KeyName, type: "Ed25519" | "X25519", publicKey: Uint8Array, privateKey: Uint8Array): LocalKey {
@@ -102,7 +102,7 @@ export class Keys {
     return { authentication: await this.signing(didKeyName(didId, "authentication")), keyAgreement: await this.agreement(didKeyName(didId, "key-agreement")) };
   }
 
-  /** The DIDComm identity of a mediation arrangement: one name in both uses. */
+  /** The DIDComm identity of a mediation arrangement: the two keys its one name derives. */
   async mediationKeys(mediationId: MediationId): Promise<DidKeys> {
     const name = mediationKeyName(mediationId);
     return { authentication: await this.signing(name), keyAgreement: await this.agreement(name) };
@@ -148,7 +148,7 @@ function localDidOf(inputDocument: JsonObject): LocalDid {
 
 /** The communication DID an entity ID and a route give: the same DID every time, from the seed alone. */
 export async function mintDid(keys: Keys, didId: DidId, route: RouteTarget): Promise<MintedDid> {
-  return { didId, ...localDidOf(inputDocumentOf(await keys.didKeys(didId), serviceOf(route))) };
+  return { didId, ...localDidOf(inputDocumentOf(await keys.didKeys(didId), routeServiceUri(route))) };
 }
 
 /** The DID a mediation arrangement is known to its mediator by: no service, its mail is picked up. */
@@ -156,8 +156,7 @@ export async function mintMediationDid(keys: Keys, mediationId: MediationId): Pr
   return localDidOf(inputDocumentOf(await keys.mediationKeys(mediationId), null));
 }
 
-/** The target a route sends a document's traffic to, as the document's DIDComm service spells it. */
-function serviceOf(route: RouteTarget): string {
+function routeServiceUri(route: RouteTarget): string {
   return route.kind === "mediated" ? route.routingDid : route.endpoint;
 }
 
@@ -192,10 +191,10 @@ export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.c
   holdsKey(resolution, "authentication", authentication, entity);
   holdsKey(resolution, "keyAgreement", keyAgreement, entity);
   const uris = didcommServiceUris(resolution.document);
-  if (uris.length !== 1 || uris[0] !== serviceOf(route)) throw new IdentityMismatch(`${entity} sends to ${JSON.stringify(uris)}, not its bound route`);
+  if (uris.length !== 1 || uris[0] !== routeServiceUri(route)) throw new IdentityMismatch(`${entity} sends to ${JSON.stringify(uris)}, not its bound route`);
 }
 
-/** A recorded mediation arrangement against the seed: `me.did` must resolve to the arrangement's one key in both uses. */
+/** A recorded mediation arrangement against the seed: `me.did` must resolve to the two keys the arrangement's name derives. */
 export async function checkMediationCreated(keys: Keys, created: Pick<VaultData["mediation.created"], "mediationId" | "me">): Promise<void> {
   const entity = `mediation ${created.mediationId}`;
   const resolution = peerResolution(created.me.did);

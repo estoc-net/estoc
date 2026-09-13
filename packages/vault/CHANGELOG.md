@@ -37,7 +37,7 @@
   seed that derives the recorded anchor; `mintDid` and
   `mintMediationDid` build the did:peer:4 input document of a
   communication DID (two keys and the route's DIDComm service) or of a
-  mediation arrangement (one key, no service); `checkDidCreated` and
+  mediation arrangement (the two keys of one name, no service); `checkDidCreated` and
   `checkMediationCreated` check a recorded entity by reading its own
   document back against the seed's keys and the bound route.
   `peerResolution` takes a long form to the fixed retained document —

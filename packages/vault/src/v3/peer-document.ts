@@ -26,8 +26,24 @@ export type PeerResolution = { did: Did; presentedDid: Did; document: JsonObject
 const PEER4_PREFIX = "did:peer:4";
 const MULTICODEC_JSON = 0x0200;
 
-export type VerificationRelationship = "authentication" | "keyAgreement";
 const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"] as const;
+export type VerificationRelationship = (typeof RELATIONSHIPS)[number];
+
+/** A verification method as a document must spell one: an id, a type, an explicit controller only as a DID, and exactly one of the two key encodings. */
+function isMethod(entry: unknown): boolean {
+  if (!isJsonObject(entry) || typeof entry["id"] !== "string" || typeof entry["type"] !== "string") return false;
+  const controller = entry["controller"];
+  if (controller !== undefined && !isDid(controller)) return false;
+  const multibase = entry["publicKeyMultibase"];
+  const jwk = entry["publicKeyJwk"];
+  return (typeof multibase === "string" && jwk === undefined) || (isJsonObject(jwk) && multibase === undefined);
+}
+
+function isService(entry: unknown): boolean {
+  if (!isJsonObject(entry) || typeof entry["id"] !== "string") return false;
+  const type = entry["type"];
+  return typeof type === "string" || (Array.isArray(type) && type.length > 0 && type.every((t) => typeof t === "string"));
+}
 
 function shaped(document: JsonObject): void {
   const arrayOf = (member: string, each: (entry: unknown) => boolean, what: string) => {
@@ -35,11 +51,20 @@ function shaped(document: JsonObject): void {
     if (entries === undefined) return;
     if (!Array.isArray(entries) || !entries.every(each)) throw new InvalidDidDocument(`${member} is an array of ${what}`);
   };
-  const withId = (entry: unknown) => isJsonObject(entry) && typeof entry["id"] === "string";
   arrayOf("alsoKnownAs", (entry) => typeof entry === "string", "strings");
-  arrayOf("verificationMethod", withId, "verification methods with an id");
-  arrayOf("service", withId, "services with an id");
-  for (const relationship of RELATIONSHIPS) arrayOf(relationship, (entry) => typeof entry === "string" || withId(entry), "references or embedded verification methods");
+  arrayOf("verificationMethod", isMethod, "verification methods: an id, a type, a DID controller if any, one of publicKeyMultibase and publicKeyJwk");
+  arrayOf("service", isService, "services with an id and a type");
+  for (const relationship of RELATIONSHIPS) arrayOf(relationship, (entry) => typeof entry === "string" || isMethod(entry), "references or embedded verification methods");
+}
+
+/** Each service under its absolute ID; two services may not share one. */
+function serviceIds(document: JsonObject, base: Did): void {
+  const seen = new Set<DidUrl>();
+  entriesOf(document, "service").forEach((service, i) => {
+    const id = absolute((service as JsonObject)["id"], base, `service[${i}].id`);
+    if (seen.has(id)) throw new InvalidDidDocument(`two services are ${id}`);
+    seen.add(id);
+  });
 }
 
 /**
@@ -89,8 +114,7 @@ export function canonicalDidOf(presented: string): Did {
   return longToShort(presented) as Did;
 }
 
-/** The fill of an omitted `controller` on a method the document defines, listed or embedded. */
-function controlled(entry: JsonValue, did: Did): JsonValue {
+function withDefaultController(entry: JsonValue, did: Did): JsonValue {
   return isJsonObject(entry) && entry["controller"] === undefined ? { ...entry, controller: did } : entry;
 }
 
@@ -100,8 +124,9 @@ function controlled(entry: JsonValue, did: Did): JsonValue {
  * form's own resolution result: identified by the long form, the short
  * form appended to `alsoKnownAs`, omitted controllers filled in and
  * everything else, relative references included, kept as the input has
- * it. Its verification relationships must read: every reference into
- * the document names a method it defines.
+ * it. Its verification relationships and services must read: every
+ * reference into the document names a method it defines, and every
+ * service has an ID of its own.
  */
 function retainedDocumentOf(longFormDid: string): JsonObject {
   const input = inputDocumentOf(longFormDid);
@@ -109,9 +134,10 @@ function retainedDocumentOf(longFormDid: string): JsonObject {
   const document: JsonObject = { ...input, id: long, alsoKnownAs: [...((input["alsoKnownAs"] as string[] | undefined) ?? []), longToShort(longFormDid)] };
   for (const member of ["verificationMethod", ...RELATIONSHIPS]) {
     const entries = input[member];
-    if (Array.isArray(entries)) document[member] = entries.map((entry) => controlled(entry, long));
+    if (Array.isArray(entries)) document[member] = entries.map((entry) => withDefaultController(entry, long));
   }
-  for (const relationship of ["authentication", "keyAgreement"] as const) authorizedMethodIds(document, relationship);
+  for (const relationship of RELATIONSHIPS) authorizedMethodIds(document, relationship);
+  serviceIds(document, long);
   return document;
 }
 

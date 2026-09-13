@@ -51,7 +51,7 @@ wrapped seed with the passphrase, and derives each named key on demand,
 an Ed25519 key and the keystore's own X25519 key per name, the latter for key agreement;
 `mintDid` builds a communication DID's numalgo-4 input document from
 the entity's two keys and its route, `mintMediationDid` a mediation
-arrangement's from its one key; `checkDidCreated` and
+arrangement's from the two keys its one name derives; `checkDidCreated` and
 `checkMediationCreated` hold a recorded entity against the seed by
 reading its own document back, so another serialization of the same
 keys and route is the same entity), the retained peer document

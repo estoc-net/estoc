@@ -116,12 +116,38 @@ describe("peerResolution", () => {
     refused({ ...INPUT, verificationMethod: [{ id: "did:web:unrelated.example#key-1", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
     refused({ ...INPUT, authentication: [{ id: "did:web:unrelated.example#e", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
     refused({ ...INPUT, verificationMethod: 1 }, /verificationMethod is an array/);
-    refused({ ...INPUT, verificationMethod: [{ type: "Multikey", publicKeyMultibase: ED_KEY }] }, /verificationMethod is an array of verification methods with an id/);
+    refused({ ...INPUT, verificationMethod: [{ type: "Multikey", publicKeyMultibase: ED_KEY }] }, /verificationMethod is an array of verification methods/);
     refused({ ...INPUT, authentication: [1] }, /authentication is an array of references/);
-    refused({ ...INPUT, service: ["#service"] }, /service is an array of services with an id/);
+    refused({ ...INPUT, service: ["#service"] }, /service is an array of services with an id and a type/);
     refused({ ...INPUT, alsoKnownAs: [1] }, /alsoKnownAs is an array of strings/);
     refused({ ...INPUT, authentication: ["#nope"] }, /references no verification method/);
     refused({ ...INPUT, keyAgreement: ["key-2"] }, /DID URL or a fragment reference/);
+  });
+
+  it("refuses a method missing its type, key material or a DID controller, a service with a malformed, duplicated or typeless ID, and a dangling reference in any relationship", () => {
+    const refused = (document: JsonObject, message: RegExp) => {
+      expect(() => peerResolution(encodeLongForm(document))).toThrow(message);
+      expect(() => canonicalDidOf(encodeLongForm(document))).toThrow(InvalidDidDocument);
+    };
+    const patched = (base: JsonObject, patch: Record<string, unknown>): JsonObject => Object.fromEntries(Object.entries({ ...base, ...patch }).filter(([, value]) => value !== undefined)) as JsonObject;
+    const method = (patch: Record<string, unknown>): JsonObject => ({ ...INPUT, verificationMethod: [patched({ id: "#key-1", type: "Multikey", publicKeyMultibase: ED_KEY }, patch), { id: "#key-2", type: "Multikey", publicKeyMultibase: X_KEY }] });
+    const shape = /verificationMethod is an array of verification methods/;
+    refused(method({ type: 7 }), shape);
+    refused(method({ type: undefined }), shape);
+    refused(method({ controller: 7 }), shape);
+    refused(method({ controller: "bob.example" }), shape);
+    refused(method({ publicKeyMultibase: undefined }), shape);
+    refused(method({ publicKeyJwk: { kty: "OKP" } }), shape);
+    refused({ ...INPUT, authentication: [{ id: "#embedded", publicKeyMultibase: ED_KEY2 }] }, /authentication is an array of references or embedded verification methods/);
+    const service = (patch: Record<string, unknown>): JsonObject => ({ ...INPUT, service: [patched({ id: "#service", type: "DIDCommMessaging", serviceEndpoint: "https://a.example" }, patch)] });
+    refused(service({ id: "#bad id" }), /service\[0\]\.id is a DID URL or a fragment reference/);
+    refused(service({ id: "#bad%escape" }), /service\[0\]\.id is a DID URL or a fragment reference/);
+    refused(service({ id: "service" }), /service\[0\]\.id is a DID URL or a fragment reference/);
+    refused(service({ type: undefined }), /services with an id and a type/);
+    refused(service({ type: [] }), /services with an id and a type/);
+    refused({ ...INPUT, service: [...(INPUT["service"] as JsonObject[]), { id: "#service", type: "LinkedDomains", serviceEndpoint: "https://bob.example" }] }, /two services are/);
+    for (const relationship of ["assertionMethod", "capabilityInvocation", "capabilityDelegation"]) refused({ ...INPUT, [relationship]: ["#absent"] }, /references no verification method/);
+    refused(service({ id: "did:web:bob.example#svc" }), /Service id must be a relative reference/);
   });
 });
 
