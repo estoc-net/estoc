@@ -393,7 +393,6 @@ export const objectCases: ObjectCase[] = [
         }
       }
       const { cid } = await hashSource(reusing(), total * MIB, () => undefined);
-      /** The source, what the platform holds sampled into `samples` at 8, 16 and 24 MiB staged. */
       const sampled = (samples: MemoryHeld[]): AsyncIterable<Uint8Array> =>
         (async function* () {
           let i = 0;
