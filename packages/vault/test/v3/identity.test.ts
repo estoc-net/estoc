@@ -1,4 +1,5 @@
-import { decodeLongForm, isLongForm, longToShort } from "@estoc/did-peer";
+import type { JsonObject } from "@estoc/event-store/v3";
+import { decodeLongForm, encodeLongForm, isLongForm, longToShort } from "@estoc/did-peer";
 import { createSeedKeystore, importSeed } from "@estoc/keystore";
 import { ed25519, edwardsToMontgomeryPub, x25519 } from "@noble/curves/ed25519";
 import { base64urlnopad } from "@scure/base";
@@ -7,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   AUTHENTICATION_METHOD,
   IdentityMismatch,
+  InvalidDidDocument,
   KEY_AGREEMENT_METHOD,
   Keys,
   Locked,
@@ -166,6 +168,12 @@ describe("mintDid", () => {
 });
 
 describe("checkDidCreated", () => {
+  /** The entity's record of a document: the spellings a `did.created` carries. */
+  const recorded = (didId: DidId, inputDocument: JsonObject) => {
+    const longFormDid = encodeLongForm(inputDocument) as Did;
+    return { didId, did: longToShort(longFormDid) as Did, longFormDid };
+  };
+
   it("accepts the entity the seed and route derive and refuses any other spelling, ID or route", async () => {
     const keys = await open();
     const minted = await mintDid(keys, DID_ID, MEDIATED);
@@ -174,7 +182,47 @@ describe("checkDidCreated", () => {
     await expect(checkDidCreated(keys, created, DIRECT)).rejects.toThrow(IdentityMismatch);
     await expect(checkDidCreated(keys, { ...created, didId: DID_ID2 }, MEDIATED)).rejects.toThrow(IdentityMismatch);
     await expect(checkDidCreated(keys, { ...created, did: EXPECTED.directShort as Did }, MEDIATED)).rejects.toThrow(IdentityMismatch);
+    await expect(checkDidCreated(keys, { ...created, longFormDid: created.did }, MEDIATED)).rejects.toThrow(InvalidDidDocument);
     await expect(checkDidCreated(await open(OTHER_SEED), created, MEDIATED)).rejects.toThrow(IdentityMismatch);
+  });
+
+  it("reads the recorded document rather than rebuilding it: another serialization of the same keys and route is the same entity", async () => {
+    const keys = await open();
+    const { inputDocument } = await mintDid(keys, DID_ID, DIRECT);
+    const { authentication, keyAgreement } = await keys.didKeys(DID_ID);
+    const reordered = Object.fromEntries(Object.entries(inputDocument).reverse());
+    expect(encodeLongForm(reordered)).not.toBe(encodeLongForm(inputDocument));
+    await expect(checkDidCreated(keys, recorded(DID_ID, reordered), DIRECT)).resolves.toBeUndefined();
+    const asJwk = {
+      ...inputDocument,
+      verificationMethod: [
+        { id: "#auth", type: "JsonWebKey2020", publicKeyJwk: { kty: "OKP", crv: "Ed25519", x: authentication.privateJwk().x } },
+        { id: "#agree", type: "JsonWebKey2020", publicKeyJwk: { kty: "OKP", crv: "X25519", x: keyAgreement.privateJwk().x } },
+      ],
+      authentication: ["#auth"],
+      keyAgreement: ["#agree"],
+      service: [{ id: "#didcomm", type: ["DIDCommMessaging"], serviceEndpoint: [DIRECT.endpoint] }],
+    };
+    await expect(checkDidCreated(keys, recorded(DID_ID, asJwk), DIRECT)).resolves.toBeUndefined();
+  });
+
+  it("refuses a recorded document that authorizes any key but the entity's two, or sends anywhere but its bound route", async () => {
+    const keys = await open();
+    const { inputDocument } = await mintDid(keys, DID_ID, DIRECT);
+    const other = (await keys.didKeys(DID_ID2)).authentication.publicKey;
+    const cases: [string, JsonObject][] = [
+      ["a foreign authentication reference", { ...inputDocument, authentication: [AUTHENTICATION_METHOD, "did:web:other.example#k"] }],
+      ["an extra authentication key", { ...inputDocument, authentication: [AUTHENTICATION_METHOD, { id: "#more", type: "Multikey", publicKeyMultibase: other }] }],
+      ["another entity's key as authentication", { ...inputDocument, verificationMethod: [{ id: "#key-1", type: "Multikey", publicKeyMultibase: other }, (inputDocument["verificationMethod"] as JsonObject[])[1] as JsonObject] }],
+      ["the two keys swapped", { ...inputDocument, authentication: [KEY_AGREEMENT_METHOD], keyAgreement: [AUTHENTICATION_METHOD] }],
+      ["no key-agreement method", { ...inputDocument, keyAgreement: [] }],
+      ["no service", { ...inputDocument, service: [] }],
+      ["a second DIDComm service", { ...inputDocument, service: [...(inputDocument["service"] as JsonObject[]), { id: "#other", type: "DIDCommMessaging", serviceEndpoint: "https://other.example/didcomm" }] }],
+      ["a service to another endpoint", { ...inputDocument, service: [{ id: "#service", type: "DIDCommMessaging", serviceEndpoint: { uri: "https://other.example/didcomm" } }] }],
+    ];
+    for (const [what, document] of cases) {
+      await expect(checkDidCreated(keys, recorded(DID_ID, document), DIRECT), what).rejects.toThrow(IdentityMismatch);
+    }
   });
 
   it("checks a mediation arrangement's DID the same way", async () => {
@@ -182,7 +230,12 @@ describe("checkDidCreated", () => {
     const minted = await mintMediationDid(keys, MEDIATION);
     const me = { keyName: mediationKeyName(MEDIATION), did: minted.longFormDid };
     await expect(checkMediationCreated(keys, { mediationId: MEDIATION, me })).resolves.toBeUndefined();
-    await expect(checkMediationCreated(keys, { mediationId: MEDIATION, me: { ...me, did: minted.did } })).rejects.toThrow(IdentityMismatch);
+    const reordered = Object.fromEntries(Object.entries(minted.inputDocument).reverse());
+    await expect(checkMediationCreated(keys, { mediationId: MEDIATION, me: { ...me, did: encodeLongForm(reordered) as Did } })).resolves.toBeUndefined();
+    await expect(checkMediationCreated(keys, { mediationId: MEDIATION, me: { ...me, did: minted.did } })).rejects.toThrow(InvalidDidDocument);
     await expect(checkMediationCreated(await open(OTHER_SEED), { mediationId: MEDIATION, me })).rejects.toThrow(IdentityMismatch);
+    const other = (await keys.didKeys(DID_ID)).authentication.publicKey;
+    const foreign = { ...minted.inputDocument, authentication: [AUTHENTICATION_METHOD, { id: "#more", type: "Multikey", publicKeyMultibase: other }] };
+    await expect(checkMediationCreated(keys, { mediationId: MEDIATION, me: { ...me, did: encodeLongForm(foreign) as Did } })).rejects.toThrow(IdentityMismatch);
   });
 });

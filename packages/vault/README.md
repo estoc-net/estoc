@@ -45,8 +45,30 @@ and `intentProjection` return the projection objects, `intentHash` and
 `plaintextHash` compute the hashes the events carry over the intent
 projection and the exact plaintext, `wirePlaintext` is the inverse of `readPlaintext`, and
 `expandPleaseAck` / `requestsAck` read `please_ack` without rewriting
-it). Every published identifier and public-key vector of those documents
-is a test in `test/v3/`.
+it), the keys and communication DIDs (`identity.ts`: `Keys` opens over
+a seed only once it derives the recorded anchor, or `unlock`s the
+wrapped seed with the passphrase, and derives each named key on demand,
+an Ed25519 key by name and its X25519 form for key agreement;
+`mintDid` builds a communication DID's numalgo-4 input document from
+the entity's two keys and its route, `mintMediationDid` a mediation
+arrangement's from its one key; `checkDidCreated` and
+`checkMediationCreated` hold a recorded entity against the seed by
+reading its own document back, so another serialization of the same
+keys and route is the same entity), the retained peer document
+(`peer-document.ts`: `peerResolution` reads a validated long form's
+raw bytes as strict JSON, refuses what the method forbids, and returns
+the fixed retained representation as object, RFC 8785 bytes and raw
+CID; `canonicalDidOf` is the DID folds compare by; `authorizedMethodIds`,
+`methodPublicKey` and `didcommServiceUris` read any retained document's
+relationships, keys and DIDComm endpoints) and the `from_prior` proof
+(`from-prior.ts`: `signFromPrior` issues the compact EdDSA JWT with
+`jose`, `verifyFromPrior` verifies one against the exact pinned
+predecessor document only, DID spellings compared by validated
+equivalence and the rest of a method ID byte for byte; what the proof
+means for a relationship is the receiving procedure's). Every published
+identifier and public-key vector of those documents is a test in
+`test/v3/`, and the DIDs and signature a fixed seed derives are pinned
+there too.
 
 A version-2 vault is an event log — one append-only log per device,
 merged by union — and everything a person sees in it is a *fold* over

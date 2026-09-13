@@ -118,7 +118,25 @@ describe("verifyFromPrior", () => {
     await expect(verifyFromPrior(fromSuccessor, pinned)).rejects.toThrow(/not the pinned predecessor/);
     const successorResolution = peerResolution(successor.longFormDid);
     await expect(verifyFromPrior(jwt, { did: successorResolution.did, document: successorResolution.document })).rejects.toThrow(/not the pinned predecessor/);
-    await expect(verifyFromPrior(jwt, { did: pinned.did, document: successorResolution.document })).rejects.toThrow(/not an authentication method/);
+    await expect(verifyFromPrior(jwt, { did: pinned.did, document: successorResolution.document })).rejects.toThrow(/pinned document is not/);
+  });
+
+  it("refuses a pin whose document is another DID's even when that document authorizes a method under the pinned DID", async () => {
+    const { predecessor, pinned, jwt } = await setup();
+    const method = { id: `${predecessor.longFormDid}${AUTHENTICATION_METHOD}`, type: "Multikey", publicKeyMultibase: (pinned.document["verificationMethod"] as JsonObject[])[0]?.["publicKeyMultibase"], controller: predecessor.longFormDid };
+    const unrelated = { id: "did:web:unrelated.example", verificationMethod: [method], authentication: [method.id] } as JsonObject;
+    await expect(verifyFromPrior(jwt, { did: pinned.did, document: unrelated })).rejects.toThrow(/pinned document is not did:peer:4/);
+  });
+
+  it("refuses a sub that is the predecessor under another spelling, or a long form whose hash does not match", async () => {
+    const { keys, predecessor, successor, pinned } = await setup();
+    const kid = `${predecessor.longFormDid}${AUTHENTICATION_METHOD}`;
+    const sameDid = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, { iss: predecessor.longFormDid, sub: predecessor.did, iat: IAT });
+    await expect(verifyFromPrior(sameDid, pinned)).rejects.toThrow(/sub is another DID/);
+    const badHash = `${predecessor.did}:${successor.longFormDid.slice(successor.did.length + 1)}` as Did;
+    const badSub = await resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, { iss: predecessor.longFormDid, sub: badHash, iat: IAT });
+    await expect(verifyFromPrior(badSub, pinned)).rejects.toThrow(/Hash is invalid/);
+    await expect(signFromPrior(keys, predecessor, badHash, IAT)).rejects.toThrow(/Hash is invalid/);
   });
 
   it("refuses a signature that does not verify under the pinned method", async () => {

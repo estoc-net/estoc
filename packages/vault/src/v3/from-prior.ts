@@ -39,7 +39,7 @@ export type PinnedResolution = { did: Did; document: JsonObject };
  */
 export async function signFromPrior(keys: Keys, predecessor: { didId: DidId; longFormDid: Did }, successorLongFormDid: Did, iat: number): Promise<string> {
   if (!isLongForm(predecessor.longFormDid) || !isLongForm(successorLongFormDid)) throw new InvalidFromPrior("iss and sub are did:peer:4 long forms");
-  if (predecessor.longFormDid === successorLongFormDid) throw new InvalidFromPrior("the successor is another DID");
+  if (canonical(predecessor.longFormDid) === canonical(successorLongFormDid)) throw new InvalidFromPrior("the successor is another DID");
   if (!Number.isSafeInteger(iat)) throw new InvalidFromPrior("iat is an integer");
   const key = await keys.signing(didKeyName(predecessor.didId, "authentication"));
   const privateKey = await importJWK(key.privateJwk(), FROM_PRIOR_ALG);
@@ -83,7 +83,7 @@ function canonical(did: string): Did {
   try {
     return canonicalDidOf(did);
   } catch (err) {
-    if (err instanceof InvalidDidDocument) throw new InvalidFromPrior(`${did}: ${err.message}`);
+    if (err instanceof InvalidDidDocument) throw new InvalidFromPrior(err.message);
     throw err;
   }
 }
@@ -91,10 +91,13 @@ function canonical(did: string): Did {
 /**
  * Verify a proof against the pinned predecessor. The protected `kid`
  * names the `iss` DID byte for byte; `iss` names the pinned DID under
- * validated spelling equivalence; the `kid` is one of the pinned
- * document's authentication methods, its DID portion under the same
- * equivalence and the rest byte for byte; and that method's key
- * verifies the signature. `iat` is any integer.
+ * validated spelling equivalence, and so does the pinned document's
+ * own `id`; `sub` is a validated DID other than the predecessor; the
+ * `kid` is one of the pinned document's authentication methods, its
+ * DID portion under the same equivalence and the rest byte for byte;
+ * and that method's key verifies the signature. `iat` is any integer.
+ * That `sub` is the DID the message came from, and that it resolves,
+ * are the receiving procedure's to check with the message in hand.
  */
 export async function verifyFromPrior(jwt: string, pinned: PinnedResolution): Promise<VerifiedFromPrior> {
   if (!isCompactJwt(jwt)) throw new InvalidFromPrior("not a compact JWT");
@@ -104,6 +107,9 @@ export async function verifyFromPrior(jwt: string, pinned: PinnedResolution): Pr
   if (kidDid !== claims.iss) throw new InvalidFromPrior("the kid DID portion is the iss DID");
   const iss = canonical(claims.iss);
   if (iss !== pinned.did) throw new InvalidFromPrior(`iss ${claims.iss} is not the pinned predecessor ${pinned.did}`);
+  if (canonical(claims.sub) === iss) throw new InvalidFromPrior("sub is another DID than iss");
+  const documentId = pinned.document["id"];
+  if (!isDid(documentId) || canonical(documentId) !== pinned.did) throw new InvalidFromPrior(`the pinned document is not ${pinned.did}'s`);
   let methodId: DidUrl | undefined;
   try {
     methodId = authorizedMethodIds(pinned.document, "authentication").find((id) => {

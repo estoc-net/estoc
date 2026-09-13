@@ -9,8 +9,10 @@
  * document's `id`, keys taken from the exact retained entries.
  */
 
-import { canonicalize, isJsonObject, type JsonObject } from "@estoc/event-store/v3";
-import { PeerDID4Error, decodeLongForm, isLongForm, isShortForm, longToShort, resolveLongForm } from "@estoc/did-peer";
+import { canonicalText, canonicalize, isJsonObject, parseStrict, type JsonObject, type JsonValue } from "@estoc/event-store/v3";
+import { PeerDID4Error, decodeLongForm, isLongForm, isShortForm, longToShort, validateInputDocument } from "@estoc/did-peer";
+import { base58 } from "@scure/base";
+import { varint } from "multiformats";
 
 import { rawCidOfBytes } from "./document.js";
 import { InvalidDidDocument, InvalidPublicKey } from "./errors.js";
@@ -18,21 +20,61 @@ import { canonicalPublicKey } from "./public-key.js";
 import { isDid, isDidUrl } from "./syntax.js";
 import type { Cid, Did, DidUrl, PublicKey } from "./types.js";
 
-export type VerificationRelationship = "authentication" | "keyAgreement";
-
 /** The retained resolution of one numalgo-4 long form: the canonical DID, the presented spelling, and the document as object, bytes and root. */
 export type PeerResolution = { did: Did; presentedDid: Did; document: JsonObject; bytes: Uint8Array; cid: Cid };
 
 const PEER4_PREFIX = "did:peer:4";
+const MULTICODEC_JSON = 0x0200;
 
+export type VerificationRelationship = "authentication" | "keyAgreement";
+const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"] as const;
+
+function shaped(document: JsonObject): void {
+  const arrayOf = (member: string, each: (entry: unknown) => boolean, what: string) => {
+    const entries = document[member];
+    if (entries === undefined) return;
+    if (!Array.isArray(entries) || !entries.every(each)) throw new InvalidDidDocument(`${member} is an array of ${what}`);
+  };
+  const withId = (entry: unknown) => isJsonObject(entry) && typeof entry["id"] === "string";
+  arrayOf("alsoKnownAs", (entry) => typeof entry === "string", "strings");
+  arrayOf("verificationMethod", withId, "verification methods with an id");
+  arrayOf("service", withId, "services with an id");
+  for (const relationship of RELATIONSHIPS) arrayOf(relationship, (entry) => typeof entry === "string" || withId(entry), "references or embedded verification methods");
+}
+
+/**
+ * The input document a validated long form encodes. The method's own
+ * decoder checks the hash; the document is then read again from the
+ * raw bytes under the event format's strict JSON, since a lenient parse
+ * would retain a document another implementation refuses, with invalid
+ * UTF-8 replaced and a duplicated member's last value kept.
+ */
 function inputDocumentOf(longFormDid: string): JsonObject {
   if (!isLongForm(longFormDid)) throw new InvalidDidDocument("not a did:peer:4 long form");
   try {
-    return decodeLongForm(longFormDid) as JsonObject;
+    decodeLongForm(longFormDid);
   } catch (err) {
     if (err instanceof PeerDID4Error) throw new InvalidDidDocument(err.message);
     throw err;
   }
+  const encoded = base58.decode(longFormDid.slice(longFormDid.lastIndexOf(":") + 2));
+  const [code, length] = varint.decode(encoded);
+  if (code !== MULTICODEC_JSON) throw new InvalidDidDocument("the encoded document is not multicodec-tagged JSON");
+  let input: unknown;
+  try {
+    input = parseStrict(encoded.subarray(length));
+  } catch (err) {
+    throw new InvalidDidDocument(`the input document is not strict JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!isJsonObject(input)) throw new InvalidDidDocument("the input document is a JSON object");
+  try {
+    validateInputDocument(input);
+  } catch (err) {
+    if (err instanceof PeerDID4Error) throw new InvalidDidDocument(err.message);
+    throw err;
+  }
+  shaped(input);
+  return input;
 }
 
 /**
@@ -43,16 +85,39 @@ function inputDocumentOf(longFormDid: string): JsonObject {
 export function canonicalDidOf(presented: string): Did {
   if (!isDid(presented)) throw new InvalidDidDocument(`not a DID: ${JSON.stringify(presented)}`);
   if (!presented.startsWith(PEER4_PREFIX) || isShortForm(presented)) return presented as Did;
-  inputDocumentOf(presented);
+  retainedDocumentOf(presented);
   return longToShort(presented) as Did;
 }
 
-/** The retained resolution of a numalgo-4 long form; a throw when the long form or its input document is not one. */
-export function peerResolution(longFormDid: string): PeerResolution {
+/** The fill of an omitted `controller` on a method the document defines, listed or embedded. */
+function controlled(entry: JsonValue, did: Did): JsonValue {
+  return isJsonObject(entry) && entry["controller"] === undefined ? { ...entry, controller: did } : entry;
+}
+
+/**
+ * The document a validated long form resolves to, as retained; a throw
+ * when the long form or its input document is not one. It is the long
+ * form's own resolution result: identified by the long form, the short
+ * form appended to `alsoKnownAs`, omitted controllers filled in and
+ * everything else, relative references included, kept as the input has
+ * it. Its verification relationships must read: every reference into
+ * the document names a method it defines.
+ */
+function retainedDocumentOf(longFormDid: string): JsonObject {
   const input = inputDocumentOf(longFormDid);
-  const aliases = input["alsoKnownAs"];
-  if (aliases !== undefined && !Array.isArray(aliases)) throw new InvalidDidDocument("alsoKnownAs is an array");
-  const document = resolveLongForm(longFormDid) as JsonObject;
+  const long = longFormDid as Did;
+  const document: JsonObject = { ...input, id: long, alsoKnownAs: [...((input["alsoKnownAs"] as string[] | undefined) ?? []), longToShort(longFormDid)] };
+  for (const member of ["verificationMethod", ...RELATIONSHIPS]) {
+    const entries = input[member];
+    if (Array.isArray(entries)) document[member] = entries.map((entry) => controlled(entry, long));
+  }
+  for (const relationship of ["authentication", "keyAgreement"] as const) authorizedMethodIds(document, relationship);
+  return document;
+}
+
+/** The retained resolution of a numalgo-4 long form: its document under the RFC 8785 bytes and raw CID the vault stores it as. */
+export function peerResolution(longFormDid: string): PeerResolution {
+  const document = retainedDocumentOf(longFormDid);
   let bytes: Uint8Array;
   try {
     bytes = canonicalize(document);
@@ -62,8 +127,7 @@ export function peerResolution(longFormDid: string): PeerResolution {
   return { did: longToShort(longFormDid) as Did, presentedDid: longFormDid as Did, document, bytes, cid: rawCidOfBytes(bytes) };
 }
 
-/** The DID portion of a DID URL and everything after it, the path, query and fragment. */
-export function splitDidUrl(url: string): [did: string, rest: string] {
+export function splitDidUrl(url: string): [did: string, pathQueryFragment: string] {
   const end = url.search(/[/?#]/);
   return end < 0 ? [url, ""] : [url.slice(0, end), url.slice(end)];
 }
@@ -93,8 +157,6 @@ function entriesOf(document: JsonObject, member: string): readonly unknown[] {
   return entries;
 }
 
-const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"] as const;
-
 /** Every method the document defines, by absolute ID; two definitions under one ID must be the same entry. */
 function definedMethods(document: JsonObject, base: Did): Map<DidUrl, JsonObject> {
   const methods = new Map<DidUrl, JsonObject>();
@@ -108,12 +170,6 @@ function definedMethods(document: JsonObject, base: Did): Map<DidUrl, JsonObject
   entriesOf(document, "verificationMethod").forEach((entry, i) => define(entry, `verificationMethod[${i}]`));
   for (const relationship of RELATIONSHIPS) entriesOf(document, relationship).forEach((entry, i) => define(entry, `${relationship}[${i}]`));
   return methods;
-}
-
-const decoder = new TextDecoder();
-
-function canonicalText(value: JsonObject): string {
-  return decoder.decode(canonicalize(value));
 }
 
 /**
@@ -157,4 +213,28 @@ export function methodPublicKey(document: JsonObject, id: DidUrl): PublicKey {
     if (err instanceof InvalidPublicKey) throw new InvalidDidDocument(`${id}: ${err.message}`);
     throw err;
   }
+}
+
+/**
+ * The endpoint URIs of the document's DIDComm services, in document
+ * order: `serviceEndpoint` as a string, as an object with a `uri`, or
+ * as an array of either.
+ */
+export function didcommServiceUris(document: JsonObject): string[] {
+  const uris: string[] = [];
+  const uriOf = (endpoint: unknown, at: string): string => {
+    if (typeof endpoint === "string") return endpoint;
+    if (isJsonObject(endpoint) && typeof endpoint["uri"] === "string") return endpoint["uri"];
+    throw new InvalidDidDocument(`${at} is a URI or an object with a uri`);
+  };
+  entriesOf(document, "service").forEach((service, i) => {
+    if (!isJsonObject(service)) throw new InvalidDidDocument(`service[${i}] is an object`);
+    const type = service["type"];
+    if (type !== "DIDCommMessaging" && !(Array.isArray(type) && type.includes("DIDCommMessaging"))) return;
+    const endpoint = service["serviceEndpoint"];
+    const at = `service[${i}].serviceEndpoint`;
+    if (Array.isArray(endpoint)) uris.push(...endpoint.map((entry, j) => uriOf(entry, `${at}[${j}]`)));
+    else uris.push(uriOf(endpoint, at));
+  });
+  return uris;
 }

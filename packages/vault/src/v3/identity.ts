@@ -4,9 +4,9 @@
  * each communication-DID entity and the one key of each mediation
  * arrangement. Each name derives an Ed25519 key; a key-agreement use
  * takes that key's X25519 form, the did:key convention. Nothing derived
- * is stored: a DID entity's spelling is recomputed from the seed, the
- * entity ID and the route its document encodes, which is how a recorded
- * `did.created` is checked against the seed.
+ * is stored: a recorded `did.created` is checked by reading its own
+ * document back and holding the keys and route it authorizes against
+ * what the seed and the bound route give.
  */
 
 import type { JsonObject, WrappedSeed } from "@estoc/event-store/v3";
@@ -17,6 +17,7 @@ import { base64urlnopad } from "@scure/base";
 
 import { IdentityMismatch, Locked } from "./errors.js";
 import { ANCHOR_KEY_NAME, didKeyName, mediationKeyName } from "./ids.js";
+import { authorizedMethodIds, didcommServiceUris, methodPublicKey, peerResolution, splitDidUrl, type PeerResolution } from "./peer-document.js";
 import { canonicalPublicKey } from "./public-key.js";
 import type { Did, DidId, KeyName, MediationId, PublicKey, VaultData } from "./types.js";
 
@@ -66,7 +67,6 @@ export class Keys {
     return new Keys(seedKey);
   }
 
-  /** Unseal the vault's wrapped seed with the passphrase and open over it. */
   static async unlock(wrapped: WrappedSeed, passphrase: string, anchor: string): Promise<Keys> {
     return Keys.open(await unlockSeedKeystore({ version: 3, seedJwe: wrapped.seedJwe, keys: [] }, passphrase), anchor);
   }
@@ -149,7 +149,7 @@ function localDidOf(inputDocument: JsonObject): LocalDid {
 
 /** The communication DID an entity ID and a route give: the same DID every time, from the seed alone. */
 export async function mintDid(keys: Keys, didId: DidId, route: RouteTarget): Promise<MintedDid> {
-  return { didId, ...localDidOf(inputDocumentOf(await keys.didKeys(didId), route.kind === "mediated" ? route.routingDid : route.endpoint)) };
+  return { didId, ...localDidOf(inputDocumentOf(await keys.didKeys(didId), serviceOf(route))) };
 }
 
 /** The DID a mediation arrangement is known to its mediator by: no service, its mail is picked up. */
@@ -157,16 +157,50 @@ export async function mintMediationDid(keys: Keys, mediationId: MediationId): Pr
   return localDidOf(inputDocumentOf(await keys.mediationKeys(mediationId), null));
 }
 
-/** A recorded DID entity against the seed: its spellings must be the ones its ID and route derive. */
-export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">, route: RouteTarget): Promise<void> {
-  const minted = await mintDid(keys, created.didId, route);
-  if (minted.longFormDid !== created.longFormDid || minted.did !== created.did) {
-    throw new IdentityMismatch(`DID entity ${created.didId} does not derive from the seed and its route`);
+/** The target a route sends a document's traffic to, as the document's DIDComm service spells it. */
+function serviceOf(route: RouteTarget): string {
+  return route.kind === "mediated" ? route.routingDid : route.endpoint;
+}
+
+/**
+ * The document's methods for a relationship must all be its own and
+ * all carry the one key the seed derives for that use: another
+ * implementation may serialize the same keys and route differently,
+ * so the recorded document is read, never rebuilt from a template.
+ */
+function holdsKey(resolution: PeerResolution, relationship: "authentication" | "keyAgreement", key: LocalKey, entity: string): void {
+  const ids = authorizedMethodIds(resolution.document, relationship);
+  if (ids.length === 0) throw new IdentityMismatch(`${entity} authorizes no ${relationship} method`);
+  for (const id of ids) {
+    if (splitDidUrl(id)[0] !== resolution.presentedDid || methodPublicKey(resolution.document, id) !== key.publicKey) {
+      throw new IdentityMismatch(`${entity} authorizes ${id} for ${relationship}, not the key the seed derives`);
+    }
   }
 }
 
-/** A recorded mediation arrangement against the seed: `me.did` must be the DID its ID derives. */
+/**
+ * A recorded DID entity against the seed and its bound route: the long
+ * form must resolve, `did` must be its short form, its authentication
+ * and key-agreement methods must carry the entity's two keys and its
+ * one DIDComm service must send to the route. A long form that does
+ * not resolve throws `InvalidDidDocument`.
+ */
+export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">, route: RouteTarget): Promise<void> {
+  const entity = `DID entity ${created.didId}`;
+  const resolution = peerResolution(created.longFormDid);
+  if (resolution.did !== created.did) throw new IdentityMismatch(`${entity} records ${created.did}, not the short form of its long form`);
+  const { authentication, keyAgreement } = await keys.didKeys(created.didId);
+  holdsKey(resolution, "authentication", authentication, entity);
+  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
+  const uris = didcommServiceUris(resolution.document);
+  if (uris.length !== 1 || uris[0] !== serviceOf(route)) throw new IdentityMismatch(`${entity} sends to ${JSON.stringify(uris)}, not its bound route`);
+}
+
+/** A recorded mediation arrangement against the seed: `me.did` must resolve to the arrangement's one key in both uses. */
 export async function checkMediationCreated(keys: Keys, created: Pick<VaultData["mediation.created"], "mediationId" | "me">): Promise<void> {
-  const minted = await mintMediationDid(keys, created.mediationId);
-  if (minted.longFormDid !== created.me.did) throw new IdentityMismatch(`mediation ${created.mediationId} does not derive its DID from the seed`);
+  const entity = `mediation ${created.mediationId}`;
+  const resolution = peerResolution(created.me.did);
+  const { authentication, keyAgreement } = await keys.mediationKeys(created.mediationId);
+  holdsKey(resolution, "authentication", authentication, entity);
+  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
 }

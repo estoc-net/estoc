@@ -1,7 +1,8 @@
 import { canonicalize, type JsonObject } from "@estoc/event-store/v3";
 import { encodeLongForm, encodeShortForm } from "@estoc/did-peer";
 import { ed25519, edwardsToMontgomeryPub } from "@noble/curves/ed25519";
-import { base64urlnopad } from "@scure/base";
+import { sha256 } from "@noble/hashes/sha2";
+import { base58, base64urlnopad } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +10,7 @@ import {
   authorizedMethodIds,
   canonicalDidOf,
   canonicalPublicKey,
+  didcommServiceUris,
   methodPublicKey,
   peerResolution,
   rawCidOfBytes,
@@ -40,6 +42,14 @@ const INPUT: JsonObject = {
 };
 const LONG = encodeLongForm(INPUT);
 const SHORT = encodeShortForm(INPUT);
+
+/** A long form over exact document bytes, hash and all: what only a hand-built encoder can put on the wire. */
+function longFormOfBytes(json: Uint8Array, codec: number[] = [0x80, 0x04]): string {
+  const encoded = "z" + base58.encode(Uint8Array.from([...codec, ...json]));
+  const hash = "z" + base58.encode(Uint8Array.from([0x12, 0x20, ...sha256(new TextEncoder().encode(encoded))]));
+  return `did:peer:4${hash}:${encoded}`;
+}
+const utf8 = (text: string) => new TextEncoder().encode(text);
 
 describe("peerResolution", () => {
   it("retains the long form's resolution: id is the long form, the short form joins alsoKnownAs, omitted controllers are filled, nothing else changes", () => {
@@ -82,6 +92,59 @@ describe("peerResolution", () => {
     const [hash] = LONG.slice("did:peer:4".length).split(":");
     const other = encodeLongForm({ ...INPUT, extra: true }).split(":")[3];
     expect(() => peerResolution(`did:peer:4${hash}:${other}`)).toThrow(/Hash is invalid/);
+  });
+
+  it("reads the input document from its raw bytes as strict JSON: invalid UTF-8, a duplicated member and another multicodec are refused although the hash matches", () => {
+    const text = JSON.stringify(INPUT);
+    expect(peerResolution(longFormOfBytes(utf8(text))).document).toEqual(peerResolution(LONG).document);
+    const invalidUtf8 = Uint8Array.from([...utf8(text.slice(0, -1)), ...utf8(',"extra":"'), 0xff, ...utf8('"}')]);
+    expect(() => peerResolution(longFormOfBytes(invalidUtf8))).toThrow(/strict JSON: not valid UTF-8/);
+    expect(() => canonicalDidOf(longFormOfBytes(invalidUtf8))).toThrow(InvalidDidDocument);
+    const duplicated = utf8(`${text.slice(0, -1)},"extra":1,"extra":2}`);
+    expect(() => peerResolution(longFormOfBytes(duplicated))).toThrow(/duplicate member "extra"/);
+    expect(() => canonicalDidOf(longFormOfBytes(duplicated))).toThrow(InvalidDidDocument);
+    expect(() => peerResolution(longFormOfBytes(utf8(text), [0x80, 0x03]))).toThrow(/multicodec-tagged JSON/);
+    expect(() => peerResolution(longFormOfBytes(utf8("[]")))).toThrow(/JSON object/);
+  });
+
+  it("refuses an input document the method forbids or one whose members are not the shape a document gives them", () => {
+    const refused = (document: JsonObject, message: RegExp) => {
+      expect(() => peerResolution(encodeLongForm(document))).toThrow(message);
+      expect(() => canonicalDidOf(encodeLongForm(document))).toThrow(InvalidDidDocument);
+    };
+    refused({ ...INPUT, id: "did:web:unrelated.example" }, /must not have a root `id`/);
+    refused({ ...INPUT, verificationMethod: [{ id: "did:web:unrelated.example#key-1", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
+    refused({ ...INPUT, authentication: [{ id: "did:web:unrelated.example#e", type: "Multikey", publicKeyMultibase: ED_KEY }] }, /must be a relative reference/);
+    refused({ ...INPUT, verificationMethod: 1 }, /verificationMethod is an array/);
+    refused({ ...INPUT, verificationMethod: [{ type: "Multikey", publicKeyMultibase: ED_KEY }] }, /verificationMethod is an array of verification methods with an id/);
+    refused({ ...INPUT, authentication: [1] }, /authentication is an array of references/);
+    refused({ ...INPUT, service: ["#service"] }, /service is an array of services with an id/);
+    refused({ ...INPUT, alsoKnownAs: [1] }, /alsoKnownAs is an array of strings/);
+    refused({ ...INPUT, authentication: ["#nope"] }, /references no verification method/);
+    refused({ ...INPUT, keyAgreement: ["key-2"] }, /DID URL or a fragment reference/);
+  });
+});
+
+describe("didcommServiceUris", () => {
+  it("lists the endpoint URIs of the DIDComm services, as strings, objects or arrays of either, and skips other services", () => {
+    const document: JsonObject = {
+      id: "did:web:bob.example",
+      service: [
+        { id: "#a", type: "DIDCommMessaging", serviceEndpoint: "https://a.example" },
+        { id: "#b", type: ["DIDCommMessaging"], serviceEndpoint: { uri: "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc", accept: ["didcomm/v2"] } },
+        { id: "#c", type: "DIDCommMessaging", serviceEndpoint: ["https://c1.example", { uri: "https://c2.example" }] },
+        { id: "#d", type: "LinkedDomains", serviceEndpoint: "https://d.example" },
+      ],
+    };
+    expect(didcommServiceUris(document)).toEqual(["https://a.example", "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc", "https://c1.example", "https://c2.example"]);
+    expect(didcommServiceUris({ id: "did:web:bob.example" })).toEqual([]);
+    expect(didcommServiceUris(peerResolution(LONG).document)).toEqual(["did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc"]);
+  });
+
+  it("refuses a DIDComm service whose endpoint carries no URI", () => {
+    expect(() => didcommServiceUris({ service: [{ id: "#a", type: "DIDCommMessaging", serviceEndpoint: { accept: ["didcomm/v2"] } }] })).toThrow(/serviceEndpoint is a URI/);
+    expect(() => didcommServiceUris({ service: [{ id: "#a", type: "DIDCommMessaging", serviceEndpoint: [1] }] })).toThrow(/serviceEndpoint\[0\] is a URI/);
+    expect(() => didcommServiceUris({ service: "https://a.example" })).toThrow(/service is an array/);
   });
 });
 

@@ -128,6 +128,7 @@ export {
   type VerificationRelationship,
   type PeerResolution,
   canonicalDidOf,
+  didcommServiceUris,
   peerResolution,
   splitDidUrl,
   authorizedMethodIds,

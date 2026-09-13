@@ -30,6 +30,25 @@
   `plaintextHash`, `expandPleaseAck` and `requestsAck` are the
   projections and hashes; every additional header, `__proto__`
   included, is an own member of the intent.
+- **The version-3 keys, communication DIDs, retained peer document and
+  `from_prior`**: `Keys` derives every key by name from the one seed
+  through `@estoc/keystore`, an Ed25519 key per name and its X25519
+  form (`@noble/curves`) for key agreement, and opens only over the
+  seed that derives the recorded anchor; `mintDid` and
+  `mintMediationDid` build the did:peer:4 input document of a
+  communication DID (two keys and the route's DIDComm service) or of a
+  mediation arrangement (one key, no service); `checkDidCreated` and
+  `checkMediationCreated` check a recorded entity by reading its own
+  document back against the seed's keys and the bound route.
+  `peerResolution` takes a long form to the fixed retained document —
+  the raw bytes read as strict JSON, the method's input-document rules
+  and the members' shapes enforced, every relationship reference
+  resolved — under its RFC 8785 bytes and raw CID; `canonicalDidOf`,
+  `authorizedMethodIds`, `methodPublicKey`, `didcommServiceUris` and
+  `splitDidUrl` read DIDs and retained documents. `signFromPrior` and
+  `verifyFromPrior` are the compact EdDSA JWT over `jose`, verified
+  against the exact pinned predecessor document only. `@estoc/did-peer`
+  exports `decodeLongForm`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
