@@ -43,7 +43,9 @@
   `peerResolution` takes a long form to the fixed retained document —
   the raw bytes read as strict JSON, the method's input-document rules
   and the members' shapes enforced, every relationship reference
-  resolved — under its RFC 8785 bytes and raw CID; `canonicalDidOf`,
+  resolved, every service carrying an endpoint whose string form is an
+  RFC 3986 URI with any bracketed host an IPv6 address by `ipaddr.js` —
+  under its RFC 8785 bytes and raw CID; `canonicalDidOf`,
   `authorizedMethodIds`, `methodPublicKey`, `didcommServiceUris` and
   `splitDidUrl` read DIDs and retained documents. `signFromPrior` and
   `verifyFromPrior` are the compact EdDSA JWT over `jose`, verified

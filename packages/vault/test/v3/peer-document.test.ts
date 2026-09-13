@@ -191,8 +191,17 @@ describe("peerResolution on key material and service endpoints", () => {
     for (const uri of ["did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc", "https://a.example:8443/p/q?x=1&y#frag", "wss://[::1]:9/x", "http://user:pw@10.0.0.1/", "mailto:bob@example.com", "urn:uuid:019b2a54-05bd-74ef-b8ac-e8375cb776c2", "file:///tmp/x", "https://a.example/%E4%B8%AD", "a:"]) {
       expect(() => peerResolution(encodeLongForm(service(uri))), uri).not.toThrow();
     }
-    for (const bad of ["not a URI", "https://a.example/a b", "https://a.example/%zz", "//no-scheme.example", "1http://a.example", "https://a.example/#a#b", "https://a.exam ple/", "https:// a.example/", ""]) {
+    for (const bad of ["not a URI", "https://a.example/a b", "https://a.example/%zz", "//no-scheme.example", "1http://a.example", "https://a.example/#a#b", "https://a.exam ple/", "https:// a.example/", "https://a.example/\n", ""]) {
       expect(() => peerResolution(encodeLongForm(service(bad))), JSON.stringify(bad)).toThrow(/serviceEndpoint that is a URI/);
+    }
+  });
+
+  it("holds a bracketed host to the IPv6 and IPvFuture grammars: groups, one ::, a strict dotted-decimal tail, no zone", () => {
+    for (const host of ["[::1]", "[1:2:3:4:5:6:7:8]", "[::ffff:192.0.2.128]", "[1::2:3.4.5.6]", "[2001:db8::]", "[v1.example]", "[V1.example]", "[vF.a:b~c]"]) {
+      expect(() => peerResolution(encodeLongForm(service(`https://${host}/`))), host).not.toThrow();
+    }
+    for (const host of ["[1]", "[:::]", "[1::2::3]", "[12345::]", "[00000::1]", "[1:2:3:4:5:6:7:8:9]", "[::ffff:999.0.0.1]", "[::ffff:192.168.001.1]", "[::ffff:1.2.3]", "[fe80::1%25eth0]", "[fe80::1%eth0]", "[]", "[v.example]", "[v1example]", "[a.example]"]) {
+      expect(() => peerResolution(encodeLongForm(service(`https://${host}/`))), host).toThrow(/serviceEndpoint that is a URI/);
     }
   });
 });
