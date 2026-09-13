@@ -86,6 +86,8 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
     if (pthid === null || relationshipBindingEventId === null || peerResolutionEventId === null || receipt.data.fromPrior !== null || receipt.data.peerTransitionEventId !== null) continue;
     const disclosed = byOob.get(pthid)?.find((disclosure) => didKeyName(disclosure.data.didId, "key-agreement") === rootKey);
     if (disclosed === undefined) continue;
+    const own = set.resolve(peerResolutionEventId, "peer.resolved");
+    if (own.status === "mismatched" || (own.status === "present" && (own.event.data.did !== receipt.data.did || own.event.data.localKeyName !== rootKey))) continue;
     const entry = receipts.get(pthid) ?? { consumers: new Set<RelationshipId>(), pending: new Map<EventId, RelationshipId | null>(), inconsistent: [] };
     receipts.set(pthid, entry);
 
@@ -101,8 +103,6 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
     const { relationshipId: claimed, localDidId, peerResolutionEventId: rootResolutionEventId } = binding.event.data;
     if (localDidId !== disclosed.data.didId) continue;
 
-    const own = set.resolve(peerResolutionEventId, "peer.resolved");
-    if (own.status === "mismatched" || (own.status === "present" && (own.event.data.did !== receipt.data.did || own.event.data.localKeyName !== rootKey))) continue;
     const root = set.resolve(rootResolutionEventId, "peer.resolved");
     if (root.status === "mismatched" || (root.status === "present" && root.event.data.did !== receipt.data.did)) continue;
     const localDid = routes.dids.get(localDidId)?.created?.did ?? null;

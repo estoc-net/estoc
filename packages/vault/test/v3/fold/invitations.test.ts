@@ -241,6 +241,10 @@ describe("the invitation fold", () => {
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: ownOfCarol.eventId as EventReference<"peer.resolved">, ordinal: 4 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootIsNoResolution), resolution: missing, ordinal: 5 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: bound(wrongR) as unknown as EventReference<"peer.resolved">, ordinal: 6 });
+    const noBinding = "019b2a99-0000-7000-8000-000000000005" as EventReference<"relationship.bound">;
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: noBinding, resolution: ownAtB.eventId as EventReference<"peer.resolved">, ordinal: 8 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: noBinding, resolution: ownOfCarol.eventId as EventReference<"peer.resolved">, ordinal: 9 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: noBinding, resolution: bound(wrongR) as unknown as EventReference<"peer.resolved">, ordinal: 10 });
     const { fold, invitations } = await folded(scene);
     expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [], inconsistent: [r1.eventId, r2.eventId], conflict: false, available: true });
     expect(invitations.consumable(OOB, stranger)).toBe("consumable");
