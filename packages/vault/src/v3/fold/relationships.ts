@@ -144,7 +144,7 @@ type Context = {
   relationshipId: RelationshipId;
   bindingEventIds: readonly EventReference<"relationship.bound">[];
   peerEdges: readonly PeerEdge[];
-  /** every key a local node could have: the bindings' root DIDs' and both ends of every local edge */
+  /** every key a local node could have: the bindings' root DIDs' and every local edge's successor's */
   namedKeyNames: ReadonlySet<KeyName>;
 };
 
@@ -181,7 +181,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
       relationshipId: id,
       bindingEventIds: bindings.map((event) => event.eventId as EventReference<"relationship.bound">),
       peerEdges: peerEdges.get(id) ?? [],
-      namedKeyNames: namedKeyNames([...bindings.map((event) => event.data.localDidId), ...(localEdges.get(id) ?? []).flatMap((edge) => [edge.data.fromDidId, edge.data.toDidId])]),
+      namedKeyNames: namedKeyNames([...bindings.map((event) => event.data.localDidId), ...(localEdges.get(id) ?? []).map((edge) => edge.data.toDidId)]),
     };
     const { binding, root } = foldBinding(bindings, context, verdict);
 
@@ -384,9 +384,11 @@ const chainsKey = (chains: Chains) => canonicalText({ local: chains.local.map((n
 /**
  * The two chains folded together until nothing changes: each pass
  * judges every edge against the chains the last pass produced, and the
- * last pass is the verdict. Each change adds a node or an applied edge
- * to a chain, so the passes are bounded by the edges, and the result
- * is the same from any order of events.
+ * last pass is the verdict. What contradicts is judged from the events
+ * alone, never from the chains, so a pass takes back nothing an
+ * earlier one applied: each change adds a node or an applied edge to a
+ * chain, the passes are bounded by the edges, and the result is the
+ * same from any order of events.
  */
 function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[] } {
   let chains: Chains = { local: [localNode(root.localDidId, root.localDid, [])], peer: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
@@ -466,9 +468,9 @@ function witnesses(bindingEventIds: readonly EventReference<"relationship.bound"
   );
 }
 
-/** One proof to one successor DID, pinning one document: the same successor reference, or successor snapshots here with one CID. */
+/** One proof from one predecessor DID to one successor DID, pinning one document: the same successor reference, or successor snapshots here with one CID. */
 function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data"]): boolean {
-  if (a.fromPrior !== b.fromPrior || a.toDid !== b.toDid) return false;
+  if (a.fromDid !== b.fromDid || a.fromPrior !== b.fromPrior || a.toDid !== b.toDid) return false;
   if (a.peerResolutionEventId === b.peerResolutionEventId) return true;
   const cidOf = (edge: PeerEdge["data"]) => {
     const resolved = context.set.resolve(edge.peerResolutionEventId, "peer.resolved");
@@ -479,8 +481,9 @@ function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data
 }
 
 /**
- * One observation's scope in this relationship, by the row it claims,
- * against the chains so far. An applied transition equal to the one a
+ * One observation's scope in this relationship, by the row it claims:
+ * what contradicts is judged from the events it names, what it waits
+ * for from the chains so far. An applied transition equal to the one a
  * proof-free successor names scopes it, since equal edges are one
  * transition; the transition under judgement stands in for the applied
  * one a carrier or a proof-free successor waits for, when it is that
@@ -514,26 +517,24 @@ function judgeObservation(evidence: Evidence, receipt: Receipt, judging: PeerEdg
   const standing = keyStanding(evidence, localKeyName);
   if (standing === "outside") faults.push("arrived at a key outside the local history");
   else if (standing === "awaited") deferred.push("arrived at a key not yet in the local history");
-  const from = (node: { did: Did; documentCid: Cid } | undefined, pinned: string) => {
-    if (node === undefined) deferred.push(`awaits ${pinned}`);
-    else if (auth.status === "present" && (auth.resolution.data.did !== node.did || auth.resolution.data.documentCid !== node.documentCid)) faults.push(`is not from the document ${pinned} pins`);
-  };
-  const pinnedBy = (transition: PeerEdge): { did: Did; documentCid: Cid } | undefined => {
-    const applied = context.peerEdges.find((edge) => evidence.nodeByEdge.has(edge.eventId) && sameTransition(context, edge.data, transition.data));
-    if (applied !== undefined) return evidence.nodeByEdge.get(applied.eventId);
-    if (judging === null || !sameTransition(context, transition.data, judging.data)) return undefined;
-    const successor = context.set.resolve(judging.data.peerResolutionEventId, "peer.resolved");
-    return successor.status === "present" ? { did: judging.data.toDid, documentCid: successor.event.data.documentCid } : undefined;
-  };
+  const notFrom = (did: Did, documentCid: Cid | null) => auth.status === "present" && (auth.resolution.data.did !== did || (documentCid !== null && auth.resolution.data.documentCid !== documentCid));
+  const stands = (transition: PeerEdge) => context.peerEdges.some((edge) => (evidence.nodeByEdge.has(edge.eventId) || (judging !== null && edge === judging)) && sameTransition(context, edge.data, transition.data));
   if (fromPrior === null) {
     if (relationshipBindingEventId === null) faults.push("carries neither a proof nor a binding");
-    else if (peerTransitionEventId === null) from(evidence.peerChain[0], "the root");
-    else {
+    else if (peerTransitionEventId === null) {
+      const root = evidence.peerChain[0];
+      if (root === undefined) deferred.push("awaits the root");
+      else if (notFrom(root.did, root.documentCid)) faults.push("is not from the document the root pins");
+    } else {
       const transition = context.set.resolve(peerTransitionEventId, "relationship.peerTransitioned");
       if (transition.status === "mismatched") faults.push(`names ${transition.event.type} as its transition`);
       else if (transition.status === "missing") deferred.push("awaits the transition it names");
       else if (transition.event.data.relationshipId !== context.relationshipId) faults.push("names a transition of another relationship");
-      else from(pinnedBy(transition.event), "the transition it names");
+      else {
+        const successor = context.set.resolve(transition.event.data.peerResolutionEventId, "peer.resolved");
+        if (notFrom(transition.event.data.toDid, successor.status === "present" ? successor.event.data.documentCid : null)) faults.push("is not from the document the transition it names pins");
+        else if (!stands(transition.event)) deferred.push("awaits the transition it names");
+      }
     }
   } else {
     let sub: string | null = null;

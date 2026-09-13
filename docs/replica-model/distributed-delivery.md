@@ -854,7 +854,7 @@ of these rows:
 | Observation | Immutable evidence and authorization | Scope |
 | --- | --- | --- |
 | Proof-free root sender | `relationshipBindingEventId` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransitionEventId == null` | R |
-| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge whose `toDid` and exact successor document authorize the observed DID/key | R |
+| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge, or an edge equal to an applied one under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned), whose `toDid` and exact successor document authorize the observed DID/key | R |
 | Carried `fromPrior` | A valid `relationship.peerTransitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
 
 These rows do not inspect public/private policy or message type. Lookup hints

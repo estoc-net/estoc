@@ -1111,7 +1111,7 @@ describe("evidence that authorizes nothing", () => {
     });
   });
 
-  it("a proof-free duplicate naming a transition not here waits alone; one at a key no node and no local edge names conflicts the group, one at a key an unapplied edge names waits", async () => {
+  it("a proof-free duplicate naming a transition not here waits alone; one at a key no node and no local edge adds conflicts the group, one at a key an unapplied edge adds waits", async () => {
     const { scene, keys, peerKeys, R, a0, a1, a2, b0, b1, root, binding } = await bornAtRoot();
     const { edge: peer, successor, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
     const named = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 2, wire: carrier.data.wireMessageId, transition: uuidv7() as EventReference<"relationship.peerTransitioned"> });
@@ -1131,6 +1131,12 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
       expect(fold.claimants(a2.did, b1.did)).toEqual([]);
       expect(fold.pendingAt(a0.did, b1.did)).toEqual([expect.objectContaining({ because: "carrier", conflict: true })]);
+    });
+    const leaving = localEdge(scene, R, a2.didId, a1.didId, await signFromPrior(keys, { didId: a2.didId, longFormDid: a2.longFormDid }, a1.longFormDid, IAT));
+    await expectFoldOrderFree(scene.events, (fold) => {
+      expect(fold.transitions.get(leaving.eventId)).toMatchObject({ status: "deferred" });
+      expect(fold.transitions.get(peer.eventId)).toMatchObject({ status: "conflict" });
+      expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
     });
     const unapplied = localEdge(scene, R, a0.didId, a2.didId, await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a2.longFormDid, IAT), uuidv7() as EventReference<"message.in">);
     await expectFoldOrderFree(scene.events, (fold) => {
@@ -1292,6 +1298,42 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.transitions.get(local.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the trigger ${input.eventId} does not confirm ${a0.didId}`) });
       expect(fold.relationships.get(R)!.faults).toEqual([expect.stringContaining(`observation ${nowhere.eventId} of message ${input.data.messageId} arrived at a key outside the local history`)]);
       expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
+    });
+  });
+  it("a proof-free observation naming a transition to another DID contradicts its group whether or not that transition is applied, however many equal edges it has", async () => {
+    const { scene, peerKeys, R, a0, b0, b1, b2, root, binding } = await bornAtRoot();
+    const first = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
+    const next = await peerRotation(scene, peerKeys, R, a0.didId, b1, b2, first.successor, binding, 2);
+    await expectFoldOrderFree(scene.events, (fold) => expect(dids(fold, R).peer).toEqual([b0.did, b1.did, b2.did]));
+    const contradictory = receipt(scene, { local: a0.didId, peer: b1, resolution: first.successor, binding, ordinal: 3, wire: first.carrier.data.wireMessageId, transition: ref(next.edge) });
+    const check = (fold: RelationshipFold) => {
+      expect(fold.transitions.get(first.edge.eventId)).toEqual({ status: "conflict", because: `observation ${contradictory.eventId} of message ${first.carrier.data.messageId} is not from the document the transition it names pins` });
+      expect(fold.transitions.get(next.edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("no rooted prefix reaches the edge") });
+      expect(dids(fold, R).peer).toEqual([b0.did]);
+      expect(fold.relationships.get(R)!.conflict).toBe(true);
+    };
+    await expectFoldOrderFree(scene.events, check);
+    for (let duplicates = 0; duplicates < 2; duplicates++) {
+      scene.add("relationship.peerTransitioned", { ...next.edge.data });
+      await expectFoldOrderFree(scene.events, check);
+    }
+  });
+
+  it("an edge naming another predecessor is not equal to an applied one, whatever proof it copies: the observation naming it waits", async () => {
+    const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
+    const { edge: valid, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
+    const referenced = peerEdge(scene, { R, local: a0.didId, from: b2, to: b1, jwt, prior: root, successor, messageId: carrier.data.messageId, overrides: { priorResolutionEventId: uuidv7() as EventReference<"peer.resolved"> } });
+    const proofFree = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 2, transition: ref(referenced) });
+    const local = localEdge(scene, R, a0.didId, a1.didId, await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT), ref(proofFree));
+    await expectFoldOrderFree(scene.events, (fold) => {
+      expect(fold.transitions.get(valid.eventId)).toEqual({ status: "applied" });
+      expect(fold.transitions.get(referenced.eventId)).toMatchObject({ status: "deferred" });
+      expect(fold.transitions.get(local.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining(`observation ${proofFree.eventId} of message ${proofFree.data.messageId} awaits the transition it names`) });
+      expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did, b1.did] });
+    });
+    await expectFoldOrderFree(scene.events.map((event) => (event === referenced ? { ...event, data: { ...event.data, fromDid: b0.did } } : event)), (fold) => {
+      expect(fold.transitions.get(local.eventId)).toEqual({ status: "applied" });
+      expect(dids(fold, R)).toEqual({ local: [a0.didId, a1.didId], peer: [b0.did, b1.did] });
     });
   });
 });

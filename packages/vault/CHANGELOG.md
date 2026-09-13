@@ -123,7 +123,7 @@
   sender and that an applied transition witnesses. One that
   contradicts (another key, another spelling, a message ID it does
   not derive, a snapshot that is not its document's, a key no node
-  and no local edge of the relationship names, a transition of
+  and no local edge of the relationship adds, a transition of
   another relationship, a proof found invalid) conflicts the group,
   and a group in conflict witnesses no proof and confirms no
   address; one whose evidence is absent waits alone, and a witness or

@@ -3886,12 +3886,15 @@ There is no migration requirement from an earlier event vocabulary.
 ### Group waits and transition validity (VE-140–VE-141)
 
 140. <a id="ve-140"></a> A peer transition whose carrier's own row is complete applies while an
-     equal edge of the same message ID group lacks its prior snapshot, or a
-     proof-free duplicate names that unapplied edge: the unapplied edge and
-     the observations that depend on it wait, the group's execution waits,
-     and R has no conflict. Supplying the missing snapshot applies them all;
-     a snapshot that contradicts conflicts the group and the applied edge
-     alike. The result is the same in every import order.
+     equal edge of the same message ID group lacks its prior snapshot, and R
+     has no conflict. An observation whose only matching carrier edge lacks
+     required evidence waits. A proof-free observation naming an equal edge
+     is scoped by an applied transition under [section 6.4](#relationship-peertransitioned)
+     even while the named edge waits. The group's execution and ACK
+     processing wait if any observation remains unresolved. Supplying the
+     missing snapshot applies the waiting edge; a snapshot that contradicts
+     conflicts the group and the applied edge alike. The result is the same
+     in every import order.
 141. <a id="ve-141"></a> A local edge confirmed by an observation at its predecessor stays
      applied when a duplicate of that message, repacked to the successor
      after the rotation, is committed under the same message ID: the
