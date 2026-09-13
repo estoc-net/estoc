@@ -65,7 +65,23 @@ relationships, keys and DIDComm endpoints) and the `from_prior` proof
 `jose`, `verifyFromPrior` verifies one against the exact pinned
 predecessor document only, DID spellings compared by validated
 equivalence and the rest of a method ID byte for byte; what the proof
-means for a relationship is the receiving procedure's). Every published
+means for a relationship is the receiving procedure's), and the first
+folds (`fold/`: `VaultEventSet` reads every event once against its
+schema and hands a type's events out in canonical order and a typed
+reference's target as present, missing or mismatched; `foldAuthors` and
+`foldLabel`; `foldMediations`, each arrangement's consistent creation,
+one grant, retirement and conflicts, and the preferred one;
+`foldRoutes`, each route's usability and terminal dependency, each local
+DID entity's consistent record, own document, route target, disclosures,
+retirement, faults and liveness, the key-name and spelling reverse maps,
+the desired mediator recipients and each entity's receipt eligibility;
+`requiredReceivingSet`; `foldInvitations`, each one-use disclosure's
+consumers read from the root-address receipts, its conflict and
+availability; `foldContacts`, the decisions a contact ID holds on its
+own. Every fold is a pure function of the event set, checked by
+shuffling; what needs the seed, whether an entity's document carries
+the keys its ID derives, is `verifyDidKeys` / `verifyMediationKeys`
+beside the fold, whose verdicts are handed back in). Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
 there too.

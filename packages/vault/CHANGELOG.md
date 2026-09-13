@@ -52,6 +52,32 @@
   `verifyFromPrior` are the compact EdDSA JWT over `jose`, verified
   against the exact pinned predecessor document only. `@estoc/did-peer`
   exports `decodeLongForm`.
+- **The first version-3 folds**, under `fold/`: `VaultEventSet` holds
+  every event once by ID, reads each version-3 event against its schema
+  on entry and keeps an invalid or unknown-typed one for its roots
+  without applying it, hands a type's events out in canonical order and
+  resolves a typed reference to its target as present, missing or
+  mismatched. `foldAuthors` and `foldLabel`; `foldMediations` (one
+  consistent creation, one grant, retirement, conflicts, the preferred
+  arrangement); `foldRoutes` (each route's consistent configuration,
+  retirement, conflict, usability and terminal dependency; each local
+  DID entity's consistent record, own document read back, route target,
+  disclosures in canonical order, retirement, faults, conflict and
+  liveness; the reverse maps from key name and from either spelling to
+  the entity; the desired mediator recipient set; whether an entity may
+  still receive, eligible, pending or terminal); `requiredReceivingSet`;
+  `foldInvitations` (each one-use OOB disclosure's consumers, read from
+  the root-address receipts that name it as `pthid` at the disclosed DID,
+  pending receipts whose evidence is missing, the two-consumer conflict,
+  availability and `consumable`); `foldContacts` (origin, tombstone,
+  petname, flags, DID preference, peer DID seeds by exact add reference,
+  display groups from `contact.merged`, and faults for a removal that
+  names nothing it can remove). Every fold is a pure function of the
+  set, the same over any permutation. `verifyDidKeys` and
+  `verifyMediationKeys` run the seed check beside the fold and return the
+  verdicts a fold takes as `keyChecks`; `checkDidCreated` and
+  `checkMediationCreated` are now composed of the exported `didDocumentOf`,
+  `documentSendsTo`, `checkDidKeys` and `checkMediationKeys`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
