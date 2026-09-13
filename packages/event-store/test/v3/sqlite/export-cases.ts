@@ -37,6 +37,8 @@ export interface ExportHarness extends VaultHarness {
   /** The complete bytes of the file at `target`, which no connection holds open. */
   fileBytes(target: string): Promise<Uint8Array>;
   memoryUsed?: () => MemoryHeld | Promise<MemoryHeld>;
+  /** Deletes the database at `target`, which no connection holds open: a case that made a large one gives the space back, where space is scarce. */
+  remove?(target: string): void | Promise<void>;
 }
 
 export interface ExportCase {
@@ -337,7 +339,8 @@ async function streamedThrough(given: ExportHarness, { retain, connected }: Watc
       },
     };
   };
-  const { vault } = await make(h, h.fresh(), clock().now);
+  const own = h.fresh();
+  const { vault } = await make(h, own, clock().now);
   await sample("before");
   let fed = 0;
   async function* sampled(): AsyncIterable<Uint8Array> {
@@ -375,7 +378,8 @@ async function streamedThrough(given: ExportHarness, { retain, connected }: Watc
   await sample("after the export");
   const snapshot = await opened(h, target);
   const restoring = copying("restore");
-  const restored = await restoreVault(snapshotWatched(snapshot, restoring.watch), destination(h, h.fresh()), { heldRoots: rootsOf, anchor: ANCHOR });
+  const restoredTo = h.fresh();
+  const restored = await restoreVault(snapshotWatched(snapshot, restoring.watch), destination(h, restoredTo), { heldRoots: rootsOf, anchor: ANCHOR });
   restoring.done();
   snapshot.close();
   assertEqual([restored.objects, restored.objectBytes], [1, OBJECT_MIB * MIB], "restored whole");
@@ -383,6 +387,7 @@ async function streamedThrough(given: ExportHarness, { retain, connected }: Watc
   await sample("after the restore");
   await vault.close();
   await sample("after the close");
+  for (const made of [own, target, restoredTo]) await h.remove?.(made);
   const note = samples.map(([at, held]) => `${at}: ${shown(held)} MiB`).join(", ");
   return { samples, broken: measure === undefined ? [] : brokenBounds(samples), note };
 }

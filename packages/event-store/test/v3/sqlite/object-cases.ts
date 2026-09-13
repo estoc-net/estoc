@@ -32,6 +32,8 @@ export interface ObjectHarness {
   fresh(): string;
   open(target: string, mode: OpenMode): Promise<SqliteDriver>;
   memoryUsed?: () => MemoryHeld | Promise<MemoryHeld>;
+  /** Deletes the database at `target`, which no connection holds open: a case that made a large one gives the space back, where space is scarce. */
+  remove?(target: string): void | Promise<void>;
 }
 
 export interface ObjectCase {
@@ -381,7 +383,8 @@ export const objectCases: ObjectCase[] = [
   {
     name: "staging goes to the temporary database's file under a bounded cache, so neither what JavaScript nor what SQLite holds grows with the object — and told to cache the whole staging, SQLite does; a put past the staging bound is refused with nothing staged",
     run: async (h) => {
-      const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
+      const target = h.fresh();
+      const db = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });
       const store = new SqliteObjectStore(db, { maxStagedBytes: 40 * MIB });
       assertEqual(rows(db.driver, "PRAGMA temp_store"), [{ temp_store: 1 }], "the temporary database is on a file");
       const total = 24;
@@ -421,7 +424,8 @@ export const objectCases: ObjectCase[] = [
         if (sqlite !== undefined) {
           assert(sqlite < 4 * MIB, `what SQLite holds does not grow with the staging: ${note}`);
           // The same staging under a temporary cache the size of the object: the bound above is the cache's doing, and the measure sees the cache fill.
-          const caching = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
+          const cachingTarget = h.fresh();
+          const caching = createRuntime(await h.open(cachingTarget, "create"), { metadata: META, wrapped: WRAPPED });
           try {
             const cachingStore = new SqliteObjectStore(caching, { maxStagedBytes: 40 * MIB });
             const small = bytesOf(16, 3);
@@ -434,6 +438,7 @@ export const objectCases: ObjectCase[] = [
             note += `; told to cache, SQLite held ${shown(cached)} MiB`;
           } finally {
             caching.close();
+            await h.remove?.(cachingTarget);
           }
         }
       }
@@ -448,6 +453,7 @@ export const objectCases: ObjectCase[] = [
       assertEqual(await other.putObject(cid.text as Cid, reusing()), { cid: cid.text, codec: "raw", size: total * MIB }, "and the bound is free again");
       other.discard();
       db.close();
+      await h.remove?.(target);
       return note;
     },
   },

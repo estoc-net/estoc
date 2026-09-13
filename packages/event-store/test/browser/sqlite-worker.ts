@@ -133,6 +133,7 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     open: (target, mode) => pool.open(target, mode),
     importFile: (target, bytes) => pool.importFile(target, bytes),
     fileBytes: (target) => pool.exportFile(target),
+    remove: (target) => pool.remove(target),
     utf16,
     memoryUsed: memoryUsedIn(pool),
   };

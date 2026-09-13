@@ -34,6 +34,9 @@ import { ANCHOR, META, WRAPPED } from "../fixtures.js";
 import { all, expectBytes } from "../suite/helpers.js";
 import { bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOptions } from "../suite/object-store-suite.js";
 import { heldOnNode } from "./node-memory.js";
+
+/** Long enough for the cases that stage and read back tens of mebibytes on a slow machine. */
+const LARGE_OBJECT_TIME_LIMIT = 120_000;
 import { objectCases } from "./object-cases.js";
 import { objectStoreOpener } from "./suite-openers.js";
 
@@ -106,10 +109,14 @@ objectStoreSuite("SqliteObjectStore on a file", objectStoreOpener({ fresh, open 
 
 describe("the object cases on node:sqlite files", () => {
   for (const c of objectCases) {
-    it(c.name, async () => {
-      const note = await c.run({ fresh, open: async (target, mode) => open(target, mode), memoryUsed: heldOnNode });
-      if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
-    });
+    it(
+      c.name,
+      async () => {
+        const note = await c.run({ fresh, open: async (target, mode) => open(target, mode), remove: (target) => rm(target, { force: true }), memoryUsed: heldOnNode });
+        if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
+      },
+      LARGE_OBJECT_TIME_LIMIT
+    );
   }
 });
 

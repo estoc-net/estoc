@@ -565,8 +565,8 @@ MiB streams through a commit, a read, an export and a restore on
 both platforms under a source that reuses one buffer, with what the
 platform holds sampled on the way, in two measures. What JavaScript
 holds once garbage is collected — the heap and the backing stores of
-its array buffers — on Node from `process.memoryUsage`, `--expose-gc`
-given to vitest's forks for the collection; in the Worker from
+its array buffers — on Node from `process.memoryUsage`, the collector
+taken from V8 at run time (`test/v3/sqlite/node-memory.ts`); in the Worker from
 outside it, over the DevTools protocol the test exposes to the page
 before it loads (`Target.exposeDevToolsProtocol`), which attaches to
 the Worker's target by name, collects its garbage and reads
