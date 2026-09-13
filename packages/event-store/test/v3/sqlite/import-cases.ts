@@ -150,13 +150,10 @@ function gated(snapshot: PortableDatabase, cid: Cid): { source: PortableDatabase
   return { source, arrived, release };
 }
 
-/** Reads `stream` to its end, or to its failure. */
 async function drained(stream: ReadableStream<Uint8Array>): Promise<void> {
   const reader = stream.getReader();
   try {
-    while (!(await reader.read()).done) {
-      // read on
-    }
+    while (!(await reader.read()).done);
   } finally {
     reader.releaseLock();
   }

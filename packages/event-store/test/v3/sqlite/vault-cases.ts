@@ -147,7 +147,7 @@ export function failingAt(inner: SqliteDriver, n: number): SqliteDriver {
   return new Connection(failing, "readwrite");
 }
 
-/** Flips one byte of the first chunk of `cid`, as a bad sector would. */
+/** Flips one byte of chunk `chunkNo` of `cid`, as a bad sector would. */
 export function corruptChunk(driver: SqliteDriver, cid: Cid, chunkNo = 0): void {
   const [row] = rows(driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", cid, chunkNo);
   if (row === undefined) throw new Error(`${cid} has no chunk ${chunkNo}`);
@@ -258,7 +258,7 @@ export const vaultCases: VaultCase[] = [
     },
   },
   {
-    name: "a commit drops the cache in the transaction that changes the accepted state under it — events with objects, events alone, a repair with no new event — an empty commit and a commit refused before its transaction leave it, and one whose transaction fails leaves it with the state",
+    name: "a commit drops the cache in the transaction that changes the accepted state under it — events with objects, events alone, a repair with its new event — an empty commit and a commit refused before its transaction leave it, and one whose transaction fails leaves it with the state",
     run: async (h) => {
       const c = clock();
       const target = h.fresh();

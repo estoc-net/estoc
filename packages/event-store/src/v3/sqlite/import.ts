@@ -148,10 +148,10 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   }
   if (forked.length > 0) throw new ForkedAuthor(target.author, forked);
   // Both folds before any byte is checked: what the union holds decides what must have bytes, and what the target held decides which of those are newly held.
-  const heldBefore = rootsOf(await retention(retainedRoots, held));
+  const heldBefore = rootsOf(await checkedRetention(retainedRoots, held));
   const union = new MemoryVault({ metadata: target.metadata });
   await union.ingest([...before, ...plan.fresh]);
-  const unionRetains = await retention(retainedRoots, union.vault);
+  const unionRetains = await checkedRetention(retainedRoots, union.vault);
   const heldAfter = rootsOf(unionRetains);
   const fresh = new Set(plan.fresh.map((event) => event.eventId));
   const required = new Set<Cid>();
@@ -171,8 +171,7 @@ async function planned(target: VaultRuntime, held: Held, incoming: Event[], offe
   return plan;
 }
 
-/** The fold run on `vault`, each root checked as a CID. */
-async function retention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {
+async function checkedRetention(retainedRoots: RetainedRoots, vault: Vault): Promise<Retained[]> {
   const out: Retained[] = [];
   for (const { eventId, root } of await retainedRoots(vault)) out.push({ eventId, root: rawCidOf(root).text as Cid });
   return out;
