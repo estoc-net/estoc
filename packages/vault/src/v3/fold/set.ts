@@ -5,7 +5,9 @@
  * of a type this version does not name is kept as it is, so both keep
  * holding their roots. A fold asks for a type's events in canonical
  * order and for the target of a typed reference, and never sees arrival
- * order.
+ * order. The events are a store's accepted events, one content per ID:
+ * a second content under an ID already here is dropped, the store
+ * having reported that conflict itself.
  */
 
 import { canonicalText, compareEvents, type AuthorId, type Event, type EventId } from "@estoc/event-store/v3";

@@ -1,7 +1,18 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { Keys, VaultEventSet, foldInvitations, foldMediations, foldRoutes, mintMediationDid, relationshipId, type Did, type EventReference, type VaultData } from "../../../src/v3/index.js";
-import { DID_ID, DID_ID2, MEDIATED, MEDIATION, PEER_DID, ROUTE, Scene, bind, createdDid, expectOrderFree, mediatedRoute, messageIn, openKeys } from "./helpers.js";
+import {
+  Keys,
+  VaultEventSet,
+  foldInvitations,
+  mintMediationDid,
+  relationshipId,
+  type Did,
+  type EventReference,
+  type KeyName,
+  type RelationshipId,
+  type VaultData,
+} from "../../../src/v3/index.js";
+import { DID_ID, DID_ID2, MEDIATED, MEDIATION, PEER_DID, PEER_KEY, ROUTE, Scene, bind, checksOf, cidOf, createdDid, expectOrderFree, foldChecked, mediatedRoute, messageIn, openKeys, type KeyChecks } from "./helpers.js";
 
 const OOB = "019b2a57-a947-7502-8fee-4d80d949dbcb";
 const OOB2 = "019b2a58-1111-7502-8fee-4d80d949dbcb";
@@ -16,7 +27,12 @@ beforeAll(async () => {
   me = (await mintMediationDid(keys, MEDIATION)).longFormDid;
 });
 
-const fold = (set: VaultEventSet) => foldInvitations(set, foldRoutes(set, foldMediations(set)));
+const fold = (checks: KeyChecks) => (set: VaultEventSet) => foldInvitations(set, foldChecked(set, checks).routes);
+/** The invitation fold over the scene with the seed's verdicts on its DIDs. */
+async function folded(scene: Scene, events = scene.events) {
+  const checks = await checksOf(scene.events, keys);
+  return { fold: fold(checks), invitations: fold(checks)(VaultEventSet.of(events)) };
+}
 
 async function disclosed(): Promise<{ scene: Scene; a: VaultData["did.created"]; b: VaultData["did.created"] }> {
   const scene = new Scene();
@@ -28,16 +44,20 @@ async function disclosed(): Promise<{ scene: Scene; a: VaultData["did.created"];
 }
 
 describe("the invitation fold", () => {
-  it("offers a one-use invitation while its DID is live and nothing consumed it", async () => {
+  it("offers a one-use invitation while its DID is live and nothing consumed it, and not while the seed has not confirmed the DID", async () => {
     const { scene } = await disclosed();
     scene.add("did.disclosed", { didId: DID_ID, as: "profile", uses: "many", oobId: null, goal: null });
-    const invitations = fold(scene.set());
-    expect(invitations.invitations.get(OOB)).toMatchObject({ oobId: OOB, didId: DID_ID, uses: "one", goal: "Write to Alice", consumers: [], pending: [], conflict: false, available: true });
+    const { invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ oobId: OOB, didId: DID_ID, uses: "one", goal: "Write to Alice", consumers: [], pending: [], inconsistent: [], faults: [], conflict: false, available: true });
     expect(invitations.invitations.size).toBe(1);
-    expect(invitations.consumable(OOB, relationshipId("did:web:a.example" as Did, "did:web:b.example" as Did))).toBe(true);
-    expect(invitations.consumable(OOB2, relationshipId("did:web:a.example" as Did, "did:web:b.example" as Did))).toBe(false);
+    const R = relationshipId("did:web:a.example" as Did, "did:web:b.example" as Did);
+    expect(invitations.consumable(OOB, R)).toBe(true);
+    expect(invitations.consumable(OOB2, R)).toBe(false);
+    const unchecked = fold({ mediations: new Map(), dids: new Map() })(scene.set());
+    expect(unchecked.invitations.get(OOB)).toMatchObject({ available: false, consumers: [] });
+    expect(unchecked.consumable(OOB, R)).toBe(false);
     scene.add("did.retired", { didId: DID_ID, because: "done" });
-    expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ available: false, consumers: [] });
+    expect((await folded(scene)).invitations.invitations.get(OOB)).toMatchObject({ available: false, consumers: [] });
   });
 
   it("is consumed by a matching root-address receipt, once, and stays consumed for that relationship only", async () => {
@@ -45,12 +65,13 @@ describe("the invitation fold", () => {
     const { R, resolved, bound } = bind(scene, { didId: DID_ID, did: a.did });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 1 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 2 });
-    const invitations = fold(scene.set());
+    const { fold, invitations } = await folded(scene);
     expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [R], conflict: false, available: false });
     expect(invitations.consumable(OOB, R)).toBe(true);
     expect(invitations.consumable(OOB, relationshipId(a.did, OTHER_PEER))).toBe(false);
     scene.add("did.retired", { didId: DID_ID, because: "done" });
-    scene.add("message.erased", { messageId: scene.set().of("message.in")[0]!.data.messageId, dropCids: scene.set().of("message.in")[0]!.data.bodyCid ? [scene.set().of("message.in")[0]!.data.bodyCid] : [], because: "user" });
+    const first = scene.set().of("message.in")[0]!.data;
+    scene.add("message.erased", { messageId: first.messageId, dropCids: [first.bodyCid], because: "user" });
     expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ consumers: [R], available: false });
     expectOrderFree(scene.events, fold);
   });
@@ -61,11 +82,34 @@ describe("the invitation fold", () => {
     const second = bind(scene, { didId: DID_ID, did: a.did }, OTHER_PEER);
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: first.bound, resolution: first.resolved, ordinal: 1 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, peerDid: OTHER_PEER, pthid: OOB, binding: second.bound, resolution: second.resolved, ordinal: 2 });
-    const invitations = fold(scene.set());
-    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [first.R, second.R].sort(), conflict: true, available: false });
+    const { fold, invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [first.R, second.R].sort(), faults: ["consumed by 2 relationships"], conflict: true, available: false });
     expect(invitations.consumable(OOB, first.R)).toBe(false);
     expect(invitations.consumable(OOB, second.R)).toBe(false);
     expectOrderFree(scene.events, fold);
+  });
+
+  it("keeps a consumed or conflicted one-use invitation closed when a later disclosure of the same ID says many, and marks the disagreement", async () => {
+    const { scene, a } = await disclosed();
+    const first = bind(scene, { didId: DID_ID, did: a.did });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: first.bound, resolution: first.resolved, ordinal: 1 });
+    scene.add("did.disclosed", { didId: DID_ID, as: "oob", uses: "many", oobId: OOB, goal: null });
+    const { fold, invitations } = await folded(scene);
+    const other = relationshipId(a.did, OTHER_PEER);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ uses: "one", consumers: [first.R], faults: ["disclosures disagree on the use"], conflict: true, available: false });
+    expect(invitations.consumable(OOB, other)).toBe(false);
+    expect(invitations.consumable(OOB, first.R)).toBe(false);
+    const second = bind(scene, { didId: DID_ID, did: a.did }, OTHER_PEER);
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, peerDid: OTHER_PEER, pthid: OOB, binding: second.bound, resolution: second.resolved, ordinal: 2 });
+    expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ consumers: [first.R, second.R].sort(), faults: ["disclosures disagree on the use", "consumed by 2 relationships"], conflict: true, available: false });
+    expectOrderFree(scene.events, fold);
+  });
+
+  it("marks disclosures of one ID on two DIDs as a conflict", async () => {
+    const { scene } = await disclosed();
+    scene.add("did.disclosed", { didId: DID_ID2, as: "oob", uses: "one", oobId: OOB, goal: null });
+    const { invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ didId: DID_ID, faults: ["disclosures disagree on the DID"], conflict: true, available: false });
   });
 
   it("is not consumed by a continuation, another local recipient, a sender other than the root peer or a bare pthid match", async () => {
@@ -77,23 +121,64 @@ describe("the invitation fold", () => {
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, peerDid: OTHER_PEER, pthid: OOB, binding: bound, resolution: resolved, ordinal: 3 });
     messageIn(scene, { localDidId: DID_ID2, localDid: b.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 4 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: null, resolution: null, ordinal: 5 });
-    const invitations = fold(scene.set());
-    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [], conflict: false, available: true });
+    const { fold, invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [], inconsistent: [], conflict: false, available: true });
     expectOrderFree(scene.events, fold);
   });
 
-  it("holds a receipt whose binding or resolution is not here as pending, consuming nothing yet", async () => {
+  it("holds a receipt whose binding, root resolution or own resolution is not here as pending, consuming nothing yet", async () => {
     const { scene, a } = await disclosed();
     const { resolved, bound } = bind(scene, { didId: DID_ID, did: a.did });
     const orphan = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: "019b2a99-0000-7000-8000-000000000001" as EventReference<"relationship.bound">, resolution: resolved, ordinal: 1 });
-    const withoutBinding = VaultEventSet.of(scene.events.filter((event) => event.eventId !== bound));
-    expect(fold(withoutBinding).invitations.get(OOB)).toMatchObject({ consumers: [], pending: [orphan.eventId], available: true });
-    const bindingHeld = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 2 });
-    const withoutResolution = VaultEventSet.of(scene.events.filter((event) => event.eventId !== resolved));
-    expect([...fold(withoutResolution).invitations.get(OOB)!.pending].sort()).toEqual([orphan.eventId, bindingHeld.eventId].sort());
-    expect(fold(withoutResolution).invitations.get(OOB)?.consumers).toEqual([]);
+    const { fold } = await folded(scene);
+    expect(fold(VaultEventSet.of(scene.events.filter((event) => event.eventId !== bound))).invitations.get(OOB)).toMatchObject({ consumers: [], pending: [orphan.eventId], available: true });
+    const held = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 2 });
+    const withoutResolution = fold(VaultEventSet.of(scene.events.filter((event) => event.eventId !== resolved)));
+    expect([...withoutResolution.invitations.get(OOB)!.pending].sort()).toEqual([orphan.eventId, held.eventId].sort());
+    expect(withoutResolution.invitations.get(OOB)?.consumers).toEqual([]);
+    const ownMissing = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: "019b2a99-0000-7000-8000-000000000002" as EventReference<"peer.resolved">, ordinal: 3 });
     const R = relationshipId(a.did, PEER_DID);
-    expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ consumers: [R], pending: [orphan.eventId], available: false });
+    expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ consumers: [R], pending: [orphan.eventId, ownMissing.eventId], available: false });
+    expectOrderFree(scene.events, fold);
+  });
+
+  it("counts no consumer for a binding the events it names contradict, and lists the receipt as inconsistent", async () => {
+    const { scene, a, b } = await disclosed();
+    const resolvedAtA = scene.add("peer.resolved", {
+      localKeyName: `did/${DID_ID}/key-agreement` as KeyName,
+      peerPublicKey: PEER_KEY,
+      presentedDid: PEER_DID,
+      did: PEER_DID,
+      documentCid: cidOf("bob"),
+      authenticationMethodIds: [],
+      keyAgreementMethodIds: [],
+      service: null,
+    });
+    const foreignR = relationshipId("did:web:x.example" as Did, "did:web:y.example" as Did);
+    const wrongR = scene.add("relationship.bound", { relationshipId: foreignR, localDidId: DID_ID, peerResolutionEventId: resolvedAtA.eventId as EventReference<"peer.resolved"> });
+    const atB = bind(scene, { didId: DID_ID2, did: b.did });
+    const keyOfB = scene.add("relationship.bound", { relationshipId: relationshipId(a.did, PEER_DID), localDidId: DID_ID, peerResolutionEventId: atB.resolved });
+    const resolvedAsSelf = scene.add("peer.resolved", {
+      localKeyName: `did/${DID_ID}/key-agreement` as KeyName,
+      peerPublicKey: PEER_KEY,
+      presentedDid: a.did,
+      did: a.did,
+      documentCid: cidOf("self"),
+      authenticationMethodIds: [],
+      keyAgreementMethodIds: [],
+      service: null,
+    });
+    const selfBound = scene.add("relationship.bound", { relationshipId: foreignR, localDidId: DID_ID, peerResolutionEventId: resolvedAsSelf.eventId as EventReference<"peer.resolved"> });
+    const r1 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: wrongR.eventId as EventReference<"relationship.bound">, resolution: resolvedAtA.eventId as EventReference<"peer.resolved">, ordinal: 1 });
+    const r2 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: keyOfB.eventId as EventReference<"relationship.bound">, resolution: resolvedAtA.eventId as EventReference<"peer.resolved">, ordinal: 2 });
+    const r3 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, peerDid: a.did, pthid: OOB, binding: selfBound.eventId as EventReference<"relationship.bound">, resolution: resolvedAsSelf.eventId as EventReference<"peer.resolved">, ordinal: 3 });
+    const r4 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: resolvedAtA.eventId as unknown as EventReference<"relationship.bound">, resolution: resolvedAtA.eventId as EventReference<"peer.resolved">, ordinal: 4 });
+    const { fold, invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [], inconsistent: [r1.eventId, r2.eventId, r3.eventId, r4.eventId], conflict: false, available: true });
+    const good = bind(scene, { didId: DID_ID, did: a.did });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: good.bound, resolution: good.resolved, ordinal: 5 });
+    expect(fold(scene.set()).invitations.get(OOB)).toMatchObject({ consumers: [good.R], conflict: false, available: false });
+    expectOrderFree(scene.events, fold);
   });
 
   it("lets one relationship's root-address receipt consume a second invitation of the same DID", async () => {
@@ -102,23 +187,22 @@ describe("the invitation fold", () => {
     const { R, resolved, bound } = bind(scene, { didId: DID_ID, did: a.did });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound, resolution: resolved, ordinal: 1 });
     messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB2, binding: bound, resolution: resolved, ordinal: 2 });
-    const invitations = fold(scene.set());
+    const { invitations } = await folded(scene);
     expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [R], available: false });
     expect(invitations.invitations.get(OOB2)).toMatchObject({ consumers: [R], available: false });
     expect(invitations.consumable(OOB2, R)).toBe(true);
   });
 
   it("keeps a reusable disclosure available while its DID is live, whoever followed it", async () => {
-    const { scene, a } = await disclosed();
+    const { scene, a, b } = await disclosed();
     scene.add("did.disclosed", { didId: DID_ID2, as: "oob", uses: "many", oobId: OOB2, goal: null });
-    const b = scene.set().of("did.created")[1]!.data;
     const first = bind(scene, { didId: DID_ID2, did: b.did });
     const second = bind(scene, { didId: DID_ID2, did: b.did }, OTHER_PEER);
     messageIn(scene, { localDidId: DID_ID2, localDid: b.did, pthid: OOB2, binding: first.bound, resolution: first.resolved, ordinal: 1 });
     messageIn(scene, { localDidId: DID_ID2, localDid: b.did, peerDid: OTHER_PEER, pthid: OOB2, binding: second.bound, resolution: second.resolved, ordinal: 2 });
-    const invitations = fold(scene.set());
+    const { fold, invitations } = await folded(scene);
     expect(invitations.invitations.get(OOB2)).toMatchObject({ uses: "many", consumers: [first.R, second.R].sort(), conflict: false, available: true });
-    expect(invitations.consumable(OOB2, relationshipId(a.did, OTHER_PEER))).toBe(true);
+    expect(invitations.consumable(OOB2, relationshipId(a.did, OTHER_PEER) as RelationshipId)).toBe(true);
     scene.add("did.retired", { didId: DID_ID2, because: "done" });
     expect(fold(scene.set()).consumable(OOB2, first.R)).toBe(false);
   });

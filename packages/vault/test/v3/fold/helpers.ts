@@ -6,6 +6,8 @@ import { v7 as uuidv7 } from "uuid";
 import {
   Keys,
   VaultEventSet,
+  foldMediations,
+  foldRoutes,
   inboundMessageId,
   mintDid,
   rawCidOfBytes,
@@ -20,11 +22,16 @@ import {
   type PublicKey,
   type RelationshipId,
   type RouteId,
+  type KeyCheck,
+  type MediationFold,
+  type RouteFold,
   type RouteTarget,
   type VaultData,
   type VaultEvent,
   type VaultEventType,
   type WireMessageId,
+  verifyDidKeys,
+  verifyMediationKeys,
 } from "../../../src/v3/index.js";
 
 export const SEED = new Uint8Array(32).fill(7);
@@ -119,7 +126,7 @@ export function snapshot(value: unknown): string {
   });
 }
 
-/** The fold gives the same result over every permutation of the events. */
+/** The fold gives the same result over several deterministic shuffles of the events. */
 export function expectOrderFree(events: readonly Event[], fold: (set: VaultEventSet) => unknown, permutations = 6): void {
   const expected = snapshot(fold(VaultEventSet.of(events)));
   for (let seed = 1; seed <= permutations; seed++) {
@@ -208,3 +215,19 @@ export function messageIn(scene: Scene, receipt: Receipt & { ordinal: number }):
 }
 
 export type { RelationshipId };
+
+export type KeyChecks = { mediations: Map<MediationId, KeyCheck>; dids: Map<DidId, KeyCheck> };
+
+/** The seed's verdict on every entity of the scene, computed once: the checks depend on the set, not on its order. */
+export async function checksOf(events: readonly Event[], keys: Keys): Promise<KeyChecks> {
+  const set = VaultEventSet.of(events);
+  const mediations = await verifyMediationKeys(keys, foldMediations(set));
+  const dids = await verifyDidKeys(keys, foldRoutes(set, foldMediations(set, { keyChecks: mediations })));
+  return { mediations, dids };
+}
+
+/** The mediation and route folds over a set, with the verdicts given. */
+export function foldChecked(set: VaultEventSet, checks: KeyChecks): { mediations: MediationFold; routes: RouteFold } {
+  const mediations = foldMediations(set, { keyChecks: checks.mediations });
+  return { mediations, routes: foldRoutes(set, mediations, { keyChecks: checks.dids }) };
+}

@@ -124,6 +124,7 @@ export {
   mintMediationDid,
   didDocumentOf,
   documentSendsTo,
+  routeServiceUri,
   checkDidKeys,
   checkMediationKeys,
   checkDidCreated,
@@ -164,6 +165,7 @@ export {
   type RouteFoldOptions,
   foldRoutes,
   verifyDidKeys,
+  foldWithSeed,
   requiredReceivingSet,
 } from "./fold/routes.js";
 export { type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";

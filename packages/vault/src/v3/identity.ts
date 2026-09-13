@@ -156,7 +156,8 @@ export async function mintMediationDid(keys: Keys, mediationId: MediationId): Pr
   return localDidOf(inputDocumentOf(await keys.mediationKeys(mediationId), null));
 }
 
-function routeServiceUri(route: RouteTarget): string {
+/** The one DIDComm endpoint a route's documents send to: the mediator's routing DID, or the direct endpoint. */
+export function routeServiceUri(route: RouteTarget): string {
   return route.kind === "mediated" ? route.routingDid : route.endpoint;
 }
 

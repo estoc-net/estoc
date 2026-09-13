@@ -76,12 +76,14 @@ DID entity's consistent record, own document, route target, disclosures,
 retirement, faults and liveness, the key-name and spelling reverse maps,
 the desired mediator recipients and each entity's receipt eligibility;
 `requiredReceivingSet`; `foldInvitations`, each one-use disclosure's
-consumers read from the root-address receipts, its conflict and
-availability; `foldContacts`, the decisions a contact ID holds on its
-own. Every fold is a pure function of the event set, checked by
-shuffling; what needs the seed, whether an entity's document carries
-the keys its ID derives, is `verifyDidKeys` / `verifyMediationKeys`
-beside the fold, whose verdicts are handed back in). Every published
+consumers read from the root-address receipts whose binding holds
+together, its conflicts and availability; `foldContacts`, the decisions
+a contact ID holds on its own. Every fold is a pure function of the
+event set, checked by shuffling; what needs the seed, whether an
+entity's document carries the keys its ID derives, is `verifyDidKeys` /
+`verifyMediationKeys` beside the fold, whose verdicts are handed back
+in, `foldWithSeed` doing both in one motion; until the seed has
+confirmed an entity it is pending, never live). Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
 there too.

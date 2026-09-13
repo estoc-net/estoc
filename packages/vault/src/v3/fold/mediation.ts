@@ -5,7 +5,8 @@
  * preferred arrangement is the latest selection, when that one is
  * usable. Whether the arrangement's own DID carries the keys its name
  * derives needs the seed, so that check runs beside the fold and its
- * verdict is handed in.
+ * verdict is handed in; until it is, the arrangement is pending, since
+ * nothing may receive on an identity the seed has not confirmed.
  */
 
 import { IdentityMismatch, InvalidDidDocument } from "../errors.js";
@@ -20,9 +21,10 @@ export type KeyCheck = "verified" | "mismatch";
 export type IdentityCheck = KeyCheck | "unchecked";
 
 /**
- * `usable` receives; `pending` waits for its creation or its grant;
- * `retired` and `conflict` are terminal, a conflict being disagreeing
- * creations or grants, or keys the seed does not derive.
+ * `usable` receives; `pending` waits for its creation, its grant or
+ * its key check; `retired` and `conflict` are terminal, a conflict
+ * being disagreeing creations or grants, or keys the seed does not
+ * derive.
  */
 export type MediationStatus = "usable" | "pending" | "retired" | "conflict";
 
@@ -82,7 +84,7 @@ export function foldMediations(set: VaultEventSet, options: MediationFoldOptions
       retired: retirement,
       faults,
       identity,
-      status: conflict ? "conflict" : retirement !== null ? "retired" : creation === null || routingDid === null ? "pending" : "usable",
+      status: conflict ? "conflict" : retirement !== null ? "retired" : creation === null || routingDid === null || identity === "unchecked" ? "pending" : "usable",
     });
   }
 

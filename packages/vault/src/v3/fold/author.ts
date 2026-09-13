@@ -27,7 +27,6 @@ export function foldAuthors(set: VaultEventSet): AuthorActivity[] {
   return [...spans.values()].sort((a, b) => (a.author < b.author ? -1 : a.author > b.author ? 1 : 0));
 }
 
-/** The user-visible identity name: the latest `identity.label`, or null before any. */
 export function foldLabel(set: VaultEventSet): string | null {
   return latest(set.of("identity.label"))?.data.name ?? null;
 }
