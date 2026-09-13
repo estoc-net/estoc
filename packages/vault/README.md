@@ -77,7 +77,9 @@ retirement, faults and liveness, the key-name and spelling reverse maps,
 the desired mediator recipients and each entity's receipt eligibility;
 `requiredReceivingSet`; `foldInvitations`, each one-use disclosure's
 consumers read from the root-address receipts whose binding holds
-together, its conflicts and availability; `foldContacts`, the decisions
+together, the receipts whose evidence is still missing and hold it
+meanwhile, its conflicts, and whether a relationship may consume it,
+wait or is turned away; `foldContacts`, the decisions
 a contact ID holds on its own. Every fold is a pure function of the
 event set, checked by shuffling; what needs the seed, whether an
 entity's document carries the keys its ID derives, is `verifyDidKeys` /

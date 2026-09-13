@@ -7,7 +7,10 @@
  * invitation's ID and whose local recipient is the disclosed DID; its
  * consumer is the binding's relationship, once the binding itself is
  * seen to hold: its resolution taken at its local DID's key, the two
- * root DIDs distinct and deriving its relationship ID. Nothing records
+ * root DIDs distinct and deriving its relationship ID. A receipt that
+ * may be such a consumption but whose evidence is not here yet holds
+ * the invitation: nobody else is admitted until the evidence arrives
+ * and says who consumed it, or that nobody did. Nothing records
  * consumption: it is read from the receipts, so deletion, erasure and
  * retirement never reopen one.
  */
@@ -18,6 +21,8 @@ import type { VaultEvent } from "../schema.js";
 import type { Did, DidId, DisclosureUses, EventId, RelationshipId } from "../types.js";
 import type { RouteFold } from "./routes.js";
 import type { VaultEventSet } from "./set.js";
+
+const NO_RETENTION: ReadonlySet<DidId> = new Set();
 
 export interface Invitation {
   /** the OOB message ID a follower carries as `pthid` */
@@ -31,7 +36,7 @@ export interface Invitation {
   readonly disclosures: readonly VaultEvent<"did.disclosed">[];
   /** every relationship whose root-address receipt matched, in the order of the relationship IDs */
   readonly consumers: readonly RelationshipId[];
-  /** receipts that may match but whose binding or resolution evidence is not here yet */
+  /** receipts that may have consumed it but whose binding or resolution evidence is not here yet; they hold a one-use invitation */
   readonly pending: readonly EventId[];
   /** receipts that would match but whose binding contradicts the events it names: no consumer, a diagnostic */
   readonly inconsistent: readonly EventId[];
@@ -39,22 +44,28 @@ export interface Invitation {
   readonly faults: readonly string[];
   /** unavailable to anyone, and an integrity conflict */
   readonly conflict: boolean;
-  /** may be consumed by a relationship that has not: the DID is live, nothing conflicts and, for one use, nothing consumed it */
+  /** may be consumed by a relationship that has not: the DID is live, nothing conflicts and, for one use, nothing consumed it or may have */
   readonly available: boolean;
 }
 
+/**
+ * Whether a root-address receipt for a relationship may proceed under
+ * an invitation. `consumable`: it is available, or that relationship
+ * already consumed it. `pending`: evidence still to arrive decides it,
+ * the DID's key check or a receipt that may have consumed it for
+ * someone else; the input waits. `unavailable` is terminal: no such
+ * invitation, a conflict, a DID that is gone or retired, or another
+ * relationship consumed it.
+ */
+export type Consumability = "consumable" | "pending" | "unavailable";
+
 export interface InvitationFold {
   readonly invitations: ReadonlyMap<string, Invitation>;
-  /**
-   * May a root-address receipt for `relationshipId` proceed under this
-   * invitation? When it is available, or that relationship already
-   * consumed it; never for another consumer of a consumed one, and
-   * never under a conflict.
-   */
-  consumable(oobId: string, relationshipId: RelationshipId): boolean;
+  consumable(oobId: string, relationshipId: RelationshipId): Consumability;
 }
 
-type Receipts = { consumers: Set<RelationshipId>; pending: EventId[]; inconsistent: EventId[] };
+/** each pending receipt with the relationship its binding claims, null while the binding itself is missing */
+type Receipts = { consumers: Set<RelationshipId>; pending: Map<EventId, RelationshipId | null>; inconsistent: EventId[] };
 
 export function foldInvitations(set: VaultEventSet, routes: RouteFold): InvitationFold {
   const byOob = new Map<string, VaultEvent<"did.disclosed">[]>();
@@ -67,31 +78,30 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
 
   const receipts = new Map<string, Receipts>();
   for (const receipt of set.of("message.in")) {
-    const { pthid, relationshipBindingEventId, peerResolutionEventId } = receipt.data;
+    const { pthid, relationshipBindingEventId, peerResolutionEventId, localKeyName: rootKey } = receipt.data;
     if (pthid === null || relationshipBindingEventId === null || peerResolutionEventId === null || receipt.data.fromPrior !== null || receipt.data.peerTransitionEventId !== null) continue;
-    const disclosures = byOob.get(pthid);
-    if (disclosures === undefined) continue;
-    const entry = receipts.get(pthid) ?? { consumers: new Set<RelationshipId>(), pending: [], inconsistent: [] };
+    const disclosed = byOob.get(pthid)?.find((disclosure) => didKeyName(disclosure.data.didId, "key-agreement") === rootKey);
+    if (disclosed === undefined) continue;
+    const entry = receipts.get(pthid) ?? { consumers: new Set<RelationshipId>(), pending: new Map<EventId, RelationshipId | null>(), inconsistent: [] };
     receipts.set(pthid, entry);
 
     const binding = set.resolve(relationshipBindingEventId, "relationship.bound");
     if (binding.status === "missing") {
-      entry.pending.push(receipt.eventId);
+      entry.pending.set(receipt.eventId, null);
       continue;
     }
     if (binding.status === "mismatched") {
       entry.inconsistent.push(receipt.eventId);
       continue;
     }
-    const { localDidId, peerResolutionEventId: rootResolutionEventId } = binding.event.data;
-    const rootKey = didKeyName(localDidId, "key-agreement");
-    if (receipt.data.localKeyName !== rootKey || !disclosures.some((disclosure) => disclosure.data.didId === localDidId)) continue;
+    const { relationshipId: claimed, localDidId, peerResolutionEventId: rootResolutionEventId } = binding.event.data;
+    if (localDidId !== disclosed.data.didId) continue;
 
     const own = set.resolve(peerResolutionEventId, "peer.resolved");
     const root = set.resolve(rootResolutionEventId, "peer.resolved");
     const localDid = routes.dids.get(localDidId)?.created?.did ?? null;
     if (own.status === "missing" || root.status === "missing" || localDid === null) {
-      entry.pending.push(receipt.eventId);
+      entry.pending.set(receipt.eventId, claimed);
       continue;
     }
     if (own.status === "mismatched" || own.event.data.did !== receipt.data.did || own.event.data.localKeyName !== rootKey) continue;
@@ -111,6 +121,7 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
     const consumers = [...(receipt?.consumers ?? [])].sort();
     if (first.uses === "one" && consumers.length > 1) faults.push(`consumed by ${consumers.length} relationships`);
     const conflict = faults.length > 0;
+    const pending = [...(receipt?.pending.keys() ?? [])];
     const live = routes.dids.get(first.didId)?.live === true;
     invitations.set(oobId, {
       oobId,
@@ -119,11 +130,11 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
       goal: first.goal,
       disclosures,
       consumers,
-      pending: receipt?.pending ?? [],
+      pending,
       inconsistent: receipt?.inconsistent ?? [],
       faults,
       conflict,
-      available: live && !conflict && (first.uses === "many" || consumers.length === 0),
+      available: live && !conflict && (first.uses === "many" || (consumers.length === 0 && pending.length === 0)),
     });
   }
 
@@ -131,8 +142,15 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
     invitations,
     consumable(oobId, relationshipId) {
       const invitation = invitations.get(oobId);
-      if (invitation === undefined || invitation.conflict) return false;
-      return invitation.available || (invitation.uses === "one" && invitation.consumers.includes(relationshipId));
+      if (invitation === undefined || invitation.conflict) return "unavailable";
+      if (invitation.consumers.includes(relationshipId)) return "consumable";
+      const eligibility = routes.receipt(invitation.didId, NO_RETENTION);
+      if (eligibility === "terminal") return "unavailable";
+      if (invitation.uses === "one") {
+        if (invitation.consumers.length > 0) return "unavailable";
+        for (const claimed of receipts.get(oobId)?.pending.values() ?? []) if (claimed !== relationshipId) return "pending";
+      }
+      return eligibility === "eligible" ? "consumable" : "pending";
     },
   };
 }

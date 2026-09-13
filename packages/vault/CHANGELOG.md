@@ -70,10 +70,13 @@
   `foldInvitations` (each one-use OOB disclosure's consumers, read from
   the root-address receipts that name it as `pthid` at the disclosed DID
   through a binding whose own evidence holds together, pending receipts
-  whose evidence is missing, inconsistent receipts whose binding
-  contradicts the events it names, the conflicts — disclosures of one
-  ID that disagree, two consumers of one use — availability and
-  `consumable`); `foldContacts` (origin, tombstone,
+  whose evidence is missing and which hold a one-use invitation until
+  it arrives, inconsistent receipts whose binding contradicts the
+  events it names, the conflicts — disclosures of one ID that
+  disagree, two consumers of one use — availability and `consumable`,
+  consumable, pending or unavailable, so a caller waits on what is
+  missing and turns away only what is settled); `foldContacts` (origin,
+  tombstone,
   petname, flags, DID preference, peer DID seeds by exact add reference,
   display groups from `contact.merged`, and faults for a removal that
   names nothing it can remove). Every fold is a pure function of the

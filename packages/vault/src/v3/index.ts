@@ -168,5 +168,5 @@ export {
   foldWithSeed,
   requiredReceivingSet,
 } from "./fold/routes.js";
-export { type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
+export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";
