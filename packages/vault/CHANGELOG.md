@@ -14,6 +14,24 @@
   `multiformats`, with `parsePublicKey` for the exact canonical form and
   `decodePublicKey` for its type and bytes. Each is checked against
   the published identifier and public-key vectors.
+- **The version-3 event schemas, stored message document and
+  projections**: `readVaultEvent`, `readVaultDraft` and `vaultDraft`
+  check the payload of each of the 33 event types — closed member set,
+  types, spellings (DIDs, DID URLs by their full RFC 3986 grammar, key
+  names, UUID versions, CIDs, hashes), the rules between members and the
+  `roots` the type retains — and throw `InvalidPayload` otherwise; they
+  never look up a referenced event or verify a JWT. `storeMessage`,
+  `readStoredDocument` and `wireAttachment` are the stored message
+  document and its wire form, meeting at the same bytes: a stored
+  inline descriptor always carries its byte count, and a payload is put
+  back on the wire only when its length matches and, for JSON, it is
+  already canonical. `readPlaintext`, `wirePlaintext`,
+  `semanticProjection`, `intentProjection`, `intentHash`,
+  `plaintextHash`, `expandPleaseAck` and `requestsAck` are the
+  projections and hashes; every additional header, `__proto__`
+  included, is an own member of the intent.
+- The version-2 peer-key fingerprint's base32 is `@scure/base`'s
+  `base32nopad`, lowercased; the output is unchanged.
 
 ## 0.2.0 — 2026-09-01
 

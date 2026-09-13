@@ -13,3 +13,22 @@ export class InvalidPublicKey extends Error {
     this.name = "InvalidPublicKey";
   }
 }
+
+/** A DIDComm plaintext, or one of its attachments, that the stored representation refuses. */
+export class InvalidPlaintext extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidPlaintext";
+  }
+}
+
+/** An event of a known type whose payload or roots break that type's schema. */
+export class InvalidPayload extends Error {
+  constructor(
+    readonly type: string,
+    message: string
+  ) {
+    super(`${type}: ${message}`);
+    this.name = "InvalidPayload";
+  }
+}
