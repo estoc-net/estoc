@@ -71,8 +71,8 @@
   the root-address receipts that name it as `pthid` at the disclosed DID
   through a binding whose own evidence holds together, pending receipts
   whose evidence is missing and which hold a one-use invitation until
-  it arrives, inconsistent receipts whose binding contradicts the
-  events it names, the conflicts — disclosures of one ID that
+  it arrives, inconsistent receipts that the evidence already here
+  contradicts, which hold nothing, the conflicts — disclosures of one ID that
   disagree, two consumers of one use — availability and `consumable`,
   consumable, pending or unavailable, so a caller waits on what is
   missing and turns away only what is settled); `foldContacts` (origin,

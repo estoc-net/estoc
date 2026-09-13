@@ -49,13 +49,17 @@ export interface Invitation {
 }
 
 /**
- * Whether a root-address receipt for a relationship may proceed under
- * an invitation. `consumable`: it is available, or that relationship
- * already consumed it. `pending`: evidence still to arrive decides it,
- * the DID's key check or a receipt that may have consumed it for
- * someone else; the input waits. `unavailable` is terminal: no such
- * invitation, a conflict, a DID that is gone or retired, or another
- * relationship consumed it.
+ * Whether the invitation stands in the way of a root-address receipt
+ * for a relationship; only the invitation, the DID's own eligibility to
+ * receive is the route fold's `receipt`. `consumable`: it is available,
+ * that relationship already consumed it, or every receipt still waiting
+ * for evidence claims that same relationship, which is safe because
+ * such a receipt ends up as that relationship's consumption or as
+ * inconsistent, never as a second consumer. `pending`: evidence still
+ * to arrive decides it, the DID's key check or a waiting receipt that
+ * may have consumed it for someone else; the input waits. `unavailable`
+ * is terminal: no such invitation, a conflict, a DID that is gone or
+ * retired, or another relationship consumed it.
  */
 export type Consumability = "consumable" | "pending" | "unavailable";
 
@@ -98,17 +102,14 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
     if (localDidId !== disclosed.data.didId) continue;
 
     const own = set.resolve(peerResolutionEventId, "peer.resolved");
+    if (own.status === "mismatched" || (own.status === "present" && (own.event.data.did !== receipt.data.did || own.event.data.localKeyName !== rootKey))) continue;
     const root = set.resolve(rootResolutionEventId, "peer.resolved");
+    if (root.status === "mismatched" || (root.status === "present" && root.event.data.did !== receipt.data.did)) continue;
     const localDid = routes.dids.get(localDidId)?.created?.did ?? null;
-    if (own.status === "missing" || root.status === "missing" || localDid === null) {
-      entry.pending.set(receipt.eventId, claimed);
-      continue;
-    }
-    if (own.status === "mismatched" || own.event.data.did !== receipt.data.did || own.event.data.localKeyName !== rootKey) continue;
-    if (root.status === "mismatched" || root.event.data.did !== receipt.data.did) continue;
-    const consumer = rootRelationship(binding.event.data, root.event.data, localDid, rootKey);
-    if (consumer === null) entry.inconsistent.push(receipt.eventId);
-    else entry.consumers.add(consumer);
+    const rootHolds = root.status === "present" ? bindingHolds(binding.event.data, root.event.data, localDid, rootKey) : "unknown";
+    if (rootHolds === "contradicted") entry.inconsistent.push(receipt.eventId);
+    else if (own.status === "missing" || rootHolds === "unknown") entry.pending.set(receipt.eventId, claimed);
+    else entry.consumers.add(claimed);
   }
 
   const invitations = new Map<string, Invitation>();
@@ -156,17 +157,21 @@ export function foldInvitations(set: VaultEventSet, routes: RouteFold): Invitati
 }
 
 /**
- * The relationship a binding names, when its evidence holds together:
- * the resolution was taken at the local DID's key-agreement key, the
- * two root DIDs are distinct and derive the recorded relationship ID.
- * Null for a binding the events it names contradict.
+ * Whether a binding's evidence holds together: its resolution was
+ * taken at the local DID's key-agreement key, the two root DIDs are
+ * distinct and derive the recorded relationship ID. Each check runs as
+ * soon as what it needs is here, so a contradiction is found without
+ * waiting for the rest; `unknown` only while the local DID's own
+ * spelling is still missing and nothing present contradicts.
  */
-function rootRelationship(binding: VaultEvent<"relationship.bound">["data"], root: VaultEvent<"peer.resolved">["data"], localDid: Did, rootKey: string): RelationshipId | null {
-  if (root.localKeyName !== rootKey || root.did === localDid) return null;
+function bindingHolds(binding: VaultEvent<"relationship.bound">["data"], root: VaultEvent<"peer.resolved">["data"], localDid: Did | null, rootKey: string): "holds" | "contradicted" | "unknown" {
+  if (root.localKeyName !== rootKey) return "contradicted";
+  if (localDid === null) return "unknown";
+  if (root.did === localDid) return "contradicted";
   try {
-    return relationshipId(localDid, root.did) === binding.relationshipId ? binding.relationshipId : null;
+    return relationshipId(localDid, root.did) === binding.relationshipId ? "holds" : "contradicted";
   } catch (err) {
-    if (err instanceof InvalidIdentifier) return null;
+    if (err instanceof InvalidIdentifier) return "contradicted";
     throw err;
   }
 }

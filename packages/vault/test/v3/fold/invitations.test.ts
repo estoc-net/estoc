@@ -214,6 +214,43 @@ describe("the invitation fold", () => {
     expectOrderFree(scene.events, fold);
   });
 
+  it("does not hold the invitation for a receipt the evidence already here contradicts, whatever is still missing", async () => {
+    const { scene, a } = await disclosed();
+    const stranger = relationshipId(a.did, OTHER_PEER);
+    const resolvedAtA = scene.add("peer.resolved", {
+      localKeyName: `did/${DID_ID}/key-agreement` as KeyName,
+      peerPublicKey: PEER_KEY,
+      presentedDid: PEER_DID,
+      did: PEER_DID,
+      documentCid: cidOf("bob"),
+      authenticationMethodIds: [],
+      keyAgreementMethodIds: [],
+      service: null,
+    });
+    const missing = "019b2a99-0000-7000-8000-000000000004" as EventReference<"peer.resolved">;
+    const wrongR = scene.add("relationship.bound", { relationshipId: relationshipId("did:web:x.example" as Did, "did:web:y.example" as Did), localDidId: DID_ID, peerResolutionEventId: resolvedAtA.eventId as EventReference<"peer.resolved"> });
+    const wrongRootKey = scene.add("relationship.bound", { relationshipId: relationshipId(a.did, PEER_DID), localDidId: DID_ID, peerResolutionEventId: scene.add("peer.resolved", { ...resolvedAtA.data, localKeyName: `did/${DID_ID2}/key-agreement` as KeyName, documentCid: cidOf("at b") }).eventId as EventReference<"peer.resolved"> });
+    const rootMissing = scene.add("relationship.bound", { relationshipId: relationshipId(a.did, PEER_DID), localDidId: DID_ID, peerResolutionEventId: missing });
+    const rootIsNoResolution = scene.add("relationship.bound", { relationshipId: relationshipId(a.did, PEER_DID), localDidId: DID_ID, peerResolutionEventId: wrongR.eventId as unknown as EventReference<"peer.resolved"> });
+    const ownAtB = scene.add("peer.resolved", { ...resolvedAtA.data, localKeyName: `did/${DID_ID2}/key-agreement` as KeyName, documentCid: cidOf("own at b") });
+    const ownOfCarol = scene.add("peer.resolved", { ...resolvedAtA.data, presentedDid: OTHER_PEER, did: OTHER_PEER, documentCid: cidOf("carol") });
+    const bound = (event: { eventId: string }) => event.eventId as EventReference<"relationship.bound">;
+    const r1 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(wrongR), resolution: missing, ordinal: 1 });
+    const r2 = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(wrongRootKey), resolution: missing, ordinal: 2 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: ownAtB.eventId as EventReference<"peer.resolved">, ordinal: 3 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: ownOfCarol.eventId as EventReference<"peer.resolved">, ordinal: 4 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootIsNoResolution), resolution: missing, ordinal: 5 });
+    messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: bound(wrongR) as unknown as EventReference<"peer.resolved">, ordinal: 6 });
+    const { fold, invitations } = await folded(scene);
+    expect(invitations.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [], inconsistent: [r1.eventId, r2.eventId], conflict: false, available: true });
+    expect(invitations.consumable(OOB, stranger)).toBe("consumable");
+    const waiting = messageIn(scene, { localDidId: DID_ID, localDid: a.did, pthid: OOB, binding: bound(rootMissing), resolution: resolvedAtA.eventId as EventReference<"peer.resolved">, ordinal: 7 });
+    const held = fold(scene.set());
+    expect(held.invitations.get(OOB)).toMatchObject({ consumers: [], pending: [waiting.eventId], available: false });
+    expect(held.consumable(OOB, stranger)).toBe("pending");
+    expectOrderFree(scene.events, fold);
+  });
+
   it("lets one relationship's root-address receipt consume a second invitation of the same DID", async () => {
     const { scene, a } = await disclosed();
     scene.add("did.disclosed", { didId: DID_ID, as: "oob", uses: "one", oobId: OOB2, goal: null });
