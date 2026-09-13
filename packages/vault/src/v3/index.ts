@@ -2,7 +2,9 @@
  * `@estoc/vault/v3` — the version-3 vault's meaning as a library. What is
  * here so far: the identifier vocabulary, the deterministic identifiers,
  * the canonical public-key value, the schema of every event type, the
- * stored message document and the projections a message is hashed by.
+ * stored message document, the projections a message is hashed by,
+ * the vault's own keys and DIDs, the retained peer document and the
+ * `from_prior` proof.
  */
 
 export type {
@@ -46,7 +48,7 @@ export type {
   WireMessageId,
 } from "./types.js";
 
-export { InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey } from "./errors.js";
+export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked } from "./errors.js";
 
 export {
   NAMESPACE_PURPOSES,
@@ -103,3 +105,33 @@ export {
 } from "./projection.js";
 
 export { type VaultEvent, type VaultDraft, VAULT_EVENT_TYPES, isVaultEventType, readVaultEvent, readVaultDraft, vaultDraft } from "./schema.js";
+
+export {
+  type OkpPrivateJwk,
+  type LocalKey,
+  type DidKeys,
+  Keys,
+  type RouteTarget,
+  type LocalDid,
+  type MintedDid,
+  AUTHENTICATION_METHOD,
+  KEY_AGREEMENT_METHOD,
+  DIDCOMM_SERVICE,
+  inputDocumentOf,
+  mintDid,
+  mintMediationDid,
+  checkDidCreated,
+  checkMediationCreated,
+} from "./identity.js";
+
+export {
+  type VerificationRelationship,
+  type PeerResolution,
+  canonicalDidOf,
+  peerResolution,
+  splitDidUrl,
+  authorizedMethodIds,
+  methodPublicKey,
+} from "./peer-document.js";
+
+export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, verifyFromPrior } from "./from-prior.js";

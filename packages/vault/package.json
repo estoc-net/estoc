@@ -41,12 +41,14 @@
     "decentralized-identity"
   ],
   "dependencies": {
+    "@estoc/did-peer": "workspace:^",
     "@estoc/event-store": "workspace:^",
     "@estoc/keystore": "workspace:^",
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "@scure/base": "^1.2.0",
     "bs58": "^6.0.0",
+    "jose": "^6.0.0",
     "multiformats": "^14.0.5",
     "uuid": "^11.1.1"
   },

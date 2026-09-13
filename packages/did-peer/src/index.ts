@@ -28,6 +28,7 @@ export {
 export { isPeerDID2, PeerDID2Error, resolve as resolvePeer2 } from "./did-peer-2.js";
 
 export {
+  decode as decodeLongForm,
   encodeLongForm,
   encodeShortForm,
   isLongForm,
