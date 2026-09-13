@@ -1207,4 +1207,22 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the trigger ${anonymous.eventId} does not confirm ${a0.didId}`) });
     }
   });
+  it("an equal peer transition carried to the root after one carried to a successor changes nothing: the rotation the successor's input confirmed still applies", async () => {
+    const { scene, keys, peerKeys, R, a0, a1, a2, b0, b1, root, binding } = await bornAtRoot();
+    const input = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const first = localEdge(scene, R, a0.didId, a1.didId, await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT), ref(input));
+    const later = await peerRotation(scene, peerKeys, R, a1.didId, b0, b1, root, binding, 2);
+    const nextInput = receipt(scene, { local: a1.didId, peer: b1, resolution: later.successor, binding, ordinal: 3, transition: ref(later.edge) });
+    const second = localEdge(scene, R, a1.didId, a2.didId, await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a2.longFormDid, IAT), ref(nextInput));
+    const rotated = { local: [a0.didId, a1.didId, a2.didId], peer: [b0.did, b1.did] };
+    await expectFoldOrderFree(scene.events, (fold) => expect(dids(fold, R)).toEqual(rotated));
+    const earlySuccessor = resolved(scene, a0.didId, b1);
+    const earlyCarrier = receipt(scene, { local: a0.didId, peer: b1, resolution: earlySuccessor, binding, ordinal: 4, fromPrior: later.jwt });
+    const early = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt: later.jwt, prior: root, successor: earlySuccessor, messageId: earlyCarrier.data.messageId });
+    await expectFoldOrderFree(scene.events, (fold) => {
+      for (const edge of [first, later.edge, second, early]) expect(fold.transitions.get(edge.eventId)).toEqual({ status: "applied" });
+      expect([...fold.relationships.get(R)!.peerChain[1]!.edgeEventIds].sort()).toEqual([later.edge.eventId, early.eventId].sort());
+      expect(dids(fold, R)).toEqual(rotated);
+    });
+  });
 });

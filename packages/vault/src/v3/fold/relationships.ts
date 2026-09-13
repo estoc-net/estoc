@@ -348,12 +348,15 @@ function evidenceOf(context: Context, chains: Chains): Evidence {
   return { context, recipientKeyNames: keyNamesOf(chains.local), localComplete: chains.localComplete, peerChain: chains.peer, nodeByEdge: chains.nodeByEdge, groups: new Map() };
 }
 
+/** Everything a pass judges against, as text: the nodes of the two chains, the applied edges at each, and whether the local history is complete. */
+const chainsKey = (chains: Chains) => canonicalText({ local: chains.local.map((node) => [node.didId, node.edgeEventIds]), localComplete: chains.localComplete, peer: chains.peer.map((node) => [node.did, node.documentCid, node.edgeEventIds]) });
+
 /**
  * The two chains folded together until nothing changes: each pass
  * judges every edge against the chains the last pass produced, and the
- * last pass is the verdict. Each change grows a chain or completes the
- * local one, so the passes are bounded by the edges, and the result is
- * the same from any order of events.
+ * last pass is the verdict. Each change adds a node or an applied edge
+ * to a chain or completes the local history, so the passes are bounded
+ * by the edges, and the result is the same from any order of events.
  */
 function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[] } {
   let chains: Chains = { local: [localNode(root.localDidId, root.localDid, [])], localComplete: false, peer: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
@@ -364,7 +367,7 @@ function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: rea
     const local = foldLocalChain(root, localEdges, evidence, found, statuses);
     const peer = foldPeerChain(root, peerEdges, evidence, found, statuses);
     const next: Chains = { local: local.chain, localComplete: local.complete, peer: peer.chain, nodeByEdge: peer.nodeByEdge };
-    const changed = next.local.length !== chains.local.length || next.localComplete !== chains.localComplete || next.peer.length !== chains.peer.length;
+    const changed = chainsKey(next) !== chainsKey(chains);
     chains = next;
     if (changed && passes > 0) continue;
     verdict.faults.push(...found.faults);
@@ -447,17 +450,11 @@ function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data
 
 /**
  * One observation's scope in this relationship, by the row it claims,
- * against the chains so far. Every row: authenticated by its own
- * resolution, arrived at a key of the local history. A proof-free root
- * sender: bound here, from the pinned root document. A proof-free
- * successor: bound here, from the document the applied transition it
- * names pins — or the transition under judgement would pin, when it
- * names that one. A carrier: its proof names its sender, no transition
- * witnessing it found its proof invalid unless another found it
- * verified, and an applied transition of this relationship witnesses
- * it — or one equal to the transition under judgement does, when
- * there is one. What contradicts and what is absent are both
- * collected; a key outside the local history is a contradiction only
+ * against the chains so far. The transition under judgement stands in
+ * for the applied one a carrier or a proof-free successor waits for,
+ * when it is that transition or equal to it: otherwise the edge would
+ * wait for its group and the group for the edge. Nothing else is taken
+ * on trust; a key outside the local history is a contradiction only
  * once that history is complete.
  */
 function observationScope(evidence: Evidence, receipt: Receipt, judging: PeerEdge | null): Verdict {
