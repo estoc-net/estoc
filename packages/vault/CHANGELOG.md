@@ -120,13 +120,15 @@
   own checked resolution, arrived at a key of the local history, and
   a root sender under the pinned root document, a successor under the
   applied transition it names, or a carrier whose proof names its
-  sender and that an applied transition witnesses — and one whose
-  evidence is absent defers the whole group while one that
+  sender and that an applied transition witnesses. One that
   contradicts (another key, another spelling, a message ID it does
-  not derive, a snapshot that is not its document's, a key outside a
-  complete local history, a transition of another relationship, a
-  proof found invalid) conflicts it; nothing in a group that is not
-  complete witnesses a proof or confirms an address. Since that scope
+  not derive, a snapshot that is not its document's, a key no node
+  and no local edge of the relationship names, a transition of
+  another relationship, a proof found invalid) conflicts the group,
+  and a group in conflict witnesses no proof and confirms no
+  address; one whose evidence is absent waits alone, and a witness or
+  a confirmation is an observation whose own row is complete in a
+  group without conflict. Since that scope
   comes from the peer chain and a peer edge's key from the local
   chain, the two are folded together until nothing changes. Each
   relationship exposes

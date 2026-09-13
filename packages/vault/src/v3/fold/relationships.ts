@@ -8,8 +8,10 @@
  * equal edges are merged, so a contradiction in one duplicate is never
  * covered by another; what contradicts is a conflict, what is not here
  * yet defers the node and every node after it, and canonical time
- * chooses nothing; the observations of one message stand or fall as a
- * group. The two chains depend on each other — a local edge needs
+ * chooses nothing. A contradiction in any observation of a message
+ * conflicts every edge the message witnesses or confirms; an
+ * observation still waiting for its own scope holds back nothing but
+ * itself. The two chains depend on each other — a local edge needs
  * input the peer chain gives scope to, a peer edge needs a local key
  * the local chain retains — so they are folded together until nothing
  * changes. The address index is every historical local DID
@@ -132,8 +134,6 @@ type Resolution = VaultEvent<"peer.resolved">;
 
 type Judged<E> = { edge: E; faults: string[]; deferred: string[] };
 
-type Group = { status: "complete" } | { status: "incomplete"; because: string } | { status: "conflict"; because: string };
-
 type Context = {
   set: VaultEventSet;
   routes: RouteFold;
@@ -144,6 +144,8 @@ type Context = {
   relationshipId: RelationshipId;
   bindingEventIds: readonly EventReference<"relationship.bound">[];
   peerEdges: readonly PeerEdge[];
+  /** every key a local node could have: the bindings' root DIDs' and both ends of every local edge */
+  namedKeyNames: ReadonlySet<KeyName>;
 };
 
 const pairKey = (localDid: Did, peerDid: Did) => JSON.stringify([localDid, peerDid]);
@@ -169,7 +171,18 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
   for (const id of ids) {
     const verdict: Verdict = { faults: [], deferred: [] };
     const bindings = bound.get(id) ?? [];
-    const context: Context = { set, routes, proofChecks, resolutionChecks, receipts, receiptsByMessage, relationshipId: id, bindingEventIds: bindings.map((event) => event.eventId as EventReference<"relationship.bound">), peerEdges: peerEdges.get(id) ?? [] };
+    const context: Context = {
+      set,
+      routes,
+      proofChecks,
+      resolutionChecks,
+      receipts,
+      receiptsByMessage,
+      relationshipId: id,
+      bindingEventIds: bindings.map((event) => event.eventId as EventReference<"relationship.bound">),
+      peerEdges: peerEdges.get(id) ?? [],
+      namedKeyNames: namedKeyNames([...bindings.map((event) => event.data.localDidId), ...(localEdges.get(id) ?? []).flatMap((edge) => [edge.data.fromDidId, edge.data.toDidId])]),
+    };
     const { binding, root } = foldBinding(bindings, context, verdict);
 
     let localChain: LocalNode[] = [];
@@ -314,8 +327,12 @@ export function bindingHolds(binding: VaultData["relationship.bound"], root: Vau
 }
 
 function keyNamesOf(chain: readonly LocalNode[]): Set<KeyName> {
+  return namedKeyNames(chain.map((node) => node.didId));
+}
+
+function namedKeyNames(didIds: readonly DidId[]): Set<KeyName> {
   const names = new Set<KeyName>();
-  for (const node of chain) names.add(node.keyNames.authentication).add(node.keyNames.keyAgreement);
+  for (const didId of didIds) names.add(didKeyName(didId, "authentication")).add(didKeyName(didId, "key-agreement"));
   return names;
 }
 
@@ -328,45 +345,58 @@ function peerNode(resolution: Resolution, edgeEventIds: readonly EventId[]): Pee
   return { did, resolutionEventId: resolution.eventId as EventReference<"peer.resolved">, documentCid, keyAgreementMethodIds, edgeEventIds };
 }
 
-type Chains = { local: LocalNode[]; localComplete: boolean; peer: PeerNode[]; nodeByEdge: ReadonlyMap<EventId, PeerNode> };
+type Chains = { local: LocalNode[]; peer: PeerNode[]; nodeByEdge: ReadonlyMap<EventId, PeerNode> };
 
 /**
  * What one pass judges every edge and observation against: the chains
- * as the last pass left them, and the observation groups judged
- * against those chains.
+ * as the last pass left them, whether a root stands at all, and the
+ * observations already judged against those chains.
  */
 type Evidence = {
   context: Context;
+  rooted: boolean;
   recipientKeyNames: ReadonlySet<KeyName>;
-  localComplete: boolean;
   peerChain: readonly PeerNode[];
   nodeByEdge: ReadonlyMap<EventId, PeerNode>;
-  groups: Map<string, Group>;
+  scopes: Map<string, Verdict>;
+  conflicts: Map<string, string | null>;
 };
 
-function evidenceOf(context: Context, chains: Chains): Evidence {
-  return { context, recipientKeyNames: keyNamesOf(chains.local), localComplete: chains.localComplete, peerChain: chains.peer, nodeByEdge: chains.nodeByEdge, groups: new Map() };
+function evidenceOf(context: Context, chains: Chains, rooted: boolean): Evidence {
+  return { context, rooted, recipientKeyNames: keyNamesOf(chains.local), peerChain: chains.peer, nodeByEdge: chains.nodeByEdge, scopes: new Map(), conflicts: new Map() };
 }
 
-/** Everything a pass judges against, as text: the nodes of the two chains, the applied edges at each, and whether the local history is complete. */
-const chainsKey = (chains: Chains) => canonicalText({ local: chains.local.map((node) => [node.didId, node.edgeEventIds]), localComplete: chains.localComplete, peer: chains.peer.map((node) => [node.did, node.documentCid, node.edgeEventIds]) });
+/**
+ * Where a key stands in the local history: `in` it; `awaited` while no
+ * root stands or while a local edge that would add it is not applied;
+ * `outside` when nothing in this relationship could ever add it. The
+ * edges name what could be added, so the answer never flips as the
+ * chain grows.
+ */
+function keyStanding(evidence: Evidence, keyName: KeyName): "in" | "awaited" | "outside" {
+  if (evidence.recipientKeyNames.has(keyName)) return "in";
+  return !evidence.rooted || evidence.context.namedKeyNames.has(keyName) ? "awaited" : "outside";
+}
+
+/** Everything a pass judges against, as text: the nodes of the two chains and the applied edges at each. */
+const chainsKey = (chains: Chains) => canonicalText({ local: chains.local.map((node) => [node.didId, node.edgeEventIds]), peer: chains.peer.map((node) => [node.did, node.documentCid, node.edgeEventIds]) });
 
 /**
  * The two chains folded together until nothing changes: each pass
  * judges every edge against the chains the last pass produced, and the
  * last pass is the verdict. Each change adds a node or an applied edge
- * to a chain or completes the local history, so the passes are bounded
- * by the edges, and the result is the same from any order of events.
+ * to a chain, so the passes are bounded by the edges, and the result
+ * is the same from any order of events.
  */
 function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[] } {
-  let chains: Chains = { local: [localNode(root.localDidId, root.localDid, [])], localComplete: false, peer: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
+  let chains: Chains = { local: [localNode(root.localDidId, root.localDid, [])], peer: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
   for (let passes = localEdges.length + peerEdges.length + 2; ; passes--) {
     const found: Verdict = { faults: [], deferred: [] };
     const statuses = new Map<EventId, TransitionStatus>();
-    const evidence = evidenceOf(context, chains);
+    const evidence = evidenceOf(context, chains, true);
     const local = foldLocalChain(root, localEdges, evidence, found, statuses);
     const peer = foldPeerChain(root, peerEdges, evidence, found, statuses);
-    const next: Chains = { local: local.chain, localComplete: local.complete, peer: peer.chain, nodeByEdge: peer.nodeByEdge };
+    const next: Chains = { local, peer: peer.chain, nodeByEdge: peer.nodeByEdge };
     const changed = chainsKey(next) !== chainsKey(chains);
     chains = next;
     if (changed && passes > 0) continue;
@@ -384,7 +414,7 @@ function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: rea
  * never confirm — is a conflict now; everything else waits.
  */
 function judgeUnrooted(localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): void {
-  const evidence = evidenceOf(context, { local: [], localComplete: false, peer: [], nodeByEdge: new Map() });
+  const evidence = evidenceOf(context, { local: [], peer: [], nodeByEdge: new Map() }, false);
   const judged: Judged<LocalEdge | PeerEdge>[] = [...localEdges.map((edge) => judgeLocalEdge(edge, evidence)), ...peerEdges.map((edge) => judgePeerEdge(edge, evidence))];
   for (const item of judged) {
     if (item.faults.length > 0) {
@@ -450,14 +480,24 @@ function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data
 
 /**
  * One observation's scope in this relationship, by the row it claims,
- * against the chains so far. The transition under judgement stands in
- * for the applied one a carrier or a proof-free successor waits for,
- * when it is that transition or equal to it: otherwise the edge would
- * wait for its group and the group for the edge. Nothing else is taken
- * on trust; a key outside the local history is a contradiction only
- * once that history is complete.
+ * against the chains so far. An applied transition equal to the one a
+ * proof-free successor names scopes it, since equal edges are one
+ * transition; the transition under judgement stands in for the applied
+ * one a carrier or a proof-free successor waits for, when it is that
+ * transition or equal to it, since otherwise the edge would wait for
+ * its observations and they for the edge. Nothing else is taken on
+ * trust.
  */
 function observationScope(evidence: Evidence, receipt: Receipt, judging: PeerEdge | null): Verdict {
+  const key = judging === null ? receipt.eventId : `${receipt.eventId} ${judging.eventId}`;
+  const known = evidence.scopes.get(key);
+  if (known !== undefined) return known;
+  const scope = judgeObservation(evidence, receipt, judging);
+  evidence.scopes.set(key, scope);
+  return scope;
+}
+
+function judgeObservation(evidence: Evidence, receipt: Receipt, judging: PeerEdge | null): Verdict {
   const { context } = evidence;
   const faults: string[] = [];
   const deferred: string[] = [];
@@ -471,17 +511,17 @@ function observationScope(evidence: Evidence, receipt: Receipt, judging: PeerEdg
     else if (binding.status === "missing") deferred.push("awaits its binding");
     else if (binding.event.data.relationshipId !== context.relationshipId) faults.push("is bound to another relationship");
   }
-  if (!evidence.recipientKeyNames.has(localKeyName)) {
-    if (evidence.localComplete) faults.push("arrived at a key outside the local history");
-    else deferred.push("arrived at a key not yet in the local history");
-  }
+  const standing = keyStanding(evidence, localKeyName);
+  if (standing === "outside") faults.push("arrived at a key outside the local history");
+  else if (standing === "awaited") deferred.push("arrived at a key not yet in the local history");
   const from = (node: { did: Did; documentCid: Cid } | undefined, pinned: string) => {
     if (node === undefined) deferred.push(`awaits ${pinned}`);
     else if (auth.status === "present" && (auth.resolution.data.did !== node.did || auth.resolution.data.documentCid !== node.documentCid)) faults.push(`is not from the document ${pinned} pins`);
   };
   const pinnedBy = (transition: PeerEdge): { did: Did; documentCid: Cid } | undefined => {
-    const node = evidence.nodeByEdge.get(transition.eventId);
-    if (node !== undefined || judging === null || !sameTransition(context, transition.data, judging.data)) return node;
+    const applied = context.peerEdges.find((edge) => evidence.nodeByEdge.has(edge.eventId) && sameTransition(context, edge.data, transition.data));
+    if (applied !== undefined) return evidence.nodeByEdge.get(applied.eventId);
+    if (judging === null || !sameTransition(context, transition.data, judging.data)) return undefined;
     const successor = context.set.resolve(judging.data.peerResolutionEventId, "peer.resolved");
     return successor.status === "present" ? { did: judging.data.toDid, documentCid: successor.event.data.documentCid } : undefined;
   };
@@ -513,38 +553,40 @@ function observationScope(evidence: Evidence, receipt: Receipt, judging: PeerEdg
 }
 
 /**
- * The observations of one message ID judged together in this
- * relationship: each must have its scope here and they must agree on
- * the intent. One that contradicts conflicts the group, one whose
- * evidence is not in defers it, and nothing in a group that is not
- * complete witnesses a proof or confirms an address. Contradictions
- * are found before absences.
+ * What contradicts among the observations of one message ID in this
+ * relationship: a disagreement on the intent, or any observation whose
+ * row contradicts. Such a group witnesses no proof and confirms no
+ * address; an observation still waiting holds back only itself.
  */
-function groupOf(evidence: Evidence, messageId: string, judging: PeerEdge | null): Group {
+function groupConflict(evidence: Evidence, messageId: string, judging: PeerEdge | null): string | null {
   const key = judging === null ? messageId : `${messageId} ${judging.eventId}`;
-  const known = evidence.groups.get(key);
+  const known = evidence.conflicts.get(key);
   if (known !== undefined) return known;
   const observations = evidence.context.receiptsByMessage.get(messageId) ?? [];
   const conflicts: string[] = [];
-  const absent: string[] = [];
   if (observations.some((receipt) => receipt.data.intentHash !== observations[0]!.data.intentHash)) conflicts.push(`the observations of message ${messageId} disagree on the intent`);
-  for (const receipt of observations) {
-    const scope = observationScope(evidence, receipt, judging);
-    conflicts.push(...scope.faults.map((fault) => `observation ${receipt.eventId} of message ${messageId} ${fault}`));
-    absent.push(...scope.deferred.map((why) => `observation ${receipt.eventId} of message ${messageId} ${why}`));
-  }
-  const group: Group = conflicts.length > 0 ? { status: "conflict", because: conflicts.join("; ") } : absent.length > 0 ? { status: "incomplete", because: absent.join("; ") } : { status: "complete" };
-  evidence.groups.set(key, group);
-  return group;
+  for (const receipt of observations) conflicts.push(...observationScope(evidence, receipt, judging).faults.map((fault) => `observation ${receipt.eventId} of message ${messageId} ${fault}`));
+  const conflict = conflicts.length > 0 ? conflicts.join("; ") : null;
+  evidence.conflicts.set(key, conflict);
+  return conflict;
+}
+
+/** One observation as a witness or a confirmation: its group must not contradict, and its own row must be complete. */
+function standingOf(evidence: Evidence, receipt: Receipt, judging: PeerEdge | null): { status: "complete" } | { status: "incomplete"; because: string } | { status: "conflict"; because: string } {
+  const conflict = groupConflict(evidence, receipt.data.messageId, judging);
+  if (conflict !== null) return { status: "conflict", because: conflict };
+  const { deferred } = observationScope(evidence, receipt, judging);
+  return deferred.length > 0 ? { status: "incomplete", because: deferred.map((why) => `observation ${receipt.eventId} of message ${receipt.data.messageId} ${why}`).join("; ") } : { status: "complete" };
 }
 
 /**
  * A local edge judged on its own evidence, in every order the same:
  * the successor's entity, the proof's verdict, the trigger it names,
- * and whether an observation of a complete group confirms the
- * predecessor at its own keys. The trigger must itself be such a
- * confirmation and application input, since control input starts no
- * rotation. Conflicts and absences are both collected in full.
+ * and whether an observation at the predecessor's own keys, complete
+ * in a group that does not contradict, confirms it. The trigger must
+ * itself be such a confirmation and application input, since control
+ * input starts no rotation. Conflicts and absences are both collected
+ * in full.
  */
 function judgeLocalEdge(edge: LocalEdge, evidence: Evidence): Judged<LocalEdge> {
   const { context } = evidence;
@@ -558,7 +600,7 @@ function judgeLocalEdge(edge: LocalEdge, evidence: Evidence): Judged<LocalEdge> 
   if (check === "invalid") faults.push("the proof does not verify against the predecessor's document");
   else if (check === undefined) deferred.push("the proof is not yet verified");
   const predecessorKeys = new Set([didKeyName(fromDidId, "authentication"), didKeyName(fromDidId, "key-agreement")]);
-  const confirms = (receipt: Receipt): Group["status"] | "none" => (predecessorKeys.has(receipt.data.localKeyName) ? groupOf(evidence, receipt.data.messageId, null).status : "none");
+  const confirms = (receipt: Receipt) => (predecessorKeys.has(receipt.data.localKeyName) ? standingOf(evidence, receipt, null) : { status: "none" as const });
   if (triggerEventId !== null) {
     const trigger = context.set.resolve(triggerEventId, "message.in");
     if (trigger.status === "mismatched") faults.push(`the trigger ${triggerEventId} is a ${trigger.event.type}`);
@@ -566,21 +608,23 @@ function judgeLocalEdge(edge: LocalEdge, evidence: Evidence): Judged<LocalEdge> 
     else {
       if (CONTROL_MESSAGE_TYPES.has(trigger.event.data.msgType)) faults.push(`the trigger ${triggerEventId} is control input, which starts no rotation`);
       const confirmation = confirms(trigger.event);
-      if (confirmation === "none" || confirmation === "conflict") faults.push(`the trigger ${triggerEventId} does not confirm ${fromDidId}`);
-      else if (confirmation === "incomplete") deferred.push(`the trigger ${triggerEventId} awaits its evidence`);
+      if (confirmation.status === "none") faults.push(`the trigger ${triggerEventId} does not confirm ${fromDidId}`);
+      else if (confirmation.status === "conflict") faults.push(`the trigger ${triggerEventId} does not confirm ${fromDidId}: ${confirmation.because}`);
+      else if (confirmation.status === "incomplete") deferred.push(`the trigger ${triggerEventId} awaits its evidence: ${confirmation.because}`);
     }
   }
-  if (!context.receipts.some((receipt) => confirms(receipt) === "complete")) deferred.push(`${fromDidId} is not confirmed by input in this relationship`);
+  if (!context.receipts.some((receipt) => confirms(receipt).status === "complete")) deferred.push(`${fromDidId} is not confirmed by input in this relationship`);
   return { edge, faults, deferred };
 }
 
 /**
  * A peer edge judged on its own evidence, in every order the same: the
  * prior and successor resolutions it names and their snapshot verdicts,
- * the successor's agreement with the edge, the local key's presence in
- * the local history, the observation group that witnesses the proof —
- * judged with this edge as the transition its carriers await — and the
- * proof's verdict. Conflicts and absences are both collected in full.
+ * the successor's agreement with the edge, the local key's standing in
+ * the local history, a complete witness in a group that does not
+ * contradict — judged with this edge as the transition its carriers
+ * await — and the proof's verdict. Conflicts and absences are both
+ * collected in full.
  */
 function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & { successor: Resolution | null } {
   const { context } = evidence;
@@ -611,16 +655,16 @@ function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & {
     if (check === "invalid") faults.push("the successor's resolution is not its document's");
     else if (check === undefined) deferred.push("the successor's resolution is not yet verified against its document");
   }
-  if (!evidence.recipientKeyNames.has(localKeyName)) {
-    if (evidence.localComplete) faults.push(`${localKeyName} is not in the local history`);
-    else deferred.push(`${localKeyName} is not yet in the local history`);
-  }
+  const standing = keyStanding(evidence, localKeyName);
+  if (standing === "outside") faults.push(`${localKeyName} is not in the local history`);
+  else if (standing === "awaited") deferred.push(`${localKeyName} is not yet in the local history`);
   const candidates = context.receiptsByMessage.get(messageId) ?? [];
-  const group = groupOf(evidence, messageId, edge);
-  if (group.status === "conflict") faults.push(group.because);
+  const conflict = groupConflict(evidence, messageId, edge);
+  if (conflict !== null) faults.push(conflict);
   else {
-    if (!candidates.some((receipt) => witnesses(context.bindingEventIds, receipt, edge.data))) deferred.push(candidates.length === 0 ? `no observation of message ${messageId} is here` : `no observation of message ${messageId} carries this proof at this key`);
-    if (group.status === "incomplete") deferred.push(group.because);
+    const carrying = candidates.filter((receipt) => witnesses(context.bindingEventIds, receipt, edge.data)).map((receipt) => standingOf(evidence, receipt, edge));
+    if (carrying.length === 0) deferred.push(candidates.length === 0 ? `no observation of message ${messageId} is here` : `no observation of message ${messageId} carries this proof at this key`);
+    else if (!carrying.some((witness) => witness.status === "complete")) deferred.push(...carrying.flatMap((witness) => (witness.status === "incomplete" ? [witness.because] : [])));
   }
   const check = context.proofChecks.get(edge.eventId);
   if (check === "invalid") faults.push("the proof does not verify against the pinned predecessor document");
@@ -681,16 +725,11 @@ function settleClass<E extends LocalEdge | PeerEdge>(cls: readonly Judged<E>[], 
 }
 
 /** Every class the walk did not reach: its edges wait for a rooted prefix, or for their own evidence. */
-function settleUnreached<E extends LocalEdge | PeerEdge, K>(classes: ReadonlyMap<K, Judged<E>[][]>, reached: ReadonlySet<Judged<E>[]>, describe: (edge: E) => string, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): boolean {
-  let all = true;
+function settleUnreached<E extends LocalEdge | PeerEdge, K>(classes: ReadonlyMap<K, Judged<E>[][]>, reached: ReadonlySet<Judged<E>[]>, describe: (edge: E) => string, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): void {
   for (const list of classes.values()) {
-    if (list.length > 1) {
-      all = false;
-      continue;
-    }
+    if (list.length > 1) continue;
     for (const cls of list) {
       if (reached.has(cls)) continue;
-      all = false;
       if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") continue;
       for (const item of cls) {
         const because = [...item.deferred, "no rooted prefix reaches the edge"].join("; ");
@@ -699,44 +738,35 @@ function settleUnreached<E extends LocalEdge | PeerEdge, K>(classes: ReadonlyMap
       }
     }
   }
-  return all;
 }
 
-function foldLocalChain(root: Root, edges: readonly LocalEdge[], evidence: Evidence, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): { chain: LocalNode[]; complete: boolean } {
+function foldLocalChain(root: Root, edges: readonly LocalEdge[], evidence: Evidence, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): LocalNode[] {
   const { context } = evidence;
   const judged = edges.map((edge) => judgeLocalEdge(edge, evidence));
   const classes = classesOf(judged, describeEdge, (edge) => edge.data.fromDidId, (edge) => canonicalText(edge.data), () => null, verdict, statuses);
   const chain = [localNode(root.localDidId, root.localDid, [])];
   const inChain = new Set([root.localDidId]);
   const reached = new Set<Judged<LocalEdge>[]>();
-  let stopped = false;
   for (let node = chain[0]!; ; ) {
     const list = classes.get(node.didId);
     if (list === undefined || list.length !== 1) break;
     const cls = list[0]!;
     reached.add(cls);
     const { toDidId } = cls[0]!.edge.data;
-    if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") {
-      stopped = true;
-      break;
-    }
+    if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") break;
     if (inChain.has(toDidId)) {
       verdict.faults.push(`${describeEdge(cls[0]!.edge)}: ${toDidId} is already in the local chain`);
       for (const item of cls) statuses.set(item.edge.eventId, { status: "conflict", because: `${toDidId} is already in the local chain` });
-      stopped = true;
       break;
     }
     const applied = settleClass(cls, describeEdge, verdict, statuses);
-    if (applied.length === 0) {
-      stopped = true;
-      break;
-    }
+    if (applied.length === 0) break;
     node = localNode(toDidId, context.routes.dids.get(toDidId)!.created!.did, applied.map((item) => item.edge.eventId));
     chain.push(node);
     inChain.add(toDidId);
   }
-  const allReached = settleUnreached(classes, reached, describeEdge, verdict, statuses);
-  return { chain, complete: !stopped && allReached && judged.every((item) => item.faults.length === 0) };
+  settleUnreached(classes, reached, describeEdge, verdict, statuses);
+  return chain;
 }
 
 /**
