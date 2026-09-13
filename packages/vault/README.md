@@ -5,6 +5,27 @@ What the events of an `.estoc` vault mean. The contract is
 root; this package is its reference implementation, and nothing more
 than the meaning: no folder, no agent, no protocol, no DID method.
 
+**Version 3 is being built beside this**, under `@estoc/vault/v3`, as
+the code form of the
+[replica model](../../docs/replica-model/README.md)'s
+[vault events](../../docs/replica-model/vault-events.md),
+[relationship policy](../../docs/replica-model/relationships.md) and
+[distributed delivery](../../docs/replica-model/distributed-delivery.md)
+over `@estoc/event-store/v3`. What is there so far is the identifier
+vocabulary (`types.ts`: one nominal type per kind of value a payload
+names, over the validated string it serializes as), the deterministic
+identifiers (`ids.ts`: the six UUIDv5 namespaces derived from the URL
+namespace, a relationship from its two birth DIDs sorted by UTF-8 bytes,
+its default contact and each end's early private DID, an inbound
+observation by the authenticating peer key or the decrypting local key,
+an execution from a relationship and a wire ID, an effect key over the
+tagged producing tuple and the automatic message ID it names, the
+reserved keystore names) and the canonical public-key value
+(`public-key.ts`: the did:key encoding of the complete type-tagged key
+as base58btc multibase, from a JWK or from any multibase form, Ed25519
+and X25519 raw, the Weierstrass curves as compressed points). Every
+published vector of those documents is a test in `test/v3/`.
+
 A version-2 vault is an event log — one append-only log per device,
 merged by union — and everything a person sees in it is a *fold* over
 the set of events: contacts, channels, messages, my keys and devices,
