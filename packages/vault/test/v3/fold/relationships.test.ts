@@ -1344,4 +1344,32 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual({ local: [a0.didId, a1.didId], peer: [b0.did, b1.did] });
     });
   });
+  it("a frozen transition whose recipient is outside the local history scopes no observation, even beside an equal applied one; one at a key an unapplied edge adds waits", async () => {
+    const { scene, keys, peerKeys, R, a0, a1, a2, b0, b1, root, binding } = await bornAtRoot();
+    const { edge: complete, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
+    const elsewhere = resolved(scene, a2.didId, b1);
+    const named = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 2, wire: carrier.data.wireMessageId });
+    const local = localEdge(scene, R, a0.didId, a1.didId, await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT), ref(named));
+    const otherCarrier = receipt(scene, { local: a2.didId, peer: b1, resolution: elsewhere, binding, ordinal: 3, fromPrior: jwt });
+    for (const messageId of [otherCarrier.data.messageId, inboundMessageId(b1.publicKey, uuidv7() as WireMessageId)]) {
+      const outside = peerEdge(scene, { R, local: a2.didId, from: b0, to: b1, jwt, prior: root, successor: elsewhere, messageId });
+      const frozen = { ...named, data: { ...named.data, peerTransitionEventId: ref(outside) } };
+      const events = scene.events.map((event) => (event === named ? frozen : event));
+      await expectFoldOrderFree(events, (fold) => {
+        expect(fold.transitions.get(outside.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`${didKeyName(a2.didId, "key-agreement")} is not in the local history`) });
+        expect(fold.transitions.get(complete.eventId)).toEqual({ status: "conflict", because: `observation ${named.eventId} of message ${carrier.data.messageId} names a transition that contradicts its own evidence: ${didKeyName(a2.didId, "key-agreement")} is not in the local history` });
+        expect(fold.transitions.get(local.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the trigger ${named.eventId} does not confirm ${a0.didId}`) });
+        expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
+      });
+      const adding = localEdge(scene, R, a1.didId, a2.didId, await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a2.longFormDid, IAT), uuidv7() as EventReference<"message.in">);
+      await expectFoldOrderFree(events.concat(adding), (fold) => {
+        expect(fold.transitions.get(outside.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("is not yet in the local history") });
+        expect(fold.transitions.get(complete.eventId)).toEqual({ status: "applied" });
+        expect(fold.transitions.get(local.eventId)).toEqual({ status: "applied" });
+        expect(dids(fold, R)).toEqual({ local: [a0.didId, a1.didId], peer: [b0.did, b1.did] });
+      });
+      scene.events.splice(scene.events.indexOf(outside), 1);
+      scene.events.splice(scene.events.indexOf(adding), 1);
+    }
+  });
 });

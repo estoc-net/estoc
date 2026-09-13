@@ -486,7 +486,8 @@ function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data
  * for from the chains so far. An applied transition equal to the one a
  * proof-free successor names scopes it, since equal edges are one
  * transition, unless the named one contradicts the evidence it names
- * itself; the transition under judgement stands in for the applied
+ * or arrived at a key outside the local history itself; the
+ * transition under judgement stands in for the applied
  * one a carrier or a proof-free successor waits for, when it is that
  * transition or equal to it, since otherwise the edge would wait for
  * its observations and they for the edge. Nothing else is taken on
@@ -533,7 +534,8 @@ function judgeObservation(evidence: Evidence, receipt: Receipt, judging: PeerEdg
       else if (transition.event.data.relationshipId !== context.relationshipId) faults.push("names a transition of another relationship");
       else {
         const named = namedEvidence(context, transition.event);
-        if (named.faults.length > 0) faults.push(`names a transition that contradicts its own evidence: ${named.faults.join("; ")}`);
+        const own = keyStanding(evidence, transition.event.data.localKeyName) === "outside" ? [...named.faults, `${transition.event.data.localKeyName} is not in the local history`] : named.faults;
+        if (own.length > 0) faults.push(`names a transition that contradicts its own evidence: ${own.join("; ")}`);
         if (notFrom(transition.event.data.toDid, named.successor?.data.documentCid ?? null)) faults.push("is not from the document the transition it names pins");
         if (faults.length === 0 && !stands(transition.event)) deferred.push("awaits the transition it names");
       }
