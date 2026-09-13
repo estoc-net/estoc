@@ -79,13 +79,22 @@ the desired mediator recipients and each entity's receipt eligibility;
 consumers read from the root-address receipts whose binding holds
 together, the receipts whose evidence is still missing and hold it
 meanwhile, its conflicts, and whether a relationship may consume it,
-wait or is turned away; `foldContacts`, the decisions
+wait or is turned away; `foldRelationships`, each relationship's
+consistent binding, its local and peer chains from the root, each edge
+applied only once everything it names is here and agrees, the current
+two ends, the recipient key names, the one contact, the address index
+over every historical pair, the pending claims a proof-free delivery
+waits at; `foldContacts`, the decisions
 a contact ID holds on its own. Every fold is a pure function of the
 event set, checked by shuffling; what needs the seed, whether an
 entity's document carries the keys its ID derives, is `verifyDidKeys` /
 `verifyMediationKeys` beside the fold, whose verdicts are handed back
-in, `foldWithSeed` doing both in one motion; until the seed has
-confirmed an entity it is pending, never live). Every published
+in, `foldWithSeed` doing both in one motion, and what needs the retained
+documents, whether a transition's proof verifies against the exact
+predecessor, is `verifyTransitions`, `foldRelationshipsVerified` doing
+both; until the seed has confirmed an entity it is pending, never live,
+and until a proof has been checked its edge is deferred, never
+applied). Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
 there too.

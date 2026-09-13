@@ -102,6 +102,12 @@ function canonical(did: string): Did {
   }
 }
 
+/** The claims a proof carries and the key it names, read without verifying anything: what a carrier says before the evidence to check it is here. */
+export function fromPriorClaims(jwt: string): FromPriorClaims {
+  if (!isCompactJwt(jwt)) throw new InvalidFromPrior("not a compact JWT");
+  return claimsOf(jwt, protectedKid(jwt));
+}
+
 /**
  * Verify a proof against the pinned predecessor. The protected `kid`
  * names the `iss` DID byte for byte; `iss` names the pinned DID under
@@ -114,10 +120,8 @@ function canonical(did: string): Did {
  * are the receiving procedure's to check with the message in hand.
  */
 export async function verifyFromPrior(jwt: string, pinned: PinnedResolution): Promise<VerifiedFromPrior> {
-  if (!isCompactJwt(jwt)) throw new InvalidFromPrior("not a compact JWT");
-  const kid = protectedKid(jwt);
-  const claims = claimsOf(jwt, kid);
-  const [kidDid, kidRest] = splitDidUrl(kid);
+  const claims = fromPriorClaims(jwt);
+  const [kidDid, kidRest] = splitDidUrl(claims.kid);
   if (kidDid !== claims.iss) throw new InvalidFromPrior("the kid DID portion is the iss DID");
   const iss = canonical(claims.iss);
   if (iss !== pinned.did) throw new InvalidFromPrior(`iss ${claims.iss} is not the pinned predecessor ${pinned.did}`);
@@ -134,7 +138,7 @@ export async function verifyFromPrior(jwt: string, pinned: PinnedResolution): Pr
     if (err instanceof InvalidDidDocument) throw new InvalidFromPrior(`the pinned document: ${err.message}`);
     throw err;
   }
-  if (methodId === undefined) throw new InvalidFromPrior(`${kid} is not an authentication method of the pinned document`);
+  if (methodId === undefined) throw new InvalidFromPrior(`${claims.kid} is not an authentication method of the pinned document`);
   let publicKey: PublicKey;
   try {
     publicKey = methodPublicKey(pinned.document, methodId);

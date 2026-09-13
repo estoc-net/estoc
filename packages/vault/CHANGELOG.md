@@ -90,6 +90,39 @@
   `checkDidCreated` and `checkMediationCreated` are now composed of the
   exported `didDocumentOf`, `documentSendsTo`, `routeServiceUri`,
   `checkDidKeys` and `checkMediationKeys`.
+- **The relationship fold**, `fold/relationships.ts`: `foldRelationships`
+  groups `relationship.bound` by ID — equivalent bindings (one root local
+  DID, one canonical peer DID, one document CID, whatever resolution
+  events they name) are one, incompatible ones a conflict, and the root
+  must hold together: resolution at the local DID's key-agreement key,
+  distinct addresses deriving the ID — and folds the two chains from
+  it. The local chain follows `relationship.localTransitioned`, the
+  peer chain `relationship.peerTransitioned`; at each node the one edge
+  leaving it is checked for everything the evidence here can settle (a
+  cycle, competing successors, a successor entity in conflict, a
+  predecessor snapshot that is not the chain's document, a successor
+  resolution that says otherwise, a local key outside the local
+  history, a carrier bound elsewhere, a trigger that confirms nothing,
+  a proof found invalid) before it waits for what is absent (the proof
+  check, the successor's creation or resolution, the predecessor's
+  confirmation, the carrier, a rooted prefix); equal edges are one, and
+  no timestamp ever picks a branch. Each relationship exposes
+  `localChain`, `peerChain`, `currentLocalDidId`, `currentPeerDid`,
+  `recipientKeyNames`, the one `contactId` or a conflict of several,
+  `deferred` and `faults`. The fold exposes every transition's status,
+  the address index — `claimants(localDid, peerDid)` over every
+  historical pair of every relationship, a pair two relationships reach
+  a conflict for each — `retainedDidIds` for `requiredReceivingSet`,
+  and the pending claims a proof-free delivery must wait at: a committed
+  carrier whose proof names its sender and has no applied transition,
+  or a deferred edge. `verifyTransitions` checks every proof beside the
+  fold against the exact predecessor document — a local edge's against
+  the predecessor entity's own, a peer edge's against the named prior
+  resolution's, derived from a numalgo-4 long form or read from the
+  object store — and `foldRelationshipsVerified` folds with the
+  verdicts in; an unchecked edge is deferred, never applied.
+  `fromPriorClaims` reads a proof's claims without verifying it.
+  `bindingHolds` is now shared with the invitation fold.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
