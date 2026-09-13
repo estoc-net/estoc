@@ -44,7 +44,8 @@
   the raw bytes read as strict JSON, the method's input-document rules
   and the members' shapes enforced, every relationship reference
   resolved, every service carrying an endpoint whose string form is an
-  RFC 3986 URI with any bracketed host an IPv6 address by `ipaddr.js` —
+  RFC 3986 URI with any bracketed host validated as IPv6 by `ipaddr.js`
+  or as IPvFuture by its URI grammar —
   under its RFC 8785 bytes and raw CID; `canonicalDidOf`,
   `authorizedMethodIds`, `methodPublicKey`, `didcommServiceUris` and
   `splitDidUrl` read DIDs and retained documents. `signFromPrior` and
