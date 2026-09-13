@@ -59,6 +59,49 @@
   `test/v3/sqlite/export-cases.ts` runs on `node:sqlite` and in a
   Chromium Worker; `test/v3/sqlite/export.test.ts` adds what only a
   path shows.
+- **Restore and import.** `restoreVault(source, open, { heldRoots,
+  anchor })` in `@estoc/event-store/v3` builds a new runtime from a
+  portable snapshot the caller opened with `openPortable`: the
+  snapshot validated in full and the credential's anchor — a string,
+  or the function that unlocks the snapshot's wrapper — compared with
+  its own, nothing made on either failure; then the destination
+  `open("create")` gives, laid in one transaction as a runtime with
+  `ready = 0` — schema, metadata, the wrapper adopted, a fresh replica
+  ID and generation, every event under a fresh position in canonical
+  order — filled object by object through the snapshot's read,
+  rehashed and chunked, checked against validation's counts and set
+  ready in one transaction, and returned open as `{ runtime, events,
+  eventBytes, objects, objectBytes }`; no source page copied, no
+  source SQL run; a failure after the destination is made closes it
+  and leaves it unready, opening as nothing. `importVault(target,
+  source, { heldRoots })` merges a snapshot of the same vault into any
+  open runtime, the vault in memory included, returning `{ added,
+  duplicates, conflicts, objects, repaired }`: outside the lock an
+  inspector is refused (`ReadOnlyVault`), the snapshot validated, its
+  anchor compared (`AnchorMismatch`), its events and listing pinned in
+  memory; under the lock a damaged history is `DamagedHistory`, each
+  event classified as duplicate, conflict the target wins, or new, a
+  new or conflicting event under the target's own author `ForkedAuthor`
+  with nothing written; the fold run on the target and on the union
+  held in memory; every root a new event retains in the union and
+  every root newly held by the union must have source bytes or sound
+  target bytes, else `IncompleteImport` names each and nothing is
+  written; every union-held object absent or known damaged in the
+  target that the source has is staged, verified as it streams, even
+  with no new event; then one transaction publishes staged objects and
+  repairs with the new events and positions and drops `local_cache`;
+  identity, wrapper and local state stay; a repeat adds nothing and,
+  with nothing to repair or record, writes nothing. For it,
+  `Held.ingest(events, stage?)` takes a `Stage` callback that prepares
+  objects to publish with the events, `Stores.ingestion(body)` is the
+  ingest counterpart of `transaction`, both event stores' `ingest`
+  take a `publish(adding)` callback run inside the transaction as
+  `appendAll`'s is, `SqlitePreparation.publish()` returns how many
+  objects landed, `VaultRuntime.writable` says whether writes are
+  admitted, and `publishedRuntime` and `copyObjects` are shared by
+  create, export and restore. `test/v3/sqlite/import-cases.ts` runs on
+  `node:sqlite` and in a Chromium Worker; `test/v3/sqlite/import.test.ts`
+  adds a restore into either journal.
 - **The SQLite vault.** `SqliteVault` in `@estoc/event-store/v3`, a
   `Runtime` over an open runtime's `SqliteEventStore` and
   `SqliteObjectStore`: a commit's objects prepared under the writer

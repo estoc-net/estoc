@@ -81,13 +81,20 @@ export interface ObjectStore {
  * to publishes them, new objects and repairs alike, together with its
  * events; a transaction that fails drops them and nothing of the store
  * changes. A root check in the transaction asks `has` here, which counts
- * what is prepared as present.
+ * what is prepared as present. An accepted object the commit relies on
+ * as it is — a root reused, not put again — is declared with `reuse`:
+ * reads run outside the lock and one may find that object damaged
+ * between the root check and the transaction, so the publication
+ * checks each declared object once more, in the transaction, and
+ * fails there rather than accept events over bytes known damaged.
  */
 export interface Preparation {
   /** Verify `source` against `cid` under `putObject`'s rules and hold the bytes here, unpublished. */
   putObject(cid: Cid, source: ByteSource): Promise<ObjectInfo>;
   /** Prepared here, or accepted and sound in the store; `false` for absence, `DamagedObject` for known damage not repaired here. */
   has(cid: Cid): Promise<boolean>;
+  /** Declares that the commit reuses the accepted object under `cid`: its publication throws `DamagedObject` should that object be known damaged by then, unless it is also prepared here, which repairs it. */
+  reuse(cid: Cid): void;
 }
 
 // ---- CIDs ---------------------------------------------------------------

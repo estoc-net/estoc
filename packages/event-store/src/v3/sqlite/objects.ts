@@ -52,6 +52,8 @@ interface Staged {
   token: number;
 }
 
+type Acceptance = "new" | "repaired" | "kept";
+
 /** What `sound` finds under a CID: the accepted size, and the epoch a read of it belongs to. */
 interface Present {
   size: number;
@@ -131,6 +133,9 @@ export class SqliteObjectStore implements ObjectStore {
       writable: (what) => this.requireWritable(what),
       stage: (want, source) => this.stage(want, source),
       has: (cid) => this.has(cid),
+      check: (cid) => {
+        if (this.damage.has(cid)) throw new DamagedObject(cid);
+      },
       inTransaction: () => this.driver.inTransaction,
       accept: (staged) => this.accept(staged),
       drop: (token) => this.drop(token),
@@ -192,13 +197,13 @@ export class SqliteObjectStore implements ObjectStore {
    * new — and reported as a repair, for the caller to clear the damage
    * once the transaction has committed.
    */
-  private accept(staged: Staged): boolean {
+  private accept(staged: Staged): Acceptance {
     const cid = staged.cid.text;
     const have = query(this.driver, "SELECT 1 AS present FROM objects WHERE cid = ?", cid).length === 1;
     const repair = have && this.damage.has(cid);
     if (have && !repair) {
       this.drop(staged.token);
-      return false;
+      return "kept";
     }
     if (repair) {
       this.move(cid);
@@ -208,7 +213,7 @@ export class SqliteObjectStore implements ObjectStore {
     run(this.driver, "INSERT INTO objects (cid, size) VALUES (?, ?)", cid, staged.size);
     run(this.driver, "INSERT INTO object_chunks (cid, chunk_no, bytes) SELECT ?, chunk_no, bytes FROM temp.staging_chunks WHERE token = ? ORDER BY chunk_no", cid, staged.token);
     this.drop(staged.token);
-    return repair;
+    return repair ? "repaired" : "new";
   }
 
   private move(cid: string): void {
@@ -397,8 +402,10 @@ export interface PreparationSteps {
   writable(what: string): void;
   stage(want: DaslCid | undefined, source: ByteSource): Promise<Staged>;
   has(cid: Cid): Promise<boolean>;
+  /** Throws `DamagedObject` for an object the store knows damaged; nothing otherwise. */
+  check(cid: Cid): void;
   inTransaction(): boolean;
-  accept(staged: Staged): boolean;
+  accept(staged: Staged): Acceptance;
   drop(token: number): void;
   forgive(cid: string): void;
 }
@@ -407,16 +414,19 @@ export interface PreparationSteps {
  * The objects of one commit between verification and publication,
  * staged in the connection's temporary database where no read of the
  * store sees them, and accepted by three steps around the transaction
- * the commit lands in: `publish` inside it, moving every staged object
- * under its CID; `settle` once it has committed, clearing the damage
- * of the objects it repaired — inside the transaction that would be
- * too soon, since a rollback keeps the old bytes and their damage —
- * and `discard` in any case, dropping whatever is still staged. A
- * preparation dropped unpublished leaves the store as it was; two in
- * flight are two, each publishing only what it verified.
+ * the commit lands in: `publish` inside it, checking every object
+ * declared reused against the damage known by then and moving every
+ * staged object under its CID; `settle` once it has committed,
+ * clearing the damage of the objects it repaired — inside the
+ * transaction that would be too soon, since a rollback keeps the old
+ * bytes and their damage — and `discard` in any case, dropping
+ * whatever is still staged. A preparation dropped unpublished leaves
+ * the store as it was; two in flight are two, each publishing only
+ * what it verified.
  */
 export class SqlitePreparation implements Preparation {
   private readonly staged = new Map<string, Staged>();
+  private readonly reused = new Set<string>();
   private repaired: string[] = [];
 
   constructor(private readonly steps: PreparationSteps) {}
@@ -441,12 +451,22 @@ export class SqlitePreparation implements Preparation {
     return this.staged.has(cid) || this.steps.has(cid);
   }
 
-  /** Accepts every staged object, inside the caller's transaction; a repair among them is noted for `settle`. */
-  publish(): void {
+  reuse(cid: Cid): void {
+    rawCidOf(cid);
+    this.reused.add(cid);
+  }
+
+  /** Checks every object declared reused, then accepts every staged object, inside the caller's transaction; a repair among them is noted for `settle`. Returns how many landed — new or repaired — as opposed to being dropped for an object already held sound. */
+  publish(): number {
     if (!this.steps.inTransaction()) throw new Error("a preparation publishes inside the transaction its commit lands in");
+    for (const cid of this.reused) if (!this.staged.has(cid)) this.steps.check(cid as Cid);
+    let landed = 0;
     for (const staged of this.staged.values()) {
-      if (this.steps.accept(staged)) this.repaired.push(staged.cid.text);
+      const accepted = this.steps.accept(staged);
+      if (accepted === "repaired") this.repaired.push(staged.cid.text);
+      if (accepted !== "kept") landed += 1;
     }
+    return landed;
   }
 
   /** After the transaction committed: the repaired objects are sound again, and nothing is staged. */
@@ -454,12 +474,14 @@ export class SqlitePreparation implements Preparation {
     for (const cid of this.repaired) this.steps.forgive(cid);
     this.repaired = [];
     this.staged.clear();
+    this.reused.clear();
   }
 
   /** Drops whatever is still staged: what an unpublished or rolled-back preparation leaves; nothing after `settle`. */
   discard(): void {
     for (const staged of this.staged.values()) this.steps.drop(staged.token);
     this.staged.clear();
+    this.reused.clear();
     this.repaired = [];
   }
 }

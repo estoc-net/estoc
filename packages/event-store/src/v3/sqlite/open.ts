@@ -104,8 +104,13 @@ export function createRuntime(driver: SqliteDriver, options: CreateRuntimeOption
       run(driver, "INSERT INTO keystore (singleton, version, seed_jwe) VALUES (1, 3, ?)", new TextEncoder().encode(wrapped.seedJwe));
       run(driver, "INSERT INTO store_state (singleton, replica_id, store_generation, last_seq) VALUES (1, ?, ?, 0)", author, generation);
     });
-    return new Opened(driver, metadata, author, generation, true);
+    return publishedRuntime(driver, metadata, { author, generation });
   });
+}
+
+/** The runtime database over `driver`, for a construction on this connection that has just published it ready with `metadata` and `control` as it wrote them: what a create hands back, and a restore. */
+export function publishedRuntime(driver: SqliteDriver, metadata: VaultMetadata, control: { author: AuthorId; generation: string }): RuntimeDatabase {
+  return new Opened(driver, metadata, control.author, control.generation, true);
 }
 
 /**

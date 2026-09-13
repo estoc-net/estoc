@@ -10,7 +10,7 @@ import { DamagedObject, IncompleteSnapshot, SnapshotTooLarge } from "../errors.j
 import { canonicalEventBytes, type Cid, type Event } from "../event.js";
 import type { WrappedSeed } from "../keystore.js";
 import { Packer, hashSource, sortCids } from "../objects.js";
-import type { Held, HeldRoots, VaultRuntime } from "../vault.js";
+import type { Held, HeldRoots, Vault, VaultRuntime } from "../vault.js";
 import type { SqliteDriver } from "./driver.js";
 import { CHUNK_BYTES } from "./objects.js";
 import { openPortable } from "./open.js";
@@ -77,7 +77,7 @@ export async function exportVault(runtime: VaultRuntime, open: OpenDestination, 
     try {
       if (writer.mode !== "create") throw new TypeError(`the destination was opened ${writer.mode}, not to create`);
       lay(writer, runtime.metadata.anchor, cut);
-      await fill(writer, held, cut.roots);
+      await copyObjects(writer, held, cut.roots, (problem) => new IncompleteSnapshot([problem]));
       publish(writer, cut);
     } finally {
       writer.close();
@@ -147,15 +147,20 @@ function lay(writer: SqliteDriver, anchor: string, cut: Cut): void {
   });
 }
 
+/** An object to copy: its CID and the size the source states for it. */
+export type CopiedObject = { cid: Cid; size: number };
+
 /**
- * Every held object copied from the vault into the destination, one
- * at a time: its bytes streamed through the vault's own read — which
- * rehashes them — and hashed again here, cut into the format's chunks
- * and written a batch at a time in transactions of their own, the
- * `objects` row with the first. An object whose bytes fail to read,
- * or hash to something else, is `IncompleteSnapshot`.
+ * Every object of `roots` copied from `from` into the destination
+ * `writer`, one at a time: its bytes streamed through the vault's own
+ * read — which rehashes them — and hashed again here, cut into the
+ * format's chunks and written a batch at a time in transactions of
+ * their own, the `objects` row with the first. An object whose bytes
+ * fail to read, or hash to something else, is what `refuse` makes of
+ * the problem: an export's `IncompleteSnapshot`, a restore's
+ * `InvalidSnapshot`.
  */
-async function fill(writer: SqliteDriver, held: Held, roots: Cut["roots"]): Promise<void> {
+export async function copyObjects(writer: SqliteDriver, from: Pick<Vault, "objects">, roots: CopiedObject[], refuse: (problem: { where: string; error: string }) => Error): Promise<void> {
   const insertObject = writer.prepare("INSERT INTO objects (cid, size) VALUES (?, ?)");
   const insertChunk = writer.prepare("INSERT INTO object_chunks (cid, chunk_no, bytes) VALUES (?, ?, ?)");
   try {
@@ -181,9 +186,9 @@ async function fill(writer: SqliteDriver, held: Held, roots: Cut["roots"]): Prom
         if (batched >= BATCH_BYTES) flush();
       });
       const fail = (error: string): never => {
-        throw new IncompleteSnapshot([{ where: `objects/${cid}`, error }]);
+        throw refuse({ where: `objects/${cid}`, error });
       };
-      const stream = await held.objects.open(cid);
+      const stream = await from.objects.open(cid);
       if (stream === null) return fail("held by the events but not present");
       let got: { cid: { text: string }; size: number };
       try {

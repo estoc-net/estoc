@@ -4,8 +4,9 @@
  * `objects.test.ts` and over the wasm pool in a Chromium Worker by
  * `browser-driver.test.ts`. What the conformance suite cannot see —
  * the rows a put leaves, a runtime reopened, a preparation staged
- * beside a read, damage under the store, a repair rolled back — where
- * the two platforms' SQLite must agree.
+ * beside a read, damage under the store, a repair rolled back, a
+ * reused object checked as it publishes — where the two platforms'
+ * SQLite must agree.
  */
 
 import { sha256 } from "@noble/hashes/sha2";
@@ -24,7 +25,7 @@ import {
   type SqliteDriver,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects } from "./driver-cases.js";
+import { assert, assertBytes, assertEqual, assertRejects, assertThrows } from "./driver-cases.js";
 
 export interface ObjectHarness {
   /** A target no database exists at yet. */
@@ -236,6 +237,40 @@ export const objectCases: ObjectCase[] = [
       } finally {
         again.close();
       }
+    },
+  },
+  {
+    name: "an object a preparation declares reused is checked again as it publishes: known damaged by then, the publication throws inside the transaction and nothing staged lands; prepared as well, the repair goes through",
+    run: async (h) => {
+      const db = createRuntime(await h.open(h.fresh(), "create"), { metadata: META, wrapped: WRAPPED });
+      const store = new SqliteObjectStore(db);
+      const bytes = bytesOf(10, 6);
+      const cid = cidOf(bytes);
+      await store.putRaw(bytes);
+      const fresh = bytesOf(10, 7);
+      const freshCid = cidOf(fresh);
+      const prepared = store.prepare();
+      await prepared.putObject(freshCid, fresh);
+      assert(await prepared.has(cid), "sound when the root was checked");
+      prepared.reuse(cid);
+      corrupt(db.driver, cid);
+      await assertRejects(() => store.read(cid, 10), "DamagedObject", "a read finds the damage before the transaction");
+      await assertRejects(async () => db.driver.transaction("immediate", () => prepared.publish()), "DamagedObject", "the publication refuses");
+      assertEqual(await store.has(freshCid), false, "the staged object did not land");
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: 1 }], "still staged");
+      prepared.discard();
+      assertEqual(rows(db.driver, "SELECT count(*) AS n FROM temp.staging_chunks"), [{ n: 0 }], "discarded");
+      const repairing = store.prepare();
+      await repairing.putObject(freshCid, fresh);
+      await repairing.putObject(cid, bytes);
+      repairing.reuse(cid);
+      db.driver.transaction("immediate", () => repairing.publish());
+      repairing.settle();
+      repairing.discard();
+      assertBytes((await store.read(cid, 10)) as Uint8Array, bytes, "repaired by the same publication");
+      assertEqual(await store.has(freshCid), true, "the new object landed with it");
+      assertThrows(() => store.prepare().reuse("nope" as Cid), "InvalidCid", "a reuse of no CID");
+      db.close();
     },
   },
   {

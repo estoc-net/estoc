@@ -12,8 +12,8 @@ import type { Cid } from "../event.js";
 import type { Collected } from "../objects.js";
 import { Runtime, type Stores } from "../vault.js";
 import { SqliteEventStore } from "./events.js";
-import { SqliteLocalState, type LocalState } from "./local.js";
-import { SqliteObjectStore, type SqliteObjectStoreOptions } from "./objects.js";
+import { SqliteLocalState, dropCache, type LocalState } from "./local.js";
+import { SqliteObjectStore, type SqliteObjectStoreOptions, type SqlitePreparation } from "./objects.js";
 import type { RuntimeDatabase } from "./open.js";
 
 export interface SqliteVaultOptions extends SqliteObjectStoreOptions {
@@ -44,8 +44,6 @@ class HistoryBoundObjects extends SqliteObjectStore {
 export class SqliteVault extends Runtime {
   declare readonly stores: Stores & { events: SqliteEventStore; objects: SqliteObjectStore };
   readonly local: LocalState;
-  /** Whether writes are admitted: false over an inspector, whose every write is `ReadOnlyVault`. */
-  readonly writable: boolean;
   private readonly db: RuntimeDatabase;
   private readonly closing: { promise: Promise<void> | undefined };
 
@@ -61,6 +59,10 @@ export class SqliteVault extends Runtime {
     const { now, ...objectOptions } = options;
     const events = new SqliteEventStore(db, now === undefined ? {} : { now });
     const objects = new HistoryBoundObjects(db, objectOptions, events);
+    // The cache is what was built from the accepted state; once that state changes under it — an object landed or repaired, an event accepted — it is dropped in the same transaction.
+    const publish = (prepared: SqlitePreparation, adding: number): void => {
+      if (prepared.publish() + adding > 0) dropCache(db.driver);
+    };
     super({
       author: db.author,
       generation: db.generation,
@@ -72,9 +74,20 @@ export class SqliteVault extends Runtime {
           const prepared = objects.prepare();
           try {
             const drafts = await body(prepared);
-            const published = await events.appendAll(drafts, () => prepared.publish());
+            const published = await events.appendAll(drafts, () => publish(prepared, drafts.length));
             prepared.settle();
             return published;
+          } finally {
+            prepared.discard();
+          }
+        },
+        ingestion: async (body) => {
+          const prepared = objects.prepare();
+          try {
+            const incoming = await body(prepared);
+            const outcome = await events.ingest(incoming, (adding) => publish(prepared, adding));
+            prepared.settle();
+            return outcome;
           } finally {
             prepared.discard();
           }
@@ -90,11 +103,11 @@ export class SqliteVault extends Runtime {
           rewrap: (next) => access.rewrap(next),
         };
       },
+      writable: db.writable,
       guard,
     });
     this.db = db;
     this.closing = closing;
-    this.writable = db.writable;
     this.local = new SqliteLocalState(db.driver, db.writable, () => guard("read"), now ?? Date.now);
   }
 

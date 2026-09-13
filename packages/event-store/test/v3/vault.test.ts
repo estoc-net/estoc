@@ -67,12 +67,14 @@ describe("Vault facade", () => {
 });
 
 describe("Runtime", () => {
-  it("refuses stores without a transaction: two stores that publish as they go cannot make a vault", () => {
+  it("refuses stores without a transaction, or without an ingestion: two stores that publish as they go cannot make a vault", () => {
     const events = new MemoryEventStore({ author: authorN(1) });
     const objects = new MemoryObjectStore();
     const keystore = () => ({ read: async () => WRAPPED, rewrap: async () => undefined });
     const stores = { events, objects } as unknown as Stores;
     expect(() => new Runtime({ author: events.author, generation: events.generation, metadata: META, stores, keystore })).toThrow(TypeError);
+    const commitsOnly = { events, objects, transaction: () => Promise.reject(new Error("unused")) } as unknown as Stores;
+    expect(() => new Runtime({ author: events.author, generation: events.generation, metadata: META, stores: commitsOnly, keystore })).toThrow(TypeError);
     // the same two stores under a transaction: a commit that fails halfway leaves nothing behind
     const runtime = new Runtime({
       author: events.author,
@@ -85,6 +87,11 @@ describe("Runtime", () => {
           const prepared = objects.prepare();
           const drafts = await body(prepared);
           return events.appendAll(drafts, () => prepared.publish());
+        },
+        ingestion: async (body) => {
+          const prepared = objects.prepare();
+          const incoming = await body(prepared);
+          return events.ingest(incoming, () => prepared.publish());
         },
       },
       keystore,
@@ -122,6 +129,11 @@ describe("Runtime guard", () => {
           const prepared = objects.prepare();
           const drafts = await body(prepared);
           return events.appendAll(drafts, () => prepared.publish());
+        },
+        ingestion: async (body) => {
+          const prepared = objects.prepare();
+          const incoming = await body(prepared);
+          return events.ingest(incoming, () => prepared.publish());
         },
       },
       keystore: () => ({ read: () => Promise.reject(new NotAVault("none")), rewrap: () => Promise.resolve() }),

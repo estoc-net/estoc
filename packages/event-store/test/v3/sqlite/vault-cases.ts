@@ -13,6 +13,7 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import {
   Connection,
+  SqliteError,
   SqliteVault,
   canonicalEventBytes,
   chunksOf,
@@ -24,6 +25,8 @@ import {
   type Draft,
   type Event,
   type OpenMode,
+  type RawConnection,
+  type Retained,
   type SqliteDriver,
   type Vault,
 } from "../../../src/v3/index.js";
@@ -45,6 +48,7 @@ export const MIB = 1024 * 1024;
 export const T0 = Date.parse("2026-09-12T10:00:00.000Z");
 export const HELLO = new TextEncoder().encode("hello");
 export const HELLO_CID = "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq" as Cid;
+export const WORLD = new TextEncoder().encode("world");
 
 /** `n` deterministic bytes from `seed`. */
 export function bytesOf(n: number, seed: number): Uint8Array {
@@ -62,6 +66,8 @@ export function bytesOf(n: number, seed: number): Uint8Array {
 export function cidOf(bytes: Uint8Array): Cid {
   return rawCidFromDigest(sha256(bytes)).text as Cid;
 }
+
+export const WORLD_CID = cidOf(WORLD);
 
 export const draft = (roots: Cid[] = [], data: Record<string, unknown> = {}): Draft => ({ type: "test.event", roots, data: { n: 1, ...data } });
 
@@ -114,6 +120,42 @@ export async function rootsOf(vault: Vault): Promise<Cid[]> {
   return roots;
 }
 
+/** Every root of every event, retained by that event: the type-independent retention. */
+export async function retainedOf(vault: Vault): Promise<Retained[]> {
+  const retained: Retained[] = [];
+  for await (const event of vault.events.scan()) for (const root of event.roots) retained.push({ eventId: event.eventId, root });
+  return retained;
+}
+
+/** `inner` as a `readwrite` connection whose `n`-th statement run fails as a bad disk would; `n` past the last run fails nothing. */
+export function failingAt(inner: SqliteDriver, n: number): SqliteDriver {
+  const raw = rawOver(inner);
+  let count = 0;
+  const failing: RawConnection = {
+    ...raw,
+    prepare: (sql) => {
+      const statement = raw.prepare(sql);
+      return {
+        ...statement,
+        run: (params) => {
+          if (++count === n) throw new SqliteError(10, "disk I/O error");
+          return statement.run(params);
+        },
+      };
+    },
+  };
+  return new Connection(failing, "readwrite");
+}
+
+/** Flips one byte of chunk `chunkNo` of `cid`, as a bad sector would. */
+export function corruptChunk(driver: SqliteDriver, cid: Cid, chunkNo = 0): void {
+  const [row] = rows(driver, "SELECT bytes FROM object_chunks WHERE cid = ? AND chunk_no = ?", cid, chunkNo);
+  if (row === undefined) throw new Error(`${cid} has no chunk ${chunkNo}`);
+  const bytes = new Uint8Array(row["bytes"] as Uint8Array);
+  bytes[0] = (bytes[0] as number) ^ 0x01;
+  exec(driver, "UPDATE object_chunks SET bytes = ? WHERE cid = ? AND chunk_no = ?", bytes, cid, chunkNo);
+}
+
 /** Cuts the stored canonical bytes of `event` short, as a torn write would. */
 export function damageEvent(driver: SqliteDriver, event: Event): void {
   exec(driver, "UPDATE events SET canonical = ? WHERE event_id = ?", canonicalEventBytes(event).slice(0, -3), event.eventId);
@@ -132,6 +174,12 @@ export async function make(h: VaultHarness, target: string, now: () => number): 
 
 export async function reopen(h: VaultHarness, target: string, now: () => number, resetIdentity = false): Promise<Made> {
   const db = await openRuntime(await h.open(target, "readwrite"), { anchor: ANCHOR, resetIdentity });
+  return { vault: new SqliteVault(db, { now }), driver: db.driver };
+}
+
+/** The vault over the runtime `driver` holds, opened as a reopen would open it. */
+export async function vaultOver(driver: SqliteDriver, now: () => number): Promise<Made> {
+  const db = await openRuntime(driver, { anchor: ANCHOR });
   return { vault: new SqliteVault(db, { now }), driver: db.driver };
 }
 
@@ -206,6 +254,60 @@ export const vaultCases: VaultCase[] = [
         assertEqual(rows(driver, "SELECT accepted_seq, event_id FROM event_positions"), [{ accepted_seq: 1, event_id: events[0]?.eventId }], "one position");
       } finally {
         await vault.close();
+      }
+    },
+  },
+  {
+    name: "a commit drops the cache in the transaction that changes the accepted state under it — events with objects, events alone, a repair with its new event — an empty commit and a commit refused before its transaction leave it, and one whose transaction fails leaves it with the state",
+    run: async (h) => {
+      const c = clock();
+      const target = h.fresh();
+      const { vault, driver } = await make(h, target, c.now);
+      const cached = async (what: string, kept: boolean): Promise<void> => {
+        assertEqual(rows(driver, "SELECT count(*) AS n FROM local_cache"), [{ n: kept ? 1 : 0 }], what);
+        await vault.local.cache.put("projection", "events", HELLO);
+      };
+      await vault.local.cache.put("projection", "events", HELLO);
+      await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID], { i: 0 })]);
+      await cached("events with objects", false);
+      await vault.vault.commit([], [{ type: "test.erased", roots: [], data: { dropCids: [HELLO_CID] } }]);
+      await cached("events alone: what an erase is", false);
+      await vault.vault.commit([], []);
+      await cached("an empty commit", true);
+      await assertRejects(() => vault.vault.commit([], [draft([cidOf(bytesOf(9, 2))])]), "MissingRoot", "a commit refused at a root");
+      await cached("refused before its transaction", true);
+      corruptChunk(driver, HELLO_CID);
+      await assertRejects(() => vault.vault.objects.read(HELLO_CID, 5), "DamagedObject", "hello known damaged");
+      const events = await vault.vault.commit([{ cid: HELLO_CID, source: HELLO }], [draft([HELLO_CID], { i: 1 })]);
+      assertEqual(events.length, 1, "the repair lands with its event");
+      assertBytes((await vault.vault.objects.read(HELLO_CID, 5)) as Uint8Array, HELLO, "hello repaired");
+      await cached("a repair", false);
+      const { author, generation } = vault;
+      await vault.close();
+      // a transaction that fails after the cache is dropped: rolled back with the state
+      for (let n = 1; ; n++) {
+        const { vault: failing, driver: raw } = await vaultOver(failingAt(await h.open(target, "readwrite"), n), c.now);
+        const before = rows(raw, "SELECT count(*) AS n FROM events");
+        let landed: Event[] | undefined;
+        try {
+          landed = await failing.vault.commit([{ cid: WORLD_CID, source: WORLD }], [draft([WORLD_CID], { i: 2 })]);
+        } catch (err) {
+          assert(err instanceof SqliteError, `statement ${n}: ${String(err)}`);
+        } finally {
+          await failing.close();
+        }
+        const { vault: check, driver: after } = await reopen(h, target, c.now);
+        try {
+          if (landed !== undefined) {
+            assertEqual(rows(after, "SELECT count(*) AS n FROM local_cache"), [{ n: 0 }], "past the last statement: the cache dropped with the commit");
+            break;
+          }
+          assertEqual(rows(after, "SELECT count(*) AS n FROM events"), before, `statement ${n}: no event`);
+          assertEqual(rows(after, "SELECT count(*) AS n FROM local_cache"), [{ n: 1 }], `statement ${n}: the cache with the state it was built from`);
+          assertEqual([check.author, check.generation], [author, generation], `statement ${n}: the identity`);
+        } finally {
+          await check.close();
+        }
       }
     },
   },
