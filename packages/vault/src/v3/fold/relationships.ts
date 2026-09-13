@@ -8,9 +8,13 @@
  * equal edges are merged, so a contradiction in one duplicate is never
  * covered by another; what contradicts is a conflict, what is not here
  * yet defers the node and every node after it, and canonical time
- * chooses nothing. The two chains depend on each other — a local edge
- * needs input the peer chain gives scope to, a peer edge needs a local
- * key the local chain retains — so they are folded together until
+ * chooses nothing. The observations of one message are judged as a
+ * group: one whose resolution is absent or unchecked defers the whole
+ * group, one that contradicts its resolution conflicts it, and no
+ * observation of a group that is not complete witnesses a proof or
+ * confirms an address. The two chains depend on each other — a local
+ * edge needs input the peer chain gives scope to, a peer edge needs a
+ * local key the local chain retains — so they are folded together until
  * neither grows. The address index is every historical local DID
  * against every historical peer DID of every relationship; a pair two
  * relationships claim conflicts them both. What needs the retained
@@ -20,7 +24,7 @@
  * verdict is not in is deferred, never applied.
  */
 
-import { isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
+import { canonicalText, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
 import { isLongForm } from "@estoc/did-peer";
 
 import { rawCidOfBytes } from "../document.js";
@@ -31,7 +35,7 @@ import { authorizedMethodIds, canonicalDidOf, methodPublicKey, peerResolution } 
 import type { VaultEvent } from "../schema.js";
 import type { Cid, ContactId, Did, DidId, DidUrl, EventId, EventReference, KeyName, RelationshipId, VaultData } from "../types.js";
 import type { RouteFold } from "./routes.js";
-import { groupBy, samePayload, type VaultEventSet } from "./set.js";
+import { groupBy, type VaultEventSet } from "./set.js";
 
 /** A verdict on a proof or a snapshot from evidence outside the event set: the documents. */
 export type EvidenceCheck = "verified" | "invalid";
@@ -40,8 +44,8 @@ export interface LocalNode {
   readonly didId: DidId;
   readonly did: Did;
   readonly keyNames: { readonly authentication: KeyName; readonly keyAgreement: KeyName };
-  /** the transition that added the node, null for the root */
-  readonly edgeEventId: EventId | null;
+  /** every applied transition that adds the node, in canonical order; none for the root */
+  readonly edgeEventIds: readonly EventId[];
 }
 
 /** A peer address in a chain, with the exact document pinned for it: the binding's for the root, the transition's for a successor. */
@@ -50,8 +54,8 @@ export interface PeerNode {
   readonly resolutionEventId: EventReference<"peer.resolved">;
   readonly documentCid: Cid;
   readonly keyAgreementMethodIds: readonly DidUrl[];
-  /** the transition that added the node, null for the root */
-  readonly edgeEventId: EventId | null;
+  /** every applied transition that adds the node, in canonical order; none for the root */
+  readonly edgeEventIds: readonly EventId[];
 }
 
 /**
@@ -129,10 +133,10 @@ type PeerEdge = VaultEvent<"relationship.peerTransitioned">;
 type Receipt = VaultEvent<"message.in">;
 type Resolution = VaultEvent<"peer.resolved">;
 
-/** An edge judged on its own evidence: what contradicts and what is absent. */
 type Judged<E> = { edge: E; faults: string[]; deferred: string[] };
 
-/** What every check in one relationship reads. */
+type Group = { status: "complete" } | { status: "incomplete"; because: string } | { status: "conflict"; because: string };
+
 type Context = {
   set: VaultEventSet;
   routes: RouteFold;
@@ -140,11 +144,16 @@ type Context = {
   resolutionChecks: ReadonlyMap<EventId, EvidenceCheck>;
   receipts: readonly Receipt[];
   receiptsByMessage: ReadonlyMap<string, Receipt[]>;
+  groups: Map<string, Group>;
   bindingEventIds: readonly EventReference<"relationship.bound">[];
 };
 
 const pairKey = (localDid: Did, peerDid: Did) => JSON.stringify([localDid, peerDid]);
 const NO_CHECKS: ReadonlyMap<EventId, EvidenceCheck> = new Map();
+const PEER4_PREFIX = "did:peer:4";
+
+/** Control input starts no rotation, whatever else it may confirm. */
+const CONTROL_MESSAGE_TYPES: ReadonlySet<string> = new Set(["https://didcomm.org/empty/1.0/empty", "https://didcomm.org/trust-ping/2.0/ping-response", "https://didcomm.org/report-problem/2.0/problem-report"]);
 
 export function foldRelationships(set: VaultEventSet, routes: RouteFold, options: RelationshipFoldOptions = {}): RelationshipFold {
   const proofChecks = options.proofChecks ?? NO_CHECKS;
@@ -155,6 +164,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
   const peerEdges = groupBy(set.of("relationship.peerTransitioned"), (event) => event.data.relationshipId);
   const receipts = set.of("message.in");
   const receiptsByMessage = groupBy(receipts, (event) => event.data.messageId);
+  const groups = new Map<string, Group>();
   const ids = [...new Set([...bound.keys(), ...assigned.keys(), ...localEdges.keys(), ...peerEdges.keys()])].sort();
 
   const transitions = new Map<EventId, TransitionStatus>();
@@ -162,7 +172,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
   for (const id of ids) {
     const verdict: Verdict = { faults: [], deferred: [] };
     const bindings = bound.get(id) ?? [];
-    const context: Context = { set, routes, proofChecks, resolutionChecks, receipts, receiptsByMessage, bindingEventIds: bindings.map((event) => event.eventId as EventReference<"relationship.bound">) };
+    const context: Context = { set, routes, proofChecks, resolutionChecks, receipts, receiptsByMessage, groups, bindingEventIds: bindings.map((event) => event.eventId as EventReference<"relationship.bound">) };
     const { binding, root } = foldBinding(bindings, context, verdict);
 
     let localChain: LocalNode[] = [];
@@ -171,9 +181,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
       const chains = foldChains(root, localEdges.get(id) ?? [], peerEdges.get(id) ?? [], context, verdict, transitions);
       localChain = chains.local;
       peerChain = chains.peer;
-    } else {
-      for (const edge of [...(localEdges.get(id) ?? []), ...(peerEdges.get(id) ?? [])]) transitions.set(edge.eventId, { status: "deferred", because: "the relationship's binding does not stand" });
-    }
+    } else judgeUnrooted(localEdges.get(id) ?? [], peerEdges.get(id) ?? [], context, verdict, transitions);
 
     const contactIds = [...new Set((assigned.get(id) ?? []).map((event) => event.data.contactId))].sort();
     if (contactIds.length > 1) verdict.faults.push(`assigned to ${contactIds.length} contacts`);
@@ -314,13 +322,13 @@ function keyNamesOf(chain: readonly LocalNode[]): Set<KeyName> {
   return names;
 }
 
-function localNode(didId: DidId, did: Did, edgeEventId: EventId | null): LocalNode {
-  return { didId, did, keyNames: { authentication: didKeyName(didId, "authentication"), keyAgreement: didKeyName(didId, "key-agreement") }, edgeEventId };
+function localNode(didId: DidId, did: Did, edgeEventIds: readonly EventId[]): LocalNode {
+  return { didId, did, keyNames: { authentication: didKeyName(didId, "authentication"), keyAgreement: didKeyName(didId, "key-agreement") }, edgeEventIds };
 }
 
-function peerNode(resolution: Resolution, edgeEventId: EventId | null): PeerNode {
+function peerNode(resolution: Resolution, edgeEventIds: readonly EventId[]): PeerNode {
   const { did, documentCid, keyAgreementMethodIds } = resolution.data;
-  return { did, resolutionEventId: resolution.eventId as EventReference<"peer.resolved">, documentCid, keyAgreementMethodIds, edgeEventId };
+  return { did, resolutionEventId: resolution.eventId as EventReference<"peer.resolved">, documentCid, keyAgreementMethodIds, edgeEventIds };
 }
 
 /**
@@ -330,32 +338,55 @@ function peerNode(resolution: Resolution, edgeEventId: EventId | null): PeerNode
  * passes end, and the result is the same from any order of events.
  */
 function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[] } {
-  let local: { chain: LocalNode[]; complete: boolean } = { chain: [localNode(root.localDidId, root.localDid, null)], complete: false };
-  let peer: PeerNode[] = [peerNode(root.resolution, null)];
+  let local: { chain: LocalNode[]; complete: boolean } = { chain: [localNode(root.localDidId, root.localDid, [])], complete: false };
+  let peer: { chain: PeerNode[]; nodeByEdge: ReadonlyMap<EventId, PeerNode> } = { chain: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
   for (;;) {
     const pass: Verdict = { faults: [], deferred: [] };
     const statuses = new Map<EventId, TransitionStatus>();
-    const scope = scopeOf(context, peer);
+    const scope = scopeOf(context, peer.chain, peer.nodeByEdge);
     const nextLocal = foldLocalChain(root, localEdges, context, scope, pass, statuses);
     const nextPeer = foldPeerChain(root, peerEdges, context, nextLocal.chain, nextLocal.complete, pass, statuses);
-    const grew = nextLocal.chain.length > local.chain.length || nextPeer.length > peer.length;
+    const grew = nextLocal.chain.length > local.chain.length || nextPeer.chain.length > peer.chain.length;
     local = nextLocal;
     peer = nextPeer;
     if (!grew) {
       verdict.faults.push(...pass.faults);
       verdict.deferred.push(...pass.deferred);
       for (const [eventId, status] of statuses) transitions.set(eventId, status);
-      return { local: local.chain, peer };
+      return { local: local.chain, peer: peer.chain };
     }
   }
 }
 
 /**
- * The resolution an observation names, once it is here and says what
- * the observation says: the same local key, canonical DID and presented
- * spelling, and the observation's message ID derived from that key and
- * its wire ID. `missing` while the resolution is absent; `contradicted`
- * when it is here and disagrees, an observation no claim can rest on.
+ * While the binding does not stand, an edge can still be judged on
+ * what needs no root: a proof found invalid, a reference of another
+ * type, a successor snapshot that says otherwise, a trigger that could
+ * confirm nothing. Those are conflicts now; everything else waits.
+ */
+function judgeUnrooted(localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): void {
+  const unrooted: Scope = () => "incomplete";
+  const judged: Judged<LocalEdge | PeerEdge>[] = [...localEdges.map((edge) => judgeLocalEdge(edge, context, unrooted)), ...peerEdges.map((edge) => judgePeerEdge(edge, context, new Set(), false))];
+  for (const item of judged) {
+    if (item.faults.length > 0) {
+      verdict.faults.push(...item.faults.map((fault) => `${describeEdge(item.edge)}: ${fault}`));
+      transitions.set(item.edge.eventId, { status: "conflict", because: item.faults.join("; ") });
+    } else transitions.set(item.edge.eventId, { status: "deferred", because: [...item.deferred, "the relationship's binding does not stand"].join("; ") });
+  }
+}
+
+function describeEdge(edge: LocalEdge | PeerEdge): string {
+  return edge.type === "relationship.localTransitioned" ? `local edge ${edge.data.fromDidId} → ${edge.data.toDidId}` : `peer edge ${edge.data.fromDid} → ${edge.data.toDid}`;
+}
+
+/**
+ * The resolution an observation names, once it is here, checked against
+ * its document, and says what the observation says: the same local key,
+ * canonical DID and presented spelling, and the observation's message
+ * ID derived from that key and its wire ID. `missing` while the
+ * resolution is absent or its verdict is not in; `contradicted` when it
+ * disagrees or is not its document's, an observation no claim can rest
+ * on.
  */
 function authenticated(context: Context, receipt: Receipt): { status: "present"; resolution: Resolution } | { status: "missing" } | { status: "contradicted" } {
   const { peerResolutionEventId, localKeyName, did, presentedDid, messageId, wireMessageId } = receipt.data;
@@ -366,7 +397,43 @@ function authenticated(context: Context, receipt: Receipt): { status: "present";
   const { data } = resolved.event;
   if (data.localKeyName !== localKeyName || data.did !== did || data.presentedDid !== presentedDid) return { status: "contradicted" };
   if (inboundMessageId(data.peerPublicKey, wireMessageId) !== messageId) return { status: "contradicted" };
+  const check = context.resolutionChecks.get(resolved.event.eventId);
+  if (check === "invalid") return { status: "contradicted" };
+  if (check === undefined) return { status: "missing" };
   return { status: "present", resolution: resolved.event };
+}
+
+/**
+ * The observations of one message ID judged together: every one must
+ * be authenticated by its own resolution and they must agree on the
+ * intent and, where bound, on the relationship. One that contradicts
+ * conflicts the group; one whose evidence is not in defers it; either
+ * way nothing in the group witnesses or confirms until it is complete.
+ * Contradictions are found before absences.
+ */
+function groupOf(context: Context, messageId: string): Group {
+  const known = context.groups.get(messageId);
+  if (known !== undefined) return known;
+  const observations = context.receiptsByMessage.get(messageId) ?? [];
+  const conflicts: string[] = [];
+  const absent: string[] = [];
+  if (observations.some((receipt) => receipt.data.intentHash !== observations[0]!.data.intentHash)) conflicts.push(`the observations of message ${messageId} disagree on the intent`);
+  const relationshipIds = new Set<RelationshipId>();
+  for (const receipt of observations) {
+    const auth = authenticated(context, receipt);
+    if (auth.status === "contradicted") conflicts.push(`observation ${receipt.eventId} of message ${messageId} contradicts its resolution`);
+    else if (auth.status === "missing") absent.push(`observation ${receipt.eventId} of message ${messageId} awaits its resolution`);
+    const bindingEventId = receipt.data.relationshipBindingEventId;
+    if (bindingEventId === null) continue;
+    const binding = context.set.resolve(bindingEventId, "relationship.bound");
+    if (binding.status === "mismatched") conflicts.push(`observation ${receipt.eventId} of message ${messageId} names ${binding.event.type} as its binding`);
+    else if (binding.status === "missing") absent.push(`observation ${receipt.eventId} of message ${messageId} awaits its binding`);
+    else relationshipIds.add(binding.event.data.relationshipId);
+  }
+  if (relationshipIds.size > 1) conflicts.push(`the observations of message ${messageId} are bound to ${relationshipIds.size} relationships`);
+  const group: Group = conflicts.length > 0 ? { status: "conflict", because: conflicts.join("; ") } : absent.length > 0 ? { status: "incomplete", because: absent.join("; ") } : { status: "complete" };
+  context.groups.set(messageId, group);
+  return group;
 }
 
 /** Does this observation carry exactly the proof a peer edge names, at its key, from its successor, bound to this relationship if bound at all? */
@@ -382,18 +449,12 @@ function witnesses(bindingEventIds: readonly EventReference<"relationship.bound"
   );
 }
 
-/** The observations of one message ID disagree on the intent: the group can witness nothing until resolved. */
-function intentConflict(context: Context, messageId: string): boolean {
-  const group = context.receiptsByMessage.get(messageId) ?? [];
-  return group.some((receipt) => receipt.data.intentHash !== group[0]!.data.intentHash);
-}
-
 /**
  * Whether an observation has scope in this relationship, given the
- * peer chain as folded so far: `scoped` when its evidence is complete
- * and authorizes it — a proof-free root sender by the pinned root
- * document, a proof-free successor by the applied transition it names
- * and that transition's exact document, a carrier by an applied
+ * peer chain as folded so far: `scoped` when its group is complete and
+ * its evidence authorizes it — a proof-free root sender by the pinned
+ * root document, a proof-free successor by the applied transition it
+ * names and that transition's exact document, a carrier by an applied
  * transition it witnesses — `incomplete` while what would decide is
  * absent, `none` when the evidence here does not give it this scope.
  * Which local key it arrived at is the caller's to check against the
@@ -401,15 +462,14 @@ function intentConflict(context: Context, messageId: string): boolean {
  */
 type Scope = (receipt: Receipt) => "scoped" | "incomplete" | "none";
 
-function scopeOf(context: Context, peerChain: readonly PeerNode[]): Scope {
-  const nodeByEdge = new Map<EventId, PeerNode>();
-  for (const node of peerChain) if (node.edgeEventId !== null) nodeByEdge.set(node.edgeEventId, node);
+function scopeOf(context: Context, peerChain: readonly PeerNode[], nodeByEdge: ReadonlyMap<EventId, PeerNode>): Scope {
   const edges = context.set.of("relationship.peerTransitioned");
   const applied = edges.filter((edge) => nodeByEdge.has(edge.eventId));
   return (receipt) => {
+    const group = groupOf(context, receipt.data.messageId);
+    if (group.status !== "complete") return group.status === "incomplete" ? "incomplete" : "none";
     const auth = authenticated(context, receipt);
     if (auth.status !== "present") return auth.status === "missing" ? "incomplete" : "none";
-    if (intentConflict(context, receipt.data.messageId)) return "none";
     const { relationshipBindingEventId, peerTransitionEventId, fromPrior, messageId, localKeyName } = receipt.data;
     const { did, documentCid } = auth.resolution.data;
     if (fromPrior !== null) {
@@ -434,7 +494,8 @@ function scopeOf(context: Context, peerChain: readonly PeerNode[]): Scope {
  * the successor's entity, the proof's verdict, the trigger it names,
  * and whether input scoped to this relationship confirms the
  * predecessor at its own keys. The trigger must itself be such a
- * confirmation. Conflicts and absences are both collected in full.
+ * confirmation and application input, since control input starts no
+ * rotation. Conflicts and absences are both collected in full.
  */
 function judgeLocalEdge(edge: LocalEdge, context: Context, scope: Scope): Judged<LocalEdge> {
   const { fromDidId, toDidId, triggerEventId } = edge.data;
@@ -453,6 +514,7 @@ function judgeLocalEdge(edge: LocalEdge, context: Context, scope: Scope): Judged
     if (trigger.status === "mismatched") faults.push(`the trigger ${triggerEventId} is a ${trigger.event.type}`);
     else if (trigger.status === "missing") deferred.push(`the trigger ${triggerEventId} is not here`);
     else {
+      if (CONTROL_MESSAGE_TYPES.has(trigger.event.data.msgType)) faults.push(`the trigger ${triggerEventId} is control input, which starts no rotation`);
       const confirmation = confirms(trigger.event);
       if (confirmation === "none") faults.push(`the trigger ${triggerEventId} does not confirm ${fromDidId}`);
       else if (confirmation === "incomplete") deferred.push(`the trigger ${triggerEventId} awaits its evidence`);
@@ -464,10 +526,11 @@ function judgeLocalEdge(edge: LocalEdge, context: Context, scope: Scope): Judged
 
 /**
  * A peer edge judged on its own evidence, in every order the same: the
- * prior and successor resolutions it names, the successor's agreement
- * with the edge and its snapshot verdict, the local key's presence in
- * the local history, the observation that witnesses the proof, and the
- * proof's verdict. Conflicts and absences are both collected in full.
+ * prior and successor resolutions it names and their snapshot verdicts,
+ * the successor's agreement with the edge, the local key's presence in
+ * the local history, the observation group that witnesses the proof,
+ * and the proof's verdict. Conflicts and absences are both collected in
+ * full.
  */
 function judgePeerEdge(edge: PeerEdge, context: Context, recipientKeyNames: ReadonlySet<KeyName>, localComplete: boolean): Judged<PeerEdge> & { successor: Resolution | null } {
   const { fromDid, toDid, presentedToDid, localKeyName, peerPublicKey, priorResolutionEventId, peerResolutionEventId, messageId } = edge.data;
@@ -476,7 +539,12 @@ function judgePeerEdge(edge: PeerEdge, context: Context, recipientKeyNames: Read
   const prior = context.set.resolve(priorResolutionEventId, "peer.resolved");
   if (prior.status === "mismatched") faults.push(`the prior resolution is a ${prior.event.type}`);
   else if (prior.status === "missing") deferred.push("the prior resolution is not here");
-  else if (prior.event.data.did !== fromDid) faults.push(`the prior resolution is ${prior.event.data.did}'s, not ${fromDid}'s`);
+  else {
+    if (prior.event.data.did !== fromDid) faults.push(`the prior resolution is ${prior.event.data.did}'s, not ${fromDid}'s`);
+    const check = context.resolutionChecks.get(prior.event.eventId);
+    if (check === "invalid") faults.push("the prior resolution is not its document's");
+    else if (check === undefined) deferred.push("the prior resolution is not yet verified against its document");
+  }
   const resolved = context.set.resolve(peerResolutionEventId, "peer.resolved");
   let successor: Resolution | null = null;
   if (resolved.status === "mismatched") faults.push(`the successor's resolution is a ${resolved.event.type}`);
@@ -497,21 +565,19 @@ function judgePeerEdge(edge: PeerEdge, context: Context, recipientKeyNames: Read
     else deferred.push(`${localKeyName} is not yet in the local history`);
   }
   const candidates = context.receiptsByMessage.get(messageId) ?? [];
-  if (intentConflict(context, messageId)) faults.push(`the observations of message ${messageId} disagree on the intent`);
+  const group = groupOf(context, messageId);
+  if (group.status === "conflict") faults.push(group.because);
   else {
     let witness = false;
-    let incomplete = false;
     for (const receipt of candidates) {
-      if (!witnesses(context.bindingEventIds, receipt, edge.data)) {
+      if (witnesses(context.bindingEventIds, receipt, edge.data)) witness = true;
+      else {
         const binding = receipt.data.relationshipBindingEventId;
         if (binding !== null && !context.bindingEventIds.includes(binding) && context.set.resolve(binding, "relationship.bound").status === "present") faults.push(`observation ${receipt.eventId} of message ${messageId} is bound to another relationship`);
-        continue;
       }
-      const auth = authenticated(context, receipt);
-      if (auth.status === "present") witness = true;
-      else if (auth.status === "missing") incomplete = true;
     }
-    if (!witness) deferred.push(candidates.length === 0 ? `no observation of message ${messageId} is here` : incomplete ? `the observation of message ${messageId} awaits its resolution` : `no observation of message ${messageId} carries this proof at this key`);
+    if (!witness) deferred.push(candidates.length === 0 ? `no observation of message ${messageId} is here` : `no observation of message ${messageId} carries this proof at this key`);
+    if (group.status === "incomplete") deferred.push(group.because);
   }
   const check = context.proofChecks.get(edge.eventId);
   if (check === "invalid") faults.push("the proof does not verify against the pinned predecessor document");
@@ -519,23 +585,38 @@ function judgePeerEdge(edge: PeerEdge, context: Context, recipientKeyNames: Read
   return { edge, faults, deferred, successor };
 }
 
-/** Equal transitions among the judged edges, grouped by predecessor; an edge with a fault of its own is settled first and never grouped. */
-function classesOf<E extends LocalEdge | PeerEdge, K>(judged: readonly Judged<E>[], describe: (edge: E) => string, predecessorOf: (edge: E) => K, sameTransition: (a: Judged<E>, b: Judged<E>) => boolean, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): Map<K, Judged<E>[][]> {
+/**
+ * Equal transitions among the judged edges, grouped by predecessor. An
+ * edge with a fault of its own is settled first and never grouped; a
+ * class whose members contradict each other is settled as a whole; a
+ * predecessor with more than one class has competing successors, and
+ * every edge leaving it conflicts.
+ */
+function classesOf<E extends LocalEdge | PeerEdge, K>(judged: readonly Judged<E>[], describe: (edge: E) => string, predecessorOf: (edge: E) => K, classKey: (edge: E) => string, contradiction: (cls: readonly Judged<E>[]) => string | null, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): Map<K, Judged<E>[][]> {
   const classes = new Map<K, Judged<E>[][]>();
+  const keys = new Map<Judged<E>[], string>();
   for (const item of judged) {
     if (item.faults.length > 0) {
       verdict.faults.push(...item.faults.map((fault) => `${describe(item.edge)}: ${fault}`));
       statuses.set(item.edge.eventId, { status: "conflict", because: item.faults.join("; ") });
       continue;
     }
-    const key = predecessorOf(item.edge);
-    const list = classes.get(key) ?? [];
-    classes.set(key, list);
-    const same = list.find((cls) => sameTransition(cls[0]!, item));
-    if (same === undefined) list.push([item]);
-    else same.push(item);
+    const list = classes.get(predecessorOf(item.edge)) ?? [];
+    classes.set(predecessorOf(item.edge), list);
+    const key = classKey(item.edge);
+    const same = list.find((cls) => keys.get(cls) === key);
+    if (same === undefined) {
+      list.push([item]);
+      keys.set(list.at(-1)!, key);
+    } else same.push(item);
   }
   for (const [from, list] of classes) {
+    for (const cls of list) {
+      const because = contradiction(cls);
+      if (because === null) continue;
+      verdict.faults.push(`${describe(cls[0]!.edge)}: ${because}`);
+      for (const item of cls) statuses.set(item.edge.eventId, { status: "conflict", because });
+    }
     if (list.length < 2) continue;
     verdict.faults.push(`competing successors of ${String(from)}`);
     for (const cls of list) for (const item of cls) statuses.set(item.edge.eventId, { status: "conflict", because: `competing successors of ${String(from)}` });
@@ -544,16 +625,16 @@ function classesOf<E extends LocalEdge | PeerEdge, K>(judged: readonly Judged<E>
 }
 
 /** A class applies when one of its equal edges is complete; the others keep their own absences on record until their evidence is in. */
-function settleClass<E extends LocalEdge | PeerEdge>(cls: readonly Judged<E>[], describe: (edge: E) => string, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): Judged<E> | null {
-  const complete = cls.find((item) => item.deferred.length === 0) ?? null;
+function settleClass<E extends LocalEdge | PeerEdge>(cls: readonly Judged<E>[], describe: (edge: E) => string, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): Judged<E>[] {
+  const applied = cls.filter((item) => item.deferred.length === 0);
   for (const item of cls) {
     if (item.deferred.length === 0) statuses.set(item.edge.eventId, { status: "applied" });
     else {
-      if (complete === null) verdict.deferred.push(...item.deferred.map((why) => `${describe(item.edge)}: ${why}`));
+      if (applied.length === 0) verdict.deferred.push(...item.deferred.map((why) => `${describe(item.edge)}: ${why}`));
       statuses.set(item.edge.eventId, { status: "deferred", because: item.deferred.join("; ") });
     }
   }
-  return complete;
+  return applied;
 }
 
 /** Every class the walk did not reach: its edges wait for a rooted prefix, or for their own evidence. */
@@ -567,6 +648,7 @@ function settleUnreached<E extends LocalEdge | PeerEdge, K>(classes: ReadonlyMap
     for (const cls of list) {
       if (reached.has(cls)) continue;
       all = false;
+      if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") continue;
       for (const item of cls) {
         const because = [...item.deferred, "no rooted prefix reaches the edge"].join("; ");
         verdict.deferred.push(`${describe(item.edge)}: ${because}`);
@@ -578,10 +660,9 @@ function settleUnreached<E extends LocalEdge | PeerEdge, K>(classes: ReadonlyMap
 }
 
 function foldLocalChain(root: Root, edges: readonly LocalEdge[], context: Context, scope: Scope, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): { chain: LocalNode[]; complete: boolean } {
-  const describe = (edge: LocalEdge) => `local edge ${edge.data.fromDidId} → ${edge.data.toDidId}`;
   const judged = edges.map((edge) => judgeLocalEdge(edge, context, scope));
-  const classes = classesOf(judged, describe, (edge) => edge.data.fromDidId, (a, b) => samePayload(a.edge.data, b.edge.data), verdict, statuses);
-  const chain = [localNode(root.localDidId, root.localDid, null)];
+  const classes = classesOf(judged, describeEdge, (edge) => edge.data.fromDidId, (edge) => canonicalText(edge.data), () => null, verdict, statuses);
+  const chain = [localNode(root.localDidId, root.localDid, [])];
   const inChain = new Set([root.localDidId]);
   const reached = new Set<Judged<LocalEdge>[]>();
   let stopped = false;
@@ -591,36 +672,44 @@ function foldLocalChain(root: Root, edges: readonly LocalEdge[], context: Contex
     const cls = list[0]!;
     reached.add(cls);
     const { toDidId } = cls[0]!.edge.data;
+    if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") {
+      stopped = true;
+      break;
+    }
     if (inChain.has(toDidId)) {
-      verdict.faults.push(`${describe(cls[0]!.edge)}: ${toDidId} is already in the local chain`);
+      verdict.faults.push(`${describeEdge(cls[0]!.edge)}: ${toDidId} is already in the local chain`);
       for (const item of cls) statuses.set(item.edge.eventId, { status: "conflict", because: `${toDidId} is already in the local chain` });
       stopped = true;
       break;
     }
-    const complete = settleClass(cls, describe, verdict, statuses);
-    if (complete === null) {
+    const applied = settleClass(cls, describeEdge, verdict, statuses);
+    if (applied.length === 0) {
       stopped = true;
       break;
     }
-    node = localNode(toDidId, context.routes.dids.get(toDidId)!.created!.did, complete.edge.eventId);
+    node = localNode(toDidId, context.routes.dids.get(toDidId)!.created!.did, applied.map((item) => item.edge.eventId));
     chain.push(node);
     inChain.add(toDidId);
   }
-  const allReached = settleUnreached(classes, reached, describe, verdict, statuses);
+  const allReached = settleUnreached(classes, reached, describeEdge, verdict, statuses);
   return { chain, complete: !stopped && allReached && judged.every((item) => item.faults.length === 0) };
 }
 
-function foldPeerChain(root: Root, edges: readonly PeerEdge[], context: Context, localChain: readonly LocalNode[], localComplete: boolean, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): PeerNode[] {
-  const describe = (edge: PeerEdge) => `peer edge ${edge.data.fromDid} → ${edge.data.toDid}`;
+/**
+ * Peer edges are the same transition when they carry one proof to one
+ * successor DID; their successor snapshots must then be one document.
+ * A snapshot not here yet is not a second document, so such a
+ * duplicate shares the class and waits on its own; two snapshots here
+ * that differ contradict the class.
+ */
+function foldPeerChain(root: Root, edges: readonly PeerEdge[], context: Context, localChain: readonly LocalNode[], localComplete: boolean, verdict: Verdict, statuses: Map<EventId, TransitionStatus>): { chain: PeerNode[]; nodeByEdge: ReadonlyMap<EventId, PeerNode> } {
   const recipientKeyNames = keyNamesOf(localChain);
   const judged = edges.map((edge) => judgePeerEdge(edge, context, recipientKeyNames, localComplete));
   const successorOf = new Map(judged.map((item) => [item.edge, item.successor] as const));
-  const sameTransition = (a: Judged<PeerEdge>, b: Judged<PeerEdge>) => {
-    const [sa, sb] = [successorOf.get(a.edge), successorOf.get(b.edge)];
-    return a.edge.data.fromPrior === b.edge.data.fromPrior && a.edge.data.toDid === b.edge.data.toDid && sa != null && sb != null && sa.data.documentCid === sb.data.documentCid;
-  };
-  const classes = classesOf(judged, describe, (edge) => edge.data.fromDid, sameTransition, verdict, statuses);
-  const chain = [peerNode(root.resolution, null)];
+  const twoDocuments = (cls: readonly Judged<PeerEdge>[]) => (new Set(cls.flatMap((item) => (successorOf.get(item.edge) === null ? [] : [successorOf.get(item.edge)!.data.documentCid]))).size > 1 ? "one proof pins two successor documents" : null);
+  const classes = classesOf(judged, describeEdge, (edge) => edge.data.fromDid, (edge) => canonicalText([edge.data.fromPrior, edge.data.toDid]), twoDocuments, verdict, statuses);
+  const chain = [peerNode(root.resolution, [])];
+  const nodeByEdge = new Map<EventId, PeerNode>();
   const inChain = new Set([root.peerDid]);
   const reached = new Set<Judged<PeerEdge>[]>();
   for (let node = chain[0]!; ; ) {
@@ -628,6 +717,7 @@ function foldPeerChain(root: Root, edges: readonly PeerEdge[], context: Context,
     if (list === undefined || list.length !== 1) break;
     const cls = list[0]!;
     reached.add(cls);
+    if (statuses.get(cls[0]!.edge.eventId)?.status === "conflict") break;
     const { toDid } = cls[0]!.edge.data;
     const faults: string[] = [];
     if (inChain.has(toDid)) faults.push(`${toDid} is already in the peer chain`);
@@ -636,18 +726,19 @@ function foldPeerChain(root: Root, edges: readonly PeerEdge[], context: Context,
       if (prior.status === "present" && prior.event.data.documentCid !== node.documentCid) faults.push("the prior resolution is not the chain's document");
     }
     if (faults.length > 0) {
-      verdict.faults.push(...faults.map((fault) => `${describe(cls[0]!.edge)}: ${fault}`));
+      verdict.faults.push(...faults.map((fault) => `${describeEdge(cls[0]!.edge)}: ${fault}`));
       for (const item of cls) statuses.set(item.edge.eventId, { status: "conflict", because: faults.join("; ") });
       break;
     }
-    const complete = settleClass(cls, describe, verdict, statuses);
-    if (complete === null) break;
-    node = peerNode(successorOf.get(complete.edge)!, complete.edge.eventId);
+    const applied = settleClass(cls, describeEdge, verdict, statuses);
+    if (applied.length === 0) break;
+    node = peerNode(successorOf.get(applied[0]!.edge)!, applied.map((item) => item.edge.eventId));
+    for (const item of applied) nodeByEdge.set(item.edge.eventId, node);
     chain.push(node);
     inChain.add(toDid);
   }
-  settleUnreached(classes, reached, describe, verdict, statuses);
-  return chain;
+  settleUnreached(classes, reached, describeEdge, verdict, statuses);
+  return { chain, nodeByEdge };
 }
 
 /**
@@ -709,8 +800,11 @@ export type ReadObject = (cid: Cid) => Promise<Uint8Array | null>;
  * The document a resolution names, as the vault retains it: for a
  * numalgo-4 long form derived from the spelling itself, for anything
  * else read from the object store by CID and checked to be those
- * bytes. Null while the object is not here; a throw when what is here
- * is not the document the resolution says.
+ * bytes. A numalgo-4 document read back must be exactly what its own
+ * long form derives, since that derivation is the only retained
+ * representation and a document's `id` alone is any key's to claim.
+ * Null while the object is not here; a throw when what is here is not
+ * the document the resolution says.
  */
 async function documentOf(resolution: VaultData["peer.resolved"], readObject: ReadObject): Promise<JsonObject | null> {
   if (isLongForm(resolution.presentedDid)) {
@@ -731,7 +825,11 @@ async function documentOf(resolution: VaultData["peer.resolved"], readObject: Re
   if (!isJsonObject(document)) throw new InvalidDidDocument("the retained document is a JSON object");
   const id = document["id"];
   if (typeof id !== "string" || canonicalDidOf(id) !== resolution.did) throw new InvalidDidDocument(`the retained document is not ${resolution.did}'s`);
-  return document;
+  if (!resolution.did.startsWith(PEER4_PREFIX)) return document;
+  if (!isLongForm(id)) throw new InvalidDidDocument("the retained document's id is not the long form");
+  const derived = peerResolution(id);
+  if (derived.cid !== resolution.documentCid) throw new InvalidDidDocument(`the retained document is not what ${id} derives`);
+  return derived.document;
 }
 
 const sameIds = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((id, i) => id === b[i]);

@@ -186,7 +186,7 @@ export async function readRoot(blobs: BlobStore, fold: VaultFold, mid: string, r
 // ---- deleting a contact -----------------------------------------------------
 
 /**
- * Step 2, on its own and idempotent: for every channel attributed exactly
+ * On its own and idempotent: for every channel attributed exactly
  * to a deleted contact, erase every message's roots that are not erased
  * yet — what this device sees that the deleting device had not.
  * Returns the erases appended; collection is the caller's next step.

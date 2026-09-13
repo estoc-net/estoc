@@ -98,27 +98,36 @@
   distinct addresses deriving the ID — and folds the two chains from
   it. The local chain follows `relationship.localTransitioned`, the
   peer chain `relationship.peerTransitioned`; every edge is judged on
-  its own evidence first — a successor entity in conflict, a
-  predecessor or successor reference of another type, a successor
-  resolution that says otherwise or whose snapshot is not its
-  document's, a local key outside a complete local history, a carrier
-  bound elsewhere or whose observation group disputes the intent, a
-  trigger that confirms nothing, a proof found invalid are its own
-  conflicts; the proof check, the successor's creation or resolution
-  and its snapshot verdict, a witnessing observation that derives its
-  message ID from its resolution, the predecessor's confirmation by
-  input scoped to this relationship are what it waits for — and only
-  then are equal edges merged, so a contradiction in one duplicate is
-  never covered by another; at each node the one class leaving it is
-  applied, a cycle or a predecessor snapshot that is not the chain's
-  document conflicts, competing classes conflict, and no timestamp
-  ever picks a branch. A local edge's predecessor is confirmed only by
-  an observation whose scope in the relationship is complete: a root
-  sender under the pinned root document, a successor under the applied
-  transition it names, or a carrier under the applied transition it
-  witnesses, bound or not; since that scope comes from the peer chain
-  and a peer edge's key from the local chain, the two are folded
-  together until neither grows. Each relationship exposes
+  its own evidence first, whether or not the binding stands yet — a
+  successor entity in conflict, a predecessor or successor reference
+  of another type, a prior or successor resolution that says otherwise
+  or whose snapshot is not its document's, a local key outside a
+  complete local history, a carrier bound elsewhere or whose
+  observation group is in conflict, a trigger that confirms nothing or
+  is control input, a proof found invalid are its own conflicts; the
+  proof check, the successor's creation or resolution and the snapshot
+  verdicts, a witnessing observation in a complete group, the
+  predecessor's confirmation by input scoped to this relationship are
+  what it waits for — and only then are equal edges merged (one proof
+  to one successor DID; a successor snapshot not here yet is no second
+  document, two here that differ are), so a contradiction in one
+  duplicate is never covered by another; at each node the one class
+  leaving it is applied and every applied member names the node, a
+  cycle or a predecessor snapshot that is not the chain's document
+  conflicts, competing classes conflict, and no timestamp ever picks a
+  branch. The observations of one message are judged as a group: one
+  whose resolution is absent or unchecked defers the whole group, one
+  that contradicts its resolution — another key, another spelling, a
+  message ID it does not derive, a snapshot that is not its
+  document's — conflicts it, and nothing in a group that is not
+  complete witnesses a proof or confirms an address. A local edge's
+  predecessor is confirmed only by an observation whose scope in the
+  relationship is complete: a root sender under the pinned root
+  document, a successor under any applied transition it names, or a
+  carrier under the applied transition it witnesses, bound or not;
+  since that scope comes from the peer chain and a peer edge's key
+  from the local chain, the two are folded together until neither
+  grows. Each relationship exposes
   `localChain`, `peerChain`, `currentLocalDidId`, `currentPeerDid`,
   `recipientKeyNames`, the one `contactId` or a conflict of several,
   `deferred` and `faults`. The fold exposes every transition's status,
@@ -129,9 +138,10 @@
   carrier whose proof names its sender and has no applied transition,
   or a deferred edge at every pair it would add. Beside the fold,
   `verifyResolutions` checks every `peer.resolved` snapshot against its
-  own document — derived from a numalgo-4 long form or read from the
-  object store under its CID — for the method IDs it enumerates and
-  the key it authenticates, and `verifyTransitions` checks every proof
+  own document — derived from a numalgo-4 long form, or read from the
+  object store under its CID and, for a numalgo-4 DID, required to be
+  exactly what its own long form derives — for the method IDs it
+  enumerates and the key it authenticates, and `verifyTransitions` checks every proof
   against the exact predecessor document, a local edge's against the
   predecessor entity's own, a peer edge's against the named prior
   resolution's; `foldRelationshipsVerified` folds with both verdicts
