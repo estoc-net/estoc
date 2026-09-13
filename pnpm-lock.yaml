@@ -387,7 +387,7 @@ importers:
         specifier: workspace:^
         version: link:../keystore
       '@noble/curves':
-        specifier: ^1.9.0
+        specifier: ^1.9.7
         version: 1.9.7
       '@noble/hashes':
         specifier: ^1.8.0
@@ -398,6 +398,9 @@ importers:
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
+      multiformats:
+        specifier: ^14.0.5
+        version: 14.0.5
       uuid:
         specifier: ^11.1.1
         version: 11.1.1

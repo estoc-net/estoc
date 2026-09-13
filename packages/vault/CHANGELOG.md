@@ -10,7 +10,8 @@
   the reserved keystore names — and `canonicalPublicKey`, the did:key
   encoding a supported key's JWK or base58btc multibase form normalizes
   to, a Weierstrass point verified on its curve by `@noble/curves`,
-  base58btc and base64url by `@scure/base`, with `parsePublicKey` for the exact canonical form and
+  base58btc and base64url by `@scure/base`, the multicodec prefix by
+  `multiformats`, with `parsePublicKey` for the exact canonical form and
   `decodePublicKey` for its type and bytes. Each is checked against
   the published identifier and public-key vectors.
 

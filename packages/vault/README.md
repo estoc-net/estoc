@@ -25,7 +25,7 @@ reserved keystore names) and the canonical public-key value
 as base58btc multibase, from a JWK or from its base58btc multibase form,
 Ed25519 and X25519 raw, the Weierstrass curves as compressed points that
 `@noble/curves` has verified lie on the curve; `@scure/base` does the
-base58btc and base64url). Every published
+base58btc and base64url, `multiformats` the multicodec prefix). Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`.
 

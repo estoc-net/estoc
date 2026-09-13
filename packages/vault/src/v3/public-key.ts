@@ -10,6 +10,7 @@
 import { p256, p384, p521 } from "@noble/curves/nist";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { base58, base64urlnopad } from "@scure/base";
+import { varint } from "multiformats";
 
 import { InvalidPublicKey } from "./errors.js";
 import type { PublicKey } from "./types.js";
@@ -35,7 +36,7 @@ const CODECS: readonly Codec[] = [
   { type: "P-521", code: 0x1202, size: 66, curve: p521 },
 ];
 
-/** A decoded public key: its type and the raw bytes did:key tags, a compressed point when the curve has points. */
+/** A decoded public key: its type and the raw bytes did:key tags, a SEC 1 compressed point for a Weierstrass curve. */
 export interface DecodedPublicKey {
   readonly type: KeyType;
   readonly bytes: Uint8Array;
@@ -46,29 +47,19 @@ export interface Jwk {
   readonly [member: string]: unknown;
 }
 
-function encodeVarint(code: number): number[] {
-  const out: number[] = [];
-  let n = code;
-  while (n >= 0x80) {
-    out.push((n & 0x7f) | 0x80);
-    n >>>= 7;
-  }
-  out.push(n);
-  return out;
+function codePrefix(code: number): Uint8Array {
+  const prefix = new Uint8Array(varint.encodingLength(code));
+  varint.encodeTo(code, prefix);
+  return prefix;
 }
 
-/** The code and its width; a code that is not minimally encoded is refused, which the varint libraries do not check. */
-function decodeVarint(bytes: Uint8Array): { code: number; length: number } {
-  let code = 0;
-  for (let i = 0; i < bytes.length && i < 4; i++) {
-    const byte = bytes[i] as number;
-    code |= (byte & 0x7f) << (7 * i);
-    if ((byte & 0x80) === 0) {
-      if (encodeVarint(code).length !== i + 1) throw new InvalidPublicKey("multicodec code is not minimally encoded");
-      return { code, length: i + 1 };
-    }
+/** The multicodec code and its width, refused unless minimally encoded. */
+function decodeCode(bytes: Uint8Array): [code: number, length: number] {
+  try {
+    return varint.decode(bytes);
+  } catch {
+    throw new InvalidPublicKey("not a multicodec-prefixed key");
   }
-  throw new InvalidPublicKey("multicodec code is not an unsigned varint of at most four bytes");
 }
 
 function codecOf(type: KeyType): Codec {
@@ -76,7 +67,7 @@ function codecOf(type: KeyType): Codec {
 }
 
 function encode(codec: Codec, bytes: Uint8Array): PublicKey {
-  return ("z" + base58.encode(Uint8Array.from([...encodeVarint(codec.code), ...bytes]))) as PublicKey;
+  return ("z" + base58.encode(Uint8Array.from([...codePrefix(codec.code), ...bytes]))) as PublicKey;
 }
 
 /** The compressed form of a SEC 1 point that the curve accepts, in any SEC 1 encoding. */
@@ -96,7 +87,7 @@ function decodeMultibase(text: string): { codec: Codec; bytes: Uint8Array } {
   } catch {
     throw new InvalidPublicKey("not a base58btc multibase value");
   }
-  const { code, length } = decodeVarint(decoded);
+  const [code, length] = decodeCode(decoded);
   const codec = CODECS.find((c) => c.code === code);
   if (codec === undefined) throw new InvalidPublicKey(`unsupported public-key multicodec 0x${code.toString(16)}`);
   const bytes = decoded.subarray(length);
