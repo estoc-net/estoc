@@ -240,7 +240,6 @@ function readStoredData(value: unknown, at: string): StoredAttachmentData {
   return { kind, root: value.root, hash: nullable(value.hash, `${at}.hash`, multihash), jws };
 }
 
-/** The JSON value of a stored payload, which must be its own RFC 8785 serialization. */
 function canonicalJsonPayload(payload: Uint8Array, root: Cid): JsonValue {
   const value = parseStrict(payload);
   if (canonicalText(value) !== new TextDecoder().decode(payload)) throw new InvalidPlaintext(`the JSON payload ${root} is not in canonical form`);

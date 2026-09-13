@@ -40,9 +40,10 @@ form with its payload objects and roots, `readStoredDocument` reads that
 form back, `wireAttachment` puts a descriptor back on the wire only from
 a payload of the stored byte count that is, for JSON, already canonical)
 and the projections (`projection.ts`: `readPlaintext` takes a plaintext
-apart into intent, stored content and addressing, `semanticProjection` /
-`intentProjection` / `intentHash` / `plaintextHash` are the hashes the
-events carry, `wirePlaintext` is the inverse of `readPlaintext`, and
+apart into intent, stored content and addressing, `semanticProjection`
+and `intentProjection` return the projection objects, `intentHash` and
+`plaintextHash` compute the hashes the events carry over the intent
+projection and the exact plaintext, `wirePlaintext` is the inverse of `readPlaintext`, and
 `expandPleaseAck` / `requestsAck` read `please_ack` without rewriting
 it). Every published identifier and public-key vector of those documents
 is a test in `test/v3/`.
