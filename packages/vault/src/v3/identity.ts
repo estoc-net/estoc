@@ -156,7 +156,7 @@ export async function mintMediationDid(keys: Keys, mediationId: MediationId): Pr
   return localDidOf(inputDocumentOf(await keys.mediationKeys(mediationId), null));
 }
 
-function routeServiceUri(route: RouteTarget): string {
+export function routeServiceUri(route: RouteTarget): string {
   return route.kind === "mediated" ? route.routingDid : route.endpoint;
 }
 
@@ -177,28 +177,53 @@ function holdsKey(resolution: PeerResolution, relationship: "authentication" | "
 }
 
 /**
- * A recorded DID entity against the seed and its bound route: the long
- * form must resolve, `did` must be its short form, its authentication
- * and key-agreement methods must carry the entity's two keys and its
- * one DIDComm service must send to the route. A long form that does
- * not resolve throws `InvalidDidDocument`.
+ * The document a recorded DID entity encodes, read for what does not
+ * need the seed: the long form must resolve and `did` must be its
+ * short form. A long form that does not resolve throws
+ * `InvalidDidDocument`.
  */
-export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">, route: RouteTarget): Promise<void> {
-  const entity = `DID entity ${created.didId}`;
+export function didDocumentOf(created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">): PeerResolution {
   const resolution = peerResolution(created.longFormDid);
-  if (resolution.did !== created.did) throw new IdentityMismatch(`${entity} records ${created.did}, not the short form of its long form`);
-  const { authentication, keyAgreement } = await keys.didKeys(created.didId);
+  if (resolution.did !== created.did) throw new IdentityMismatch(`DID entity ${created.didId} records ${created.did}, not the short form of its long form`);
+  return resolution;
+}
+
+/** Does the document send to exactly one DIDComm endpoint, the route's target? */
+export function documentSendsTo(document: JsonObject, route: RouteTarget): boolean {
+  const uris = didcommServiceUris(document);
+  return uris.length === 1 && uris[0] === routeServiceUri(route);
+}
+
+/** A DID entity's document against the seed: its authentication and key-agreement methods must carry the entity's two keys. */
+export async function checkDidKeys(keys: Keys, didId: DidId, resolution: PeerResolution): Promise<void> {
+  const entity = `DID entity ${didId}`;
+  const { authentication, keyAgreement } = await keys.didKeys(didId);
   holdsKey(resolution, "authentication", authentication, entity);
   holdsKey(resolution, "keyAgreement", keyAgreement, entity);
-  const uris = didcommServiceUris(resolution.document);
-  if (uris.length !== 1 || uris[0] !== routeServiceUri(route)) throw new IdentityMismatch(`${entity} sends to ${JSON.stringify(uris)}, not its bound route`);
+}
+
+/** A mediation arrangement's own document against the seed: its methods must carry the two keys the arrangement's name derives. */
+export async function checkMediationKeys(keys: Keys, mediationId: MediationId, resolution: PeerResolution): Promise<void> {
+  const entity = `mediation ${mediationId}`;
+  const { authentication, keyAgreement } = await keys.mediationKeys(mediationId);
+  holdsKey(resolution, "authentication", authentication, entity);
+  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
+}
+
+/**
+ * A recorded DID entity against the seed and its bound route: the
+ * document must read, carry the entity's two keys and send to the
+ * route. A long form that does not resolve throws `InvalidDidDocument`.
+ */
+export async function checkDidCreated(keys: Keys, created: Pick<VaultData["did.created"], "didId" | "did" | "longFormDid">, route: RouteTarget): Promise<void> {
+  const resolution = didDocumentOf(created);
+  await checkDidKeys(keys, created.didId, resolution);
+  if (!documentSendsTo(resolution.document, route)) {
+    throw new IdentityMismatch(`DID entity ${created.didId} sends to ${JSON.stringify(didcommServiceUris(resolution.document))}, not its bound route`);
+  }
 }
 
 /** A recorded mediation arrangement against the seed: `me.did` must resolve to the two keys the arrangement's name derives. */
 export async function checkMediationCreated(keys: Keys, created: Pick<VaultData["mediation.created"], "mediationId" | "me">): Promise<void> {
-  const entity = `mediation ${created.mediationId}`;
-  const resolution = peerResolution(created.me.did);
-  const { authentication, keyAgreement } = await keys.mediationKeys(created.mediationId);
-  holdsKey(resolution, "authentication", authentication, entity);
-  holdsKey(resolution, "keyAgreement", keyAgreement, entity);
+  await checkMediationKeys(keys, created.mediationId, peerResolution(created.me.did));
 }

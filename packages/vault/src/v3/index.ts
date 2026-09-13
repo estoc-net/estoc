@@ -3,8 +3,10 @@
  * here so far: the identifier vocabulary, the deterministic identifiers,
  * the canonical public-key value, the schema of every event type, the
  * stored message document, the projections a message is hashed by,
- * the vault's own keys and DIDs, the retained peer document and the
- * `from_prior` proof.
+ * the vault's own keys and DIDs, the retained peer document, the
+ * `from_prior` proof, and the first folds: the event set they read,
+ * the authors and label, the mediations, the routes and local DIDs,
+ * the invitations and the contacts' own decisions.
  */
 
 export type {
@@ -120,6 +122,11 @@ export {
   inputDocumentOf,
   mintDid,
   mintMediationDid,
+  didDocumentOf,
+  documentSendsTo,
+  routeServiceUri,
+  checkDidKeys,
+  checkMediationKeys,
   checkDidCreated,
   checkMediationCreated,
 } from "./identity.js";
@@ -136,3 +143,30 @@ export {
 } from "./peer-document.js";
 
 export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, verifyFromPrior } from "./from-prior.js";
+
+export { VaultEventSet, type InvalidVaultEvent, type Resolved, latest, groupBy, samePayload } from "./fold/set.js";
+export { type AuthorActivity, foldAuthors, foldLabel } from "./fold/author.js";
+export {
+  type KeyCheck,
+  type IdentityCheck,
+  type MediationStatus,
+  type Mediation,
+  type MediationFold,
+  type MediationFoldOptions,
+  foldMediations,
+  verifyMediationKeys,
+} from "./fold/mediation.js";
+export {
+  type Route,
+  type LocalDidEntity,
+  type DesiredRecipient,
+  type ReceiptEligibility,
+  type RouteFold,
+  type RouteFoldOptions,
+  foldRoutes,
+  verifyDidKeys,
+  foldWithSeed,
+  requiredReceivingSet,
+} from "./fold/routes.js";
+export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
+export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";

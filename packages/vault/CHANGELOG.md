@@ -52,6 +52,44 @@
   `verifyFromPrior` are the compact EdDSA JWT over `jose`, verified
   against the exact pinned predecessor document only. `@estoc/did-peer`
   exports `decodeLongForm`.
+- **The first version-3 folds**, under `fold/`: `VaultEventSet` holds
+  every event once by ID, reads each version-3 event against its schema
+  on entry and keeps an invalid or unknown-typed one for its roots
+  without applying it, hands a type's events out in canonical order and
+  resolves a typed reference to its target as present, missing or
+  mismatched. `foldAuthors` and `foldLabel`; `foldMediations` (one
+  consistent creation, one grant, retirement, conflicts, the preferred
+  arrangement); `foldRoutes` (each route's consistent configuration,
+  retirement, conflict, usability and terminal dependency; each local
+  DID entity's consistent record, own document read back, route target,
+  disclosures in canonical order, retirement, faults, conflict and
+  liveness; the reverse maps from key name and from either spelling to
+  the entity; the desired mediator recipient set; whether an entity may
+  still receive, eligible, pending or terminal, what is terminal
+  settled before what is missing); `requiredReceivingSet`;
+  `foldInvitations` (each one-use OOB disclosure's consumers, read from
+  the root-address receipts that name it as `pthid` at the disclosed DID
+  through a binding whose own evidence holds together, pending receipts
+  whose evidence is missing and which hold a one-use invitation until
+  it arrives, inconsistent receipts that the evidence already here
+  contradicts, which hold nothing, the conflicts — disclosures of one ID that
+  disagree, two consumers of one use — availability and `consumable`,
+  consumable, pending or unavailable, so a caller waits on what is
+  missing and turns away only what is settled); `foldContacts` (origin,
+  tombstone,
+  petname, flags, DID preference, peer DID seeds by exact add reference,
+  display groups from `contact.merged`, and faults for a removal that
+  names nothing it can remove). Every fold is a pure function of the
+  set, the same over any permutation. `verifyDidKeys` and
+  `verifyMediationKeys` run the seed check beside the fold and return the
+  verdicts a fold takes as `keyChecks`, and `foldWithSeed` does both
+  folds with every verdict in; an entity or arrangement the seed has not
+  confirmed is pending, never live, usable, preferred, desired or
+  required. A document that does not read, or that sends elsewhere than
+  its bound route, is that entity's conflict and stops nothing else.
+  `checkDidCreated` and `checkMediationCreated` are now composed of the
+  exported `didDocumentOf`, `documentSendsTo`, `routeServiceUri`,
+  `checkDidKeys` and `checkMediationKeys`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
