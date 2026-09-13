@@ -1,8 +1,8 @@
 /**
- * The vault's event types (vault-events.md): what `data` holds under each
+ * The vault's event types: what `data` holds under each
  * `type`, and a reader that tells a line of one of these types from a
- * line that only claims to be. The store knows none of these names
- * (event-store.md §2); this is the first layer that does.
+ * line that only claims to be. The store knows none of these names;
+ * this is the first layer that does.
  *
  * Every type here is a `type` alias and not an interface, so that it is
  * a `JsonObject` to the store's `Event<D>`.
@@ -11,11 +11,11 @@
 import type { Cid, Event, JsonObject, JsonValue } from "@estoc/event-store";
 import { isCid, isDeviceId, isUuidv7 } from "@estoc/event-store";
 
-// ---- channels (§3) ---------------------------------------------------------
+// ---- channels ---------------------------------------------------------------
 
-/** One key of ours and one key of theirs (§3): every observation carries both, `null` a value. */
+/** One key of ours and one key of theirs: every observation carries both, `null` a value. */
 export type ChannelKey = {
-  /** the name of a key of ours (§2); null: no key of ours was involved */
+  /** the name of a key of ours; null: no key of ours was involved */
   myKey: string | null;
   /** the fingerprint of a public key of theirs (`peerKeyOf`); null: the sender is anonymous */
   peerKey: string | null;
@@ -31,7 +31,7 @@ export type ChannelFirstSeen = ChannelKey & {
   firstDid?: string;
 };
 
-/** The skeleton of a message (§3.1): what a thread view needs and nothing a person said. */
+/** The skeleton of a message: what a thread view needs and nothing a person said. */
 export type Skeleton = ChannelKey & {
   mid: string;
   wireId: string;
@@ -40,7 +40,7 @@ export type Skeleton = ChannelKey & {
   pthid?: string;
   /** the size of the plaintext */
   bytes: number;
-  /** the root of the blob holding the plaintext (§4) */
+  /** the root of the blob holding the plaintext */
   body: Cid;
   /** the roots of every blob lifted out of it */
   attachments: Cid[];
@@ -83,7 +83,7 @@ export type ProfileShared = ChannelKey & { mid: string };
 
 export type PeerResolved = ChannelKey & {
   did: string;
-  /** every key the document listed, as did:key or multibase: context, never an edge (§7.1) */
+  /** every key the document listed, as did:key or multibase: context, never an edge */
   keys: string[];
   service?: string | null;
 };
@@ -104,7 +104,7 @@ export type MessageErased = ChannelKey & {
   because: EraseCause;
 };
 
-// ---- identity and devices (§5) ---------------------------------------------
+// ---- identity and devices ---------------------------------------------------
 
 export type DeviceMinted = Record<string, never>;
 
@@ -159,7 +159,7 @@ export type ExtensionRemoved = { ext: string };
 
 export type ExtensionPurged = { ext: string };
 
-// ---- contacts (§6) ---------------------------------------------------------
+// ---- contacts ---------------------------------------------------------------
 
 export type ContactCreated = { cid: string };
 
@@ -180,7 +180,7 @@ export type ContactMerged = { cid: string; from: string };
 
 export type ContactDeleted = { cid: string };
 
-// ---- the types, by name ----------------------------------------------------
+// ---- the types, by name -----------------------------------------------------
 
 /** `data` by `type`: the vault's own types, and what each line of them carries. */
 export type VaultData = {
@@ -223,7 +223,7 @@ export type VaultType = keyof VaultData;
 /** An event of one of the vault's types, `data` read. */
 export type VaultEvent<T extends VaultType = VaultType> = T extends VaultType ? Event<VaultData[T]> & { type: T } : never;
 
-/** The observations (§3.1): every one carries a `ChannelKey`. */
+/** The observations: every one carries a `ChannelKey`. */
 export const OBSERVATIONS = [
   "channel.firstSeen",
   "message.in",
@@ -235,14 +235,14 @@ export const OBSERVATIONS = [
   "peer.rotated",
 ] as const satisfies readonly VaultType[];
 
-/** The two decisions that carry a pair, because they are about one message in it (§3.1). */
+/** The two decisions that carry a pair, because they are about one message in it. */
 export const CHANNEL_DECISIONS = ["delivery.held", "message.erased"] as const satisfies readonly VaultType[];
 
 export function isVaultType(type: string): type is VaultType {
   return Object.hasOwn(READERS, type);
 }
 
-/** The key names of §2: `anchor`, `mediation/<id>/me`, `did/<id>`. */
+/** The key names: `anchor`, `mediation/<id>/me`, `did/<id>`. */
 export const KEY_ANCHOR = "anchor";
 export const DID_KEY_PREFIX = "did/";
 export const MEDIATION_KEY_PREFIX = "mediation/";
@@ -255,7 +255,7 @@ export function mediationKeyName(id: string): string {
   return `${MEDIATION_KEY_PREFIX}${id}/me`;
 }
 
-/** A `mediation/<id>/me` key: the mediator's channels, not any contact's (§3). */
+/** A `mediation/<id>/me` key: the mediator's channels, not any contact's. */
 export function isMediationKey(name: string | null): boolean {
   return name !== null && name.startsWith(MEDIATION_KEY_PREFIX);
 }
@@ -265,12 +265,12 @@ export function sameChannel(a: ChannelKey, b: ChannelKey): boolean {
   return a.myKey === b.myKey && a.peerKey === b.peerKey;
 }
 
-/** A pair as a map key; not a format, not written anywhere (§3: no channel id). */
+/** A pair as a map key; not a format, not written anywhere: a channel has no id. */
 export function channelId(pair: ChannelKey): string {
   return JSON.stringify([pair.myKey, pair.peerKey]);
 }
 
-// ---- reading ---------------------------------------------------------------
+// ---- reading ----------------------------------------------------------------
 
 /** A line of one of the vault's types whose `data` is not what the type says. */
 export class Malformed extends Error {
@@ -414,9 +414,9 @@ class Check {
   }
 }
 
-/** A key name as `@estoc/keystore` v3 has it (§2). */
+/** A key name as `@estoc/keystore` v3 has it. */
 export const KEY_NAME = /^[A-Za-z0-9._/-]+$/;
-/** A peer key: 26 characters of base32 lower (§3). */
+/** A peer key: 26 characters of base32 lower. */
 export const PEER_KEY = /^[a-z2-7]{26}$/;
 
 function optional<T extends object>(fields: { [K in keyof T]: T[K] | undefined }): T {

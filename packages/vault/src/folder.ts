@@ -1,9 +1,8 @@
 /**
- * A v2 vault on a folder (vault-folder.md), opened for an identity: the
- * anchor fixed in `config.json` at creation (§6.1), the seed checked
- * against it on every open, the keystore beside it (§6.2), and the fold
- * over every device's events — the application's first read (§7.3 of
- * vault-events.md).
+ * A v2 vault on a folder, opened for an identity: the anchor fixed in
+ * `config.json` at creation, the seed checked against it on every
+ * open, the keystore beside it, and the fold over every device's
+ * events — the application's first read.
  */
 
 import type { OpenVaultOptions, VaultBackend } from "@estoc/event-store";
@@ -42,7 +41,7 @@ function folderOptions<M extends MintedDid>(options: FolderOptions<M>): OpenVaul
  * `config.json` lands, and `open` checks the cached anchor against
  * the config's — a raced vault fails loudly, at this create or at the
  * latest on its next open, never quietly inconsistent. Real mutual
- * exclusion is the caller's serialization (event-store.md §4.1): a
+ * exclusion is the caller's serialization: a
  * Web Lock in the browser, one process on disk.
  */
 export async function createFolderVault<M extends MintedDid = MintedDid>(

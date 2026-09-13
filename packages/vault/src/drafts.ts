@@ -1,7 +1,7 @@
 /**
- * Drafts of the vault's events (vault-events.md): what `append` takes,
+ * Drafts of the vault's events: what `append` takes,
  * one constructor per type, `blobs` filled in where the type references
- * roots (a skeleton lists its body and attachments twice, §3.1: once for
+ * roots (a skeleton lists its body and attachments twice: once for
  * the collector, once for the reader).
  */
 
@@ -16,7 +16,7 @@ function draft<T extends VaultType>(type: T, data: VaultData[T], blobs?: string[
 }
 
 export const drafts = {
-  // ---- channels (§3.1)
+  // ---- channels
   channelFirstSeen: (data: VaultData["channel.firstSeen"]) => draft("channel.firstSeen", data),
   messageIn: (data: VaultData["message.in"]) => draft("message.in", data, [data.body, ...data.attachments]),
   messageOut: (data: VaultData["message.out"]) => draft("message.out", data, [data.body, ...data.attachments]),
@@ -26,9 +26,9 @@ export const drafts = {
   profileShared: (data: VaultData["profile.shared"]) => draft("profile.shared", data),
   peerResolved: (data: VaultData["peer.resolved"]) => draft("peer.resolved", data),
   peerRotated: (data: VaultData["peer.rotated"]) => draft("peer.rotated", data),
-  /** an erase references nothing (§8.1): `blobs` stays `[]` */
+  /** an erase references nothing: `blobs` stays `[]` */
   messageErased: (data: VaultData["message.erased"]) => draft("message.erased", data),
-  // ---- identity and devices (§5)
+  // ---- identity and devices
   deviceMinted: () => draft("device.minted", {}),
   didMinted: (data: VaultData["did.minted"]) => draft("did.minted", data),
   didRegistered: (data: VaultData["did.registered"]) => draft("did.registered", data),
@@ -40,11 +40,11 @@ export const drafts = {
   identityLabel: (data: VaultData["identity.label"]) => draft("identity.label", data),
   deviceLabel: (data: VaultData["device.label"]) => draft("device.label", data),
   deviceRetired: (data: VaultData["device.retired"]) => draft("device.retired", data),
-  /** `object` names, never references (§5): `blobs` stays `[]` */
+  /** `object` names, never references: `blobs` stays `[]` */
   extensionInstalled: (data: VaultData["extension.installed"]) => draft("extension.installed", data),
   extensionRemoved: (data: VaultData["extension.removed"]) => draft("extension.removed", data),
   extensionPurged: (data: VaultData["extension.purged"]) => draft("extension.purged", data),
-  // ---- contacts (§6)
+  // ---- contacts
   contactCreated: (data: VaultData["contact.created"]) => draft("contact.created", data),
   contactPetname: (data: VaultData["contact.petname"]) => draft("contact.petname", data),
   contactFlag: (data: VaultData["contact.flag"]) => draft("contact.flag", data),

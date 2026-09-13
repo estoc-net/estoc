@@ -1,5 +1,5 @@
 /**
- * @estoc/vault — the vault's events and folds (docs/vault-events.md).
+ * @estoc/vault — the vault's events and folds.
  *
  * What each event type's `data` holds, the peer-key fingerprint, the
  * folds (attribution, contact state, my DIDs and devices, invitations,

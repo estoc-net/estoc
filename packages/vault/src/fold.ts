@@ -1,10 +1,10 @@
 /**
- * The folds (vault-events.md §7): attribution, contact state, my DIDs
- * and devices, invitations, deliveries, the keep-set (§8.3) and the
- * erased roots (§8.2), all from one event set with `self` as the one
- * parameter (§1 principle 3). Pure: the projection is a function of the
+ * The folds: attribution, contact state, my DIDs and devices,
+ * invitations, deliveries, the keep-set and the erased roots, all from
+ * one event set with `self` as the one parameter. Pure: the projection
+ * is a function of the
  * set, recomputed after any event is applied, so events arrive in any
- * order, one at a time (§7), and the result is the same.
+ * order, one at a time, and the result is the same.
  */
 
 import type { Cid, Event, EventStore } from "@estoc/event-store";
@@ -32,13 +32,13 @@ import {
 
 // ---- projections -----------------------------------------------------------
 
-/** Which contact a channel belongs to (§7.1). */
+/** Which contact a channel belongs to. */
 export type Attribution =
   | { kind: "none" }
   | { kind: "one"; cid: string }
   /** a multi-valued conflict: shown, resolved by `contact.merged` */
   | { kind: "several"; cids: string[] }
-  /** every contact it is attached to is deleted (§9): hidden */
+  /** every contact it is attached to is deleted: hidden */
   | { kind: "deleted"; cids: string[] };
 
 export interface Channel {
@@ -51,7 +51,7 @@ export interface Channel {
   resolved: { did: string; keys: string[]; service: string | null; at: string }[];
   /** every `peer.rotated` recorded on this pair, in canonical order: the old pair's evidence, the JWT and the mid it came from */
   rotated: { from: string; to: string; fromPrior: string; mid: string; at: string; by: string }[];
-  /** the DIDs joined to it in the identity graph (§7.1) */
+  /** the DIDs joined to it in the identity graph */
   dids: string[];
   attribution: Attribution;
   /** the mids of the messages carrying it, in canonical order */
@@ -62,7 +62,7 @@ export type DeliveryStatus = "pending" | "failed" | "held" | "sent";
 
 export interface Delivery {
   mid: string;
-  /** `sent` is final; `held` is `self`'s own hold; `failed` means retry (§3.1) */
+  /** `sent` is final; `held` is `self`'s own hold; `failed` means retry */
   status: DeliveryStatus;
   attempts: { attempt: number; outcome: DeliveryOutcome; error: string | null; at: string; by: string }[];
   heldBy: { dev: string; because: "user" | "imported"; at: string }[];
@@ -88,7 +88,7 @@ export interface ContactKey {
   did: string | null;
   routingDid: string | null;
   because: string;
-  /** added by the fold: an invitation this contact took (§7.4) */
+  /** added by the fold: an invitation this contact took */
   implicit: boolean;
   since: string;
 }
@@ -113,11 +113,11 @@ export interface Attached {
 }
 
 export interface Contact {
-  /** the representative: the smallest live cid of the component (§6) */
+  /** the representative: the smallest live cid of the component */
   cid: string;
   /** every live member, `cid` among them */
   members: string[];
-  /** members with a `contact.deleted`: contribute nothing (§7.2) */
+  /** members with a `contact.deleted`: contribute nothing */
   hidden: string[];
   createdAt: string | null;
   petname: string | null;
@@ -134,7 +134,7 @@ export interface Contact {
   channels: ChannelKey[];
   /** every live `contact.attached` of its members, in canonical order: how each channel came to it */
   attached: Attached[];
-  /** the unfrozen ones (§3.2) */
+  /** the unfrozen ones */
   writeTo: ChannelKey[];
   /** the default among `writeTo`; null: mint or rotate before sending */
   write: ChannelKey | null;
@@ -147,7 +147,7 @@ export interface DeletedContact {
   members: string[];
   /** the channels attributed to this contact alone, before it was deleted */
   channels: ChannelKey[];
-  /** every `contact.useKey` (and implicit invitation key) of its members: what §9 step 3 retires */
+  /** every `contact.useKey` (and implicit invitation key) of its members: what deleting the contact retires */
   keys: ContactKey[];
 }
 
@@ -184,7 +184,7 @@ export interface Mediation {
   retired: { because: string; at: string } | null;
   /** the device's latest `created` without a `retired` */
   current: boolean;
-  /** the channels under its `me` key: the mediator's (§3) */
+  /** the channels under its `me` key: the mediator's */
   channels: ChannelKey[];
 }
 
@@ -263,7 +263,7 @@ export class VaultFold {
     return this.set.size;
   }
 
-  /** Lines of a vault type whose `data` is not what the type says (§1): held, not read. */
+  /** Lines of a vault type whose `data` is not what the type says: held, not read. */
   get malformed(): readonly Malformed[] {
     return this.set.malformed;
   }
@@ -318,7 +318,7 @@ export class VaultFold {
     return this.p.devices.get(dev) ?? null;
   }
 
-  /** What the identity calls itself (§5). */
+  /** What the identity calls itself. */
   label(): string | null {
     return this.p.label;
   }
@@ -344,12 +344,12 @@ export class VaultFold {
     return this.message(mid)?.delivery ?? null;
   }
 
-  /** The roots the events hold (§8.3): the `keep` for `collect`, and what a merge copies (§10). */
+  /** The roots the events hold: the `keep` for `collect`, and what a merge copies. */
   held(): Cid[] {
     return [...this.p.held].sort();
   }
 
-  /** Whether some `message.erased` for `mid` names `root` (§8.2): asked before the blocks. */
+  /** Whether some `message.erased` for `mid` names `root`: asked before the blocks. */
   erased(mid: string, root: Cid): boolean {
     return this.message(mid)?.erased.includes(root) ?? false;
   }
@@ -401,7 +401,7 @@ function project(set: EventSet, self: string): Projection {
     channel(event.data).rotated.push({ from: event.data.from, to: event.data.to, fromPrior: event.data.fromPrior, mid: event.data.mid, at: event.at, by: event.author });
   }
 
-  // ---- the identity graph (§7.1)
+  // ---- the identity graph
   const graph = new Components();
   for (const have of channels.values()) {
     if (qualifies(have.pair)) {
@@ -431,7 +431,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
 
-  // ---- contacts as components under contact.merged (§6)
+  // ---- contacts as components under contact.merged
   const contactGraph = new Components();
   const deletedCids = new Set<string>();
   for (const type of ["contact.created", "contact.petname", "contact.flag", "contact.useKey", "contact.attached", "contact.detached", "contact.merged", "contact.deleted"] as const) {
@@ -462,7 +462,7 @@ function project(set: EventSet, self: string): Projection {
   interface Attach {
     cid: string;
     rep: string;
-    /** its `cid` is tombstoned: contributes nothing to a live contact (§7.2) */
+    /** its `cid` is tombstoned: contributes nothing to a live contact */
     dead: boolean;
     pair: ChannelKey;
     because: AttachCause;
@@ -496,7 +496,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
 
-  // ---- attribution (§7.1)
+  // ---- attribution
   const attachesByComponent = new Map<string, Attach[]>();
   for (const attach of attaches) {
     if (!qualifies(attach.pair)) {
@@ -526,7 +526,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
 
-  // ---- messages, erases, deliveries (§3.1, §8)
+  // ---- messages, erases, deliveries
   const erasedOf = new Map<string, Set<Cid>>();
   for (const event of set.of("message.erased")) {
     let drops = erasedOf.get(event.data.mid);
@@ -587,7 +587,7 @@ function project(set: EventSet, self: string): Projection {
     channel(message.pair).messages.push(mid);
   }
 
-  // ---- the keep-set (§8.3)
+  // ---- the keep-set
   const held = new Set<Cid>(set.foreignRoots());
   for (const type of VAULT_TYPES) {
     for (const event of set.of(type)) {
@@ -600,7 +600,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
 
-  // ---- my keys (§7.3)
+  // ---- my keys
   const keys = new Map<string, MyKey>();
   const myKey = (name: string): MyKey => {
     let have = keys.get(name);
@@ -644,7 +644,7 @@ function project(set: EventSet, self: string): Projection {
     return have !== undefined && have.minted !== null && have.retired === null;
   };
 
-  // ---- mediations and devices (§5, §7.3)
+  // ---- mediations and devices
   const granted = new Map<string, VaultEvent<"mediation.granted">>();
   for (const event of set.of("mediation.granted")) {
     const have = granted.get(event.data.id);
@@ -693,7 +693,7 @@ function project(set: EventSet, self: string): Projection {
     const label = latest(set.of("device.label").filter((event) => event.data.dev === dev));
     const retired = latest(set.of("device.retired").filter((event) => event.data.dev === dev));
     const own = mediationsBy.get(dev) ?? [];
-    const current = retired === null ? (own.filter((m) => m.retired === null).at(-1) ?? null) : null; // a retired device has no live address (§10)
+    const current = retired === null ? (own.filter((m) => m.retired === null).at(-1) ?? null) : null; // a retired device has no live address
     if (current !== null) {
       current.current = true;
     }
@@ -707,7 +707,7 @@ function project(set: EventSet, self: string): Projection {
     });
   }
 
-  // ---- the identity (§7.3)
+  // ---- the identity
   const label = latest(set.of("identity.label"))?.data.name ?? null;
   const extensions = new Map<string, Extension>();
   for (const event of set.of("extension.installed")) {
@@ -729,7 +729,7 @@ function project(set: EventSet, self: string): Projection {
     }
   }
 
-  // ---- invitations (§7.4)
+  // ---- invitations
   const invitations: Invitation[] = [];
   for (const event of set.of("did.published")) {
     if (event.data.as !== "oob" || event.data.uses !== "one") {
@@ -750,7 +750,7 @@ function project(set: EventSet, self: string): Projection {
   }
   const oneUse = new Set(invitations.map((invitation) => invitation.key));
 
-  // ---- contact state (§7.2)
+  // ---- contact state
   const resolvedByDid = new Map<string, VaultEvent<"peer.resolved">>();
   for (const event of set.of("peer.resolved")) {
     const have = resolvedByDid.get(event.data.did);
@@ -781,7 +781,7 @@ function project(set: EventSet, self: string): Projection {
   const attributedTo = (rep: string, kind: "one" | "deleted"): Channel[] =>
     [...channels.values()].filter((have) => (kind === "one" ? have.attribution.kind === "one" && have.attribution.cid === rep : have.attribution.kind === "deleted" && have.attribution.cids.includes(rep)));
   const keyOrder = (a: ContactKey, b: ContactKey): number => (a.since !== b.since ? (a.since < b.since ? -1 : 1) : a.key < b.key ? -1 : 1);
-  /** Every `contact.useKey` of `cids` plus the implicit key of each invitation `mine` took (§7.4); `lastUse` is filled with each key's latest use. */
+  /** Every `contact.useKey` of `cids` plus the implicit key of each invitation `mine` took; `lastUse` is filled with each key's latest use. */
   const contactKeysOf = (cids: Set<string>, mine: (attach: Attach) => boolean, lastUse: Map<string, Pick<Event, "at" | "eid" | "author">>): ContactKey[] => {
     const contactKeys = new Map<string, ContactKey>();
     for (const event of set.of("contact.useKey")) {
@@ -884,7 +884,7 @@ function project(set: EventSet, self: string): Projection {
       write = { myKey: latestWritable.data.myKey, peerKey: latestWritable.data.peerKey };
     } else {
       const lastUsed = (entry: ContactKey): Pick<Event, "at" | "eid" | "author"> => lastUse.get(entry.key) as Pick<Event, "at" | "eid" | "author">;
-      const latestUse = [...liveKeys].sort((a, b) => compareEvents(lastUsed(a), lastUsed(b))).at(-1); // the latest `contact.useKey` (§7.2), by canonical order
+      const latestUse = [...liveKeys].sort((a, b) => compareEvents(lastUsed(a), lastUsed(b))).at(-1); // the latest `contact.useKey`, by canonical order
       write = latestUse === undefined ? null : (writeTo.find((pair) => pair.myKey === latestUse.key) ?? null);
     }
 
@@ -938,7 +938,7 @@ function project(set: EventSet, self: string): Projection {
 }
 
 /**
- * DIDs in rotation order (§7.2): a `from` before every `to` it rotated
+ * DIDs in rotation order: a `from` before every `to` it rotated
  * to, ties and cycles by first mention then name — a total order that is
  * a function of the set.
  */
