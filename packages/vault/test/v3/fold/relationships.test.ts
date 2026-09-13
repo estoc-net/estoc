@@ -1240,8 +1240,8 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual(rotated);
     });
   });
-  it("an equal edge lacking its prior snapshot, and a proof-free duplicate naming it, wait alone: the complete equal edge applies and scopes the duplicate", async () => {
-    const { scene, keys, peerKeys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
+  it("an equal edge lacking its prior snapshot, and a proof-free duplicate naming it, wait alone: the complete equal edge applies and scopes the duplicate; a prior that contradicts conflicts them all", async () => {
+    const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const { edge: complete, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
     const missing = uuidv7() as EventReference<"peer.resolved">;
     const unverified = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt, prior: root, successor, messageId: carrier.data.messageId, overrides: { priorResolutionEventId: missing } });
@@ -1255,6 +1255,14 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.relationships.get(R)!.peerChain[1]!.edgeEventIds).toEqual([complete.eventId]);
       expect(dids(fold, R)).toEqual(rotated);
       expect(fold.relationships.get(R)!.conflict).toBe(false);
+    });
+    const another = resolved(scene, a0.didId, b2);
+    scene.events.pop();
+    await expectFoldOrderFree([...scene.events, { ...another, eventId: missing }], (fold) => {
+      expect(fold.transitions.get(unverified.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the prior resolution is ${b2.did}'s, not ${b0.did}'s`) });
+      expect(fold.transitions.get(complete.eventId)).toEqual({ status: "conflict", because: `observation ${named.eventId} of message ${carrier.data.messageId} names a transition that contradicts its own evidence: the prior resolution is ${b2.did}'s, not ${b0.did}'s; the proof does not verify against the pinned predecessor document` });
+      expect(fold.transitions.get(local.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the trigger ${named.eventId} does not confirm ${a0.didId}`) });
+      expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
     });
     scene.events.push({ ...root, eventId: missing });
     await expectFoldOrderFree(scene.events, (fold) => {

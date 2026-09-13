@@ -485,7 +485,8 @@ function sameTransition(context: Context, a: PeerEdge["data"], b: PeerEdge["data
  * what contradicts is judged from the events it names, what it waits
  * for from the chains so far. An applied transition equal to the one a
  * proof-free successor names scopes it, since equal edges are one
- * transition; the transition under judgement stands in for the applied
+ * transition, unless the named one contradicts the evidence it names
+ * itself; the transition under judgement stands in for the applied
  * one a carrier or a proof-free successor waits for, when it is that
  * transition or equal to it, since otherwise the edge would wait for
  * its observations and they for the edge. Nothing else is taken on
@@ -531,9 +532,10 @@ function judgeObservation(evidence: Evidence, receipt: Receipt, judging: PeerEdg
       else if (transition.status === "missing") deferred.push("awaits the transition it names");
       else if (transition.event.data.relationshipId !== context.relationshipId) faults.push("names a transition of another relationship");
       else {
-        const successor = context.set.resolve(transition.event.data.peerResolutionEventId, "peer.resolved");
-        if (notFrom(transition.event.data.toDid, successor.status === "present" ? successor.event.data.documentCid : null)) faults.push("is not from the document the transition it names pins");
-        else if (!stands(transition.event)) deferred.push("awaits the transition it names");
+        const named = namedEvidence(context, transition.event);
+        if (named.faults.length > 0) faults.push(`names a transition that contradicts its own evidence: ${named.faults.join("; ")}`);
+        if (notFrom(transition.event.data.toDid, named.successor?.data.documentCid ?? null)) faults.push("is not from the document the transition it names pins");
+        if (faults.length === 0 && !stands(transition.event)) deferred.push("awaits the transition it names");
       }
     }
   } else {
@@ -619,17 +621,13 @@ function judgeLocalEdge(edge: LocalEdge, evidence: Evidence): Judged<LocalEdge> 
 }
 
 /**
- * A peer edge judged on its own evidence, in every order the same: the
- * prior and successor resolutions it names and their snapshot verdicts,
- * the successor's agreement with the edge, the local key's standing in
- * the local history, a complete witness in a group that does not
- * contradict — judged with this edge as the transition its carriers
- * await — and the proof's verdict. Conflicts and absences are both
- * collected in full.
+ * A peer edge against the evidence it names, from the events alone:
+ * the prior and successor resolutions and their snapshot verdicts, the
+ * successor's agreement with the edge, and the proof's verdict.
+ * Conflicts and absences are both collected in full.
  */
-function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & { successor: Resolution | null } {
-  const { context } = evidence;
-  const { fromDid, toDid, presentedToDid, localKeyName, peerPublicKey, priorResolutionEventId, peerResolutionEventId, messageId } = edge.data;
+function namedEvidence(context: Context, edge: PeerEdge): Judged<PeerEdge> & { successor: Resolution | null } {
+  const { fromDid, toDid, presentedToDid, localKeyName, peerPublicKey, priorResolutionEventId, peerResolutionEventId } = edge.data;
   const faults: string[] = [];
   const deferred: string[] = [];
   const prior = context.set.resolve(priorResolutionEventId, "peer.resolved");
@@ -656,6 +654,23 @@ function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & {
     if (check === "invalid") faults.push("the successor's resolution is not its document's");
     else if (check === undefined) deferred.push("the successor's resolution is not yet verified against its document");
   }
+  const check = context.proofChecks.get(edge.eventId);
+  if (check === "invalid") faults.push("the proof does not verify against the pinned predecessor document");
+  else if (check === undefined) deferred.push("the proof is not yet verified");
+  return { edge, faults, deferred, successor };
+}
+
+/**
+ * A peer edge judged on its own evidence, in every order the same: the
+ * evidence it names, the local key's standing in the local history,
+ * and a complete witness in a group that does not contradict — judged
+ * with this edge as the transition its carriers await. Conflicts and
+ * absences are both collected in full.
+ */
+function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & { successor: Resolution | null } {
+  const { context } = evidence;
+  const { localKeyName, messageId } = edge.data;
+  const { faults, deferred, successor } = namedEvidence(context, edge);
   const standing = keyStanding(evidence, localKeyName);
   if (standing === "outside") faults.push(`${localKeyName} is not in the local history`);
   else if (standing === "awaited") deferred.push(`${localKeyName} is not yet in the local history`);
@@ -667,9 +682,6 @@ function judgePeerEdge(edge: PeerEdge, evidence: Evidence): Judged<PeerEdge> & {
     if (carrying.length === 0) deferred.push(candidates.length === 0 ? `no observation of message ${messageId} is here` : `no observation of message ${messageId} carries this proof at this key`);
     else if (!carrying.some((witness) => witness.status === "complete")) deferred.push(...carrying.flatMap((witness) => (witness.status === "incomplete" ? [witness.because] : [])));
   }
-  const check = context.proofChecks.get(edge.eventId);
-  if (check === "invalid") faults.push("the proof does not verify against the pinned predecessor document");
-  else if (check === undefined) deferred.push("the proof is not yet verified");
   return { edge, faults, deferred, successor };
 }
 
