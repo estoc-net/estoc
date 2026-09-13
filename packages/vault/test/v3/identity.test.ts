@@ -1,7 +1,7 @@
 import type { JsonObject } from "@estoc/event-store/v3";
 import { decodeLongForm, encodeLongForm, isLongForm, longToShort } from "@estoc/did-peer";
-import { createSeedKeystore, importSeed } from "@estoc/keystore";
-import { ed25519, edwardsToMontgomeryPub, x25519 } from "@noble/curves/ed25519";
+import { createSeedKeystore, deriveIdentity, importSeed } from "@estoc/keystore";
+import { ed25519, x25519 } from "@noble/curves/ed25519";
 import { base64urlnopad } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
@@ -40,9 +40,9 @@ const DIRECT: RouteTarget = { kind: "direct", endpoint: "https://ingress.example
 /** The anchor and the DIDs the fixed seed derives; a change here renames every identity a vault holds. */
 const EXPECTED = {
   anchor: "did:key:z6MknPaqk9immiDFicttb6PNyNEc3B2f28DxSoYKbEvaNvqL",
-  mediatedShort: "did:peer:4zQmV2mWZe2bfnkoErpeb2Ksm27bDupXCa4RpsVUFkorfAVg",
-  directShort: "did:peer:4zQmRuQWSbNN6Ze9aDuGSJUDXW7fmt7aA8NMao2CkkkFr4vP",
-  mediationShort: "did:peer:4zQmQ2eGxYk3z8N5qqqAVxv92cQyzDEaeaJbzJGYUGppdZQP",
+  mediatedShort: "did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP",
+  directShort: "did:peer:4zQmcRRbHFBJtMfjVL6ycfrhWYviwcCZPT95vriF6JMSpye5",
+  mediationShort: "did:peer:4zQmdxb4gk3GmReVxbUhThVG4hAfKTmF2jTf2cGdHZryz1xC",
 };
 
 async function open(seed = SEED): Promise<Keys> {
@@ -82,21 +82,25 @@ describe("Keys", () => {
     expect(x25519.getPublicKey(base64urlnopad.decode(agreement.d))).toEqual(keyAgreement.publicKeyBytes());
   });
 
-  it("takes a key-agreement key as the X25519 form of the Ed25519 key its own name derives", async () => {
-    const keys = await open();
+  it("takes a key-agreement key from the keystore's own X25519 derivation of the name, not from its Ed25519 key", async () => {
+    const seedKey = await importSeed(SEED);
+    const keys = await Keys.open(seedKey, EXPECTED.anchor);
     const name = didKeyName(DID_ID, "key-agreement");
-    const edwards = await keys.signing(name);
-    const montgomery = await keys.agreement(name);
-    expect(montgomery.publicKeyBytes()).toEqual(edwardsToMontgomeryPub(edwards.publicKeyBytes()));
-    expect(montgomery.publicKey).not.toBe((await keys.agreement(didKeyName(DID_ID, "authentication"))).publicKey);
+    const derived = await deriveIdentity(seedKey, name);
+    expect((await keys.agreement(name)).publicKeyBytes()).toEqual(derived.signer.x25519PublicKey());
+    expect((await keys.signing(name)).publicKeyBytes()).toEqual(derived.signer.publicKey());
+    expect((await keys.agreement(name)).publicKey).not.toBe((await keys.agreement(didKeyName(DID_ID, "authentication"))).publicKey);
   });
 
-  it("derives a mediation arrangement's one key in both uses", async () => {
-    const keys = await open();
+  it("derives a mediation arrangement's one name in both uses", async () => {
+    const seedKey = await importSeed(SEED);
+    const keys = await Keys.open(seedKey, EXPECTED.anchor);
     const { authentication, keyAgreement } = await keys.mediationKeys(MEDIATION);
     expect(authentication.name).toBe(mediationKeyName(MEDIATION));
     expect(keyAgreement.name).toBe(mediationKeyName(MEDIATION));
-    expect(keyAgreement.publicKeyBytes()).toEqual(edwardsToMontgomeryPub(authentication.publicKeyBytes()));
+    const derived = await deriveIdentity(seedKey, mediationKeyName(MEDIATION));
+    expect(authentication.publicKeyBytes()).toEqual(derived.signer.publicKey());
+    expect(keyAgreement.publicKeyBytes()).toEqual(derived.signer.x25519PublicKey());
   });
 
   it("derives nothing once locked, while keys already handed out keep their material", async () => {

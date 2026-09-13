@@ -2,8 +2,9 @@
  * The vault's own keys and communication DIDs. One seed derives every
  * key by name: the anchor that is the vault's identity, the two keys of
  * each communication-DID entity and the one key of each mediation
- * arrangement. Each name derives an Ed25519 key; a key-agreement use
- * takes that key's X25519 form, the did:key convention. Nothing derived
+ * arrangement. Each name derives an Ed25519 key and, separately under
+ * the keystore's own domain, an X25519 key; a key-agreement use takes
+ * the latter, never a conversion of the former. Nothing derived
  * is stored: a recorded `did.created` is checked by reading its own
  * document back and holding the keys and route it authorizes against
  * what the seed and the bound route give.
@@ -12,7 +13,6 @@
 import type { JsonObject, WrappedSeed } from "@estoc/event-store/v3";
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { deriveIdentity, unlockSeedKeystore, type SeedKey } from "@estoc/keystore";
-import { edwardsToMontgomeryPriv, edwardsToMontgomeryPub } from "@noble/curves/ed25519";
 import { base64urlnopad } from "@scure/base";
 
 import { IdentityMismatch, Locked } from "./errors.js";
@@ -80,22 +80,21 @@ export class Keys {
     this.seedKey = null;
   }
 
-  private async derive(name: KeyName): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
+  private async derive(name: KeyName, type: "Ed25519" | "X25519"): Promise<LocalKey> {
     if (this.seedKey === null) throw new Locked();
     const identity = await deriveIdentity(this.seedKey, name);
-    return { publicKey: identity.signer.publicKey(), privateKey: base64urlnopad.decode(identity.privateJwks().ed25519.d as string) };
+    const jwk = type === "Ed25519" ? identity.privateJwks().ed25519 : identity.privateJwks().x25519;
+    return localKey(name, type, base64urlnopad.decode(jwk.x as string), base64urlnopad.decode(jwk.d as string));
   }
 
   /** The Ed25519 key a name derives. */
   async signing(name: KeyName): Promise<LocalKey> {
-    const { publicKey, privateKey } = await this.derive(name);
-    return localKey(name, "Ed25519", publicKey, privateKey);
+    return this.derive(name, "Ed25519");
   }
 
-  /** The X25519 form of the Ed25519 key a name derives. */
+  /** The X25519 key a name derives. */
   async agreement(name: KeyName): Promise<LocalKey> {
-    const { publicKey, privateKey } = await this.derive(name);
-    return localKey(name, "X25519", edwardsToMontgomeryPub(publicKey), edwardsToMontgomeryPriv(privateKey));
+    return this.derive(name, "X25519");
   }
 
   /** The fixed keys of a communication-DID entity: one name for authentication, another for key agreement. */

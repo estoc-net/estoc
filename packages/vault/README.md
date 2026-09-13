@@ -48,7 +48,7 @@ projection and the exact plaintext, `wirePlaintext` is the inverse of `readPlain
 it), the keys and communication DIDs (`identity.ts`: `Keys` opens over
 a seed only once it derives the recorded anchor, or `unlock`s the
 wrapped seed with the passphrase, and derives each named key on demand,
-an Ed25519 key by name and its X25519 form for key agreement;
+an Ed25519 key and the keystore's own X25519 key per name, the latter for key agreement;
 `mintDid` builds a communication DID's numalgo-4 input document from
 the entity's two keys and its route, `mintMediationDid` a mediation
 arrangement's from its one key; `checkDidCreated` and

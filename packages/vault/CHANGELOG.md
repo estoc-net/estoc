@@ -32,8 +32,8 @@
   included, is an own member of the intent.
 - **The version-3 keys, communication DIDs, retained peer document and
   `from_prior`**: `Keys` derives every key by name from the one seed
-  through `@estoc/keystore`, an Ed25519 key per name and its X25519
-  form (`@noble/curves`) for key agreement, and opens only over the
+  through `@estoc/keystore`, the Ed25519 key and the separately derived
+  X25519 key of each name, the latter for key agreement, and opens only over the
   seed that derives the recorded anchor; `mintDid` and
   `mintMediationDid` build the did:peer:4 input document of a
   communication DID (two keys and the route's DIDComm service) or of a

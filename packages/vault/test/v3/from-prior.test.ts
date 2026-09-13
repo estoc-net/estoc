@@ -27,7 +27,7 @@ const ROUTE: RouteTarget = { kind: "mediated", routingDid: "did:peer:2.Ez6LSbysY
 const IAT = 1_757_700_000;
 
 /** The signature the fixed seed puts on the proof; it moves when the derivation, the DIDs or the JWT shape move. */
-const EXPECTED_SIGNATURE = "Na3BbC32HQrgzW35UIkTSfUwrrj_FbX2jfTF3vT1vujVERhlK5p9Z0Odqf0QJ2GQDm_HrdGoVXXHfmELImI3Cg";
+const EXPECTED_SIGNATURE = "P5uIl87bzVfbgJGbVhmmU5fhH7kF1I2THWRp2y4AJlrvWg7HBzmi6VrKira1ybmBUlrMZPj9AnKvsSc1e6lNBg";
 
 async function setup() {
   const seedKey = await importSeed(SEED);
