@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Version 3 begins**, under `@estoc/vault/v3`: the identifier
+  vocabulary as nominal types, the deterministic identifiers — the six
+  UUIDv5 namespaces derived from the URL namespace, `relationshipId`,
+  `contactIdOf`, `earlyPrivateDidId`, `inboundMessageId`, `executionId`,
+  `effectKey`, `automaticMessageId`, the stored `decimalOrdinal` and
+  the reserved keystore names — and `canonicalPublicKey`, the did:key
+  encoding a supported key's JWK or base58btc multibase form normalizes
+  to, a Weierstrass point verified on its curve by `@noble/curves`,
+  base58btc and base64url by `@scure/base`, the multicodec prefix by
+  `multiformats`, with `parsePublicKey` for the exact canonical form and
+  `decodePublicKey` for its type and bytes. Each is checked against
+  the published identifier and public-key vectors.
+
 ## 0.2.0 — 2026-09-01
 
 The version-2 vault is the package. What was `@estoc/vault/v2` is now
