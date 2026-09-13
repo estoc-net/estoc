@@ -115,19 +115,21 @@
   leaving it is applied and every applied member names the node, a
   cycle or a predecessor snapshot that is not the chain's document
   conflicts, competing classes conflict, and no timestamp ever picks a
-  branch. The observations of one message are judged as a group: one
-  whose resolution is absent or unchecked defers the whole group, one
-  that contradicts its resolution — another key, another spelling, a
-  message ID it does not derive, a snapshot that is not its
-  document's — conflicts it, and nothing in a group that is not
-  complete witnesses a proof or confirms an address. A local edge's
-  predecessor is confirmed only by an observation whose scope in the
-  relationship is complete: a root sender under the pinned root
-  document, a successor under any applied transition it names, or a
-  carrier under the applied transition it witnesses, bound or not;
-  since that scope comes from the peer chain and a peer edge's key
-  from the local chain, the two are folded together until neither
-  grows. Each relationship exposes
+  branch. The observations of one message are judged as a group in
+  the relationship, each by the row it claims — authenticated by its
+  own checked resolution, arrived at a key of the local history, and
+  a root sender under the pinned root document, a successor under the
+  applied transition it names, or a carrier whose proof names its
+  sender and that an applied transition witnesses — and one whose
+  evidence is absent defers the whole group while one that
+  contradicts (another key, another spelling, a message ID it does
+  not derive, a snapshot that is not its document's, a key outside a
+  complete local history, a transition of another relationship, a
+  proof found invalid) conflicts it; nothing in a group that is not
+  complete witnesses a proof or confirms an address. Since that scope
+  comes from the peer chain and a peer edge's key from the local
+  chain, the two are folded together until nothing changes. Each
+  relationship exposes
   `localChain`, `peerChain`, `currentLocalDidId`, `currentPeerDid`,
   `recipientKeyNames`, the one `contactId` or a conflict of several,
   `deferred` and `faults`. The fold exposes every transition's status,
@@ -138,10 +140,12 @@
   carrier whose proof names its sender and has no applied transition,
   or a deferred edge at every pair it would add. Beside the fold,
   `verifyResolutions` checks every `peer.resolved` snapshot against its
-  own document — derived from a numalgo-4 long form, or read from the
-  object store under its CID and, for a numalgo-4 DID, required to be
-  exactly what its own long form derives — for the method IDs it
-  enumerates and the key it authenticates, and `verifyTransitions` checks every proof
+  own document — its presented spelling one of its canonical DID's,
+  the document derived from a numalgo-4 long form, or read from the
+  object store under its CID in canonical form and, for a numalgo-4
+  DID, required to be exactly what its own long form derives — for
+  the method IDs it enumerates and the key it authenticates, and
+  `verifyTransitions` checks every proof
   against the exact predecessor document, a local edge's against the
   predecessor entity's own, a peer edge's against the named prior
   resolution's; `foldRelationshipsVerified` folds with both verdicts
