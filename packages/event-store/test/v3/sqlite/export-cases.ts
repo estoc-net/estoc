@@ -30,7 +30,7 @@ import {
   type VaultRuntime,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects, type MemoryHeld } from "./driver-cases.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects, type MemoryHeld } from "./driver-cases.js";
 import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, corruptChunk, damageEvent, draft, exec, make, rootsOf, rows, type VaultHarness } from "./vault-cases.js";
 
 export interface ExportHarness extends VaultHarness {
@@ -41,8 +41,7 @@ export interface ExportHarness extends VaultHarness {
   remove?(target: string): void | Promise<void>;
 }
 
-export interface ExportCase {
-  name: string;
+export interface ExportCase extends Case {
   run(harness: ExportHarness): Promise<string | void>;
 }
 
@@ -761,6 +760,7 @@ export const exportCases: ExportCase[] = [
   },
   {
     name: "an object of 64 MiB streams through a commit, a read, an export and a restore, and what the platform holds stays bounded throughout",
+    large: true,
     run: async (h) => {
       const { samples, broken, note } = await streamedThrough(h);
       assert(broken.length === 0, `${described(samples, broken)} — ${note}`);
@@ -769,6 +769,7 @@ export const exportCases: ExportCase[] = [
   },
   {
     name: "the measure of JavaScript sees what it holds: with a copy of every chunk the 64 MiB object passes through kept, every JavaScript bound breaks and no SQLite bound, and once the copies are let go what is held falls back",
+    large: true,
     run: async (h) => {
       if (h.memoryUsed === undefined) return;
       const kept: Uint8Array[] = [];
@@ -786,6 +787,7 @@ export const exportCases: ExportCase[] = [
   },
   {
     name: "the measure of SQLite sees what it holds: with every connection's cache the size of the object, the vault's own connection, the export's destination and the restore's two connections keep the object in SQLite's allocator and their bounds break, no JavaScript bound does, and closing frees it",
+    large: true,
     run: async (h) => {
       if (h.memoryUsed === undefined || (await h.memoryUsed()).sqlite === undefined) return;
       const { samples, broken, note } = await streamedThrough(h, { connected: (driver) => driver.exec(`PRAGMA cache_size = -${128 * 1024}`) });

@@ -9,7 +9,7 @@
 
 import { createRuntime, createTables, openInspector, openPortable, openRuntime, type OpenMode, type SqliteDriver } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertEqual, assertRejects, assertThrows } from "./driver-cases.js";
+import { type Case, assert, assertEqual, assertRejects, assertThrows } from "./driver-cases.js";
 
 export interface OpenHarness {
   /** A target no database exists at yet. */
@@ -21,8 +21,7 @@ export interface OpenHarness {
   utf16: { snapshot: Uint8Array; forged: Uint8Array };
 }
 
-export interface OpenCase {
-  name: string;
+export interface OpenCase extends Case {
   /** Returns a note for the report, or nothing. */
   run(harness: OpenHarness): Promise<string | void>;
 }

@@ -20,8 +20,13 @@ export interface DriverHarness {
   persistent: boolean;
 }
 
-export interface DriverCase {
+export interface Case {
   name: string;
+  /** Moves tens of mebibytes through the platform's storage: seconds where the others take milliseconds. */
+  large?: true;
+}
+
+export interface DriverCase extends Case {
   needsPersistence?: true;
   /** Returns a note for the report — a timing — or nothing. */
   run(harness: DriverHarness): Promise<string | void>;
@@ -500,6 +505,7 @@ export const driverCases: DriverCase[] = [
   },
   {
     name: "mebibyte chunks go in and come back whole",
+    large: true,
     run: async (h) => {
       const target = h.fresh();
       const db = await h.open(target, "create");

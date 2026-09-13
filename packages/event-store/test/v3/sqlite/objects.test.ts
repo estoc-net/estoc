@@ -36,7 +36,7 @@ import { bytesOf, chunked, cidOf, drain, objectStoreSuite, type OpenObjectOption
 import { heldOnNode } from "./node-memory.js";
 
 /** Long enough for the cases that stage and read back tens of mebibytes on a slow machine. */
-const LARGE_OBJECT_TIME_LIMIT = 120_000;
+const LARGE_CASE_TIME_LIMIT = 120_000;
 import { objectCases } from "./object-cases.js";
 import { objectStoreOpener } from "./suite-openers.js";
 
@@ -115,7 +115,7 @@ describe("the object cases on node:sqlite files", () => {
         const note = await c.run({ fresh, open: async (target, mode) => open(target, mode), remove: (target) => rm(target, { force: true }), memoryUsed: heldOnNode });
         if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
       },
-      LARGE_OBJECT_TIME_LIMIT
+      c.large ? LARGE_CASE_TIME_LIMIT : undefined
     );
   }
 });

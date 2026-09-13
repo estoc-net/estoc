@@ -2,7 +2,7 @@
  * The wasm adapter in a real browser: the page script and the Worker
  * script are bundled with esbuild and served, with `sqlite3.wasm`, to a
  * headless Chromium over localhost (a secure context, which OPFS
- * needs); the page drives the Workers and the results come back — one
+ * needs); the page drives the Workers, running at once, and the results come back — one
  * vitest case per driver, open, event, object, vault, export, import
  * and pool case, per test of the three conformance suites, and per
  * case of the page's own. The Worker's bundle gets the suites' `vitest`
@@ -131,10 +131,13 @@ async function inChromium(executablePath: string): Promise<Outcome> {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  const browser = await chromium.launch({ executablePath, headless: true, chromiumSandbox: false });
+  // A profile on disk: its storage quota follows the disk, where an ephemeral context's follows memory and runs out under the large cases' databases all at once.
+  const context = await chromium.launchPersistentContext(path.join(dir, "profile"), { executablePath, headless: true, chromiumSandbox: false });
   let expired: ReturnType<typeof setTimeout> | undefined;
   try {
-    const tab = await browser.newPage();
+    const browser = context.browser();
+    if (browser === null) throw new Error("the persistent context has no browser to expose the DevTools protocol from");
+    const tab = context.pages()[0] ?? (await context.newPage());
     await exposeDevTools(browser);
     tab.on("pageerror", (err) => console.error("page error:", err));
     tab.on("console", (message) => {
@@ -153,7 +156,7 @@ async function inChromium(executablePath: string): Promise<Outcome> {
     return { ...output, dir, sampleVault, sample };
   } finally {
     clearTimeout(expired);
-    await browser.close();
+    await context.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }

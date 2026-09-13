@@ -40,7 +40,7 @@ import {
   type VaultRuntime,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, REWRAPPED, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects, rawOver } from "./driver-cases.js";
 import { altered, destination, opened, settled, type ExportHarness } from "./export-cases.js";
 import { HELLO, HELLO_CID, MIB, WORLD, WORLD_CID, all, bytesOf, cidOf, clock, corruptChunk, draft, exec, failingAt, make, reopen, retainedOf, rootsOf, rows, vaultOver, type Made } from "./vault-cases.js";
 
@@ -49,8 +49,7 @@ export interface ImportHarness extends ExportHarness {
   importFile(target: string, bytes: Uint8Array): Promise<void>;
 }
 
-export interface ImportCase {
-  name: string;
+export interface ImportCase extends Case {
   run(harness: ImportHarness): Promise<string | void>;
 }
 

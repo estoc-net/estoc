@@ -39,12 +39,13 @@ export interface Exchanged {
   bytes: number[];
 }
 
+/** The commands the page sends: the cases to run are named, so the page can spread one list over Workers running at once. */
 export type WorkerRequest =
-  | { cmd: "cases"; directory: string }
-  | { cmd: "open"; directory: string; utf16: { snapshot: number[]; forged: number[] } }
+  | { cmd: "cases"; directory: string; names: string[] }
+  | { cmd: "open"; directory: string; utf16: { snapshot: number[]; forged: number[] }; names: string[] }
   | { cmd: "suites"; directory: string }
   | { cmd: "exchange"; directory: string; snapshot: number[] }
-  | { cmd: "pool" }
+  | { cmd: "pool"; names: string[] }
   | { cmd: "hold"; directory: string }
   | { cmd: "release" };
 
@@ -107,11 +108,19 @@ async function attempt(results: WorkerCaseResult[], name: string, body: () => Pr
   }
 }
 
+function named<C extends { name: string }>(cases: C[], names: string[]): C[] {
+  return names.map((name) => {
+    const found = cases.find((c) => c.name === name);
+    if (found === undefined) throw new Error(`no case named ${JSON.stringify(name)}`);
+    return found;
+  });
+}
+
 async function closing(pool: SqlitePool, results: WorkerCaseResult[], what: string): Promise<void> {
   await attempt(results, `the pool closes once the ${what} have closed their connections`, () => pool.close());
 }
 
-async function runCases(directory: string): Promise<WorkerCaseResult[]> {
+async function runCases(directory: string, names: string[]): Promise<WorkerCaseResult[]> {
   const pool = await openSqlitePool({ directory });
   let n = 0;
   const harness: DriverHarness = {
@@ -120,12 +129,12 @@ async function runCases(directory: string): Promise<WorkerCaseResult[]> {
     persistent: true,
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of driverCases) await attempt(results, c.name, () => c.run(harness));
+  for (const c of named(driverCases, names)) await attempt(results, c.name, () => c.run(harness));
   await closing(pool, results, "cases");
   return results;
 }
 
-async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; forged: Uint8Array }): Promise<WorkerCaseResult[]> {
+async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; forged: Uint8Array }, names: string[]): Promise<WorkerCaseResult[]> {
   const pool = await openSqlitePool({ directory });
   let n = 0;
   const harness: OpenHarness & ObjectHarness & ExportHarness & ImportHarness = {
@@ -138,7 +147,7 @@ async function runOpenCases(directory: string, utf16: { snapshot: Uint8Array; fo
     memoryUsed: memoryUsedIn(pool),
   };
   const results: WorkerCaseResult[] = [];
-  for (const c of [...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases, ...importCases]) await attempt(results, c.name, () => c.run(harness));
+  for (const c of named([...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases, ...importCases], names)) await attempt(results, c.name, () => c.run(harness));
   await closing(pool, results, "open cases");
   return results;
 }
@@ -193,9 +202,9 @@ async function runExchange(directory: string, snapshot: Uint8Array): Promise<Exc
   return result;
 }
 
-async function runPoolCases(): Promise<WorkerCaseResult[]> {
+async function runPoolCases(names: string[]): Promise<WorkerCaseResult[]> {
   const results: WorkerCaseResult[] = [];
-  for (const c of poolCases) await attempt(results, c.name, () => c.run(openSqlitePool));
+  for (const c of named(poolCases, names)) await attempt(results, c.name, () => c.run(openSqlitePool));
   return results;
 }
 
@@ -206,15 +215,15 @@ function describe(err: unknown): string {
 async function handle(command: WorkerCommand): Promise<unknown> {
   switch (command.cmd) {
     case "cases":
-      return runCases(command.directory);
+      return runCases(command.directory, command.names);
     case "open":
-      return runOpenCases(command.directory, { snapshot: new Uint8Array(command.utf16.snapshot), forged: new Uint8Array(command.utf16.forged) });
+      return runOpenCases(command.directory, { snapshot: new Uint8Array(command.utf16.snapshot), forged: new Uint8Array(command.utf16.forged) }, command.names);
     case "suites":
       return runSuites(command.directory);
     case "exchange":
       return runExchange(command.directory, new Uint8Array(command.snapshot));
     case "pool":
-      return runPoolCases();
+      return runPoolCases(command.names);
     case "hold": {
       held.set(command.directory, await openSqlitePool({ directory: command.directory }));
       return "held";

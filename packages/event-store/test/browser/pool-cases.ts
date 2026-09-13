@@ -8,12 +8,11 @@
 import type { SqlitePool, SqlitePoolOptions } from "../../src/browser.js";
 import { SqliteObjectStore, createRuntime } from "../../src/v3/index.js";
 import { META, WRAPPED } from "../v3/fixtures.js";
-import { assertEqual, assertRejects, assertThrows, assertBytes, pattern } from "../v3/sqlite/driver-cases.js";
+import { type Case, assertEqual, assertRejects, assertThrows, assertBytes, pattern } from "../v3/sqlite/driver-cases.js";
 
 export type OpenPool = (options: SqlitePoolOptions) => Promise<SqlitePool>;
 
-export interface PoolCase {
-  name: string;
+export interface PoolCase extends Case {
   run(open: OpenPool): Promise<string | void>;
 }
 
@@ -159,6 +158,7 @@ export const poolCases: PoolCase[] = [
   },
   {
     name: "connections kept open keep the handles their staging and journals will take: each in turn stages and accepts an object past the temporary cache, another opens after them, and every one still writes",
+    large: true,
     run: async (open) => {
       const pool = await open({ directory: "/capacity-held" });
       const vaults: ReturnType<typeof createRuntime>[] = [];
@@ -186,6 +186,7 @@ export const poolCases: PoolCase[] = [
   },
   {
     name: "a repair whose statement journal outgrows memory finds its handle: with the pool's spare handles taken by imports beside the open connection, a damaged 32 MiB object is put again with its bytes, read back whole and no longer damaged",
+    large: true,
     run: async (open) => {
       const pool = await open({ directory: "/capacity-repair" });
       const template = await pool.open("template", "create");

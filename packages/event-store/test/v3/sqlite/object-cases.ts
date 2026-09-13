@@ -25,7 +25,7 @@ import {
   type SqliteDriver,
 } from "../../../src/v3/index.js";
 import { ANCHOR, META, WRAPPED } from "../fixtures.js";
-import { assert, assertBytes, assertEqual, assertRejects, assertThrows, type MemoryHeld } from "./driver-cases.js";
+import { type Case, assert, assertBytes, assertEqual, assertRejects, assertThrows, type MemoryHeld } from "./driver-cases.js";
 
 export interface ObjectHarness {
   /** A target no database exists at yet. */
@@ -36,8 +36,7 @@ export interface ObjectHarness {
   remove?(target: string): void | Promise<void>;
 }
 
-export interface ObjectCase {
-  name: string;
+export interface ObjectCase extends Case {
   run(harness: ObjectHarness): Promise<string | void>;
 }
 
@@ -382,6 +381,7 @@ export const objectCases: ObjectCase[] = [
   },
   {
     name: "staging goes to the temporary database's file under a bounded cache, so neither what JavaScript nor what SQLite holds grows with the object — and told to cache the whole staging, SQLite does; a put past the staging bound is refused with nothing staged",
+    large: true,
     run: async (h) => {
       const target = h.fresh();
       const db = createRuntime(await h.open(target, "create"), { metadata: META, wrapped: WRAPPED });

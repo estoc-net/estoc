@@ -1,15 +1,25 @@
 /**
- * What runs in the page: spawns the Workers, drives them through the
- * driver cases, the open cases, the conformance suites, the exchange
- * of a snapshot with the other platform, the pool cases and the pool's
- * ownership, and reports every outcome as one list the test reads
- * back, with what the exchange made. The page itself tries the pool
- * once, to see it refused outside a Worker. A Worker that asks what
- * memory it holds is measured from here, over the DevTools protocol
- * the test exposes to the page before it loads.
+ * What runs in the page: spawns the Workers, all at once, each with a
+ * directory of its own — the driver cases, the open cases, the
+ * conformance suites, the exchange of a snapshot with the other
+ * platform and the pool cases, every large case in a Worker of its
+ * own and the rest of its list together in another — tries the pool's
+ * ownership across two more, and reports every outcome as one list
+ * the test reads back, with what the exchange made. The page itself
+ * tries the pool once, to see it refused outside a Worker. A Worker
+ * that asks what memory it holds is measured from here, over the
+ * DevTools protocol the test exposes to the page before it loads.
  */
 
 import { openSqlitePool } from "../../src/browser.js";
+import { type Case, driverCases } from "../v3/sqlite/driver-cases.js";
+import { eventCases } from "../v3/sqlite/event-cases.js";
+import { exportCases } from "../v3/sqlite/export-cases.js";
+import { importCases } from "../v3/sqlite/import-cases.js";
+import { objectCases } from "../v3/sqlite/object-cases.js";
+import { openCases } from "../v3/sqlite/open-cases.js";
+import { vaultCases } from "../v3/sqlite/vault-cases.js";
+import { poolCases } from "./pool-cases.js";
 import type { Exchanged, PageAnswer, WorkerAsk, WorkerCaseResult, WorkerReply, WorkerRequest } from "./sqlite-worker.js";
 
 export interface SuiteInput {
@@ -167,6 +177,14 @@ async function attempt(name: string, body: () => Promise<string | void>): Promis
   }
 }
 
+const OPEN_CASES = [...openCases, ...eventCases, ...objectCases, ...vaultCases, ...exportCases, ...importCases];
+
+/** The names one Worker each is given: the list's small cases together, then every large one alone. */
+function shares(cases: Case[]): string[][] {
+  const small = cases.filter((c) => c.large === undefined).map((c) => c.name);
+  return [small, ...cases.filter((c) => c.large !== undefined).map((c) => [c.name])];
+}
+
 window.runSqliteSuite = async ({ utf16, snapshot }: SuiteInput): Promise<SuiteOutput> => {
   const results: WorkerCaseResult[] = [];
   results.push(
@@ -180,21 +198,31 @@ window.runSqliteSuite = async ({ utf16, snapshot }: SuiteInput): Promise<SuiteOu
       throw new Error("the main thread got a pool");
     })
   );
-  const first = new Driven();
-  const second = new Driven();
+  const workers: Driven[] = [];
+  const driven = (): Driven => {
+    const worker = new Driven();
+    workers.push(worker);
+    return worker;
+  };
+  const casesOf = (command: WorkerRequest): Promise<WorkerCaseResult[]> => driven().send(command) as Promise<WorkerCaseResult[]>;
   try {
-    results.push(...((await first.send({ cmd: "cases", directory: "/cases" })) as WorkerCaseResult[]));
-    results.push(...((await first.send({ cmd: "open", directory: "/open", utf16 })) as WorkerCaseResult[]));
-    const suites = (await first.send({ cmd: "suites", directory: "/suites" })) as WorkerCaseResult[];
-    const exchanged = (await first.send({ cmd: "exchange", directory: "/crossing", snapshot })) as Exchanged;
+    const running = [
+      ...shares(driverCases).map((names, i) => casesOf({ cmd: "cases", directory: `/cases-${i}`, names })),
+      ...shares(OPEN_CASES).map((names, i) => casesOf({ cmd: "open", directory: `/open-${i}`, utf16, names })),
+      ...shares(poolCases).map((names) => casesOf({ cmd: "pool", names })),
+    ];
+    const suites = casesOf({ cmd: "suites", directory: "/suites" });
+    const exchanged = driven().send({ cmd: "exchange", directory: "/crossing", snapshot }) as Promise<Exchanged>;
+    const holder = driven();
+    const second = driven();
     results.push(
       await attempt("a second Worker is refused the directory another holds, and admitted once it is released", async () => {
-        await first.send({ cmd: "hold", directory: "/owned" });
+        await holder.send({ cmd: "hold", directory: "/owned" });
         try {
           await second.send({ cmd: "hold", directory: "/owned" });
         } catch (err) {
           if (!(err instanceof Error && /^DatabaseBusy:/.test(err.message))) throw err;
-          await first.send({ cmd: "release" });
+          await holder.send({ cmd: "release" });
           await second.send({ cmd: "hold", directory: "/owned" });
           await second.send({ cmd: "release" });
           return;
@@ -204,21 +232,16 @@ window.runSqliteSuite = async ({ utf16, snapshot }: SuiteInput): Promise<SuiteOu
     );
     results.push(
       await attempt("a terminated Worker's directory frees up for the next", async () => {
-        await first.send({ cmd: "hold", directory: "/abandoned" });
-        first.terminate();
-        const third = new Driven();
-        try {
-          await third.send({ cmd: "hold", directory: "/abandoned" });
-          await third.send({ cmd: "release" });
-        } finally {
-          third.terminate();
-        }
+        await holder.send({ cmd: "hold", directory: "/abandoned" });
+        holder.terminate();
+        const third = driven();
+        await third.send({ cmd: "hold", directory: "/abandoned" });
+        await third.send({ cmd: "release" });
       })
     );
-    results.push(...((await second.send({ cmd: "pool" })) as WorkerCaseResult[]));
-    return { results, suites, exchanged };
+    for (const list of await Promise.all(running)) results.push(...list);
+    return { results, suites: await suites, exchanged: await exchanged };
   } finally {
-    first.terminate();
-    second.terminate();
+    for (const worker of workers) worker.terminate();
   }
 };

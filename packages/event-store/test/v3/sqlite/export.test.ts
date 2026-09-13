@@ -30,7 +30,7 @@ import { META, WRAPPED } from "../fixtures.js";
 import { heldOnNode } from "./node-memory.js";
 
 /** Long enough for the cases that stream 64 MiB through a commit, a read, an export and a restore on a slow machine. */
-const LARGE_OBJECT_TIME_LIMIT = 120_000;
+const LARGE_CASE_TIME_LIMIT = 120_000;
 import { all } from "../suite/helpers.js";
 import { exportCases, type ExportHarness } from "./export-cases.js";
 import { HELLO, HELLO_CID, draft, rootsOf } from "./vault-cases.js";
@@ -84,7 +84,7 @@ describe("the export cases on node:sqlite files", () => {
         const note = await c.run(harness);
         if (note !== undefined) console.info(`on node:sqlite: ${c.name}: ${note}`);
       },
-      LARGE_OBJECT_TIME_LIMIT
+      c.large ? LARGE_CASE_TIME_LIMIT : undefined
     );
   }
 });
