@@ -181,9 +181,11 @@
   recipient resolution taken at its key, verified against its document
   and pinned by a node of the peer chain (one a peer edge would add
   waits); the one ACK-bearing response per execution, a second message
-  ID conflicting both; an automatic intent's carrier group, complete
-  in the intent's relationship, else waiting, else — anonymous, scoped
-  elsewhere, in conflict — a contradiction; `ackWitnesses`, the
+  ID conflicting both; an automatic intent's carrier groups, one
+  complete in the intent's relationship and every complete one
+  agreeing on the intent, else waiting, else — anonymous, scoped
+  elsewhere, in conflict, two complete groups of the peer's prior and
+  successor keys disagreeing — a contradiction; `ackWitnesses`, the
   complete scoped observations of complete groups in the relationship
   whose `ack` names the message, applied only once membership is
   verified, the earliest as `receiptInstant`, `late` at or after

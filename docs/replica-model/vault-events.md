@@ -2805,8 +2805,26 @@ by verified scoped transitions under [distributed-delivery.md section 9](distrib
 and agree on intent hashes with valid package evidence.
 This is the only cross-peer-key wire-ID merge.
 
-Each resulting conflict-free logical group uses its derived execution ID under
+Before authorizing new automatic work, compare the complete authenticated
+logical groups that derive the same execution ID. If two such groups have
+different intent hashes, that execution is in intent conflict, even when
+each observation message-ID group is individually consistent and their
+sender keys are authorized by the same pinned document or by validated
+transitions of the same relationship. Keeping those groups separate does
+not give either group independent authority to execute under that ID.
+
+An execution in intent conflict authorizes no new automatic effect,
+preparation, repackaging or submission of an automatic outbound produced by
+that execution. Retain all committed observations and effects under their
+original identifiers. This conflict does not reopen a submitted message,
+change effect identity, or authorize envelope collection.
+
+When there is no such conflict, the resulting conflict-free logical group
+uses its derived execution ID under
 [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) for ACK processing and automatic effects.
+Missing observation evidence continues to follow the per-message-ID group
+rules above; it does not by itself prove an intent conflict between complete
+logical groups.
 
 A **control observation** is one of:
 
@@ -3883,7 +3901,7 @@ There is no migration requirement from an earlier event vocabulary.
      Shuffled enumeration and event import produce the same receiptInstant and
      late, independently of which eligible witness was used for lifting.
 
-### Group waits and transition validity (VE-140–VE-141)
+### Group waits and transition validity (VE-140–VE-142)
 
 140. <a id="ve-140"></a> A peer transition whose carrier's own row is complete applies while an
      equal edge of the same message ID group lacks its prior snapshot, and R
@@ -3901,3 +3919,13 @@ There is no migration requirement from an earlier event vocabulary.
      duplicate is scoped by the successor node the edge adds, with a null or
      a named trigger, in every import order. A duplicate at a key that no
      node and no edge of R names conflicts the group and the edge.
+142. <a id="ve-142"></a> Two complete authenticated observation groups of one wire ID in one
+     R, at the peer's prior and successor keys across a verified transition,
+     that agree on the intent are one logical carrier and reuse one execution
+     ID; two that disagree put that execution in intent conflict under
+     [section 10.6](#inbound-message-and-execution-fold): no automatic outbound
+     of that execution is prepared, repacked or submitted, an already
+     submitted one is not reopened, its envelopes are not collected, and a
+     response under another handler ID or ordinal is likewise suppressed.
+     An execution of another R or another wire ID is unaffected. The result
+     is the same in every import order.

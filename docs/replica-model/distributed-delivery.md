@@ -965,14 +965,20 @@ recovery are in [relationships.md section 11](relationships.md#early-private-add
 
 An automatic DIDComm output is one effect identified by
 `(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
-derived execution ID of a unique conflict-free carrier group. Each protocol
+derived execution ID of one conflict-free logical carrier after the
+observation-group and cross-key checks in [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
+Two complete logical groups with that same execution ID and different
+intent hashes are an execution conflict; the presence of one complete
+group cannot authorize automatic work while that conflict exists. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
 and output intent rules. Its outputs MUST obey [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s
 limit of one logical outbound carrying a non-empty `ack` per execution, across
 all producing tuples. Handler IDs and kinds are non-empty strings without
 U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
 leading zeros.
-Retries MUST NOT change the tuple to create another effect or evade a conflict.
+Retries MUST NOT change the tuple to create another effect or evade a
+conflict. Selecting a different handler, effect kind or ordinal cannot
+bypass a conflict of the carrier's execution ID.
 
 ```text
 effectKey = base64url(
@@ -1370,7 +1376,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     resolver attempts nor its local retention stop. No local retention timeout
     clears the pending claim.
 
-### Group waits and transition validity (DD-70)
+### Group waits and transition validity (DD-70–DD-71)
 
 70. <a id="dd-70"></a> A waiting observation of a message ID group suspends that group's
     execution and ACK processing; a transition or predecessor confirmation
@@ -1378,3 +1384,11 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     regardless. Only a contradiction propagates from the group to the
     transition, and it propagates to every edge the group witnesses or
     confirms.
+71. <a id="dd-71"></a> Two complete logical carrier groups deriving one execution ID with
+    different intent hashes are an execution conflict under section 11: no
+    automatic effect of that execution is prepared, repacked or submitted
+    under any handler ID, effect kind or ordinal; committed observations and
+    effects keep their identifiers; a submitted response is not reopened and
+    no envelope is collected on that account. Groups that agree on the
+    intent are one logical carrier under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold)
+    and share the execution.

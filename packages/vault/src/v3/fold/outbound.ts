@@ -445,41 +445,53 @@ function judgePackage(data: VaultData["message.prepared"], relationship: Relatio
   return { status: "verified" };
 }
 
-/** The observation groups by the execution ID their relationship and wire ID derive, and every group's wire ID. */
-type Carriers = { byExecution: ReadonlyMap<ExecutionId, readonly ObservationGroup[]>; wires: ReadonlyMap<MessageId, WireMessageId> };
+/** The observation groups, each with its intent, by the execution ID their relationship and wire ID derive, and every group's wire ID. */
+type Carriers = { byExecution: ReadonlyMap<ExecutionId, readonly Carrier[]>; wires: ReadonlyMap<MessageId, WireMessageId> };
+type Carrier = { group: ObservationGroup; intentHash: VaultData["message.in"]["intentHash"] };
 
 function carriersOf(set: VaultEventSet, relationships: RelationshipFold): Carriers {
   const wires = new Map<MessageId, WireMessageId>();
-  for (const receipt of set.of("message.in")) wires.set(receipt.data.messageId, receipt.data.wireMessageId);
-  const byExecution = new Map<ExecutionId, ObservationGroup[]>();
+  const intents = new Map<MessageId, Carrier["intentHash"]>();
+  for (const receipt of set.of("message.in")) {
+    wires.set(receipt.data.messageId, receipt.data.wireMessageId);
+    intents.set(receipt.data.messageId, receipt.data.intentHash);
+  }
+  const byExecution = new Map<ExecutionId, Carrier[]>();
   for (const [messageId, group] of relationships.groups) {
     if (group.status === "anonymous" || group.relationshipId === null) continue;
     const executionId = executionIdOf(group.relationshipId, wires.get(messageId)!);
+    const carrier = { group, intentHash: intents.get(messageId)! };
     const list = byExecution.get(executionId);
-    if (list === undefined) byExecution.set(executionId, [group]);
-    else list.push(group);
+    if (list === undefined) byExecution.set(executionId, [carrier]);
+    else list.push(carrier);
   }
   return { byExecution, wires };
 }
 
 /**
- * An automatic intent's carrier: the observation group whose
- * relationship and wire ID derive the intent's execution ID, which
- * must be complete in the intent's own relationship. A carrier scoped
- * elsewhere or in conflict contradicts the intent; one still waiting,
- * or not here, defers it. When no group derives the ID from its own
- * relationship, the groups are looked up by the intent's relationship
- * instead: a group that derives it so but is anonymous, or scoped
- * elsewhere, contradicts the intent, since the intent claims a scope
- * the carrier does not have; one whose scope is not yet known waits.
+ * An automatic intent's carrier: the observation groups whose
+ * relationship and wire ID derive the intent's execution ID, of which
+ * one must be complete in the intent's own relationship, and every
+ * complete one must agree on the intent — the peer's prior and
+ * successor keys may each have carried the message, and one execution
+ * cannot answer two intents. A carrier scoped elsewhere or in conflict
+ * contradicts the intent; one still waiting, or not here, defers it.
+ * When no group derives the ID from its own relationship, the groups
+ * are looked up by the intent's relationship instead: a group that
+ * derives it so but is anonymous, or scoped elsewhere, contradicts the
+ * intent, since the intent claims a scope the carrier does not have;
+ * one whose scope is not yet known waits.
  */
 function judgeCarrier(intent: MessageOut, context: Context, faults: string[], deferred: string[]): void {
   const executionId = intent.executionId!;
-  const groups = context.carriers.byExecution.get(executionId) ?? [];
-  if (groups.length > 0) {
+  const carriers = context.carriers.byExecution.get(executionId) ?? [];
+  if (carriers.length > 0) {
+    const groups = carriers.map((carrier) => carrier.group);
     const scoped = groups[0]! as { relationshipId: RelationshipId };
+    const complete = carriers.filter((carrier) => carrier.group.status === "complete");
     if (scoped.relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${scoped.relationshipId}, not ${intent.relationshipId}`);
-    else if (groups.some((group) => group.status === "complete")) return;
+    else if (new Set(complete.map((carrier) => carrier.intentHash)).size > 1) faults.push(`the carrier of execution ${executionId} is ${complete.length} complete groups that disagree on the intent`);
+    else if (complete.length > 0) return;
     else if (groups.some((group) => group.status === "incomplete")) deferred.push(`the carrier of execution ${executionId} awaits its evidence`);
     else faults.push(`the carrier of execution ${executionId} is in conflict: ${(groups.find((group) => group.status === "conflict") as { because: string }).because}`);
     return;

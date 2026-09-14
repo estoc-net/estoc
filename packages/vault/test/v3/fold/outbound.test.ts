@@ -191,6 +191,37 @@ describe("the outbound message", () => {
     });
   });
 
+  it("takes two complete cross-key groups of one wire ID as one carrier when they agree on the intent, and as an execution conflict that works nothing when they disagree", async () => {
+    const { scene, keys, peerKeys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
+    const source = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const rotation = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 2);
+    const snapshot = resolved(scene, a0.didId, b1);
+    const exec = executionId(R, source.data.wireMessageId);
+    const response = automatic(scene, R, { executionId: exec }, { ack: [source.data.wireMessageId] });
+    const pkg = packageOf(scene, response, { sender: a0.didId, recipient: b0, resolution: root });
+    const other = automatic(scene, R, { executionId: exec, handlerId: "https://didcomm.org/trust-ping/2.0", effectKind: "ping-response" });
+    const R2 = bound(scene, a1, b1, resolved(scene, a1.didId, b1)).R;
+    const elsewhere = automatic(scene, R2, { executionId: executionId(R2, uuidv7() as WireMessageId) });
+    const base = scene.events.length;
+    const agreeing = receipt(scene, { local: a0.didId, peer: b1, resolution: snapshot, binding, ordinal: 3, wire: source.data.wireMessageId, transition: ref(rotation.edge) });
+    let f = await fold(scene.events, keys);
+    expect(f.relationships.groups.get(agreeing.data.messageId)!.status).toBe("complete");
+    expect(outboundOf(f, response.data.messageId)).toMatchObject({ membership: { status: "verified" }, faults: [], work: { kind: "submit", packageIds: [pkg.data.packageId] } });
+
+    scene.events.length = base;
+    scene.add("delivery.submitted", { messageId: response.data.messageId, packageId: pkg.data.packageId });
+    const disagreeing = receipt(scene, { local: a0.didId, peer: b1, resolution: snapshot, binding, ordinal: 3, wire: source.data.wireMessageId, transition: ref(rotation.edge), overrides: { intentHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" as VaultData["message.in"]["intentHash"] } });
+    await expectFoldOrderFree(scene.events, keys, (folds) => {
+      expect(folds.relationships.groups.get(disagreeing.data.messageId)!.status).toBe("complete");
+      for (const id of [response.data.messageId, other.data.messageId]) {
+        expect(outboundOf(folds, id).faults).toEqual([`the carrier of execution ${exec} is 2 complete groups that disagree on the intent`]);
+        expect(outboundOf(folds, id)).toMatchObject({ outcome: "conflict", work: { kind: "none", because: "in conflict" } });
+      }
+      expect(outboundOf(folds, response.data.messageId).packages.get(pkg.data.packageId)!.submitted).toBe(true);
+      expect(outboundOf(folds, elsewhere.data.messageId)).toMatchObject({ faults: [], deferred: [expect.stringMatching(/is not here$/)] });
+    });
+  });
+
   it("is acknowledged by a complete scoped observation whose ack names it; the earliest witness is the receipt, late at or after expiry, a duplicate never later", async () => {
     const { scene, keys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
     const expiresTime = Math.floor(Date.UTC(2026, 8, 13, 0, 1) / 1000);
