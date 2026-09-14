@@ -19,6 +19,8 @@ import {
   MEDIATE_REQUEST,
   MESSAGES_RECEIVED,
   PLAIN_TYP,
+  RECIPIENT,
+  RECIPIENT_QUERY,
   RECIPIENT_UPDATE,
   RECIPIENT_UPDATE_RESPONSE,
   STATUS,
@@ -127,6 +129,10 @@ export class FakeMediator {
   private readonly secrets: Secret[];
   /** recipient DID → account (mediator-facing) DID */
   readonly recipients = new Map<string, string>();
+  /** the accounts granted mediation: what recipient-query answers for */
+  readonly granted = new Set<string>();
+  /** recipient DIDs every update of which is answered `server_error`: a mediator that will not hold them */
+  readonly refuse = new Set<string>();
   readonly queues = new Map<string, Queued[]>();
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
@@ -239,10 +245,21 @@ export class FakeMediator {
         return null;
       }
       case MEDIATE_REQUEST:
+        this.granted.add(from as string);
         return this.reply(MEDIATE_GRANT, from as string, { routing_did: [this.did] }, msg.id);
+      case RECIPIENT_QUERY: {
+        if (!this.granted.has(from as string)) {
+          return this.reply(PROBLEM_REPORT, from as string, { code: "e.p.not-mediated", comment: "mediation was not granted" }, msg.id);
+        }
+        const dids = [...this.recipients].filter(([, account]) => account === from).map(([recipient_did]) => ({ recipient_did }));
+        return this.reply(RECIPIENT, from as string, { dids, pagination: { count: dids.length, offset: 0, remaining: 0 } }, msg.id);
+      }
       case RECIPIENT_UPDATE: {
         const updates = (msg.body as { updates: { recipient_did: string; action: string }[] }).updates;
         const updated = updates.map((u) => {
+          if (this.refuse.has(u.recipient_did)) {
+            return { ...u, result: "server_error" };
+          }
           if (u.action === "add") {
             const had = this.recipients.get(u.recipient_did);
             this.recipients.set(u.recipient_did, from as string);

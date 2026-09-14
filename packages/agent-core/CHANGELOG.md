@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Version 3 begins**, under `@estoc/agent-core/v3`: the agent's
+  skeleton and identity over the version-3 vault. `openVault`,
+  `createVault`, `inspectRuntime` and `inspectSnapshot` open the SQLite
+  runtime of `@estoc/event-store/v3` with the seed's keys of
+  `@estoc/vault/v3` — the seed or a passphrase verified against the
+  anchor before anything is derived, the fold read once at open, an
+  inspector that writes nothing and a snapshot validated whole. `Keyring`
+  holds the two keys of every verified communication-DID entity and
+  mediation identity under both Peer DID spellings for didcomm's secrets
+  resolver. `AgentTrace` keeps what the runtime observed in the local
+  trace, one prune policy per level, `traceOf` following the onion of
+  one message. `MediatorLink` and `Pickup` carry over with the new key
+  source and trace. `createMediation`, `establish`, `reconcile` and
+  `selectMediation` record an arrangement before the mediator is asked,
+  its grant when it comes, and make the mediator hold exactly the live
+  DIDs on its routes by recipient-query and recipient-update.
+  `configureRoute`, `ensureRoute`, `createDid`, `disclose` and
+  `retireDid` are the route and address lifecycle: a DID minted from its
+  ID and route alone and never recreated elsewhere, a mediated address
+  disclosed only once its registration is verified, an `oob` disclosure
+  carried by an invitation with the long form. The shared protocol
+  constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
 - **A share's blocks are in the vault once.** A recorded object-share —
   received (`keepShare`) or sent (`Agent.shareObject`, any `send` naming
   `roots`) — keeps its block attachments by id alone: the `data` is gone
