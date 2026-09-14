@@ -327,14 +327,20 @@
   binding, outbound work, relationships with application input and no
   contact assignment with the contact the default policy would assign
   and whether its tombstone forbids it, transitions and pending claims
-  waiting, the replies owed (acknowledgments requested, a natural
-  response for the types the application names, Trust Ping by
-  default) each with `senderGate`'s verdict on whether the relationship
-  may send one, the application inputs the default early-privacy
-  policy may take as a rotation trigger, profile disclosures without a
-  lift for the message types the application names, erases owed and
-  deletions unfinished — from the fold and never from a queue.
-  `UnknownContact` is thrown for a contact ID no event names.
+  waiting, the replies owed (acknowledgments requested, the natural
+  response of the types the application names, Trust Ping by default,
+  and the notification a frozen rotation trigger requires, each owed
+  until the execution has selected that natural response or an Empty
+  under its producing tuple, acknowledging or not) each with
+  `senderGate`'s verdict on whether the relationship may send one, the
+  application inputs the default early-privacy policy may take as a
+  rotation trigger, profile disclosures without a lift for the message
+  types the application names, erases owed and deletions unfinished —
+  from the fold and never from a queue. `UnknownContact` is thrown for
+  a contact ID no event names.
+- The outbound fold takes the erasures: an erased message has no work,
+  whatever bytes another event keeps, and neither has a deleted
+  contact's.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 

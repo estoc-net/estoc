@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 
 import {
   executionId,
+  foldErasures,
   foldInbound,
   foldOutbound,
   foldRelationships,
@@ -23,7 +24,7 @@ import {
   type WireMessageId,
 } from "../../../src/v3/index.js";
 import { checksOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
-import { IAT, automatic, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
+import { CONTACT, IAT, automatic, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
 
 type Folds = { routes: RouteFold; relationships: RelationshipFold; outbound: OutboundFold };
 type Verdicts = { keyChecks: KeyChecks; resolutionChecks: Awaited<ReturnType<typeof verifyResolutions>>; proofChecks: Awaited<ReturnType<typeof verifyTransitions>> };
@@ -39,7 +40,7 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function foldWith(set: VaultEventSet, v: Verdicts, resolutionChecks = v.resolutionChecks): Folds {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks });
-  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks }) };
+  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks, erasures: foldErasures(set) }) };
 }
 
 async function fold(events: readonly Event[], keys: Keys): Promise<Folds> {
@@ -651,6 +652,27 @@ describe("the outbound message", () => {
     expect(m.packages.get(wrongProof.data.packageId)!.membership).toEqual({ status: "conflict", because: "carries a proof that is not the transition's that added its sender" });
     expect(m.packages.get(rootWithProof.data.packageId)!.membership).toEqual({ status: "conflict", because: "carries a proof, though sent from the root" });
     expect(m.acknowledged).toBe(false);
+  });
+
+  it("works nothing for an erased message, whatever bytes another event keeps, and nothing for a deleted contact's", async () => {
+    const { scene, keys, R, a0, b0, root } = await bornAtRoot();
+    scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
+    const out = intent(scene, R);
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const other = intent(scene, R, { bodyCid: out.data.bodyCid });
+    const base = scene.events.length;
+    scene.add("message.erased", { messageId: out.data.messageId, dropCids: [pkg.data.envelopeCid], because: "user" });
+    await expectFoldOrderFree(scene.events, keys, ({ outbound }) => {
+      expect(outbound.outbounds.get(out.data.messageId)!.work).toEqual({ kind: "none", because: "erased" });
+      expect(outbound.outbounds.get(other.data.messageId)!.work).toEqual({ kind: "prepare" });
+    });
+
+    scene.events.length = base;
+    scene.add("contact.deleted", { contactId: CONTACT });
+    await expectFoldOrderFree(scene.events, keys, ({ outbound }) => {
+      expect(outbound.outbounds.get(out.data.messageId)!.work).toEqual({ kind: "none", because: `the contact ${CONTACT} is deleted` });
+      expect(outbound.outbounds.get(other.data.messageId)!.work).toEqual({ kind: "none", because: `the contact ${CONTACT} is deleted` });
+    });
   });
 
   it("works nothing while the current local end is not live", async () => {

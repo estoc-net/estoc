@@ -4,19 +4,20 @@ import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
 import {
+  EMPTY_RESPONSE,
   Keys,
+  PING_RESPONSE,
   UnknownContact,
-  automaticMessageId,
   checkVault,
   closeErasures,
   collectGarbage,
   contactIdOf,
   deleteContact,
   deletionOf,
-  effectKey,
   eraseMessage,
   executionId,
   foldVault,
+  logicalMessageIds,
   rawCidOfBytes,
   relationshipId,
   scanVault,
@@ -33,11 +34,12 @@ import {
   type VaultChecks,
   type WorkOptions,
 } from "../../src/v3/index.js";
-import { DID_ID, DID_ID2, DID_ID3, ROUTE, SEED, Scene, cidOf, expectOrderFree } from "./fold/helpers.js";
+import { AUTHOR, ROUTE, SEED, Scene, cidOf, expectOrderFree } from "./fold/helpers.js";
 import { CONTACT, CONTACT2, IAT, automatic, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./fold/scene.js";
 
 const encoder = new TextEncoder();
 const PING = "https://didcomm.org/trust-ping/2.0/ping";
+const PING_RESPONSE_TYPE = "https://didcomm.org/trust-ping/2.0/ping-response";
 const PROFILE = "https://didcomm.org/user-profile/1.0/profile";
 
 /** A vault in memory holding the scene's events and the bytes of every text named. */
@@ -112,6 +114,31 @@ describe("erasing a message", () => {
     expect(closed.collected.removed).toEqual([aliasAttachment]);
     expect(unfinishedWork(await scanVault(vault.vault, keys)).erasures).toEqual([]);
     expect((await closeErasures(vault, keys)).events).toEqual([]);
+  });
+
+  it("extends an erasure only to the observation IDs proven to be the same message: one a contradicting observation claims under the wire ID stays, after a contact deletion's closure too", async () => {
+    const { scene, keys, a0, a1, b0, b1, root, root2, R1, binding1 } = await twoContacts();
+    const own = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding: binding1, ordinal: 1 });
+    const outside = receipt(scene, { local: a1.didId, peer: b1, resolution: root2, binding: binding1, ordinal: 2, wire: own.data.wireMessageId, overrides: { bodyCid: cidOf("unrelated") } });
+    const vault = await vaultOf(scene, [`body ${own.data.wireMessageId}`, "unrelated"]);
+    const fold = await scanVault(vault.vault, keys);
+    expect(fold.relationships.observations.get(outside.eventId)!.status).toBe("conflict");
+    const execution = fold.inbound.executions.get(executionId(R1, own.data.wireMessageId))!;
+    expect(execution.status).toBe("complete");
+    expect(execution.messageIds).toEqual([own.data.messageId, outside.data.messageId].sort());
+    expect(logicalMessageIds(fold, own.data.messageId)).toEqual([own.data.messageId]);
+    expect(logicalMessageIds(fold, outside.data.messageId)).toEqual([outside.data.messageId]);
+
+    const erased = await eraseMessage(vault, keys, own.data.messageId);
+    expect(erased.events.map((event) => event.data)).toEqual([{ messageId: own.data.messageId, dropCids: [own.data.bodyCid], because: "user" }]);
+    expect(await has(vault, outside.data.bodyCid)).toBe(true);
+    expect(unfinishedWork(await scanVault(vault.vault, keys)).erasures).toEqual([]);
+
+    const deleting = await vaultOf(scene, [`body ${own.data.wireMessageId}`, "unrelated"]);
+    const deleted = await deleteContact(deleting, keys, CONTACT);
+    expect(deleted.events.filter((event) => event.type === "message.erased").map((event) => event.data.messageId)).toEqual([own.data.messageId]);
+    expect((await closeErasures(deleting, keys)).events).toEqual([]);
+    expect(await has(deleting, outside.data.bodyCid)).toBe(true);
   });
 
   it("hands the event store the same retention for collection, export and validation", async () => {
@@ -189,7 +216,7 @@ describe("deleting a contact", () => {
   });
 
   it("retires the route once every address binding it is retired, one of them for a deleted contact, and keeps an address disclosed by an invitation no relationship of the contact consumed", async () => {
-    const { scene, keys, a0, a1, a2, b0, b1, b2, root, root2, root3, R1, R2, R3, binding1 } = await twoContacts();
+    const { scene, keys, a0, a1, a2, b0, root, R2, binding1 } = await twoContacts();
     scene.add("relationship.contactAssigned", { relationshipId: R2, contactId: CONTACT });
     scene.events.splice(scene.events.findIndex((event) => event.type === "relationship.contactAssigned" && (event.data as { contactId: ContactId }).contactId === CONTACT2), 1);
     scene.add("did.disclosed", { didId: a0.didId, as: "oob", uses: "one", oobId: "oob-a0", goal: null });
@@ -204,7 +231,27 @@ describe("deleting a contact", () => {
     scene.add("did.retired", { didId: a1.didId, because: "user" });
     deletion = deletionOf(foldVault(VaultEventSet.of(scene.events), await checkVault(VaultEventSet.of(scene.events), keys, noObjects)), CONTACT);
     expect(deletion.retiredRoutes).toEqual([ROUTE]);
-    expect([R1, R2, R3, b1, b2, root2, root3, DID_ID, DID_ID2, DID_ID3].length).toBe(10);
+  });
+
+  it("leaves a deleted contact's message no work, an unsubmitted package included, whatever bytes another event keeps and though its address stays live for a public disclosure", async () => {
+    const { scene, keys, R, a0, b0, root } = await bornAtRoot();
+    scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
+    scene.add("did.disclosed", { didId: a0.didId, as: "oob", uses: "many", oobId: "public", goal: null });
+    const out = intent(scene, R);
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.events.push({ eventId: uuidv7(), at: scene.events.at(-1)!.at, author: AUTHOR, type: "application.keep", roots: [out.data.bodyCid, pkg.data.envelopeCid], data: {} } as Event);
+    const vault = await vaultOf(scene, [`body ${out.data.messageId}`, `envelope ${pkg.data.packageId}`]);
+    expect(unfinishedWork(await scanVault(vault.vault, keys)).outbound).toEqual([{ messageId: out.data.messageId, relationshipId: R, work: { kind: "submit", packageIds: [pkg.data.packageId] } }]);
+
+    const deleted = await deleteContact(vault, keys, CONTACT);
+    expect(deleted.deletion.retiredDids).toEqual([]);
+    expect(deleted.events.map((event) => event.type)).toEqual(["contact.deleted", "message.erased"]);
+    const fold = await scanVault(vault.vault, keys);
+    expect(fold.routes.dids.get(a0.didId)!.live).toBe(true);
+    expect(await has(vault, pkg.data.envelopeCid)).toBe(true);
+    expect(fold.outbound.outbounds.get(out.data.messageId)!.work).toEqual({ kind: "none", because: "erased" });
+    expect(unfinishedWork(fold).outbound).toEqual([]);
+    expect(senderGate(fold, R)).toBe(`the contact ${CONTACT} is deleted`);
   });
 });
 
@@ -264,8 +311,8 @@ describe("unfinished work", () => {
     expectWorkOrderFree(c, {}, (work) => {
       expect(work.responses).toEqual(
         [
-          { executionId: askedId, relationshipId: R, wireMessageId: asked.data.wireMessageId, kind: "ack", ackTargets: [asked.data.wireMessageId], blocked: null },
-          { executionId: pingId, relationshipId: R, wireMessageId: ping.data.wireMessageId, kind: "natural", ackTargets: [], blocked: null },
+          { executionId: askedId, relationshipId: R, wireMessageId: asked.data.wireMessageId, kind: "empty", ackTargets: [asked.data.wireMessageId], notifies: null, blocked: null },
+          { executionId: pingId, relationshipId: R, wireMessageId: ping.data.wireMessageId, kind: "natural", ackTargets: [], notifies: null, blocked: null },
         ].sort((a, b) => (a.executionId < b.executionId ? -1 : 1))
       );
       expect(work.rotations).toEqual([askedId, pingId, plainId].sort().map((id) => ({ relationshipId: R, executionId: id })));
@@ -300,7 +347,7 @@ describe("unfinished work", () => {
     const profileId = executionId(R, profile.data.wireMessageId);
     const ours = intent(scene, R, { msgType: PROFILE });
     const pkg = packageOf(scene, ours, { sender: a0.didId, recipient: b0, resolution: root });
-    const queued = intent(scene, R, { msgType: PROFILE });
+    intent(scene, R, { msgType: PROFILE });
     const options = { profileTypes: new Set([PROFILE]) };
     let work = workOf(await checked(scene.events, keys), options);
     expect(work.lifts).toEqual({ inbound: [{ executionId: profileId, relationshipId: R }], outbound: [] });
@@ -327,6 +374,52 @@ describe("unfinished work", () => {
     work = workOf(await checked(scene.events, keys), options);
     expect(work.lifts).toEqual({ inbound: [], outbound: [] });
     expect(work.deletions).toEqual([CONTACT]);
-    expect([queued, automaticMessageId, effectKey].length).toBe(3);
+  });
+
+  it("lists the notification a frozen rotation trigger is owed until a reply is selected, and takes a selected natural response or Empty as the reply whether or not it acknowledges", async () => {
+    const { scene, keys, R, a0, a1, a2, b0, root, binding } = await bornAtRoot();
+    scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
+    scene.add("did.disclosed", { didId: a0.didId, as: "oob", uses: "many", oobId: "oob-many", goal: null });
+    const plain = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const ping = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, overrides: { msgType: PING } });
+    const plainId = executionId(R, plain.data.wireMessageId);
+    const pingId = executionId(R, ping.data.wireMessageId);
+    const reply = automatic(scene, R, { executionId: pingId, handlerId: PING_RESPONSE.handlerId, effectKind: PING_RESPONSE.effectKind }, { msgType: PING_RESPONSE_TYPE, thid: ping.data.wireMessageId });
+    const pkg = packageOf(scene, reply, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.add("delivery.submitted", { messageId: reply.data.messageId, packageId: pkg.data.packageId });
+    let c = await checked(scene.events, keys);
+    expect(foldVault(VaultEventSet.of(c.events), c.checks).outbound.responses.has(pingId)).toBe(false);
+    expectWorkOrderFree(c, {}, (work) => {
+      expect(work.responses).toEqual([]);
+      expect(work.rotations).toEqual([{ relationshipId: R, executionId: plainId }]);
+    });
+
+    const edge = localEdge(scene, R, a0.didId, a1.didId, await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT), ref(plain));
+    c = await checked(scene.events, keys);
+    expectWorkOrderFree(c, {}, (work) => {
+      expect(work.transitions).toEqual([]);
+      expect(work.responses).toEqual([{ executionId: plainId, relationshipId: R, wireMessageId: plain.data.wireMessageId, kind: "empty", ackTargets: [], notifies: edge.eventId, blocked: null }]);
+      expect(work.rotations).toEqual([]);
+      expect(work.outbound).toEqual([]);
+    });
+
+    const successor = resolved(scene, a1.didId, b0);
+    const later = receipt(scene, { local: a1.didId, peer: b0, resolution: successor, binding, ordinal: 3, overrides: { msgType: PING } });
+    const laterId = executionId(R, later.data.wireMessageId);
+    const again = localEdge(scene, R, a1.didId, a2.didId, await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a2.longFormDid, IAT + 1), ref(later));
+    c = await checked(scene.events, keys);
+    expectWorkOrderFree(c, {}, (work) => {
+      expect(work.transitions).toEqual([]);
+      expect(work.responses).toEqual(
+        [
+          { executionId: plainId, relationshipId: R, wireMessageId: plain.data.wireMessageId, kind: "empty", ackTargets: [], notifies: edge.eventId, blocked: null },
+          { executionId: laterId, relationshipId: R, wireMessageId: later.data.wireMessageId, kind: "natural", ackTargets: [], notifies: again.eventId, blocked: null },
+        ].sort((a, b) => (a.executionId < b.executionId ? -1 : 1))
+      );
+    });
+
+    automatic(scene, R, { executionId: plainId, handlerId: EMPTY_RESPONSE.handlerId, effectKind: EMPTY_RESPONSE.effectKind }, { pleaseAck: [""] });
+    automatic(scene, R, { executionId: laterId, handlerId: EMPTY_RESPONSE.handlerId, effectKind: EMPTY_RESPONSE.effectKind }, { pleaseAck: [""] });
+    expect(workOf(await checked(scene.events, keys)).responses).toEqual([]);
   });
 });

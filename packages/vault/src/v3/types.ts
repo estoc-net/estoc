@@ -36,7 +36,6 @@ export type DeliveryId = string & { readonly __deliveryId: unique symbol };
 export type KeyName = string & { readonly __keyName: unique symbol };
 /** A complete canonical public-key value. */
 export type PublicKey = string & { readonly __publicKey: unique symbol };
-/** A DID string. */
 export type Did = string & { readonly __did: unique symbol };
 /** A verification-method DID URL. */
 export type DidUrl = string & { readonly __didUrl: unique symbol };

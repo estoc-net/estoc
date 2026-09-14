@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
+import { base32 } from "multiformats/bases/base32";
 
 import type { Cid, Event, JsonObject } from "@estoc/event-store";
 import { MemoryBlobStore } from "@estoc/event-store";
@@ -108,19 +109,7 @@ describe("v2 peer keys", () => {
     bytes[0] = 0xec;
     bytes[1] = 0x01;
     const digest = createHash("sha256").update(bytes).digest();
-    // an independent base32: BigInt arithmetic, no shared code with the implementation
-    let acc = 0n;
-    let bits = 0n;
-    let expected = "";
-    for (const byte of digest) {
-      acc = (acc << 8n) | BigInt(byte);
-      bits += 8n;
-      while (bits >= 5n && expected.length < 26) {
-        bits -= 5n;
-        expected += "abcdefghijklmnopqrstuvwxyz234567"[Number((acc >> bits) & 31n)];
-      }
-    }
-    expect(fingerprint(bytes)).toBe(expected);
+    expect(fingerprint(bytes)).toBe(base32.baseEncode(digest).slice(0, 26));
     expect(fingerprint(bytes)).toMatch(/^[a-z2-7]{26}$/);
   });
 

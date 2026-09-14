@@ -16,18 +16,25 @@ import { heldRootsOf, type Collected, type Event, type HeldRoots, type RetainedR
 
 import { UnknownContact } from "./errors.js";
 import { erased } from "./fold/held.js";
-import { ackTargets } from "./fold/inbound.js";
+import { ackTargets, type Execution } from "./fold/inbound.js";
 import type { Work } from "./fold/outbound.js";
 import type { PendingClaim } from "./fold/relationships.js";
 import { scanVault, type ScanOptions, type VaultFold } from "./fold/vault.js";
 import type { Keys } from "./identity.js";
-import { contactIdOf } from "./ids.js";
+import { contactIdOf, decimalOrdinal, type EffectTuple } from "./ids.js";
 import { vaultDraft, type VaultDraft } from "./schema.js";
 import type { Birth, Cid, ContactId, DidId, EventId, EventReference, ExecutionId, MessageId, RelationshipId, RouteId, VaultData, WireMessageId } from "./types.js";
 
 const CONTACT_DELETED = "contact-deleted";
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const PING = "https://didcomm.org/trust-ping/2.0/ping";
+
+/** The producing tuple of a response, apart from the execution it answers. */
+export type ResponseEffect = Omit<EffectTuple, "executionId">;
+
+/** The one Empty an execution may select: a pure acknowledgment, or the address notification a rotation trigger is owed. */
+export const EMPTY_RESPONSE: ResponseEffect = { handlerId: "https://estoc.dev/distributed-delivery/1.0#pure-ack", effectKind: "pure-ack", ordinal: decimalOrdinal(0) };
+export const PING_RESPONSE: ResponseEffect = { handlerId: "https://didcomm.org/trust-ping/2.0", effectKind: "ping-response", ordinal: decimalOrdinal(0) };
 
 // ---- retention -----------------------------------------------------------
 
@@ -48,11 +55,25 @@ export function collectGarbage(runtime: VaultRuntime, keys: Keys | null, options
 
 // ---- erasure -------------------------------------------------------------
 
-/** The message IDs of the logical message one belongs to: every observation ID of its execution, or the ID on its own. */
+/**
+ * The message IDs a logical message is known by: the observation IDs
+ * of the complete groups of its execution while the execution is
+ * complete, or the ID on its own. An execution also indexes the
+ * candidate IDs of groups still waiting or contradicting, and those
+ * are no alias: an erasure reaches only what is proven to be the same
+ * message, never a message a contradicting observation merely claims
+ * to be it.
+ */
 export function logicalMessageIds(fold: VaultFold, messageId: MessageId): MessageId[] {
-  for (const execution of fold.inbound.executions.values()) if (execution.messageIds.includes(messageId)) return [...execution.messageIds];
+  for (const execution of fold.inbound.executions.values()) {
+    if (execution.status !== "complete") continue;
+    const aliases = provenIds(fold, execution);
+    if (aliases.includes(messageId)) return aliases;
+  }
   return [messageId];
 }
+
+const provenIds = (fold: VaultFold, execution: Execution): MessageId[] => [...new Set(execution.eventIds.map((eventId) => fold.inbound.observations.get(eventId)!.messageId))].sort();
 
 /** Every root the events of each message name, by message ID: what its erasure must release. */
 function rootsByMessage(fold: VaultFold): Map<MessageId, Set<Cid>> {
@@ -270,13 +291,23 @@ export function senderGate(fold: VaultFold, relationshipId: RelationshipId): str
   return null;
 }
 
+/**
+ * A reply an execution is owed and no outbound has selected: its
+ * protocol's natural response, or an Empty. Whatever the reply is, it
+ * carries the acknowledgments the input requested, and when the input
+ * triggered a local rotation it carries that transition's proof, the
+ * notification the frozen trigger requires however the process ended
+ * between the edge and the intent.
+ */
 export type ResponseWork = {
   readonly executionId: ExecutionId;
   readonly relationshipId: RelationshipId;
   readonly wireMessageId: WireMessageId;
-  /** `ack`: the carrier requested acknowledgments and some target stands; `natural`: its protocol answers it, the body deciding how */
-  readonly kind: "ack" | "natural";
+  /** `natural`: the input's protocol answers it, the body deciding how; `empty`: an Empty acknowledges or notifies */
+  readonly kind: "natural" | "empty";
   readonly ackTargets: readonly WireMessageId[];
+  /** the applied local transition the input triggered, null when none */
+  readonly notifies: EventId | null;
   /** the sender gate's reason while no reply may be sent, null when one may */
   readonly blocked: string | null;
 };
@@ -306,14 +337,14 @@ export interface UnfinishedWork {
 export type WorkOptions = {
   /** the message types of supported profile disclosures; none when left out, since which protocols carry a profile is the application's */
   profileTypes?: ReadonlySet<string>;
-  /** the application message types whose protocol defines a natural response; Trust Ping when left out */
-  respondsTo?: ReadonlySet<string>;
+  /** the natural response each application message type's protocol defines, by type; Trust Ping's when left out */
+  respondsTo?: ReadonlyMap<string, ResponseEffect>;
 };
 
 /** Everything the events say is still to be done, read from the fold: what recovery enumerates on open, and what a worker picks from between operations. */
 export function unfinishedWork(fold: VaultFold, options: WorkOptions = {}): UnfinishedWork {
   const profileTypes = options.profileTypes ?? new Set<string>();
-  const respondsTo = options.respondsTo ?? new Set([PING]);
+  const respondsTo = options.respondsTo ?? new Map([[PING, PING_RESPONSE]]);
   const assigned = new Set(fold.set.of("relationship.contactAssigned").map((event) => event.data.relationshipId));
   const localEdges = new Set(fold.set.of("relationship.localTransitioned").map((event) => event.data.relationshipId));
   const stands = (relationshipId: RelationshipId) => {
@@ -331,13 +362,15 @@ export function unfinishedWork(fold: VaultFold, options: WorkOptions = {}): Unfi
   for (const message of [...fold.outbound.outbounds.values()].sort((a, b) => cmp(a.messageId, b.messageId))) {
     if (message.intent === null) continue;
     const { relationshipId, birth, msgType, bodyCid } = message.intent;
-    if (birth !== null && stands(relationshipId) === null && !message.conflict && !message.submitted && message.failed === null) births.push({ messageId: message.messageId, relationshipId, birth });
+    if (birth !== null && stands(relationshipId) === null && message.work.kind !== "none") births.push({ messageId: message.messageId, relationshipId, birth });
     if (message.work.kind !== "none") outbound.push({ messageId: message.messageId, relationshipId, work: message.work });
     if (profileTypes.has(msgType) && message.submitted && !erased(fold.erasures, message.messageId, bodyCid) && !deletedContact(relationshipId)) {
       if (!(fold.profiles.get(relationshipId)?.shares ?? []).some((share) => share.messageId === message.messageId)) outboundLifts.push({ messageId: message.messageId, relationshipId });
     }
   }
 
+  const selected = selectedEffects(fold);
+  const triggers = appliedTriggers(fold);
   const applicationIn = new Set<RelationshipId>();
   const responses: ResponseWork[] = [];
   const rotations: UnfinishedWork["rotations"][number][] = [];
@@ -347,11 +380,13 @@ export function unfinishedWork(fold: VaultFold, options: WorkOptions = {}): Unfi
     const { executionId, relationshipId, wireMessageId } = execution;
     const application = execution.kind === "application";
     if (application) applicationIn.add(relationshipId);
-    const answered = fold.outbound.responses.has(executionId);
+    const natural = application ? (respondsTo.get(execution.intent!.msgType) ?? null) : null;
+    const effects = selected.get(executionId);
+    const answered = fold.outbound.responses.has(executionId) || effects?.has(effectId(EMPTY_RESPONSE)) === true || (natural !== null && effects?.has(effectId(natural)) === true);
     if (!answered) {
       const targets = ackTargets(fold.inbound, execution);
-      const natural = application && respondsTo.has(execution.intent!.msgType);
-      if (targets.length > 0 || natural) responses.push({ executionId, relationshipId, wireMessageId, kind: natural ? "natural" : "ack", ackTargets: targets, blocked: senderGate(fold, relationshipId) });
+      const notifies = triggers.get(executionId) ?? null;
+      if (targets.length > 0 || natural !== null || notifies !== null) responses.push({ executionId, relationshipId, wireMessageId, kind: natural === null ? "empty" : "natural", ackTargets: targets, notifies, blocked: senderGate(fold, relationshipId) });
       const relationship = stands(relationshipId);
       if (application && relationship !== null && relationship.localChain.length === 1 && !localEdges.has(relationshipId) && rootShared(fold, relationship.localChain[0]!.didId, relationshipId)) rotations.push({ relationshipId, executionId });
     }
@@ -383,6 +418,33 @@ export function unfinishedWork(fold: VaultFold, options: WorkOptions = {}): Unfi
     erasures: erasureClosure(fold),
     deletions: deletedContacts(fold).filter((contactId) => deletionOf(fold, contactId).drafts.length > 0),
   };
+}
+
+const effectId = (effect: ResponseEffect) => `${effect.handlerId}\0${effect.effectKind}\0${effect.ordinal}`;
+
+/** The producing tuples committed under each execution, whatever became of their messages: a selection is not made twice. */
+function selectedEffects(fold: VaultFold): Map<ExecutionId, Set<string>> {
+  const selected = new Map<ExecutionId, Set<string>>();
+  for (const event of fold.set.of("message.out")) {
+    const { executionId, handlerId, effectKind, ordinal } = event.data;
+    if (executionId === null) continue;
+    const effects = selected.get(executionId);
+    const id = effectId({ handlerId: handlerId!, effectKind: effectKind!, ordinal: ordinal! });
+    if (effects === undefined) selected.set(executionId, new Set([id]));
+    else effects.add(id);
+  }
+  return selected;
+}
+
+/** The applied local transition each execution triggered, by the trigger's execution. */
+function appliedTriggers(fold: VaultFold): Map<ExecutionId, EventId> {
+  const triggers = new Map<ExecutionId, EventId>();
+  for (const edge of fold.set.of("relationship.localTransitioned")) {
+    if (edge.data.triggerEventId === null || fold.relationships.transitions.get(edge.eventId)?.status !== "applied") continue;
+    const executionId = fold.inbound.observations.get(edge.data.triggerEventId)?.executionId ?? null;
+    if (executionId !== null && !triggers.has(executionId)) triggers.set(executionId, edge.eventId);
+  }
+  return triggers;
 }
 
 /** The root address is one the default policy would leave: disclosed for many uses or by invitation, or in another relationship's validated local history. */

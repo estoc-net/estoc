@@ -27,7 +27,8 @@ import { InvalidDidDocument, InvalidIdentifier } from "../errors.js";
 import { executionId as executionIdOf, relationshipId as relationshipIdOf } from "../ids.js";
 import { canonicalDidOf } from "../peer-document.js";
 import type { VaultEvent } from "../schema.js";
-import type { Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData } from "../types.js";
+import type { ContactId, Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData } from "../types.js";
+import type { Erasures } from "./held.js";
 import type { InboundFold } from "./inbound.js";
 import type { EvidenceCheck, LocalNode, Relationship, RelationshipFold } from "./relationships.js";
 import type { RouteFold } from "./routes.js";
@@ -60,12 +61,16 @@ export type Outcome = "conflict" | "submitted" | "failed" | "prepared" | "queued
  * What the active runtime may do next for the message, from the
  * events alone: prepare a first or replacement package, submit one of
  * the packages named (in canonical order), retire the packages named
- * and prepare from the current local end, or nothing, and why. Work
- * waits while a local transition of the relationship is still
- * unjudged, since it may move the current end; a package from a
- * successor no input has yet confirmed is submittable only with the
- * transition's proof. The worker still compares the clock with
- * `expiresTime` and checks that the envelope bytes are here.
+ * and prepare from the current local end, or nothing, and why. An
+ * erased message has no work, whatever bytes another event still
+ * keeps: nothing rebuilds content the user released, nothing sends an
+ * envelope of it. A deleted contact's message has none either, since
+ * the tombstone ends every interaction with it. Work waits while a
+ * local transition of the relationship is still unjudged, since it
+ * may move the current end; a package from a successor no input has
+ * yet confirmed is submittable only with the transition's proof. The
+ * worker still compares the clock with `expiresTime` and checks that
+ * the envelope bytes are here.
  */
 export type Work =
   | { readonly kind: "none"; readonly because: string }
@@ -118,6 +123,8 @@ export interface OutboundFold {
 export type OutboundFoldOptions = {
   /** each `peer.resolved` event's snapshot against its document, by event ID */
   resolutionChecks?: ReadonlyMap<EventId, EvidenceCheck>;
+  /** the roots each message's erasures released; none when left out */
+  erasures?: Erasures;
 };
 
 type Receipt = VaultEvent<"message.in">;
@@ -137,6 +144,8 @@ type Context = {
   peerEdges: ReadonlyMap<RelationshipId, VaultEvent<"relationship.peerTransitioned">[]>;
   /** the keys scoped input in each relationship arrived at, in a group that does not contradict: what confirms a local address */
   confirmedKeys: ReadonlyMap<RelationshipId, ReadonlySet<KeyName>>;
+  erasures: Erasures;
+  deletedContacts: ReadonlySet<ContactId>;
 };
 
 const NO_CHECKS: ReadonlyMap<EventId, EvidenceCheck> = new Map();
@@ -193,6 +202,8 @@ export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationship
     localEdges: groupBy(set.of("relationship.localTransitioned"), (event) => event.data.relationshipId),
     peerEdges: groupBy(set.of("relationship.peerTransitioned"), (event) => event.data.relationshipId),
     confirmedKeys,
+    erasures: options.erasures ?? new Map(),
+    deletedContacts: new Set(set.of("contact.deleted").map((event) => event.data.contactId)),
   };
 
   const outbounds = new Map<MessageId, Outbound>();
@@ -551,6 +562,9 @@ function workOf(intent: MessageOut | null, relationship: Relationship | undefine
   if (conflict) return { kind: "none", because: "in conflict" };
   if (submitted) return { kind: "none", because: "submitted" };
   if (failed !== null) return { kind: "none", because: `terminal failure: ${failed}` };
+  if (context.erasures.has(intent.messageId)) return { kind: "none", because: "erased" };
+  const contactId = relationship?.contactId ?? null;
+  if (contactId !== null && context.deletedContacts.has(contactId)) return { kind: "none", because: `the contact ${contactId} is deleted` };
   if (deferred.length > 0) return { kind: "none", because: `awaits evidence: ${deferred.join("; ")}` };
   const unjudged = (context.localEdges.get(intent.relationshipId) ?? []).filter((edge) => context.relationships.transitions.get(edge.eventId)?.status === "deferred");
   if (unjudged.length > 0) return { kind: "none", because: `awaits the local transition${unjudged.length > 1 ? "s" : ""} ${unjudged.map((edge) => edge.eventId).join(", ")}, which may move the current local end` };
