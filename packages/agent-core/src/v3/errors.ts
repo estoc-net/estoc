@@ -65,3 +65,11 @@ export class UnverifiedReply extends Error {
     this.name = "UnverifiedReply";
   }
 }
+
+/** The key an observation or a selection names is not one the resolved document authorizes for any use. */
+export class UnauthorizedKey extends Error {
+  constructor(did: string, publicKey: string) {
+    super(`${did}'s document authorizes no method carrying ${publicKey}`);
+    this.name = "UnauthorizedKey";
+  }
+}
