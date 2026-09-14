@@ -7,26 +7,11 @@
  * authenticated, since a repack to another of our keys or a verified
  * rotation of the peer's changes neither the message nor its
  * execution. The execution's intent is proven by every observation
- * whose own row is scoped there, read from that row alone, and two
- * that disagree contradict the execution whatever their groups later
- * wait for or contradict, since a proven disagreement is not undone by
- * less evidence; short of that, one group complete in the relationship
- * completes the execution, one still waiting defers it, and groups
- * that all contradict make it a conflict. A complete execution is
- * classified from the intent its observations agree on and the proofs
- * they carry: application input, or one of the control observations —
- * a pure acknowledgment, an address notification carrying a proof a
- * transition validated, a response correlated to an outbound of the
- * relationship, a no-response error — or a control type that fails
- * its predicate, which is neither. Anonymous groups are messages of
- * their own, with no execution. Receipt keys order acknowledgment
- * targets: the least key of a logical message's observations, compared
- * by the exact integer ordinal and then the author, never by the
- * clock; two events of one author under one ordinal are a receipt
- * conflict that keeps their messages from being fresh targets and
- * changes nothing else. The next ordinal to allocate is one above every
- * ordinal here, whoever recorded it and whether or not the message was
- * since erased.
+ * whose own row is scoped there, read from that row alone: two that
+ * disagree contradict the execution whatever their groups later wait
+ * for or contradict, since a proven disagreement is not undone by less
+ * evidence. Receipt keys order acknowledgment targets, compared by the
+ * exact integer ordinal and then the author, never by the clock.
  */
 
 import { canonicalize, compareEvents } from "@estoc/event-store/v3";
@@ -52,12 +37,13 @@ export function compareReceiptKeys(a: ReceiptKey, b: ReceiptKey): number {
 }
 
 /**
- * What a logical message is: application input, or a control
- * observation — a pure acknowledgment, an address notification whose
- * proof a transition validated, an Empty or ping response correlated
- * to an outbound of the relationship, a no-response error — or a
- * control type that fails its predicate, which is neither application
- * input nor executable.
+ * What a complete logical message is, from its agreed headers, its
+ * stored content's identity and its evidence: application input, or a
+ * control observation — a pure acknowledgment, an address notification
+ * carrying a proof a transition validated, an Empty or ping response
+ * in a thread an outbound of the relationship opened, a no-response
+ * error — or a control type that fails its predicate, which is neither
+ * application input nor executable.
  */
 export type MessageKind = "application" | "pure-ack" | "notification" | "response" | "error" | "malformed-control";
 
@@ -285,18 +271,7 @@ function threadsOf(set: VaultEventSet): Threads {
   return threads;
 }
 
-/**
- * The kind of a logical message from its agreed headers, its stored
- * content's identity and its evidence: `scoped` when it has a
- * relationship, `proven` when an observation of it whose row is scoped
- * carries a proof, `threads` what its relationship's outbounds opened.
- * An Empty must have an empty body and no attachment; Empty and ping
- * responses need a thread an outbound opened, a ping response one a
- * ping opened; a no-response error carries neither proof nor request
- * for acknowledgment, names its parent thread and has a relationship.
- * A control type that satisfies no predicate is malformed control, not
- * application input.
- */
+/** `scoped` when the message has a relationship, `proven` when an observation of it whose row is scoped carries a proof, `threads` what its relationship's outbounds opened. */
 function kindOf(data: MessageIn, evidence: { scoped: boolean; proven: boolean; threads: ReadonlyMap<string, ReadonlySet<string>> | undefined }): MessageKind {
   const { msgType, thid, pthid, pleaseAck, ack, fromPrior, bodyCid, attachmentCids } = data;
   const empty = bodyCid === EMPTY_DOCUMENT_CID && attachmentCids.length === 0;
@@ -316,10 +291,8 @@ function kindOf(data: MessageIn, evidence: { scoped: boolean; proven: boolean; t
  * The wire IDs a complete carrier may acknowledge: each ID its
  * `please_ack` requests, `""` standing for its own, that is a complete
  * execution in the carrier's own relationship and free of receipt
- * conflict, in first-receipt order. A wire ID another relationship
- * reuses is never one of them, and a carrier that is not complete, or
- * is malformed control, acknowledges nothing. Whether a usable sender
- * exists to answer with is the runtime's gate, not the fold's.
+ * conflict, in first-receipt order. Whether a usable sender exists to
+ * answer with is the runtime's gate, not the fold's.
  */
 export function ackTargets(inbound: InboundFold, carrier: Execution): WireMessageId[] {
   if (carrier.intent === null || carrier.intent.pleaseAck === null || carrier.kind === "malformed-control") return [];

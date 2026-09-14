@@ -18,7 +18,8 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function profilesWith(set: VaultEventSet, v: Verdicts): ReadonlyMap<RelationshipId, Profile> {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks });
-  return foldProfiles(set, relationships, foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks: v.resolutionChecks }));
+  const inbound = foldInbound(set, relationships);
+  return foldProfiles(set, relationships, inbound, foldOutbound(set, routes, relationships, inbound, { resolutionChecks: v.resolutionChecks }));
 }
 
 async function profile(events: readonly Event[], keys: Keys, R: RelationshipId): Promise<Profile> {
@@ -40,6 +41,7 @@ async function bornAtRoot() {
 }
 
 const keyOf = (event: Event) => ({ at: event.at, eventId: event.eventId, author: event.author });
+const OTHER_HASH = "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAQ" as VaultData["message.in"]["intentHash"];
 
 describe("the relationship profile", () => {
   it("is empty without lifts", async () => {
@@ -121,6 +123,33 @@ describe("the relationship profile", () => {
       `lift ${lifts[4]!.eventId} names message.out as its source`,
     ]);
     expect((await profile(scene.events, keys, R)).claimedName).toBe("F");
+  });
+
+  it("names nothing from a source whose execution two scoped observations put in intent conflict, a lift made before the contradicting alias arrived included, and keeps that conflict while the alias's group waits", async () => {
+    const { scene, keys, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
+    const older = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const source = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2 });
+    scene.add("profile.nameClaimed", { relationshipId: R, sourceEventId: ref(older), name: "Robert" });
+    const lift = scene.add("profile.nameClaimed", { relationshipId: R, sourceEventId: ref(source), name: "Bob" });
+    expect((await profile(scene.events, keys, R)).claimedName).toBe("Bob");
+    const rotation = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 3);
+    const alias = receipt(scene, { local: a0.didId, peer: b1, resolution: rotation.successor, binding, ordinal: 4, wire: source.data.wireMessageId, transition: ref(rotation.edge), overrides: { intentHash: OTHER_HASH } });
+    const contradicted = (profiles: ReadonlyMap<RelationshipId, Profile>) => {
+      const p = profileOf(profiles, R);
+      expect(p.claimedName).toBe("Robert");
+      expect(p.nameConflict).toBe(false);
+      expect(p.claims.map((claim) => claim.names)).toEqual([["Robert"]]);
+      expect(p.faults).toEqual([`lift ${lift.eventId} names a source whose execution is 2 scoped observations that disagree on the intent`]);
+      expect(p.deferred).toEqual([]);
+    };
+    await expectProfilesOrderFree(scene.events, keys, contradicted);
+    const gone = resolved(scene, a0.didId, b1);
+    receipt(scene, { local: a0.didId, peer: b1, resolution: gone, binding, ordinal: 5, wire: source.data.wireMessageId, transition: ref(rotation.edge), overrides: { intentHash: OTHER_HASH } });
+    const events = scene.events.filter((event) => event !== gone);
+    const v = await verdicts(events, keys);
+    const set = VaultEventSet.of(events);
+    expect(foldRelationships(set, foldChecked(set, v.keyChecks).routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks }).groups.get(alias.data.messageId)!.status).toBe("incomplete");
+    await expectProfilesOrderFree(events, keys, contradicted);
   });
 
   it("names nothing from a source at a pair another relationship claims", async () => {

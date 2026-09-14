@@ -343,6 +343,24 @@ describe("the outbound message", () => {
     expect(await workOf(scene.events)).toEqual(repack);
   });
 
+  it("is acknowledged by nothing whose execution two scoped observations put in intent conflict, the record it witnessed then naming no witness; the message itself stands and its work goes on", async () => {
+    const { scene, keys, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
+    const out = intent(scene, R);
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const ack = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1, overrides: { ack: [out.data.messageId] } });
+    scene.add("delivery.acknowledged", { messageId: out.data.messageId, localKeyName: ack.data.localKeyName, peerPublicKey: b0.publicKey, ackMessageId: ack.data.messageId, ackWireMessageId: ack.data.wireMessageId });
+    expect(outboundOf(await fold(scene.events, keys), out.data.messageId)).toMatchObject({ acknowledged: true, ackWitnesses: [ack.eventId], ackFaults: [] });
+    const rotation = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 2);
+    const alias = receipt(scene, { local: a0.didId, peer: b1, resolution: rotation.successor, binding, ordinal: 3, wire: ack.data.wireMessageId, transition: ref(rotation.edge), overrides: { intentHash: OTHER_INTENT } });
+    const exec = executionId(R, ack.data.wireMessageId);
+    await expectFoldOrderFree(scene.events, keys, (folds) => {
+      expect(folds.relationships.groups.get(alias.data.messageId)!.status).toBe("complete");
+      const m = outboundOf(folds, out.data.messageId);
+      expect(m).toMatchObject({ acknowledged: false, ackWitnesses: [], receiptInstant: null, ackDeferred: [], membership: { status: "verified" }, outcome: "prepared", work: { kind: "submit", packageIds: [pkg.data.packageId] } });
+      expect(m.ackFaults).toEqual([expect.stringMatching(new RegExp(`^acknowledgment .* names no witness: execution ${exec} is 2 scoped observations that disagree on the intent$`))]);
+    });
+  });
+
   it("judges an acknowledgment record by the witness rule: a matching observation scoped elsewhere or in a contradicting group witnesses nothing, one waiting for its binding or its snapshot's verdict defers", async () => {
     const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
     const out = intent(scene, R);

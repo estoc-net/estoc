@@ -15,6 +15,7 @@ import {
   keyOf,
   PROBLEM_REPORT,
   readProblemReports,
+  signFromPrior,
   storeMessage,
   verifyResolutions,
   verifyTransitions,
@@ -29,7 +30,7 @@ import {
   type WireMessageId,
 } from "../../../src/v3/index.js";
 import { checksOf, cidOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
-import { CONTACT, CONTACT2, bound, intent, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
+import { CONTACT, CONTACT2, IAT, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
 
 type Verdicts = { keyChecks: KeyChecks; resolutionChecks: Awaited<ReturnType<typeof verifyResolutions>>; proofChecks: Awaited<ReturnType<typeof verifyTransitions>> };
 
@@ -47,7 +48,7 @@ function viewsWith(set: VaultEventSet, v: Verdicts, options: ContactViewOptions 
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks });
   const inbound = foldInbound(set, relationships);
   const outbound = foldOutbound(set, routes, relationships, inbound, { resolutionChecks: v.resolutionChecks });
-  return foldContactViews(set, { routes, relationships, inbound, profiles: foldProfiles(set, relationships, outbound) }, options);
+  return foldContactViews(set, { routes, relationships, inbound, outbound, profiles: foldProfiles(set, relationships, inbound, outbound) }, options);
 }
 
 async function expectViewsOrderFree(events: readonly Event[], keys: Keys, check: (views: ReadonlyMap<ContactId, ContactView>) => void, options: ContactViewOptions = {}): Promise<void> {
@@ -164,16 +165,48 @@ describe("the contact view", () => {
     const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks });
     const inbound = foldInbound(set, relationships);
     expect(inbound.observations.get(observation.eventId)!.scope.status).not.toBe("scoped");
-    const diagnostics = foldDiagnostics(set, relationships, inbound, { problemReports: new Map(), erasures: foldErasures(set) });
+    const outbound = foldOutbound(set, routes, relationships, inbound, { resolutionChecks: v.resolutionChecks });
+    const diagnostics = foldDiagnostics(set, relationships, inbound, outbound, { problemReports: new Map(), erasures: foldErasures(set) });
     expect([...diagnostics.keys()]).toEqual([R1, R3].sort());
     expect(diagnostics.get(R3)![0]).toMatchObject({ kind: "peer-key-changed", eventId: elsewhere.observation.eventId, did: b2.did });
   });
 
-  it("shows a remote error's code beside the one outbound its parent thread names, none for an ambiguous thread, an erased or unread body, and orders reports by their earliest observation", async () => {
-    const { scene, keys, R1, a0, b0, root, binding1 } = await threeRelationships();
+  it("names no same-DID key change at a pair two relationships' histories both claim, since the observation identifies neither", async () => {
+    const { scene, keys, R1, a0, a1, b0, b3, binding1 } = await threeRelationships();
+    const fresh = resolved(scene, a0.didId, b0, { short: true, peerPublicKey: b3.publicKey, documentCid: cidOf(`a fresh document of ${b0.did}`) });
+    const wire = "wire-1" as WireMessageId;
+    const observation = receipt(scene, { local: a0.didId, peer: b0, resolution: fresh, binding: binding1, ordinal: 1, wire, overrides: { messageId: inboundMessageId(b3.publicKey, wire) } });
+    const contact = async () => viewsWith(VaultEventSet.of(scene.events), await verdicts(scene.events, keys)).get(CONTACT)!;
+    expect((await contact()).diagnostics).toEqual([{ kind: "peer-key-changed", relationshipId: R1, eventId: observation.eventId, resolutionEventId: ref(fresh), did: b0.did }]);
+    const twiceRoot = resolved(scene, a1.didId, b0);
+    const twice = bound(scene, a1, b0, twiceRoot);
+    const confirmation = receipt(scene, { local: a1.didId, peer: b0, resolution: twiceRoot, binding: twice.bound, ordinal: 2 });
+    expect((await contact()).diagnostics).toHaveLength(1);
+    localEdge(scene, twice.R, a1.didId, a0.didId, await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a0.longFormDid, IAT), ref(confirmation));
+    await expectViewsOrderFree(scene.events, keys, (views) => {
+      const view = views.get(CONTACT)!;
+      expect(view.diagnostics).toEqual([]);
+      expect(view.relationships.find((r) => r.relationshipId === R1)).toMatchObject({ standing: "conflict" });
+    });
+  });
+
+  it("shows a remote error's code beside the one outbound its parent thread names among those with a package sent within the chains: none for an unprepared outbound, an ambiguous thread, a candidate contradicted or waiting, an erased or unread body; orders reports by their earliest observation", async () => {
+    const { scene, keys, R1, a0, b0, b1, root, binding1 } = await threeRelationships();
     const answered = intent(scene, R1);
     const threadedOnce = intent(scene, R1, { thid: "T" });
     const threadedTwice = intent(scene, R1, { thid: "T" });
+    const unprepared = intent(scene, R1);
+    const sent = intent(scene, R1, { thid: "U" });
+    intent(scene, R1, { thid: "U" });
+    const outside = intent(scene, R1, { thid: "V" });
+    const alongside = intent(scene, R1, { thid: "W" });
+    const contradicted = intent(scene, R1, { thid: "W" });
+    const waiting = intent(scene, R1, { thid: "X" });
+    for (const out of [answered, threadedOnce, threadedTwice, sent, alongside]) packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const elsewhere = resolved(scene, a0.didId, b1);
+    for (const out of [outside, contradicted]) packageOf(scene, out, { sender: a0.didId, recipient: b1, resolution: elsewhere });
+    const gone = resolved(scene, a0.didId, b0);
+    packageOf(scene, waiting, { sender: a0.didId, recipient: b0, resolution: gone });
     const report = (ordinal: number, pthid: string, at?: string) => receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding: binding1, ordinal, overrides: { msgType: PROBLEM_REPORT, pthid } }, at === undefined ? {} : { at });
     const later = report(1, answered.data.messageId, "2026-09-14T13:00:09.000Z");
     const earlier = report(2, answered.data.messageId, "2026-09-14T13:00:01.000Z");
@@ -181,38 +214,64 @@ describe("the contact view", () => {
     const erased = report(4, answered.data.messageId);
     scene.add("message.erased", { messageId: erased.data.messageId, dropCids: [erased.data.bodyCid], because: "user" });
     const unread = report(5, answered.data.messageId);
+    const forUnprepared = report(6, unprepared.data.messageId);
+    const forQueued = report(7, "U", "2026-09-14T13:00:20.000Z");
+    const forOutside = report(8, "V");
+    const forAlongside = report(9, "W");
+    const forWaiting = report(10, "X");
     const problemReports = new Map<EventId, ProblemReport>([
       [later.eventId, { code: "e.p.xfer.later", comment: "late" }],
       [earlier.eventId, { code: "e.p.xfer.earlier", comment: null }],
       [ambiguous.eventId, { code: "e.p.ambiguous", comment: null }],
       [erased.eventId, { code: "e.p.erased", comment: null }],
+      [forUnprepared.eventId, { code: "e.p.unprepared", comment: null }],
+      [forQueued.eventId, { code: "e.p.queued", comment: null }],
+      [forOutside.eventId, { code: "e.p.outside", comment: null }],
+      [forAlongside.eventId, { code: "e.p.alongside", comment: null }],
+      [forWaiting.eventId, { code: "e.p.waiting", comment: null }],
     ]);
-    expect(threadedOnce.data.thid).toBe(threadedTwice.data.thid);
     expect(unread.data.pthid).toBe(answered.data.messageId);
+    const events = scene.events.filter((event) => event !== gone);
     await expectViewsOrderFree(
-      scene.events,
+      events,
       keys,
       (views) => {
         const view = views.get(CONTACT)!;
         expect(view.diagnostics).toEqual([
           { kind: "remote-error", relationshipId: R1, executionId: executionId(R1, earlier.data.wireMessageId), messageId: answered.data.messageId, code: "e.p.xfer.earlier", comment: null, sourceKey: keyOf(earlier) },
           { kind: "remote-error", relationshipId: R1, executionId: executionId(R1, later.data.wireMessageId), messageId: answered.data.messageId, code: "e.p.xfer.later", comment: "late", sourceKey: keyOf(later) },
+          { kind: "remote-error", relationshipId: R1, executionId: executionId(R1, forQueued.data.wireMessageId), messageId: sent.data.messageId, code: "e.p.queued", comment: null, sourceKey: keyOf(forQueued) },
         ]);
         expect(view.thread).toEqual([]);
       },
       { problemReports }
     );
+    const v = await verdicts(events, keys);
+    const set = VaultEventSet.of(events);
+    const routes = foldChecked(set, v.keyChecks).routes;
+    const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks });
+    const outbound = foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks: v.resolutionChecks });
+    expect([unprepared, outside, contradicted, waiting].map((out) => outbound.outbounds.get(out.data.messageId)!).map((m) => [m.packages.size, m.conflict, m.deferred.length > 0])).toEqual([
+      [0, false, false],
+      [1, true, false],
+      [1, true, false],
+      [1, false, true],
+    ]);
   });
 
-  it("reads each problem report's body from its object: a code and, if there, a comment; an object that is not here, does not read or has no code gives none", async () => {
+  it("reads each problem report's body from its object: a well-formed code, extension descriptors and state-name scopes included, and, if there, a comment; an object that is not here, does not read, has no code or a malformed one gives none", async () => {
     const { scene, a0, b0, root, binding1 } = await threeRelationships();
     const full = storeMessage({ code: "e.p.xfer", comment: "nope", args: ["x"] }, []);
     const bare = storeMessage({ code: "e.p.msg" }, []);
     const codeless = storeMessage({ comment: "why" }, []);
+    const extended = storeMessage({ code: "w.req-pending.custom-thing.v2" }, []);
+    const malformed = ["not a problem code", "x.p.msg", "e.p", "e.p.", "e..msg", "E.P.MSG", "e.p.-msg", "e.p.msg-", " e.p.msg", ""].map((code) => storeMessage({ code }, []));
     const objects = new Map<Cid, Uint8Array>([
       [full.bodyCid, full.bytes],
       [bare.bodyCid, bare.bytes],
       [codeless.bodyCid, codeless.bytes],
+      [extended.bodyCid, extended.bytes],
+      ...malformed.map((stored): [Cid, Uint8Array] => [stored.bodyCid, stored.bytes]),
       [cidOf("garbage"), new TextEncoder().encode("{")],
     ]);
     const at = (ordinal: number, bodyCid: Cid) => receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding: binding1, ordinal, overrides: { msgType: PROBLEM_REPORT, pthid: "x", bodyCid } });
@@ -221,11 +280,14 @@ describe("the contact view", () => {
     at(3, codeless.bodyCid);
     at(4, cidOf("garbage"));
     at(5, cidOf("absent"));
-    const ordinary = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding: binding1, ordinal: 6, overrides: { bodyCid: full.bodyCid } });
+    const three = at(6, extended.bodyCid);
+    malformed.forEach((stored, i) => at(7 + i, stored.bodyCid));
+    const ordinary = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding: binding1, ordinal: 20, overrides: { bodyCid: full.bodyCid } });
     const reports = await readProblemReports(VaultEventSet.of(scene.events), async (cid) => objects.get(cid) ?? null);
     expect([...reports]).toEqual([
       [one.eventId, { code: "e.p.xfer", comment: "nope" }],
       [two.eventId, { code: "e.p.msg", comment: null }],
+      [three.eventId, { code: "w.req-pending.custom-thing.v2", comment: null }],
     ]);
     expect(reports.has(ordinary.eventId)).toBe(false);
   });

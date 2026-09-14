@@ -328,15 +328,17 @@ type Witness = { readonly status: "complete" } | { readonly status: "incomplete"
 
 /**
  * Whether an observation acknowledges the message: its own row scoped
- * in the relationship, its group complete there and the message's
- * whole membership verified. Any of the three contradicting is final
- * whatever the others still wait for, since more evidence undoes no
+ * in the relationship, its group complete there, the execution its
+ * wire ID derives there free of conflict and the message's whole
+ * membership verified. Any of the four contradicting is final whatever
+ * the others still wait for, since more evidence undoes no
  * contradiction; only short of one does what is missing defer.
  */
 function witnessOf(context: Context, receipt: Receipt, relationshipId: RelationshipId, membership: Membership): Witness {
-  const { messageId } = receipt.data;
+  const { messageId, wireMessageId } = receipt.data;
   const group = context.relationships.groups.get(messageId);
   const scope = context.relationships.observations.get(receipt.eventId);
+  const execution = context.inbound.executions.get(executionIdOf(relationshipId, wireMessageId));
   if (membership.status === "conflict") return { status: "none", because: "the message's membership is in conflict" };
   if (group?.status === "anonymous") return { status: "none", because: `the observations of ${messageId} are anonymous` };
   if (group?.status === "conflict") return { status: "none", because: `the observations of ${messageId} are in conflict: ${group.because}` };
@@ -344,6 +346,7 @@ function witnessOf(context: Context, receipt: Receipt, relationshipId: Relations
   if (scope?.status === "anonymous") return { status: "none", because: `observation ${receipt.eventId} is anonymous` };
   if (scope?.status === "conflict") return { status: "none", because: `observation ${receipt.eventId} is in conflict: ${scope.because}` };
   if (scope !== undefined && scope.relationshipId !== null && scope.relationshipId !== relationshipId) return { status: "none", because: `observation ${receipt.eventId} is scoped in ${scope.relationshipId}, not ${relationshipId}` };
+  if (execution?.status === "conflict") return { status: "none", because: `execution ${execution.executionId} ${execution.because}` };
   if (scope === undefined) return { status: "incomplete", because: `observation ${receipt.eventId} awaits its scope` };
   if (scope.status === "deferred") return { status: "incomplete", because: `observation ${receipt.eventId} ${scope.because}` };
   if (group === undefined || group.status === "incomplete") return { status: "incomplete", because: `the observations of ${messageId} await their evidence` };

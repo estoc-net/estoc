@@ -262,13 +262,22 @@
   and the diagnostics of `foldDiagnostics`: the same-DID key change, an
   authenticated proof-free observation at one of the relationship's
   keys from its current peer DID under a document the peer chain does
-  not pin, kept out of the thread and never scoped, and the remote
-  error, a no-response problem report whose parent thread exactly one
-  outbound of the relationship opened, its code shown while its body is
-  here and unerased, ambiguity, absence and erasure each supplying none;
-  `readProblemReports` reads the reports' bodies from the objects
-  beside the fold. `SourceKey`, `keyOf` and `compareKeys` move to
-  `fold/set.ts`.
+  not pin, at an address pair the relationship alone claims, kept out
+  of the thread and never scoped, and the remote error, a no-response
+  problem report whose parent thread names exactly one outbound of the
+  relationship among those with a package prepared, that outbound sent
+  within the relationship's chains, its code shown while its body is
+  here and unerased; ambiguity, a candidate waiting or contradicted,
+  absence and erasure each supply none. `readProblemReports` reads the
+  reports' bodies from the objects beside the fold and admits only a
+  well-formed problem code: sorter, scope and at least one descriptor
+  in lower kebab-case. An observation whose execution two scoped
+  observations put in intent conflict acknowledges nothing and names
+  nothing: `foldOutbound` reads the execution beside the row and group
+  for every witness, and `foldProfiles` now takes the inbound fold and
+  makes the execution the logical source, one in intent conflict a
+  fault of every lift from it. `SourceKey`, `keyOf` and `compareKeys`
+  move to `fold/set.ts`.
   The test scene of two vaults is shared by the relationship, outbound,
   held-root and profile tests as `test/v3/fold/scene.ts`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s

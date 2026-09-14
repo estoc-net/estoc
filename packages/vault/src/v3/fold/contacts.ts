@@ -5,33 +5,21 @@
  * view of a contact, `foldContactViews`, adds what it holds through
  * the relationships uniquely assigned to it and nothing else: an
  * unassigned relationship, or one assigned to two contacts, gives no
- * contact a name, a message or a diagnostic. From those relationships
- * it takes the latest claimed name across them, the disclosures of our
- * profile each was sent, the local addresses still in use and the
- * current ends, which of them may be written to — standing, not
- * contradicted, with a live current local end and no local transition
- * still unjudged — and the thread: each complete application message
- * of theirs once, at its earliest observation, control input and
- * anything unresolved or in conflict left out. Two diagnostics are
- * read for each relationship, the same-DID key change (an
- * authenticated proof-free observation at one of the relationship's
- * keys, from the current peer DID under a document the peer chain
- * does not pin: preserved, never scoped, and named rather than waited
- * on) and the remote error (a no-response problem report whose parent
- * thread is exactly one outbound of the relationship, its code shown
- * while its body is here and unerased), and shown at the contact the
- * relationship is uniquely assigned to.
+ * contact a name, a message or a diagnostic. The diagnostics of each
+ * relationship are `foldDiagnostics`, and `readProblemReports` reads
+ * the problem reports' bodies beside the fold.
  */
 
 import { InvalidJson, parseStrict, type EventId } from "@estoc/event-store/v3";
 
 import { readStoredDocument } from "../document.js";
 import { InvalidPlaintext } from "../errors.js";
-import { inboundMessageId } from "../ids.js";
+import { didKeyName, inboundMessageId } from "../ids.js";
 import type { VaultEvent } from "../schema.js";
 import type { Cid, ContactId, ContactOrigin, Did, DidId, EventReference, ExecutionId, MessageId, RelationshipId, WireMessageId } from "../types.js";
 import { erased, foldErasures, type Erasures } from "./held.js";
 import { PROBLEM_REPORT, type Execution, type InboundFold } from "./inbound.js";
+import type { Outbound, OutboundFold } from "./outbound.js";
 import type { Profile } from "./profile.js";
 import type { ReadObject, Relationship, RelationshipFold } from "./relationships.js";
 import type { RouteFold } from "./routes.js";
@@ -166,7 +154,7 @@ export type Diagnostic =
       readonly kind: "remote-error";
       readonly relationshipId: RelationshipId;
       readonly executionId: ExecutionId;
-      /** the one outbound the report's parent thread names */
+      /** the one outbound of the relationship, prepared and sent within its chains, whose thread the report's parent thread names */
       readonly messageId: MessageId;
       readonly code: string;
       readonly comment: string | null;
@@ -207,6 +195,7 @@ export type ContactViewInputs = {
   routes: RouteFold;
   relationships: RelationshipFold;
   inbound: InboundFold;
+  outbound: OutboundFold;
   profiles: ReadonlyMap<RelationshipId, Profile>;
 };
 
@@ -217,9 +206,9 @@ export type ContactViewOptions = {
 };
 
 export function foldContactViews(set: VaultEventSet, folds: ContactViewInputs, options: ContactViewOptions = {}): ReadonlyMap<ContactId, ContactView> {
-  const { routes, relationships, inbound, profiles } = folds;
+  const { routes, relationships, inbound, outbound, profiles } = folds;
   const decisions = foldContacts(set);
-  const diagnostics = foldDiagnostics(set, relationships, inbound, { problemReports: options.problemReports ?? new Map(), erasures: options.erasures ?? foldErasures(set) });
+  const diagnostics = foldDiagnostics(set, relationships, inbound, outbound, { problemReports: options.problemReports ?? new Map(), erasures: options.erasures ?? foldErasures(set) });
   const assignedTo = new Map<ContactId, Set<RelationshipId>>();
   for (const event of set.of("relationship.contactAssigned")) {
     const ids = assignedTo.get(event.data.contactId);
@@ -285,21 +274,23 @@ function standingOf(relationship: Relationship): RelationshipStanding {
 
 /**
  * The diagnostics of each relationship, in canonical order of the
- * observation each is read from: the same-DID key changes and the
- * remote errors. A key change is an authenticated observation without
- * a proof, bound to the relationship, arrived at one of its keys, from
- * its current peer DID under a document no node of the peer chain
- * pins; its resolution must be here and be the one that authenticated
- * it — same key, DID, spelling and message ID — since the diagnostic
- * reads the key from that evidence; whether that snapshot has been
- * checked against its document does not hold the diagnostic back,
- * which names the change rather than waiting on more evidence. A remote error is a
- * complete no-response problem report whose parent thread exactly one
- * outbound intent of the relationship opened, contradicted intents
- * counted, with a body here and unerased at every observation of it;
- * ambiguity, absence and erasure each supply none.
+ * observation each is read from. A same-DID key change is an
+ * authenticated proof-free observation bound to the relationship at
+ * one of its keys, from its current peer DID under a document no node
+ * of the peer chain pins, whose resolution is the one that
+ * authenticated it — the diagnostic reads the key from that evidence
+ * — and whose address pair the relationship alone claims, since a
+ * pair two relationships claim identifies neither. Whether the
+ * snapshot has been checked against its document does not hold the
+ * diagnostic back: it names the change rather than waiting on more
+ * evidence. A remote error is a complete no-response problem report
+ * whose parent thread names exactly one outbound of the relationship
+ * with a package prepared, that outbound sent within the
+ * relationship's chains, with a body here and unerased at every
+ * observation of the report; ambiguity, an outbound still waiting or
+ * contradicted, absence and erasure each supply none.
  */
-export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipFold, inbound: InboundFold, options: { problemReports: ReadonlyMap<EventId, ProblemReport>; erasures: Erasures }): ReadonlyMap<RelationshipId, readonly Diagnostic[]> {
+export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipFold, inbound: InboundFold, outbound: OutboundFold, options: { problemReports: ReadonlyMap<EventId, ProblemReport>; erasures: Erasures }): ReadonlyMap<RelationshipId, readonly Diagnostic[]> {
   const receipts = new Map(set.of("message.in").map((receipt) => [receipt.eventId, receipt]));
   const drafts = new Map<RelationshipId, { diagnostic: Diagnostic; sourceKey: SourceKey }[]>();
   const add = (relationshipId: RelationshipId, diagnostic: Diagnostic, sourceKey: SourceKey) => {
@@ -314,7 +305,11 @@ export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipF
     const binding = set.resolve(relationshipBindingEventId, "relationship.bound");
     if (binding.status !== "present") continue;
     const relationship = relationships.relationships.get(binding.event.data.relationshipId);
-    if (relationship === undefined || relationship.currentPeerDid !== did || !relationship.recipientKeyNames.has(localKeyName)) continue;
+    if (relationship === undefined || did === null || relationship.currentPeerDid !== did) continue;
+    const local = relationship.localChain.find((node) => didKeyName(node.didId, "key-agreement") === localKeyName || didKeyName(node.didId, "authentication") === localKeyName);
+    if (local === undefined) continue;
+    const claimants = relationships.claimants(local.did, did);
+    if (claimants.length !== 1 || claimants[0] !== relationship.relationshipId) continue;
     const resolved = set.resolve(peerResolutionEventId, "peer.resolved");
     if (resolved.status !== "present") continue;
     const resolution = resolved.event.data;
@@ -323,23 +318,16 @@ export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipF
     add(relationship.relationshipId, { kind: "peer-key-changed", relationshipId: relationship.relationshipId, eventId: receipt.eventId, resolutionEventId: peerResolutionEventId, did }, { at: receipt.at, eventId: receipt.eventId, author: receipt.author });
   }
 
-  const threads = new Map<RelationshipId, Map<string, Set<MessageId>>>();
-  for (const event of set.of("message.out")) {
-    const { relationshipId, thid, messageId } = event.data;
-    let opened = threads.get(relationshipId);
-    if (opened === undefined) threads.set(relationshipId, (opened = new Map()));
-    const key = thid ?? messageId;
-    const ids = opened.get(key);
-    if (ids === undefined) opened.set(key, new Set([messageId]));
-    else ids.add(messageId);
-  }
+  const targets = reportTargets(set, outbound);
   for (const execution of inbound.executions.values()) {
     if (execution.kind !== "error") continue;
     const report = reportOf(execution, receipts, options);
     if (report === null) continue;
-    const opened = threads.get(execution.relationshipId)?.get(execution.intent!.pthid!);
-    if (opened === undefined || opened.size !== 1) continue;
-    add(execution.relationshipId, { kind: "remote-error", relationshipId: execution.relationshipId, executionId: execution.executionId, messageId: [...opened][0]!, code: report.code, comment: report.comment, sourceKey: execution.sourceKey! }, execution.sourceKey!);
+    const named = targets.get(execution.relationshipId)?.get(execution.intent!.pthid!);
+    if (named === undefined || named.size !== 1) continue;
+    const [target] = named.values();
+    if (target!.standing !== "sent") continue;
+    add(execution.relationshipId, { kind: "remote-error", relationshipId: execution.relationshipId, executionId: execution.executionId, messageId: target!.messageId, code: report.code, comment: report.comment, sourceKey: execution.sourceKey! }, execution.sourceKey!);
   }
 
   const diagnostics = new Map<RelationshipId, readonly Diagnostic[]>();
@@ -347,6 +335,40 @@ export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipF
     diagnostics.set(relationshipId, list.sort((a, b) => compareKeys(a.sourceKey, b.sourceKey)).map((entry) => entry.diagnostic));
   }
   return diagnostics;
+}
+
+/**
+ * An outbound a report may name: sent once a package of it is a
+ * verified member of the relationship's chains, waiting while its
+ * standing or every package's is, contradicted otherwise. A
+ * contradicted outbound is not dropped from the candidates, since
+ * dropping it could make another one unique.
+ */
+type ReportTarget = { readonly messageId: MessageId; readonly standing: "sent" | "waiting" | "contradicted" };
+
+/** The outbounds with a package prepared, by relationship and by the thread each names: its `thid`, or its own message ID. */
+function reportTargets(set: VaultEventSet, outbound: OutboundFold): ReadonlyMap<RelationshipId, ReadonlyMap<string, ReadonlyMap<MessageId, ReportTarget>>> {
+  const targets = new Map<RelationshipId, Map<string, Map<MessageId, ReportTarget>>>();
+  for (const event of set.of("message.out")) {
+    const { relationshipId, thid, messageId } = event.data;
+    const message = outbound.outbounds.get(messageId)!;
+    if (message.packages.size === 0) continue;
+    let threads = targets.get(relationshipId);
+    if (threads === undefined) targets.set(relationshipId, (threads = new Map()));
+    const key = thid ?? messageId;
+    let named = threads.get(key);
+    if (named === undefined) threads.set(key, (named = new Map()));
+    named.set(messageId, { messageId, standing: targetStanding(message) });
+  }
+  return targets;
+}
+
+function targetStanding(message: Outbound): ReportTarget["standing"] {
+  if (message.conflict) return "contradicted";
+  if (message.membership.status === "deferred") return "waiting";
+  const packages = [...message.packages.values()];
+  if (packages.some((pkg) => pkg.membership.status === "verified")) return "sent";
+  return packages.some((pkg) => pkg.membership.status === "deferred") ? "waiting" : "contradicted";
 }
 
 /** The report's body from its first observation with one read, unless the body of any observation of it is erased. */
@@ -361,11 +383,15 @@ function reportOf(execution: Execution, receipts: ReadonlyMap<EventId, VaultEven
 }
 
 /**
- * The body of every problem report observation whose object reads: a
- * stored document whose body carries a non-empty `code` and, if a
- * comment, a string one. An object that is not here, does not read
- * or has no code gives no report, and no report is a diagnostic.
+ * A problem code as the Report Problem 2.0 protocol spells it: a
+ * sorter, `e` or `w`, a scope, `p`, `m` or a state name, and at least
+ * one descriptor, each token lower kebab-case and the tokens joined by
+ * dots. Descriptors beyond the protocol's own list are accepted, since
+ * that list is open.
  */
+const PROBLEM_CODE = /^[ew](?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){2,}$/;
+
+/** The body of every problem report observation whose object reads as a stored document with a well-formed `code` and, if a comment, a string one; any other supplies no report. */
 export async function readProblemReports(set: VaultEventSet, readObject: ReadObject): Promise<Map<EventId, ProblemReport>> {
   const reports = new Map<EventId, ProblemReport>();
   const read = new Map<Cid, ProblemReport | null>();
@@ -386,7 +412,7 @@ export async function readProblemReports(set: VaultEventSet, readObject: ReadObj
 function problemReportOf(bytes: Uint8Array): ProblemReport | null {
   try {
     const { body } = readStoredDocument(parseStrict(bytes));
-    if (typeof body.code !== "string" || body.code.length === 0) return null;
+    if (typeof body.code !== "string" || !PROBLEM_CODE.test(body.code)) return null;
     const comment = body.comment;
     if (comment !== undefined && typeof comment !== "string") return null;
     return { code: body.code, comment: comment ?? null };
