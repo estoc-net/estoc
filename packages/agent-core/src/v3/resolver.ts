@@ -100,7 +100,8 @@ const RETRYABLE_STATUS = new Set([408, 429]);
 const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"];
 /** The members a JWK carries only when it holds a private or symmetric key. */
 const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
-const URI = /^[A-Za-z][A-Za-z0-9+.-]*:\S*$/;
+/** RFC 3986's characters and well-formed percent escapes, scheme first: the raw string, before any parser has repaired it. */
+const URI_CHARACTERS = /^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?#[\]]|%[0-9A-Fa-f]{2})*$/;
 
 function definitive(reason: string): Resolved {
   return { outcome: "definitive", reason };
@@ -111,30 +112,42 @@ function unavailable(reason: string): Resolved {
 }
 
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = (err as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(err);
 }
 
-/** An error and what it was caused by, outermost first. */
 function causeChain(err: unknown): unknown[] {
   const chain: unknown[] = [];
   for (let at = err; at !== undefined && at !== null && chain.length < 8; at = (at as { cause?: unknown }).cause) chain.push(at);
   return chain;
 }
 
-/** What a failure says, the cause included: a transport wraps its refusal in a generic error, and the refusal is what the reason must show. */
 function reasonOf(err: unknown): string {
   return [...new Set(causeChain(err).map(messageOf))].join(": ");
 }
 
-/** The failure of a fetch or a read as an outcome: final by the transport's code, or no answer now. */
-function transportFailure(err: unknown, signal: AbortSignal, timeoutMs: number): Resolved {
-  const code = causeChain(err)
-    .map((at) => (at as { code?: unknown }).code)
-    .find((found) => typeof found === "string");
-  if (code === DEFINITIVE_TRANSPORT_CODES.refused) return definitive(`the transport refused the connection: ${reasonOf(err)}`);
-  if (code === DEFINITIVE_TRANSPORT_CODES.noAddress) return definitive(`the authority has no address: ${reasonOf(err)}`);
+/**
+ * A failure of the transport or of the body as an outcome. A final
+ * answer takes precedence over how it was wrapped: the definitive
+ * code is looked for down the whole cause chain, past whatever
+ * generic code an outer error carries, and past the deadline.
+ */
+function transportFailure(err: unknown, what: string, signal: AbortSignal, timeoutMs: number): Resolved {
+  const codes = new Set(causeChain(err).map((at) => (at as { code?: unknown }).code));
+  if (codes.has(DEFINITIVE_TRANSPORT_CODES.refused)) return definitive(`the transport refused the connection: ${reasonOf(err)}`);
+  if (codes.has(DEFINITIVE_TRANSPORT_CODES.noAddress)) return definitive(`the authority has no address: ${reasonOf(err)}`);
   if (signal.aborted) return unavailable(`timed out: not resolved within ${timeoutMs} ms`);
-  return unavailable(`the fetch failed: ${reasonOf(err)}`);
+  return unavailable(`${what}: ${reasonOf(err)}`);
+}
+
+/**
+ * A URI by RFC 3986's syntax. The characters and escapes are held on
+ * the raw string, since the URL parser repairs a space or a bad escape
+ * rather than refusing it; the parser then checks the structure the
+ * characters cannot — an authority that closes, a port that is one.
+ */
+function isUri(value: unknown): value is string {
+  return typeof value === "string" && URI_CHARACTERS.test(value) && URL.canParse(value);
 }
 
 function isDid(value: unknown): boolean {
@@ -152,11 +165,10 @@ function methodFault(entry: unknown): string | null {
   if (!isJsonObject(entry)) return "is an object";
   if (typeof entry["id"] !== "string") return "has a string id";
   if (typeof entry["type"] !== "string") return "has a string type";
-  const controller = entry["controller"];
-  if (controller !== undefined && !isDid(controller)) return "has a DID controller if any";
+  if (!isDid(entry["controller"])) return "has a DID controller";
   const multibase = entry["publicKeyMultibase"];
   const jwk = entry["publicKeyJwk"];
-  if ((multibase === undefined) === (jwk === undefined)) return "carries one of publicKeyMultibase and publicKeyJwk";
+  if (multibase !== undefined && jwk !== undefined) return "carries publicKeyMultibase or publicKeyJwk, not both";
   if (multibase !== undefined && typeof multibase !== "string") return "has a string publicKeyMultibase";
   if (jwk !== undefined) {
     if (!isJsonObject(jwk)) return "has an object publicKeyJwk";
@@ -167,10 +179,10 @@ function methodFault(entry: unknown): string | null {
 }
 
 function endpointFault(endpoint: unknown): string | null {
-  if (typeof endpoint === "string") return URI.test(endpoint) ? null : "has a serviceEndpoint that is a URI";
+  if (typeof endpoint === "string") return isUri(endpoint) ? null : "has a serviceEndpoint that is a URI";
   if (!isJsonObject(endpoint)) return "has a serviceEndpoint that is a URI or an object";
   const uri = endpoint["uri"];
-  return uri === undefined || (typeof uri === "string" && URI.test(uri)) ? null : "has a serviceEndpoint whose uri is a URI";
+  return uri === undefined || isUri(uri) ? null : "has a serviceEndpoint whose uri is a URI";
 }
 
 function serviceFault(entry: unknown): string | null {
@@ -188,13 +200,15 @@ function serviceFault(entry: unknown): string | null {
 
 /**
  * The shape a fetched document must have before its relationships are
- * read — what the vault requires of a numalgo-4 input document, asked
- * here of a `did:web` one: every method an object with an ID, a type,
- * a DID controller if any and exactly one public key that is public;
- * every service an object with an ID of its own, a type and an
- * endpoint that is a URI or an object. A method of a type this agent
- * never uses does not fail the document: whether its key is usable is
- * decided where the key is used.
+ * read: every method an object with an ID, a type, a DID controller
+ * and, if it carries a JWK or a multibase key, one that is public;
+ * every service an object with a URI as its own ID, a type and an
+ * endpoint that is a URI or an object. This is a published document,
+ * not a numalgo-4 input: nothing is filled in for it, so a controller
+ * must be there, and it may carry what this agent never uses — a
+ * method of another suite with its own key format, a service of
+ * another kind — since whether a key is usable is decided where the
+ * key is used.
  */
 function checkShape(document: JsonObject, did: Did): void {
   const each = (member: string, faultOf: (entry: unknown) => string | null) => {
@@ -214,7 +228,7 @@ function checkShape(document: JsonObject, did: Did): void {
   (document["service"] as JsonObject[] | undefined)?.forEach((service, i) => {
     const reference = service["id"] as string;
     const id = reference.startsWith("#") || reference.startsWith("?") ? did + reference : reference;
-    if (!id.startsWith("did:")) throw new InvalidDidDocument(`service[${i}].id is a DID URL or a fragment reference: ${JSON.stringify(reference)}`);
+    if (!isUri(id)) throw new InvalidDidDocument(`service[${i}].id is a URI or a reference into the document: ${JSON.stringify(reference)}`);
     if (serviceIds.has(id)) throw new InvalidDidDocument(`two services are ${id}`);
     serviceIds.add(id);
   });
@@ -292,7 +306,12 @@ export function webDidUrl(did: string, insecureLoopback = false): { url: URL } |
   return { url };
 }
 
-/** The body, or null once it runs past `maxBytes`; what fails while reading is the transport's. */
+/**
+ * The body, or null once it runs past `maxBytes`; what fails while
+ * reading is the transport's. Past the bound the answer is settled,
+ * so the stream is let go rather than waited for: a cancel that fails
+ * or never returns changes nothing.
+ */
 async function readBounded(response: Response, maxBytes: number): Promise<Uint8Array | null> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) return null;
@@ -308,7 +327,7 @@ async function readBounded(response: Response, maxBytes: number): Promise<Uint8A
     if (done) break;
     length += value.length;
     if (length > maxBytes) {
-      await reader.cancel();
+      reader.cancel().catch(() => undefined);
       return null;
     }
     chunks.push(value);
@@ -356,7 +375,7 @@ async function fetchWeb(presented: Did, url: URL, fetch: typeof globalThis.fetch
   try {
     response = await bounded(signal, () => fetch(url.href, { redirect: "manual", cache: "no-store", signal, headers: { accept: "application/did+json, application/json" } }));
   } catch (err) {
-    return transportFailure(err, signal, timeoutMs);
+    return transportFailure(err, "the fetch failed", signal, timeoutMs);
   }
   const { status } = response;
   if (response.type === "opaqueredirect" || (status >= 300 && status < 400)) return definitive(`a redirect (${status}) is not followed`);
@@ -367,7 +386,7 @@ async function fetchWeb(presented: Did, url: URL, fetch: typeof globalThis.fetch
   try {
     bytes = await bounded(signal, () => readBounded(response, maxBytes));
   } catch (err) {
-    return signal.aborted ? transportFailure(err, signal, timeoutMs) : unavailable(`the body did not arrive whole: ${reasonOf(err)}`);
+    return transportFailure(err, "the body did not arrive whole", signal, timeoutMs);
   }
   if (bytes === null) return definitive(`the document is larger than ${maxBytes} bytes`);
   let document: unknown;

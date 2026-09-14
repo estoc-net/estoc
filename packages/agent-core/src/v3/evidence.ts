@@ -80,7 +80,7 @@ export interface CommitResolutionOptions {
   fresh?: boolean;
 }
 
-/** Whether the object is here and sound; one known damaged is not, and the bytes coming in replace it. */
+/** Whether the object is accepted and not known damaged; one known damaged counts as absent, since the bytes coming in repair it. */
 async function objectHeld(held: Held, cid: Cid): Promise<boolean> {
   try {
     return await held.objects.has(cid);

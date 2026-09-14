@@ -4,9 +4,12 @@ import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { MemoryVault, canonicalize, type JsonObject } from "@estoc/event-store/v3";
 import { canonicalPublicKey, didKeyName, peerResolution, rawCidOfBytes, scanVault, type DidId, type Did } from "@estoc/vault/v3";
 
+import bs58 from "bs58";
+
+import { secretsResolverFor } from "../../src/index.js";
 import { AgentTrace, DEFINITIVE_TRANSPORT_CODES, MAX_DOCUMENT_BYTES, authorizedKeys, commitResolution, didcommDocumentOf, knownLongForms, resolve, webDidUrl, type KnownLongForms, type Resolution, type ResolverOptions } from "../../src/v3/index.js";
 import { MEDIATOR_HTTP } from "../fake-mediator.js";
-import { freshVault, json, newMediator, party, webFetch, webIdentity } from "./helpers.js";
+import { didcomm, freshVault, json, newMediator, party, webFetch, webIdentity } from "./helpers.js";
 
 const none = () => null;
 const BOB = "did:web:bob.example";
@@ -189,6 +192,26 @@ describe("did:web resolution", () => {
     }
     expect(await resolve(BOB, none, { fetch: failing(new TypeError("fetch failed")) })).toEqual({ outcome: "unavailable", reason: "the fetch failed: fetch failed" });
     expect(await resolve(BOB, none, { fetch: failing("no") })).toEqual({ outcome: "unavailable", reason: "the fetch failed: no" });
+
+    const generic = (cause: unknown) => Object.assign(new Error("network operation failed", { cause }), { code: "ERR_NETWORK" });
+    expect(await resolve(BOB, none, { fetch: failing(generic(coded("EBLOCKED", refusal))) })).toEqual({ outcome: "definitive", reason: `the transport refused the connection: network operation failed: ${refusal}` });
+    expect(await resolve(BOB, none, { fetch: failing(generic(coded("ENXDOMAIN", "no such name"))) })).toEqual({ outcome: "definitive", reason: "the authority has no address: network operation failed: no such name" });
+    expect(await resolve(BOB, none, { fetch: failing(generic(coded("ENOTFOUND"))) })).toEqual({ outcome: "unavailable", reason: "the fetch failed: network operation failed: ENOTFOUND" });
+    expect(await resolve(BOB, none, { fetch: failing({ code: "EBLOCKED", message: refusal }) })).toEqual({ outcome: "definitive", reason: `the transport refused the connection: ${refusal}` });
+    expect(await resolve(BOB, none, { fetch: failing({ code: "ECONNRESET", message: "reset" }) })).toEqual({ outcome: "unavailable", reason: "the fetch failed: reset" });
+
+    const bodyFailing = (err: unknown) => answering(() => new Response(new ReadableStream({ start: (controller) => controller.error(err) }), { status: 200 }));
+    expect(await resolve(BOB, none, { fetch: bodyFailing(coded("EBLOCKED", refusal)) })).toEqual({ outcome: "definitive", reason: `the transport refused the connection: ${refusal}` });
+    expect(await resolve(BOB, none, { fetch: bodyFailing(generic(coded("ENXDOMAIN", "no such name"))) })).toEqual({ outcome: "definitive", reason: "the authority has no address: network operation failed: no such name" });
+    expect(await resolve(BOB, none, { fetch: bodyFailing(coded("ECONNRESET")) })).toEqual({ outcome: "unavailable", reason: "the body did not arrive whole: ECONNRESET" });
+  });
+
+  it("a body past the bound is definitive once it is past, whatever letting the stream go comes to", async () => {
+    const never = () => new Promise<never>(() => undefined);
+    for (const cancel of [() => undefined, () => Promise.reject(new Error("cancel failed")), never]) {
+      const oversize = answering(() => new Response(new ReadableStream({ start: (controller) => controller.enqueue(new Uint8Array(65)), cancel }), { status: 200 }));
+      expect(await resolve(BOB, none, { fetch: oversize, maxBytes: 64, timeoutMs: 20 })).toEqual({ outcome: "definitive", reason: "the document is larger than 64 bytes" });
+    }
   });
 
   it("one deadline covers the whole resolution, and the diagnostic neither holds the outcome nor overturns it", async () => {
@@ -214,15 +237,28 @@ describe("did:web resolution", () => {
     const broken: [string, (d: JsonObject) => void, string][] = [
       ["a relationship that is not an array", (d) => (d["authentication"] = "#auth"), "authentication is an array"],
       ["a method without a type", (d) => delete method(d, 1)["type"], "verificationMethod[1] has a string type"],
-      ["a controller that is not a DID", (d) => (method(d, 1)["controller"] = 3), "verificationMethod[1] has a DID controller if any"],
-      ["a method with two keys", (d) => (method(d, 1)["publicKeyMultibase"] = "z6Mk"), "carries one of publicKeyMultibase and publicKeyJwk"],
+      ["a controller that is not a DID", (d) => (method(d, 1)["controller"] = 3), "verificationMethod[1] has a DID controller"],
+      ["a method without a controller: nothing is filled in for a published document", (d) => delete method(d, 1)["controller"], "verificationMethod[1] has a DID controller"],
+      [
+        "an embedded method without a controller",
+        (d) => {
+          const embedded = { ...method(d, 1) };
+          delete embedded["controller"];
+          d["keyAgreement"] = [embedded];
+        },
+        "keyAgreement[0] has a DID controller",
+      ],
+      ["a method with two keys", (d) => (method(d, 1)["publicKeyMultibase"] = "z6Mk"), "carries publicKeyMultibase or publicKeyJwk, not both"],
       ["a JWK with a private member", (d) => ((method(d, 1)["publicKeyJwk"] as JsonObject)["d"] = "secret"), "without the private member d"],
       ["a service without an ID", (d) => delete service(d)["id"], "service[0] has a string id"],
       ["a service without a type", (d) => delete service(d)["type"], "service[0] has a type"],
       ["an endpoint that is not a URI", (d) => ((service(d)["serviceEndpoint"] as JsonObject)["uri"] = "not a URI"), "whose uri is a URI"],
       ["a string endpoint that is not a URI", (d) => (service(d)["serviceEndpoint"] = "not a URI"), "serviceEndpoint that is a URI"],
+      ["an endpoint whose authority never closes", (d) => ((service(d)["serviceEndpoint"] as JsonObject)["uri"] = "https://["), "whose uri is a URI"],
+      ["an endpoint with a bad percent escape", (d) => ((service(d)["serviceEndpoint"] as JsonObject)["uri"] = "https://bob.example/%GG"), "whose uri is a URI"],
       ["two services under one ID", (d) => (d["service"] as JsonObject[]).push({ ...service(d) }), `two services are ${BOB}#didcomm`],
-      ["a service ID that is neither a DID URL nor a fragment", (d) => (service(d)["id"] = "didcomm"), "service[0].id is a DID URL or a fragment reference"],
+      ["a service ID with a space", (d) => (service(d)["id"] = "did:bad key"), "service[0].id is a URI or a reference into the document"],
+      ["a service ID that is a bare word", (d) => (service(d)["id"] = "didcomm"), "service[0].id is a URI or a reference into the document"],
       ["alsoKnownAs that is not strings", (d) => (d["alsoKnownAs"] = [1]), "alsoKnownAs[0] is a string"],
     ];
     for (const [what, damage, reason] of broken) {
@@ -235,6 +271,24 @@ describe("did:web resolution", () => {
     const resolution = await resolved(BOB, none, { fetch: answering(() => json(unknown)) });
     expect([...authorizedKeys(resolution, "keyAgreement").keys()]).toEqual([`${BOB}#agree`]);
     expect(didcommDocumentOf(resolution).verificationMethod.map((m) => m.id)).toEqual([`${BOB}#auth`, `${BOB}#agree`]);
+  });
+
+  it("what a published document carries beyond this agent's use is kept, its keys simply not selectable, and the document still seals", async () => {
+    const bob = await webIdentity(BOB);
+    const document = structuredClone(bob.document);
+    const auth = (document["verificationMethod"] as JsonObject[])[0] as JsonObject;
+    (document["service"] as JsonObject[]).push({ id: "https://bob.example/profile-service", type: "LinkedDomains", serviceEndpoint: "https://bob.example/" });
+    (document["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#legacy`, type: "Ed25519VerificationKey2018", controller: BOB, publicKeyBase58: bs58.encode(Buffer.from((auth["publicKeyJwk"] as JsonObject)["x"] as string, "base64url")) });
+    (document["authentication"] as string[]).push(`${BOB}#legacy`);
+    const resolution = await resolved(BOB, none, { fetch: answering(() => json(document)) });
+    expect(resolution.service).toBe("https://bob.example/didcomm");
+    expect(resolution.authenticationMethodIds).toEqual([`${BOB}#auth`, `${BOB}#legacy`]);
+    expect([...authorizedKeys(resolution, "authentication").keys()]).toEqual([`${BOB}#auth`]);
+    expect([...authorizedKeys(resolution, "keyAgreement").keys()]).toEqual([`${BOB}#agree`]);
+    const plaintext = { id: "m1", typ: "application/didcomm-plain+json", type: "https://didcomm.org/basicmessage/2.0/message", to: [BOB], body: { content: "hi" } };
+    const [packed] = await new didcomm.Message(plaintext).pack_encrypted(BOB, null, null, { resolve: async () => didcommDocumentOf(resolution) }, secretsResolverFor([]), { forward: false });
+    const [opened] = await didcomm.Message.unpack(packed, { resolve: async () => didcommDocumentOf(resolution) }, secretsResolverFor(bob.secrets), {});
+    expect(opened.as_value().body).toEqual({ content: "hi" });
   });
 
   it("a policy refusal is definitive before any fetch; the loopback allowance is honoured", async () => {
