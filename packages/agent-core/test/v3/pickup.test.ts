@@ -5,7 +5,7 @@ import { resolveDIDCommDoc } from "@estoc/did-peer";
 
 import { BASIC_MESSAGE, PLAIN_TYP, STATUS, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
 import { Pickup, createDid, ensureRoute, establish, reconcile, type Opened } from "../../src/v3/index.js";
-import { newMediator, party, reloaded } from "./helpers.js";
+import { newMediator, party, reloaded, until } from "./helpers.js";
 
 const resolver = { resolve: resolveDIDCommDoc };
 
@@ -68,7 +68,7 @@ describe("pickup over the v3 ring", () => {
     const stray = plainMessage(STATUS, impostor.did, p.link.me, { live_delivery: true });
     const [packed] = await new Message(stray).pack_encrypted(p.link.me, impostor.did, null, resolver, secretsResolverFor(impostor.secrets), { forward: false });
     mediator.socketOf(p.link.me)?.deliver(packed);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await until("the stray frame's drop", () => p.log.length > 0);
     expect(frames).toHaveLength(1);
     expect(p.log).toEqual([`a socket frame was dropped: the reply was not sealed by the mediator to this account: sealed by ${impostor.did}`]);
     p.link.closeSocket();

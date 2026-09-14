@@ -416,6 +416,23 @@ describe("v2 link: the line to the mediator", () => {
     expect(await alice.trace.read("envelope", { type: "envelope.rejected" })).toEqual([]);
   });
 
+  it("a reply the mediator signed but sealed anonymously is not the mediator's word: refused, its signature notwithstanding", async () => {
+    const mediator = await newMediator();
+    const alice = await party(mediator, 23, {
+      fetch: async () => {
+        const grant = plain(MEDIATE_GRANT, mediator.did, alice.me.identity.did, { routing_did: [mediator.did] });
+        const [packed] = await new Message(grant).pack_encrypted(alice.me.identity.did, null, mediator.did, resolver, secretsResolverFor(mediator.secrets), { forward: false });
+        return new Response(packed, { status: 200 });
+      },
+    });
+    await expect(alice.link.exchange(MEDIATE_REQUEST, {})).rejects.toBeInstanceOf(UnverifiedReply);
+    const [rejected] = await alice.trace.read("envelope", { type: "envelope.rejected" });
+    expect(rejected?.data["reason"]).toBe("not authenticated encryption");
+    const [open] = await alice.trace.read("envelope", { type: "envelope.open" });
+    expect(open?.data["from_kid"]).toBeUndefined();
+    expect(String(open?.data["sign_from"]).startsWith(`${mediator.did}#`)).toBe(true);
+  });
+
   it("a reply that is not the mediator's is refused by the deadline even when the note of the refusal never settles", async () => {
     const mediator = await newMediator();
     const decoder = new TextDecoder();

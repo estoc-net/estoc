@@ -109,7 +109,7 @@ describe("establishing", () => {
     await p.runtime.close();
   });
 
-  it("takes only a reply the mediator sealed to the arrangement's identity: plaintext, anonymous, another sealer and another recipient of ours are refused", async () => {
+  it("takes only a reply the mediator sealed to the arrangement's identity: plaintext, anonymous, signed under an anonymous seal, another sealer and another recipient of ours are refused", async () => {
     const mediator = await newMediator();
     const impostor = await newMediator(201, "http://impostor/");
     const p = await party(mediator);
@@ -125,11 +125,12 @@ describe("establishing", () => {
       }) as typeof fetch
     );
     const link = new MediatorLink({ ...p.linkOptions, fetch: forged });
-    const packWith = (secrets: Secret[]) => async (message: IMessage, from: string | null, recipient = to) =>
-      (await new Message(message).pack_encrypted(recipient, from, null, { resolve: resolveDIDCommDoc }, secretsResolverFor(secrets), { forward: false }))[0];
+    const packWith = (secrets: Secret[]) => async (message: IMessage, from: string | null, recipient = to, signBy: string | null = null) =>
+      (await new Message(message).pack_encrypted(recipient, from, signBy, { resolve: resolveDIDCommDoc }, secretsResolverFor(secrets), { forward: false }))[0];
     const forgeries: Record<string, (message: IMessage) => Promise<string>> = {
       plaintext: async (message) => JSON.stringify({ ...message, from: mediator.did }),
       anonymous: (message) => packWith(impostor.secrets)({ ...message, from: mediator.did }, null),
+      "signed by the mediator, sealed anonymously": (message) => packWith(mediator.secrets)({ ...message, from: mediator.did }, null, to, mediator.did),
       "another sealer": (message) => packWith(impostor.secrets)(message, impostor.did),
       "another recipient": (message) => packWith(mediator.secrets)({ ...message, from: mediator.did, to: [otherAccount.data.me.did] }, mediator.did, otherAccount.data.me.did),
     };
@@ -141,9 +142,14 @@ describe("establishing", () => {
     expect((await p.trace.read({ type: "envelope.rejected" })).map((entry) => entry.data["reason"])).toEqual([
       "not authenticated encryption",
       "not authenticated encryption",
+      "not authenticated encryption",
       `sealed by ${impostor.did}`,
       `sealed to ${otherAccount.data.me.did}`,
     ]);
+    // the signed one did open as authenticated: the signature verified, and that is not what the boundary asks
+    const signed = (await p.trace.read({ type: "envelope.open" })).find((entry) => entry.data["sign_from"] !== undefined);
+    expect(signed?.data["from_kid"]).toBeUndefined();
+    expect(String(signed?.data["sign_from"]).startsWith(`${mediator.did}#`)).toBe(true);
     forge = null;
     expect((await establish(link, p.runtime, p.keys, p.mediationId)).mediation.routingDid).toBe(mediator.did);
     await p.runtime.close();

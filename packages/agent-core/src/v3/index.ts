@@ -44,7 +44,7 @@ export {
   type TracePolicy,
   type TraceStream,
 } from "./trace.js";
-export { MediatorLink, bounded, ritual, sealData, senderOf, type LinkOptions, type Opened, type Sealed } from "./link.js";
+export { MediatorLink, bounded, ritual, sealData, sealerOf, senderOf, type LinkOptions, type Opened, type Sealed } from "./link.js";
 export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export { decide, serially, type Decided } from "./procedure.js";
 export { canonicalDid, sameDid } from "./same-did.js";

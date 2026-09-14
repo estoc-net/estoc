@@ -70,6 +70,11 @@ export function envelopeKind(metadata: Unpacked): EnvelopeKind | null {
   return metadata.encrypted ? "anoncrypt" : null;
 }
 
+/** The DID of the key that sealed the envelope as authcrypt (`encrypted_from_kid`'s); null when none did. */
+export function sealerOf(metadata: Unpacked): string | null {
+  return didOf(kidIn(metadata.encrypted_from_kid));
+}
+
 /**
  * The DID the proving key wears (`did`): `encrypted_from_kid`'s,
  * else `sign_from`'s — the document to resolve before `inboundPair`.
@@ -78,7 +83,7 @@ export function envelopeKind(metadata: Unpacked): EnvelopeKind | null {
 export function senderOf(metadata: Unpacked): string | null {
   switch (envelopeKind(metadata)) {
     case "authcrypt":
-      return didOf(metadata.encrypted_from_kid);
+      return sealerOf(metadata);
     case "signed":
       return didOf(metadata.sign_from);
     default:

@@ -81,6 +81,15 @@ export async function party(mediator: FakeMediator, fill = 1, over: Partial<Link
 }
 
 /** The ring brought up to the vault as it stands now. */
+/** Waits for `condition`, giving up after two seconds with `what` in the error. */
+export async function until(what: string, condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`${what}: still not, after two seconds`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 export async function reloaded(p: Pick<Party, "ring" | "runtime" | "keys">): Promise<void> {
   await p.ring.reload(await scanVault(p.runtime.vault, p.keys));
 }

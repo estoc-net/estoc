@@ -28,8 +28,10 @@
   `MediatorLink` and the v3 one, accept a ritual's answer or a socket
   frame only when the envelope was authenticated encryption from the
   mediator's key to the key of ours the request went out from; a
-  plaintext, an anonymous envelope, one sealed by another key or to
-  another key of ours is refused with `UnverifiedReply` (an HTTP reply)
+  plaintext, an anonymous envelope (signed or not: a signed plaintext
+  can be sealed to us again by anyone holding it), one sealed by
+  another key or to another key of ours is refused with
+  `UnverifiedReply` (an HTTP reply)
   or dropped with a log line (a socket frame), noted as
   `envelope.rejected`. The v3 link is one arrangement's for its life
   (`me` is its DID, not a callback), and the v3 mediation procedures

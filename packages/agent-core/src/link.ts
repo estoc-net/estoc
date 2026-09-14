@@ -22,7 +22,7 @@ import type { PeerIdentity } from "./identity/peer.js";
 import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "./protocol/didcomm.js";
 import { envelopeHeader } from "./protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "./protocol/mediation.js";
-import { senderOf } from "./channel.js";
+import { sealerOf, senderOf } from "./channel.js";
 import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
 
 /** What came back over the line to the mediator was not sealed by the mediator to the key it knows us by: whatever it says, it is not the mediator's answer. */
@@ -287,9 +287,9 @@ export class MediatorLink {
     // the binding hands back null, not undefined, for a header that is not there
     const rotation = metadata.from_prior ?? null;
     open.type = value.type;
-    if (metadata.encrypted_from_kid !== undefined) open.from_kid = metadata.encrypted_from_kid;
-    if (metadata.encrypted_to_kids !== undefined) open.to_kids = metadata.encrypted_to_kids;
-    if (metadata.non_repudiation && metadata.sign_from !== undefined) open.sign_from = metadata.sign_from;
+    if (typeof metadata.encrypted_from_kid === "string") open.from_kid = metadata.encrypted_from_kid;
+    if (Array.isArray(metadata.encrypted_to_kids)) open.to_kids = metadata.encrypted_to_kids;
+    if (metadata.non_repudiation && typeof metadata.sign_from === "string") open.sign_from = metadata.sign_from;
     if (metadata.re_wrapped_in_forward) open.re_wrapped_in_forward = true;
     if (rotation !== null) open.from_prior = { iss: rotation.iss, sub: rotation.sub };
     return {
@@ -350,23 +350,22 @@ export class MediatorLink {
   }
 
   /**
-   * What the mediator sends down the line — a ritual's answer, a
-   * delivery — counts only when the envelope proves it: authcrypt from
-   * the mediator's key to the key of ours the request went out from.
-   * An anonymous outer layer over that authcrypt, DIDComm's sender
-   * protection, still proves the sender and is taken. A document that
-   * merely unpacks proves nothing about who wrote it; one sealed by
-   * another key, by no key, or to another key of ours is noted
-   * (`envelope.rejected`) and refused, whatever it says. The note is
-   * observability only: it waits at most for `signal`, and not at all
-   * without one.
+   * What the mediator sends down the line counts only when the envelope
+   * is authcrypt from the mediator's key to the key of ours the request
+   * went out from. Sender protection, an anonymous layer over that
+   * authcrypt, still carries it. A signature under an anonymous seal
+   * does not, whoever signed: a signed plaintext proves who wrote it
+   * once, not who sends it now, since anyone holding it can seal it to
+   * us again. The note of a refusal is observability only: it waits at
+   * most for `signal`, and not at all without one.
    */
   private async fromMediator(opened: Opened, me: string | null, signal?: AbortSignal): Promise<void> {
-    const { metadata, sender, recipient } = opened;
-    const reason = !metadata.encrypted || !metadata.authenticated || metadata.encrypted_from_kid === undefined || sender === null
+    const { metadata, recipient } = opened;
+    const sealer = sealerOf(metadata);
+    const reason = sealer === null
       ? "not authenticated encryption"
-      : sender !== this.mediatorDid
-        ? `sealed by ${sender}`
+      : sealer !== this.mediatorDid
+        ? `sealed by ${sealer}`
         : me === null || recipient !== me
           ? `sealed to ${recipient ?? "no key of ours"}`
           : null;
