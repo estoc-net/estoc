@@ -125,7 +125,7 @@ describe("the relationship profile", () => {
     expect((await profile(scene.events, keys, R)).claimedName).toBe("F");
   });
 
-  it("names nothing from a source whose execution two scoped observations put in intent conflict, a lift made before the contradicting alias arrived included, and keeps that conflict while the alias's group waits", async () => {
+  it("names nothing from a source whose execution two scoped observations put in intent conflict, a lift made before the contradicting alias arrived included, and keeps that conflict while the alias's group, or the source's own, waits", async () => {
     const { scene, keys, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const older = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
     const source = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2 });
@@ -150,6 +150,15 @@ describe("the relationship profile", () => {
     const set = VaultEventSet.of(events);
     expect(foldRelationships(set, foldChecked(set, v.keyChecks).routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks }).groups.get(alias.data.messageId)!.status).toBe("incomplete");
     await expectProfilesOrderFree(events, keys, contradicted);
+    const ownGone = resolved(scene, a0.didId, b0);
+    receipt(scene, { local: a0.didId, peer: b0, resolution: ownGone, binding, ordinal: 6, wire: source.data.wireMessageId });
+    const ownWaits = scene.events.filter((event) => event !== gone && event !== ownGone);
+    const ownSet = VaultEventSet.of(ownWaits);
+    const ownVerdicts = await verdicts(ownWaits, keys);
+    const groups = foldRelationships(ownSet, foldChecked(ownSet, ownVerdicts.keyChecks).routes, { proofChecks: ownVerdicts.proofChecks, resolutionChecks: ownVerdicts.resolutionChecks });
+    expect(groups.observations.get(source.eventId)!.status).toBe("scoped");
+    expect(groups.groups.get(source.data.messageId)!.status).toBe("incomplete");
+    await expectProfilesOrderFree(ownWaits, keys, contradicted);
   });
 
   it("names nothing from a source at a pair another relationship claims", async () => {

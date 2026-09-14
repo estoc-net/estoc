@@ -265,18 +265,25 @@
   not pin, at an address pair the relationship alone claims, kept out
   of the thread and never scoped, and the remote error, a no-response
   problem report whose parent thread names exactly one outbound of the
-  relationship among those with a package prepared, that outbound sent
-  within the relationship's chains, its code shown while its body is
-  here and unerased; ambiguity, a candidate waiting or contradicted,
-  absence and erasure each supply none. `readProblemReports` reads the
-  reports' bodies from the objects beside the fold and admits only a
-  well-formed problem code: sorter, scope and at least one descriptor
-  in lower kebab-case. An observation whose execution two scoped
+  relationship among those with a package history — consistent or
+  disputed, since dropping a contradicted candidate could make another
+  unique — that one compatible: its own standing verified and a package
+  of it a verified member of the chains, no package contradicting, and
+  another package's wait taking nothing from it; its code shown while
+  its body is here and unerased; ambiguity, a candidate waiting or
+  contradicted, absence and erasure each supply none. `Outbound` now
+  carries `standing`, the message's own standing apart from its
+  packages and carrier, what a submission completes under.
+  `readProblemReports` reads the reports' bodies from the objects
+  beside the fold and admits only a well-formed problem code: sorter,
+  scope and descriptors in lower kebab-case, a code without a
+  descriptor read as the protocol only asks senders to include one. An observation whose execution two scoped
   observations put in intent conflict acknowledges nothing and names
   nothing: `foldOutbound` reads the execution beside the row and group
   for every witness, and `foldProfiles` now takes the inbound fold and
   makes the execution the logical source, one in intent conflict a
-  fault of every lift from it. `SourceKey`, `keyOf` and `compareKeys`
+  fault of every lift from it, whatever the source's own group still
+  waits for. `SourceKey`, `keyOf` and `compareKeys`
   move to `fold/set.ts`.
   The test scene of two vaults is shared by the relationship, outbound,
   held-root and profile tests as `test/v3/fold/scene.ts`.

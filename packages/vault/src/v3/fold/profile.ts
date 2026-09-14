@@ -9,9 +9,11 @@
  * execution of one wire ID in the relationship, whatever key each
  * observation arrived at, or the intent events of one message ID. An
  * execution whose scoped observations disagree on the intent is one
- * contradicted source, not two sources to choose between, and a lift
- * made before the contradicting observation arrived is contradicted
- * with it. Sources are ordered by their earliest event, never by when
+ * contradicted source, not two sources to choose between; a lift made
+ * before the contradicting observation arrived is contradicted with
+ * it, and so it stays while the source's own group waits for more,
+ * since a proven disagreement is not undone by less evidence. Sources
+ * are ordered by their earliest event, never by when
  * they were lifted, so recovering an old lift moves nothing; two names
  * lifted from one source contradict, and that source names nothing
  * while every other still does.
@@ -85,23 +87,21 @@ export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold
       }
       const scope = relationships.observations.get(source.event.eventId)!;
       const group = relationships.groups.get(source.event.data.messageId)!;
+      const execution = inbound.executions.get(executionIdOf(relationshipId, source.event.data.wireMessageId));
       if (scope.status === "anonymous") faults.push(`lift ${lift.eventId} names an anonymous source`);
       else if (scope.status === "conflict") faults.push(`lift ${lift.eventId} names a source that contradicts: ${scope.because}`);
       else if (group.status === "conflict") faults.push(`lift ${lift.eventId} names a source whose group is in conflict: ${group.because}`);
       else if (scope.relationshipId !== null && scope.relationshipId !== relationshipId) faults.push(`lift ${lift.eventId} names a source scoped in ${scope.relationshipId}`);
+      else if (execution?.status === "conflict") faults.push(`lift ${lift.eventId} names a source whose execution ${execution.because}`);
       else if (scope.status === "deferred") deferred.push(`lift ${lift.eventId} awaits its source's scope: ${scope.because}`);
       else if (group.status !== "complete") deferred.push(`lift ${lift.eventId} awaits its source's group: ${group.status === "incomplete" ? group.because : "anonymous"}`);
+      else if (execution === undefined || execution.status === "incomplete") deferred.push(`lift ${lift.eventId} awaits its source's execution, which ${execution?.because ?? "is not derived"}`);
       else {
-        const execution = inbound.executions.get(executionIdOf(relationshipId, source.event.data.wireMessageId))!;
-        if (execution.status === "conflict") faults.push(`lift ${lift.eventId} names a source whose execution ${execution.because}`);
-        else if (execution.status === "incomplete") deferred.push(`lift ${lift.eventId} awaits its source's execution, which ${execution.because}`);
+        const draft = claims.get(execution.executionId);
+        if (draft === undefined) claims.set(execution.executionId, { sourceKey: execution.sourceKey!, sourceEventIds: execution.eventIds, liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
         else {
-          const draft = claims.get(execution.executionId);
-          if (draft === undefined) claims.set(execution.executionId, { sourceKey: execution.sourceKey!, sourceEventIds: execution.eventIds, liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
-          else {
-            draft.liftEventIds.push(lift.eventId);
-            draft.names.add(lift.data.name);
-          }
+          draft.liftEventIds.push(lift.eventId);
+          draft.names.add(lift.data.name);
         }
       }
     }

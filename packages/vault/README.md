@@ -89,8 +89,8 @@ relationship, waiting, contradicting, anonymous — with each message
 ID's observations as a group; `foldContacts`, the decisions
 a contact ID holds on its own; `foldOutbound`, each outbound message's
 one intent or its conflict, its consistent packages and what became of
-each, whether it is submitted, failed or in conflict, its membership
-in the relationship it names — birth, binding and every package
+each, whether it is submitted, failed or in conflict, its own standing
+and its membership in the relationship it names — birth, binding and every package
 agreeing, each package sent from a node of the local chain to a
 document of the peer chain with the proof of the transition that
 added its sender — the complete scoped observations that acknowledge
@@ -125,7 +125,8 @@ local and peer addresses, where a message may be written and the
 thread of complete application messages — and `foldDiagnostics`, the
 same-DID key change at a pair the relationship alone claims and the
 remote error beside the one outbound its thread names among those
-with a package sent within the chains, with `readProblemReports`
+with a package history, a package of it a verified member of the
+chains and none of them contradicting, with `readProblemReports`
 reading the reports' bodies beside the fold and admitting only a
 well-formed problem code. Every fold is a pure function of the
 event set, checked by shuffling; what needs the seed, whether an

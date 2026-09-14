@@ -85,6 +85,8 @@ export interface Outbound {
   readonly submitted: boolean;
   /** the code of the first message-scoped terminal failure in canonical order, null while none */
   readonly failed: string | null;
+  /** the message's own standing: one intent, its birth and binding agreeing and its relationship standing, apart from its packages and its carrier; what a submission completes under */
+  readonly standing: Membership;
   /** the message's whole membership: intent, birth, binding, every package and, for an automatic message, its execution agreeing; what an acknowledgment is applied under */
   readonly membership: Membership;
   /** the complete, scoped observations whose explicit `ack` names this message, in canonical order */
@@ -309,6 +311,7 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     packages,
     submitted,
     failed,
+    standing,
     membership,
     ackWitnesses: ackWitnesses.map((receipt) => receipt.eventId),
     acknowledged,

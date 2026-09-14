@@ -37,13 +37,17 @@ export function compareReceiptKeys(a: ReceiptKey, b: ReceiptKey): number {
 }
 
 /**
- * What a complete logical message is, from its agreed headers, its
- * stored content's identity and its evidence: application input, or a
- * control observation — a pure acknowledgment, an address notification
- * carrying a proof a transition validated, an Empty or ping response
- * in a thread an outbound of the relationship opened, a no-response
- * error — or a control type that fails its predicate, which is neither
- * application input nor executable.
+ * What a complete logical message is, from its retained headers, its
+ * stored content's identity and its evidence alone, so that the kind
+ * is the same after the body is erased and before its object is here:
+ * application input, or a control observation — a pure acknowledgment,
+ * an address notification carrying a proof a transition validated, an
+ * Empty or ping response in a thread an outbound of the relationship
+ * opened, a no-response error — or a control type that fails its
+ * predicate, which is neither application input nor executable. An
+ * `error` is a problem report by its headers and scope; whether its
+ * body carries a well-formed report is read beside the fold, and only
+ * that reading shows a reason.
  */
 export type MessageKind = "application" | "pure-ack" | "notification" | "response" | "error" | "malformed-control";
 

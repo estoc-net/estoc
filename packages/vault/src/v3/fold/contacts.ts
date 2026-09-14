@@ -154,7 +154,7 @@ export type Diagnostic =
       readonly kind: "remote-error";
       readonly relationshipId: RelationshipId;
       readonly executionId: ExecutionId;
-      /** the one outbound of the relationship, prepared and sent within its chains, whose thread the report's parent thread names */
+      /** the one outbound of the relationship with a package history whose thread the report's parent thread names, a package of it a verified member of the chains */
       readonly messageId: MessageId;
       readonly code: string;
       readonly comment: string | null;
@@ -274,21 +274,16 @@ function standingOf(relationship: Relationship): RelationshipStanding {
 
 /**
  * The diagnostics of each relationship, in canonical order of the
- * observation each is read from. A same-DID key change is an
- * authenticated proof-free observation bound to the relationship at
- * one of its keys, from its current peer DID under a document no node
- * of the peer chain pins, whose resolution is the one that
- * authenticated it — the diagnostic reads the key from that evidence
- * — and whose address pair the relationship alone claims, since a
- * pair two relationships claim identifies neither. Whether the
- * snapshot has been checked against its document does not hold the
- * diagnostic back: it names the change rather than waiting on more
- * evidence. A remote error is a complete no-response problem report
- * whose parent thread names exactly one outbound of the relationship
- * with a package prepared, that outbound sent within the
- * relationship's chains, with a body here and unerased at every
- * observation of the report; ambiguity, an outbound still waiting or
- * contradicted, absence and erasure each supply none.
+ * observation each is read from: the same-DID key changes and the
+ * remote errors. A key change is named only at an address pair the
+ * relationship alone claims, since a pair two relationships claim
+ * identifies neither; whether the snapshot has been checked against
+ * its document does not hold it back, as it names the change rather
+ * than waiting on more evidence. A remote error is shown beside the
+ * one outbound its parent thread names among those with a package
+ * history, when that one is compatible; a candidate that is
+ * contradicted stays a candidate, since dropping it could make another
+ * one unique.
  */
 export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipFold, inbound: InboundFold, outbound: OutboundFold, options: { problemReports: ReadonlyMap<EventId, ProblemReport>; erasures: Erasures }): ReadonlyMap<RelationshipId, readonly Diagnostic[]> {
   const receipts = new Map(set.of("message.in").map((receipt) => [receipt.eventId, receipt]));
@@ -326,7 +321,7 @@ export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipF
     const named = targets.get(execution.relationshipId)?.get(execution.intent!.pthid!);
     if (named === undefined || named.size !== 1) continue;
     const [target] = named.values();
-    if (target!.standing !== "sent") continue;
+    if (target!.standing !== "compatible") continue;
     add(execution.relationshipId, { kind: "remote-error", relationshipId: execution.relationshipId, executionId: execution.executionId, messageId: target!.messageId, code: report.code, comment: report.comment, sourceKey: execution.sourceKey! }, execution.sourceKey!);
   }
 
@@ -338,37 +333,47 @@ export function foldDiagnostics(set: VaultEventSet, relationships: RelationshipF
 }
 
 /**
- * An outbound a report may name: sent once a package of it is a
- * verified member of the relationship's chains, waiting while its
- * standing or every package's is, contradicted otherwise. A
- * contradicted outbound is not dropped from the candidates, since
- * dropping it could make another one unique.
+ * An outbound a report may name, by relationship and by the thread
+ * each of its intent events names — its `thid`, or its own message ID
+ * — whenever a package was prepared for it, consistent or not.
  */
-type ReportTarget = { readonly messageId: MessageId; readonly standing: "sent" | "waiting" | "contradicted" };
+type ReportTarget = { readonly messageId: MessageId; readonly standing: "compatible" | "waiting" | "contradicted" };
 
-/** The outbounds with a package prepared, by relationship and by the thread each names: its `thid`, or its own message ID. */
 function reportTargets(set: VaultEventSet, outbound: OutboundFold): ReadonlyMap<RelationshipId, ReadonlyMap<string, ReadonlyMap<MessageId, ReportTarget>>> {
+  const prepared = groupBy(set.of("message.prepared"), (event) => event.data.messageId);
   const targets = new Map<RelationshipId, Map<string, Map<MessageId, ReportTarget>>>();
   for (const event of set.of("message.out")) {
     const { relationshipId, thid, messageId } = event.data;
-    const message = outbound.outbounds.get(messageId)!;
-    if (message.packages.size === 0) continue;
+    const history = prepared.get(messageId);
+    if (history === undefined) continue;
     let threads = targets.get(relationshipId);
     if (threads === undefined) targets.set(relationshipId, (threads = new Map()));
     const key = thid ?? messageId;
     let named = threads.get(key);
     if (named === undefined) threads.set(key, (named = new Map()));
-    named.set(messageId, { messageId, standing: targetStanding(message) });
+    named.set(messageId, { messageId, standing: targetStanding(outbound.outbounds.get(messageId)!, history) });
   }
   return targets;
 }
 
-function targetStanding(message: Outbound): ReportTarget["standing"] {
-  if (message.conflict) return "contradicted";
-  if (message.membership.status === "deferred") return "waiting";
-  const packages = [...message.packages.values()];
-  if (packages.some((pkg) => pkg.membership.status === "verified")) return "sent";
-  return packages.some((pkg) => pkg.membership.status === "deferred") ? "waiting" : "contradicted";
+/**
+ * Compatible when the message's own standing is verified and some
+ * package is a verified member of the relationship's chains — sent from
+ * a node of the local chain to a document the peer chain pins — the
+ * chains being what connect the package's recipient to the report's
+ * authenticated sender across any rotation between them. A package
+ * recorded with two contents, prepared for two messages, carrying
+ * another intent or outside the chains contradicts the whole
+ * candidate; short of that, what is still waiting waits, and another
+ * package's wait takes nothing from a verified one, just as it takes
+ * nothing from a submission.
+ */
+function targetStanding(message: Outbound, history: readonly VaultEvent<"message.prepared">[]): ReportTarget["standing"] {
+  const memberships = [...message.packages.values()].map((pkg) => pkg.membership.status);
+  if (message.intent === null || message.standing.status === "conflict" || memberships.includes("conflict")) return "contradicted";
+  if (history.some((event) => !message.packages.has(event.data.packageId))) return "contradicted";
+  if (message.standing.status === "deferred") return "waiting";
+  return memberships.includes("verified") ? "compatible" : "waiting";
 }
 
 /** The report's body from its first observation with one read, unless the body of any observation of it is erased. */
@@ -384,12 +389,14 @@ function reportOf(execution: Execution, receipts: ReadonlyMap<EventId, VaultEven
 
 /**
  * A problem code as the Report Problem 2.0 protocol spells it: a
- * sorter, `e` or `w`, a scope, `p`, `m` or a state name, and at least
- * one descriptor, each token lower kebab-case and the tokens joined by
- * dots. Descriptors beyond the protocol's own list are accepted, since
- * that list is open.
+ * sorter, `e` or `w`, a scope, `p`, `m` or a state name, and
+ * descriptors, each token lower kebab-case and the tokens joined by
+ * dots. A code with no descriptor is read, since the protocol only
+ * asks senders to include one, and a sorter and scope alone still say
+ * what failed and what it resets; descriptors beyond the protocol's
+ * own list are read, since that list is open.
  */
-const PROBLEM_CODE = /^[ew](?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){2,}$/;
+const PROBLEM_CODE = /^[ew](?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$/;
 
 /** The body of every problem report observation whose object reads as a stored document with a well-formed `code` and, if a comment, a string one; any other supplies no report. */
 export async function readProblemReports(set: VaultEventSet, readObject: ReadObject): Promise<Map<EventId, ProblemReport>> {
