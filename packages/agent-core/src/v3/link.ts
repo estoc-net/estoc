@@ -114,7 +114,8 @@ function utf8Length(text: string): number {
 }
 
 function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const message = (err as { message?: unknown } | null)?.message;
+  return typeof message === "string" ? message : String(err);
 }
 
 /** The DID of ours an envelope was opened with: the first of the kids it was sealed to whose secret this runtime holds. */
@@ -128,6 +129,9 @@ function openedWith(kids: readonly string[], secrets: readonly Secret[]): string
  * one for a whole ritual or delivery: a resolver or a seal that never
  * settles must not hold the queue it runs on. Work that loses the race
  * is abandoned — its late result dropped, its late failure swallowed.
+ * A failure that is not an `Error` is wrapped in one that keeps it as
+ * the cause, so what it carried — a code, a cause of its own — is
+ * still there for whoever classifies it.
  */
 export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -148,7 +152,7 @@ export function bounded<T>(signal: AbortSignal, work: () => Promise<T>): Promise
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        reject(err instanceof Error ? err : new Error(messageOf(err), { cause: err }));
       }
     );
   });

@@ -5,12 +5,16 @@
  * what this runtime observed (`trace`); the line to a mediator and the
  * pickup of what it holds (`link`, `pickup`); the mediation rituals and
  * the reconciliation of recipients (`mediation`); routes, communication
- * DIDs, disclosure and retirement (`dids`). The protocols themselves —
+ * DIDs, disclosure and retirement (`dids`); a peer's DID resolved to
+ * the exact evidence the vault retains and the failures that leave
+ * work retryable told from the ones that close it (`resolver`); that
+ * evidence committed, read back and handed to didcomm under the
+ * spelling it asks for (`evidence`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
 
-export { EntityConflict, MediatorRefused, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -65,3 +69,16 @@ export {
   type Disclosure,
   type RouteSpec,
 } from "./dids.js";
+export { DEFINITIVE_TRANSPORT_CODES, MAX_DOCUMENT_BYTES, knownLongForms, resolve, webDidUrl, type KnownLongForms, type Resolution, type Resolved, type ResolverOptions, type WebResolverOptions } from "./resolver.js";
+export {
+  authorizedKeys,
+  commitResolution,
+  didcommDocumentOf,
+  pinnedResolution,
+  pinnedResolver,
+  readResolution,
+  resolutionData,
+  type CommitResolutionOptions,
+  type PinnedResolverOptions,
+  type ResolutionEvidence,
+} from "./evidence.js";

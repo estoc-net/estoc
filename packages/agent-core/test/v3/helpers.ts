@@ -1,8 +1,8 @@
 import { FromPrior, Message } from "didcomm-node";
 
-import { resolveDIDCommDoc, type DIDDoc } from "@estoc/did-peer";
+import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
-import type { SqliteDriver } from "@estoc/event-store/v3";
+import type { JsonObject, SqliteDriver } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import { scanVault, type Did, type MediationId, type VaultEvent } from "@estoc/vault/v3";
 
@@ -92,3 +92,48 @@ export async function until(what: string, condition: () => boolean): Promise<voi
 export async function reloaded(p: Pick<Party, "ring" | "runtime" | "keys">): Promise<void> {
   await p.ring.reload(await scanVault(p.runtime.vault, p.keys));
 }
+
+/** A `did:web` peer that lives inside the test: its document as a server would publish it, and the secrets behind it. */
+export interface WebIdentity {
+  did: string;
+  document: JsonObject;
+  secrets: Secret[];
+}
+
+/** A `did:web` identity under `did`, JWK-encoded, with one DIDComm service; the same `fill` gives the same keys under any DID. */
+export async function webIdentity(did: string, fill = 77, endpoint = "https://bob.example/didcomm"): Promise<WebIdentity> {
+  const jwks = (await deriveIdentity(await importSeed(seedOf(fill)), "anchor")).privateJwks();
+  const publicOf = (jwk: JsonWebKey): JsonObject => ({ kty: jwk.kty as string, crv: jwk.crv as string, x: jwk.x as string });
+  return {
+    did,
+    document: {
+      "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/suites/jws-2020/v1"],
+      id: did,
+      verificationMethod: [
+        { id: `${did}#auth`, type: "JsonWebKey2020", controller: did, publicKeyJwk: publicOf(jwks.ed25519) },
+        { id: `${did}#agree`, type: "JsonWebKey2020", controller: did, publicKeyJwk: publicOf(jwks.x25519) },
+      ],
+      authentication: [`${did}#auth`],
+      keyAgreement: [`${did}#agree`],
+      service: [{ id: `${did}#didcomm`, type: "DIDCommMessaging", serviceEndpoint: { uri: endpoint, accept: ["didcomm/v2"] } }],
+    },
+    secrets: [
+      { id: `${did}#auth`, type: "JsonWebKey2020", privateKeyJwk: { ...jwks.ed25519 } },
+      { id: `${did}#agree`, type: "JsonWebKey2020", privateKeyJwk: { ...jwks.x25519 } },
+    ],
+  };
+}
+
+/** A fetch that answers from `routes` by URL and records every URL asked; anything else is 404. */
+export function webFetch(routes: Record<string, (init?: RequestInit) => Response | Promise<Response>>): { fetch: typeof globalThis.fetch; calls: string[] } {
+  const calls: string[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    calls.push(url);
+    const route = routes[url];
+    return route === undefined ? new Response("no such document", { status: 404 }) : route(init);
+  };
+  return { fetch, calls };
+}
+
+export const json = (document: unknown, status = 200): Response => new Response(JSON.stringify(document), { status, headers: { "content-type": "application/did+json" } });
