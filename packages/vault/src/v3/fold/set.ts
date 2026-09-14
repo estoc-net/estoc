@@ -102,6 +102,11 @@ export class VaultEventSet {
     yield* this.kept.values();
   }
 
+  /** Every event read against its schema, in no promised order. */
+  *applied(): IterableIterator<VaultEvent> {
+    yield* this.read.values();
+  }
+
   authors(): Set<AuthorId> {
     const authors = new Set<AuthorId>();
     for (const event of this.all()) authors.add(event.author);

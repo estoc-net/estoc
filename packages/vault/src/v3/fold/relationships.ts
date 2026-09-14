@@ -14,7 +14,12 @@
  * itself. The two chains depend on each other — a local edge needs
  * input the peer chain gives scope to, a peer edge needs a local key
  * the local chain retains — so they are folded together until nothing
- * changes. The address index is every historical local DID
+ * changes. The verdict on every observation is kept: the relationship
+ * its row gives it scope in, or what it waits for, or what it
+ * contradicts, and each message ID's observations as a group, so
+ * whatever consumes received evidence — an acknowledgment, a lifted
+ * profile, an execution — reads one judgement, never a second one.
+ * The address index is every historical local DID
  * against every historical peer DID of every relationship; a pair two
  * relationships claim conflicts them both. What needs the retained
  * documents — whether a proof verifies, whether a resolution's
@@ -23,7 +28,7 @@
  * verdict is not in is deferred, never applied.
  */
 
-import { canonicalText, canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
+import { canonicalText, canonicalize, compareEvents, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
 import { isLongForm } from "@estoc/did-peer";
 
 import { rawCidOfBytes } from "../document.js";
@@ -32,7 +37,7 @@ import { fromPriorClaims, verifyFromPrior } from "../from-prior.js";
 import { didKeyName, inboundMessageId, relationshipId } from "../ids.js";
 import { authorizedMethodIds, canonicalDidOf, methodPublicKey, peerResolution } from "../peer-document.js";
 import type { VaultEvent } from "../schema.js";
-import type { Cid, ContactId, Did, DidId, DidUrl, EventId, EventReference, KeyName, RelationshipId, VaultData } from "../types.js";
+import type { Cid, ContactId, Did, DidId, DidUrl, EventId, EventReference, KeyName, MessageId, RelationshipId, VaultData } from "../types.js";
 import type { RouteFold } from "./routes.js";
 import { groupBy, type VaultEventSet } from "./set.js";
 
@@ -104,8 +109,38 @@ export interface PendingClaim {
   readonly conflict: boolean;
 }
 
+/**
+ * Where one committed observation stands: scoped by its row in one
+ * relationship; waiting, in the relationship it would be scoped in
+ * when that is known; contradicting, so it can never be scoped; or
+ * anonymous, which has no relationship scope at all.
+ */
+export type ObservationScope =
+  | { readonly status: "scoped"; readonly relationshipId: RelationshipId }
+  | { readonly status: "deferred"; readonly relationshipId: RelationshipId | null; readonly because: string }
+  | { readonly status: "conflict"; readonly relationshipId: RelationshipId | null; readonly because: string }
+  | { readonly status: "anonymous" };
+
+/**
+ * The observations of one message ID as a whole: complete when every
+ * one is scoped in the same relationship and they agree on the intent;
+ * incomplete while one still waits; in conflict when one contradicts,
+ * they disagree on the intent or they are scoped in different
+ * relationships. Only a complete group acknowledges, executes or is
+ * lifted from.
+ */
+export type ObservationGroup =
+  | { readonly status: "complete"; readonly relationshipId: RelationshipId; readonly eventIds: readonly EventId[] }
+  | { readonly status: "incomplete"; readonly relationshipId: RelationshipId | null; readonly because: string }
+  | { readonly status: "conflict"; readonly relationshipId: RelationshipId | null; readonly because: string }
+  | { readonly status: "anonymous"; readonly eventIds: readonly EventId[] };
+
 export interface RelationshipFold {
   readonly relationships: ReadonlyMap<RelationshipId, Relationship>;
+  /** every committed observation's standing, by event ID */
+  readonly observations: ReadonlyMap<EventId, ObservationScope>;
+  /** every observation message ID's group */
+  readonly groups: ReadonlyMap<MessageId, ObservationGroup>;
   /** every local DID entity in some validated local chain: retained, whatever its liveness */
   readonly retainedDidIds: ReadonlySet<DidId>;
   readonly transitions: ReadonlyMap<EventId, TransitionStatus>;
@@ -168,6 +203,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
 
   const transitions = new Map<EventId, TransitionStatus>();
   const folded = new Map<RelationshipId, { relationship: Omit<Relationship, "faults" | "conflict">; faults: string[] }>();
+  const evidences = new Map<RelationshipId, Evidence>();
   for (const id of ids) {
     const verdict: Verdict = { faults: [], deferred: [] };
     const bindings = bound.get(id) ?? [];
@@ -191,7 +227,8 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
       const chains = foldChains(root, localEdges.get(id) ?? [], peerEdges.get(id) ?? [], context, verdict, transitions);
       localChain = chains.local;
       peerChain = chains.peer;
-    } else judgeUnrooted(localEdges.get(id) ?? [], peerEdges.get(id) ?? [], context, verdict, transitions);
+      evidences.set(id, chains.evidence);
+    } else evidences.set(id, judgeUnrooted(localEdges.get(id) ?? [], peerEdges.get(id) ?? [], context, verdict, transitions));
 
     const contactIds = [...new Set((assigned.get(id) ?? []).map((event) => event.data.contactId))].sort();
     if (contactIds.length > 1) verdict.faults.push(`assigned to ${contactIds.length} contacts`);
@@ -238,6 +275,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
     for (const node of relationship.localChain) retainedDidIds.add(node.didId);
   }
 
+  const { observations, groups } = foldObservations(set, receipts, receiptsByMessage, relationships, evidences, index);
   const pendingClaims = foldPendingClaims(set, routes, relationships, transitions, receipts);
   const pendingByPair = new Map<string, PendingClaim[]>();
   for (const claim of pendingClaims) {
@@ -250,6 +288,8 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
 
   return {
     relationships,
+    observations,
+    groups,
     retainedDidIds,
     transitions,
     pendingClaims,
@@ -390,7 +430,7 @@ const chainsKey = (chains: Chains) => canonicalText({ local: chains.local.map((n
  * chain, the passes are bounded by the edges, and the result is the
  * same from any order of events.
  */
-function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[] } {
+function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): { local: LocalNode[]; peer: PeerNode[]; evidence: Evidence } {
   let chains: Chains = { local: [localNode(root.localDidId, root.localDid, [])], peer: [peerNode(root.resolution, [])], nodeByEdge: new Map() };
   for (let passes = localEdges.length + peerEdges.length + 2; ; passes--) {
     const found: Verdict = { faults: [], deferred: [] };
@@ -405,7 +445,7 @@ function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: rea
     verdict.faults.push(...found.faults);
     verdict.deferred.push(...found.deferred);
     for (const [eventId, status] of statuses) transitions.set(eventId, status);
-    return { local: chains.local, peer: chains.peer };
+    return { local: chains.local, peer: chains.peer, evidence };
   }
 }
 
@@ -415,7 +455,7 @@ function foldChains(root: Root, localEdges: readonly LocalEdge[], peerEdges: rea
  * another type, a snapshot that says otherwise, a trigger that could
  * never confirm — is a conflict now; everything else waits.
  */
-function judgeUnrooted(localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): void {
+function judgeUnrooted(localEdges: readonly LocalEdge[], peerEdges: readonly PeerEdge[], context: Context, verdict: Verdict, transitions: Map<EventId, TransitionStatus>): Evidence {
   const evidence = evidenceOf(context, { local: [], peer: [], nodeByEdge: new Map() }, false);
   const judged: Judged<LocalEdge | PeerEdge>[] = [...localEdges.map((edge) => judgeLocalEdge(edge, evidence)), ...peerEdges.map((edge) => judgePeerEdge(edge, evidence))];
   for (const item of judged) {
@@ -424,6 +464,7 @@ function judgeUnrooted(localEdges: readonly LocalEdge[], peerEdges: readonly Pee
       transitions.set(item.edge.eventId, { status: "conflict", because: item.faults.join("; ") });
     } else transitions.set(item.edge.eventId, { status: "deferred", because: [...item.deferred, "the relationship's binding does not stand"].join("; ") });
   }
+  return evidence;
 }
 
 function describeEdge(edge: LocalEdge | PeerEdge): string {
@@ -828,6 +869,95 @@ function foldPeerChain(root: Root, edges: readonly PeerEdge[], evidence: Evidenc
   }
   settleUnreached(classes, reached, describeEdge, verdict, statuses);
   return { chain, nodeByEdge };
+}
+
+/**
+ * The relationship an observation would be scoped in, from what it
+ * names: a proof-free observation the relationship of its binding; a
+ * carrier the relationship of the transitions carrying its proof, or
+ * of its binding while no transition carries it yet. What it names
+ * and is not here defers; transitions of two relationships carrying
+ * one proof contradict.
+ */
+function candidateOf(receipt: Receipt, set: VaultEventSet, relationships: ReadonlyMap<RelationshipId, Relationship>, peerEdges: readonly PeerEdge[]): { relationshipId: RelationshipId } | { deferred: string } | { conflict: string } | "anonymous" {
+  const { peerResolutionEventId, relationshipBindingEventId, fromPrior } = receipt.data;
+  if (peerResolutionEventId === null) return "anonymous";
+  let bound: RelationshipId | null = null;
+  let bindingMissing = false;
+  if (relationshipBindingEventId !== null) {
+    const binding = set.resolve(relationshipBindingEventId, "relationship.bound");
+    if (binding.status === "mismatched") return { conflict: `names ${binding.event.type} as its binding` };
+    if (binding.status === "missing") bindingMissing = true;
+    else bound = binding.event.data.relationshipId;
+  }
+  if (fromPrior === null) return bound === null ? { deferred: "awaits its binding" } : { relationshipId: bound };
+  const carrying = [...new Set(peerEdges.filter((edge) => witnesses(relationships.get(edge.data.relationshipId)?.bindingEventIds ?? [], receipt, edge.data)).map((edge) => edge.data.relationshipId))].sort();
+  if (carrying.length > 1) return { conflict: `carries a proof that transitions of ${carrying.length} relationships claim: ${carrying.join(", ")}` };
+  if (carrying.length === 1) return { relationshipId: carrying[0]! };
+  if (bound !== null) return { relationshipId: bound };
+  return { deferred: bindingMissing ? "awaits its binding" : "awaits the transition carrying its proof" };
+}
+
+/**
+ * Every observation judged in the relationship it would be scoped in,
+ * against that relationship's final chains and the address index, and
+ * every message ID's observations taken together. An observation whose
+ * row holds is still not scoped when the pair it arrived at, its local
+ * DID and the sender's, is in the history of another relationship too:
+ * the evidence then names two relationships, not one.
+ */
+function foldObservations(set: VaultEventSet, receipts: readonly Receipt[], receiptsByMessage: ReadonlyMap<string, Receipt[]>, relationships: ReadonlyMap<RelationshipId, Relationship>, evidences: ReadonlyMap<RelationshipId, Evidence>, index: ReadonlyMap<string, readonly RelationshipId[]>): { observations: Map<EventId, ObservationScope>; groups: Map<MessageId, ObservationGroup> } {
+  const peerEdges = set.of("relationship.peerTransitioned");
+  const observations = new Map<EventId, ObservationScope>();
+  for (const receipt of receipts) {
+    const candidate = candidateOf(receipt, set, relationships, peerEdges);
+    if (candidate === "anonymous") observations.set(receipt.eventId, { status: "anonymous" });
+    else if ("conflict" in candidate) observations.set(receipt.eventId, { status: "conflict", relationshipId: null, because: candidate.conflict });
+    else if ("deferred" in candidate) observations.set(receipt.eventId, { status: "deferred", relationshipId: null, because: candidate.deferred });
+    else {
+      const { relationshipId } = candidate;
+      const evidence = evidences.get(relationshipId);
+      if (evidence === undefined) {
+        observations.set(receipt.eventId, { status: "deferred", relationshipId, because: "the relationship is not folded" });
+        continue;
+      }
+      const { faults, deferred } = observationScope(evidence, receipt, null);
+      if (faults.length > 0) observations.set(receipt.eventId, { status: "conflict", relationshipId, because: faults.join("; ") });
+      else if (deferred.length > 0) observations.set(receipt.eventId, { status: "deferred", relationshipId, because: deferred.join("; ") });
+      else {
+        const localDid = relationships.get(relationshipId)!.localChain.find((node) => node.keyNames.keyAgreement === receipt.data.localKeyName || node.keyNames.authentication === receipt.data.localKeyName)!.did;
+        const others = (index.get(pairKey(localDid, receipt.data.did!)) ?? []).filter((other) => other !== relationshipId);
+        if (others.length > 0) observations.set(receipt.eventId, { status: "conflict", relationshipId, because: `arrived at the pair ${localDid} / ${receipt.data.did}, which ${others.join(", ")} also claim${others.length > 1 ? "" : "s"}` });
+        else observations.set(receipt.eventId, { status: "scoped", relationshipId });
+      }
+    }
+  }
+
+  const groups = new Map<MessageId, ObservationGroup>();
+  for (const [messageId, members] of receiptsByMessage) {
+    const sorted = [...members].sort(compareEvents);
+    const eventIds = sorted.map((receipt) => receipt.eventId);
+    const scopes = sorted.map((receipt) => observations.get(receipt.eventId)!);
+    const anonymous = scopes.filter((scope) => scope.status === "anonymous").length;
+    if (anonymous === scopes.length) {
+      groups.set(messageId as MessageId, { status: "anonymous", eventIds });
+      continue;
+    }
+    const conflicts: string[] = [];
+    if (anonymous > 0) conflicts.push("anonymous and authenticated observations share the message ID");
+    if (sorted.some((receipt) => receipt.data.intentHash !== sorted[0]!.data.intentHash)) conflicts.push("the observations disagree on the intent");
+    const ids = [...new Set(scopes.flatMap((scope) => (scope.status !== "anonymous" && scope.relationshipId !== null ? [scope.relationshipId] : [])))].sort();
+    const relationshipId = ids.length === 1 ? ids[0]! : null;
+    if (ids.length > 1) conflicts.push(`the observations are scoped in ${ids.length} relationships: ${ids.join(", ")}`);
+    for (const [i, scope] of scopes.entries()) if (scope.status === "conflict") conflicts.push(`observation ${eventIds[i]} ${scope.because}`);
+    if (conflicts.length > 0) groups.set(messageId as MessageId, { status: "conflict", relationshipId, because: conflicts.join("; ") });
+    else {
+      const waiting = scopes.flatMap((scope, i) => (scope.status === "deferred" ? [`observation ${eventIds[i]} ${scope.because}`] : []));
+      if (waiting.length > 0) groups.set(messageId as MessageId, { status: "incomplete", relationshipId, because: waiting.join("; ") });
+      else groups.set(messageId as MessageId, { status: "complete", relationshipId: relationshipId!, eventIds });
+    }
+  }
+  return { observations, groups };
 }
 
 /**

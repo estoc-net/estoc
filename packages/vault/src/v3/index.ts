@@ -1,13 +1,9 @@
 /**
- * `@estoc/vault/v3` — the version-3 vault's meaning as a library. What is
- * here so far: the identifier vocabulary, the deterministic identifiers,
- * the canonical public-key value, the schema of every event type, the
- * stored message document, the projections a message is hashed by,
- * the vault's own keys and DIDs, the retained peer document, the
- * `from_prior` proof, and the first folds: the event set they read,
- * the authors and label, the mediations, the routes and local DIDs,
- * the relationships with their chains and address index, the
- * invitations and the contacts' own decisions.
+ * `@estoc/vault/v3` — the version-3 vault's meaning as a library: the
+ * identifiers and their vocabulary, the schema of every event type and
+ * of the stored message document, the vault's own keys, DIDs and
+ * proofs, the evidence it keeps of its peers, and the folds that read
+ * an event set into what the vault knows.
  */
 
 export type {
@@ -178,6 +174,8 @@ export {
   type PendingClaim,
   type RelationshipFold,
   type RelationshipFoldOptions,
+  type ObservationScope,
+  type ObservationGroup,
   type ReadObject,
   foldRelationships,
   bindingHolds,
@@ -187,3 +185,6 @@ export {
 } from "./fold/relationships.js";
 export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";
+export { type Membership, type Package, type Outcome, type Work, type Outbound, type OutboundFold, type OutboundFoldOptions, foldOutbound } from "./fold/outbound.js";
+export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, heldRoots, readState } from "./fold/held.js";
+export { type SourceKey, type NameClaim, type Share, type Profile, compareKeys, foldProfiles, profileOf } from "./fold/profile.js";

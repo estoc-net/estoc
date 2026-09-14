@@ -1016,6 +1016,12 @@ receipt routes overlap as specified in [vault-events.md section 6.5](vault-event
 A manual rotation can solicit that input with the response-requesting ordinary
 Trust Ping in [vault-events.md section 13.7](vault-events.md#rotate-a-local-relationship-address).
 
+Address confirmation of the exact current successor follows
+[vault-events.md section 6.5](vault-events.md#relationship-localtransitioned): the
+observation's own row must be complete, uniquely scoped in R and free of
+the group contradictions defined there. Ordinary messages, ACKs and
+protocol errors use the same rule.
+
 <a id="peer-address-changes"></a>
 
 ## 12. Peer address changes
@@ -1072,7 +1078,12 @@ R; explicit ACKs prove only receipt. A no-response error with no rotation or
 ACK request is a control observation under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
 It creates no privacy reply or new contact. Its retained reason can appear
 beside one uniquely correlated outbound; erasure removes that diagnostic.
-It does not terminate R, confirm a local successor or reopen a submitted message ID.
+It does not terminate R or reopen a submitted message ID. Its authenticated
+observation may supply exact-address confirmation under
+[vault-events.md section 6.5](vault-events.md#relationship-localtransitioned),
+independently of its diagnostic, body availability or ACK contents. This
+confirms address knowledge without asserting application acceptance or
+generating a reply.
 
 <a id="retry-replacement-and-address-rollover"></a>
 

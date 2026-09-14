@@ -11,8 +11,8 @@ import ipaddr from "ipaddr.js";
 // colon-separated segments of ALPHA / DIGIT / "." / "-" / "_" / pct-encoded.
 const DID_SYNTAX = "did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+";
 const DID = new RegExp(`^${DID_SYNTAX}$`);
-// A DID URL is a DID followed by RFC 3986 path-abempty, query and fragment
-// (DID Core §3.2): every component is built from pchar, so a percent sign
+// A DID URL is a DID followed by RFC 3986 path-abempty, query and fragment:
+// every component is built from pchar, so a percent sign
 // must begin a two-digit escape, and a space or a second `#` is not a URL.
 // The only general URL parser in the platform, WHATWG `URL`, escapes and
 // normalizes what it is given instead of refusing it, so it cannot decide

@@ -154,7 +154,77 @@
   in. An unchecked root snapshot leaves the binding standing on
   nothing, an unchecked edge is deferred, never applied.
   `fromPriorClaims` reads a proof's claims without verifying it.
-  `bindingHolds` is now shared with the invitation fold.
+  `bindingHolds` is now shared with the invitation fold. The fold also
+  exposes every observation's standing, `observations`, as the
+  relationship its row gives it scope in, waiting, contradicting or
+  anonymous, and every message ID's observations as a group,
+  `groups`, complete when all are scoped in one relationship and agree
+  on the intent, so what consumes received evidence reads one
+  judgement; an observation whose row holds is still a contradiction
+  when the pair it arrived at is in another relationship's history
+  too.
+- **The outbound, held-root and profile folds**. `foldOutbound`
+  (`fold/outbound.ts`) groups `message.out` by message ID: equal
+  intents are one logical message, different ones a conflict that
+  keeps every package and works nothing; the consistent packages, a
+  package recorded with two contents, prepared for two messages or
+  carrying another intent being a fault; each package's retirement,
+  package-scoped failure and submission; `submitted` once a package
+  that belongs, of a message that stands, has a committed submission,
+  closing the message for good — a submission of a package still
+  waiting or contradicting releasing nothing, and what another package
+  waits for or an execution conflict found later taking nothing back;
+  the first message-scoped failure; the message's membership
+  in its relationship — a birth that derives the ID and agrees with
+  the binding, a relationship that stands and does not contradict,
+  each package sent from a node of the local chain (one a local edge
+  would add waits, any other is outside), carrying exactly the proof of
+  the transition that added its sender or none from the root, to a
+  recipient resolution taken at its key, verified against its document
+  and pinned by a node of the peer chain (one a peer edge would add
+  waits); the one ACK-bearing response per execution, a second message
+  ID conflicting both; an automatic intent's carrier, every
+  observation whose own row is scoped under the relationship and wire
+  ID deriving the execution proving the intent it carried to that
+  relationship alone, and two that disagree — at the peer's prior and
+  successor keys, or in one group — contradicting the execution
+  whatever their groups later wait for, contradict or take in from
+  another relationship, else one group complete in the intent's
+  relationship, else waiting, else — anonymous, scoped elsewhere, in
+  conflict — a contradiction; `ackWitnesses`, the
+  complete scoped observations of complete groups in the relationship
+  whose `ack` names the message, applied only once membership is
+  verified, the earliest as `receiptInstant`, `late` at or after
+  `expiresTime`; a `delivery.acknowledged` event checked against the
+  observations it names by the same witness rule — the message's
+  membership, resolution, scope, group and relationship, a
+  contradiction of any final whatever the others still wait for — its
+  diagnostics kept apart as `ackDeferred` / `ackFaults` since receipt
+  information changes no work, outcome or retention; the displayed `outcome` in its precedence, and `work` —
+  prepare, submit these packages, repack these, or nothing and why —
+  from the events alone, the clock and the bytes being the worker's:
+  work waits while a local transition of the relationship is still
+  unjudged, and a package from a successor no scoped input — of any
+  type, a problem report included — has confirmed is submittable only
+  with the transition's proof. `heldRoots` (`fold/held.ts`) is what collection
+  keeps: every root an accepted event retains, an unknown or unreadable
+  event's and a resolution's pinned document included, less what an
+  erasure released from that message,
+  and a prepared envelope only while `retainEnvelope` — not erased,
+  the message neither submitted nor failed, the package neither retired
+  nor failed — holds, a disputed or intent-less package held until
+  erased; `foldErasures` and `readState`, erased before absent.
+  `foldProfiles` (`fold/profile.ts`) lifts each relationship's
+  `claimedName` from its latest complete scoped inbound source, the
+  observations of one wire ID and intent in the relationship being one
+  source at whatever keys they arrived, `nameConflict` when one source
+  was lifted two names, and `shared` as the earliest intent event of
+  the latest submitted, verified disclosure of our profile; sources are
+  ordered by their earliest event, never by the lift, and a lift whose
+  source is missing or unscoped waits while one whose source is
+  anonymous, elsewhere, contradicting or of another type is a fault.
+  The test scene of two vaults is shared by the relationship, outbound,
+  held-root and profile tests as `test/v3/fold/scene.ts`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
