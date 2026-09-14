@@ -1,28 +1,19 @@
 /**
- * A presented DID resolved to the exact evidence the vault retains of
- * a peer: the presented spelling, the canonical DID, the document as
- * the object store keeps it — RFC 8785 bytes under their raw CID —
- * the methods it authorizes for authentication and key agreement, and
- * the DIDComm service it names. Two methods are supported. A Peer DID
- * numalgo 4 carries its document in its long form and resolves without
- * a network; its short form resolves only through a long form already
- * in evidence. A `did:web` is fetched, under a policy that refuses what
- * a fetch from an agent must never do — reach an address the DID
- * itself does not name, follow a redirect, read without bound — and
- * its document must call itself by the presented string, byte for
- * byte: the spelling is the identity, whatever URL or DNS processing
- * the fetch went through.
+ * A presented DID resolved to the evidence the vault retains of a
+ * peer: the presented spelling, the canonical DID, the document as
+ * RFC 8785 bytes under their raw CID, the methods it authorizes and
+ * the DIDComm service it names. A numalgo-4 long form resolves from
+ * itself, its short form only through a long form already in
+ * evidence. A `did:web` is fetched, and its document must call itself
+ * by the presented string byte for byte: the spelling is the identity,
+ * whatever URL or DNS processing the fetch went through.
  *
- * Every failure is one of two kinds, and the difference decides what
- * the caller does next: `unavailable` is no answer now — the network,
- * a timeout, a retryable status — and leaves the work retryable;
- * `definitive` is an answer that closes the attempt — not found, not
- * a document, another DID's, forbidden by policy.
+ * Every failure is `unavailable` — no answer now, the work stays
+ * retryable — or `definitive` — an answer that closes the attempt.
  *
- * `web-did-resolver` is not used here: it fetches through its own
- * transport, follows redirects and reads without a bound, none of
- * which this policy can reach into. The `did:web` URL derivation it
- * would provide is a few lines; the document checks are the vault's.
+ * `web-did-resolver` is not used: it fetches through its own
+ * transport, follows redirects and reads without a bound, and the
+ * network policy has to hold on the transport itself.
  */
 
 import ipaddr from "ipaddr.js";
@@ -31,6 +22,7 @@ import { isLongForm, isPeerDID4, isShortForm } from "@estoc/did-peer";
 import { InvalidJson, canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
 import { InvalidDidDocument, authorizedMethodIds, canonicalDidOf, didcommServiceUris, peerResolution, rawCidOfBytes, type Cid, type Did, type DidUrl, type VaultFold } from "@estoc/vault/v3";
 
+import { bounded } from "./link.js";
 import type { AgentTrace } from "./trace.js";
 
 /** A resolved peer document, in the exact form the vault retains and the folds check. */
@@ -54,21 +46,34 @@ export type Resolved = { outcome: "resolved"; resolution: Resolution } | { outco
 /** The long form of a numalgo-4 short form already in evidence, or null. */
 export type KnownLongForms = (shortFormDid: Did) => Did | null;
 
+/**
+ * The codes a transport failure carries when its answer is final, on
+ * the error or down its `cause` chain. `refused`: the transport's
+ * policy forbids the connection. `noAddress`: the name has no address
+ * — NXDOMAIN, or NODATA for every usable address family. A transport
+ * that cannot tell a name's absence from a lookup that failed leaves
+ * the code off, and the failure counts as no answer now.
+ */
+export const DEFINITIVE_TRANSPORT_CODES = { refused: "EBLOCKED", noAddress: "ENXDOMAIN" } as const;
+
 export interface WebResolverOptions {
-  /** the transport; the global by default */
+  /**
+   * The transport a `did:web` document is fetched over, and where the
+   * network policy holds. A check on the name binds nothing: only what
+   * makes the connection sees every address the name resolves to, at
+   * lookup, and can refuse one that is not public unicast — on every
+   * connection, since the name may resolve differently next time. So
+   * the transport is the host's, under this contract: it refuses what
+   * its policy forbids, follows no redirect, answers from no cache,
+   * honours `signal`, and marks a failure that is final with a code
+   * from `DEFINITIVE_TRANSPORT_CODES`. Without one no `did:web` is
+   * resolved.
+   */
   fetch?: typeof fetch;
   /** the most bytes a document may be; `MAX_DOCUMENT_BYTES` by default */
   maxBytes?: number;
-  /** how long one fetch may take, connect to last byte; 10 s by default */
+  /** how long one resolution may take, all of it — connection, last byte, diagnostic; 10 s by default */
   timeoutMs?: number;
-  /**
-   * The host's own say on a hostname, beyond the syntactic policy
-   * here: the reason it is refused, or null. A fetch API neither
-   * exposes the addresses a name resolves to nor pins the connection
-   * to them; a host that can look them up refuses here the names that
-   * lead to a reserved range.
-   */
-  checkHost?: (hostname: string) => Promise<string | null> | string | null;
   /**
    * Plain HTTP to `localhost`, `127.0.0.1` or `[::1]`: a mediator run
    * on this machine for development. Every loopback name is refused
@@ -92,6 +97,11 @@ const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const RESERVED_SUFFIXES = [".localhost", ".local", ".internal", ".home.arpa", ".in-addr.arpa", ".ip6.arpa"];
 const RETRYABLE_STATUS = new Set([408, 429]);
 
+const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"];
+/** The members a JWK carries only when it holds a private or symmetric key. */
+const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+const URI = /^[A-Za-z][A-Za-z0-9+.-]*:\S*$/;
+
 function definitive(reason: string): Resolved {
   return { outcome: "definitive", reason };
 }
@@ -102,6 +112,112 @@ function unavailable(reason: string): Resolved {
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** An error and what it was caused by, outermost first. */
+function causeChain(err: unknown): unknown[] {
+  const chain: unknown[] = [];
+  for (let at = err; at !== undefined && at !== null && chain.length < 8; at = (at as { cause?: unknown }).cause) chain.push(at);
+  return chain;
+}
+
+/** What a failure says, the cause included: a transport wraps its refusal in a generic error, and the refusal is what the reason must show. */
+function reasonOf(err: unknown): string {
+  return [...new Set(causeChain(err).map(messageOf))].join(": ");
+}
+
+/** The failure of a fetch or a read as an outcome: final by the transport's code, or no answer now. */
+function transportFailure(err: unknown, signal: AbortSignal, timeoutMs: number): Resolved {
+  const code = causeChain(err)
+    .map((at) => (at as { code?: unknown }).code)
+    .find((found) => typeof found === "string");
+  if (code === DEFINITIVE_TRANSPORT_CODES.refused) return definitive(`the transport refused the connection: ${reasonOf(err)}`);
+  if (code === DEFINITIVE_TRANSPORT_CODES.noAddress) return definitive(`the authority has no address: ${reasonOf(err)}`);
+  if (signal.aborted) return unavailable(`timed out: not resolved within ${timeoutMs} ms`);
+  return unavailable(`the fetch failed: ${reasonOf(err)}`);
+}
+
+function isDid(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    canonicalDidOf(value);
+    return true;
+  } catch (err) {
+    if (err instanceof InvalidDidDocument) return false;
+    throw err;
+  }
+}
+
+function methodFault(entry: unknown): string | null {
+  if (!isJsonObject(entry)) return "is an object";
+  if (typeof entry["id"] !== "string") return "has a string id";
+  if (typeof entry["type"] !== "string") return "has a string type";
+  const controller = entry["controller"];
+  if (controller !== undefined && !isDid(controller)) return "has a DID controller if any";
+  const multibase = entry["publicKeyMultibase"];
+  const jwk = entry["publicKeyJwk"];
+  if ((multibase === undefined) === (jwk === undefined)) return "carries one of publicKeyMultibase and publicKeyJwk";
+  if (multibase !== undefined && typeof multibase !== "string") return "has a string publicKeyMultibase";
+  if (jwk !== undefined) {
+    if (!isJsonObject(jwk)) return "has an object publicKeyJwk";
+    const secret = PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
+    if (secret !== undefined) return `has a publicKeyJwk without the private member ${secret}`;
+  }
+  return null;
+}
+
+function endpointFault(endpoint: unknown): string | null {
+  if (typeof endpoint === "string") return URI.test(endpoint) ? null : "has a serviceEndpoint that is a URI";
+  if (!isJsonObject(endpoint)) return "has a serviceEndpoint that is a URI or an object";
+  const uri = endpoint["uri"];
+  return uri === undefined || (typeof uri === "string" && URI.test(uri)) ? null : "has a serviceEndpoint whose uri is a URI";
+}
+
+function serviceFault(entry: unknown): string | null {
+  if (!isJsonObject(entry)) return "is an object";
+  if (typeof entry["id"] !== "string") return "has a string id";
+  const type = entry["type"];
+  if (typeof type !== "string" && !(Array.isArray(type) && type.length > 0 && type.every((t) => typeof t === "string"))) return "has a type, a string or strings";
+  const endpoint = entry["serviceEndpoint"];
+  if (Array.isArray(endpoint)) {
+    if (endpoint.length === 0) return "has a serviceEndpoint that is not empty";
+    return endpoint.map(endpointFault).find((fault) => fault !== null) ?? null;
+  }
+  return endpointFault(endpoint);
+}
+
+/**
+ * The shape a fetched document must have before its relationships are
+ * read — what the vault requires of a numalgo-4 input document, asked
+ * here of a `did:web` one: every method an object with an ID, a type,
+ * a DID controller if any and exactly one public key that is public;
+ * every service an object with an ID of its own, a type and an
+ * endpoint that is a URI or an object. A method of a type this agent
+ * never uses does not fail the document: whether its key is usable is
+ * decided where the key is used.
+ */
+function checkShape(document: JsonObject, did: Did): void {
+  const each = (member: string, faultOf: (entry: unknown) => string | null) => {
+    const entries = document[member];
+    if (entries === undefined) return;
+    if (!Array.isArray(entries)) throw new InvalidDidDocument(`${member} is an array`);
+    entries.forEach((entry, i) => {
+      const fault = faultOf(entry);
+      if (fault !== null) throw new InvalidDidDocument(`${member}[${i}] ${fault}`);
+    });
+  };
+  each("alsoKnownAs", (entry) => (typeof entry === "string" ? null : "is a string"));
+  each("verificationMethod", methodFault);
+  each("service", serviceFault);
+  for (const relationship of RELATIONSHIPS) each(relationship, (entry) => (typeof entry === "string" ? null : methodFault(entry)));
+  const serviceIds = new Set<string>();
+  (document["service"] as JsonObject[] | undefined)?.forEach((service, i) => {
+    const reference = service["id"] as string;
+    const id = reference.startsWith("#") || reference.startsWith("?") ? did + reference : reference;
+    if (!id.startsWith("did:")) throw new InvalidDidDocument(`service[${i}].id is a DID URL or a fragment reference: ${JSON.stringify(reference)}`);
+    if (serviceIds.has(id)) throw new InvalidDidDocument(`two services are ${id}`);
+    serviceIds.add(id);
+  });
 }
 
 /** The full resolution over a document the vault's rules accept, or a throw the caller classifies as definitive. */
@@ -162,14 +278,14 @@ export function webDidUrl(did: string, insecureLoopback = false): { url: URL } |
   } catch {
     return { refused: `the authority ${JSON.stringify(authority)} is not a host` };
   }
-  const hostname = url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname;
-  const loopback = LOOPBACK_NAMES.has(url.hostname);
-  if (loopback) {
+  const name = url.hostname.endsWith(".") ? url.hostname.slice(0, -1) : url.hostname;
+  const literal = name.startsWith("[") ? name.slice(1, -1) : name;
+  if (LOOPBACK_NAMES.has(name)) {
     if (!insecureLoopback) return { refused: "a loopback authority" };
     url.protocol = "http:";
-  } else if (ipaddr.isValid(hostname)) {
+  } else if (ipaddr.isValid(literal)) {
     return { refused: "an IP-literal authority" };
-  } else if (RESERVED_SUFFIXES.some((suffix) => url.hostname.endsWith(suffix))) {
+  } else if (RESERVED_SUFFIXES.some((suffix) => name.endsWith(suffix))) {
     return { refused: `a reserved name: ${url.hostname}` };
   }
   url.pathname = path.length === 0 ? "/.well-known/did.json" : `/${path.map((segment) => encodeURIComponent(segment)).join("/")}/did.json`;
@@ -206,7 +322,12 @@ async function readBounded(response: Response, maxBytes: number): Promise<Uint8A
   return bytes;
 }
 
-/** A `did:web` fetched under the policy and checked to be its own: the presented string, byte for byte, as the document's `id`. */
+/**
+ * A `did:web` fetched over the transport and checked to be its own:
+ * the presented string, byte for byte, as the document's `id`. One
+ * deadline covers the whole resolution; the diagnostic written after
+ * it neither holds the outcome nor overturns it.
+ */
 async function resolveWeb(presented: string, options: ResolverOptions): Promise<Resolved> {
   try {
     canonicalDidOf(presented);
@@ -216,23 +337,26 @@ async function resolveWeb(presented: string, options: ResolverOptions): Promise<
   }
   const derived = webDidUrl(presented, options.insecureLoopback ?? false);
   if ("refused" in derived) return definitive(`the resolver policy refuses ${presented}: ${derived.refused}`);
+  if (options.fetch === undefined) return definitive("no transport: a did:web is fetched only over one that holds the network policy");
   const { url } = derived;
-  const refused = await options.checkHost?.(url.hostname);
-  if (refused !== null && refused !== undefined) return definitive(`the resolver policy refuses ${url.hostname}: ${refused}`);
-  const maxBytes = options.maxBytes ?? MAX_DOCUMENT_BYTES;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const signal = AbortSignal.timeout(timeoutMs);
   const started = Date.now();
-  const outcome = await fetchWeb(presented as Did, url, maxBytes, options);
-  await options.trace?.append("diag", "resolve", { did: presented, url: url.href, outcome: outcome.outcome, ...(outcome.outcome === "resolved" ? { cid: outcome.resolution.cid } : { reason: outcome.reason }), ms: Date.now() - started });
+  const outcome = await fetchWeb(presented as Did, url, options.fetch, options.maxBytes ?? MAX_DOCUMENT_BYTES, signal, timeoutMs);
+  const trace = options.trace;
+  if (trace !== undefined) {
+    const entry = { did: presented, url: url.href, outcome: outcome.outcome, ...(outcome.outcome === "resolved" ? { cid: outcome.resolution.cid } : { reason: outcome.reason }), ms: Date.now() - started };
+    await bounded(signal, () => trace.append("diag", "resolve", entry)).catch(() => undefined);
+  }
   return outcome;
 }
 
-async function fetchWeb(presented: Did, url: URL, maxBytes: number, options: WebResolverOptions): Promise<Resolved> {
-  const fetch = options.fetch ?? globalThis.fetch;
+async function fetchWeb(presented: Did, url: URL, fetch: typeof globalThis.fetch, maxBytes: number, signal: AbortSignal, timeoutMs: number): Promise<Resolved> {
   let response: Response;
   try {
-    response = await fetch(url.href, { redirect: "manual", signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS), headers: { accept: "application/did+json, application/json" } });
+    response = await bounded(signal, () => fetch(url.href, { redirect: "manual", cache: "no-store", signal, headers: { accept: "application/did+json, application/json" } }));
   } catch (err) {
-    return unavailable(`the fetch failed: ${messageOf(err)}`);
+    return transportFailure(err, signal, timeoutMs);
   }
   const { status } = response;
   if (response.type === "opaqueredirect" || (status >= 300 && status < 400)) return definitive(`a redirect (${status}) is not followed`);
@@ -241,9 +365,9 @@ async function fetchWeb(presented: Did, url: URL, maxBytes: number, options: Web
   if (status < 200 || status >= 300) return definitive(`HTTP ${status}`);
   let bytes: Uint8Array | null;
   try {
-    bytes = await readBounded(response, maxBytes);
+    bytes = await bounded(signal, () => readBounded(response, maxBytes));
   } catch (err) {
-    return unavailable(`the body did not arrive whole: ${messageOf(err)}`);
+    return signal.aborted ? transportFailure(err, signal, timeoutMs) : unavailable(`the body did not arrive whole: ${reasonOf(err)}`);
   }
   if (bytes === null) return definitive(`the document is larger than ${maxBytes} bytes`);
   let document: unknown;
@@ -255,6 +379,7 @@ async function fetchWeb(presented: Did, url: URL, maxBytes: number, options: Web
   if (!isJsonObject(document)) return definitive("the document is not a JSON object");
   if (document["id"] !== presented) return definitive(`the document is ${JSON.stringify(document["id"])}'s, not ${presented}'s`);
   try {
+    checkShape(document, presented);
     const canonical = canonicalize(document);
     return { outcome: "resolved", resolution: resolutionOf(presented, presented, document, canonical, rawCidOfBytes(canonical)) };
   } catch (err) {
@@ -281,15 +406,19 @@ export async function resolve(presented: string, known: KnownLongForms, options:
  * Every numalgo-4 long form the fold has in evidence, by short form:
  * what a peer disclosed, what was resolved, what a transition named
  * under either spelling, and this vault's own entities and mediation
- * identities. A short form presented later resolves through it.
+ * identities. A short form presented later resolves through it. A
+ * spelling is validated when looked up — its hash, its document, the
+ * short form it derives — so that an invalid one in evidence never
+ * stands in for a valid one recorded beside it.
  */
 export function knownLongForms(fold: VaultFold): KnownLongForms {
-  const longForms = new Map<Did, Did>();
+  const candidates = new Map<Did, Set<Did>>();
   const note = (spelling: Did | null | undefined): void => {
-    if (spelling !== null && spelling !== undefined && isLongForm(spelling)) {
-      const shortForm = spelling.slice(0, spelling.lastIndexOf(":")) as Did;
-      if (!longForms.has(shortForm)) longForms.set(shortForm, spelling);
-    }
+    if (spelling === null || spelling === undefined || !isLongForm(spelling)) return;
+    const shortForm = spelling.slice(0, spelling.lastIndexOf(":")) as Did;
+    const found = candidates.get(shortForm);
+    if (found === undefined) candidates.set(shortForm, new Set([spelling]));
+    else found.add(spelling);
   };
   for (const event of fold.set.of("peer.resolved")) note(event.data.presentedDid);
   for (const event of fold.set.of("message.in")) note(event.data.presentedDid);
@@ -302,5 +431,14 @@ export function knownLongForms(fold: VaultFold): KnownLongForms {
     note(event.data.me.did);
     note(event.data.mediatorDid);
   }
-  return (shortFormDid) => longForms.get(shortFormDid) ?? null;
+  return (shortFormDid) => {
+    for (const candidate of candidates.get(shortFormDid) ?? []) {
+      try {
+        if (peerResolution(candidate).did === shortFormDid) return candidate;
+      } catch (err) {
+        if (!(err instanceof InvalidDidDocument)) throw err;
+      }
+    }
+    return null;
+  };
 }

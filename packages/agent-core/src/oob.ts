@@ -1,8 +1,7 @@
 /**
  * out-of-band/2.0 invitations over the v2 fold: the message an issued
- * invitation stands for. Reading one back (`parseInvitation`) and
- * carrying it in a URL (`invitationUrl`) are the same as before; only
- * the record they start from changed.
+ * invitation stands for, read back (`parseInvitation`) and carried in
+ * a URL (`invitationUrl`).
  */
 
 import { PLAIN_TYP } from "./protocol/didcomm.js";

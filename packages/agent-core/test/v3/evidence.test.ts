@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { longToShort, resolveDIDCommDoc, toDIDCommDIDDoc } from "@estoc/did-peer";
+import { MemoryVault } from "@estoc/event-store/v3";
 import { didKeyName, objectReader, peerResolution, relationshipId, scanVault, vaultDraft, type Did, type DidId, type PublicKey, type RouteId } from "@estoc/vault/v3";
 
 import { secretsResolverFor } from "../../src/index.js";
@@ -68,6 +69,27 @@ describe("peer.resolved", () => {
 
     expect(await readResolution(event, objectReader(a.runtime.vault.objects))).toEqual(resolution);
     expect(await readResolution(event, async () => null)).toBeNull();
+    await a.runtime.close();
+  });
+
+  it("evidence that arrived without its document is repaired by the same document in hand, and the original pin reads again", async () => {
+    const a = await alice();
+    const resolution = await webResolution(await webIdentity(BOB));
+    const evidence = { resolution, localKeyName: LOCAL_KEY, peerPublicKey: keyAgreementKey(resolution) };
+    const event = await commitResolution(a.runtime, evidence);
+    const copy = new MemoryVault({ metadata: a.runtime.metadata });
+    await copy.ingest([event]);
+    const read = objectReader(copy.vault.objects);
+    expect(await copy.vault.objects.has(resolution.cid)).toBe(false);
+    expect(await readResolution(event, read)).toBeNull();
+    const repaired = await commitResolution(copy, evidence);
+    expect(repaired.eventId).not.toBe(event.eventId);
+    expect(await copy.vault.objects.has(resolution.cid)).toBe(true);
+    expect(await readResolution(event, read)).toEqual(resolution);
+    expect([event.eventId, repaired.eventId]).toContain((await commitResolution(copy, evidence)).eventId);
+    const fold = await scanVault(copy.vault, a.keys);
+    expect(fold.set.of("peer.resolved").map((e) => e.eventId)).toEqual([event.eventId, repaired.eventId]);
+    expect([...fold.checks.resolutionChecks.values()]).toEqual(["verified", "verified"]);
     await a.runtime.close();
   });
 

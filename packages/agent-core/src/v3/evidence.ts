@@ -1,19 +1,16 @@
 /**
- * Resolution evidence as the vault keeps it and as didcomm reads it.
- * `peer.resolved` is the durable record of one resolution for one
- * authenticated or selected peer key: the document object and the
- * event are committed together, an equal record already there is
- * reused rather than repeated, and what an event records is read back
- * into the resolution it stands for. The documents didcomm opens and
- * seals envelopes against come from here too, each under the spelling
- * didcomm asks for: a sender or recipient from the resolution made
- * fresh for the work in hand, a `from_prior` issuer from the snapshot
- * a relationship pinned, this vault's own entities from the fold, and
- * a numalgo-4 long form from itself.
+ * Resolution evidence as the vault keeps it and as didcomm reads it:
+ * `peer.resolved` with its document object, one record per resolution
+ * for one authenticated or selected peer key; and the documents
+ * didcomm opens and seals against, each under the spelling it asks
+ * for. A fresh resolution and a pinned snapshot are kept apart: the
+ * first is what a sender or recipient is read from now, the second is
+ * what a `from_prior` issuer is verified against, whatever the peer
+ * publishes today.
  */
 
 import { DIDDocConversionError, isLongForm, toDIDCommDIDDoc, type DIDDoc } from "@estoc/did-peer";
-import { isJsonObject, parseStrict, type VaultRuntime } from "@estoc/event-store/v3";
+import { DamagedObject, isJsonObject, parseStrict, type Held, type VaultRuntime } from "@estoc/event-store/v3";
 import {
   InvalidDidDocument,
   VaultEventSet,
@@ -25,6 +22,7 @@ import {
   readVaultEvent,
   samePayload,
   vaultDraft,
+  type Cid,
   type Did,
   type DidUrl,
   type KeyName,
@@ -82,11 +80,25 @@ export interface CommitResolutionOptions {
   fresh?: boolean;
 }
 
+/** Whether the object is here and sound; one known damaged is not, and the bytes coming in replace it. */
+async function objectHeld(held: Held, cid: Cid): Promise<boolean> {
+  try {
+    return await held.objects.has(cid);
+  } catch (err) {
+    if (err instanceof DamagedObject) return false;
+    throw err;
+  }
+}
+
 /**
  * `peer.resolved` for the evidence, with its document object, under
  * the writer lock. An event already recording exactly this — same
  * spellings, document, methods, service and keys — is returned instead
- * of being repeated, unless `fresh` asks for a new one.
+ * of being repeated, unless `fresh` asks for a new one or the document
+ * it names is not here: evidence that arrived without its object, or
+ * whose object was found damaged, is what the bytes in hand repair,
+ * and the new event carries them in while the old event's pin reads
+ * again.
  */
 export async function commitResolution(runtime: VaultRuntime, evidence: ResolutionEvidence, options: CommitResolutionOptions = {}): Promise<VaultEvent<"peer.resolved">> {
   const data = resolutionData(evidence);
@@ -94,7 +106,7 @@ export async function commitResolution(runtime: VaultRuntime, evidence: Resoluti
     if (!options.fresh) {
       const set = await VaultEventSet.from(held.events.scan());
       const recorded = set.of("peer.resolved").find((event) => samePayload(event.data, data));
-      if (recorded !== undefined) return recorded;
+      if (recorded !== undefined && (await objectHeld(held, evidence.resolution.cid))) return recorded;
     }
     const [event] = (await held.commit([{ cid: evidence.resolution.cid, source: evidence.resolution.bytes }], [vaultDraft("peer.resolved", data)])).map(readVaultEvent);
     return event as VaultEvent<"peer.resolved">;
