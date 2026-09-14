@@ -370,7 +370,7 @@ function reportTargets(set: VaultEventSet, outbound: OutboundFold): ReadonlyMap<
  */
 function targetStanding(message: Outbound, history: readonly VaultEvent<"message.prepared">[]): ReportTarget["standing"] {
   const memberships = [...message.packages.values()].map((pkg) => pkg.membership.status);
-  if (message.intent === null || message.standing.status === "conflict" || memberships.includes("conflict")) return "contradicted";
+  if (message.standing.status === "conflict" || memberships.includes("conflict")) return "contradicted";
   if (history.some((event) => !message.packages.has(event.data.packageId))) return "contradicted";
   if (message.standing.status === "deferred") return "waiting";
   return memberships.includes("verified") ? "compatible" : "waiting";

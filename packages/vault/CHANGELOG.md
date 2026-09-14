@@ -272,8 +272,10 @@
   another package's wait taking nothing from it; its code shown while
   its body is here and unerased; ambiguity, a candidate waiting or
   contradicted, absence and erasure each supply none. `Outbound` now
-  carries `standing`, the message's own standing apart from its
-  packages and carrier, what a submission completes under.
+  carries `standing`, the message's own standing — one intent, birth
+  and binding agreeing, the relationship standing — apart from its
+  packages and carrier, what a submission completes under; intents
+  that disagree under one ID are that standing's conflict.
   `readProblemReports` reads the reports' bodies from the objects
   beside the fold and admits only a well-formed problem code: sorter,
   scope and descriptors in lower kebab-case, a code without a

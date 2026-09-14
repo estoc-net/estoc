@@ -121,19 +121,25 @@ describe("the outbound message", () => {
     const pkg = packageOf(scene, response, { sender: a0.didId, recipient: b0, resolution: root });
     let m = outboundOf(await fold(scene.events, keys), response.data.messageId);
     expect(m.intentEventIds).toHaveLength(2);
-    expect(m).toMatchObject({ intent: response.data, outcome: "prepared", conflict: false, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
+    expect(m).toMatchObject({ intent: response.data, standing: { status: "verified" }, outcome: "prepared", conflict: false, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
     expect(await fold(scene.events, keys).then((f) => f.outbound.responses.get(exec))).toEqual([response.data.messageId]);
 
     const R2 = bound(scene, a1, b1, resolved(scene, a1.didId, b1)).R;
     automatic(scene, R2, { executionId: exec }, { ack: [carrier.data.wireMessageId] });
+    const bare = intent(scene, R);
+    scene.add("message.out", { ...bare.data, msgType: "https://didcomm.org/trust-ping/2.0/ping" });
     await expectFoldOrderFree(scene.events, keys, (f) => {
       const message = outboundOf(f, response.data.messageId);
       expect(message.intent).toBeNull();
       expect(message.faults).toEqual(["2 intents disagree under one message ID"]);
+      expect(message).toMatchObject({ standing: { status: "conflict", because: "2 intents disagree under one message ID" }, membership: { status: "conflict" } });
       expect(message.outcome).toBe("conflict");
       expect(message.work).toEqual({ kind: "none", because: "the intent events disagree" });
       expect(message.packages.has(pkg.data.packageId)).toBe(true);
+      expect(message.packages.get(pkg.data.packageId)!.membership).toEqual({ status: "conflict", because: "the intent events disagree" });
       expect(message.intentEventIds).toHaveLength(3);
+      expect(outboundOf(f, bare.data.messageId)).toMatchObject({ intent: null, standing: { status: "conflict" }, outcome: "conflict" });
+      expect(outboundOf(f, bare.data.messageId).packages.size).toBe(0);
     });
   });
 

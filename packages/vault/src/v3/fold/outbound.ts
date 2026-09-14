@@ -225,7 +225,6 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
   const deferred: string[] = [];
   const variants = new Set(intentEvents.map((event) => canonicalText(event.data)));
   const intent = variants.size === 1 ? intentEvents[0]!.data : null;
-  if (variants.size > 1) faults.push(`${variants.size} intents disagree under one message ID`);
 
   const drafts = new Map<PackageId, PackageDraft>();
   const disputed = new Set<PackageId>();
@@ -267,7 +266,7 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
   }
 
   const relationship = intent === null ? undefined : context.relationships.relationships.get(intent.relationshipId);
-  const { packages, standing } = judgeMembership(intent, relationship, drafts, context, faults, deferred);
+  const { packages, standing } = judgeMembership(intent, variants.size, relationship, drafts, context, faults, deferred);
   const submitted = standing.status === "verified" && [...packages.values()].some((pkg) => pkg.submitted && pkg.membership.status === "verified");
   if (intent !== null && intent.executionId !== null) {
     if (intent.ack.length > 0) {
@@ -404,22 +403,25 @@ function recordWitness(context: Context, messageId: MessageId, relationshipId: R
  * on the birth alone; one with neither waits. Both parts are added to
  * the message's diagnostics.
  */
-function judgeMembership(intent: MessageOut | null, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, faults: string[], deferred: string[]): { packages: Map<PackageId, Package>; standing: Membership } {
+function judgeMembership(intent: MessageOut | null, variants: number, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, faults: string[], deferred: string[]): { packages: Map<PackageId, Package>; standing: Membership } {
   const own: Verdict = { faults: [], deferred: [] };
-  const packages = judgeMessage(intent, relationship, drafts, context, own, faults, deferred);
+  const packages = judgeMessage(intent, variants, relationship, drafts, context, own, faults, deferred);
   faults.push(...own.faults);
   deferred.push(...own.deferred);
   const standing: Membership = own.faults.length > 0 ? { status: "conflict", because: own.faults.join("; ") } : own.deferred.length > 0 ? { status: "deferred", because: own.deferred.join("; ") } : { status: "verified" };
   return { packages, standing };
 }
 
-function judgeMessage(intent: MessageOut | null, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, own: Verdict, faults: string[], deferred: string[]): Map<PackageId, Package> {
+function judgeMessage(intent: MessageOut | null, variants: number, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, own: Verdict, faults: string[], deferred: string[]): Map<PackageId, Package> {
   const packages = new Map<PackageId, Package>();
   const settle = (membership: Membership) => {
     for (const draft of drafts.values()) packages.set(draft.packageId, { ...draft, active: draft.retired === null && draft.failed === null, membership });
     return packages;
   };
-  if (intent === null) return settle({ status: "conflict", because: "the intent events disagree" });
+  if (intent === null) {
+    own.faults.push(`${variants} intents disagree under one message ID`);
+    return settle({ status: "conflict", because: "the intent events disagree" });
+  }
   const R = intent.relationshipId;
   let birthPeer: Did | null = null;
   if (intent.birth !== null) {
