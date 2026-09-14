@@ -16,7 +16,10 @@
  * network policy has to hold on the transport itself.
  */
 
+import { secp256k1 } from "@noble/curves/secp256k1";
+import bs58 from "bs58";
 import ipaddr from "ipaddr.js";
+import { bases } from "multiformats/basics";
 
 import { isLongForm, isPeerDID4, isShortForm } from "@estoc/did-peer";
 import { InvalidJson, canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
@@ -100,34 +103,41 @@ const RETRYABLE_STATUS = new Set([408, 429]);
 const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"];
 /** The members a JWK carries only when it holds a private or symmetric key. */
 const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+/** The members a public JWK of each key type carries, by RFC 7518 §6 and RFC 8037 §2. */
+const PUBLIC_JWK_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["EC", ["crv", "x", "y"]],
+  ["OKP", ["crv", "x"]],
+  ["RSA", ["n", "e"]],
+]);
+/** A CAIP-10 account ID: chain namespace, chain reference, account address. */
+const CAIP_10 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$/;
+const HEX_BYTES = /^(?:[0-9A-Fa-f]{2})+$/;
 /**
  * The verification material a known suite defines, one of which a
- * method of that type must carry. A type not here is another suite's:
- * its method is kept with whatever material it carries, and its key
- * is unusable rather than the document invalid.
+ * method of that type carries. Any other type is another suite's: its
+ * method is kept with whatever material it carries, and whether that
+ * is a usable key is decided where the key is used.
  */
-const SUITE_MATERIAL: Record<string, readonly string[]> = {
-  JsonWebKey2020: ["publicKeyJwk"],
-  Multikey: ["publicKeyMultibase"],
-  Ed25519VerificationKey2020: ["publicKeyMultibase"],
-  X25519KeyAgreementKey2020: ["publicKeyMultibase"],
-  Ed25519VerificationKey2018: ["publicKeyBase58"],
-  X25519KeyAgreementKey2019: ["publicKeyBase58"],
-  EcdsaSecp256k1VerificationKey2019: ["publicKeyJwk", "publicKeyHex"],
-  EcdsaSecp256k1RecoveryMethod2020: ["blockchainAccountId", "publicKeyJwk", "publicKeyHex"],
-};
+const SUITE_MATERIAL: ReadonlyMap<string, readonly string[]> = new Map([
+  ["JsonWebKey2020", ["publicKeyJwk"]],
+  ["Multikey", ["publicKeyMultibase"]],
+  ["Ed25519VerificationKey2020", ["publicKeyMultibase"]],
+  ["X25519KeyAgreementKey2020", ["publicKeyMultibase"]],
+  ["Ed25519VerificationKey2018", ["publicKeyBase58"]],
+  ["X25519KeyAgreementKey2019", ["publicKeyBase58"]],
+  ["EcdsaSecp256k1VerificationKey2019", ["publicKeyJwk", "publicKeyHex"]],
+  ["EcdsaSecp256k1RecoveryMethod2020", ["blockchainAccountId", "publicKeyJwk", "publicKeyHex"]],
+]);
+/** The suites whose hex material is a SEC 1 encoded point on secp256k1. */
+const SECP256K1_SUITES = new Set(["EcdsaSecp256k1VerificationKey2019", "EcdsaSecp256k1RecoveryMethod2020"]);
 const METHOD_MEMBERS = new Set(["id", "type", "controller"]);
 
-// RFC 3986 §3 URI, component by component: a scheme, then an authority
-// with path-abempty or a path that is absolute, rootless or empty, then
-// query and fragment, each built from its own characters — so a bracket
-// belongs to an IP literal, a second `#` ends nothing, and a percent
-// sign begins a two-digit escape. The raw string is what is checked: the
+// RFC 3986 §3, component by component, on the raw string: the
 // platform's URL parser escapes and normalizes what it is given rather
-// than refusing it. A bracketed host is captured and checked apart, as
-// `ipaddr.js` decides whether it is an IPv6 address; the grammar adds
-// what the library does not hold to — a dotted tail in strict decimal,
-// no zone identifier, IPvFuture under its own rule.
+// than refusing it. A bracketed host is captured and checked apart:
+// `ipaddr.js` decides whether it is an IPv6 address, and the grammar
+// adds what the library does not hold to — a dotted tail in strict
+// decimal, no zone identifier, IPvFuture under its own rule.
 const PCHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})";
 const QUERY_OR_FRAGMENT = `(?:${PCHAR}|[/?])*`;
 const REG_CHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=-]|%[0-9A-Fa-f]{2})";
@@ -200,28 +210,72 @@ function isDid(value: unknown): boolean {
   }
 }
 
+function jwkFault(jwk: unknown): string | null {
+  if (!isJsonObject(jwk)) return "an object";
+  const secret = PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
+  if (secret !== undefined) return `a public key, without the private member ${secret}`;
+  const kty = jwk["kty"];
+  if (typeof kty !== "string") return "a JWK with a string kty";
+  const missing = (PUBLIC_JWK_MEMBERS.get(kty) ?? []).find((member) => typeof jwk[member] !== "string");
+  return missing === undefined ? null : `a ${kty} JWK with a string ${missing}`;
+}
+
+function isMultibase(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const base = Object.values(bases).find((candidate) => candidate.prefix === value[0]);
+  if (base === undefined) return false;
+  try {
+    return base.decode(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function isBase58(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    return bs58.decode(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function isSecp256k1Point(hex: string): boolean {
+  try {
+    secp256k1.Point.fromHex(hex);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** What each verification material property holds, whichever suite names it: the fault when a value is not that. */
+const MATERIAL: ReadonlyMap<string, (value: unknown) => string | null> = new Map([
+  ["publicKeyJwk", jwkFault],
+  ["publicKeyMultibase", (value) => (isMultibase(value) ? null : "a multibase-encoded value")],
+  ["publicKeyBase58", (value) => (isBase58(value) ? null : "a base58btc-encoded value")],
+  ["publicKeyHex", (value) => (typeof value === "string" && HEX_BYTES.test(value) ? null : "hex-encoded bytes")],
+  ["blockchainAccountId", (value) => (typeof value === "string" && CAIP_10.test(value) ? null : "a CAIP-10 account ID")],
+]);
+
 function methodFault(entry: unknown): string | null {
   if (!isJsonObject(entry)) return "is an object";
   if (typeof entry["id"] !== "string") return "has a string id";
   if (typeof entry["type"] !== "string") return "has a string type";
   if (!isDid(entry["controller"])) return "has a DID controller";
+  for (const [member, faultOf] of MATERIAL) {
+    const value = entry[member];
+    if (value === undefined) continue;
+    const fault = faultOf(value);
+    if (fault !== null) return `has a ${member} that is ${fault}`;
+  }
+  if (entry["publicKeyMultibase"] !== undefined && entry["publicKeyJwk"] !== undefined) return "carries publicKeyMultibase or publicKeyJwk, not both";
   const type = entry["type"];
-  const material = SUITE_MATERIAL[type];
-  if (material !== undefined) {
-    if (!material.some((member) => entry[member] !== undefined)) return `of type ${type} carries ${material.join(" or ")}`;
-  } else if (!Object.keys(entry).some((member) => !METHOD_MEMBERS.has(member))) {
-    return `of type ${type} carries its verification material`;
-  }
-  const multibase = entry["publicKeyMultibase"];
-  const jwk = entry["publicKeyJwk"];
-  if (multibase !== undefined && jwk !== undefined) return "carries publicKeyMultibase or publicKeyJwk, not both";
-  if (multibase !== undefined && typeof multibase !== "string") return "has a string publicKeyMultibase";
-  if (entry["publicKeyBase58"] !== undefined && typeof entry["publicKeyBase58"] !== "string") return "has a string publicKeyBase58";
-  if (jwk !== undefined) {
-    if (!isJsonObject(jwk)) return "has an object publicKeyJwk";
-    const secret = PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
-    if (secret !== undefined) return `has a publicKeyJwk without the private member ${secret}`;
-  }
+  const material = SUITE_MATERIAL.get(type);
+  if (material === undefined) return Object.keys(entry).some((member) => !METHOD_MEMBERS.has(member)) ? null : `of type ${type} carries its verification material`;
+  if (!material.some((member) => entry[member] !== undefined)) return `of type ${type} carries ${material.join(" or ")}`;
+  const hex = entry["publicKeyHex"];
+  if (SECP256K1_SUITES.has(type) && typeof hex === "string" && !isSecp256k1Point(hex)) return "has a publicKeyHex that is a point on secp256k1";
   return null;
 }
 

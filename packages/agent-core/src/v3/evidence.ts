@@ -164,18 +164,20 @@ export async function pinnedResolution(fold: VaultFold, readObject: ReadObject, 
  * The document as didcomm can hold it. didcomm reads a document's
  * methods as one, each with material of a kind it knows — a JWK, a
  * multibase or a base58 key — and refuses the whole document on one
- * of another kind. So a method of another suite is left out of the
- * projection, and the relationships that named it with it; it stays
- * in the resolution, the retained bytes and the evidence. A key
- * `authorizedKeys` offers is read from such material and so is never
- * the one left out.
+ * of another kind; and it follows a relationship's references only to
+ * the document's own methods, refusing a reference into another
+ * document. So the projection keeps the methods of a kind it knows,
+ * and in each relationship only the references to those, by ID
+ * whatever form that takes; what is left out stays in the resolution,
+ * the retained bytes and the evidence. A key `authorizedKeys` offers
+ * is read from such material and so is never one left out.
  */
 function didcommProjection(document: JsonObject): DIDDoc {
   const converted = toDIDCommDIDDoc(document);
   const verificationMethod = converted.verificationMethod.filter((method) => method.publicKeyJwk !== undefined || method.publicKeyMultibase !== undefined || method.publicKeyBase58 !== undefined);
   const kept = new Set(verificationMethod.map((method) => method.id));
-  const known = (id: string) => kept.has(id) || !id.startsWith(`${converted.id}#`);
-  return { ...converted, verificationMethod, authentication: converted.authentication.filter(known), keyAgreement: converted.keyAgreement.filter(known) };
+  const stays = (id: string) => kept.has(id);
+  return { ...converted, verificationMethod, authentication: converted.authentication.filter(stays), keyAgreement: converted.keyAgreement.filter(stays) };
 }
 
 /**

@@ -89,6 +89,9 @@ importers:
       '@estoc/vault':
         specifier: workspace:^
         version: link:../vault
+      '@noble/curves':
+        specifier: ^1.9.7
+        version: 1.9.7
       bs58:
         specifier: ^6.0.0
         version: 6.0.0
@@ -98,6 +101,9 @@ importers:
       ipaddr.js:
         specifier: ^2.5.0
         version: 2.5.0
+      multiformats:
+        specifier: ^14.0.5
+        version: 14.0.5
       uuid:
         specifier: ^11.1.1
         version: 11.1.1

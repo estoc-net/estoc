@@ -254,6 +254,16 @@ describe("did:web resolution", () => {
       ["a 2020 suite with another suite's material", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Ed25519VerificationKey2020", controller: BOB, publicKeyBase58: "z6Mk" }), "of type Ed25519VerificationKey2020 carries publicKeyMultibase"],
       ["an unknown suite with no material at all", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "UnknownSuite", controller: BOB }), "of type UnknownSuite carries its verification material"],
       ["a JWK with a private member", (d) => ((method(d, 1)["publicKeyJwk"] as JsonObject)["d"] = "secret"), "without the private member d"],
+      ["a JWK with nothing in it", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "JsonWebKey2020", controller: BOB, publicKeyJwk: {} }), "has a publicKeyJwk that is a JWK with a string kty"],
+      ["an OKP JWK without its coordinate", (d) => delete (method(d, 1)["publicKeyJwk"] as JsonObject)["x"], "has a publicKeyJwk that is a OKP JWK with a string x"],
+      ["a multibase value of no bytes", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: "z" }), "has a publicKeyMultibase that is a multibase-encoded value"],
+      ["a multibase value under no known prefix", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: "!6Mk" }), "has a publicKeyMultibase that is a multibase-encoded value"],
+      ["a base58 value outside the alphabet", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Ed25519VerificationKey2018", controller: BOB, publicKeyBase58: "0OIl" }), "has a publicKeyBase58 that is a base58btc-encoded value"],
+      ["a hex value that is null", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyHex: null }), "has a publicKeyHex that is hex-encoded bytes"],
+      ["a hex value of half a byte", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyHex: "abc" }), "has a publicKeyHex that is hex-encoded bytes"],
+      ["a hex value that is no point on the curve", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyHex: `04${"00".repeat(64)}` }), "has a publicKeyHex that is a point on secp256k1"],
+      ["an account ID that is not a string", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1RecoveryMethod2020", controller: BOB, blockchainAccountId: [] }), "has a blockchainAccountId that is a CAIP-10 account ID"],
+      ["an account ID without its chain", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1RecoveryMethod2020", controller: BOB, blockchainAccountId: "0xab16a96d359ec26a11e2c2b3d8f8b8942d5bfcdb" }), "has a blockchainAccountId that is a CAIP-10 account ID"],
       ["a service without an ID", (d) => delete service(d)["id"], "service[0] has a string id"],
       ["a service without a type", (d) => delete service(d)["type"], "service[0] has a type"],
       ["an endpoint that is not a URI", (d) => ((service(d)["serviceEndpoint"] as JsonObject)["uri"] = "not a URI"), "whose uri is a URI"],
@@ -275,6 +285,43 @@ describe("did:web resolution", () => {
     const resolution = await resolved(BOB, none, { fetch: answering(() => json(unknown)) });
     expect([...authorizedKeys(resolution, "keyAgreement").keys()]).toEqual([`${BOB}#agree`]);
     expect(didcommDocumentOf(resolution).verificationMethod.map((m) => m.id)).toEqual([`${BOB}#auth`, `${BOB}#agree`]);
+  });
+
+  it("a type is looked up as a suite name and nothing else, whatever name it happens to share", async () => {
+    const bob = await webIdentity(BOB);
+    for (const type of ["constructor", "toString", "__proto__", "hasOwnProperty", "get", "size"]) {
+      const document = structuredClone(bob.document);
+      const auth = (document["verificationMethod"] as JsonObject[])[0] as JsonObject;
+      (document["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type, controller: BOB, publicKeyJwk: auth["publicKeyJwk"] as JsonObject });
+      (document["authentication"] as string[]).push(`${BOB}#extra`);
+      const resolution = await resolved(BOB, none, { fetch: answering(() => json(document)) });
+      expect([...authorizedKeys(resolution, "authentication").keys()], type).toEqual([`${BOB}#auth`, `${BOB}#extra`]);
+      const bare = structuredClone(bob.document);
+      (bare["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type, controller: BOB });
+      expect(await resolve(BOB, none, { fetch: answering(() => json(bare)) }), type).toMatchObject({ outcome: "definitive", reason: expect.stringContaining(`of type ${type} carries its verification material`) });
+    }
+  });
+
+  it("a method left out of the projection takes every reference to it along, by identity, whatever form its ID takes; a reference into another document, which didcomm does not follow, goes too", async () => {
+    const bob = await webIdentity(BOB);
+    const point = "034ee0f670fc96bb75e8b89c068a1665007a41c98513d6a911b6137e2d16f1d300";
+    const elsewhere = "did:web:carol.example#agree";
+    for (const id of [`${BOB}#extra`, `${BOB}?version=2#extra`, `${BOB}/keys/extra`]) {
+      const document = structuredClone(bob.document);
+      (document["verificationMethod"] as JsonObject[]).push({ id, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyHex: point });
+      (document["keyAgreement"] as string[]).push(id, elsewhere);
+      const resolution = await resolved(BOB, none, { fetch: answering(() => json(document)) });
+      expect(resolution.keyAgreementMethodIds, id).toEqual([`${BOB}#agree`, id, elsewhere]);
+      expect([...authorizedKeys(resolution, "keyAgreement").keys()], id).toEqual([`${BOB}#agree`]);
+      const projection = didcommDocumentOf(resolution);
+      expect(projection.verificationMethod.map((m) => m.id), id).toEqual([`${BOB}#auth`, `${BOB}#agree`]);
+      expect(projection.keyAgreement, id).toEqual([`${BOB}#agree`]);
+      const plaintext = { id: "m1", typ: "application/didcomm-plain+json", type: "https://didcomm.org/basicmessage/2.0/message", to: [BOB], body: { content: "hi" } };
+      const resolver = { resolve: async (did: string) => (did === BOB ? projection : null) };
+      const [packed] = await new didcomm.Message(plaintext).pack_encrypted(BOB, null, null, resolver, secretsResolverFor([]), { forward: false });
+      const [opened] = await didcomm.Message.unpack(packed, resolver, secretsResolverFor(bob.secrets), {});
+      expect(opened.as_value().body, id).toEqual({ content: "hi" });
+    }
   });
 
   it("what a published document carries beyond this agent's use is kept, its keys simply not selectable, and the document still seals", async () => {
