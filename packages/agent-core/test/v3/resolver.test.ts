@@ -249,6 +249,10 @@ describe("did:web resolution", () => {
         "keyAgreement[0] has a DID controller",
       ],
       ["a method with two keys", (d) => (method(d, 1)["publicKeyMultibase"] = "z6Mk"), "carries publicKeyMultibase or publicKeyJwk, not both"],
+      ["a JsonWebKey2020 without its JWK", (d) => delete method(d, 1)["publicKeyJwk"], "verificationMethod[1] of type JsonWebKey2020 carries publicKeyJwk"],
+      ["an extra known method with no material", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "JsonWebKey2020", controller: BOB }), "verificationMethod[2] of type JsonWebKey2020 carries publicKeyJwk"],
+      ["a 2020 suite with another suite's material", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Ed25519VerificationKey2020", controller: BOB, publicKeyBase58: "z6Mk" }), "of type Ed25519VerificationKey2020 carries publicKeyMultibase"],
+      ["an unknown suite with no material at all", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "UnknownSuite", controller: BOB }), "of type UnknownSuite carries its verification material"],
       ["a JWK with a private member", (d) => ((method(d, 1)["publicKeyJwk"] as JsonObject)["d"] = "secret"), "without the private member d"],
       ["a service without an ID", (d) => delete service(d)["id"], "service[0] has a string id"],
       ["a service without a type", (d) => delete service(d)["type"], "service[0] has a type"],
@@ -279,16 +283,44 @@ describe("did:web resolution", () => {
     const auth = (document["verificationMethod"] as JsonObject[])[0] as JsonObject;
     (document["service"] as JsonObject[]).push({ id: "https://bob.example/profile-service", type: "LinkedDomains", serviceEndpoint: "https://bob.example/" });
     (document["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#legacy`, type: "Ed25519VerificationKey2018", controller: BOB, publicKeyBase58: bs58.encode(Buffer.from((auth["publicKeyJwk"] as JsonObject)["x"] as string, "base64url")) });
-    (document["authentication"] as string[]).push(`${BOB}#legacy`);
+    (document["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#recovery`, type: "EcdsaSecp256k1RecoveryMethod2020", controller: BOB, blockchainAccountId: "eip155:1:0xab16a96d359ec26a11e2c2b3d8f8b8942d5bfcdb" });
+    (document["authentication"] as string[]).push(`${BOB}#legacy`, `${BOB}#recovery`);
     const resolution = await resolved(BOB, none, { fetch: answering(() => json(document)) });
     expect(resolution.service).toBe("https://bob.example/didcomm");
-    expect(resolution.authenticationMethodIds).toEqual([`${BOB}#auth`, `${BOB}#legacy`]);
+    expect(resolution.authenticationMethodIds).toEqual([`${BOB}#auth`, `${BOB}#legacy`, `${BOB}#recovery`]);
     expect([...authorizedKeys(resolution, "authentication").keys()]).toEqual([`${BOB}#auth`]);
     expect([...authorizedKeys(resolution, "keyAgreement").keys()]).toEqual([`${BOB}#agree`]);
+    expect((resolution.document["verificationMethod"] as JsonObject[]).map((m) => m["id"])).toEqual([`${BOB}#auth`, `${BOB}#agree`, `${BOB}#legacy`, `${BOB}#recovery`]);
+    const projection = didcommDocumentOf(resolution);
+    expect(projection.verificationMethod.map((m) => m.id)).toEqual([`${BOB}#auth`, `${BOB}#agree`, `${BOB}#legacy`]);
+    expect(projection.authentication).toEqual([`${BOB}#auth`, `${BOB}#legacy`]);
+    expect(projection.keyAgreement).toEqual([`${BOB}#agree`]);
     const plaintext = { id: "m1", typ: "application/didcomm-plain+json", type: "https://didcomm.org/basicmessage/2.0/message", to: [BOB], body: { content: "hi" } };
-    const [packed] = await new didcomm.Message(plaintext).pack_encrypted(BOB, null, null, { resolve: async () => didcommDocumentOf(resolution) }, secretsResolverFor([]), { forward: false });
-    const [opened] = await didcomm.Message.unpack(packed, { resolve: async () => didcommDocumentOf(resolution) }, secretsResolverFor(bob.secrets), {});
+    const [packed] = await new didcomm.Message(plaintext).pack_encrypted(BOB, null, null, { resolve: async () => projection }, secretsResolverFor([]), { forward: false });
+    const [opened] = await didcomm.Message.unpack(packed, { resolve: async () => projection }, secretsResolverFor(bob.secrets), {});
     expect(opened.as_value().body).toEqual({ content: "hi" });
+  });
+
+  it("a URI is one by RFC 3986, component by component, on the raw string", async () => {
+    const bob = await webIdentity(BOB);
+    const withEndpoint = (uri: string) => {
+      const document = structuredClone(bob.document);
+      ((document["service"] as JsonObject[])[0] as JsonObject)["serviceEndpoint"] = uri;
+      return document;
+    };
+    const withId = (uri: string) => {
+      const document = structuredClone(bob.document);
+      ((document["service"] as JsonObject[])[0] as JsonObject)["id"] = uri;
+      return document;
+    };
+    for (const uri of ["https://bob.example/%5Broute%5D", "https://[2001:db8::1]/didcomm", "https://[2001:db8::192.0.2.1]:8443/didcomm", "https://[v1.fe]/didcomm", "https://bob.example/didcomm#service", "https://bob.example/didcomm?x=1&y=/?", "urn:example:route", "mailto:bob@bob.example", "https://user@bob.example:8443/"]) {
+      expect((await resolved(BOB, none, { fetch: answering(() => json(withEndpoint(uri))) })).service, uri).toBe(uri);
+      expect((await resolve(BOB, none, { fetch: answering(() => json(withId(uri))) })).outcome, uri).toBe("resolved");
+    }
+    for (const uri of ["https://bob.example/[route]", "https://bob.example/didcomm#service#more", "urn:example:route[bad]", "https://bob.example/didcomm\n", "https://bob.example/didcomm\r", "https://[2001:db8::1", "https://[2001:db8::1%25eth0]/", "https://[2001:db8::1.2.3]/", "https://bob.example:8a/", "https://bob.example/%G", "//bob.example/didcomm", "bob.example/didcomm"]) {
+      expect(await resolve(BOB, none, { fetch: answering(() => json(withEndpoint(uri))) }), uri).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("serviceEndpoint that is a URI") });
+      expect(await resolve(BOB, none, { fetch: answering(() => json(withId(uri))) }), uri).toMatchObject({ outcome: "definitive", reason: expect.stringContaining("service[0].id is a URI") });
+    }
   });
 
   it("a policy refusal is definitive before any fetch; the loopback allowance is honoured", async () => {

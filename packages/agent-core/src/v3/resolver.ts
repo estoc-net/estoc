@@ -100,8 +100,45 @@ const RETRYABLE_STATUS = new Set([408, 429]);
 const RELATIONSHIPS = ["authentication", "assertionMethod", "keyAgreement", "capabilityDelegation", "capabilityInvocation"];
 /** The members a JWK carries only when it holds a private or symmetric key. */
 const PRIVATE_JWK_MEMBERS = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
-/** RFC 3986's characters and well-formed percent escapes, scheme first: the raw string, before any parser has repaired it. */
-const URI_CHARACTERS = /^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?#[\]]|%[0-9A-Fa-f]{2})*$/;
+/**
+ * The verification material a known suite defines, one of which a
+ * method of that type must carry. A type not here is another suite's:
+ * its method is kept with whatever material it carries, and its key
+ * is unusable rather than the document invalid.
+ */
+const SUITE_MATERIAL: Record<string, readonly string[]> = {
+  JsonWebKey2020: ["publicKeyJwk"],
+  Multikey: ["publicKeyMultibase"],
+  Ed25519VerificationKey2020: ["publicKeyMultibase"],
+  X25519KeyAgreementKey2020: ["publicKeyMultibase"],
+  Ed25519VerificationKey2018: ["publicKeyBase58"],
+  X25519KeyAgreementKey2019: ["publicKeyBase58"],
+  EcdsaSecp256k1VerificationKey2019: ["publicKeyJwk", "publicKeyHex"],
+  EcdsaSecp256k1RecoveryMethod2020: ["blockchainAccountId", "publicKeyJwk", "publicKeyHex"],
+};
+const METHOD_MEMBERS = new Set(["id", "type", "controller"]);
+
+// RFC 3986 §3 URI, component by component: a scheme, then an authority
+// with path-abempty or a path that is absolute, rootless or empty, then
+// query and fragment, each built from its own characters — so a bracket
+// belongs to an IP literal, a second `#` ends nothing, and a percent
+// sign begins a two-digit escape. The raw string is what is checked: the
+// platform's URL parser escapes and normalizes what it is given rather
+// than refusing it. A bracketed host is captured and checked apart, as
+// `ipaddr.js` decides whether it is an IPv6 address; the grammar adds
+// what the library does not hold to — a dotted tail in strict decimal,
+// no zone identifier, IPvFuture under its own rule.
+const PCHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=:@-]|%[0-9A-Fa-f]{2})";
+const QUERY_OR_FRAGMENT = `(?:${PCHAR}|[/?])*`;
+const REG_CHAR = "(?:[A-Za-z0-9._~!$&'()*+,;=-]|%[0-9A-Fa-f]{2})";
+const HOST = `(?:\\[([^\\]]*)\\]|${REG_CHAR}*)`;
+const AUTHORITY = `(?:(?:${REG_CHAR}|:)*@)?${HOST}(?::[0-9]*)?`;
+const HIER_PART = `(?://${AUTHORITY}(?:/${PCHAR}*)*|/(?:${PCHAR}+(?:/${PCHAR}*)*)?|${PCHAR}+(?:/${PCHAR}*)*|)`;
+const URI = new RegExp(`^[A-Za-z][A-Za-z0-9+.-]*:${HIER_PART}(?:\\?${QUERY_OR_FRAGMENT})?(?:#${QUERY_OR_FRAGMENT})?$`);
+const IPV_FUTURE = /^[vV][0-9A-Fa-f]+\.[A-Za-z0-9._~!$&'()*+,;=:-]+$/;
+const IPV6_CHARS = /^[0-9A-Fa-f:.]+$/;
+const DEC_OCTET = "(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])";
+const IPV4 = new RegExp(`^${DEC_OCTET}(?:\\.${DEC_OCTET}){3}$`);
 
 function definitive(reason: string): Resolved {
   return { outcome: "definitive", reason };
@@ -140,14 +177,16 @@ function transportFailure(err: unknown, what: string, signal: AbortSignal, timeo
   return unavailable(`${what}: ${reasonOf(err)}`);
 }
 
-/**
- * A URI by RFC 3986's syntax. The characters and escapes are held on
- * the raw string, since the URL parser repairs a space or a bad escape
- * rather than refusing it; the parser then checks the structure the
- * characters cannot — an authority that closes, a port that is one.
- */
+function isIpLiteral(literal: string): boolean {
+  if (IPV_FUTURE.test(literal)) return true;
+  if (!IPV6_CHARS.test(literal) || !ipaddr.IPv6.isValid(literal)) return false;
+  return !literal.includes(".") || IPV4.test(literal.slice(literal.lastIndexOf(":") + 1));
+}
+
 function isUri(value: unknown): value is string {
-  return typeof value === "string" && URI_CHARACTERS.test(value) && URL.canParse(value);
+  if (typeof value !== "string") return false;
+  const match = URI.exec(value);
+  return match !== null && (match[1] === undefined || isIpLiteral(match[1]));
 }
 
 function isDid(value: unknown): boolean {
@@ -166,10 +205,18 @@ function methodFault(entry: unknown): string | null {
   if (typeof entry["id"] !== "string") return "has a string id";
   if (typeof entry["type"] !== "string") return "has a string type";
   if (!isDid(entry["controller"])) return "has a DID controller";
+  const type = entry["type"];
+  const material = SUITE_MATERIAL[type];
+  if (material !== undefined) {
+    if (!material.some((member) => entry[member] !== undefined)) return `of type ${type} carries ${material.join(" or ")}`;
+  } else if (!Object.keys(entry).some((member) => !METHOD_MEMBERS.has(member))) {
+    return `of type ${type} carries its verification material`;
+  }
   const multibase = entry["publicKeyMultibase"];
   const jwk = entry["publicKeyJwk"];
   if (multibase !== undefined && jwk !== undefined) return "carries publicKeyMultibase or publicKeyJwk, not both";
   if (multibase !== undefined && typeof multibase !== "string") return "has a string publicKeyMultibase";
+  if (entry["publicKeyBase58"] !== undefined && typeof entry["publicKeyBase58"] !== "string") return "has a string publicKeyBase58";
   if (jwk !== undefined) {
     if (!isJsonObject(jwk)) return "has an object publicKeyJwk";
     const secret = PRIVATE_JWK_MEMBERS.find((member) => jwk[member] !== undefined);
@@ -201,14 +248,13 @@ function serviceFault(entry: unknown): string | null {
 /**
  * The shape a fetched document must have before its relationships are
  * read: every method an object with an ID, a type, a DID controller
- * and, if it carries a JWK or a multibase key, one that is public;
- * every service an object with a URI as its own ID, a type and an
- * endpoint that is a URI or an object. This is a published document,
- * not a numalgo-4 input: nothing is filled in for it, so a controller
- * must be there, and it may carry what this agent never uses — a
- * method of another suite with its own key format, a service of
- * another kind — since whether a key is usable is decided where the
- * key is used.
+ * and the material its type defines, public if it is a JWK; every
+ * service an object with a URI as its own ID, a type and an endpoint
+ * that is a URI or an object. This is a published document, not a
+ * numalgo-4 input: nothing is filled in for it, so a controller must
+ * be there, and it may carry what this agent never uses — a method of
+ * another suite with its own key format, a service of another kind —
+ * since whether a key is usable is decided where the key is used.
  */
 function checkShape(document: JsonObject, did: Did): void {
   const each = (member: string, faultOf: (entry: unknown) => string | null) => {

@@ -10,7 +10,7 @@
  */
 
 import { DIDDocConversionError, isLongForm, toDIDCommDIDDoc, type DIDDoc } from "@estoc/did-peer";
-import { DamagedObject, isJsonObject, parseStrict, type Held, type VaultRuntime } from "@estoc/event-store/v3";
+import { DamagedObject, isJsonObject, parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
 import {
   InvalidDidDocument,
   VaultEventSet,
@@ -161,6 +161,24 @@ export async function pinnedResolution(fold: VaultFold, readObject: ReadObject, 
 }
 
 /**
+ * The document as didcomm can hold it. didcomm reads a document's
+ * methods as one, each with material of a kind it knows — a JWK, a
+ * multibase or a base58 key — and refuses the whole document on one
+ * of another kind. So a method of another suite is left out of the
+ * projection, and the relationships that named it with it; it stays
+ * in the resolution, the retained bytes and the evidence. A key
+ * `authorizedKeys` offers is read from such material and so is never
+ * the one left out.
+ */
+function didcommProjection(document: JsonObject): DIDDoc {
+  const converted = toDIDCommDIDDoc(document);
+  const verificationMethod = converted.verificationMethod.filter((method) => method.publicKeyJwk !== undefined || method.publicKeyMultibase !== undefined || method.publicKeyBase58 !== undefined);
+  const kept = new Set(verificationMethod.map((method) => method.id));
+  const known = (id: string) => kept.has(id) || !id.startsWith(`${converted.id}#`);
+  return { ...converted, verificationMethod, authentication: converted.authentication.filter(known), keyAgreement: converted.keyAgreement.filter(known) };
+}
+
+/**
  * The document as didcomm reads it, identified by `spelling`: the
  * resolved document itself when that is its `id`, and for a numalgo-4
  * document asked for under its other spelling the same document
@@ -168,9 +186,9 @@ export async function pinnedResolution(fold: VaultFold, readObject: ReadObject, 
  * the envelope names. A spelling of another DID is refused.
  */
 export function didcommDocumentOf(resolution: Resolution, spelling: string = resolution.presentedDid): DIDDoc {
-  if (spelling === resolution.document["id"]) return toDIDCommDIDDoc(resolution.document);
+  if (spelling === resolution.document["id"]) return didcommProjection(resolution.document);
   if (canonicalDidOf(spelling) !== resolution.did) throw new InvalidDidDocument(`${spelling} is not a spelling of ${resolution.did}`);
-  return toDIDCommDIDDoc({ ...resolution.document, id: spelling });
+  return didcommProjection({ ...resolution.document, id: spelling });
 }
 
 export interface PinnedResolverOptions {
@@ -196,16 +214,16 @@ export function pinnedResolver(fold: VaultFold, options: PinnedResolverOptions =
   const among = (resolutions: readonly Resolution[], did: string): Resolution | undefined => resolutions.find((r) => r.presentedDid === did) ?? resolutions.find((r) => sameDid(r.did, did));
   const local = (did: string): DIDDoc | null => {
     for (const entity of fold.routes.dids.values()) {
-      if (entity.created !== null && entity.resolution !== null && !entity.conflict && sameDid(entity.created.did, did)) return toDIDCommDIDDoc({ ...entity.resolution.document, id: did });
+      if (entity.created !== null && entity.resolution !== null && !entity.conflict && sameDid(entity.created.did, did)) return didcommProjection({ ...entity.resolution.document, id: did });
     }
     for (const mediation of fold.mediations.mediations.values()) {
-      if (mediation.me !== null && mediation.status !== "conflict" && sameDid(mediation.me.did, did)) return toDIDCommDIDDoc({ ...peerResolution(mediation.me.did).document, id: did });
+      if (mediation.me !== null && mediation.status !== "conflict" && sameDid(mediation.me.did, did)) return didcommProjection({ ...peerResolution(mediation.me.did).document, id: did });
     }
     return null;
   };
   const spelled = (did: string): DIDDoc | null => {
     const longForm = isLongForm(did) ? did : known(did as Did);
-    return longForm === null ? null : toDIDCommDIDDoc({ ...peerResolution(longForm).document, id: did });
+    return longForm === null ? null : didcommProjection({ ...peerResolution(longForm).document, id: did });
   };
   return {
     resolve: async (did: string): Promise<DIDDoc | null> => {
