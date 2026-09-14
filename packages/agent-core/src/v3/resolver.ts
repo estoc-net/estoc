@@ -24,7 +24,7 @@ import { bases } from "multiformats/basics";
 
 import { isLongForm, isPeerDID4, isShortForm } from "@estoc/did-peer";
 import { InvalidJson, canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
-import { InvalidDidDocument, InvalidPublicKey, authorizedMethodIds, canonicalDidOf, canonicalPublicKey, decodePublicKey, didcommServiceUris, peerResolution, rawCidOfBytes, type Cid, type Did, type DidUrl, type KeyType, type VaultFold } from "@estoc/vault/v3";
+import { InvalidDidDocument, InvalidPublicKey, authorizedMethodIds, canonicalDidOf, canonicalPublicKey, didcommServiceUris, peerResolution, rawCidOfBytes, type Cid, type Did, type DidUrl, type KeyType, type VaultFold } from "@estoc/vault/v3";
 
 import { bounded } from "./link.js";
 import type { AgentTrace } from "./trace.js";
@@ -114,20 +114,29 @@ const PUBLIC_JWK_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
 const CAIP_10 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$/;
 const HEX_BYTES = /^(?:[0-9A-Fa-f]{2})+$/;
 /**
- * The most characters one encoded key may run to: room for the
- * largest public key in any of these encodings, and a bound on what
- * decoding one costs — base58 decoding is quadratic in its length, and
- * runs where no deadline can interrupt it.
+ * The most characters one encoded key may run to before any decoder
+ * runs on it: a bound on the decoding done for one key, since base58
+ * decoding is quadratic in its length. Set well above the keys the
+ * suites here carry, not to fit every key in every encoding.
  */
 const MAX_MATERIAL_CHARS = 1024;
-/** The JWK curves the vault reads, by key type; a JWK of another curve is kept unread. */
+/** About how long the document checks run between giving the loop back, so the deadline on the whole resolution can fire between them. */
+const CHECK_SLICE_MS = 10;
+// What the vault reads is listed here because it exports no table of
+// it, and its `canonicalPublicKey` fails the same way on a key it does
+// not read and on one it reads and finds wrong.
 const READ_JWK_CURVES: ReadonlyMap<string, readonly KeyType[]> = new Map([
   ["OKP", ["Ed25519", "X25519"]],
   ["EC", ["P-256", "P-384", "P-521", "secp256k1"]],
 ]);
-/** The multicodec codes of the key types the vault reads; a multibase key under another code is kept unread. */
-const READ_MULTICODECS = new Set([0xed, 0xec, 0xe7, 0x1200, 0x1201, 0x1202]);
-/** Bytes of a raw Ed25519 or X25519 key, the keys the base58 suites carry. */
+const READ_MULTICODECS: ReadonlyMap<number, KeyType> = new Map([
+  [0xed, "Ed25519"],
+  [0xec, "X25519"],
+  [0xe7, "secp256k1"],
+  [0x1200, "P-256"],
+  [0x1201, "P-384"],
+  [0x1202, "P-521"],
+]);
 const RAW_KEY_BYTES = 32;
 interface Suite {
   /** the material a method of the suite carries, one of these */
@@ -273,13 +282,15 @@ function invalidKey(read: () => unknown): string | null {
   }
 }
 
-/** The multicodec code a base58btc multibase value carries; null under another base. */
-function multicodecOf(text: string): number | null {
-  if (!text.startsWith(bases.base58btc.prefix)) return null;
+/** The multicodec code a base58btc multibase key carries, or what is wrong with the value as one. */
+function multicodecOf(text: string): number | string {
+  if (!text.startsWith(bases.base58btc.prefix)) return "not under the base58btc prefix";
   try {
-    return varint.decode(bases.base58btc.decode(text))[0];
-  } catch {
-    return null;
+    const decoded = bases.base58btc.decode(text);
+    const [code, length] = varint.decode(decoded);
+    return decoded.length > length ? code : "no key bytes after the code";
+  } catch (err) {
+    return messageOf(err);
   }
 }
 
@@ -293,35 +304,36 @@ function isSecp256k1Point(hex: string): boolean {
 }
 
 /**
- * A fault in the key a method's material holds, read as the vault
- * reads keys: a JWK of a curve the vault reads, or a multibase key
- * under a code it reads, must be that key; a base58 key of a suite for
- * raw keys must be one; a hex key of a secp256k1 suite must be a point
- * on the curve; and a suite for one kind of key must carry that kind.
- * Material of a kind the vault does not read is kept unread.
+ * A fault in the key a method's material holds. What the suite
+ * prescribes comes first: a multicodec suite's key is a base58btc
+ * value under a whole multicodec code, and a suite for one kind of
+ * key carries that kind, by the code or the JWK curve, whether or not
+ * the vault reads it. Then a key the vault reads — a JWK of one of its
+ * curves, a multibase key under one of its codes — must be one, by the
+ * vault's own reading. Anything else is kept unread: an unknown
+ * suite's bytes may be laid out its own way.
  */
 function keyFault(entry: JsonObject, type: string, suite: Suite | undefined): string | null {
   const expects = suite?.keyType;
-  const wrongKind = (read: KeyType) => (expects !== undefined && read !== expects ? `of type ${type} carries a ${expects} key, not ${read}` : null);
+  const wrongKind = (kind: string | undefined) => (expects !== undefined && kind !== expects ? `of type ${type} carries a ${expects} key, not ${kind ?? "one of another kind"}` : null);
   const jwk = entry["publicKeyJwk"];
   if (isJsonObject(jwk)) {
-    const read = (READ_JWK_CURVES.get(String(jwk["kty"])) ?? []).find((curve) => curve === jwk["crv"]);
-    if (read !== undefined) {
-      const fault = invalidKey(() => canonicalPublicKey(jwk));
-      if (fault !== null) return `has a publicKeyJwk that is a ${read} key: ${fault}`;
-      const wrong = wrongKind(read);
-      if (wrong !== null) return wrong;
-    }
+    const crv = typeof jwk["crv"] === "string" ? jwk["crv"] : undefined;
+    const wrong = wrongKind(crv);
+    if (wrong !== null) return wrong;
+    const read = (READ_JWK_CURVES.get(String(jwk["kty"])) ?? []).find((curve) => curve === crv);
+    const fault = read === undefined ? null : invalidKey(() => canonicalPublicKey(jwk));
+    if (fault !== null) return `has a publicKeyJwk that is a ${read} key: ${fault}`;
   }
   const multibase = entry["publicKeyMultibase"];
-  if (typeof multibase === "string") {
+  if (typeof multibase === "string" && suite?.material.includes("publicKeyMultibase")) {
     const code = multicodecOf(multibase);
-    if (code !== null && READ_MULTICODECS.has(code)) {
-      const fault = invalidKey(() => canonicalPublicKey(multibase));
-      if (fault !== null) return `has a publicKeyMultibase that is the key its code says: ${fault}`;
-      const wrong = wrongKind(decodePublicKey(canonicalPublicKey(multibase)).type);
-      if (wrong !== null) return wrong;
-    }
+    if (typeof code === "string") return `has a publicKeyMultibase that is a base58btc multicodec key: ${code}`;
+    const kind = READ_MULTICODECS.get(code);
+    const wrong = wrongKind(kind ?? `one under multicodec 0x${code.toString(16)}`);
+    if (wrong !== null) return wrong;
+    const fault = kind === undefined ? null : invalidKey(() => canonicalPublicKey(multibase));
+    if (fault !== null) return `has a publicKeyMultibase that is the ${kind} key its code says: ${fault}`;
   }
   const base58 = entry["publicKeyBase58"];
   if (typeof base58 === "string" && (expects === "Ed25519" || expects === "X25519") && bs58.decode(base58).length !== RAW_KEY_BYTES) return `of type ${type} carries a ${expects} key of ${RAW_KEY_BYTES} bytes`;
@@ -382,21 +394,31 @@ function serviceFault(entry: unknown): string | null {
  * be there, and it may carry what this agent never uses — a method of
  * another suite with its own key format, a service of another kind —
  * since whether a key is usable is decided where the key is used.
+ * The checks run in slices with the loop given back between them, so
+ * the deadline on the whole resolution can end them.
  */
-function checkShape(document: JsonObject, did: Did): void {
-  const each = (member: string, faultOf: (entry: unknown) => string | null) => {
+async function checkShape(document: JsonObject, did: Did, signal: AbortSignal): Promise<void> {
+  let sliceBegan = performance.now();
+  const pause = async (): Promise<void> => {
+    if (performance.now() - sliceBegan < CHECK_SLICE_MS) return;
+    await new Promise<void>((next) => setTimeout(next, 0));
+    signal.throwIfAborted();
+    sliceBegan = performance.now();
+  };
+  const each = async (member: string, faultOf: (entry: unknown) => string | null): Promise<void> => {
     const entries = document[member];
     if (entries === undefined) return;
     if (!Array.isArray(entries)) throw new InvalidDidDocument(`${member} is an array`);
-    entries.forEach((entry, i) => {
+    for (const [i, entry] of entries.entries()) {
       const fault = faultOf(entry);
       if (fault !== null) throw new InvalidDidDocument(`${member}[${i}] ${fault}`);
-    });
+      await pause();
+    }
   };
-  each("alsoKnownAs", (entry) => (typeof entry === "string" ? null : "is a string"));
-  each("verificationMethod", methodFault);
-  each("service", serviceFault);
-  for (const relationship of RELATIONSHIPS) each(relationship, (entry) => (typeof entry === "string" ? null : methodFault(entry)));
+  await each("alsoKnownAs", (entry) => (typeof entry === "string" ? null : "is a string"));
+  await each("verificationMethod", methodFault);
+  await each("service", serviceFault);
+  for (const relationship of RELATIONSHIPS) await each(relationship, (entry) => (typeof entry === "string" ? null : methodFault(entry)));
   const serviceIds = new Set<string>();
   (document["service"] as JsonObject[] | undefined)?.forEach((service, i) => {
     const reference = service["id"] as string;
@@ -571,7 +593,13 @@ async function fetchWeb(presented: Did, url: URL, fetch: typeof globalThis.fetch
   if (!isJsonObject(document)) return definitive("the document is not a JSON object");
   if (document["id"] !== presented) return definitive(`the document is ${JSON.stringify(document["id"])}'s, not ${presented}'s`);
   try {
-    checkShape(document, presented);
+    await bounded(signal, () => checkShape(document, presented, signal));
+  } catch (err) {
+    if (err instanceof InvalidDidDocument) return definitive(`the document is not one the vault retains: ${messageOf(err)}`);
+    if (signal.aborted) return unavailable(`timed out: not resolved within ${timeoutMs} ms`);
+    throw err;
+  }
+  try {
     const canonical = canonicalize(document);
     return { outcome: "resolved", resolution: resolutionOf(presented, presented, document, canonical, rawCidOfBytes(canonical)) };
   } catch (err) {

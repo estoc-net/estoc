@@ -1,9 +1,13 @@
+import { generateKeyPairSync } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { encodeLongForm, longToShort } from "@estoc/did-peer";
 import { MemoryVault, canonicalize, type JsonObject } from "@estoc/event-store/v3";
 import { canonicalPublicKey, didKeyName, peerResolution, rawCidOfBytes, scanVault, type DidId, type Did } from "@estoc/vault/v3";
 
+import { bls12_381 } from "@noble/curves/bls12-381";
+import { p521 } from "@noble/curves/nist";
 import bs58 from "bs58";
 import { bases } from "multiformats/basics";
 
@@ -24,6 +28,9 @@ async function resolved(presented: string, known: KnownLongForms, options?: Reso
 }
 
 const ZERO_COORDINATE = Buffer.alloc(32).toString("base64url");
+const ED448_JWK = generateKeyPairSync("ed448").publicKey.export({ format: "jwk" }) as JsonObject;
+const BLS_G1 = bls12_381.G1.Point.BASE.toBytes(true);
+const multikey = (code: number[], bytes: Uint8Array) => bases.base58btc.encode(Uint8Array.of(...code, ...bytes));
 const answering = (respond: () => Response | Promise<Response>) => webFetch({ [BOB_URL]: respond }).fetch;
 const failing = (err: unknown) => answering(() => Promise.reject(err));
 const coded = (code: string, message = code) => Object.assign(new Error(message), { code });
@@ -272,9 +279,17 @@ describe("did:web resolution", () => {
       ["a secp256k1 JWK off the curve", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyJwk: { kty: "EC", crv: "secp256k1", x: ZERO_COORDINATE, y: ZERO_COORDINATE } }), "has a publicKeyJwk that is a secp256k1 key: not a point on secp256k1"],
       ["a secp256k1 suite with an Ed25519 JWK", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyJwk: method(d, 0)["publicKeyJwk"] as JsonObject }), "of type EcdsaSecp256k1VerificationKey2019 carries a secp256k1 key, not Ed25519"],
       ["a base58 X25519 key of one byte", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2019", controller: BOB, publicKeyBase58: "1" }), "of type X25519KeyAgreementKey2019 carries a X25519 key of 32 bytes"],
-      ["a multibase X25519 key of one byte", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2020", controller: BOB, publicKeyMultibase: bases.base58btc.encode(Uint8Array.of(0xec, 1, 0)) }), "has a publicKeyMultibase that is the key its code says: X25519 key is not 32 bytes"],
+      ["a multibase X25519 key of one byte", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2020", controller: BOB, publicKeyMultibase: bases.base58btc.encode(Uint8Array.of(0xec, 1, 0)) }), "has a publicKeyMultibase that is the X25519 key its code says: X25519 key is not 32 bytes"],
       ["an Ed25519 suite with a multibase X25519 key", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Ed25519VerificationKey2020", controller: BOB, publicKeyMultibase: canonicalPublicKey(method(d, 1)["publicKeyJwk"] as JsonObject) }), "of type Ed25519VerificationKey2020 carries a Ed25519 key, not X25519"],
-      ["a Multikey under a code the vault reads with a point off the curve", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: bases.base58btc.encode(Uint8Array.of(0x80, 0x24, 0x04, ...new Uint8Array(64))) }), "has a publicKeyMultibase that is the key its code says: not a point on P-256"],
+      ["a Multikey under a code the vault reads with a point off the curve", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: multikey([0x82, 0x24], Uint8Array.of(0x04, ...new Uint8Array(132))) }), "has a publicKeyMultibase that is the P-521 key its code says: not a point on P-521"],
+      ["a multicodec key cut short", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2020", controller: BOB, publicKeyMultibase: "z55" }), "has a publicKeyMultibase that is a base58btc multicodec key: Could not decode varint"],
+      ["a Multikey cut short", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: "z55" }), "has a publicKeyMultibase that is a base58btc multicodec key: Could not decode varint"],
+      ["a multicodec code not minimally encoded", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2020", controller: BOB, publicKeyMultibase: multikey([0xec, 0x81, 0x00], bases.base58btc.decode(canonicalPublicKey(method(d, 1)["publicKeyJwk"] as JsonObject)).subarray(2)) }), "has a publicKeyMultibase that is a base58btc multicodec key: Invalid varint: not minimally encoded"],
+      ["a multicodec code with nothing after it", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: multikey([0xec, 0x01], new Uint8Array(0)) }), "has a publicKeyMultibase that is a base58btc multicodec key: no key bytes after the code"],
+      ["a Multikey not under base58btc", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "Multikey", controller: BOB, publicKeyMultibase: bases.base64url.encode(Uint8Array.of(0xea, 0x01, ...BLS_G1)) }), "has a publicKeyMultibase that is a base58btc multicodec key: not under the base58btc prefix"],
+      ["a BLS key under an X25519 suite", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "X25519KeyAgreementKey2020", controller: BOB, publicKeyMultibase: multikey([0xea, 0x01], BLS_G1) }), "of type X25519KeyAgreementKey2020 carries a X25519 key, not one under multicodec 0xea"],
+      ["an Ed448 JWK under a secp256k1 suite", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1VerificationKey2019", controller: BOB, publicKeyJwk: ED448_JWK }), "of type EcdsaSecp256k1VerificationKey2019 carries a secp256k1 key, not Ed448"],
+      ["an RSA JWK under a secp256k1 suite", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1RecoveryMethod2020", controller: BOB, publicKeyJwk: { kty: "RSA", n: "AQAB", e: "AQAB" } }), "of type EcdsaSecp256k1RecoveryMethod2020 carries a secp256k1 key, not one of another kind"],
       ["an account ID without its chain", (d) => (d["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#extra`, type: "EcdsaSecp256k1RecoveryMethod2020", controller: BOB, blockchainAccountId: "0xab16a96d359ec26a11e2c2b3d8f8b8942d5bfcdb" }), "has a blockchainAccountId that is a CAIP-10 account ID"],
       ["a service without an ID", (d) => delete service(d)["id"], "service[0] has a string id"],
       ["a service without a type", (d) => delete service(d)["type"], "service[0] has a type"],
@@ -330,9 +345,10 @@ describe("did:web resolution", () => {
     const x25519 = canonicalPublicKey(agree["publicKeyJwk"] as JsonObject);
     const raw = bases.base58btc.decode(x25519);
     const kept: [string, JsonObject][] = [
-      ["an Ed448 JWK", { type: "JsonWebKey2020", publicKeyJwk: { kty: "OKP", crv: "Ed448", x: "AA" } }],
+      ["an Ed448 JWK", { type: "JsonWebKey2020", publicKeyJwk: ED448_JWK }],
       ["an RSA JWK", { type: "JsonWebKey2020", publicKeyJwk: { kty: "RSA", n: "AQAB", e: "AQAB" } }],
-      ["a Multikey under a code the vault does not read", { type: "Multikey", publicKeyMultibase: bases.base58btc.encode(Uint8Array.of(0xea, 0x01, 0x00)) }],
+      ["a BLS12-381 G1 Multikey", { type: "Multikey", publicKeyMultibase: multikey([0xea, 0x01], BLS_G1) }],
+      ["an unknown suite's bytes laid out its own way", { type: "UnknownSuite", publicKeyMultibase: "z55" }],
       ["a multibase key under the base256emoji prefix", { type: "UnknownSuite", publicKeyMultibase: bases.base256emoji.encode(raw) }],
       ["a multibase key under the base64url prefix", { type: "UnknownSuite", publicKeyMultibase: bases.base64url.encode(raw) }],
     ];
@@ -351,6 +367,17 @@ describe("did:web resolution", () => {
     (document["keyAgreement"] as string[]).push(`${BOB}#multikey`, `${BOB}#base58`);
     const resolution = await resolved(BOB, none, { fetch: answering(() => json(document)) });
     expect([...authorizedKeys(resolution, "keyAgreement").entries()]).toEqual([[`${BOB}#agree`, x25519], [`${BOB}#multikey`, x25519]]);
+  });
+
+  it("checking a document of many keys, each short, runs under the same deadline as the fetch", async () => {
+    const bob = await webIdentity(BOB);
+    const key = multikey([0x82, 0x24], p521.getPublicKey(p521.utils.randomPrivateKey(), true));
+    const document = structuredClone(bob.document);
+    for (let i = 0; i < 950; i += 1) (document["verificationMethod"] as JsonObject[]).push({ id: `${BOB}#k${i}`, type: "Multikey", controller: BOB, publicKeyMultibase: key });
+    expect(canonicalize(document).length).toBeLessThan(MAX_DOCUMENT_BYTES);
+    expect(await resolve(BOB, none, { fetch: answering(() => json(document)), timeoutMs: 20 })).toMatchObject({ outcome: "unavailable", reason: "timed out: not resolved within 20 ms" });
+    expect((await resolve(BOB, none, { fetch: answering(() => json(document)), timeoutMs: 30_000 })).outcome).toBe("resolved");
+    expect((await resolve(BOB, none, { fetch: answering(() => json(bob.document)), timeoutMs: 20 })).outcome).toBe("resolved");
   });
 
   it("a type is looked up as a suite name and nothing else, whatever name it happens to share", async () => {
