@@ -639,6 +639,7 @@ export function knownLongForms(fold: VaultFold): KnownLongForms {
   };
   for (const event of fold.set.of("peer.resolved")) note(event.data.presentedDid);
   for (const event of fold.set.of("message.in")) note(event.data.presentedDid);
+  for (const event of fold.set.of("message.out")) note(event.data.birth?.peerDid);
   for (const event of fold.set.of("relationship.peerTransitioned")) {
     note(event.data.presentedFromDid);
     note(event.data.presentedToDid);

@@ -5,12 +5,15 @@ import { MemoryVault } from "@estoc/event-store/v3";
 import {
   InvalidDidDocument,
   didKeyName,
+  inboundMessageId,
   intentOfOutbound,
+  mintDid,
   objectReader,
   readPlaintext,
   readStoredDocument,
   relationshipId,
   scanVault,
+  signFromPrior,
   unfinishedWork,
   vaultDraft,
   wirePlaintext,
@@ -20,19 +23,25 @@ import {
   type DidId,
   type MessageId,
   type PublicKey,
+  type ReceiptOrdinal,
   type RouteId,
+  type WireMessageId,
 } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { AmbiguousTarget, EntityConflict, UnknownEntity, Unusable, authorizedKeys, commitResolution, configureRoute, createDid, resolve, retireDid, send, type Content } from "../../src/v3/index.js";
+import { AmbiguousTarget, EntityConflict, UnknownEntity, Unusable, authorizedKeys, commitResolution, configureRoute, createDid, knownLongForms, resolve, retireDid, send, type Content } from "../../src/v3/index.js";
 import { freshVault, json, newMediator, webFetch, webIdentity, type Fresh } from "./helpers.js";
 
 const ROUTE = "019b0000-0000-7000-8000-00000000000a" as RouteId;
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const FRESH = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
+const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
+const THIRD = "019b0000-0000-7000-8000-000000000103" as MessageId;
+const FOURTH = "019b0000-0000-7000-8000-000000000104" as MessageId;
 const CONTACT = "019b0000-0000-7000-8000-000000000201" as ContactId;
 const OTHER = "019b0000-0000-7000-8000-000000000202" as ContactId;
+const THIRD_CONTACT = "019b0000-0000-7000-8000-000000000203" as ContactId;
 const BOB = "did:web:bob.example";
 const BOB_URL = "https://bob.example/.well-known/did.json";
 
@@ -71,7 +80,7 @@ describe("send to an address", () => {
     globalThis.fetch = fetch;
   });
 
-  it("a new pair: one commit of the objects, the intent and the sender minted for it, with networking off; the birth freezes the exact peer spelling and the pair again freezes the same selection", async () => {
+  it("a new pair: one commit of the objects, the intent and the sender minted for it, with networking off; each message freezes the exact peer spelling it was given, in the one relationship the pair derives", async () => {
     const a = await alice();
     const bob = await newMediator(201);
     const content: Content = {
@@ -121,7 +130,7 @@ describe("send to an address", () => {
     const again = await send(a.runtime, a.keys, { peerDid: longToShort(bob.did), sender: { didId: FRESH } }, HELLO);
     expect(again.created).toBeNull();
     expect(again.relationshipId).toBe(sent.relationshipId);
-    expect(again.birth).toEqual(sent.birth);
+    expect(again.birth).toEqual({ localDidId: FRESH, peerDid: longToShort(bob.did) });
     expect((await scanVault(a.runtime.vault, a.keys)).set.of("message.out")).toHaveLength(2);
     await a.runtime.close();
   });
@@ -135,7 +144,7 @@ describe("send to an address", () => {
     expect(again.existed).toBe(true);
     expect(again.intent.eventId).toBe(sent.intent.eventId);
     await expect(send(a.runtime, a.keys, target, { ...HELLO, body: { content: "other" } }, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
-    await expect(send(a.runtime, a.keys, { peerDid: bob.did, sender: { fresh: ROUTE } }, HELLO, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
+    await expect(send(a.runtime, a.keys, { peerDid: bob.did, sender: { fresh: ROUTE, didId: FRESH } }, HELLO, { messageId: MESSAGE })).rejects.toBeInstanceOf(EntityConflict);
     const fold = await scanVault(a.runtime.vault, a.keys);
     expect(fold.set.of("message.out")).toHaveLength(1);
     expect(fold.set.of("did.created")).toHaveLength(1);
@@ -158,6 +167,80 @@ describe("send to an address", () => {
     const fold = await scanVault(copy.vault, a.keys);
     expect(fold.outbound.outbounds.get(MESSAGE)?.conflict).toBe(false);
     expect(fold.outbound.outbounds.get(MESSAGE)?.intentEventIds).toHaveLength(2);
+    await a.runtime.close();
+  });
+
+  it("a send repeated with its message ID returns the record, whatever the fold has since become; a target that names another relationship or sender is refused", async () => {
+    const a = await alice();
+    const bob = await newMediator(201);
+    await contact(a, CONTACT, [bob.did]);
+    const fixed = { peerDid: bob.did, sender: { fresh: ROUTE, didId: FRESH } };
+    const first = await send(a.runtime, a.keys, fixed, HELLO, { messageId: MESSAGE });
+    const firstAgain = await send(a.runtime, a.keys, fixed, HELLO, { messageId: MESSAGE });
+    expect(firstAgain).toMatchObject({ existed: true, created: null, relationshipId: first.relationshipId, birth: first.birth });
+    expect(firstAgain.intent.eventId).toBe(first.intent.eventId);
+
+    const generated = { peerDid: bob.did, sender: { fresh: ROUTE } };
+    const second = await send(a.runtime, a.keys, generated, HELLO, { messageId: SECOND });
+    expect((await send(a.runtime, a.keys, generated, HELLO, { messageId: SECOND })).intent.eventId).toBe(second.intent.eventId);
+
+    const viaContact = { contactId: CONTACT, sender: { fresh: ROUTE } };
+    const third = await send(a.runtime, a.keys, viaContact, HELLO, { messageId: THIRD });
+    expect(third.assigned?.data.contactId).toBe(CONTACT);
+    expect((await send(a.runtime, a.keys, viaContact, HELLO, { messageId: THIRD })).existed).toBe(true);
+
+    const web = { peerDid: BOB, sender: { didId: DID } };
+    const fourth = await send(a.runtime, a.keys, web, HELLO, { messageId: FOURTH });
+    await boundToBob(a);
+    const fourthAgain = await send(a.runtime, a.keys, web, HELLO, { messageId: FOURTH });
+    expect(fourthAgain).toMatchObject({ existed: true, birth: fourth.birth });
+    expect((await send(a.runtime, a.keys, web, HELLO)).birth).toBeNull();
+
+    await expect(send(a.runtime, a.keys, { peerDid: bob.did, sender: { didId: DID } }, HELLO, { messageId: MESSAGE })).rejects.toThrow(/another target/);
+    await expect(send(a.runtime, a.keys, { ...fixed, contactId: CONTACT }, HELLO, { messageId: MESSAGE })).rejects.toThrow(/another target/);
+    await expect(send(a.runtime, a.keys, { contactId: CONTACT }, HELLO, { messageId: FOURTH })).rejects.toThrow(/another target/);
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.set.of("message.out")).toHaveLength(5);
+    expect(fold.set.of("did.created")).toHaveLength(4);
+    expect(fold.set.of("relationship.contactAssigned")).toHaveLength(1);
+    await a.runtime.close();
+  });
+
+  it("the headers are frozen as given, whatever the caller does to them while the send is pending", async () => {
+    const a = await alice();
+    const bob = await newMediator(201);
+    const custom = { value: "initial" };
+    const content: Content = { ...HELLO, headers: { lang: "en", custom } };
+    const pending = send(a.runtime, a.keys, { peerDid: bob.did, sender: { didId: DID } }, content);
+    custom.value = "changed";
+    const sent = await pending;
+    expect(sent.intent.data.headers).toEqual({ lang: "en", custom: { value: "initial" } });
+    const read = objectReader(a.runtime.vault.objects);
+    const document = readStoredDocument(JSON.parse(new TextDecoder().decode((await read(sent.intent.data.bodyCid)) as Uint8Array)));
+    expect(readPlaintext(wirePlaintext(intentOfOutbound(sent.intent.data, document), { from: a.did, to: [bob.did as Did], fromPrior: null }, () => new Uint8Array())).intentHash).toBe(sent.intent.data.intentHash);
+    await a.runtime.close();
+  });
+
+  it("a new message to the same pair keeps the spelling it was given; the long form it brings resolves the short form an earlier, failed message froze", async () => {
+    const a = await alice();
+    const bob = await newMediator(201);
+    const short = longToShort(bob.did);
+    await contact(a, CONTACT);
+    const first = await send(a.runtime, a.keys, { peerDid: short, sender: { didId: DID }, contactId: CONTACT }, HELLO);
+    expect(knownLongForms(await scanVault(a.runtime.vault, a.keys))(short as Did)).toBeNull();
+    const failed = async (messageId: MessageId) => a.runtime.vault.commit([], [vaultDraft("delivery.failed", { messageId, scope: "message", packageId: null, code: "unresolvable" })]);
+    await failed(first.messageId);
+    const retried = await send(a.runtime, a.keys, { contactId: CONTACT }, HELLO);
+    expect(retried.birth).toEqual({ localDidId: DID, peerDid: short });
+    await failed(retried.messageId);
+    const second = await send(a.runtime, a.keys, { peerDid: bob.did, sender: { didId: DID } }, HELLO);
+    expect(second.relationshipId).toBe(first.relationshipId);
+    expect(second.birth).toEqual({ localDidId: DID, peerDid: bob.did });
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.outbound.outbounds.get(first.messageId)?.outcome).toBe("failed");
+    expect(fold.outbound.outbounds.get(second.messageId)?.outcome).toBe("queued");
+    expect(knownLongForms(fold)(short as Did)).toBe(bob.did);
+    expect((await send(a.runtime, a.keys, { contactId: CONTACT }, HELLO)).birth).toEqual(second.birth);
     await a.runtime.close();
   });
 
@@ -266,6 +349,108 @@ describe("send to a contact", () => {
     await expect(send(a.runtime, a.keys, { contactId: OTHER, sender: { fresh: ROUTE } }, HELLO)).rejects.toBeInstanceOf(Unusable);
     await expect(send(a.runtime, a.keys, { contactId: "019b0000-0000-7000-8000-0000000002ff" as ContactId }, HELLO)).rejects.toBeInstanceOf(UnknownEntity);
     await a.runtime.close();
+  });
+
+  it("the peer DIDs added to a contact are told apart by DID: one added twice, or under both spellings, is one target, born at the long form; two DIDs are none", async () => {
+    const a = await alice();
+    const bob = await newMediator(201);
+    const carol = await newMediator(202);
+    await contact(a, CONTACT, [BOB, BOB]);
+    await contact(a, OTHER, [longToShort(bob.did), bob.did]);
+    await contact(a, THIRD_CONTACT, [BOB, carol.did]);
+    const twice = await send(a.runtime, a.keys, { contactId: CONTACT, sender: { didId: DID } }, HELLO);
+    expect(twice.birth).toEqual({ localDidId: DID, peerDid: BOB });
+    const both = await send(a.runtime, a.keys, { contactId: OTHER, sender: { didId: DID } }, HELLO);
+    expect(both.birth).toEqual({ localDidId: DID, peerDid: bob.did });
+    expect(both.relationshipId).toBe(relationshipId(a.did, longToShort(bob.did) as Did));
+    await expect(send(a.runtime, a.keys, { contactId: THIRD_CONTACT, sender: { didId: DID } }, HELLO)).rejects.toThrow(/2 peer DIDs added/);
+    await a.runtime.close();
+  });
+
+  it("a pair a claim awaits evidence for, or another relationship's histories hold, is refused through the contact as it is by address", async () => {
+    const a = await alice();
+    const b = await freshVault(101);
+    const endpoint = { kind: "direct", endpoint: "https://bob.example/didcomm" } as const;
+    const b0 = await mintDid(b.keys, DID, endpoint);
+    const b1 = await mintDid(b.keys, FRESH, endpoint);
+    const proof = await signFromPrior(b.keys, b0, b1.longFormDid, 1_757_700_000);
+    const keyName = didKeyName(DID, "key-agreement");
+    const pinned = async (did: Did) => {
+      const outcome = await resolve(did, () => null);
+      if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
+      const [peerPublicKey] = authorizedKeys(outcome.resolution, "keyAgreement").values();
+      return { peerPublicKey: peerPublicKey as PublicKey, evidence: await commitResolution(a.runtime, { resolution: outcome.resolution, localKeyName: keyName, peerPublicKey: peerPublicKey as PublicKey }) };
+    };
+    const root = await pinned(b0.longFormDid);
+    const R1 = relationshipId(a.did, b0.did);
+    await contact(a, OTHER);
+    const [binding] = await a.runtime.vault.commit([], [
+      vaultDraft("relationship.bound", { relationshipId: R1, localDidId: DID, peerResolutionEventId: root.evidence.eventId as never }),
+      vaultDraft("relationship.contactAssigned", { relationshipId: R1, contactId: OTHER }),
+    ]);
+    await contact(a, CONTACT);
+    const byAddress = { peerDid: b1.longFormDid, sender: { didId: DID }, contactId: CONTACT };
+    const queued = await send(a.runtime, a.keys, byAddress, HELLO);
+    expect(queued.assigned?.data.contactId).toBe(CONTACT);
+
+    const successor = await pinned(b1.longFormDid);
+    const wire = "rotation-carrier" as WireMessageId;
+    const plaintext = { id: wire, type: HELLO.type, body: HELLO.body, from: b1.longFormDid, to: [a.did], from_prior: proof };
+    const read = readPlaintext(plaintext);
+    const carrier = {
+      messageId: inboundMessageId(successor.peerPublicKey, wire),
+      wireMessageId: wire,
+      receiptOrdinal: "1" as ReceiptOrdinal,
+      intentHash: read.intentHash,
+      plaintextHash: read.plaintextHash,
+      localKeyName: keyName,
+      msgType: HELLO.type,
+      peerResolutionEventId: successor.evidence.eventId as never,
+      relationshipBindingEventId: binding!.eventId as never,
+      peerTransitionEventId: null,
+      presentedDid: b1.longFormDid,
+      did: b1.did,
+      thid: null,
+      pthid: null,
+      createdTime: null,
+      expiresTime: null,
+      pleaseAck: null,
+      ack: [],
+      headers: {},
+      fromPrior: proof,
+      bodyCid: read.stored.bodyCid,
+      attachmentCids: [],
+      bytes: new TextEncoder().encode(JSON.stringify(plaintext)).length,
+      signedBy: null,
+      receivedVia: { mediationId: null, deliveryId: null },
+    };
+    await a.runtime.vault.commit([{ cid: read.stored.bodyCid, source: read.stored.bytes }], [vaultDraft("message.in", carrier)]);
+    expect((await scanVault(a.runtime.vault, a.keys)).relationships.pendingAt(a.did, b1.did)).toHaveLength(1);
+    await expect(send(a.runtime, a.keys, byAddress, HELLO)).rejects.toThrow(/awaits the evidence/);
+    await expect(send(a.runtime, a.keys, { contactId: CONTACT }, HELLO)).rejects.toThrow(/awaits the evidence/);
+
+    await a.runtime.vault.commit([], [vaultDraft("relationship.peerTransitioned", {
+      relationshipId: R1,
+      localKeyName: keyName,
+      peerPublicKey: successor.peerPublicKey,
+      fromDid: b0.did,
+      presentedFromDid: b0.longFormDid,
+      toDid: b1.did,
+      presentedToDid: b1.longFormDid,
+      fromPrior: proof,
+      priorResolutionEventId: root.evidence.eventId as never,
+      peerResolutionEventId: successor.evidence.eventId as never,
+      messageId: carrier.messageId,
+    })]);
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.relationships.claimants(a.did, b1.did)).toEqual([R1]);
+    await expect(send(a.runtime, a.keys, byAddress, HELLO)).rejects.toThrow(/assigned to the contact/);
+    await expect(send(a.runtime, a.keys, { contactId: CONTACT }, HELLO)).rejects.toThrow(/claimed by/);
+    const rotated = await send(a.runtime, a.keys, { peerDid: b1.longFormDid, sender: { didId: DID } }, HELLO);
+    expect(rotated).toMatchObject({ relationshipId: R1, birth: null });
+    expect(fold.set.of("message.out").map((event) => event.data.relationshipId)).toEqual([queued.relationshipId]);
+    await a.runtime.close();
+    await b.runtime.close();
   });
 
   it("a deleted contact is not written to, in any of its relationships", async () => {
