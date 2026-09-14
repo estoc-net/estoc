@@ -304,33 +304,30 @@ function isSecp256k1Point(hex: string): boolean {
 }
 
 /**
- * A fault in the key a method's material holds. What the suite
- * prescribes comes first: a multicodec suite's key is a base58btc
- * value under a whole multicodec code, and a suite for one kind of
- * key carries that kind, by the code or the JWK curve, whether or not
- * the vault reads it. Then a key the vault reads — a JWK of one of its
- * curves, a multibase key under one of its codes — must be one, by the
- * vault's own reading. Anything else is kept unread: an unknown
- * suite's bytes may be laid out its own way.
+ * A fault in the key a method's material holds. Content rules apply
+ * only to a representation that is known — a suite's prescribed one,
+ * or a JWK or multicodec key of a kind the vault reads — since an
+ * unknown suite may lay its bytes out its own way.
  */
 function keyFault(entry: JsonObject, type: string, suite: Suite | undefined): string | null {
   const expects = suite?.keyType;
-  const wrongKind = (kind: string | undefined) => (expects !== undefined && kind !== expects ? `of type ${type} carries a ${expects} key, not ${kind ?? "one of another kind"}` : null);
+  const wrongKind = (kind: KeyType | undefined, other: string) => (expects !== undefined && kind !== expects ? `of type ${type} carries a ${expects} key, not ${kind ?? other}` : null);
   const jwk = entry["publicKeyJwk"];
   if (isJsonObject(jwk)) {
-    const crv = typeof jwk["crv"] === "string" ? jwk["crv"] : undefined;
-    const wrong = wrongKind(crv);
+    const kty = String(jwk["kty"]);
+    const crv = jwk["crv"];
+    const kind = (READ_JWK_CURVES.get(kty) ?? []).find((curve) => curve === crv);
+    const wrong = wrongKind(kind, `a ${kty} JWK${typeof crv === "string" ? ` of curve ${crv}` : ""}`);
     if (wrong !== null) return wrong;
-    const read = (READ_JWK_CURVES.get(String(jwk["kty"])) ?? []).find((curve) => curve === crv);
-    const fault = read === undefined ? null : invalidKey(() => canonicalPublicKey(jwk));
-    if (fault !== null) return `has a publicKeyJwk that is a ${read} key: ${fault}`;
+    const fault = kind === undefined ? null : invalidKey(() => canonicalPublicKey(jwk));
+    if (fault !== null) return `has a publicKeyJwk that is a ${kind} key: ${fault}`;
   }
   const multibase = entry["publicKeyMultibase"];
   if (typeof multibase === "string" && suite?.material.includes("publicKeyMultibase")) {
     const code = multicodecOf(multibase);
     if (typeof code === "string") return `has a publicKeyMultibase that is a base58btc multicodec key: ${code}`;
     const kind = READ_MULTICODECS.get(code);
-    const wrong = wrongKind(kind ?? `one under multicodec 0x${code.toString(16)}`);
+    const wrong = wrongKind(kind, `one under multicodec 0x${code.toString(16)}`);
     if (wrong !== null) return wrong;
     const fault = kind === undefined ? null : invalidKey(() => canonicalPublicKey(multibase));
     if (fault !== null) return `has a publicKeyMultibase that is the ${kind} key its code says: ${fault}`;
