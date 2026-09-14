@@ -138,7 +138,33 @@ whether a transition's proof verifies against the exact predecessor,
 is `verifyResolutions` / `verifyTransitions`,
 `foldRelationshipsVerified` doing all of it; until the seed has
 confirmed an entity it is pending, never live, and until a snapshot or
-a proof has been checked what rests on it is deferred, never applied).
+a proof has been checked what rests on it is deferred, never applied),
+the whole fold (`fold/vault.ts`: `foldVault` runs every fold over one
+set, each fed the ones it reads, and adds the retention edge by edge
+and the roots it holds; `checkVault` computes every verdict beside it
+in one motion, the seed's, the documents' and the problem reports',
+`objectReader` reading the vault's objects with absence, damage and
+excess size each as no verdict; `scanVault` is one scan of a vault,
+the checks and the fold) and the procedures (`procedures.ts`:
+`vaultRetention` / `vaultHeldRoots` hand the event store the fold's
+retention for collection, export, validation and import, and
+`collectGarbage` is one pass; `eraseMessage` erases a logical message,
+every observation ID of its execution, over every root its events and
+packages still name, in one commit, and `closeErasures` appends the
+equivalent erases a late observation, an alias or a later package is
+owed, `eraseDrafts` / `erasureClosure` / `logicalMessageIds` being the
+decisions; `deleteContact` tombstones a contact, erases the messages
+attributed to it alone, retires the addresses no other relationship,
+binding claim, queued birth or open disclosure needs and the routes
+only retired addresses bind, idempotently, `deletionOf` the decision
+and `sweepDeleted` every tombstoned contact's cleanup at once;
+`unfinishedWork` enumerates what the events say is still to be done —
+births awaiting their binding, outbound work, relationships with
+application input and no contact, transitions and claims waiting,
+replies owed with `senderGate`'s verdict, the early-privacy triggers
+the default policy may take, profile lifts missing for the types the
+application names, erases owed and deletions unfinished — so recovery
+reads it from the fold and never from a queue).
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
