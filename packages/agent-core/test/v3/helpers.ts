@@ -80,7 +80,6 @@ export async function party(mediator: FakeMediator, fill = 1, over: Partial<Link
   return { ...fresh, fold, mediator, mediationId: created.data.mediationId, created, ring, trace, link, linkOptions, log, offline };
 }
 
-/** The ring brought up to the vault as it stands now. */
 /** Waits for `condition`, giving up after two seconds with `what` in the error. */
 export async function until(what: string, condition: () => boolean): Promise<void> {
   const deadline = Date.now() + 2000;

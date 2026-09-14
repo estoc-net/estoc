@@ -354,9 +354,8 @@ export class MediatorLink {
    * is authcrypt from the mediator's key to the key of ours the request
    * went out from. Sender protection, an anonymous layer over that
    * authcrypt, still carries it. A signature under an anonymous seal
-   * does not, whoever signed: a signed plaintext proves who wrote it
-   * once, not who sends it now, since anyone holding it can seal it to
-   * us again. The note of a refusal is observability only: it waits at
+   * is other evidence, whoever signed, and not what this boundary
+   * accepts. The note of a refusal is observability only: it waits at
    * most for `signal`, and not at all without one.
    */
   private async fromMediator(opened: Opened, me: string | null, signal?: AbortSignal): Promise<void> {
