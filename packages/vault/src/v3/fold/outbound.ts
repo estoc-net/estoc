@@ -279,15 +279,15 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
   const ackDeferred: string[] = [];
   for (const event of events.acknowledgments) {
     if (intent === null) {
-      ackDeferred.push(`acknowledgment ${event.eventId} awaits one intent`);
+      ackFaults.push(`acknowledgment ${event.eventId} names no witness: the intent events disagree`);
       continue;
     }
-    const witness = witnessOf(context, messageId, intent.relationshipId, event.data);
-    if (witness === "none") ackFaults.push(`acknowledgment ${event.eventId} names no complete witness among the observations of ${event.data.ackMessageId}`);
-    else if (witness === "unknown") ackDeferred.push(`acknowledgment ${event.eventId} awaits the observations of ${event.data.ackMessageId}`);
+    const witness = recordWitness(context, messageId, intent.relationshipId, membership, event.data);
+    if (witness.status === "none") ackFaults.push(`acknowledgment ${event.eventId} names no witness: ${witness.because}`);
+    else if (witness.status === "incomplete") ackDeferred.push(`acknowledgment ${event.eventId} awaits its witness: ${witness.because}`);
   }
   const candidates = context.ackers.get(messageId) ?? [];
-  const ackWitnesses = intent === null || membership.status !== "verified" ? [] : candidates.filter((receipt) => isWitness(context.relationships, receipt, intent.relationshipId)).sort(compareEvents);
+  const ackWitnesses = intent === null ? [] : candidates.filter((receipt) => witnessOf(context, receipt, intent.relationshipId, membership).status === "complete").sort(compareEvents);
   if (candidates.length > 0 && membership.status === "deferred") ackDeferred.push(`${candidates.length} acknowledging observation${candidates.length > 1 ? "s await" : " awaits"} the message's membership`);
   const acknowledged = ackWitnesses.length > 0;
   const receiptInstant = acknowledged ? ackWitnesses[0]!.at : null;
@@ -318,53 +318,69 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
   };
 }
 
+type Witness = { readonly status: "complete" } | { readonly status: "incomplete" | "none"; readonly because: string };
+
 /**
- * Does an observation of the acknowledged message ID witness the
- * acknowledgment record: the same wire ID, local key and authenticated
- * peer key, its `ack` naming the outbound, and the standing every
- * acknowledging observation must have? `unknown` while a matching
- * observation's resolution or standing is not yet known, or while none
- * of the message's observations is here; `none` when every one here
- * falls short.
+ * Whether an observation acknowledges the message: its own row scoped
+ * in the relationship, its group complete there and the message's
+ * whole membership verified. Any of the three contradicting is final
+ * whatever the others still wait for, since more evidence undoes no
+ * contradiction; only short of one does what is missing defer.
  */
-function witnessOf(context: Context, messageId: MessageId, relationshipId: RelationshipId, data: VaultData["delivery.acknowledged"]): "matched" | "unknown" | "none" {
-  let unknown = false;
+function witnessOf(context: Context, receipt: Receipt, relationshipId: RelationshipId, membership: Membership): Witness {
+  const { messageId } = receipt.data;
+  const group = context.relationships.groups.get(messageId);
+  const scope = context.relationships.observations.get(receipt.eventId);
+  if (membership.status === "conflict") return { status: "none", because: "the message's membership is in conflict" };
+  if (group?.status === "anonymous") return { status: "none", because: `the observations of ${messageId} are anonymous` };
+  if (group?.status === "conflict") return { status: "none", because: `the observations of ${messageId} are in conflict: ${group.because}` };
+  if (group !== undefined && group.relationshipId !== null && group.relationshipId !== relationshipId) return { status: "none", because: `the observations of ${messageId} are scoped in ${group.relationshipId}, not ${relationshipId}` };
+  if (scope?.status === "anonymous") return { status: "none", because: `observation ${receipt.eventId} is anonymous` };
+  if (scope?.status === "conflict") return { status: "none", because: `observation ${receipt.eventId} is in conflict: ${scope.because}` };
+  if (scope !== undefined && scope.relationshipId !== null && scope.relationshipId !== relationshipId) return { status: "none", because: `observation ${receipt.eventId} is scoped in ${scope.relationshipId}, not ${relationshipId}` };
+  if (scope === undefined) return { status: "incomplete", because: `observation ${receipt.eventId} awaits its scope` };
+  if (scope.status === "deferred") return { status: "incomplete", because: `observation ${receipt.eventId} ${scope.because}` };
+  if (group === undefined || group.status === "incomplete") return { status: "incomplete", because: `the observations of ${messageId} await their evidence` };
+  if (membership.status === "deferred") return { status: "incomplete", because: "the message's membership awaits its evidence" };
+  return { status: "complete" };
+}
+
+/**
+ * Whether an observation of the acknowledged message ID witnesses the
+ * acknowledgment record: the same wire ID, local key and authenticated
+ * peer key, its `ack` naming the outbound, and what any acknowledging
+ * observation needs. What contradicts the message or the observations
+ * as a whole is final for every candidate; else one candidate still
+ * waiting, for its resolution or its standing, keeps the record
+ * waiting, and the record is unwitnessed once every candidate here
+ * falls short. None of the message's observations being here yet is a
+ * wait.
+ */
+function recordWitness(context: Context, messageId: MessageId, relationshipId: RelationshipId, membership: Membership, data: VaultData["delivery.acknowledged"]): Witness {
+  if (membership.status === "conflict") return { status: "none", because: "the message's membership is in conflict" };
+  let waiting: Witness | null = null;
+  let short: Witness | null = null;
   for (const receipt of context.ackers.get(messageId) ?? []) {
     if (receipt.data.messageId !== data.ackMessageId || receipt.data.wireMessageId !== data.ackWireMessageId || receipt.data.localKeyName !== data.localKeyName) continue;
     if (receipt.data.peerResolutionEventId === null) continue;
+    const witness = witnessOf(context, receipt, relationshipId, membership);
+    if (witness.status === "none") {
+      short ??= witness;
+      continue;
+    }
     const resolved = context.set.resolve(receipt.data.peerResolutionEventId, "peer.resolved");
     if (resolved.status === "missing") {
-      unknown = true;
+      waiting ??= { status: "incomplete", because: `observation ${receipt.eventId} awaits its resolution ${receipt.data.peerResolutionEventId}` };
       continue;
     }
     if (resolved.status !== "present" || resolved.event.data.peerPublicKey !== data.peerPublicKey) continue;
-    const standing = witnessStanding(context.relationships, receipt, relationshipId);
-    if (standing === "complete") return "matched";
-    if (standing === "incomplete") unknown = true;
+    if (witness.status === "complete") return witness;
+    waiting ??= witness;
   }
-  if (unknown) return "unknown";
-  return context.relationships.groups.has(data.ackMessageId) ? "none" : "unknown";
-}
-
-/**
- * Where an acknowledging observation stands: complete when its own row
- * is scoped in the relationship and its group is complete there;
- * incomplete while its scope or its group still waits; none when
- * either contradicts or lies elsewhere.
- */
-function witnessStanding(relationships: RelationshipFold, receipt: Receipt, relationshipId: RelationshipId): "complete" | "incomplete" | "none" {
-  const scope = relationships.observations.get(receipt.eventId);
-  if (scope === undefined) return "incomplete";
-  if (scope.status === "deferred") return scope.relationshipId === null || scope.relationshipId === relationshipId ? "incomplete" : "none";
-  if (scope.status !== "scoped" || scope.relationshipId !== relationshipId) return "none";
-  const group = relationships.groups.get(receipt.data.messageId);
-  if (group === undefined || group.status === "incomplete") return "incomplete";
-  return group.status === "complete" && group.relationshipId === relationshipId ? "complete" : "none";
-}
-
-/** A complete observation, scoped in the relationship, in a complete group: what acknowledges. */
-function isWitness(relationships: RelationshipFold, receipt: Receipt, relationshipId: RelationshipId): boolean {
-  return witnessStanding(relationships, receipt, relationshipId) === "complete";
+  if (waiting !== null) return waiting;
+  if (short !== null) return short;
+  if (context.relationships.groups.has(data.ackMessageId)) return { status: "none", because: `no observation of ${data.ackMessageId} matches the record` };
+  return { status: "incomplete", because: `the observations of ${data.ackMessageId} are not here` };
 }
 
 /**
@@ -485,59 +501,73 @@ function judgePackage(data: VaultData["message.prepared"], relationship: Relatio
   return { status: "verified" };
 }
 
-/** The observation groups by the execution ID their relationship and wire ID derive, each with the intent of every observation of it whose own row is scoped, and every group's wire ID. */
-type Carriers = { byExecution: ReadonlyMap<ExecutionId, readonly Carrier[]>; wires: ReadonlyMap<MessageId, WireMessageId> };
-type Carrier = { group: ObservationGroup; scopedIntents: readonly VaultData["message.in"]["intentHash"][] };
+/**
+ * The evidence of each execution ID under the relationship and wire ID
+ * that derive it: the intent of every observation whose own row is
+ * scoped there, read from that row alone, and the observation groups
+ * deriving it — by their own relationship, or by a scoped row of
+ * theirs when the group as a whole has none. Every message ID's wire
+ * ID is kept for the intents no group reaches.
+ */
+type Carriers = { byExecution: ReadonlyMap<ExecutionId, Carrier>; wires: ReadonlyMap<MessageId, WireMessageId> };
+type Carrier = { relationshipId: RelationshipId; provenIntents: readonly IntentHash[]; groups: readonly ObservationGroup[] };
+type IntentHash = VaultData["message.in"]["intentHash"];
 
 function carriersOf(set: VaultEventSet, relationships: RelationshipFold): Carriers {
   const wires = new Map<MessageId, WireMessageId>();
-  const scopedIntents = new Map<MessageId, Carrier["scopedIntents"][number][]>();
+  const drafts = new Map<ExecutionId, { relationshipId: RelationshipId; provenIntents: IntentHash[]; messageIds: Set<MessageId> }>();
+  const draftOf = (relationshipId: RelationshipId, wireMessageId: WireMessageId) => {
+    const executionId = executionIdOf(relationshipId, wireMessageId);
+    let draft = drafts.get(executionId);
+    if (draft === undefined) drafts.set(executionId, (draft = { relationshipId, provenIntents: [], messageIds: new Set() }));
+    return draft;
+  };
   for (const receipt of set.of("message.in")) {
     wires.set(receipt.data.messageId, receipt.data.wireMessageId);
-    if (relationships.observations.get(receipt.eventId)?.status !== "scoped") continue;
-    const intents = scopedIntents.get(receipt.data.messageId);
-    if (intents === undefined) scopedIntents.set(receipt.data.messageId, [receipt.data.intentHash]);
-    else intents.push(receipt.data.intentHash);
+    const scope = relationships.observations.get(receipt.eventId);
+    if (scope?.status !== "scoped") continue;
+    const draft = draftOf(scope.relationshipId, receipt.data.wireMessageId);
+    draft.provenIntents.push(receipt.data.intentHash);
+    draft.messageIds.add(receipt.data.messageId);
   }
-  const byExecution = new Map<ExecutionId, Carrier[]>();
   for (const [messageId, group] of relationships.groups) {
     if (group.status === "anonymous" || group.relationshipId === null) continue;
-    const executionId = executionIdOf(group.relationshipId, wires.get(messageId)!);
-    const carrier = { group, scopedIntents: scopedIntents.get(messageId) ?? [] };
-    const list = byExecution.get(executionId);
-    if (list === undefined) byExecution.set(executionId, [carrier]);
-    else list.push(carrier);
+    draftOf(group.relationshipId, wires.get(messageId)!).messageIds.add(messageId);
+  }
+  const byExecution = new Map<ExecutionId, Carrier>();
+  for (const [executionId, { relationshipId, provenIntents, messageIds }] of drafts) {
+    byExecution.set(executionId, { relationshipId, provenIntents, groups: [...messageIds].sort().map((messageId) => relationships.groups.get(messageId)!) });
   }
   return { byExecution, wires };
 }
 
 /**
- * An automatic intent's carrier: the observation groups whose
- * relationship and wire ID derive the intent's execution ID. Every
- * observation of them whose own row is scoped there proves the intent
- * it carried, and two that disagree contradict the execution — the
- * peer's prior and successor keys may each have carried the message,
- * and one execution cannot answer two intents — whatever another
- * observation of their groups later waits for or contradicts, since a
- * proven disagreement is not undone by less evidence; an observation
- * whose row is not scoped proves nothing. Short of that, one group
- * must be complete in the intent's own relationship: a carrier scoped
- * elsewhere or in conflict contradicts the intent; one still waiting,
- * or not here, defers it. When no group derives the ID from its own
- * relationship, the groups are looked up by the intent's relationship
+ * An automatic intent's carrier: the evidence of the intent's
+ * execution ID. Every observation whose own row is scoped under the
+ * relationship and wire ID deriving it proves the intent it carried,
+ * and two that disagree contradict the execution — the peer's prior
+ * and successor keys may each have carried the message, and one
+ * execution cannot answer two intents — whatever another observation
+ * of their groups later waits for or contradicts, and whatever other
+ * relationship another observation joins their groups from, since a
+ * proven disagreement is not undone by less evidence and a row proves
+ * its intent to its own relationship only; an observation whose row
+ * is not scoped proves nothing. Short of that, one group deriving the
+ * ID must be complete in the intent's own relationship: a carrier
+ * scoped elsewhere or in conflict contradicts the intent; one still
+ * waiting, or not here, defers it. When no scoped row or group derives
+ * the ID, the groups are looked up by the intent's relationship
  * instead: a group that derives it so but is anonymous, or scoped
  * elsewhere, contradicts the intent, since the intent claims a scope
  * the carrier does not have; one whose scope is not yet known waits.
  */
 function judgeCarrier(intent: MessageOut, context: Context, faults: string[], deferred: string[]): void {
   const executionId = intent.executionId!;
-  const carriers = context.carriers.byExecution.get(executionId) ?? [];
-  if (carriers.length > 0) {
-    const groups = carriers.map((carrier) => carrier.group);
-    const scoped = groups[0]! as { relationshipId: RelationshipId };
-    const proven = carriers.flatMap((carrier) => carrier.scopedIntents);
-    if (scoped.relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${scoped.relationshipId}, not ${intent.relationshipId}`);
-    else if (new Set(proven).size > 1) faults.push(`the carrier of execution ${executionId} is ${proven.length} scoped observations that disagree on the intent`);
+  const carrier = context.carriers.byExecution.get(executionId);
+  if (carrier !== undefined) {
+    const { relationshipId, provenIntents, groups } = carrier;
+    if (relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${relationshipId}, not ${intent.relationshipId}`);
+    else if (new Set(provenIntents).size > 1) faults.push(`the carrier of execution ${executionId} is ${provenIntents.length} scoped observations that disagree on the intent`);
     else if (groups.some((group) => group.status === "complete")) return;
     else if (groups.some((group) => group.status === "incomplete")) deferred.push(`the carrier of execution ${executionId} awaits its evidence`);
     else faults.push(`the carrier of execution ${executionId} is in conflict: ${(groups.find((group) => group.status === "conflict") as { because: string }).because}`);

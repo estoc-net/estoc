@@ -183,21 +183,24 @@
   recipient resolution taken at its key, verified against its document
   and pinned by a node of the peer chain (one a peer edge would add
   waits); the one ACK-bearing response per execution, a second message
-  ID conflicting both; an automatic intent's carrier groups, every
-  observation of them whose own row is scoped proving the intent it
-  carried and two that disagree — at the peer's prior and successor
-  keys, or in one group — contradicting the execution whatever their
-  groups later wait for, else one group complete in the intent's
+  ID conflicting both; an automatic intent's carrier, every
+  observation whose own row is scoped under the relationship and wire
+  ID deriving the execution proving the intent it carried to that
+  relationship alone, and two that disagree — at the peer's prior and
+  successor keys, or in one group — contradicting the execution
+  whatever their groups later wait for, contradict or take in from
+  another relationship, else one group complete in the intent's
   relationship, else waiting, else — anonymous, scoped elsewhere, in
   conflict — a contradiction; `ackWitnesses`, the
   complete scoped observations of complete groups in the relationship
   whose `ack` names the message, applied only once membership is
   verified, the earliest as `receiptInstant`, `late` at or after
   `expiresTime`; a `delivery.acknowledged` event checked against the
-  observations it names by the same witness rule — resolution, scope,
-  group and relationship — its diagnostics kept apart as `ackDeferred`
-  / `ackFaults` since receipt information changes no work, outcome or
-  retention; the displayed `outcome` in its precedence, and `work` —
+  observations it names by the same witness rule — the message's
+  membership, resolution, scope, group and relationship, a
+  contradiction of any final whatever the others still wait for — its
+  diagnostics kept apart as `ackDeferred` / `ackFaults` since receipt
+  information changes no work, outcome or retention; the displayed `outcome` in its precedence, and `work` —
   prepare, submit these packages, repack these, or nothing and why —
   from the events alone, the clock and the bytes being the worker's:
   work waits while a local transition of the relationship is still
