@@ -107,7 +107,23 @@ and how a root reads, erased before absent;
 `foldProfiles`, each relationship's claimed name from the latest
 complete scoped inbound source, the names in conflict at one source,
 and the latest submitted disclosure of our own profile, sources ordered
-by their earliest event and never by their lift. Every fold is a pure function of the
+by their earliest event and never by their lift; `foldInbound`, every
+observation with its receipt key and each execution — one wire ID in
+one relationship, the logical message of every group scoped there at
+whatever keys, complete, waiting or in conflict, its intent as the
+scoped rows prove it, what kind of message it is, application input or
+a pure acknowledgment, a proof-carrying notification, a correlated
+response, a no-response error or malformed control, its first receipt
+key and its earliest observation — the anonymous messages, the receipt
+conflicts and the next ordinal to allocate, with `ackTargets` giving
+the wire IDs a carrier may acknowledge in first-receipt order;
+`foldContactViews`, what a contact holds through the relationships
+uniquely assigned to it — the latest name, our shared profile, its
+local and peer addresses, where a message may be written and the
+thread of complete application messages — and `foldDiagnostics`, the
+same-DID key change and the remote error each relationship shows at
+its contact, with `readProblemReports` reading the reports' bodies
+beside the fold. Every fold is a pure function of the
 event set, checked by shuffling; what needs the seed, whether an
 entity's document carries the keys its ID derives, is `verifyDidKeys` /
 `verifyMediationKeys` beside the fold, whose verdicts are handed back

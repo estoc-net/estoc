@@ -15,14 +15,11 @@
 
 import { compareEvents } from "@estoc/event-store/v3";
 
-import type { AuthorId, EventId, MessageId, RelationshipId } from "../types.js";
+import type { EventId, MessageId, RelationshipId } from "../types.js";
 import type { VaultEvent } from "../schema.js";
 import type { OutboundFold } from "./outbound.js";
 import type { RelationshipFold } from "./relationships.js";
-import { groupBy, type VaultEventSet } from "./set.js";
-
-/** The complete canonical key of an event: what orders sources. */
-export type SourceKey = { readonly at: string; readonly eventId: EventId; readonly author: AuthorId };
+import { compareKeys, groupBy, keyOf, type SourceKey, type VaultEventSet } from "./set.js";
 
 export interface NameClaim {
   /** the source's earliest event */
@@ -56,15 +53,6 @@ export interface Profile {
   readonly deferred: readonly string[];
   readonly faults: readonly string[];
 }
-
-const keyOf = (event: { at: string; eventId: EventId; author: AuthorId }): SourceKey => ({ at: event.at, eventId: event.eventId, author: event.author });
-
-/** Canonical order: by `at`, then event ID, then author. */
-export function compareKeys(a: SourceKey, b: SourceKey): number {
-  return cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author);
-}
-
-const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The profile of a relationship, empty when nothing was lifted for it. */
 export function profileOf(profiles: ReadonlyMap<RelationshipId, Profile>, relationshipId: RelationshipId): Profile {

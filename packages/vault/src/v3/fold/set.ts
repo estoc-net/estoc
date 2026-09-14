@@ -114,6 +114,18 @@ export class VaultEventSet {
   }
 }
 
+/** The complete canonical key of an event: what orders it among others. */
+export type SourceKey = { readonly at: string; readonly eventId: EventId; readonly author: AuthorId };
+
+export const keyOf = (event: { at: string; eventId: EventId; author: AuthorId }): SourceKey => ({ at: event.at, eventId: event.eventId, author: event.author });
+
+/** Canonical order: by `at`, then event ID, then author. */
+export function compareKeys(a: SourceKey, b: SourceKey): number {
+  return cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author);
+}
+
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 /** The last of `events` in canonical order, or null: what a latest-wins value is. */
 export function latest<E extends Event>(events: Iterable<E>): E | null {
   let best: E | null = null;

@@ -141,7 +141,7 @@ export {
 
 export { FROM_PRIOR_ALG, type FromPriorClaims, type VerifiedFromPrior, type PinnedResolution, signFromPrior, fromPriorClaims, verifyFromPrior } from "./from-prior.js";
 
-export { VaultEventSet, type InvalidVaultEvent, type Resolved, latest, groupBy, samePayload } from "./fold/set.js";
+export { VaultEventSet, type InvalidVaultEvent, type Resolved, type SourceKey, latest, groupBy, samePayload, keyOf, compareKeys } from "./fold/set.js";
 export { type AuthorActivity, foldAuthors, foldLabel } from "./fold/author.js";
 export {
   type KeyCheck,
@@ -184,7 +184,39 @@ export {
   foldRelationshipsVerified,
 } from "./fold/relationships.js";
 export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
-export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";
+export {
+  type PeerDidSeed,
+  type ContactDecisions,
+  type RelationshipStanding,
+  type AssignedRelationship,
+  type ThreadEntry,
+  type Diagnostic,
+  type ContactView,
+  type ProblemReport,
+  type ContactViewInputs,
+  type ContactViewOptions,
+  foldContacts,
+  foldContactViews,
+  foldDiagnostics,
+  readProblemReports,
+} from "./fold/contacts.js";
+export {
+  type ReceiptKey,
+  type MessageKind,
+  type InboundIntent,
+  type Observation,
+  type ExecutionStatus,
+  type Execution,
+  type AnonymousMessage,
+  type ReceiptConflict,
+  type InboundFold,
+  PROBLEM_REPORT,
+  EMPTY_DOCUMENT_CID,
+  compareOrdinals,
+  compareReceiptKeys,
+  foldInbound,
+  ackTargets,
+} from "./fold/inbound.js";
 export { type Membership, type Package, type Outcome, type Work, type Outbound, type OutboundFold, type OutboundFoldOptions, foldOutbound } from "./fold/outbound.js";
 export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, heldRoots, readState } from "./fold/held.js";
-export { type SourceKey, type NameClaim, type Share, type Profile, compareKeys, foldProfiles, profileOf } from "./fold/profile.js";
+export { type NameClaim, type Share, type Profile, foldProfiles, profileOf } from "./fold/profile.js";

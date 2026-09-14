@@ -223,6 +223,52 @@
   ordered by their earliest event, never by the lift, and a lift whose
   source is missing or unscoped waits while one whose source is
   anonymous, elsewhere, contradicting or of another type is a fault.
+- **The inbound fold and the contact view**. `foldInbound`
+  (`fold/inbound.ts`) reads every `message.in` into an observation
+  with its receipt key, the exact integer ordinal then the author, and
+  the executions the observations derive: one wire ID in one
+  relationship is one execution and the logical message, the
+  observations of every group scoped there at whatever local key each
+  arrived and under whatever peer key the sender used, so a repack or a
+  verified rotation converges on one; its intent is proven by every
+  observation whose own row is scoped there, two that disagree
+  contradicting the execution whatever their groups later wait for or
+  contradict, else one complete group completes it, one waiting defers
+  it and groups that all contradict conflict it; a complete execution
+  is classified — application input, or a pure acknowledgment, an
+  address notification whose proof a transition validated, an Empty or
+  ping response in a thread an outbound of the relationship opened, a
+  no-response error, or a control type that fails its predicate, which
+  is neither application input nor executable — and carries its first
+  receipt key and earliest observation; anonymous groups are messages
+  of their own; two events of one author under one ordinal are a
+  receipt conflict that keeps their messages from being fresh
+  acknowledgment targets and changes nothing else; `nextReceiptOrdinal`
+  is one above every ordinal here, erased messages and every author
+  included. `ackTargets` gives the wire IDs a complete carrier may
+  acknowledge, each requested ID that is a complete, conflict-free
+  execution of the carrier's own relationship, in first-receipt order,
+  never by the clock. `foldOutbound` now takes the inbound fold and
+  reads an automatic intent's carrier from its execution, one judgement
+  for both. `foldContactViews` (`fold/contacts.ts`) is what a contact
+  holds through the relationships uniquely assigned to it and nothing
+  else: each with its standing, the ones another contact contests, the
+  latest claimed name and the disclosures of our profile across them,
+  the non-retired local addresses and the current ends, `writeTo` —
+  standing, not contradicted, the contact not deleted, the current
+  local end live and no local transition unjudged — and the ones
+  `useDid` prefers, the thread of complete application messages by
+  earliest observation, control input and anything unresolved left out,
+  and the diagnostics of `foldDiagnostics`: the same-DID key change, an
+  authenticated proof-free observation at one of the relationship's
+  keys from its current peer DID under a document the peer chain does
+  not pin, kept out of the thread and never scoped, and the remote
+  error, a no-response problem report whose parent thread exactly one
+  outbound of the relationship opened, its code shown while its body is
+  here and unerased, ambiguity, absence and erasure each supplying none;
+  `readProblemReports` reads the reports' bodies from the objects
+  beside the fold. `SourceKey`, `keyOf` and `compareKeys` move to
+  `fold/set.ts`.
   The test scene of two vaults is shared by the relationship, outbound,
   held-root and profile tests as `test/v3/fold/scene.ts`.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s

@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 
 import {
   executionId,
+  foldInbound,
   foldOutbound,
   foldRelationships,
   inboundMessageId,
@@ -38,7 +39,7 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function foldWith(set: VaultEventSet, v: Verdicts, resolutionChecks = v.resolutionChecks): Folds {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks });
-  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, { resolutionChecks }) };
+  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks }) };
 }
 
 async function fold(events: readonly Event[], keys: Keys): Promise<Folds> {

@@ -27,8 +27,9 @@ import { InvalidDidDocument, InvalidIdentifier } from "../errors.js";
 import { executionId as executionIdOf, relationshipId as relationshipIdOf } from "../ids.js";
 import { canonicalDidOf } from "../peer-document.js";
 import type { VaultEvent } from "../schema.js";
-import type { Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData, WireMessageId } from "../types.js";
-import type { EvidenceCheck, LocalNode, ObservationGroup, Relationship, RelationshipFold } from "./relationships.js";
+import type { Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData } from "../types.js";
+import type { InboundFold } from "./inbound.js";
+import type { EvidenceCheck, LocalNode, Relationship, RelationshipFold } from "./relationships.js";
 import type { RouteFold } from "./routes.js";
 import { groupBy, type VaultEventSet } from "./set.js";
 
@@ -129,7 +130,7 @@ type Context = {
   packageOwners: ReadonlyMap<PackageId, ReadonlySet<MessageId>>;
   ackers: ReadonlyMap<string, Receipt[]>;
   responses: ReadonlyMap<ExecutionId, readonly MessageId[]>;
-  carriers: Carriers;
+  inbound: InboundFold;
   localEdges: ReadonlyMap<RelationshipId, VaultEvent<"relationship.localTransitioned">[]>;
   peerEdges: ReadonlyMap<RelationshipId, VaultEvent<"relationship.peerTransitioned">[]>;
   /** the keys scoped input in each relationship arrived at, in a group that does not contradict: what confirms a local address */
@@ -138,7 +139,7 @@ type Context = {
 
 const NO_CHECKS: ReadonlyMap<EventId, EvidenceCheck> = new Map();
 
-export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationships: RelationshipFold, options: OutboundFoldOptions = {}): OutboundFold {
+export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationships: RelationshipFold, inbound: InboundFold, options: OutboundFoldOptions = {}): OutboundFold {
   const intents = groupBy(set.of("message.out"), (event) => event.data.messageId);
   const prepared = groupBy(set.of("message.prepared"), (event) => event.data.messageId);
   const retirements = groupBy(set.of("message.packageRetired"), (event) => event.data.messageId);
@@ -186,7 +187,7 @@ export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationship
     packageOwners,
     ackers,
     responses,
-    carriers: carriersOf(set, relationships),
+    inbound,
     localEdges: groupBy(set.of("relationship.localTransitioned"), (event) => event.data.relationshipId),
     peerEdges: groupBy(set.of("relationship.peerTransitioned"), (event) => event.data.relationshipId),
     confirmedKeys,
@@ -507,79 +508,27 @@ function judgePackage(data: VaultData["message.prepared"], relationship: Relatio
 }
 
 /**
- * The evidence of each execution ID under the relationship and wire ID
- * that derive it: the intent of every observation whose own row is
- * scoped there, read from that row alone, and the observation groups
- * deriving it — by their own relationship, or by a scoped row of
- * theirs when the group as a whole has none. Every message ID's wire
- * ID is kept for the intents no group reaches.
- */
-type Carriers = { byExecution: ReadonlyMap<ExecutionId, Carrier>; wires: ReadonlyMap<MessageId, WireMessageId> };
-type Carrier = { relationshipId: RelationshipId; provenIntents: readonly IntentHash[]; groups: readonly ObservationGroup[] };
-type IntentHash = VaultData["message.in"]["intentHash"];
-
-function carriersOf(set: VaultEventSet, relationships: RelationshipFold): Carriers {
-  const wires = new Map<MessageId, WireMessageId>();
-  const drafts = new Map<ExecutionId, { relationshipId: RelationshipId; provenIntents: IntentHash[]; messageIds: Set<MessageId> }>();
-  const draftOf = (relationshipId: RelationshipId, wireMessageId: WireMessageId) => {
-    const executionId = executionIdOf(relationshipId, wireMessageId);
-    let draft = drafts.get(executionId);
-    if (draft === undefined) drafts.set(executionId, (draft = { relationshipId, provenIntents: [], messageIds: new Set() }));
-    return draft;
-  };
-  for (const receipt of set.of("message.in")) {
-    wires.set(receipt.data.messageId, receipt.data.wireMessageId);
-    const scope = relationships.observations.get(receipt.eventId);
-    if (scope?.status !== "scoped") continue;
-    const draft = draftOf(scope.relationshipId, receipt.data.wireMessageId);
-    draft.provenIntents.push(receipt.data.intentHash);
-    draft.messageIds.add(receipt.data.messageId);
-  }
-  for (const [messageId, group] of relationships.groups) {
-    if (group.status === "anonymous" || group.relationshipId === null) continue;
-    draftOf(group.relationshipId, wires.get(messageId)!).messageIds.add(messageId);
-  }
-  const byExecution = new Map<ExecutionId, Carrier>();
-  for (const [executionId, { relationshipId, provenIntents, messageIds }] of drafts) {
-    byExecution.set(executionId, { relationshipId, provenIntents, groups: [...messageIds].sort().map((messageId) => relationships.groups.get(messageId)!) });
-  }
-  return { byExecution, wires };
-}
-
-/**
- * An automatic intent's carrier: the evidence of the intent's
- * execution ID. Every observation whose own row is scoped under the
- * relationship and wire ID deriving it proves the intent it carried,
- * and two that disagree contradict the execution — the peer's prior
- * and successor keys may each have carried the message, and one
- * execution cannot answer two intents — whatever another observation
- * of their groups later waits for or contradicts, and whatever other
- * relationship another observation joins their groups from, since a
- * proven disagreement is not undone by less evidence and a row proves
- * its intent to its own relationship only; an observation whose row
- * is not scoped proves nothing. Short of that, one group deriving the
- * ID must be complete in the intent's own relationship: a carrier
- * scoped elsewhere or in conflict contradicts the intent; one still
- * waiting, or not here, defers it. When no scoped row or group derives
- * the ID, the groups are looked up by the intent's relationship
+ * An automatic intent's carrier: the execution the intent names, read
+ * from the inbound fold — scoped in the intent's own relationship,
+ * else a contradiction; complete, else waiting or in conflict as the
+ * execution is. When no scoped row or group derives the ID, the groups
+ * of the wire ID are looked up under the intent's relationship
  * instead: a group that derives it so but is anonymous, or scoped
  * elsewhere, contradicts the intent, since the intent claims a scope
  * the carrier does not have; one whose scope is not yet known waits.
  */
 function judgeCarrier(intent: MessageOut, context: Context, faults: string[], deferred: string[]): void {
   const executionId = intent.executionId!;
-  const carrier = context.carriers.byExecution.get(executionId);
-  if (carrier !== undefined) {
-    const { relationshipId, provenIntents, groups } = carrier;
-    if (relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${relationshipId}, not ${intent.relationshipId}`);
-    else if (new Set(provenIntents).size > 1) faults.push(`the carrier of execution ${executionId} is ${provenIntents.length} scoped observations that disagree on the intent`);
-    else if (groups.some((group) => group.status === "complete")) return;
-    else if (groups.some((group) => group.status === "incomplete")) deferred.push(`the carrier of execution ${executionId} awaits its evidence`);
-    else faults.push(`the carrier of execution ${executionId} is in conflict: ${(groups.find((group) => group.status === "conflict") as { because: string }).because}`);
+  const execution = context.inbound.executions.get(executionId);
+  if (execution !== undefined) {
+    if (execution.relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${execution.relationshipId}, not ${intent.relationshipId}`);
+    else if (execution.status === "conflict") faults.push(`the carrier of execution ${executionId} ${execution.because}`);
+    else if (execution.status === "incomplete") deferred.push(`the carrier of execution ${executionId} ${execution.because}`);
     return;
   }
-  for (const [messageId, group] of context.relationships.groups) {
-    if (executionIdOf(intent.relationshipId, context.carriers.wires.get(messageId)!) !== executionId) continue;
+  for (const [wireMessageId, messageIds] of context.inbound.groupsByWire) {
+    if (executionIdOf(intent.relationshipId, wireMessageId) !== executionId) continue;
+    const group = context.relationships.groups.get(messageIds[0]!)!;
     if (group.status === "anonymous") faults.push(`the carrier of execution ${executionId} is anonymous`);
     else if (group.relationshipId !== null) faults.push(`the carrier of execution ${executionId} is scoped in ${group.relationshipId}, not ${intent.relationshipId}`);
     else if (group.status === "conflict") faults.push(`the carrier of execution ${executionId} is in conflict: ${group.because}`);

@@ -2,7 +2,7 @@ import type { Event } from "@estoc/event-store/v3";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { foldOutbound, foldProfiles, foldRelationships, inboundMessageId, profileOf, signFromPrior, verifyResolutions, verifyTransitions, VaultEventSet, type Keys, type Profile, type RelationshipId, type VaultData, type WireMessageId } from "../../../src/v3/index.js";
+import { foldInbound, foldOutbound, foldProfiles, foldRelationships, inboundMessageId, profileOf, signFromPrior, verifyResolutions, verifyTransitions, VaultEventSet, type Keys, type Profile, type RelationshipId, type VaultData, type WireMessageId } from "../../../src/v3/index.js";
 import { checksOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
 import { IAT, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
 
@@ -18,7 +18,7 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function profilesWith(set: VaultEventSet, v: Verdicts): ReadonlyMap<RelationshipId, Profile> {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks: v.resolutionChecks });
-  return foldProfiles(set, relationships, foldOutbound(set, routes, relationships, { resolutionChecks: v.resolutionChecks }));
+  return foldProfiles(set, relationships, foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks: v.resolutionChecks }));
 }
 
 async function profile(events: readonly Event[], keys: Keys, R: RelationshipId): Promise<Profile> {

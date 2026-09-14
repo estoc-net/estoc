@@ -2,7 +2,7 @@ import type { Event } from "@estoc/event-store/v3";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { executionId, foldErasures, foldOutbound, foldRelationships, heldRoots, rawCidOfBytes, readState, retainEnvelope, verifyResolutions, VaultEventSet, type Cid, type EventId, type Keys, type MessageId, type PackageId, type VaultData } from "../../../src/v3/index.js";
+import { executionId, foldErasures, foldInbound, foldOutbound, foldRelationships, heldRoots, rawCidOfBytes, readState, retainEnvelope, verifyResolutions, VaultEventSet, type Cid, type EventId, type Keys, type MessageId, type PackageId, type VaultData } from "../../../src/v3/index.js";
 import { AUTHOR, checksOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
 import { automatic, bound, intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
 
@@ -15,7 +15,7 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function heldWith(set: VaultEventSet, v: Verdicts) {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { resolutionChecks: v.resolutionChecks });
-  const outbound = foldOutbound(set, routes, relationships, { resolutionChecks: v.resolutionChecks });
+  const outbound = foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks: v.resolutionChecks });
   return { outbound, erasures: foldErasures(set), held: heldRoots(set, outbound) };
 }
 
