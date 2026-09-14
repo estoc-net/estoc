@@ -1,5 +1,5 @@
 /**
- * object-share/1.0, the giving side (docs/object-share.md §7–9): what a
+ * object-share/1.0, the giving side: what a
  * share of ours is made of, and the package road past `maxShareBytes` —
  * the closure as one encrypted CAR at our mediator's blob store, and
  * the fetch that fills a received share in. The receiving side is the
@@ -51,10 +51,10 @@ export interface ShareParts {
 }
 
 /**
- * Build a share of `object` (§7): hash its canonical tree, and choose
+ * Build a share of `object`: hash its canonical tree, and choose
  * the road — the whole closure as attachments when it fits
  * `maxShareBytes`, else the skeleton and `index.json` inline and the
- * closure placed as a package (`place`, §8), named in the body. An
+ * closure placed as a package (`place`), named in the body. An
  * object whose skeleton and `index.json` alone do not fit cannot be
  * shared this way. Plain, the share says only that we handed the
  * object over; with `sign` the anchor signs a card, with `card` the
@@ -118,7 +118,7 @@ export interface Placing {
 }
 
 /**
- * The closure as a package at our mediator (§8.1): CAR it, encrypt it
+ * The closure as a package at our mediator: CAR it, encrypt it
  * under a fresh key, `put` its name and size (blob-store/1.0, over the
  * standing link — a ritual, bounded as any), and upload the bytes where
  * the mediator says — unless it has them. Slots are keyed by mediation
@@ -226,7 +226,7 @@ async function attempt(
 
 /**
  * The mediator refused the put: a problem-report carrying one of the
- * three refusal codes docs/blob-store.md defines, the answers that
+ * three refusal codes blob-store/1.0 defines, the answers that
  * settle that no reservation was made and these bytes will not be
  * taken. A cut line, an unknown code — `e.p.blob.` prefixed or not —
  * or any other answer is not this: there the result is unknown, and
@@ -234,7 +234,7 @@ async function attempt(
  */
 export class BlobRefused extends Error {}
 
-/** The codes that settle a put as refused (docs/blob-store.md): exactly these, never the namespace. */
+/** The codes that settle a put as refused, as blob-store/1.0 defines them: exactly these, never the namespace. */
 const REFUSALS = new Set(["e.p.blob.too-large", "e.p.blob.quota", "e.p.blob.refused"]);
 
 /** blob-store/1.0 `put` to our mediator; a blob refusal is `BlobRefused`, any other unexpected answer a plain error — the result unknown. */
@@ -263,8 +263,8 @@ export async function deleteBlob(link: MediatorLink, hash: string): Promise<void
 }
 
 /**
- * Fetch the package a received share names and fill the object in
- * (§8): GET the ciphertext, check it against its name, open it, and
+ * Fetch the package a received share names and fill the object in:
+ * GET the ciphertext, check it against its name, open it, and
  * walk the tree from the message's root over the package's blocks —
  * only blocks the walk reaches (the closure) are kept, put-if-absent
  * in `blobs/`. Resolves to the share as verified afterwards; throws

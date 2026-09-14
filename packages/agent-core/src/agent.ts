@@ -131,7 +131,7 @@ export interface AgentOptions {
   /**
    * The most block bytes `shareObject` will put in one message; default
    * 1 MiB. A bigger closure goes as a package at the mediator's blob
-   * store, the skeleton still inline (see docs/object-share.md §7–8).
+   * store, the skeleton still inline.
    */
   maxShareBytes?: number;
 }
@@ -739,17 +739,17 @@ export class Agent {
   }
 
   /**
-   * Share an object (`docs/object-share.md`) with the contact who wears
+   * Share an object (object-share/1.0) with the contact who wears
    * `did`: hash its canonical tree, keep the blocks in our own `blobs/`,
    * and send one object-share/1.0 message — the root in the body, one
    * attachment per block, and the record's skeleton naming the root, as
-   * `keepShare` names a received share's (vault-events.md §3.1); the
+   * `keepShare` names a received share's; the
    * record's body names the blocks by id, the bytes are in `blobs/` once,
    * and the outbox fills them back in for the wire (`lift.ts`). Two
-   * roads and no round trip (§7): the whole closure goes inline when it
+   * roads and no round trip: the whole closure goes inline when it
    * fits `maxShareBytes`; otherwise the skeleton and `index.json` go
-   * inline and the whole closure goes as one encrypted CAR — a package
-   * (§8) — put at our mediator's blob store under a fresh key, named in
+   * inline and the whole closure goes as one encrypted CAR, a package
+   * put at our mediator's blob store under a fresh key, named in
    * the share by URL, hash and key. An object whose skeleton and
    * `index.json` do not fit cannot be shared this way; one whose
    * mediator keeps no blobs cannot be shared beyond `maxShareBytes`.
@@ -767,8 +767,8 @@ export class Agent {
   }
 
   /**
-   * Fetch the package a received share names and fill the object in
-   * (§8): GET the ciphertext, check it against its name, open it, and
+   * Fetch the package a received share names and fill the object in:
+   * GET the ciphertext, check it against its name, open it, and
    * walk the tree from the message's root over the package's blocks —
    * only blocks the walk reaches are kept, put-if-absent in `blobs/`.
    * Resolves to the share as verified afterwards; throws when the share
@@ -776,7 +776,7 @@ export class Agent {
    * retention ran out), or they do not open — the share is then what it
    * was, a partial object. The download is bounded by `packageTimeoutMs`
    * and reads exactly the `byte_count` the share promised (`share.ts`).
-   * A share whose object the fold says erased (§8.2) is not filled in:
+   * A share whose object the fold says erased is not filled in:
    * the record is asked, not the caller's copy of it.
    */
   async fetchPackage(record: MessageRecord): Promise<VerifiedShare> {
@@ -1000,7 +1000,7 @@ export class Agent {
   }
 
   /**
-   * Forget a contact (§9): the mediator is asked to stop accepting mail
+   * Forget a contact: the mediator is asked to stop accepting mail
    * for the DIDs we minted toward them (best effort — the keys stay
    * burned either way), then the tombstones, the erases, the
    * retirements, the collection (`deleteContact`).

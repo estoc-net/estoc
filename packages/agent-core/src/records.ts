@@ -1,7 +1,7 @@
 /**
  * The records: what the agent hands its callers, each a reading of the
  * fold and nothing a file. A message with its plaintext read back from
- * the blob store (vault-events.md §4, §8.2), a contact with the name it
+ * the blob store, a contact with the name it
  * is shown by, an invitation with the flags a list of them asks for.
  * The fold's `Delivery` is handed over as it is.
  */
@@ -28,7 +28,7 @@ export interface PlainMessage {
 
 // ---- messages --------------------------------------------------------------
 
-/** How the body stands (§8.2): the erase asked first, the blocks second; bytes that are not a plaintext message count as missing. */
+/** How the body stands: the erase asked first, the blocks second; bytes that are not a plaintext message count as missing. */
 export type BodyState = Absence["state"];
 
 export interface MessageRecord {
@@ -39,14 +39,14 @@ export interface MessageRecord {
   direction: "in" | "out";
   pair: ChannelKey;
   /**
-   * Inbound: the DID the envelope proved sent it — the skeleton's `did`
-   * (§3.1), which DID the peer key wore at this message; null for an
+   * Inbound: the DID the envelope proved sent it — the skeleton's
+   * `did`, which DID the peer key wore at this message; null for an
    * anonymous envelope. Outbound: null; the addressee is `msg.to[0]`.
    */
   sender: string | null;
   skeleton: MessageIn | MessageOut;
   /**
-   * The plaintext as stored (vault-events.md §4, `lift.ts`), when the
+   * The plaintext as stored (`lift.ts`), when the
    * body is present: an object-share's blocks are in `blobs/` and its
    * attachments name them by id alone, `data` gone — `verifyShare` over
    * `blobs.getBlock` reads the object, `fillBlocks` makes the wire form.
@@ -54,7 +54,7 @@ export interface MessageRecord {
   msg: PlainMessage | null;
   body: BodyState;
   /**
-   * The roots of this message the fold says erased (§8.2): the body,
+   * The roots of this message the fold says erased: the body,
    * and any attachment lifted out of it. A reader asks this before the
    * blocks — a block may live on in `blobs/` for another message that
    * names it, or until a collection — so an erased share is shown as
@@ -84,7 +84,7 @@ export async function messageRecord(fold: VaultFold, blobs: BlobStore, mid: stri
   };
 }
 
-/** The skeleton's `did` (§3.1): with a peer key, the DID it wore; anonymous, none. */
+/** The skeleton's `did`: with a peer key, the DID it wore; anonymous, none. */
 function senderOf(message: Message): string | null {
   if (message.direction !== "in") {
     return null;
@@ -98,7 +98,7 @@ async function plaintextOf(blobs: BlobStore, message: Message): Promise<PlainMes
   try {
     bytes = await blobs.get(message.skeleton.body);
   } catch {
-    return null; // a root that is not a file: damage, absence to §8.2
+    return null; // a root that is not a file: damage, read as absence
   }
   if (bytes === null) {
     return null; // collected between the two reads

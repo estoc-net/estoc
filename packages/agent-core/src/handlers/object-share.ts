@@ -6,11 +6,11 @@ import { stripBlocks, type Lifted } from "../lift.js";
 import type { PlainMessage } from "../records.js";
 
 /**
- * object-share/1.0 (`docs/object-share.md`): a contact handed us an
+ * object-share/1.0: a contact handed us an
  * object. Nothing to do on arrival: the share was checked and its blocks
  * kept as the message was recorded (`keepShare`) — the skeleton's
  * `attachments` name the root of a share that verified, and nothing of
- * one that did not (vault-events.md §3.1, §4) — so by the time a handler
+ * one that did not — so by the time a handler
  * would see it the object is in `blobs/` as far as it came, by CID, and
  * the rest fills in from wherever it arrives: the package the share
  * names, when the application fetches it, or a later share. The type is
@@ -24,7 +24,7 @@ export const objectShareHandler: ProtocolHandler = {
 
 /**
  * The receiving side, run before the message is recorded — the lifting
- * of a share (`lift.ts`, vault-events.md §4): one that verifies has
+ * of a share (`lift.ts`): one that verifies has
  * every block its tree reaches put in `blobs/`, its root returned for
  * the skeleton's `attachments`, and its plaintext returned as it is
  * stored — those blocks' attachments by id alone, the bytes in the

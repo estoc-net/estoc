@@ -104,7 +104,7 @@ async function contact({ v }: Party, cid: string): Promise<void> {
   await record(v.vault.events, v.fold, drafts.contactCreated({ cid }));
 }
 
-/** Another device's events folded into this one's: what a merge (§10) leaves in the fold. */
+/** Another device's events folded into this one's: what a merge leaves in the fold. */
 async function merged(into: Party, from: Party): Promise<void> {
   for await (const event of from.v.vault.events.scan()) {
     into.v.fold.apply(event);

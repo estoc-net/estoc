@@ -1,5 +1,5 @@
 /**
- * blob-store/1.0 (`docs/blob-store.md`), the client side: ask our own
+ * blob-store/1.0, the client side: ask our own
  * mediator to keep bytes named by hash, then PUT them where it says. It
  * is a mediation service — spoken to the mediator, never a contact — so
  * like mediation and pickup it stays out of the message log.

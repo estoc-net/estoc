@@ -1,8 +1,8 @@
 /**
- * The channel an envelope proves (vault-events.md §3): from the key that
+ * The channel an envelope proves: from the key that
  * opened it and the key that sealed or signed it, the pair, the kind and
  * the peer's full key; from a document, what else the DID lists
- * (`peer.resolved`, §3.1). Pure functions over didcomm-rust's unpack
+ * (`peer.resolved`). Pure functions over didcomm-rust's unpack
  * metadata and the flat `DIDDoc` a resolver hands back — nothing here
  * reads the vault or the network, and no DID is in a pair: a DID is a
  * name a key wears.
@@ -43,18 +43,18 @@ function kidIn(value: string | null | undefined): string | undefined {
 /** A key of ours by the DID it is under — the keyring's `keyOfDid`; null for a DID that is no one of ours. */
 export type KeyOfDid = (did: string) => string | null;
 
-/** What an envelope proves (§3): the pair, the kind, and the keys behind them. */
+/** What an envelope proves: the pair, the kind, and the keys behind them. */
 export interface Proved {
   pair: ChannelKey;
   kind: EnvelopeKind;
   /** the peer's full public key as its document lists it, multibase; present exactly when `peerKey` is */
   peerPublicKey?: string;
-  /** authcrypt: a key that also signed the plaintext, as its document lists it (§3.1 `signedBy`) */
+  /** authcrypt: a key that also signed the plaintext, as its document lists it (`signedBy`) */
   signedBy?: string;
 }
 
 /**
- * The kind of channel an envelope opens (§3): what it proved of its
+ * The kind of channel an envelope opens: what it proved of its
  * sender. Sealed by a key of theirs is `authcrypt`, whether or not a
  * signature rode inside; signed by one and sealed by no one is `signed`,
  * bare or inside anoncrypt; sealed to us by no one and unsigned is
@@ -71,7 +71,7 @@ export function envelopeKind(metadata: Unpacked): EnvelopeKind | null {
 }
 
 /**
- * The DID the proving key wears (§3.1 `did`): `encrypted_from_kid`'s,
+ * The DID the proving key wears (`did`): `encrypted_from_kid`'s,
  * else `sign_from`'s — the document to resolve before `inboundPair`.
  * Null when no key of theirs proved anything.
  */
@@ -87,7 +87,7 @@ export function senderOf(metadata: Unpacked): string | null {
 }
 
 /**
- * The DID of a signature that rode inside authcrypt (§3.1 `signedBy`):
+ * The DID of a signature that rode inside authcrypt (`signedBy`):
  * `sign_from`'s, which may not be the sender's — then its document is
  * the second one to resolve before `inboundPair`. Null when no signature
  * rode inside authcrypt.
@@ -134,8 +134,9 @@ export function inboundPair(metadata: Unpacked, senderDoc: DIDDoc | null, keyOfD
 
 /**
  * The channel an outbound envelope will prove, sealed from `myKey` (null:
- * anonymously) to the first key agreement key `toDoc` lists — §11's
- * working rule. Throws when the document lists none.
+ * anonymously) to the first key agreement key `toDoc` lists — the
+ * working rule while key selection is not negotiated. Throws when the
+ * document lists none.
  */
 export function outboundPair(myKey: string | null, toDoc: DIDDoc): Proved {
   const kid = toDoc.keyAgreement[0];
@@ -147,10 +148,10 @@ export function outboundPair(myKey: string | null, toDoc: DIDDoc): Proved {
 }
 
 /**
- * The `peer.resolved` line for a document seen under `did` on a channel
- * (§3.1): every key it lists that this vault can name, in the document's
+ * The `peer.resolved` line for a document seen under `did` on a
+ * channel: every key it lists that this vault can name, in the document's
  * order, and its first service's uri. Context for the fold, never an
- * edge (§7.1).
+ * edge.
  */
 export function resolvedOf(pair: ChannelKey, did: string, doc: DIDDoc): PeerResolved {
   const keys: string[] = [];
@@ -211,7 +212,7 @@ export function publicKeyOfMethod(method: VerificationMethod): string {
   return key;
 }
 
-/** The peer key (§3) of a verification method: the fingerprint of the key it lists. */
+/** The peer key of a verification method: the fingerprint of the key it lists. */
 export function peerKeyOfMethod(method: VerificationMethod): string {
   return peerKeyOf(publicKeyOfMethod(method));
 }

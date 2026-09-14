@@ -1,5 +1,5 @@
 /**
- * The mediation rituals (vault-events.md §5): what this device settles
+ * The mediation rituals: what this device settles
  * with its mediator over the link, and what it records of it — a grant
  * as `mediation.granted`, a DID the mediator accepted as
  * `did.registered`, a leaving as `did.retired` and `mediation.retired`.
@@ -10,7 +10,7 @@
  * address rides the current routing DID, and the mediator has been told
  * of it — and report what they did. "Ours" here is this device's: the
  * keys it minted (`did.minted` by `self`). Another device's keys are
- * seen in the fold and left alone (§5, §7.3: seen, not adopted) — not
+ * seen in the fold and left alone (seen, not adopted) — not
  * registered under this device's `me`, which would take the mediator's
  * mapping from it, and not retired for riding a route that is not
  * ours.
@@ -31,7 +31,7 @@ const CHANGED = "changed";
 
 // ---- what the fold says -----------------------------------------------------
 
-/** This device's current mediation (§5): the last `mediation.created` without a `mediation.retired`, plus its grant if any. */
+/** This device's current mediation: the last `mediation.created` without a `mediation.retired`, plus its grant if any. */
 export function current(fold: VaultFold, self: string): Mediation | null {
   return fold.device(self)?.mediation ?? null;
 }
@@ -43,7 +43,7 @@ export function routedOf(mediation: Mediation | null): Routed | null {
 
 /**
  * The keys this device minted on the current routing DID that its
- * mediator has not been told of (§7.3: `registered` without this
+ * mediator has not been told of (`registered` without this
  * device) — the public DID, every live key toward a contact, every open
  * invitation — a mint that happened while the mediator could not be
  * told, or was told and the answer never recorded. Another device's

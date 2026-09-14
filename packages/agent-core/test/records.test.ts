@@ -45,7 +45,7 @@ const plain = (id: string, from: string, to: string, content: string): PlainMess
 
 const side = (v: PeerVault) => ({ events: v.vault.events, blobs: v.vault.blobs });
 
-/** `did` is what the envelope proved (§3.1), the inbound flow's to set: with a peer key, its DID; anonymous, none */
+/** `did` is what the envelope proved, the inbound flow's to set: with a peer key, its DID; anonymous, none */
 async function inbound(v: PeerVault, pair: ChannelKey, mid: string, msg: PlainMessage, did?: string): Promise<void> {
   const base = { myKey: pair.myKey, mid, wireId: msg.id, msgType: msg.type, attachments: [] };
   const skeleton: InboundSkeleton = pair.peerKey === null ? { ...base, peerKey: null } : { ...base, peerKey: pair.peerKey, did: did as string };
@@ -101,7 +101,7 @@ describe("v2 records: messages", () => {
     expect(anon?.sender).toBeNull(); // the plaintext's `from` is a claim, not the sender
     expect(anon?.msg?.from).toBe("did:example:claimed");
 
-    // a line that pairs the two the wrong way — a key without its DID, or a DID without a key — is malformed: held, not read (§1)
+    // a line that pairs the two the wrong way — a key without its DID, or a DID without a key — is malformed: held, not read
     const skeleton = { mid: uuid(2), wireId: "w2", msgType: BASIC, bytes: 1, attachments: [] as string[], body: await v.vault.blobs.put(enc.encode("{}")) };
     await record(v.vault.events, v.fold, { type: "message.in", blobs: [skeleton.body], data: { ...PAIR, ...skeleton } });
     await record(v.vault.events, v.fold, { type: "message.in", blobs: [skeleton.body], data: { ...anonymous, ...skeleton, mid: uuid(3), did: "did:example:mallory" } });
@@ -141,7 +141,7 @@ describe("v2 records: messages", () => {
     expect(wrong?.msg).toBeNull();
 
     // what is erased is on the record, attachments included: the object of a share can be
-    // erased with its message kept, and a reader asks the record before the blocks (§8.2)
+    // erased with its message kept, and a reader asks the record before the blocks
     const object = await v.vault.blobs.put(enc.encode("an object's bytes"));
     const kept = await v.vault.blobs.put(enc.encode(JSON.stringify({ id: "w6", type: BASIC, body: { root: object }, attachments: [{ id: object }] })));
     await record(v.vault.events, v.fold, drafts.messageIn({ ...PAIR, mid: uuid(6), wireId: "w6", msgType: BASIC, did: BOB1, bytes: 1, body: kept, attachments: [object] }));

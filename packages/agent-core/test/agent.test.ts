@@ -945,7 +945,7 @@ describe("v2 agent with an outbox", () => {
 
     // restored on another device (same seed, so every key derives): the
     // snapshot carries no `local/`, so the open is a fresh device — whose
-    // own hold (`delivery.held { imported }`, vault-events.md §10) keeps
+    // own hold (`delivery.held { imported }`) keeps
     // the old device's unsent mail out of the outbox
     const other = new MemoryBackend();
     await restoreFolder(other, files);
@@ -972,7 +972,7 @@ describe("v2 agent with an outbox", () => {
     expect(bob.messages.some((m) => m.view.content === "written offline")).toBe(false);
     // by hand it is tried — and refused: the key it was written from is
     // the old device's address, under that device's mediation, and mail
-    // written elsewhere is not this device's to send (vault-events.md §3.2)
+    // written elsewhere is not this device's to send
     expect((await again.agent.retry(stuck.mid)).data).toMatchObject({
       outcome: "failed",
       attempt: 2,

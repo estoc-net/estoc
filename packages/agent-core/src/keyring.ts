@@ -1,5 +1,5 @@
 /**
- * The keys of ours this device holds (vault-events.md §2, §5): every
+ * The keys of ours this device holds: every
  * `did/<id>` the fold says was minted and the `me` of every mediation
  * this device made, retired or not — inbound still opens — each derived
  * from its name and checked against the DID the log recorded. What a
@@ -18,7 +18,7 @@ import type { PeerIdentity } from "./identity/peer.js";
 import type { KeyOfDid } from "./channel.js";
 import type { PeerVault } from "./identity.js";
 
-/** A key of ours in hand: its name (§2) and what the name derives. */
+/** A key of ours in hand: its name and what the name derives. */
 export interface MyIdentity {
   /** `did/<id>` or `mediation/<id>/me` */
   key: string;
@@ -48,8 +48,8 @@ export class Keyring {
   private constructor(private readonly opened: PeerVault) {}
 
   /**
-   * Derive what the fold says is ours: every minted `did/<id>` (§7.3)
-   * and the `me` of every mediation this device made (§5), retired ones
+   * Derive what the fold says is ours: every minted `did/<id>`
+   * and the `me` of every mediation this device made, retired ones
    * included, each checked against the DID the log recorded — a name
    * that derives another DID is skipped, and said so in `skipped`.
    */
@@ -123,7 +123,7 @@ export class Keyring {
     return [...this.byName.values()].flatMap((identity) => identity.secrets);
   }
 
-  /** This device's current mediation (§5): the fold's, read fresh. */
+  /** This device's current mediation: the fold's, read fresh. */
   current(): Mediation | null {
     return this.opened.fold.device(this.opened.vault.self)?.mediation ?? null;
   }
@@ -136,7 +136,7 @@ export class Keyring {
 
   /**
    * The DID of ours the current mediation publishes as a profile
-   * (`did.published { as: "profile" }`, §5): minted under it and its
+   * (`did.published { as: "profile" }`): minted under it and its
    * current routing DID — a later `mediation.granted` moves the route,
    * and a DID whose service names the old one is no address — not
    * retired, held here; the latest minted when there are several. Null
@@ -160,7 +160,7 @@ export class Keyring {
     return null;
   }
 
-  // ---- minting (§5, §6): the event first, the cache after, the ring at once --
+  // ---- minting: the event first, the cache after, the ring at once --
 
   /** This device's arrangement with a mediator: `mediation.created` and its `me` key (`Keys.createMediation`); `me` is it from here on. */
   async createMediation(mediatorDid: string): Promise<{ id: string; me: MyIdentity }> {
@@ -169,14 +169,14 @@ export class Keyring {
     return { id, me: { key, identity } };
   }
 
-  /** A DID for one contact: minted, then `contact.useKey { because: "minted" }` (§6). */
+  /** A DID for one contact: minted, then `contact.useKey { because: "minted" }`. */
   async mintToward(cid: string, mediation: Routed): Promise<MyIdentity> {
     const minted = await this.mint(mediation);
     await record(this.opened.vault.events, this.opened.fold, drafts.contactUseKey({ cid, key: minted.key, because: "minted" }));
     return minted;
   }
 
-  /** A DID for one taker: minted, then `did.published { as: "oob", uses: "one" }` — an open invitation (§7.4). */
+  /** A DID for one taker: minted, then `did.published { as: "oob", uses: "one" }` — an open invitation. */
   async mintInvitation(mediation: Routed, oobId: string, goal: string | null): Promise<MyIdentity> {
     const minted = await this.mint(mediation);
     await record(this.opened.vault.events, this.opened.fold, drafts.didPublished({ key: minted.key, as: "oob", uses: "one", oobId, ...(goal === null ? {} : { goal }) }));

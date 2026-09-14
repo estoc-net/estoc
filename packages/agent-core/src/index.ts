@@ -1,6 +1,6 @@
 /**
  * @estoc/agent-core — the DIDComm v2 agent behind Estoc's clients, over
- * the `.estoc` vault as `@estoc/vault` folds it (docs/vault-events.md).
+ * the `.estoc` vault as `@estoc/vault` folds it.
  *
  * Bottom up: the folder and its events (`@estoc/event-store`,
  * `@estoc/vault`), bound here to did:peer:4 minted from a seed-derived
