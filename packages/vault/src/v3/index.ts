@@ -1,15 +1,9 @@
 /**
- * `@estoc/vault/v3` — the version-3 vault's meaning as a library. What is
- * here so far: the identifier vocabulary, the deterministic identifiers,
- * the canonical public-key value, the schema of every event type, the
- * stored message document, the projections a message is hashed by,
- * the vault's own keys and DIDs, the retained peer document, the
- * `from_prior` proof, and the first folds: the event set they read,
- * the authors and label, the mediations, the routes and local DIDs,
- * the relationships with their chains and address index, the
- * invitations and the contacts' own decisions, the outbound messages
- * with their packages, deliveries and acknowledgments, the held roots
- * and the read state of a root, and the relationship profiles.
+ * `@estoc/vault/v3` — the version-3 vault's meaning as a library: the
+ * identifiers and their vocabulary, the schema of every event type and
+ * of the stored message document, the vault's own keys, DIDs and
+ * proofs, the evidence it keeps of its peers, and the folds that read
+ * an event set into what the vault knows.
  */
 
 export type {

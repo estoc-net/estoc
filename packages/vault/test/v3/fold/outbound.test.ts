@@ -227,14 +227,15 @@ describe("the outbound message", () => {
     scene.events.length = base;
     scene.add("delivery.acknowledged", { messageId: out.data.messageId, localKeyName: onTime.data.localKeyName, peerPublicKey: b0.publicKey, ackMessageId: onTime.data.messageId, ackWireMessageId: onTime.data.wireMessageId });
     m = outboundOf(await fold(scene.events, keys), out.data.messageId);
-    expect(m.deferred).toEqual([expect.stringMatching(/^acknowledgment .* awaits the observations of /)]);
-    expect(m.acknowledged).toBe(false);
+    expect(m.ackDeferred).toEqual([expect.stringMatching(/^acknowledgment .* awaits the observations of /)]);
+    expect(m).toMatchObject({ acknowledged: false, deferred: [], membership: { status: "verified" }, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
     scene.add("message.in", onTime.data, { at: onTime.at });
     m = outboundOf(await fold(scene.events, keys), out.data.messageId);
-    expect(m).toMatchObject({ acknowledged: true, late: false, deferred: [], faults: [] });
+    expect(m).toMatchObject({ acknowledged: true, late: false, deferred: [], faults: [], ackDeferred: [], ackFaults: [] });
     scene.add("delivery.acknowledged", { messageId: out.data.messageId, localKeyName: onTime.data.localKeyName, peerPublicKey: b1.publicKey, ackMessageId: onTime.data.messageId, ackWireMessageId: onTime.data.wireMessageId });
     m = outboundOf(await fold(scene.events, keys), out.data.messageId);
-    expect(m.faults).toEqual([expect.stringMatching(/^acknowledgment .* names no complete witness among the observations of /)]);
+    expect(m.ackFaults).toEqual([expect.stringMatching(/^acknowledgment .* names no complete witness among the observations of /)]);
+    expect(m).toMatchObject({ faults: [], conflict: false, outcome: "prepared", acknowledged: true, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
   });
 
   it("applies an acknowledgment only once the message's membership is verified: a waiting package defers it, a witness in an incomplete group is none", async () => {
@@ -249,7 +250,8 @@ describe("the outbound message", () => {
     m = outboundOf(await fold(scene.events.filter((e) => e !== forPackage), keys), out.data.messageId);
     expect(m.acknowledged).toBe(false);
     expect(m.membership.status).toBe("deferred");
-    expect(m.deferred).toEqual([expect.stringMatching(/^package .* awaits its recipient resolution$/), "1 acknowledging observation awaits the message's membership"]);
+    expect(m.deferred).toEqual([expect.stringMatching(/^package .* awaits its recipient resolution$/)]);
+    expect(m.ackDeferred).toEqual(["1 acknowledging observation awaits the message's membership"]);
 
     const again = resolved(scene, a0.didId, b0);
     receipt(scene, { local: a0.didId, peer: b0, resolution: again, binding, ordinal: 2, wire: ack.data.wireMessageId, overrides: { ack: [out.data.messageId] } });
@@ -319,6 +321,30 @@ describe("the outbound message", () => {
     expect(m.membership).toEqual({ status: "deferred", because: `relationship ${R} does not stand: no root resolution is yet verified against its document` });
   });
 
+  it("waits while a local transition of the relationship is unjudged, since it may move the current end, and repacks once it is applied", async () => {
+    const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
+    const out = intent(scene, R);
+    const fromRoot = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const confirmation = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const jwt = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
+    const edge = localEdge(scene, R, a0.didId, a1.didId, jwt, ref(confirmation));
+    const unconfirmed = scene.events.filter((e) => e !== confirmation);
+    const v = await verdicts(unconfirmed, keys);
+    const check = (f: Folds) => {
+      expect(f.relationships.transitions.get(edge.eventId)!.status).toBe("deferred");
+      const m = outboundOf(f, out.data.messageId);
+      expect(m).toMatchObject({ membership: { status: "verified" }, deferred: [], outcome: "prepared", work: { kind: "none", because: `awaits the local transition ${edge.eventId}, which may move the current local end` } });
+      expect(m.packages.get(fromRoot.data.packageId)!.membership).toEqual({ status: "verified" });
+    };
+    check(foldWith(VaultEventSet.of(unconfirmed), v));
+    expectOrderFree(unconfirmed, (set) => {
+      const f = foldWith(set, v);
+      check(f);
+      return f.outbound;
+    });
+    expect(outboundOf(await fold(scene.events, keys), out.data.messageId).work).toEqual({ kind: "repack", packageIds: [fromRoot.data.packageId] });
+  });
+
   it("repacks from the current end after a local rotation, and a package from the successor carries exactly the transition's proof; ACKs cross the rotation both ways", async () => {
     const { scene, keys, R, a0, a1, a2, b0, root, binding } = await bornAtRoot();
     const out = intent(scene, R);
@@ -332,12 +358,21 @@ describe("the outbound message", () => {
 
     scene.add("message.packageRetired", { messageId: out.data.messageId, packageId: fromRoot.data.packageId, because: "repacked", replacementPackageId: null });
     const atA1 = resolved(scene, a1.didId, b0);
-    const fromSuccessor = packageOf(scene, out, { sender: a1.didId, recipient: b0, resolution: atA1, fromPrior: jwt });
     const proofless = packageOf(scene, out, { sender: a1.didId, recipient: b0, resolution: atA1 });
     m = outboundOf(await fold(scene.events, keys), out.data.messageId);
-    expect(m.work).toEqual({ kind: "submit", packageIds: [fromSuccessor.data.packageId, proofless.data.packageId] });
+    expect(m.packages.get(proofless.data.packageId)!.membership).toEqual({ status: "verified" });
+    expect(m.work).toEqual({ kind: "repack", packageIds: [proofless.data.packageId] });
+    const fromSuccessor = packageOf(scene, out, { sender: a1.didId, recipient: b0, resolution: atA1, fromPrior: jwt });
+    m = outboundOf(await fold(scene.events, keys), out.data.messageId);
+    expect(m.work).toEqual({ kind: "submit", packageIds: [fromSuccessor.data.packageId] });
+    const atSuccessor = receipt(scene, { local: a1.didId, peer: b0, resolution: atA1, binding, ordinal: 2 });
+    m = outboundOf(await fold(scene.events, keys), out.data.messageId);
+    expect(m.work).toEqual({ kind: "submit", packageIds: [proofless.data.packageId, fromSuccessor.data.packageId] });
+    m = outboundOf(await fold(scene.events.filter((e) => e !== atA1), keys), out.data.messageId);
+    expect(m.work.kind).toBe("none");
+    expect(atSuccessor.data.localKeyName).toBe(atA1.data.localKeyName);
 
-    const ackAtRoot = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, overrides: { ack: [out.data.messageId] } });
+    const ackAtRoot = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 3, overrides: { ack: [out.data.messageId] } });
     await expectFoldOrderFree(scene.events, keys, (f) => {
       const message = outboundOf(f, out.data.messageId);
       expect(message.ackWitnesses).toEqual([ackAtRoot.eventId]);

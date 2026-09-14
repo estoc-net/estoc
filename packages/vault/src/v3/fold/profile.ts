@@ -13,7 +13,10 @@
  * that source names nothing while every other still does.
  */
 
+import { compareEvents } from "@estoc/event-store/v3";
+
 import type { AuthorId, EventId, MessageId, RelationshipId } from "../types.js";
+import type { VaultEvent } from "../schema.js";
 import type { OutboundFold } from "./outbound.js";
 import type { RelationshipFold } from "./relationships.js";
 import { groupBy, type VaultEventSet } from "./set.js";
@@ -73,19 +76,19 @@ type ShareDraft = { messageId: MessageId; sourceKey: SourceKey; liftEventIds: Ev
 
 export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold, outbound: OutboundFold): ReadonlyMap<RelationshipId, Profile> {
   const receiptsByMessage = groupBy(set.of("message.in"), (event) => event.data.messageId);
-  const logical = new Map<string, { sourceKey: SourceKey; eventIds: EventId[] }>();
+  const logical = new Map<string, { sourceKey: SourceKey; events: VaultEvent<"message.in">[] }>();
   for (const [messageId, group] of relationships.groups) {
     if (group.status !== "complete") continue;
-    const receipts = receiptsByMessage.get(messageId)!;
+    const receipts = [...receiptsByMessage.get(messageId)!].sort(compareEvents);
     const key = JSON.stringify([group.relationshipId, receipts[0]!.data.wireMessageId, receipts[0]!.data.intentHash]);
     const known = logical.get(key);
-    if (known === undefined) logical.set(key, { sourceKey: keyOf(receipts[0]!), eventIds: [...group.eventIds] });
+    if (known === undefined) logical.set(key, { sourceKey: keyOf(receipts[0]!), events: receipts });
     else {
       if (compareKeys(keyOf(receipts[0]!), known.sourceKey) < 0) known.sourceKey = keyOf(receipts[0]!);
-      known.eventIds.push(...group.eventIds);
+      known.events.push(...receipts);
     }
   }
-  for (const source of logical.values()) source.eventIds.sort();
+  for (const source of logical.values()) source.events.sort(compareEvents);
 
   const claimed = groupBy(set.of("profile.nameClaimed"), (event) => event.data.relationshipId);
   const shared = groupBy(set.of("profile.shared"), (event) => event.data.relationshipId);
@@ -116,7 +119,7 @@ export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold
         const key = JSON.stringify([relationshipId, source.event.data.wireMessageId, source.event.data.intentHash]);
         const logicalSource = logical.get(key)!;
         const draft = claims.get(key);
-        if (draft === undefined) claims.set(key, { sourceKey: logicalSource.sourceKey, sourceEventIds: logicalSource.eventIds, liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
+        if (draft === undefined) claims.set(key, { sourceKey: logicalSource.sourceKey, sourceEventIds: logicalSource.events.map((event) => event.eventId), liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
         else {
           draft.liftEventIds.push(lift.eventId);
           draft.names.add(lift.data.name);

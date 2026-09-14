@@ -160,16 +160,19 @@
   anonymous, and every message ID's observations as a group,
   `groups`, complete when all are scoped in one relationship and agree
   on the intent, so what consumes received evidence reads one
-  judgement.
+  judgement; an observation whose row holds is still a contradiction
+  when the pair it arrived at is in another relationship's history
+  too.
 - **The outbound, held-root and profile folds**. `foldOutbound`
   (`fold/outbound.ts`) groups `message.out` by message ID: equal
   intents are one logical message, different ones a conflict that
   keeps every package and works nothing; the consistent packages, a
   package recorded with two contents, prepared for two messages or
   carrying another intent being a fault; each package's retirement,
-  package-scoped failure and submission; `submitted` once any
-  consistent package has a committed submission, closing the message
-  for good; the first message-scoped failure; the message's membership
+  package-scoped failure and submission; `submitted` once a
+  package of a verified message has a committed submission, closing
+  the message for good, a submission of a package still waiting or
+  contradicting releasing nothing; the first message-scoped failure; the message's membership
   in its relationship — a birth that derives the ID and agrees with
   the binding, a relationship that stands and does not contradict,
   each package sent from a node of the local chain (one a local edge
@@ -185,12 +188,17 @@
   whose `ack` names the message, applied only once membership is
   verified, the earliest as `receiptInstant`, `late` at or after
   `expiresTime`; a `delivery.acknowledged` event checked against the
-  observations it names; the displayed `outcome` in its precedence,
-  and `work` — prepare, submit these packages, repack these, or
-  nothing and why — from the events alone, the clock and the bytes
-  being the worker's. `heldRoots` (`fold/held.ts`) is what collection
+  observations it names, its diagnostics kept apart as `ackDeferred`
+  / `ackFaults` since receipt information changes no work, outcome or
+  retention; the displayed `outcome` in its precedence, and `work` —
+  prepare, submit these packages, repack these, or nothing and why —
+  from the events alone, the clock and the bytes being the worker's:
+  work waits while a local transition of the relationship is still
+  unjudged, and a package from a successor no input has confirmed is
+  submittable only with the transition's proof. `heldRoots` (`fold/held.ts`) is what collection
   keeps: every root an accepted event retains, an unknown or unreadable
-  event's included, less what an erasure released from that message,
+  event's and a resolution's pinned document included, less what an
+  erasure released from that message,
   and a prepared envelope only while `retainEnvelope` — not erased,
   the message neither submitted nor failed, the package neither retired
   nor failed — holds, a disputed or intent-less package held until

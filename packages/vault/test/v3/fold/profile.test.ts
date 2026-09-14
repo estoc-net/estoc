@@ -2,9 +2,9 @@ import type { Event } from "@estoc/event-store/v3";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { foldOutbound, foldProfiles, foldRelationships, inboundMessageId, profileOf, verifyResolutions, verifyTransitions, VaultEventSet, type Keys, type Profile, type RelationshipId, type VaultData, type WireMessageId } from "../../../src/v3/index.js";
+import { foldOutbound, foldProfiles, foldRelationships, inboundMessageId, profileOf, signFromPrior, verifyResolutions, verifyTransitions, VaultEventSet, type Keys, type Profile, type RelationshipId, type VaultData, type WireMessageId } from "../../../src/v3/index.js";
 import { checksOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
-import { bound, intent, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
+import { IAT, bound, intent, localEdge, noObjects, packageOf, peerRotation, receipt, ref, resolved, vaults } from "./scene.js";
 
 type Verdicts = { keyChecks: KeyChecks; resolutionChecks: Awaited<ReturnType<typeof verifyResolutions>>; proofChecks: Awaited<ReturnType<typeof verifyTransitions>> };
 
@@ -121,6 +121,24 @@ describe("the relationship profile", () => {
       `lift ${lifts[4]!.eventId} names message.out as its source`,
     ]);
     expect((await profile(scene.events, keys, R)).claimedName).toBe("F");
+  });
+
+  it("names nothing from a source at a pair another relationship claims", async () => {
+    const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
+    const confirmation = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const jwt = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
+    localEdge(scene, R, a0.didId, a1.didId, jwt, ref(confirmation));
+    const snapshot = resolved(scene, a1.didId, b0);
+    const source = receipt(scene, { local: a1.didId, peer: b0, resolution: snapshot, binding, ordinal: 2 });
+    const lift = scene.add("profile.nameClaimed", { relationshipId: R, sourceEventId: ref(source), name: "Bob" });
+    expect((await profile(scene.events, keys, R)).claimedName).toBe("Bob");
+    const { R: R2 } = bound(scene, a1, b0, snapshot);
+    await expectProfilesOrderFree(scene.events, keys, (profiles) => {
+      const p = profileOf(profiles, R);
+      expect(p.claimedName).toBeNull();
+      expect(p.claims).toEqual([]);
+      expect(p.faults).toEqual([`lift ${lift.eventId} names a source that contradicts: arrived at the pair ${a1.did} / ${b0.did}, which ${R2} also claims`]);
+    });
   });
 
   it("shares only a submitted, verified source, at the earliest of its intent events, whatever the lift or submission order; repacks, duplicates and erasure change nothing", async () => {

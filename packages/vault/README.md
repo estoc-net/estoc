@@ -96,11 +96,13 @@ document of the peer chain with the proof of the transition that
 added its sender — the complete scoped observations that acknowledge
 it, the earliest of them as the receipt and whether that is late, the
 displayed outcome, and the work the runtime may do next, prepare,
-submit, repack or nothing; `heldRoots` / `retainEnvelope` /
-`foldErasures` / `readState`, what collection must keep, a prepared
-envelope until its message is submitted, failed, retired or erased and
-never released by an acknowledgment, a disputed or intent-less package
-held until erased, and how a root reads, erased before absent;
+submit, repack or nothing, a submission closing the message only once
+it is verified and receipt information changing no work; `heldRoots` / `retainEnvelope` /
+`foldErasures` / `readState`, what collection must keep — every root
+an accepted event retains, a prepared envelope until its message is
+submitted, failed, retired or erased and never released by an
+acknowledgment, a disputed or intent-less package held until erased —
+and how a root reads, erased before absent;
 `foldProfiles`, each relationship's claimed name from the latest
 complete scoped inbound source, the names in conflict at one source,
 and the latest submitted disclosure of our own profile, sources ordered

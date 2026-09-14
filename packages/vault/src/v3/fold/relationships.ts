@@ -275,7 +275,7 @@ export function foldRelationships(set: VaultEventSet, routes: RouteFold, options
     for (const node of relationship.localChain) retainedDidIds.add(node.didId);
   }
 
-  const { observations, groups } = foldObservations(set, receipts, receiptsByMessage, relationships, evidences);
+  const { observations, groups } = foldObservations(set, receipts, receiptsByMessage, relationships, evidences, index);
   const pendingClaims = foldPendingClaims(set, routes, relationships, transitions, receipts);
   const pendingByPair = new Map<string, PendingClaim[]>();
   for (const claim of pendingClaims) {
@@ -900,10 +900,13 @@ function candidateOf(receipt: Receipt, set: VaultEventSet, relationships: Readon
 
 /**
  * Every observation judged in the relationship it would be scoped in,
- * against that relationship's final chains, and every message ID's
- * observations taken together.
+ * against that relationship's final chains and the address index, and
+ * every message ID's observations taken together. An observation whose
+ * row holds is still not scoped when the pair it arrived at, its local
+ * DID and the sender's, is in the history of another relationship too:
+ * the evidence then names two relationships, not one.
  */
-function foldObservations(set: VaultEventSet, receipts: readonly Receipt[], receiptsByMessage: ReadonlyMap<string, Receipt[]>, relationships: ReadonlyMap<RelationshipId, Relationship>, evidences: ReadonlyMap<RelationshipId, Evidence>): { observations: Map<EventId, ObservationScope>; groups: Map<MessageId, ObservationGroup> } {
+function foldObservations(set: VaultEventSet, receipts: readonly Receipt[], receiptsByMessage: ReadonlyMap<string, Receipt[]>, relationships: ReadonlyMap<RelationshipId, Relationship>, evidences: ReadonlyMap<RelationshipId, Evidence>, index: ReadonlyMap<string, readonly RelationshipId[]>): { observations: Map<EventId, ObservationScope>; groups: Map<MessageId, ObservationGroup> } {
   const peerEdges = set.of("relationship.peerTransitioned");
   const observations = new Map<EventId, ObservationScope>();
   for (const receipt of receipts) {
@@ -921,7 +924,12 @@ function foldObservations(set: VaultEventSet, receipts: readonly Receipt[], rece
       const { faults, deferred } = observationScope(evidence, receipt, null);
       if (faults.length > 0) observations.set(receipt.eventId, { status: "conflict", relationshipId, because: faults.join("; ") });
       else if (deferred.length > 0) observations.set(receipt.eventId, { status: "deferred", relationshipId, because: deferred.join("; ") });
-      else observations.set(receipt.eventId, { status: "scoped", relationshipId });
+      else {
+        const localDid = relationships.get(relationshipId)!.localChain.find((node) => node.keyNames.keyAgreement === receipt.data.localKeyName || node.keyNames.authentication === receipt.data.localKeyName)!.did;
+        const others = (index.get(pairKey(localDid, receipt.data.did!)) ?? []).filter((other) => other !== relationshipId);
+        if (others.length > 0) observations.set(receipt.eventId, { status: "conflict", relationshipId, because: `arrived at the pair ${localDid} / ${receipt.data.did}, which ${others.join(", ")} also claim${others.length > 1 ? "" : "s"}` });
+        else observations.set(receipt.eventId, { status: "scoped", relationshipId });
+      }
     }
   }
 

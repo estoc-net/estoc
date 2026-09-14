@@ -77,8 +77,6 @@ export async function peerDid(keys: Keys, didId: DidId): Promise<Peer> {
 
 export type Local = { didId: DidId; did: Did; longFormDid: Did };
 
-/** The two vaults of a scene: ours with three communication DIDs on a mediated route, the peer's with four. */
-
 export async function vaults() {
   const keys = await openKeys();
   const peerKeys = await openKeys(OTHER_SEED);

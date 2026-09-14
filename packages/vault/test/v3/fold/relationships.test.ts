@@ -1136,6 +1136,31 @@ describe("observations and groups", () => {
     expect(fold.groups.get(rotation.carrier.data.messageId)!.status).toBe("incomplete");
   });
 
+  it("conflict an observation at a pair another relationship claims, though its own row holds; an observation at a pair only its relationship claims stays scoped", async () => {
+    const { scene, keys, a0, a1, b0 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const { R, bound: binding } = bound(scene, a0, b0, root);
+    const confirmation = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const jwt = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
+    localEdge(scene, R, a0.didId, a1.didId, jwt, ref(confirmation));
+    const snapshot = resolved(scene, a1.didId, b0);
+    const atSuccessor = receipt(scene, { local: a1.didId, peer: b0, resolution: snapshot, binding, ordinal: 2 });
+    let fold = await fold_(scene.events);
+    expect(fold.observations.get(atSuccessor.eventId)).toEqual({ status: "scoped", relationshipId: R });
+
+    const { R: R2 } = bound(scene, a1, b0, snapshot);
+    await expectFoldOrderFree(scene.events, (fold) => {
+      expect(fold.claimants(a1.did, b0.did)).toEqual([R, R2].sort());
+      expect(fold.relationships.get(R)!.conflict).toBe(true);
+      expect(fold.observations.get(confirmation.eventId)).toEqual({ status: "scoped", relationshipId: R });
+      expect(fold.observations.get(atSuccessor.eventId)).toEqual({ status: "conflict", relationshipId: R, because: `arrived at the pair ${a1.did} / ${b0.did}, which ${R2} also claims` });
+      expect(fold.groups.get(atSuccessor.data.messageId)).toEqual({ status: "conflict", relationshipId: R, because: `observation ${atSuccessor.eventId} arrived at the pair ${a1.did} / ${b0.did}, which ${R2} also claims` });
+      expect(dids(fold, R)).toEqual({ local: [a0.didId, a1.didId], peer: [b0.did] });
+    });
+    fold = await fold_(scene.events);
+    expect(fold.groups.get(confirmation.data.messageId)!.status).toBe("complete");
+  });
+
   it("conflict a group whose observations disagree on the intent, or are scoped in two relationships", async () => {
     const { scene, a0, a1, b0, b1 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
@@ -1155,4 +1180,3 @@ describe("observations and groups", () => {
     expect(b1).toBeDefined();
   });
 });
-

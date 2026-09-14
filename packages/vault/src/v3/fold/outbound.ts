@@ -2,17 +2,20 @@
  * The outbound messages: each an intent frozen under one message ID,
  * the packages prepared for it, what became of each — retired, failed,
  * submitted — and the receipts the peer's acknowledgments evidence.
- * Submission is one committed acceptance of any valid package and
- * closes the message for good; a terminal failure closes it too; an
- * acknowledgment is a complete, scoped observation whose explicit
- * `ack` names the message, applied only once the message's own
- * membership in its relationship is verified — birth, binding and
+ * Submission is one committed acceptance of a package of a verified
+ * message and closes the message for good; a terminal failure closes
+ * it too; an acknowledgment is a complete, scoped observation whose
+ * explicit `ack` names the message, applied only once the message's
+ * own membership in its relationship is verified — birth, binding and
  * every package agreeing on the one relationship, each package sent
  * from a node of the local chain to a document of the peer chain. What
  * contradicts is a conflict that stops every automatic step; what is
- * not here yet defers them; the fold reads no clock, so expiry is the
- * worker's to compare against `expiresTime`, and a committed expired
- * failure is what ends the message.
+ * not here yet defers them, a submission included, since a record of
+ * acceptance releases nothing until the package it names is known to
+ * belong. The acknowledgment records are judged apart: they change no
+ * work, outcome or retention. The fold reads no clock, so expiry is
+ * the worker's to compare against `expiresTime`, and a committed
+ * expired failure is what ends the message.
  */
 
 import { canonicalText, compareEvents } from "@estoc/event-store/v3";
@@ -21,8 +24,8 @@ import { InvalidDidDocument, InvalidIdentifier } from "../errors.js";
 import { executionId as executionIdOf, relationshipId as relationshipIdOf } from "../ids.js";
 import { canonicalDidOf } from "../peer-document.js";
 import type { VaultEvent } from "../schema.js";
-import type { Did, EventId, EventReference, ExecutionId, MessageId, MessageOut, PackageId, RelationshipId, VaultData, WireMessageId } from "../types.js";
-import type { EvidenceCheck, ObservationGroup, Relationship, RelationshipFold } from "./relationships.js";
+import type { Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData, WireMessageId } from "../types.js";
+import type { EvidenceCheck, LocalNode, ObservationGroup, Relationship, RelationshipFold } from "./relationships.js";
 import type { RouteFold } from "./routes.js";
 import { groupBy, type VaultEventSet } from "./set.js";
 
@@ -53,9 +56,12 @@ export type Outcome = "conflict" | "submitted" | "failed" | "prepared" | "queued
  * What the active runtime may do next for the message, from the
  * events alone: prepare a first or replacement package, submit one of
  * the packages named (in canonical order), retire the packages named
- * and prepare from the current local end, or nothing, and why. The
- * worker still compares the clock with `expiresTime` and checks that
- * the envelope bytes are here.
+ * and prepare from the current local end, or nothing, and why. Work
+ * waits while a local transition of the relationship is still
+ * unjudged, since it may move the current end; a package from a
+ * successor no input has yet confirmed is submittable only with the
+ * transition's proof. The worker still compares the clock with
+ * `expiresTime` and checks that the envelope bytes are here.
  */
 export type Work =
   | { readonly kind: "none"; readonly because: string }
@@ -71,7 +77,7 @@ export interface Outbound {
   readonly intentEventIds: readonly EventReference<"message.out">[];
   /** every consistent package by ID; a package recorded with two contents, prepared for two messages or carrying another intent is a fault, not a package */
   readonly packages: ReadonlyMap<PackageId, Package>;
-  /** a committed submission names a package here: the message is closed to further preparation and submission */
+  /** a committed submission names a package here and the message's membership is verified: closed to further preparation and submission, its envelopes released */
   readonly submitted: boolean;
   /** the code of the first message-scoped terminal failure in canonical order, null while none */
   readonly failed: string | null;
@@ -89,6 +95,10 @@ export interface Outbound {
   readonly deferred: readonly string[];
   readonly faults: readonly string[];
   readonly conflict: boolean;
+  /** what the acknowledgment records and the acknowledging observations still wait for: receipt information only */
+  readonly ackDeferred: readonly string[];
+  /** an acknowledgment record no observation witnesses: receipt information only */
+  readonly ackFaults: readonly string[];
 }
 
 export interface OutboundFold {
@@ -118,6 +128,8 @@ type Context = {
   carriers: Carriers;
   localEdges: ReadonlyMap<RelationshipId, VaultEvent<"relationship.localTransitioned">[]>;
   peerEdges: ReadonlyMap<RelationshipId, VaultEvent<"relationship.peerTransitioned">[]>;
+  /** the keys scoped input in each relationship arrived at, in a group that does not contradict: what confirms a local address */
+  confirmedKeys: ReadonlyMap<RelationshipId, ReadonlySet<KeyName>>;
 };
 
 const NO_CHECKS: ReadonlyMap<EventId, EvidenceCheck> = new Map();
@@ -153,6 +165,14 @@ export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationship
     else ids.add(messageId);
   }
   const responses = new Map<ExecutionId, readonly MessageId[]>([...selected].map(([executionId, ids]) => [executionId, [...ids].sort()]));
+  const confirmedKeys = new Map<RelationshipId, Set<KeyName>>();
+  for (const receipt of set.of("message.in")) {
+    const scope = relationships.observations.get(receipt.eventId);
+    if (scope === undefined || scope.status !== "scoped" || relationships.groups.get(receipt.data.messageId)?.status === "conflict") continue;
+    const keys = confirmedKeys.get(scope.relationshipId);
+    if (keys === undefined) confirmedKeys.set(scope.relationshipId, new Set([receipt.data.localKeyName]));
+    else keys.add(receipt.data.localKeyName);
+  }
 
   const context: Context = {
     set,
@@ -165,6 +185,7 @@ export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationship
     carriers: carriersOf(set, relationships),
     localEdges: groupBy(set.of("relationship.localTransitioned"), (event) => event.data.relationshipId),
     peerEdges: groupBy(set.of("relationship.peerTransitioned"), (event) => event.data.relationshipId),
+    confirmedKeys,
   };
 
   const outbounds = new Map<MessageId, Outbound>();
@@ -237,7 +258,6 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     const draft = packageNamed(event.data.packageId, "a submission");
     if (draft !== null) draft.submitted = true;
   }
-  const submitted = [...drafts.values()].some((draft) => draft.submitted);
 
   const relationship = intent === null ? undefined : context.relationships.relationships.get(intent.relationshipId);
   const packages = judgeMembership(intent, relationship, drafts, context, faults, deferred);
@@ -249,16 +269,18 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     judgeCarrier(intent, context, faults, deferred);
   }
   const membership: Membership = faults.length > 0 ? { status: "conflict", because: faults.join("; ") } : deferred.length > 0 ? { status: "deferred", because: deferred.join("; ") } : { status: "verified" };
+  const submitted = membership.status === "verified" && [...packages.values()].some((pkg) => pkg.submitted);
 
+  const ackFaults: string[] = [];
+  const ackDeferred: string[] = [];
   for (const event of events.acknowledgments) {
     const witness = witnessOf(context, messageId, event.data);
-    if (witness === "none") faults.push(`acknowledgment ${event.eventId} names no complete witness among the observations of ${event.data.ackMessageId}`);
-    else if (witness === "unknown") deferred.push(`acknowledgment ${event.eventId} awaits the observations of ${event.data.ackMessageId}`);
+    if (witness === "none") ackFaults.push(`acknowledgment ${event.eventId} names no complete witness among the observations of ${event.data.ackMessageId}`);
+    else if (witness === "unknown") ackDeferred.push(`acknowledgment ${event.eventId} awaits the observations of ${event.data.ackMessageId}`);
   }
-
   const candidates = context.ackers.get(messageId) ?? [];
   const ackWitnesses = intent === null || membership.status !== "verified" ? [] : candidates.filter((receipt) => isWitness(context.relationships, receipt, intent.relationshipId)).sort(compareEvents);
-  if (candidates.length > 0 && membership.status === "deferred") deferred.push(`${candidates.length} acknowledging observation${candidates.length > 1 ? "s await" : " awaits"} the message's membership`);
+  if (candidates.length > 0 && membership.status === "deferred") ackDeferred.push(`${candidates.length} acknowledging observation${candidates.length > 1 ? "s await" : " awaits"} the message's membership`);
   const acknowledged = ackWitnesses.length > 0;
   const receiptInstant = acknowledged ? ackWitnesses[0]!.at : null;
   const late = acknowledged && intent !== null && intent.expiresTime !== null && Date.parse(receiptInstant!) >= intent.expiresTime * 1000;
@@ -283,6 +305,8 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     deferred,
     faults,
     conflict,
+    ackDeferred,
+    ackFaults,
   };
 }
 
@@ -477,13 +501,22 @@ function workOf(intent: MessageOut | null, relationship: Relationship | undefine
   if (submitted) return { kind: "none", because: "submitted" };
   if (failed !== null) return { kind: "none", because: `terminal failure: ${failed}` };
   if (deferred.length > 0) return { kind: "none", because: `awaits evidence: ${deferred.join("; ")}` };
+  const unjudged = (context.localEdges.get(intent.relationshipId) ?? []).filter((edge) => context.relationships.transitions.get(edge.eventId)?.status === "deferred");
+  if (unjudged.length > 0) return { kind: "none", because: `awaits the local transition${unjudged.length > 1 ? "s" : ""} ${unjudged.map((edge) => edge.eventId).join(", ")}, which may move the current local end` };
   const active = [...packages.values()].filter((pkg) => pkg.active);
   const current = relationship?.currentLocalDidId ?? (relationship === undefined || relationship.bindingEventIds.length === 0 ? (intent.birth?.localDidId ?? null) : null);
   if (current === null) return { kind: "none", because: "no current local end" };
   const entity = context.routes.dids.get(current);
   if (entity === undefined || !entity.live) return { kind: "none", because: `the current local DID ${current} is not live` };
   if (active.length === 0) return { kind: "prepare" };
-  const submittable = active.filter((pkg) => pkg.membership.status === "verified" && pkg.data.senderDidId === current).map((pkg) => pkg.packageId);
+  const node = relationship?.localChain.find((node) => node.didId === current);
+  const proofRequired = node !== undefined && !confirmed(node, context.confirmedKeys.get(intent.relationshipId));
+  const submittable = active.filter((pkg) => pkg.membership.status === "verified" && pkg.data.senderDidId === current && (pkg.data.fromPrior !== null || !proofRequired)).map((pkg) => pkg.packageId);
   if (submittable.length > 0) return { kind: "submit", packageIds: submittable };
   return { kind: "repack", packageIds: active.map((pkg) => pkg.packageId) };
+}
+
+/** Is a node of the local chain confirmed: the root always, a successor once scoped input arrived at one of its keys. */
+function confirmed(node: LocalNode, keys: ReadonlySet<KeyName> | undefined): boolean {
+  return node.edgeEventIds.length === 0 || (keys !== undefined && (keys.has(node.keyNames.keyAgreement) || keys.has(node.keyNames.authentication)));
 }

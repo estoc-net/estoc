@@ -39,16 +39,17 @@ describe("held roots", () => {
     const first = intent(scene, R, { bodyCid: body, attachmentCids: [attachment] });
     const second = intent(scene, R, { bodyCid: body });
     const inbound = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1, overrides: { bodyCid: attachment } });
+    const document = root.data.documentCid;
     let roots = await held(scene.events, keys);
-    expect(roots).toEqual(new Set([body, attachment]));
+    expect(roots).toEqual(new Set([document, body, attachment]));
 
-    scene.add("message.erased", { messageId: first.data.messageId, dropCids: [body, attachment], because: "user" });
+    scene.add("message.erased", { messageId: first.data.messageId, dropCids: [body, attachment, document], because: "user" });
     roots = await held(scene.events, keys);
-    expect(roots).toEqual(new Set([body, attachment]));
+    expect(roots).toEqual(new Set([document, body, attachment]));
     scene.add("message.erased", { messageId: second.data.messageId, dropCids: [body], because: "contact-deleted" });
     const v = await verdicts(scene.events, keys);
     const { erasures } = heldWith(VaultEventSet.of(scene.events), v);
-    expect(heldWith(VaultEventSet.of(scene.events), v).held).toEqual(new Set([attachment]));
+    expect(heldWith(VaultEventSet.of(scene.events), v).held).toEqual(new Set([document, attachment]));
     expect(readState(erasures, first.data.messageId, body, true)).toBe("erased");
     expect(readState(erasures, inbound.data.messageId, attachment, true)).toBe("available");
     expect(readState(erasures, inbound.data.messageId, attachment, false)).toBe("missing");
@@ -56,19 +57,62 @@ describe("held roots", () => {
 
     scene.add("message.erased", { messageId: inbound.data.messageId, dropCids: [attachment], because: "user" });
     await expectOrderFree(scene.events, (set) => heldWith(set, v).held);
-    expect(await held(scene.events, keys)).toEqual(new Set());
+    expect(await held(scene.events, keys)).toEqual(new Set([document]));
   });
 
   it("hold the roots of an event of an unknown type and of one whose payload does not read, whatever erasures say", async () => {
-    const { scene, keys, R } = await bornAtRoot();
+    const { scene, keys, R, root } = await bornAtRoot();
     const foreign = rawCidOfBytes(new Uint8Array([9]));
     const broken = rawCidOfBytes(new Uint8Array([10]));
     scene.events.push({ eventId: uuidv7() as EventId, at: "2026-09-13T00:00:00.000Z", author: AUTHOR, type: "message.future", roots: [foreign], data: {} });
     const messageId = uuidv7() as MessageId;
     scene.events.push({ eventId: uuidv7() as EventId, at: "2026-09-13T00:00:01.000Z", author: AUTHOR, type: "message.out", roots: [broken], data: { messageId } });
     scene.add("message.erased", { messageId, dropCids: [broken, foreign], because: "user" });
-    expect(await held(scene.events, keys)).toEqual(new Set([foreign, broken]));
+    expect(await held(scene.events, keys)).toEqual(new Set([root.data.documentCid, foreign, broken]));
     expect(R).toBeDefined();
+  });
+
+  it("releases an envelope only by a submission of a verified message: a package outside the history, one awaiting its resolution, or an intent in conflict keeps it held", async () => {
+    const { scene, keys, R, a0, a2, b0, root } = await bornAtRoot();
+    const outside = intent(scene, R);
+    const fromOutside = packageOf(scene, outside, { sender: a2.didId, recipient: b0, resolution: resolved(scene, a2.didId, b0) });
+    scene.add("delivery.submitted", { messageId: outside.data.messageId, packageId: fromOutside.data.packageId });
+    const waiting = intent(scene, R);
+    const forWaiting = resolved(scene, a0.didId, b0);
+    const awaitingResolution = packageOf(scene, waiting, { sender: a0.didId, recipient: b0, resolution: forWaiting });
+    scene.add("delivery.submitted", { messageId: waiting.data.messageId, packageId: awaitingResolution.data.packageId });
+    const disputed = intent(scene, R);
+    const ofDisputed = packageOf(scene, disputed, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.add("delivery.submitted", { messageId: disputed.data.messageId, packageId: ofDisputed.data.packageId });
+    intent(scene, R, { messageId: disputed.data.messageId, bodyCid: rawCidOfBytes(new Uint8Array([3])) });
+    const events = scene.events.filter((event) => event !== forWaiting);
+    const v = await verdicts(events, keys);
+    const check = (folds: ReturnType<typeof heldWith>) => {
+      const cases = [
+        [outside, fromOutside, "conflict", "conflict"],
+        [waiting, awaitingResolution, "deferred", "prepared"],
+        [disputed, ofDisputed, "conflict", "conflict"],
+      ] as const;
+      for (const [out, pkg, membership, outcome] of cases) {
+        const message = folds.outbound.outbounds.get(out.data.messageId)!;
+        expect(message.packages.get(pkg.data.packageId)!.submitted).toBe(true);
+        expect(message).toMatchObject({ submitted: false, outcome, membership: { status: membership }, work: { kind: "none" } });
+        expect(folds.held.has(pkg.data.envelopeCid)).toBe(true);
+      }
+    };
+    check(heldWith(VaultEventSet.of(events), v));
+    await expectOrderFree(events, (set) => {
+      const folds = heldWith(set, v);
+      check(folds);
+      return folds.held;
+    });
+
+    const completed = await verdicts(scene.events, keys);
+    const folds = heldWith(VaultEventSet.of(scene.events), completed);
+    expect(folds.outbound.outbounds.get(waiting.data.messageId)).toMatchObject({ submitted: true, outcome: "submitted" });
+    expect(folds.held.has(awaitingResolution.data.envelopeCid)).toBe(false);
+    expect(folds.held.has(fromOutside.data.envelopeCid)).toBe(true);
+    expect(folds.held.has(ofDisputed.data.envelopeCid)).toBe(true);
   });
 
   it("retain a prepared envelope until submission, retirement, terminal failure or erasure; an acknowledgment releases nothing", async () => {
