@@ -12,8 +12,7 @@
  *
  * The wire behaviour itself — the DID shapes, second timestamps, the
  * WebSocket ritual, `return_route` on every request — is what mediator-ts
- * pins in its demo-interop test. Moved from the v1 agent as it was, the
- * trace written through `AgentTrace`.
+ * pins in its demo-interop test.
  */
 
 import type { DIDDoc, Secret } from "@estoc/did-peer";
@@ -25,6 +24,14 @@ import { envelopeHeader } from "./protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "./protocol/mediation.js";
 import { senderOf } from "./channel.js";
 import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
+
+/** What came back over the line to the mediator was not sealed by the mediator to the key it knows us by: whatever it says, it is not the mediator's answer. */
+export class UnverifiedReply extends Error {
+  constructor(reason: string) {
+    super(`the reply was not sealed by the mediator to us: ${reason}`);
+    this.name = "UnverifiedReply";
+  }
+}
 
 export interface LinkOptions {
   didcomm: DidcommApi;
@@ -319,8 +326,9 @@ export class MediatorLink {
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const signal = AbortSignal.timeout(this.timeoutMs);
-    const message = plainMessage(type, this.me().did, this.mediatorDid, body);
-    const { packed, seal } = await bounded(signal, () => this.pack(message));
+    const me = this.me().did;
+    const message = plainMessage(type, me, this.mediatorDid, body);
+    const { packed, seal } = await bounded(signal, () => this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, me));
     const endpoint = this.http();
     const out = await bounded(signal, () => this.traceOut("http", endpoint, packed, { type }));
     await bounded(signal, () => this.traceSeal(seal, out, message));
@@ -336,8 +344,32 @@ export class MediatorLink {
     const opened = await bounded(signal, () => this.unpack(text));
     opened.open.parent = await noting;
     await this.noted(signal, () => this.noteOpen(opened));
+    await this.fromMediator(opened, me);
     this.noteRitual(opened);
     return opened;
+  }
+
+  /**
+   * What the mediator sends down the line — a ritual's answer, a
+   * delivery — counts only when the envelope proves it: sealed by the
+   * mediator's key, authenticated, to the key of ours the request went
+   * out from. A document that merely unpacks proves nothing about who
+   * wrote it; one from another key, anonymous, or sealed to another
+   * key of ours is noted (`envelope.rejected`) and refused, whatever
+   * it says.
+   */
+  private async fromMediator(opened: Opened, me: string | null): Promise<void> {
+    const { metadata, sender, recipient } = opened;
+    const reason = !metadata.encrypted || metadata.anonymous_sender || !metadata.authenticated || sender === null
+      ? "not authenticated encryption"
+      : sender !== this.mediatorDid
+        ? `sealed by ${sender}`
+        : me === null || recipient !== me
+          ? `sealed to ${recipient ?? "no key of ours"}`
+          : null;
+    if (reason === null) return;
+    await this.note("envelope", "envelope.rejected", { parent: opened.eid, reason });
+    throw new UnverifiedReply(reason);
   }
 
   /**
@@ -389,10 +421,12 @@ export class MediatorLink {
     const socket = new this.WebSocketCtor(uri);
     this.socket = socket;
 
+    let me: string | null = null;
     socket.onopen = async () => {
       try {
-        const plain = plainMessage(LIVE_DELIVERY_CHANGE, this.me().did, this.mediatorDid, { live_delivery: true });
-        const { packed, seal } = await this.pack(plain);
+        me = this.me().did;
+        const plain = plainMessage(LIVE_DELIVERY_CHANGE, me, this.mediatorDid, { live_delivery: true });
+        const { packed, seal } = await this.seal({ ...plain, return_route: "all" } as IMessage, this.mediatorDid, me);
         socket.send(packed);
         await this.traceSeal(seal, await this.traceOut("ws", uri, packed, { type: plain.type }), plain);
       } catch (err) {
@@ -414,6 +448,12 @@ export class MediatorLink {
         return;
       }
       await this.noteOpen(opened);
+      try {
+        await this.fromMediator(opened, me);
+      } catch (err) {
+        this.log(`a socket frame was dropped: ${messageOf(err)}`);
+        return;
+      }
       this.noteRitual(opened);
       try {
         await onFrame(opened);

@@ -24,6 +24,17 @@
   disclosed only once its registration is verified, an `oob` disclosure
   carried by an invitation with the long form. The shared protocol
   constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
+- **The mediator's word is only what it sealed.** Both links, the v2
+  `MediatorLink` and the v3 one, accept a ritual's answer or a socket
+  frame only when the envelope was authenticated encryption from the
+  mediator's key to the key of ours the request went out from; a
+  plaintext, an anonymous envelope, one sealed by another key or to
+  another key of ours is refused with `UnverifiedReply` (an HTTP reply)
+  or dropped with a log line (a socket frame), noted as
+  `envelope.rejected`. The v3 link is one arrangement's for its life
+  (`me` is its DID, not a callback), and the v3 mediation procedures
+  refuse a link speaking as another arrangement's identity
+  (`WrongAccount`), even toward the same mediator.
 - **A share's blocks are in the vault once.** A recorded object-share —
   received (`keepShare`) or sent (`Agent.shareObject`, any `send` naming
   `roots`) — keeps its block attachments by id alone: the `data` is gone

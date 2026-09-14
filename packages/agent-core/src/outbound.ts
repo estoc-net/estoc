@@ -10,12 +10,10 @@
  * `delivery.attempted` (§3.1); one held is left alone unless named, and
  * one on a channel since frozen (§3.2) is not sent from it.
  *
- * Moved from the v1 agent — compose, attachFromPrior, ensurePairwise,
- * logOutbound, deliverToContact, drainOutbox, attemptDelivery, retry,
- * flush. What changed: which key we write from is the contact's
- * `keys` (a `contact.useKey`, §6), which DID they know us by is
- * `addressedAs` and the thread, all folds; and an attempt is an event
- * on the message's channel, not a line in a deliveries file.
+ * Which key we write from is the contact's `keys` (a `contact.useKey`),
+ * which DID they know us by is `addressedAs` and the thread, all folds;
+ * and an attempt is an event on the message's channel, not a line in a
+ * deliveries file.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";

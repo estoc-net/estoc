@@ -47,6 +47,8 @@ export interface Party extends Fresh {
   ring: Keyring;
   trace: AgentTrace;
   link: MediatorLink;
+  /** what `link` was built from: another link over the same account, or one speaking as another, is `new MediatorLink({ ...linkOptions, ... })` */
+  linkOptions: LinkOptions;
   log: string[];
   /** the fetch fails with this while set: the mediator out of reach */
   offline: { reason: string | null };
@@ -61,20 +63,21 @@ export async function party(mediator: FakeMediator, fill = 1, over: Partial<Link
   const trace = await AgentTrace.open(fresh.runtime.local);
   const log: string[] = [];
   const offline: { reason: string | null } = { reason: null };
-  const link = new MediatorLink({
+  const linkOptions: LinkOptions = {
     didcomm,
     resolveDid: resolveDIDCommDoc,
     fetch: (input, init) => (offline.reason === null ? mediator.fetch(input, init) : Promise.reject(new Error(offline.reason))),
     WebSocket: mediator.WebSocket,
     trace,
     secrets: () => ring.secrets(),
-    me: () => created.data.me.did,
+    me: created.data.me.did,
     mediatorDid: mediator.did,
     mediatorDoc: (await resolveDIDCommDoc(mediator.did)) as DIDDoc,
     log: (line) => log.push(line),
     ...over,
-  });
-  return { ...fresh, fold, mediator, mediationId: created.data.mediationId, created, ring, trace, link, log, offline };
+  };
+  const link = new MediatorLink(linkOptions);
+  return { ...fresh, fold, mediator, mediationId: created.data.mediationId, created, ring, trace, link, linkOptions, log, offline };
 }
 
 /** The ring brought up to the vault as it stands now. */

@@ -26,11 +26,8 @@
  * outside the log but the wire ids seen, and those are loaded from it.
  * What an envelope becomes is final once it is handed back — recorded,
  * a duplicate, or ignored, the pickup may acknowledge it; what throws is
- * left for a later pickup. Moved from the v1 agent — processDelivery's
- * inner loop, claimInvitation, applyRotation, ensureContact,
- * handleSpecMessage — with one change under all of it: a contact is a
- * component of events, not a record saved (§6), so every step here
- * appends and asks the fold.
+ * left for a later pickup. A contact is a component of events, not a
+ * record saved, so every step here appends and asks the fold.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";

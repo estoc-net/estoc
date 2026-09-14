@@ -49,3 +49,19 @@ export class Unregistered extends Error {
     this.name = "Unregistered";
   }
 }
+
+/** The link speaks for another arrangement's identity than the one named: a ritual run over it would be recorded against the wrong account. */
+export class WrongAccount extends Error {
+  constructor(expected: string, actual: string) {
+    super(`the link speaks as ${actual}, not the arrangement's identity ${expected}`);
+    this.name = "WrongAccount";
+  }
+}
+
+/** What came back over the line to the mediator was not sealed by the mediator to this account: whatever it says, it is not the mediator's answer. */
+export class UnverifiedReply extends Error {
+  constructor(reason: string) {
+    super(`the reply was not sealed by the mediator to this account: ${reason}`);
+    this.name = "UnverifiedReply";
+  }
+}

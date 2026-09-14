@@ -8,9 +8,9 @@
  * of it. Everything the agent learns is an event in the log before
  * anyone is told: UIs mirror the vault; they are not the record.
  *
- * Moved from the v1 agent. What changed: the state the v1 agent carried
- * — records saved, caches loaded at start, DIDs re-derived by hand — is
- * the fold now, read fresh at every step; the seed stays outside
+ * The agent carries no state of its own — no records saved, no caches
+ * loaded at start, no DIDs re-derived by hand: what the vault says is
+ * the fold, read fresh at every step; the seed stays outside
  * (`openVault` checked it, `Keys` holds it); and what each step means
  * lives in its own module, this class only running them in order. The
  * mediator, too, is an event: a fresh vault has none, `setMediator`

@@ -3,8 +3,29 @@ import { describe, expect, it } from "vitest";
 import { longToShort } from "@estoc/did-peer";
 import { mediationKeyName, scanVault, type Did, type MediationId } from "@estoc/vault/v3";
 
-import { MEDIATE_REQUEST, RECIPIENT_QUERY, RECIPIENT_UPDATE } from "../../src/index.js";
-import { EntityConflict, Unusable, WrongMediator, createDid, createMediation, ensureRoute, establish, reconcile, registered, retireDid, selectMediation } from "../../src/v3/index.js";
+import { Message } from "didcomm-node";
+
+import { resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
+
+import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
+import {
+  EntityConflict,
+  MediatorLink,
+  Unregistered,
+  Unusable,
+  UnverifiedReply,
+  WrongAccount,
+  WrongMediator,
+  createDid,
+  createMediation,
+  disclose,
+  ensureRoute,
+  establish,
+  reconcile,
+  registered,
+  retireDid,
+  selectMediation,
+} from "../../src/v3/index.js";
 import { MEDIATOR_HTTP } from "../fake-mediator.js";
 import { newMediator, party, reloaded } from "./helpers.js";
 
@@ -62,6 +83,70 @@ describe("establishing", () => {
     await p.runtime.close();
     await wrong.runtime.close();
   });
+
+  it("refuses a link speaking as another arrangement's identity, even toward the same mediator", async () => {
+    const mediator = await newMediator();
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+    const mine = await createDid(p.runtime, p.keys, routeId);
+    await reconcile(p.link, p.runtime, p.keys, p.mediationId);
+    const second = await createMediation(p.runtime, p.keys, mediator.did as Did);
+    const seen = mediator.seenTypes.length;
+    await expect(establish(p.link, p.runtime, p.keys, second.data.mediationId)).rejects.toBeInstanceOf(WrongAccount);
+    await expect(reconcile(p.link, p.runtime, p.keys, second.data.mediationId)).rejects.toBeInstanceOf(WrongAccount);
+    expect(mediator.seenTypes).toHaveLength(seen);
+    expect(mediator.granted.has(second.data.me.did)).toBe(false);
+    expect(mediator.recipients.get(mine.minted.did)).toBe(p.created.data.me.did);
+    const fold = await scanVault(p.runtime.vault, p.keys);
+    expect(fold.mediations.mediations.get(second.data.mediationId)?.status).toBe("pending");
+
+    const own = new MediatorLink({ ...p.linkOptions, me: second.data.me.did });
+    await reloaded(p);
+    expect((await establish(own, p.runtime, p.keys, second.data.mediationId)).mediation.status).toBe("usable");
+    expect(mediator.granted.has(second.data.me.did)).toBe(true);
+    await p.runtime.close();
+  });
+
+  it("takes only a reply the mediator sealed to the arrangement's identity: plaintext, anonymous, another sealer and another recipient of ours are refused", async () => {
+    const mediator = await newMediator();
+    const impostor = await newMediator(201, "http://impostor/");
+    const p = await party(mediator);
+    const otherAccount = await createMediation(p.runtime, p.keys, mediator.did as Did);
+    await reloaded(p);
+    const to = p.created.data.me.did;
+    let forge: ((message: IMessage) => Promise<string>) | null = null;
+    const forged = (
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (forge === null) return mediator.fetch(input, init);
+        const message = plainMessage(MEDIATE_GRANT, impostor.did, to, { routing_did: [impostor.did] });
+        return new Response(await forge(message), { status: 200 });
+      }) as typeof fetch
+    );
+    const link = new MediatorLink({ ...p.linkOptions, fetch: forged });
+    const packWith = (secrets: Secret[]) => async (message: IMessage, from: string | null, recipient = to) =>
+      (await new Message(message).pack_encrypted(recipient, from, null, { resolve: resolveDIDCommDoc }, secretsResolverFor(secrets), { forward: false }))[0];
+    const forgeries: Record<string, (message: IMessage) => Promise<string>> = {
+      plaintext: async (message) => JSON.stringify({ ...message, from: mediator.did }),
+      anonymous: (message) => packWith(impostor.secrets)({ ...message, from: mediator.did }, null),
+      "another sealer": (message) => packWith(impostor.secrets)(message, impostor.did),
+      "another recipient": (message) => packWith(mediator.secrets)({ ...message, from: mediator.did, to: [otherAccount.data.me.did] }, mediator.did, otherAccount.data.me.did),
+    };
+    for (const [name, forgery] of Object.entries(forgeries)) {
+      forge = forgery;
+      await expect(establish(link, p.runtime, p.keys, p.mediationId), name).rejects.toBeInstanceOf(UnverifiedReply);
+      expect((await scanVault(p.runtime.vault, p.keys)).mediations.mediations.get(p.mediationId)?.status, name).toBe("pending");
+    }
+    expect((await p.trace.read({ type: "envelope.rejected" })).map((entry) => entry.data["reason"])).toEqual([
+      "not authenticated encryption",
+      "not authenticated encryption",
+      `sealed by ${impostor.did}`,
+      `sealed to ${otherAccount.data.me.did}`,
+    ]);
+    forge = null;
+    expect((await establish(link, p.runtime, p.keys, p.mediationId)).mediation.routingDid).toBe(mediator.did);
+    await p.runtime.close();
+  });
 });
 
 describe("reconciling recipients", () => {
@@ -73,8 +158,7 @@ describe("reconciling recipients", () => {
     const a = await createDid(p.runtime, p.keys, routeId);
     const b = await createDid(p.runtime, p.keys, routeId);
     mediator.recipients.set("did:peer:2.Ez6stale", p.created.data.me.did);
-    let fold = await scanVault(p.runtime.vault, p.keys);
-    const first = await reconcile(p.link, fold, p.mediationId);
+    const first = await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     expect(first.desired.sort()).toEqual([a.minted.did, b.minted.did].sort());
     expect(first.added.sort()).toEqual([a.minted.did, b.minted.did].sort());
     expect(first.removed).toEqual(["did:peer:2.Ez6stale"]);
@@ -82,14 +166,13 @@ describe("reconciling recipients", () => {
     expect([...mediator.recipients.keys()].sort()).toEqual([a.minted.did, b.minted.did].sort());
     expect(mediator.recipients.get(a.minted.did)).toBe(p.created.data.me.did);
 
-    const second = await reconcile(p.link, fold, p.mediationId);
+    const second = await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     expect(second).toMatchObject({ added: [], removed: [], refused: [] });
     expect(second.held.sort()).toEqual([a.minted.did, b.minted.did].sort());
     expect(mediator.seenTypes.filter((type) => type === RECIPIENT_UPDATE)).toHaveLength(1);
 
     await retireDid(p.runtime, p.keys, b.minted.didId, "user");
-    fold = await scanVault(p.runtime.vault, p.keys);
-    const third = await reconcile(p.link, fold, p.mediationId);
+    const third = await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     expect(third.removed).toEqual([b.minted.did]);
     expect([...mediator.recipients.keys()]).toEqual([a.minted.did]);
     expect(mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY)).toHaveLength(4);
@@ -103,7 +186,7 @@ describe("reconciling recipients", () => {
     const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
     const a = await createDid(p.runtime, p.keys, routeId);
     mediator.refuse.add(a.minted.did);
-    const reconciled = await reconcile(p.link, await scanVault(p.runtime.vault, p.keys), p.mediationId);
+    const reconciled = await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     expect(reconciled.refused).toEqual([a.minted.did]);
     expect(reconciled.added).toEqual([]);
     expect(registered(reconciled, a.minted.did)).toBe(false);
@@ -112,7 +195,67 @@ describe("reconciling recipients", () => {
 
   it("needs a usable arrangement", async () => {
     const p = await party(await newMediator());
-    await expect(reconcile(p.link, p.fold, p.mediationId)).rejects.toBeInstanceOf(Unusable);
+    await expect(reconcile(p.link, p.runtime, p.keys, p.mediationId)).rejects.toBeInstanceOf(Unusable);
+    await p.runtime.close();
+  });
+
+  it("pairs each answer with the update it answers: a removal's success is no registration", async () => {
+    const mediator = await newMediator();
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+    const a = await createDid(p.runtime, p.keys, routeId);
+    const answers: Record<string, unknown>[][] = [
+      [{ recipient_did: a.minted.did, action: "remove", result: "success" }],
+      [{ recipient_did: a.minted.did, result: "success" }],
+      [],
+      [
+        { recipient_did: a.minted.did, action: "add", result: "success" },
+        { recipient_did: a.minted.did, action: "add", result: "server_error" },
+      ],
+    ];
+    mediator.intercept = (msg, from) => {
+      if (msg.type !== RECIPIENT_UPDATE) return undefined;
+      return mediator.reply(RECIPIENT_UPDATE_RESPONSE, from as string, { updated: answers.shift() }, msg.id);
+    };
+    while (answers.length > 0) {
+      const reconciled = await reconcile(p.link, p.runtime, p.keys, p.mediationId);
+      expect(reconciled.refused).toEqual([a.minted.did]);
+      expect(registered(reconciled, a.minted.did)).toBe(false);
+      await expect(disclose(p.link, p.runtime, p.keys, a.minted.didId, { as: "oob", uses: "one" })).rejects.toBeInstanceOf(Unregistered);
+    }
+    expect(mediator.recipients.has(a.minted.did)).toBe(false);
+    mediator.intercept = null;
+    expect(registered(await reconcile(p.link, p.runtime, p.keys, p.mediationId), a.minted.did)).toBe(true);
+    await p.runtime.close();
+  });
+
+  it("runs one procedure at a time per account, whichever link, so a reconciliation cannot remove what was disclosed while it waited", async () => {
+    const mediator = await newMediator();
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+    const first = await createDid(p.runtime, p.keys, routeId);
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let queries = 0;
+    mediator.intercept = async (msg) => {
+      if (msg.type === RECIPIENT_QUERY && queries++ === 0) await gate;
+      return undefined;
+    };
+    const firstDisclosure = disclose(p.link, p.runtime, p.keys, first.minted.didId, { as: "oob", uses: "one" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = await createDid(p.runtime, p.keys, routeId);
+    const other = new MediatorLink({ ...p.linkOptions, me: p.created.data.me.did });
+    const secondDisclosure = disclose(other, p.runtime, p.keys, second.minted.didId, { as: "oob", uses: "one" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY)).toHaveLength(2);
+    expect(mediator.recipients.size).toBe(0);
+    release();
+    await Promise.all([firstDisclosure, secondDisclosure]);
+    expect([...mediator.recipients.keys()].sort()).toEqual([first.minted.did, second.minted.did].sort());
+    const fold = await scanVault(p.runtime.vault, p.keys);
+    expect(fold.set.of("did.disclosed")).toHaveLength(2);
     await p.runtime.close();
   });
 });

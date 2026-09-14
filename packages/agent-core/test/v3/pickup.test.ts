@@ -5,7 +5,6 @@ import { resolveDIDCommDoc } from "@estoc/did-peer";
 
 import { BASIC_MESSAGE, PLAIN_TYP, secretsResolverFor, type IMessage } from "../../src/index.js";
 import { Pickup, createDid, ensureRoute, establish, reconcile, type Opened } from "../../src/v3/index.js";
-import { scanVault } from "@estoc/vault/v3";
 import { newMediator, party, reloaded } from "./helpers.js";
 
 const resolver = { resolve: resolveDIDCommDoc };
@@ -25,7 +24,7 @@ describe("pickup over the v3 ring", () => {
     const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
     const { minted } = await createDid(p.runtime, p.keys, routeId);
     await reloaded(p);
-    await reconcile(p.link, await scanVault(p.runtime.vault, p.keys), p.mediationId);
+    await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     const account = p.created.data.me.did;
     mediator.queues.set(account, [
       { id: "q1", packed: await sealedTo(minted.longFormDid, "hello") },

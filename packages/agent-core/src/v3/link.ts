@@ -21,6 +21,8 @@ import type { JsonObject } from "@estoc/event-store/v3";
 import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "../protocol/didcomm.js";
 import { envelopeHeader } from "../protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "../protocol/mediation.js";
+import { UnverifiedReply } from "./errors.js";
+import { sameDid } from "./same-did.js";
 import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
 
 export interface LinkOptions {
@@ -32,8 +34,8 @@ export interface LinkOptions {
   trace: AgentTrace;
   /** every secret this runtime holds: what an envelope may be opened with, whatever key it was sealed to */
   secrets: () => Secret[];
-  /** the DID the mediator knows this vault by — the arrangement's own, its long form; throws when there is none */
-  me: () => string;
+  /** the DID the mediator knows this vault by: the arrangement's own, its long form. A link is one arrangement's for its whole life. */
+  me: string;
   mediatorDid: string;
   /** the mediator's document, resolved by the caller: where `http()` and `ws()` read the endpoints */
   mediatorDoc: DIDDoc;
@@ -152,7 +154,7 @@ export class MediatorLink {
   private readonly WebSocketCtor: typeof WebSocket;
   readonly trace: AgentTrace;
   private readonly secrets: () => Secret[];
-  private readonly me: () => string;
+  readonly me: string;
   private readonly mediatorDoc: DIDDoc;
   private readonly timeoutMs: number;
   private readonly log: (line: string) => void;
@@ -208,7 +210,7 @@ export class MediatorLink {
 
   /** Seal a message from the arrangement's own DID to the mediator, declaring the connection it arrives on as its return route, as messagepickup 3.0 requires of every request. */
   pack(message: IMessage): Promise<Sealed> {
-    return this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, this.me());
+    return this.seal({ ...message, return_route: "all" } as IMessage, this.mediatorDid, this.me);
   }
 
   /**
@@ -282,7 +284,7 @@ export class MediatorLink {
    */
   async exchange(type: string, body: Record<string, unknown>): Promise<Opened> {
     const signal = AbortSignal.timeout(this.timeoutMs);
-    const message = plainMessage(type, this.me(), this.mediatorDid, body);
+    const message = plainMessage(type, this.me, this.mediatorDid, body);
     const { packed, seal } = await bounded(signal, () => this.pack(message));
     const endpoint = this.http();
     const out = await bounded(signal, () => this.traceOut("http", endpoint, packed, { type }));
@@ -297,8 +299,31 @@ export class MediatorLink {
     const opened = await bounded(signal, () => this.unpack(text));
     opened.open.parent = await noting;
     await this.noted(signal, () => this.noteOpen(opened));
+    await this.fromMediator(opened);
     this.noteRitual(opened);
     return opened;
+  }
+
+  /**
+   * What the mediator sends down the line — a ritual's answer, a
+   * delivery — counts only when the envelope proves it: sealed by the
+   * mediator's key, authenticated, to the arrangement's own DID. A
+   * document that merely unpacks proves nothing about who wrote it;
+   * one from another key, anonymous, or sealed to another identity of
+   * ours is noted (`envelope.rejected`) and refused, whatever it says.
+   */
+  private async fromMediator(opened: Opened): Promise<number | undefined> {
+    const { metadata, sender, recipient } = opened;
+    const reason = !metadata.encrypted || metadata.anonymous_sender || !metadata.authenticated || sender === null
+      ? "not authenticated encryption"
+      : !sameDid(sender, this.mediatorDid)
+        ? `sealed by ${sender}`
+        : recipient === null || !sameDid(recipient, this.me)
+          ? `sealed to ${recipient ?? "no key of ours"}`
+          : null;
+    if (reason === null) return undefined;
+    await this.note("envelope", "rejected", { parent: opened.seq, reason });
+    throw new UnverifiedReply(reason);
   }
 
   /**
@@ -344,7 +369,7 @@ export class MediatorLink {
 
     socket.onopen = async () => {
       try {
-        const plain = plainMessage(LIVE_DELIVERY_CHANGE, this.me(), this.mediatorDid, { live_delivery: true });
+        const plain = plainMessage(LIVE_DELIVERY_CHANGE, this.me, this.mediatorDid, { live_delivery: true });
         const { packed, seal } = await this.pack(plain);
         socket.send(packed);
         await this.traceSeal(seal, await this.traceOut("ws", uri, packed, { type: plain.type }), plain);
@@ -365,6 +390,12 @@ export class MediatorLink {
         return;
       }
       await this.noteOpen(opened);
+      try {
+        await this.fromMediator(opened);
+      } catch (err) {
+        this.log(`a socket frame was dropped: ${messageOf(err)}`);
+        return;
+      }
       this.noteRitual(opened);
       try {
         await onFrame(opened);

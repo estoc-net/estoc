@@ -37,9 +37,8 @@ describe("AES256_GCM_HKDF_1MB", () => {
     expect(Math.ceil(sealed.length / SEG)).toBe(Math.ceil((1000 + 40) / (SEG - 16)));
   });
 
-  it("reads a Go-style empty last segment too", async () => {
-    // build one: encrypt an exact fill, then the layout with an extra empty last segment is what Go writes;
-    // decryption treats the final chunk as last either way, so a plaintext that fills exactly decrypts
+  it("a plaintext that fills its segments exactly round-trips as full segments and nothing after them", async () => {
+    // the other layout for the same plaintext, an empty last segment after the full ones, is not built here: no fixture from another implementation is checked in
     const key = freshKey();
     const n = SEG - 40 - 16 + (SEG - 16);
     const sealed = await encryptStream(key, bytes(n), SEG);

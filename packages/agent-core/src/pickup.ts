@@ -16,9 +16,6 @@
  * Every inbound step runs after the one before it — a delivery down the
  * socket, a delivery fetched — so what the handle records is in the
  * order the mail came, whichever way it came.
- *
- * Moved from the v1 agent (drainQueue, processDelivery, enqueueInbound,
- * the socket's frame dispatch), the decisions left to the handle.
  */
 
 import { base64urlToUtf8 } from "@estoc/did-peer";

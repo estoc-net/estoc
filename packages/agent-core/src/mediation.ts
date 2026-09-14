@@ -13,9 +13,7 @@
  * seen in the fold and left alone (§5, §7.3: seen, not adopted) — not
  * registered under this device's `me`, which would take the mediator's
  * mapping from it, and not retired for riding a route that is not
- * ours. Moved from the v1 agent (`establishMediation`,
- * `registerRecipients`, `registerPending`, `leaveMediator`,
- * `rotateStale`), the records now events.
+ * ours.
  */
 
 import { drafts, record, type Mediation, type MyKey, type VaultFold } from "@estoc/vault";

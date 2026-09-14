@@ -37,19 +37,17 @@ import { GOAL_CONNECT, type Invitation } from "../protocol/oob.js";
 import { OOB_INVITATION } from "../protocol/spec.js";
 import { EntityConflict, UnknownEntity, Unregistered, Unusable, WrongMediator } from "./errors.js";
 import type { MediatorLink } from "./link.js";
-import { mediationOf, reconcile, registered } from "./mediation.js";
-import { decide } from "./procedure.js";
+import { mediationOf, reconcileNow, registered } from "./mediation.js";
+import { decide, serially } from "./procedure.js";
 
 export type RouteSpec = { kind: "mediated"; mediationId: MediationId } | { kind: "direct"; endpoint: string };
 
-/** The route as the fold has it; `UnknownEntity` when it has none. */
 export function routeOf(fold: VaultFold, routeId: RouteId): Route {
   const route = fold.routes.routes.get(routeId);
   if (route === undefined) throw new UnknownEntity("route", routeId);
   return route;
 }
 
-/** The DID entity as the fold has it; `UnknownEntity` when it has none. */
 export function didOf(fold: VaultFold, didId: DidId): LocalDidEntity {
   const entity = fold.routes.dids.get(didId);
   if (entity === undefined) throw new UnknownEntity("DID", didId);
@@ -166,8 +164,9 @@ function requireLive(entity: LocalDidEntity): void {
  * `did.disclosed` for a live entity, and the invitation when it is an
  * `oob` one. A mediated address is reconciled with its mediator over
  * `link` first and refused unless the mediator holds it; a direct
- * address needs no link. The reconciliation runs outside the lock,
- * the entity's liveness is read again under it.
+ * address needs no link. The reconciliation and the commit run as the
+ * account's one procedure at a time, the reconciliation outside the
+ * writer lock and the entity's liveness read again under it.
  */
 export async function disclose(link: MediatorLink | null, runtime: VaultRuntime, keys: Keys, didId: DidId, disclosure: Disclosure): Promise<Disclosed> {
   const fold = await scanVault(runtime.vault, keys);
@@ -175,18 +174,27 @@ export async function disclose(link: MediatorLink | null, runtime: VaultRuntime,
   requireLive(entity);
   const created = entity.created as VaultData["did.created"];
   const route = routeOf(fold, created.boundRouteId);
-  if (route.configured?.kind === "mediated") {
-    const mediation = mediationOf(fold, route.configured.mediationId);
-    if (link === null) throw new WrongMediator(mediation.mediatorDid ?? "unknown", "no link");
-    if (!registered(await reconcile(link, fold, mediation.mediationId), created.did)) throw new Unregistered(created.did);
-  }
   const goal = disclosure.goal ?? null;
   const oobId = disclosure.as === "oob" ? (disclosure.oobId ?? uuidv7()) : null;
-  const { events } = await decide(runtime, keys, (fold) => {
-    requireLive(didOf(fold, didId));
-    return [vaultDraft("did.disclosed", { didId, as: disclosure.as, uses: disclosure.uses, oobId, goal })];
-  });
-  return { disclosed: events[0] as VaultEvent<"did.disclosed">, longFormDid: created.longFormDid, invitation: oobId === null ? null : invitationOf(created.longFormDid, oobId, goal) };
+  const commit = (): Promise<VaultEvent<"did.disclosed">> =>
+    decide(runtime, keys, (fold) => {
+      requireLive(didOf(fold, didId));
+      return [vaultDraft("did.disclosed", { didId, as: disclosure.as, uses: disclosure.uses, oobId, goal })];
+    }).then(({ events }) => events[0] as VaultEvent<"did.disclosed">);
+  let disclosed: VaultEvent<"did.disclosed">;
+  if (route.configured?.kind === "mediated") {
+    const { mediationId } = route.configured;
+    if (link === null) throw new WrongMediator(mediationOf(fold, mediationId).mediatorDid ?? "unknown", "no link");
+    disclosed = await serially(runtime, mediationId, async () => {
+      const current = await scanVault(runtime.vault, keys);
+      requireLive(didOf(current, didId));
+      if (!registered(await reconcileNow(link, current, mediationId), created.did)) throw new Unregistered(created.did);
+      return commit();
+    });
+  } else {
+    disclosed = await commit();
+  }
+  return { disclosed, longFormDid: created.longFormDid, invitation: oobId === null ? null : invitationOf(created.longFormDid, oobId, goal) };
 }
 
 /** `did.retired` for an entity, `because`: terminal for new sending, disclosure and births. Already retired, the first retirement is returned and nothing written. */

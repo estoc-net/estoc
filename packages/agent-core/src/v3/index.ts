@@ -10,7 +10,7 @@
  * `protocol/`.
  */
 
-export { EntityConflict, MediatorRefused, UnknownEntity, Unregistered, Unusable, WrongMediator } from "./errors.js";
+export { EntityConflict, MediatorRefused, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -46,8 +46,9 @@ export {
 } from "./trace.js";
 export { MediatorLink, bounded, ritual, sealData, senderOf, type LinkOptions, type Opened, type Sealed } from "./link.js";
 export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
-export { decide, type Decided } from "./procedure.js";
-export { createMediation, establish, mediationOf, reconcile, registered, selectMediation, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
+export { decide, serially, type Decided } from "./procedure.js";
+export { canonicalDid, sameDid } from "./same-did.js";
+export { createMediation, establish, mediationOf, reconcile, reconcileNow, registered, selectMediation, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
 export {
   configureRoute,
   createDid,

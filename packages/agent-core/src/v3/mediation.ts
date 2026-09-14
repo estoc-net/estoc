@@ -18,9 +18,10 @@ import { mediationKeyName, mintMediationDid, scanVault, vaultDraft, type Did, ty
 
 import type { IMessage } from "../protocol/didcomm.js";
 import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT, RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE } from "../protocol/mediation.js";
-import { EntityConflict, MediatorRefused, UnknownEntity, Unusable, WrongMediator } from "./errors.js";
+import { EntityConflict, MediatorRefused, UnknownEntity, Unusable, WrongAccount, WrongMediator } from "./errors.js";
 import type { MediatorLink } from "./link.js";
-import { decide } from "./procedure.js";
+import { decide, serially } from "./procedure.js";
+import { sameDid } from "./same-did.js";
 
 /** The arrangement as the fold has it; `UnknownEntity` when it has none. */
 export function mediationOf(fold: VaultFold, mediationId: MediationId): Mediation {
@@ -29,9 +30,15 @@ export function mediationOf(fold: VaultFold, mediationId: MediationId): Mediatio
   return mediation;
 }
 
-/** The link must be to the arrangement's mediator: a ritual recorded against another would be a lie in the log. */
+/**
+ * The link must be the arrangement's own: to its mediator, speaking as
+ * its identity. Two arrangements with one mediator are two accounts
+ * there, and a ritual run as one and recorded against the other would
+ * grant, register and disclose under the wrong one.
+ */
 function toward(link: MediatorLink, mediation: Mediation): void {
-  if (mediation.mediatorDid !== null && mediation.mediatorDid !== link.mediatorDid) throw new WrongMediator(mediation.mediatorDid, link.mediatorDid);
+  if (mediation.mediatorDid !== null && !sameDid(mediation.mediatorDid, link.mediatorDid)) throw new WrongMediator(mediation.mediatorDid, link.mediatorDid);
+  if (mediation.me !== null && !sameDid(mediation.me.did, link.me)) throw new WrongAccount(mediation.me.did, link.me);
 }
 
 /**
@@ -91,7 +98,7 @@ export async function establish(link: MediatorLink, runtime: VaultRuntime, keys:
     fold = await scanVault(runtime.vault, keys);
     mediation = mediationOf(fold, mediationId);
   }
-  const reconciled = await reconcile(link, fold, mediationId);
+  const reconciled = await reconcile(link, runtime, keys, mediationId);
   steps.push("reconciled");
   return { mediation, steps, reconciled };
 }
@@ -118,8 +125,16 @@ export function registered(reconciled: Reconciled, did: Did): boolean {
  * what the mediator holds and the desired set: every live DID bound to
  * a mediated route of this arrangement, by its short form, and nothing
  * else. Needs a usable arrangement; the diff goes to the `diag` trace.
+ * Runs as the account's one procedure at a time, over the fold as it
+ * stands on entry: a desired set read earlier could be missing a DID
+ * disclosed since, and would have it removed.
  */
-export async function reconcile(link: MediatorLink, fold: VaultFold, mediationId: MediationId): Promise<Reconciled> {
+export function reconcile(link: MediatorLink, runtime: VaultRuntime, keys: Keys, mediationId: MediationId): Promise<Reconciled> {
+  return serially(runtime, mediationId, async () => reconcileNow(link, await scanVault(runtime.vault, keys), mediationId));
+}
+
+/** `reconcile` for a caller that already holds the account's turn and a fold read under it. */
+export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediationId: MediationId): Promise<Reconciled> {
   const mediation = mediationOf(fold, mediationId);
   toward(link, mediation);
   if (mediation.status !== "usable") throw new Unusable("mediation", mediationId, mediation.faults.length > 0 ? mediation.faults : [mediation.status]);
@@ -133,10 +148,12 @@ export async function reconcile(link: MediatorLink, fold: VaultFold, mediationId
     const answer = await link.roundTrip(RECIPIENT_UPDATE, { updates });
     if (answer.type !== RECIPIENT_UPDATE_RESPONSE) throw new MediatorRefused(`expected recipient-update-response, got ${answer.type}`);
     const results = resultsOf(answer);
-    for (const did of [...added, ...removed]) {
-      const result = results.get(did);
-      if (result !== "success" && result !== "no_change") refused.push(did);
-    }
+    const done = (did: Did, action: string): boolean => {
+      const result = results.get(updateKey(did, action));
+      return result === "success" || result === "no_change";
+    };
+    for (const did of added) if (!done(did, "add")) refused.push(did);
+    for (const did of removed) if (!done(did, "remove")) refused.push(did);
   }
   const reconciled: Reconciled = { mediationId, desired, held, added: added.filter((did) => !refused.includes(did)), removed: removed.filter((did) => !refused.includes(did)), refused };
   await link.trace.append("diag", "reconcile", { ...reconciled });
@@ -162,15 +179,26 @@ async function queryRecipients(link: MediatorLink): Promise<Did[]> {
   }
 }
 
-/** recipient-update-response: `updated[].recipient_did` → `result`. */
+function updateKey(did: string, action: string): string {
+  return `${action} ${did}`;
+}
+
+/**
+ * recipient-update-response: the result of each update, by the DID and
+ * the action together, since a success at removing is no success at
+ * adding. An entry missing its action or its DID says nothing; two
+ * entries for one update that disagree say nothing either.
+ */
 function resultsOf(answer: IMessage): Map<string, string | undefined> {
   const results = new Map<string, string | undefined>();
   const updated = answer.body["updated"];
   for (const entry of Array.isArray(updated) ? updated : []) {
-    if (typeof entry === "object" && entry !== null) {
-      const { recipient_did, result } = entry as { recipient_did?: unknown; result?: unknown };
-      if (typeof recipient_did === "string") results.set(recipient_did, typeof result === "string" ? result : undefined);
-    }
+    if (typeof entry !== "object" || entry === null) continue;
+    const { recipient_did, action, result } = entry as { recipient_did?: unknown; action?: unknown; result?: unknown };
+    if (typeof recipient_did !== "string" || typeof action !== "string") continue;
+    const key = updateKey(recipient_did, action);
+    const value = typeof result === "string" ? result : undefined;
+    results.set(key, results.has(key) && results.get(key) !== value ? undefined : value);
   }
   return results;
 }

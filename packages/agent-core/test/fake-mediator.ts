@@ -126,7 +126,7 @@ export class FakeSocket {
 
 export class FakeMediator {
   readonly did: string;
-  private readonly secrets: Secret[];
+  readonly secrets: Secret[];
   /** recipient DID → account (mediator-facing) DID */
   readonly recipients = new Map<string, string>();
   /** the accounts granted mediation: what recipient-query answers for */
@@ -137,6 +137,8 @@ export class FakeMediator {
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
   readonly seenTypes: string[] = [];
+  /** a test's hand on the dispatch: a reply of its own (null for none), or `undefined` to let the mediator answer as usual */
+  intercept: ((msg: IMessage, from: string | null) => Promise<IMessage | null | undefined> | IMessage | null | undefined) | null = null;
   /** blob-store/1.0 when on: hash → blob (one putter in these tests, so hash is key enough); off, `put` is refused */
   readonly blobs: Map<string, FakeBlob> | null;
   /** the fake `fetch`: the mediator's endpoint, or 404 */
@@ -193,7 +195,7 @@ export class FakeMediator {
     return packed;
   }
 
-  private reply(type: string, to: string, body: Record<string, unknown>, thid?: string): IMessage {
+  reply(type: string, to: string, body: Record<string, unknown>, thid?: string): IMessage {
     return {
       id: crypto.randomUUID(),
       typ: PLAIN_TYP,
@@ -225,6 +227,8 @@ export class FakeMediator {
   /** Handle one plaintext from `from`; the reply plaintext, or null for none. */
   private async dispatch(msg: IMessage, from: string | null): Promise<IMessage | null> {
     this.seenTypes.push(msg.type);
+    const intercepted = await this.intercept?.(msg, from);
+    if (intercepted !== undefined) return intercepted;
     switch (msg.type) {
       case FORWARD: {
         const next = (msg.body as { next?: string }).next;

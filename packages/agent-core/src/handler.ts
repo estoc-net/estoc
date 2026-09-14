@@ -15,11 +15,10 @@
  * through the agent's options, and one it registers for a type the
  * built-ins cover replaces the built-in.
  *
- * Moved from the v1 seam. What changed: a handler no longer holds the
- * vault or saves a contact. It reads the fold and records events — which
- * is all a contact is made of now (vault-events.md §6): what a peer
- * called themself is an observation on the channel the message came by,
- * and the contact's name follows from it at fold time.
+ * A handler holds no vault and saves no contact. It reads the fold and
+ * records events, which is all a contact is made of: what a peer called
+ * themself is an observation on the channel the message came by, and
+ * the contact's name follows from it at fold time.
  */
 
 import type { BlobStore, Cid } from "@estoc/event-store";
