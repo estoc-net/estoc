@@ -47,7 +47,7 @@ export type {
   WireMessageId,
 } from "./types.js";
 
-export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked } from "./errors.js";
+export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked, UnknownContact } from "./errors.js";
 
 export {
   NAMESPACE_PURPOSES,
@@ -218,5 +218,30 @@ export {
   ackTargets,
 } from "./fold/inbound.js";
 export { type Membership, type Package, type Outcome, type Work, type Outbound, type OutboundFold, type OutboundFoldOptions, foldOutbound } from "./fold/outbound.js";
-export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, heldRoots, readState } from "./fold/held.js";
+export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, retainedRoots, heldRoots, readState } from "./fold/held.js";
 export { type NameClaim, type Share, type Profile, foldProfiles, profileOf } from "./fold/profile.js";
+export { type VaultChecks, type VaultFold, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
+export {
+  type Committed,
+  type Deletion,
+  type Deleted,
+  type ResponseEffect,
+  type ResponseWork,
+  type UnfinishedWork,
+  type WorkOptions,
+  EMPTY_RESPONSE,
+  PING_RESPONSE,
+  vaultRetention,
+  vaultHeldRoots,
+  collectGarbage,
+  logicalMessageIds,
+  eraseDrafts,
+  erasureClosure,
+  eraseMessage,
+  closeErasures,
+  deletionOf,
+  deleteContact,
+  sweepDeleted,
+  senderGate,
+  unfinishedWork,
+} from "./procedures.js";

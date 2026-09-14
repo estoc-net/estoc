@@ -289,6 +289,58 @@
   move to `fold/set.ts`.
   The test scene of two vaults is shared by the relationship, outbound,
   held-root and profile tests as `test/v3/fold/scene.ts`.
+- **The whole fold and the procedures.** `foldVault` (`fold/vault.ts`)
+  runs every fold over one event set, each fed the folds it reads, and
+  adds `retained`, the retention edge by edge as the event store's
+  import asks for it (`retainedRoots` in `fold/held.ts`, which
+  `heldRoots` now projects), and `held`, the roots those edges hold;
+  it is a pure function of the set and the verdicts handed in, checked
+  by shuffling the whole scene. `checkVault` computes every verdict
+  beside it in one motion — the seed's on each mediation and DID
+  entity when the keys are here, the retained documents' on each
+  snapshot and proof, the objects' on each problem report — with
+  `objectReader` reading the vault's objects and handing absence,
+  damage and excess size each in as no verdict; `scanVault` is one
+  scan of a vault, the checks and the fold. `procedures.ts` is what
+  the runtime does over that fold: `vaultRetention` and
+  `vaultHeldRoots` hand the event store the fold's retention for
+  collection, export, validation and import, and `collectGarbage` is
+  one pass; `eraseMessage` erases a logical message, every observation
+  ID of its execution, over every root its events and packages still
+  name, one erase per message ID in one commit, then collects, and
+  `closeErasures` appends the equivalent erases a late observation, an
+  alias under the peer's new key or a package prepared later is owed,
+  under the first erasure's reason, the decisions being `eraseDrafts`,
+  `erasureClosure` and `logicalMessageIds`; `deleteContact` tombstones
+  a contact, erases every message attributed to it alone — every
+  intent or complete observation group of which is in a relationship
+  uniquely assigned to it — retires the addresses no other
+  relationship's history, binding claim or queued birth names and no
+  disclosure keeps open, a one-use invitation its own relationships
+  consumed excepted, and retires a route once every address binding
+  it is retired and one of them for a deleted contact, all in one
+  commit and idempotently, so a second call after a crash or after a
+  late message attributed to the tombstoned contact finishes what is
+  left, `deletionOf` being the decision and `sweepDeleted` every
+  tombstoned contact's cleanup at once; `unfinishedWork` enumerates
+  what the events say is still to be done — births awaiting their
+  binding, outbound work, relationships with application input and no
+  contact assignment with the contact the default policy would assign
+  and whether its tombstone forbids it, transitions and pending claims
+  waiting, the replies owed (acknowledgments requested, the natural
+  response of the types the application names, Trust Ping by default,
+  and the notification a frozen rotation trigger requires, each owed
+  until the execution has selected that natural response or an Empty
+  under its producing tuple, acknowledging or not) each with
+  `senderGate`'s verdict on whether the relationship may send one, the
+  application inputs the default early-privacy policy may take as a
+  rotation trigger, profile disclosures without a lift for the message
+  types the application names, erases owed and deletions unfinished —
+  from the fold and never from a queue. `UnknownContact` is thrown for
+  a contact ID no event names.
+- The outbound fold takes the erasures: an erased message has no work,
+  whatever bytes another event keeps, and neither has a deleted
+  contact's.
 - The version-2 peer-key fingerprint's base32 is `@scure/base`'s
   `base32nopad`, lowercased; the output is unchanged.
 
