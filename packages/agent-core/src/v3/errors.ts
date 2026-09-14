@@ -73,3 +73,14 @@ export class UnauthorizedKey extends Error {
     this.name = "UnauthorizedKey";
   }
 }
+
+/** A contact has more than one relationship a message may be sent in and no preference among them: which one is the caller's to say. */
+export class AmbiguousTarget extends Error {
+  constructor(
+    contactId: string,
+    readonly relationshipIds: readonly string[]
+  ) {
+    super(`contact ${contactId} may be written in ${relationshipIds.length} relationships: ${relationshipIds.join(", ")}`);
+    this.name = "AmbiguousTarget";
+  }
+}

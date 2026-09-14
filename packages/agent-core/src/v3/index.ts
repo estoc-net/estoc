@@ -9,12 +9,14 @@
  * the exact evidence the vault retains and the failures that leave
  * work retryable told from the ones that close it (`resolver`); that
  * evidence committed, read back and handed to didcomm under the
- * spelling it asks for (`evidence`). The protocols themselves —
+ * spelling it asks for (`evidence`); a message's content and control
+ * headers frozen as one intent in the relationship its target
+ * selects, without a byte on the wire (`send`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
 
-export { EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -82,3 +84,4 @@ export {
   type PinnedResolverOptions,
   type ResolutionEvidence,
 } from "./evidence.js";
+export { selectTarget, send, type Content, type Selection, type SendOptions, type Sender, type Sent, type Target } from "./send.js";

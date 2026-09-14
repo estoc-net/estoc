@@ -80,14 +80,17 @@ export interface CommitResolutionOptions {
   fresh?: boolean;
 }
 
-/** Whether the object is accepted and not known damaged; one known damaged counts as absent, since the bytes coming in repair it. */
-async function objectHeld(held: Held, cid: Cid): Promise<boolean> {
-  try {
-    return await held.objects.has(cid);
-  } catch (err) {
-    if (err instanceof DamagedObject) return false;
-    throw err;
+/** Whether every object is accepted and not known damaged; one known damaged counts as absent, since the bytes coming in repair it. */
+export async function objectsHeld(held: Held, cids: Iterable<Cid>): Promise<boolean> {
+  for (const cid of cids) {
+    try {
+      if (!(await held.objects.has(cid))) return false;
+    } catch (err) {
+      if (err instanceof DamagedObject) return false;
+      throw err;
+    }
   }
+  return true;
 }
 
 /**
@@ -106,7 +109,7 @@ export async function commitResolution(runtime: VaultRuntime, evidence: Resoluti
     if (!options.fresh) {
       const set = await VaultEventSet.from(held.events.scan());
       const recorded = set.of("peer.resolved").find((event) => samePayload(event.data, data));
-      if (recorded !== undefined && (await objectHeld(held, evidence.resolution.cid))) return recorded;
+      if (recorded !== undefined && (await objectsHeld(held, [evidence.resolution.cid]))) return recorded;
     }
     const [event] = (await held.commit([{ cid: evidence.resolution.cid, source: evidence.resolution.bytes }], [vaultDraft("peer.resolved", data)])).map(readVaultEvent);
     return event as VaultEvent<"peer.resolved">;
