@@ -160,6 +160,7 @@ export type Receipt = {
   binding?: EventReference<"relationship.bound"> | null;
   resolution?: EventReference<"peer.resolved"> | null;
   transition?: EventReference<"relationship.peerTransitioned"> | null;
+  overrides?: Partial<MessageIn>;
 };
 
 /** A peer resolution and a binding for a peer met at one of our DIDs, then an authenticated receipt through that binding. */
@@ -210,6 +211,7 @@ export function messageIn(scene: Scene, receipt: Receipt & { ordinal: number }):
     bytes: 100,
     signedBy: null,
     receivedVia: { mediationId: null, deliveryId: null },
+    ...receipt.overrides,
   };
   return scene.add("message.in", data);
 }

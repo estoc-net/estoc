@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 
 import {
   executionId,
+  foldInbound,
   foldOutbound,
   foldRelationships,
   inboundMessageId,
@@ -38,7 +39,7 @@ async function verdicts(events: readonly Event[], keys: Keys): Promise<Verdicts>
 function foldWith(set: VaultEventSet, v: Verdicts, resolutionChecks = v.resolutionChecks): Folds {
   const routes = foldChecked(set, v.keyChecks).routes;
   const relationships = foldRelationships(set, routes, { proofChecks: v.proofChecks, resolutionChecks });
-  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, { resolutionChecks }) };
+  return { routes, relationships, outbound: foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks }) };
 }
 
 async function fold(events: readonly Event[], keys: Keys): Promise<Folds> {
@@ -120,19 +121,25 @@ describe("the outbound message", () => {
     const pkg = packageOf(scene, response, { sender: a0.didId, recipient: b0, resolution: root });
     let m = outboundOf(await fold(scene.events, keys), response.data.messageId);
     expect(m.intentEventIds).toHaveLength(2);
-    expect(m).toMatchObject({ intent: response.data, outcome: "prepared", conflict: false, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
+    expect(m).toMatchObject({ intent: response.data, standing: { status: "verified" }, outcome: "prepared", conflict: false, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
     expect(await fold(scene.events, keys).then((f) => f.outbound.responses.get(exec))).toEqual([response.data.messageId]);
 
     const R2 = bound(scene, a1, b1, resolved(scene, a1.didId, b1)).R;
     automatic(scene, R2, { executionId: exec }, { ack: [carrier.data.wireMessageId] });
+    const bare = intent(scene, R);
+    scene.add("message.out", { ...bare.data, msgType: "https://didcomm.org/trust-ping/2.0/ping" });
     await expectFoldOrderFree(scene.events, keys, (f) => {
       const message = outboundOf(f, response.data.messageId);
       expect(message.intent).toBeNull();
       expect(message.faults).toEqual(["2 intents disagree under one message ID"]);
+      expect(message).toMatchObject({ standing: { status: "conflict", because: "2 intents disagree under one message ID" }, membership: { status: "conflict" } });
       expect(message.outcome).toBe("conflict");
       expect(message.work).toEqual({ kind: "none", because: "the intent events disagree" });
       expect(message.packages.has(pkg.data.packageId)).toBe(true);
+      expect(message.packages.get(pkg.data.packageId)!.membership).toEqual({ status: "conflict", because: "the intent events disagree" });
       expect(message.intentEventIds).toHaveLength(3);
+      expect(outboundOf(f, bare.data.messageId)).toMatchObject({ intent: null, standing: { status: "conflict" }, outcome: "conflict" });
+      expect(outboundOf(f, bare.data.messageId).packages.size).toBe(0);
     });
   });
 
@@ -340,6 +347,24 @@ describe("the outbound message", () => {
     const first = receipt(scene, { local: a1.didId, peer: b0, resolution: atA1, binding, ordinal: 2 });
     receipt(scene, { local: a1.didId, peer: b0, resolution: atA1, binding, ordinal: 3, wire: first.data.wireMessageId, overrides: { intentHash: OTHER_INTENT } });
     expect(await workOf(scene.events)).toEqual(repack);
+  });
+
+  it("is acknowledged by nothing whose execution two scoped observations put in intent conflict, the record it witnessed then naming no witness; the message itself stands and its work goes on", async () => {
+    const { scene, keys, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
+    const out = intent(scene, R);
+    const pkg = packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: root });
+    const ack = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1, overrides: { ack: [out.data.messageId] } });
+    scene.add("delivery.acknowledged", { messageId: out.data.messageId, localKeyName: ack.data.localKeyName, peerPublicKey: b0.publicKey, ackMessageId: ack.data.messageId, ackWireMessageId: ack.data.wireMessageId });
+    expect(outboundOf(await fold(scene.events, keys), out.data.messageId)).toMatchObject({ acknowledged: true, ackWitnesses: [ack.eventId], ackFaults: [] });
+    const rotation = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 2);
+    const alias = receipt(scene, { local: a0.didId, peer: b1, resolution: rotation.successor, binding, ordinal: 3, wire: ack.data.wireMessageId, transition: ref(rotation.edge), overrides: { intentHash: OTHER_INTENT } });
+    const exec = executionId(R, ack.data.wireMessageId);
+    await expectFoldOrderFree(scene.events, keys, (folds) => {
+      expect(folds.relationships.groups.get(alias.data.messageId)!.status).toBe("complete");
+      const m = outboundOf(folds, out.data.messageId);
+      expect(m).toMatchObject({ acknowledged: false, ackWitnesses: [], receiptInstant: null, ackDeferred: [], membership: { status: "verified" }, outcome: "prepared", work: { kind: "submit", packageIds: [pkg.data.packageId] } });
+      expect(m.ackFaults).toEqual([expect.stringMatching(new RegExp(`^acknowledgment .* names no witness: execution ${exec} is 2 scoped observations that disagree on the intent$`))]);
+    });
   });
 
   it("judges an acknowledgment record by the witness rule: a matching observation scoped elsewhere or in a contradicting group witnesses nothing, one waiting for its binding or its snapshot's verdict defers", async () => {

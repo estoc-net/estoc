@@ -3,26 +3,28 @@
  * lifted from inbound disclosures, and the disclosures of our own
  * profile the peer was sent. A lift names one exact source event; what
  * it means depends on that source's standing — an inbound source must
- * be a complete, scoped observation of a complete group in the same
- * relationship, an outbound source a submitted, verified member of it.
- * Lifts of one logical source are one: the observations of one wire
- * ID and intent in the relationship, whatever key each arrived at, or
- * the intent events of one message ID. Sources are ordered by their
- * earliest event, never by when they were lifted, so recovering an old
- * lift moves nothing; two names lifted from one source contradict, and
- * that source names nothing while every other still does.
+ * be a scoped observation of a complete group whose execution in the
+ * same relationship is complete, an outbound source a submitted,
+ * verified member of it. Lifts of one logical source are one: the
+ * execution of one wire ID in the relationship, whatever key each
+ * observation arrived at, or the intent events of one message ID. An
+ * execution whose scoped observations disagree on the intent is one
+ * contradicted source, not two sources to choose between; a lift made
+ * before the contradicting observation arrived is contradicted with
+ * it, and so it stays while the source's own group waits for more,
+ * since a proven disagreement is not undone by less evidence. Sources
+ * are ordered by their earliest event, never by when
+ * they were lifted, so recovering an old lift moves nothing; two names
+ * lifted from one source contradict, and that source names nothing
+ * while every other still does.
  */
 
-import { compareEvents } from "@estoc/event-store/v3";
-
-import type { AuthorId, EventId, MessageId, RelationshipId } from "../types.js";
-import type { VaultEvent } from "../schema.js";
+import { executionId as executionIdOf } from "../ids.js";
+import type { EventId, ExecutionId, MessageId, RelationshipId } from "../types.js";
+import type { InboundFold } from "./inbound.js";
 import type { OutboundFold } from "./outbound.js";
 import type { RelationshipFold } from "./relationships.js";
-import { groupBy, type VaultEventSet } from "./set.js";
-
-/** The complete canonical key of an event: what orders sources. */
-export type SourceKey = { readonly at: string; readonly eventId: EventId; readonly author: AuthorId };
+import { compareKeys, groupBy, keyOf, type SourceKey, type VaultEventSet } from "./set.js";
 
 export interface NameClaim {
   /** the source's earliest event */
@@ -57,46 +59,22 @@ export interface Profile {
   readonly faults: readonly string[];
 }
 
-const keyOf = (event: { at: string; eventId: EventId; author: AuthorId }): SourceKey => ({ at: event.at, eventId: event.eventId, author: event.author });
-
-/** Canonical order: by `at`, then event ID, then author. */
-export function compareKeys(a: SourceKey, b: SourceKey): number {
-  return cmp(a.at, b.at) || cmp(a.eventId, b.eventId) || cmp(a.author, b.author);
-}
-
-const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-
 /** The profile of a relationship, empty when nothing was lifted for it. */
 export function profileOf(profiles: ReadonlyMap<RelationshipId, Profile>, relationshipId: RelationshipId): Profile {
   return profiles.get(relationshipId) ?? { relationshipId, claimedName: null, nameConflict: false, shared: null, claims: [], shares: [], deferred: [], faults: [] };
 }
 
-type ClaimDraft = { sourceKey: SourceKey; sourceEventIds: EventId[]; liftEventIds: EventId[]; names: Set<string> };
+type ClaimDraft = { sourceKey: SourceKey; sourceEventIds: readonly EventId[]; liftEventIds: EventId[]; names: Set<string> };
 type ShareDraft = { messageId: MessageId; sourceKey: SourceKey; liftEventIds: EventId[] };
 
-export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold, outbound: OutboundFold): ReadonlyMap<RelationshipId, Profile> {
-  const receiptsByMessage = groupBy(set.of("message.in"), (event) => event.data.messageId);
-  const logical = new Map<string, { sourceKey: SourceKey; events: VaultEvent<"message.in">[] }>();
-  for (const [messageId, group] of relationships.groups) {
-    if (group.status !== "complete") continue;
-    const receipts = [...receiptsByMessage.get(messageId)!].sort(compareEvents);
-    const key = JSON.stringify([group.relationshipId, receipts[0]!.data.wireMessageId, receipts[0]!.data.intentHash]);
-    const known = logical.get(key);
-    if (known === undefined) logical.set(key, { sourceKey: keyOf(receipts[0]!), events: receipts });
-    else {
-      if (compareKeys(keyOf(receipts[0]!), known.sourceKey) < 0) known.sourceKey = keyOf(receipts[0]!);
-      known.events.push(...receipts);
-    }
-  }
-  for (const source of logical.values()) source.events.sort(compareEvents);
-
+export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold, inbound: InboundFold, outbound: OutboundFold): ReadonlyMap<RelationshipId, Profile> {
   const claimed = groupBy(set.of("profile.nameClaimed"), (event) => event.data.relationshipId);
   const shared = groupBy(set.of("profile.shared"), (event) => event.data.relationshipId);
   const profiles = new Map<RelationshipId, Profile>();
   for (const relationshipId of [...new Set([...claimed.keys(), ...shared.keys()])].sort()) {
     const faults: string[] = [];
     const deferred: string[] = [];
-    const claims = new Map<string, ClaimDraft>();
+    const claims = new Map<ExecutionId, ClaimDraft>();
     for (const lift of claimed.get(relationshipId) ?? []) {
       const source = set.resolve(lift.data.sourceEventId, "message.in");
       if (source.status === "mismatched") {
@@ -109,17 +87,18 @@ export function foldProfiles(set: VaultEventSet, relationships: RelationshipFold
       }
       const scope = relationships.observations.get(source.event.eventId)!;
       const group = relationships.groups.get(source.event.data.messageId)!;
+      const execution = inbound.executions.get(executionIdOf(relationshipId, source.event.data.wireMessageId));
       if (scope.status === "anonymous") faults.push(`lift ${lift.eventId} names an anonymous source`);
       else if (scope.status === "conflict") faults.push(`lift ${lift.eventId} names a source that contradicts: ${scope.because}`);
       else if (group.status === "conflict") faults.push(`lift ${lift.eventId} names a source whose group is in conflict: ${group.because}`);
       else if (scope.relationshipId !== null && scope.relationshipId !== relationshipId) faults.push(`lift ${lift.eventId} names a source scoped in ${scope.relationshipId}`);
+      else if (execution?.status === "conflict") faults.push(`lift ${lift.eventId} names a source whose execution ${execution.because}`);
       else if (scope.status === "deferred") deferred.push(`lift ${lift.eventId} awaits its source's scope: ${scope.because}`);
       else if (group.status !== "complete") deferred.push(`lift ${lift.eventId} awaits its source's group: ${group.status === "incomplete" ? group.because : "anonymous"}`);
+      else if (execution === undefined || execution.status === "incomplete") deferred.push(`lift ${lift.eventId} awaits its source's execution, which ${execution?.because ?? "is not derived"}`);
       else {
-        const key = JSON.stringify([relationshipId, source.event.data.wireMessageId, source.event.data.intentHash]);
-        const logicalSource = logical.get(key)!;
-        const draft = claims.get(key);
-        if (draft === undefined) claims.set(key, { sourceKey: logicalSource.sourceKey, sourceEventIds: logicalSource.events.map((event) => event.eventId), liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
+        const draft = claims.get(execution.executionId);
+        if (draft === undefined) claims.set(execution.executionId, { sourceKey: execution.sourceKey!, sourceEventIds: execution.eventIds, liftEventIds: [lift.eventId], names: new Set([lift.data.name]) });
         else {
           draft.liftEventIds.push(lift.eventId);
           draft.names.add(lift.data.name);
