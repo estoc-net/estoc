@@ -165,12 +165,10 @@ export async function pinnedResolution(fold: VaultFold, readObject: ReadObject, 
  * methods as one, each with material of a kind it knows — a JWK, a
  * multibase or a base58 key — and refuses the whole document on one
  * of another kind; and it follows a relationship's references only to
- * the document's own methods, refusing a reference into another
- * document. So the projection keeps the methods of a kind it knows,
- * and in each relationship only the references to those, by ID
- * whatever form that takes; what is left out stays in the resolution,
- * the retained bytes and the evidence. A key `authorizedKeys` offers
- * is read from such material and so is never one left out.
+ * the document's own methods, refusing any other. What the projection
+ * leaves out stays in the resolution, the retained bytes and the
+ * evidence; a key `authorizedKeys` offers is read from material of
+ * such a kind and so is never one left out.
  */
 function didcommProjection(document: JsonObject): DIDDoc {
   const converted = toDIDCommDIDDoc(document);

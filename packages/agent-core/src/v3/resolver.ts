@@ -19,11 +19,12 @@
 import { secp256k1 } from "@noble/curves/secp256k1";
 import bs58 from "bs58";
 import ipaddr from "ipaddr.js";
+import { varint } from "multiformats";
 import { bases } from "multiformats/basics";
 
 import { isLongForm, isPeerDID4, isShortForm } from "@estoc/did-peer";
 import { InvalidJson, canonicalize, isJsonObject, parseStrict, type JsonObject } from "@estoc/event-store/v3";
-import { InvalidDidDocument, authorizedMethodIds, canonicalDidOf, didcommServiceUris, peerResolution, rawCidOfBytes, type Cid, type Did, type DidUrl, type VaultFold } from "@estoc/vault/v3";
+import { InvalidDidDocument, InvalidPublicKey, authorizedMethodIds, canonicalDidOf, canonicalPublicKey, decodePublicKey, didcommServiceUris, peerResolution, rawCidOfBytes, type Cid, type Did, type DidUrl, type KeyType, type VaultFold } from "@estoc/vault/v3";
 
 import { bounded } from "./link.js";
 import type { AgentTrace } from "./trace.js";
@@ -113,23 +114,42 @@ const PUBLIC_JWK_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
 const CAIP_10 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$/;
 const HEX_BYTES = /^(?:[0-9A-Fa-f]{2})+$/;
 /**
- * The verification material a known suite defines, one of which a
- * method of that type carries. Any other type is another suite's: its
- * method is kept with whatever material it carries, and whether that
- * is a usable key is decided where the key is used.
+ * The most characters one encoded key may run to: room for the
+ * largest public key in any of these encodings, and a bound on what
+ * decoding one costs — base58 decoding is quadratic in its length, and
+ * runs where no deadline can interrupt it.
  */
-const SUITE_MATERIAL: ReadonlyMap<string, readonly string[]> = new Map([
-  ["JsonWebKey2020", ["publicKeyJwk"]],
-  ["Multikey", ["publicKeyMultibase"]],
-  ["Ed25519VerificationKey2020", ["publicKeyMultibase"]],
-  ["X25519KeyAgreementKey2020", ["publicKeyMultibase"]],
-  ["Ed25519VerificationKey2018", ["publicKeyBase58"]],
-  ["X25519KeyAgreementKey2019", ["publicKeyBase58"]],
-  ["EcdsaSecp256k1VerificationKey2019", ["publicKeyJwk", "publicKeyHex"]],
-  ["EcdsaSecp256k1RecoveryMethod2020", ["blockchainAccountId", "publicKeyJwk", "publicKeyHex"]],
+const MAX_MATERIAL_CHARS = 1024;
+/** The JWK curves the vault reads, by key type; a JWK of another curve is kept unread. */
+const READ_JWK_CURVES: ReadonlyMap<string, readonly KeyType[]> = new Map([
+  ["OKP", ["Ed25519", "X25519"]],
+  ["EC", ["P-256", "P-384", "P-521", "secp256k1"]],
 ]);
-/** The suites whose hex material is a SEC 1 encoded point on secp256k1. */
-const SECP256K1_SUITES = new Set(["EcdsaSecp256k1VerificationKey2019", "EcdsaSecp256k1RecoveryMethod2020"]);
+/** The multicodec codes of the key types the vault reads; a multibase key under another code is kept unread. */
+const READ_MULTICODECS = new Set([0xed, 0xec, 0xe7, 0x1200, 0x1201, 0x1202]);
+/** Bytes of a raw Ed25519 or X25519 key, the keys the base58 suites carry. */
+const RAW_KEY_BYTES = 32;
+interface Suite {
+  /** the material a method of the suite carries, one of these */
+  readonly material: readonly string[];
+  /** the kind of key the suite is for, when it is for one kind */
+  readonly keyType?: KeyType;
+}
+/**
+ * The known suites. Any other type is another suite's: its method is
+ * kept with whatever material it carries, and whether that is a
+ * usable key is decided where the key is used.
+ */
+const SUITES: ReadonlyMap<string, Suite> = new Map([
+  ["JsonWebKey2020", { material: ["publicKeyJwk"] }],
+  ["Multikey", { material: ["publicKeyMultibase"] }],
+  ["Ed25519VerificationKey2020", { material: ["publicKeyMultibase"], keyType: "Ed25519" }],
+  ["X25519KeyAgreementKey2020", { material: ["publicKeyMultibase"], keyType: "X25519" }],
+  ["Ed25519VerificationKey2018", { material: ["publicKeyBase58"], keyType: "Ed25519" }],
+  ["X25519KeyAgreementKey2019", { material: ["publicKeyBase58"], keyType: "X25519" }],
+  ["EcdsaSecp256k1VerificationKey2019", { material: ["publicKeyJwk", "publicKeyHex"], keyType: "secp256k1" }],
+  ["EcdsaSecp256k1RecoveryMethod2020", { material: ["blockchainAccountId", "publicKeyJwk", "publicKeyHex"], keyType: "secp256k1" }],
+]);
 const METHOD_MEMBERS = new Set(["id", "type", "controller"]);
 
 // RFC 3986 §3, component by component, on the raw string: the
@@ -220,23 +240,46 @@ function jwkFault(jwk: unknown): string | null {
   return missing === undefined ? null : `a ${kty} JWK with a string ${missing}`;
 }
 
-function isMultibase(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const base = Object.values(bases).find((candidate) => candidate.prefix === value[0]);
-  if (base === undefined) return false;
+function encodedKeyFault(value: unknown, what: string, decode: (text: string) => Uint8Array): string | null {
+  if (typeof value !== "string" || value.length > MAX_MATERIAL_CHARS) return `${what} within ${MAX_MATERIAL_CHARS} characters`;
   try {
-    return base.decode(value).length > 0;
+    return decode(value).length > 0 ? null : what;
   } catch {
-    return false;
+    return what;
   }
 }
 
-function isBase58(value: unknown): boolean {
-  if (typeof value !== "string") return false;
+function decodeMultibase(text: string): Uint8Array {
+  const base = Object.values(bases).find((candidate) => text.startsWith(candidate.prefix));
+  if (base === undefined) throw new Error("no multibase prefix");
+  return base.decode(text);
+}
+
+const MATERIAL_FAULTS: ReadonlyMap<string, (value: unknown) => string | null> = new Map([
+  ["publicKeyJwk", jwkFault],
+  ["publicKeyMultibase", (value) => encodedKeyFault(value, "a multibase-encoded value", decodeMultibase)],
+  ["publicKeyBase58", (value) => encodedKeyFault(value, "a base58btc-encoded value", (text) => bs58.decode(text))],
+  ["publicKeyHex", (value) => (typeof value === "string" && value.length <= MAX_MATERIAL_CHARS && HEX_BYTES.test(value) ? null : `hex-encoded bytes within ${MAX_MATERIAL_CHARS} characters`)],
+  ["blockchainAccountId", (value) => (typeof value === "string" && CAIP_10.test(value) ? null : "a CAIP-10 account ID")],
+]);
+
+function invalidKey(read: () => unknown): string | null {
   try {
-    return bs58.decode(value).length > 0;
+    read();
+    return null;
+  } catch (err) {
+    if (err instanceof InvalidPublicKey) return err.message;
+    throw err;
+  }
+}
+
+/** The multicodec code a base58btc multibase value carries; null under another base. */
+function multicodecOf(text: string): number | null {
+  if (!text.startsWith(bases.base58btc.prefix)) return null;
+  try {
+    return varint.decode(bases.base58btc.decode(text))[0];
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -249,21 +292,50 @@ function isSecp256k1Point(hex: string): boolean {
   }
 }
 
-/** What each verification material property holds, whichever suite names it: the fault when a value is not that. */
-const MATERIAL: ReadonlyMap<string, (value: unknown) => string | null> = new Map([
-  ["publicKeyJwk", jwkFault],
-  ["publicKeyMultibase", (value) => (isMultibase(value) ? null : "a multibase-encoded value")],
-  ["publicKeyBase58", (value) => (isBase58(value) ? null : "a base58btc-encoded value")],
-  ["publicKeyHex", (value) => (typeof value === "string" && HEX_BYTES.test(value) ? null : "hex-encoded bytes")],
-  ["blockchainAccountId", (value) => (typeof value === "string" && CAIP_10.test(value) ? null : "a CAIP-10 account ID")],
-]);
+/**
+ * A fault in the key a method's material holds, read as the vault
+ * reads keys: a JWK of a curve the vault reads, or a multibase key
+ * under a code it reads, must be that key; a base58 key of a suite for
+ * raw keys must be one; a hex key of a secp256k1 suite must be a point
+ * on the curve; and a suite for one kind of key must carry that kind.
+ * Material of a kind the vault does not read is kept unread.
+ */
+function keyFault(entry: JsonObject, type: string, suite: Suite | undefined): string | null {
+  const expects = suite?.keyType;
+  const wrongKind = (read: KeyType) => (expects !== undefined && read !== expects ? `of type ${type} carries a ${expects} key, not ${read}` : null);
+  const jwk = entry["publicKeyJwk"];
+  if (isJsonObject(jwk)) {
+    const read = (READ_JWK_CURVES.get(String(jwk["kty"])) ?? []).find((curve) => curve === jwk["crv"]);
+    if (read !== undefined) {
+      const fault = invalidKey(() => canonicalPublicKey(jwk));
+      if (fault !== null) return `has a publicKeyJwk that is a ${read} key: ${fault}`;
+      const wrong = wrongKind(read);
+      if (wrong !== null) return wrong;
+    }
+  }
+  const multibase = entry["publicKeyMultibase"];
+  if (typeof multibase === "string") {
+    const code = multicodecOf(multibase);
+    if (code !== null && READ_MULTICODECS.has(code)) {
+      const fault = invalidKey(() => canonicalPublicKey(multibase));
+      if (fault !== null) return `has a publicKeyMultibase that is the key its code says: ${fault}`;
+      const wrong = wrongKind(decodePublicKey(canonicalPublicKey(multibase)).type);
+      if (wrong !== null) return wrong;
+    }
+  }
+  const base58 = entry["publicKeyBase58"];
+  if (typeof base58 === "string" && (expects === "Ed25519" || expects === "X25519") && bs58.decode(base58).length !== RAW_KEY_BYTES) return `of type ${type} carries a ${expects} key of ${RAW_KEY_BYTES} bytes`;
+  const hex = entry["publicKeyHex"];
+  if (typeof hex === "string" && expects === "secp256k1" && !isSecp256k1Point(hex)) return "has a publicKeyHex that is a point on secp256k1";
+  return null;
+}
 
 function methodFault(entry: unknown): string | null {
   if (!isJsonObject(entry)) return "is an object";
   if (typeof entry["id"] !== "string") return "has a string id";
   if (typeof entry["type"] !== "string") return "has a string type";
   if (!isDid(entry["controller"])) return "has a DID controller";
-  for (const [member, faultOf] of MATERIAL) {
+  for (const [member, faultOf] of MATERIAL_FAULTS) {
     const value = entry[member];
     if (value === undefined) continue;
     const fault = faultOf(value);
@@ -271,12 +343,13 @@ function methodFault(entry: unknown): string | null {
   }
   if (entry["publicKeyMultibase"] !== undefined && entry["publicKeyJwk"] !== undefined) return "carries publicKeyMultibase or publicKeyJwk, not both";
   const type = entry["type"];
-  const material = SUITE_MATERIAL.get(type);
-  if (material === undefined) return Object.keys(entry).some((member) => !METHOD_MEMBERS.has(member)) ? null : `of type ${type} carries its verification material`;
-  if (!material.some((member) => entry[member] !== undefined)) return `of type ${type} carries ${material.join(" or ")}`;
-  const hex = entry["publicKeyHex"];
-  if (SECP256K1_SUITES.has(type) && typeof hex === "string" && !isSecp256k1Point(hex)) return "has a publicKeyHex that is a point on secp256k1";
-  return null;
+  const suite = SUITES.get(type);
+  if (suite === undefined) {
+    if (!Object.keys(entry).some((member) => !METHOD_MEMBERS.has(member))) return `of type ${type} carries its verification material`;
+  } else if (!suite.material.some((member) => entry[member] !== undefined)) {
+    return `of type ${type} carries ${suite.material.join(" or ")}`;
+  }
+  return keyFault(entry, type, suite);
 }
 
 function endpointFault(endpoint: unknown): string | null {
