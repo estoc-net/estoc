@@ -98,7 +98,7 @@ export interface Outbound {
   readonly deferred: readonly string[];
   readonly faults: readonly string[];
   readonly conflict: boolean;
-  /** what the acknowledgment records and the acknowledging observations still wait for: receipt information only */
+  /** what the acknowledgment records, and the acknowledging observations that may yet witness, still wait for: receipt information only */
   readonly ackDeferred: readonly string[];
   /** an acknowledgment record no observation witnesses: receipt information only */
   readonly ackFaults: readonly string[];
@@ -286,9 +286,14 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     if (witness.status === "none") ackFaults.push(`acknowledgment ${event.eventId} names no witness: ${witness.because}`);
     else if (witness.status === "incomplete") ackDeferred.push(`acknowledgment ${event.eventId} awaits its witness: ${witness.because}`);
   }
-  const candidates = context.ackers.get(messageId) ?? [];
-  const ackWitnesses = intent === null ? [] : candidates.filter((receipt) => witnessOf(context, receipt, intent.relationshipId, membership).status === "complete").sort(compareEvents);
-  if (candidates.length > 0 && membership.status === "deferred") ackDeferred.push(`${candidates.length} acknowledging observation${candidates.length > 1 ? "s await" : " awaits"} the message's membership`);
+  const ackWitnesses: Receipt[] = [];
+  if (intent !== null) {
+    for (const receipt of [...(context.ackers.get(messageId) ?? [])].sort(compareEvents)) {
+      const witness = witnessOf(context, receipt, intent.relationshipId, membership);
+      if (witness.status === "complete") ackWitnesses.push(receipt);
+      else if (witness.status === "incomplete") ackDeferred.push(`acknowledging observation ${receipt.eventId} is not yet a witness: ${witness.because}`);
+    }
+  }
   const acknowledged = ackWitnesses.length > 0;
   const receiptInstant = acknowledged ? ackWitnesses[0]!.at : null;
   const late = acknowledged && intent !== null && intent.expiresTime !== null && Date.parse(receiptInstant!) >= intent.expiresTime * 1000;

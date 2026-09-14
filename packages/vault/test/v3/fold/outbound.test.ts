@@ -351,7 +351,8 @@ describe("the outbound message", () => {
     const check = async (events: readonly Event[], expected: "ackFaults" | "ackDeferred") => {
       const m = outboundOf(await fold(events, keys), out.data.messageId);
       expect(m).toMatchObject({ acknowledged: false, membership: { status: "verified" }, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
-      expect(m[expected]).toEqual([expect.stringMatching(/^acknowledgment /)]);
+      expect(m[expected].filter((line) => line.startsWith("acknowledgment "))).toHaveLength(1);
+      expect(m[expected].filter((line) => !line.startsWith("acknowledgment ")).every((line) => line.startsWith("acknowledging observation "))).toBe(true);
       expect(m[expected === "ackFaults" ? "ackDeferred" : "ackFaults"]).toEqual([]);
     };
 
@@ -384,7 +385,7 @@ describe("the outbound message", () => {
     await check(scene.events, "ackFaults");
   });
 
-  it("judges an acknowledgment record under the message's membership: a conflict is final though the observation is a complete witness, a wait defers the record", async () => {
+  it("judges an acknowledgment record under the message's membership: a conflict is final while the carrier's row and group are complete, a wait defers the record", async () => {
     const { scene, keys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const born = intent(scene, R, { birth: { localDidId: a0.didId, peerDid: b1.longFormDid } });
     packageOf(scene, born, { sender: a0.didId, recipient: b0, resolution: root });
@@ -406,7 +407,7 @@ describe("the outbound message", () => {
     expect(m).toMatchObject({ acknowledged: true, ackWitnesses: [ack.eventId], ackDeferred: [], ackFaults: [] });
     m = outboundOf(await fold(scene.events.filter((e) => e !== forPackage), keys), out.data.messageId);
     expect(m).toMatchObject({ membership: { status: "deferred" }, acknowledged: false, ackWitnesses: [], ackFaults: [] });
-    expect(m.ackDeferred).toEqual([`acknowledgment ${ofOut.eventId} awaits its witness: the message's membership awaits its evidence`, "1 acknowledging observation awaits the message's membership"]);
+    expect(m.ackDeferred).toEqual([`acknowledgment ${ofOut.eventId} awaits its witness: the message's membership awaits its evidence`, `acknowledging observation ${ack.eventId} is not yet a witness: the message's membership awaits its evidence`]);
   });
 
   it("is acknowledged by a complete scoped observation whose ack names it; the earliest witness is the receipt, late at or after expiry, a duplicate never later", async () => {
@@ -456,26 +457,47 @@ describe("the outbound message", () => {
     expect(m).toMatchObject({ faults: [], conflict: false, outcome: "prepared", acknowledged: true, work: { kind: "submit", packageIds: [pkg.data.packageId] } });
   });
 
-  it("applies an acknowledgment only once the message's membership is verified: a waiting package defers it, a witness in an incomplete group is none", async () => {
-    const { scene, keys, R, a0, b0, root, binding } = await bornAtRoot();
+  it("applies an acknowledgment only once the message's membership is verified: a waiting package defers it, a witness in an incomplete group is none; only an observation that may yet witness is reported waiting", async () => {
+    const { scene, keys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
     const out = intent(scene, R);
     const forPackage = resolved(scene, a0.didId, b0);
     packageOf(scene, out, { sender: a0.didId, recipient: b0, resolution: forPackage });
+    const base = scene.events.length;
     const ack = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1, overrides: { ack: [out.data.messageId] } });
     let m = outboundOf(await fold(scene.events, keys), out.data.messageId);
     expect(m).toMatchObject({ acknowledged: true, ackWitnesses: [ack.eventId] });
 
+    const waiting = { acknowledged: false, ackWitnesses: [], membership: { status: "deferred" }, deferred: [expect.stringMatching(/^package .* awaits its recipient resolution$/)], ackFaults: [] };
     m = outboundOf(await fold(scene.events.filter((e) => e !== forPackage), keys), out.data.messageId);
-    expect(m.acknowledged).toBe(false);
-    expect(m.membership.status).toBe("deferred");
-    expect(m.deferred).toEqual([expect.stringMatching(/^package .* awaits its recipient resolution$/)]);
-    expect(m.ackDeferred).toEqual(["1 acknowledging observation awaits the message's membership"]);
+    expect(m).toMatchObject(waiting);
+    expect(m.ackDeferred).toEqual([`acknowledging observation ${ack.eventId} is not yet a witness: the message's membership awaits its evidence`]);
 
+    const atA1 = resolved(scene, a1.didId, b1);
+    const elsewhere = receipt(scene, { local: a1.didId, peer: b1, resolution: atA1, binding: bound(scene, a1, b1, atA1).bound, ordinal: 1, overrides: { ack: [out.data.messageId] } });
+    await expectFoldOrderFree(scene.events.filter((e) => e !== forPackage), keys, (f) => {
+      expect(f.relationships.groups.get(elsewhere.data.messageId)!.status).toBe("complete");
+      const message = outboundOf(f, out.data.messageId);
+      expect(message).toMatchObject(waiting);
+      expect(message.ackDeferred).toEqual([`acknowledging observation ${ack.eventId} is not yet a witness: the message's membership awaits its evidence`]);
+    });
+    m = outboundOf(await fold(scene.events.filter((e) => e !== forPackage && e !== ack), keys), out.data.messageId);
+    expect(m).toMatchObject({ ...waiting, ackDeferred: [] });
+
+    scene.events.length = base;
+    const first = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1, overrides: { ack: [out.data.messageId] } });
+    receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, wire: first.data.wireMessageId, overrides: { ack: [out.data.messageId], intentHash: OTHER_INTENT } });
+    await expectFoldOrderFree(scene.events.filter((e) => e !== forPackage), keys, (f) => {
+      expect(f.relationships.groups.get(first.data.messageId)!.status).toBe("conflict");
+      expect(outboundOf(f, out.data.messageId)).toMatchObject({ ...waiting, ackDeferred: [] });
+    });
+
+    scene.events.length = base;
+    scene.add("message.in", ack.data, { at: ack.at });
     const again = resolved(scene, a0.didId, b0);
-    receipt(scene, { local: a0.didId, peer: b0, resolution: again, binding, ordinal: 2, wire: ack.data.wireMessageId, overrides: { ack: [out.data.messageId] } });
+    const later = receipt(scene, { local: a0.didId, peer: b0, resolution: again, binding, ordinal: 2, wire: ack.data.wireMessageId, overrides: { ack: [out.data.messageId] } });
     m = outboundOf(await fold(scene.events.filter((e) => e !== again), keys), out.data.messageId);
-    expect(m.acknowledged).toBe(false);
-    expect(m.membership.status).toBe("verified");
+    expect(m).toMatchObject({ acknowledged: false, ackWitnesses: [], membership: { status: "verified" }, ackFaults: [] });
+    expect(m.ackDeferred).toEqual([expect.stringMatching(/^acknowledging observation .* is not yet a witness: the observations of .* await their evidence$/), `acknowledging observation ${later.eventId} is not yet a witness: observation ${later.eventId} awaits its resolution`]);
   });
 
   it("derives membership from birth, binding and packages: what disagrees conflicts, what is not here waits, a birth without a binding stands alone", async () => {
