@@ -8,10 +8,12 @@
  * A procedure that has to talk to the mediator runs its round trips
  * outside the writer lock, since no lock should wait on the network;
  * what it needs instead is that no other procedure talks to the same
- * account meanwhile, so that what it read before asking is still what
- * the vault says when the answer comes. `serially` is that: one
- * procedure at a time per account of a runtime, whichever link it
- * runs over.
+ * account meanwhile, so that two of them cannot cross — one removing
+ * what the other just registered. `serially` is that: one procedure
+ * at a time per account of a runtime, whichever link it runs over. It
+ * holds off no vault write: a DID can be created while the answer is
+ * awaited, which is why what is committed is still decided over the
+ * fold read under the lock.
  */
 
 import type { VaultRuntime } from "@estoc/event-store/v3";

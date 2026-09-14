@@ -133,6 +133,8 @@ export class FakeMediator {
   readonly granted = new Set<string>();
   /** recipient DIDs every update of which is answered `server_error`: a mediator that will not hold them */
   readonly refuse = new Set<string>();
+  /** seal every reply and frame with the sender hidden under an anonymous outer layer, as DIDComm's sender protection does */
+  protectSender = false;
   readonly queues = new Map<string, Queued[]>();
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
@@ -190,7 +192,7 @@ export class FakeMediator {
       null,
       resolver,
       secretsResolverFor(this.secrets),
-      { forward: false }
+      { forward: false, protect_sender: this.protectSender }
     );
     return packed;
   }
@@ -362,6 +364,11 @@ export class FakeMediator {
     if (reply !== null) {
       socket.deliver(await this.pack(reply, from as string));
     }
+  }
+
+  /** The socket an account switched live delivery on over, for a test to push a frame down. */
+  socketOf(account: string): FakeSocket | undefined {
+    return this.sockets.get(account);
   }
 
   /** The mediator dropping an account's socket — an outage seen from the client. */

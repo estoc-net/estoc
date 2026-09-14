@@ -7,8 +7,9 @@ import { Message } from "didcomm-node";
 
 import { resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
 
-import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
+import { MEDIATE_GRANT, MEDIATE_REQUEST, RECIPIENT, RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_UPDATE_RESPONSE, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
 import {
+  AgentTrace,
   EntityConflict,
   MediatorLink,
   Unregistered,
@@ -147,6 +148,37 @@ describe("establishing", () => {
     expect((await establish(link, p.runtime, p.keys, p.mediationId)).mediation.routingDid).toBe(mediator.did);
     await p.runtime.close();
   });
+
+  it("takes the mediator's reply with its sender protected: an anonymous layer over the mediator's authcrypt still proves it", async () => {
+    const mediator = await newMediator();
+    mediator.protectSender = true;
+    const p = await party(mediator);
+    const opened = await p.link.exchange(MEDIATE_REQUEST, {});
+    expect(opened.msg.type).toBe(MEDIATE_GRANT);
+    expect(opened.metadata).toMatchObject({ encrypted: true, authenticated: true, anonymous_sender: true });
+    expect(opened.sender).toBe(mediator.did);
+    expect((await establish(p.link, p.runtime, p.keys, p.mediationId)).mediation.status).toBe("usable");
+    expect(await p.trace.read({ type: "envelope.rejected" })).toEqual([]);
+    await p.runtime.close();
+  });
+
+  it("refuses a forged reply by the deadline even when the note of the refusal never settles, and the account's next procedure goes on", async () => {
+    const mediator = await newMediator();
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const stalled = Object.create(p.trace) as AgentTrace;
+    (stalled as { append: AgentTrace["append"] }).append = (stream, what, data) => (stream === "envelope" && what === "rejected" ? new Promise(() => undefined) : p.trace.append(stream, what, data));
+    const forged = plainMessage(RECIPIENT, mediator.did, p.link.me, { dids: [], pagination: { count: 0, offset: 0, remaining: 0 } });
+    const link = new MediatorLink({ ...p.linkOptions, trace: stalled, timeoutMs: 300, fetch: async () => new Response(JSON.stringify(forged), { status: 200 }) });
+    const started = Date.now();
+    const first = reconcile(link, p.runtime, p.keys, p.mediationId);
+    const second = reconcile(p.link, p.runtime, p.keys, p.mediationId);
+    await expect(first).rejects.toBeInstanceOf(UnverifiedReply);
+    expect((await second).desired).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(p.log).toContain("trace not written: the deadline passed while noting");
+    await p.runtime.close();
+  });
 });
 
 describe("reconciling recipients", () => {
@@ -238,21 +270,26 @@ describe("reconciling recipients", () => {
     const first = await createDid(p.runtime, p.keys, routeId);
     let release = (): void => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered = (): void => undefined;
+    const paused = new Promise<void>((resolve) => (entered = resolve));
     let queries = 0;
     mediator.intercept = async (msg) => {
-      if (msg.type === RECIPIENT_QUERY && queries++ === 0) await gate;
+      if (msg.type === RECIPIENT_QUERY && queries++ === 0) {
+        entered();
+        await gate;
+      }
       return undefined;
     };
     const firstDisclosure = disclose(p.link, p.runtime, p.keys, first.minted.didId, { as: "oob", uses: "one" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await paused;
     const second = await createDid(p.runtime, p.keys, routeId);
     const other = new MediatorLink({ ...p.linkOptions, me: p.created.data.me.did });
     const secondDisclosure = disclose(other, p.runtime, p.keys, second.minted.didId, { as: "oob", uses: "one" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mediator.seenTypes.filter((type) => type === RECIPIENT_QUERY)).toHaveLength(2);
     expect(mediator.recipients.size).toBe(0);
     release();
     await Promise.all([firstDisclosure, secondDisclosure]);
+    expect(mediator.seenTypes.slice(-4)).toEqual([RECIPIENT_QUERY, RECIPIENT_UPDATE, RECIPIENT_QUERY, RECIPIENT_UPDATE]);
     expect([...mediator.recipients.keys()].sort()).toEqual([first.minted.did, second.minted.did].sort());
     const fold = await scanVault(p.runtime.vault, p.keys);
     expect(fold.set.of("did.disclosed")).toHaveLength(2);

@@ -19,6 +19,7 @@ import {
   RECIPIENT_UPDATE,
   RECIPIENT_UPDATE_RESPONSE,
   STATUS,
+  UnverifiedReply,
   createVault,
   secretsResolverFor,
   type IMessage,
@@ -395,6 +396,43 @@ describe("v2 link: the line to the mediator", () => {
     expect(alice.log.length).toBeGreaterThan(0);
     expect(new Set(alice.log)).toEqual(new Set(["trace not written: disk full"]));
     expect(await alice.trace.read("wire")).toEqual([]);
+  });
+
+  it("the mediator's reply with its sender protected is the mediator's still: taken over HTTP and down the socket", async () => {
+    const mediator = await newMediator();
+    mediator.protectSender = true;
+    const alice = await party(mediator, 21);
+    const opened = await alice.link.exchange(MEDIATE_REQUEST, {});
+    expect(opened.msg.type).toBe(MEDIATE_GRANT);
+    expect(opened.metadata).toMatchObject({ encrypted: true, authenticated: true, anonymous_sender: true });
+    expect(opened.sender).toBe(mediator.did);
+    const down = frames();
+    alice.link.openSocket(down.onFrame);
+    const status = await down.next();
+    expect(status.msg.type).toBe(STATUS);
+    expect(status.metadata.anonymous_sender).toBe(true);
+    alice.link.closeSocket();
+    expect(alice.log).toEqual([]);
+    expect(await alice.trace.read("envelope", { type: "envelope.rejected" })).toEqual([]);
+  });
+
+  it("a reply that is not the mediator's is refused by the deadline even when the note of the refusal never settles", async () => {
+    const mediator = await newMediator();
+    const decoder = new TextDecoder();
+    class Parked extends MemoryBackend {
+      override async append(path: string, data: Uint8Array): Promise<void> {
+        if (path.includes("/local/agent/trace/") && decoder.decode(data).includes("envelope.rejected")) {
+          await new Promise<void>(() => undefined);
+        }
+        return super.append(path, data);
+      }
+    }
+    const forged = plain(MEDIATE_GRANT, mediator.did, "did:example:alice", { routing_did: [mediator.did] });
+    const alice = await party(mediator, 22, { timeoutMs: 300, fetch: async () => new Response(JSON.stringify(forged), { status: 200 }) }, new Parked());
+    const started = Date.now();
+    await expect(alice.link.exchange(MEDIATE_REQUEST, {})).rejects.toBeInstanceOf(UnverifiedReply);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(alice.log).toContain("trace not written: the deadline passed while noting");
   });
 
   it("a ritual gives up after its timeout: a fetch that never settles does not hold the line forever", async () => {

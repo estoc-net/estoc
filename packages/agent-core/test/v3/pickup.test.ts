@@ -3,7 +3,7 @@ import { Message } from "didcomm-node";
 
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 
-import { BASIC_MESSAGE, PLAIN_TYP, secretsResolverFor, type IMessage } from "../../src/index.js";
+import { BASIC_MESSAGE, PLAIN_TYP, STATUS, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
 import { Pickup, createDid, ensureRoute, establish, reconcile, type Opened } from "../../src/v3/index.js";
 import { newMediator, party, reloaded } from "./helpers.js";
 
@@ -45,6 +45,33 @@ describe("pickup over the v3 ring", () => {
     ]);
     expect(mediator.queues.get(account)?.map((item) => item.id)).toEqual(["q2"]);
     expect((await p.trace.read({ stream: "envelope" })).filter((entry) => entry.type === "envelope.open").length).toBeGreaterThanOrEqual(2);
+    await p.runtime.close();
+  });
+
+  it("a frame down the socket is the mediator's with its sender protected, and dropped when another sealed it", async () => {
+    const mediator = await newMediator();
+    mediator.protectSender = true;
+    const p = await party(mediator);
+    await establish(p.link, p.runtime, p.keys, p.mediationId);
+    const frames: Opened[] = [];
+    let arrived = (): void => undefined;
+    const next = (): Promise<void> => new Promise((resolve) => (arrived = resolve));
+    const status = next();
+    p.link.openSocket((opened) => {
+      frames.push(opened);
+      arrived();
+    });
+    await status;
+    expect(frames.map((opened) => [opened.msg.type, opened.sender, opened.metadata.anonymous_sender])).toEqual([[STATUS, mediator.did, true]]);
+
+    const impostor = await newMediator(201, "http://impostor/");
+    const stray = plainMessage(STATUS, impostor.did, p.link.me, { live_delivery: true });
+    const [packed] = await new Message(stray).pack_encrypted(p.link.me, impostor.did, null, resolver, secretsResolverFor(impostor.secrets), { forward: false });
+    mediator.socketOf(p.link.me)?.deliver(packed);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(frames).toHaveLength(1);
+    expect(p.log).toEqual([`a socket frame was dropped: the reply was not sealed by the mediator to this account: sealed by ${impostor.did}`]);
+    p.link.closeSocket();
     await p.runtime.close();
   });
 });

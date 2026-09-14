@@ -344,23 +344,26 @@ export class MediatorLink {
     const opened = await bounded(signal, () => this.unpack(text));
     opened.open.parent = await noting;
     await this.noted(signal, () => this.noteOpen(opened));
-    await this.fromMediator(opened, me);
+    await this.fromMediator(opened, me, signal);
     this.noteRitual(opened);
     return opened;
   }
 
   /**
    * What the mediator sends down the line — a ritual's answer, a
-   * delivery — counts only when the envelope proves it: sealed by the
-   * mediator's key, authenticated, to the key of ours the request went
-   * out from. A document that merely unpacks proves nothing about who
-   * wrote it; one from another key, anonymous, or sealed to another
-   * key of ours is noted (`envelope.rejected`) and refused, whatever
-   * it says.
+   * delivery — counts only when the envelope proves it: authcrypt from
+   * the mediator's key to the key of ours the request went out from.
+   * An anonymous outer layer over that authcrypt, DIDComm's sender
+   * protection, still proves the sender and is taken. A document that
+   * merely unpacks proves nothing about who wrote it; one sealed by
+   * another key, by no key, or to another key of ours is noted
+   * (`envelope.rejected`) and refused, whatever it says. The note is
+   * observability only: it waits at most for `signal`, and not at all
+   * without one.
    */
-  private async fromMediator(opened: Opened, me: string | null): Promise<void> {
+  private async fromMediator(opened: Opened, me: string | null, signal?: AbortSignal): Promise<void> {
     const { metadata, sender, recipient } = opened;
-    const reason = !metadata.encrypted || metadata.anonymous_sender || !metadata.authenticated || sender === null
+    const reason = !metadata.encrypted || !metadata.authenticated || metadata.encrypted_from_kid === undefined || sender === null
       ? "not authenticated encryption"
       : sender !== this.mediatorDid
         ? `sealed by ${sender}`
@@ -368,7 +371,9 @@ export class MediatorLink {
           ? `sealed to ${recipient ?? "no key of ours"}`
           : null;
     if (reason === null) return;
-    await this.note("envelope", "envelope.rejected", { parent: opened.eid, reason });
+    const noting = (): Promise<string | undefined> => this.note("envelope", "envelope.rejected", { parent: opened.eid, reason });
+    if (signal === undefined) void noting();
+    else await this.noted(signal, noting);
     throw new UnverifiedReply(reason);
   }
 
