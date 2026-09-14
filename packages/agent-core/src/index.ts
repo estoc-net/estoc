@@ -1,6 +1,6 @@
 /**
  * @estoc/agent-core — the DIDComm v2 agent behind Estoc's clients, over
- * the `.estoc` vault as `@estoc/vault` folds it (docs/vault-events.md).
+ * the `.estoc` vault as `@estoc/vault` folds it.
  *
  * Bottom up: the folder and its events (`@estoc/event-store`,
  * `@estoc/vault`), bound here to did:peer:4 minted from a seed-derived
@@ -86,7 +86,7 @@ export {
   type Unpacked,
 } from "./channel.js";
 export { Keyring, type MyIdentity, type Routed, type Skipped } from "./keyring.js";
-export { MediatorLink, ritual, sealData, type LinkOptions, type Opened, type Sealed } from "./link.js";
+export { MediatorLink, UnverifiedReply, ritual, sealData, type LinkOptions, type Opened, type Sealed } from "./link.js";
 export { current, establish, leave, register, registerPending, rotateStale, routedOf, type EstablishStep, type Established, type Left, type Rotated } from "./mediation.js";
 export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export { type HandlerContext, type InboundRecord, type ProtocolHandler, type SendOptions } from "./handler.js";

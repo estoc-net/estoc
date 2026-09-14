@@ -19,6 +19,8 @@ import {
   MEDIATE_REQUEST,
   MESSAGES_RECEIVED,
   PLAIN_TYP,
+  RECIPIENT,
+  RECIPIENT_QUERY,
   RECIPIENT_UPDATE,
   RECIPIENT_UPDATE_RESPONSE,
   STATUS,
@@ -124,13 +126,21 @@ export class FakeSocket {
 
 export class FakeMediator {
   readonly did: string;
-  private readonly secrets: Secret[];
+  readonly secrets: Secret[];
   /** recipient DID → account (mediator-facing) DID */
   readonly recipients = new Map<string, string>();
+  /** the accounts granted mediation: what recipient-query answers for */
+  readonly granted = new Set<string>();
+  /** recipient DIDs every update of which is answered `server_error`: a mediator that will not hold them */
+  readonly refuse = new Set<string>();
+  /** seal every reply and frame with the sender hidden under an anonymous outer layer, as DIDComm's sender protection does */
+  protectSender = false;
   readonly queues = new Map<string, Queued[]>();
   private readonly sockets = new Map<string, FakeSocket>();
   /** every plaintext type the mediator handled, in order — for assertions */
   readonly seenTypes: string[] = [];
+  /** a test's hand on the dispatch: a reply of its own (null for none), or `undefined` to let the mediator answer as usual */
+  intercept: ((msg: IMessage, from: string | null) => Promise<IMessage | null | undefined> | IMessage | null | undefined) | null = null;
   /** blob-store/1.0 when on: hash → blob (one putter in these tests, so hash is key enough); off, `put` is refused */
   readonly blobs: Map<string, FakeBlob> | null;
   /** the fake `fetch`: the mediator's endpoint, or 404 */
@@ -182,12 +192,12 @@ export class FakeMediator {
       null,
       resolver,
       secretsResolverFor(this.secrets),
-      { forward: false }
+      { forward: false, protect_sender: this.protectSender }
     );
     return packed;
   }
 
-  private reply(type: string, to: string, body: Record<string, unknown>, thid?: string): IMessage {
+  reply(type: string, to: string, body: Record<string, unknown>, thid?: string): IMessage {
     return {
       id: crypto.randomUUID(),
       typ: PLAIN_TYP,
@@ -219,6 +229,8 @@ export class FakeMediator {
   /** Handle one plaintext from `from`; the reply plaintext, or null for none. */
   private async dispatch(msg: IMessage, from: string | null): Promise<IMessage | null> {
     this.seenTypes.push(msg.type);
+    const intercepted = await this.intercept?.(msg, from);
+    if (intercepted !== undefined) return intercepted;
     switch (msg.type) {
       case FORWARD: {
         const next = (msg.body as { next?: string }).next;
@@ -239,10 +251,21 @@ export class FakeMediator {
         return null;
       }
       case MEDIATE_REQUEST:
+        this.granted.add(from as string);
         return this.reply(MEDIATE_GRANT, from as string, { routing_did: [this.did] }, msg.id);
+      case RECIPIENT_QUERY: {
+        if (!this.granted.has(from as string)) {
+          return this.reply(PROBLEM_REPORT, from as string, { code: "e.p.not-mediated", comment: "mediation was not granted" }, msg.id);
+        }
+        const dids = [...this.recipients].filter(([, account]) => account === from).map(([recipient_did]) => ({ recipient_did }));
+        return this.reply(RECIPIENT, from as string, { dids, pagination: { count: dids.length, offset: 0, remaining: 0 } }, msg.id);
+      }
       case RECIPIENT_UPDATE: {
         const updates = (msg.body as { updates: { recipient_did: string; action: string }[] }).updates;
         const updated = updates.map((u) => {
+          if (this.refuse.has(u.recipient_did)) {
+            return { ...u, result: "server_error" };
+          }
           if (u.action === "add") {
             const had = this.recipients.get(u.recipient_did);
             this.recipients.set(u.recipient_did, from as string);
@@ -341,6 +364,11 @@ export class FakeMediator {
     if (reply !== null) {
       socket.deliver(await this.pack(reply, from as string));
     }
+  }
+
+  /** The socket an account switched live delivery on over, for a test to push a frame down. */
+  socketOf(account: string): FakeSocket | undefined {
+    return this.sockets.get(account);
   }
 
   /** The mediator dropping an account's socket — an outage seen from the client. */

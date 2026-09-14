@@ -1,6 +1,6 @@
 /**
  * Inbound policy: one opened envelope, the events it leaves and the
- * answer it gets (vault-events.md §3, §6, §7). In order: the channel it
+ * answer it gets. In order: the channel it
  * proves, read off the envelope and the documents it was opened with;
  * the same wire id from the same key again, dropped; the observations a
  * device writes on first sight (`channel.firstSeen`, `peer.resolved`);
@@ -26,11 +26,8 @@
  * outside the log but the wire ids seen, and those are loaded from it.
  * What an envelope becomes is final once it is handed back — recorded,
  * a duplicate, or ignored, the pickup may acknowledge it; what throws is
- * left for a later pickup. Moved from the v1 agent — processDelivery's
- * inner loop, claimInvitation, applyRotation, ensureContact,
- * handleSpecMessage — with one change under all of it: a contact is a
- * component of events, not a record saved (§6), so every step here
- * appends and asks the fold.
+ * left for a later pickup. A contact is a component of events, not a
+ * record saved, so every step here appends and asks the fold.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
@@ -99,7 +96,7 @@ function seenKey(peerKey: string | null, wireId: string): string {
   return `${peerKey ?? ""}\n${wireId}`;
 }
 
-/** The skeleton (§3.1) of a message that proved `proved`: `did` with a peer key, never without. */
+/** The skeleton of a message that proved `proved`: `did` with a peer key, never without. */
 function skeletonOf(proved: Proved, sender: string | null, msg: IMessage, mid: string, attachments: Cid[]): InboundSkeleton {
   const base = {
     myKey: proved.pair.myKey,
@@ -164,7 +161,7 @@ export class Inbound {
   /** One opened envelope, through every step; throws when a step fails — a document that does not resolve now, a disk that will not take the body. */
   async handle(opened: Opened): Promise<Handled> {
     const { msg, metadata, sender, recipient, documents } = opened;
-    // 1. the channel it proves (§3): the keys didcomm verified against, and the key of ours it found a secret for
+    // 1. the channel it proves: the keys didcomm verified against, and the key of ours it found a secret for
     const senderDoc = await this.document(sender, documents);
     const signer = signerOf(metadata);
     const signerDoc = signer === null || signer === sender ? null : await this.document(signer, documents);
@@ -180,7 +177,7 @@ export class Inbound {
       this.log(`${msg.type} ${msg.id} arrived again; recorded already`);
       return { outcome: "duplicate" };
     }
-    // 3. what a device writes on sight (§3.1)
+    // 3. what a device writes on sight
     await noteFirstSeen(this.events, this.fold, {
       ...pair,
       kind: proved.kind,
@@ -190,16 +187,16 @@ export class Inbound {
     if (sender !== null && senderDoc !== null) {
       await notePeerResolved(this.events, this.fold, resolvedOf(pair, sender, senderDoc));
     }
-    // 4. the rotation it vouched for (§3.1 `peer.rotated`), before anything asks who the channel belongs to
+    // 4. the rotation it vouched for (`peer.rotated`), before anything asks who the channel belongs to
     const mid = await this.noteRotation(opened, pair, this.mint());
-    // 5. an invitation of ours (§7.4)
+    // 5. an invitation of ours
     const refusal = await this.takeInvitation(pair, sender);
-    // 6. whose it is (§7.1)
+    // 6. whose it is
     const homed = await this.home(pair, sender, msg.type, refusal);
-    // 7. what the message carries, lifted out (§4, `lift.ts`): a share's blocks to `blobs/`, its body stored without them
+    // 7. what the message carries, lifted out (`lift.ts`): a share's blocks to `blobs/`, its body stored without them
     const lifted: Lifted =
       msg.type === OBJECT_SHARE ? await keepShare(msg as PlainMessage, this.opened.vault.blobs, (line) => this.log(line)) : { plaintext: msg as PlainMessage, attachments: [] };
-    // 8. the message, body first (§4): the last event, and the one a redelivery is told apart by
+    // 8. the message, body first: the last event, and the one a redelivery is told apart by
     await recordMessage(this.opened.vault, this.fold, "in", utf8.encode(JSON.stringify(lifted.plaintext)), skeletonOf(proved, sender, msg, mid, lifted.attachments));
     this.seen.add(key);
     const found = await messageRecord(this.fold, this.opened.vault.blobs, mid);
@@ -239,7 +236,7 @@ export class Inbound {
   }
 
   /**
-   * Mail to a key published as a one-use invitation (§7.4). Open, and
+   * Mail to a key published as a one-use invitation. Open, and
    * from someone: taken — attached to the contact the peer key already
    * belongs to, when it does (they wrote to us by another key of ours
    * before), else to a contact created for them; `because: invitation`,
@@ -290,13 +287,13 @@ export class Inbound {
    * or anonymously (didcomm-rust refuses a plaintext whose `from` is
    * not the JWT's `sub`; the envelope's proven sender closes the gap
    * between the plaintext's claim and the key that sealed it). Recorded
-   * on the channel `iss` was last resolved on — the old pair (§3.1) —
+   * on the channel `iss` was last resolved on — the old pair —
    * else on this one, when `iss` was never seen: a stranger vouching
    * with a DID they used elsewhere. Once: a later message still carrying
    * it, or this one redelivered, finds the rotation recorded already —
    * the rotation, not the join: the same key under a moved DID joins the
    * two by resolution alone, and only the rotation says which is the
-   * later one (§7.2). Returns the mid the message is recorded under —
+   * later one. Returns the mid the message is recorded under —
    * `minted`, or the one a rotation names that no message carries yet:
    * an earlier attempt's, cut off before its record, whose evidence
    * this record is.
@@ -342,7 +339,7 @@ export class Inbound {
     return null;
   }
 
-  /** The channel `did` was last resolved on (§3.1 `peer.resolved`): where its key was seen; null when never. */
+  /** The channel `did` was last resolved on (`peer.resolved`): where its key was seen; null when never. */
   private channelOf(did: string): Channel | null {
     let found: { channel: Channel; at: string } | null = null;
     for (const channel of this.fold.channels()) {
@@ -355,13 +352,13 @@ export class Inbound {
   }
 
   /**
-   * The contact the channel belongs to (§7.1). One: theirs. Several:
+   * The contact the channel belongs to. One: theirs. Several:
    * shown under the first until merged, said so. Deleted: nobody's,
    * hidden. None: a stranger — adopted when the option says so
    * (`contact.created` + `contact.attached { because: manual }`) and
    * they wrote, not pinged: not anonymous, not turned away from an
    * invitation, not sealed to a mediation key (no contact's channel is
-   * under one, §3), not a type the specification defines (pinging is
+   * under one), not a type the specification defines (pinging is
    * not writing). Once: a redelivery finds the channel attributed.
    */
   private async home(pair: ChannelKey, sender: string | null, type: string, refusal: string | null): Promise<ContactRecord | null> {

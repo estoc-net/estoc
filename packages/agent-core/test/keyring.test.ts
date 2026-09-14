@@ -180,7 +180,7 @@ describe("v2 keyring: the keys this device holds", () => {
     expect(again.v.fold.myKey(pub.key)?.minted).toMatchObject({ mediation: routed.id, routingDid: ROUTING_2 });
     expect((await resolveDIDCommDoc(pub.identity.did))?.service[0]?.serviceEndpoint).toMatchObject({ uri: ROUTING_2 });
     expect(again.ring.pub()).toEqual(pub);
-    // the stale one is still published and not retired: retiring it is the mediation ritual's (T09), not the ring's
+    // the stale one is still published and not retired: retiring it is the mediation ritual's, not the ring's
     expect(again.v.fold.myKey(stale.key)).toMatchObject({ retired: null, published: [expect.objectContaining({ as: "profile" })] });
 
     // not granted at all: no address, whatever was published

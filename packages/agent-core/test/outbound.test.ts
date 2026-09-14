@@ -646,7 +646,7 @@ describe("v2 outbound: delivering", () => {
     const share = async (): Promise<MessageRecord> =>
       s.outbound.record(await s.outbound.compose(cid, OBJECT_SHARE, { root }, { attachments: [...attachmentsOf(blocks), stray] }), [root]);
     const found = await share();
-    // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
+    // the record's body names the blocks by id alone: the bytes are in blobs/, once
     const stored = found.msg?.attachments as { id: string; media_type: string; byte_count: number; data?: unknown }[];
     expect(stored.map((a) => a.id)).toEqual([...[...blocks.keys()].sort(), outside]);
     expect(stored.slice(0, -1).every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);

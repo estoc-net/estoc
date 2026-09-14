@@ -739,7 +739,7 @@ describe("v2 inbound: object-share", () => {
       expect(await s.v.vault.blobs.has(cid)).toBe(true);
     }
     expect(kept.outcome === "recorded" && kept.record.skeleton.attachments).toEqual([root]);
-    // the record's body names the blocks by id alone: the bytes are in blobs/, once (§4)
+    // the record's body names the blocks by id alone: the bytes are in blobs/, once
     const stored = (kept.outcome === "recorded" ? kept.record.msg?.attachments : undefined) as { id: string; media_type: string; byte_count: number; data?: unknown }[];
     expect(stored.map((a) => a.id).sort()).toEqual([...blocks.keys()].sort());
     expect(stored.every((a) => a.data === undefined && a.byte_count > 0)).toBe(true);

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- **Version 3 begins**, under `@estoc/agent-core/v3`: the agent's
+  skeleton and identity over the version-3 vault. `openVault`,
+  `createVault`, `inspectRuntime` and `inspectSnapshot` open the SQLite
+  runtime of `@estoc/event-store/v3` with the seed's keys of
+  `@estoc/vault/v3` — the seed or a passphrase verified against the
+  anchor before anything is derived, the fold read once at open, an
+  inspector that writes nothing and a snapshot validated whole. `Keyring`
+  holds the two keys of every verified communication-DID entity and
+  mediation identity under both Peer DID spellings for didcomm's secrets
+  resolver. `AgentTrace` keeps what the runtime observed in the local
+  trace, one prune policy per level, `traceOf` following the onion of
+  one message. `MediatorLink` and `Pickup` carry over with the new key
+  source and trace. `createMediation`, `establish`, `reconcile` and
+  `selectMediation` record an arrangement before the mediator is asked,
+  its grant when it comes, and make the mediator hold exactly the live
+  DIDs on its routes by recipient-query and recipient-update.
+  `configureRoute`, `ensureRoute`, `createDid`, `disclose` and
+  `retireDid` are the route and address lifecycle: a DID minted from its
+  ID and route alone and never recreated elsewhere, a mediated address
+  disclosed only once its registration is verified, an `oob` disclosure
+  carried by an invitation with the long form. The shared protocol
+  constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
+- **The mediator's word is only what it sealed.** Both links, the v2
+  `MediatorLink` and the v3 one, accept a ritual's answer or a socket
+  frame only when the envelope was authenticated encryption from the
+  mediator's key to the key of ours the request went out from; a
+  plaintext, an anonymous envelope (signed or not: a signed plaintext
+  can be sealed to us again by anyone holding it), one sealed by
+  another key or to another key of ours is refused with
+  `UnverifiedReply` (an HTTP reply)
+  or dropped with a log line (a socket frame), noted as
+  `envelope.rejected`. The v3 link is one arrangement's for its life
+  (`me` is its DID, not a callback), and the v3 mediation procedures
+  refuse a link speaking as another arrangement's identity
+  (`WrongAccount`), even toward the same mediator.
 - **A share's blocks are in the vault once.** A recorded object-share —
   received (`keepShare`) or sent (`Agent.shareObject`, any `send` naming
   `roots`) — keeps its block attachments by id alone: the `data` is gone

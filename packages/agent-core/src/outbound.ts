@@ -1,21 +1,19 @@
 /**
- * Outbound: what a message of ours becomes on its way out (vault-events.md
- * §3, §6, §7.2), and the outbox it waits in. Composing — from which key
+ * Outbound: what a message of ours becomes on its way out, and the
+ * outbox it waits in. Composing — from which key
  * of ours, to which DID of theirs, vouched for by which DID they know us
  * by; recording — the `message.out`, body first, before anything touches
  * the wire; delivering — sealed to them, forwarded through their mediator
  * when they have one, POSTed, traced layer by layer. The outbox is a
  * reading of the fold and holds nothing of its own: every `message.out`
  * not yet `sent`, tried in order per contact, each try one
- * `delivery.attempted` (§3.1); one held is left alone unless named, and
- * one on a channel since frozen (§3.2) is not sent from it.
+ * `delivery.attempted`; one held is left alone unless named, and
+ * one on a channel since frozen is not sent from it.
  *
- * Moved from the v1 agent — compose, attachFromPrior, ensurePairwise,
- * logOutbound, deliverToContact, drainOutbox, attemptDelivery, retry,
- * flush. What changed: which key we write from is the contact's
- * `keys` (a `contact.useKey`, §6), which DID they know us by is
- * `addressedAs` and the thread, all folds; and an attempt is an event
- * on the message's channel, not a line in a deliveries file.
+ * Which key we write from is the contact's `keys` (a `contact.useKey`),
+ * which DID they know us by is `addressedAs` and the thread, all folds;
+ * and an attempt is an event on the message's channel, not a line in a
+ * deliveries file.
  */
 
 import type { DIDDoc } from "@estoc/did-peer";
@@ -57,7 +55,7 @@ export interface OutboundOptions {
 /** A message composed and not yet recorded: the plaintext, the channel it will go out on, the DID it is addressed to. */
 export interface Composed {
   plain: IMessage;
-  /** the key of ours it is from and the key of theirs it will be sealed to (§3) */
+  /** the key of ours it is from and the key of theirs it will be sealed to */
   pair: ChannelKey;
   /** the contact's current DID, which `plain.to` names */
   to: string;
@@ -76,11 +74,11 @@ function shortType(type: string): string {
 
 /**
  * Minted under this device's current mediation *and* its routing DID:
- * the mediation is this device's own (§5: a mediation binds one
+ * the mediation is this device's own (a mediation binds one
  * device), so the mediator delivers what comes back here; the route is
  * the one the DID's service names now. A key under another device's
- * mediation is derived here after a merge, and is not written from
- * (§3.2): its mail is that device's.
+ * mediation is derived here after a merge, and is not written from:
+ * its mail is that device's.
  */
 function underCurrent(key: MyKey | null, routed: Routed): key is MyKey & { minted: NonNullable<MyKey["minted"]> } {
   return key !== null && key.minted !== null && key.minted.mediation === routed.id && key.minted.routingDid === routed.routingDid;
@@ -124,8 +122,8 @@ export class Outbound {
 
   /**
    * One message to a contact: to their current DID, resolved now and
-   * recorded as `peer.resolved` on the channel it will go out on (§3.1
-   * — the edge that makes the channel theirs); from the key of ours
+   * recorded as `peer.resolved` on the channel it will go out on (the
+   * edge that makes the channel theirs); from the key of ours
    * toward them, minted now when there is none (`fromKey`); naming their
    * invitation as `pthid` while we are still answering it; and carrying
    * `from_prior` while they know us by another DID (`vouch`). Needs a
@@ -137,7 +135,7 @@ export class Outbound {
     if (routed === null) {
       throw new Error("no mediation granted yet: nothing to write from");
     }
-    // the representative (§6): a member's cid — held across a merge, or a deletion — locks, mints
+    // the representative: a member's cid — held across a merge, or a deletion — locks, mints
     // and writes under the one contact it is part of, not under a cid the fold reads nothing from
     const rep = this.contact(cid).cid;
     const to = this.toDid(this.contact(rep));
@@ -168,7 +166,7 @@ export class Outbound {
   }
 
   /**
-   * The `message.out` (§3.1), body first (§4): the plaintext into the
+   * The `message.out`, body first: the plaintext into the
    * blob store, then the skeleton — `roots` the blobs lifted out of it,
    * put by the caller before this. With roots named, the body is the
    * plaintext as stored (`lift.ts`): the block attachments those roots
@@ -208,7 +206,7 @@ export class Outbound {
    * same key. The record keeps the address it was written to; the copy
    * on the wire names where it went, since an envelope is sealed only
    * to a DID its plaintext addresses. Sealed from the DID the plaintext
-   * is from to the first agreement key their document lists (§11) — the
+   * is from to the first agreement key their document lists — the
    * document resolved once here, which the service is read off and the
    * key is sealed to, so that a did:web changing between two
    * resolutions cannot pair one version's key with the other's
@@ -294,7 +292,7 @@ export class Outbound {
     return contact;
   }
 
-  /** The DID they are written to: the current one; the latest of several, said so — a conflict is shown, not solved here (§7.2). */
+  /** The DID they are written to: the current one; the latest of several, said so — a conflict is shown, not solved here. */
   private toDid(contact: Contact): string {
     const to = contact.currentDids.at(-1);
     if (to === undefined) {
@@ -310,10 +308,10 @@ export class Outbound {
    * The key of ours we write to this contact from: the latest live
    * `contact.useKey` under this device's current mediation and route
    * (`underCurrent`) that the ring holds — a key minted toward them, or
-   * the invitation they took (§7.4) — else one minted now
+   * the invitation they took — else one minted now
    * (`Keyring.mintToward`: `did.minted` + `contact.useKey`). A key on
    * another route, or under another device's mediation, is no address
-   * of this device's (§3.2) and is passed over; one the ring has not
+   * of this device's and is passed over; one the ring has not
    * derived yet is derived and held now (`holdMinted` — a mint that
    * landed after this ring loaded, under an earlier assembly); one the
    * seed does not derive is not ours to write from. One choice at a time, across every
@@ -362,7 +360,7 @@ export class Outbound {
   /**
    * `from_prior`: the DID they know us by, signing over the one we write
    * from, while the two differ. They know us by the key they last wrote
-   * to (`addressedAs`, §7.2); before they ever wrote, by the one we last
+   * to (`addressedAs`); before they ever wrote, by the one we last
    * wrote from that is not this one; before either, by our public DID —
    * the card they most likely took our address from — unless they gave
    * us theirs (`accepted`): then neither knew the other's public DID,
@@ -428,11 +426,11 @@ export type Attempted = VaultEvent<"delivery.attempted">;
  * passes over it. A pass tries each waiting message once, oldest first,
  * narrowed to one contact or one message when asked; a failure for a
  * contact stops the pass for that contact, so their messages never
- * overtake one another, and other contacts go on. Held messages (§3.1,
- * this device's `delivery.held`) are skipped unless named by `mid` —
+ * overtake one another, and other contacts go on. Held messages (this
+ * device's `delivery.held`) are skipped unless named by `mid` —
  * that is what a retry by hand is. Passes are serialised, so a start, a
  * reconnect and a send cannot try one message at the same time. A
- * message on a channel since frozen (§3.2) is tried and fails, saying
+ * message on a channel since frozen is tried and fails, saying
  * why: nothing is sent from a key that is not this device's current
  * address, or to a key that is not theirs any more; writing again from
  * where both sides are now is the sender's to do.
@@ -523,7 +521,7 @@ export class Outbox {
       }
       const attribution = this.fold.attribution(message.pair);
       if (attribution.kind === "deleted") {
-        continue; // written to a contact since deleted (§9): nobody's to send
+        continue; // written to a contact since deleted: nobody's to send
       }
       const cid = attributedTo(attribution);
       if (only.cid !== undefined && cid !== only.cid) {
@@ -547,11 +545,11 @@ export class Outbox {
    * the key it was written from, the mediator told of it first when it
    * has not been (`register`), so that what comes back finds us; to the
    * contact's DID now; sealed and POSTed (`Outbound.deliver`). Whatever
-   * happens is one `delivery.attempted` on the message's channel
-   * (§3.1): `sent`, and it is out of the outbox; `failed`, with why, and
+   * happens is one `delivery.attempted` on the message's channel:
+   * `sent`, and it is out of the outbox; `failed`, with why, and
    * it waits for the next pass. A message whose body, or whose lifted
-   * blocks, were erased since it was written (§8), or a block of whose
-   * object is gone (§4), fails saying so: what the record no longer
+   * blocks, were erased since it was written, or a block of whose
+   * object is gone, fails saying so: what the record no longer
    * holds is not sent, and nothing partial is. Nothing here throws but the
    * log refusing the event.
    */
@@ -579,14 +577,14 @@ export class Outbox {
       if (found === null || found.msg === null) {
         throw new Error(`its plaintext is ${found?.body ?? "gone"}`);
       }
-      // what it carries, erased since (§8.2): as the body, asked before the blocks are
+      // what it carries, erased since: as the body, asked before the blocks are
       const erased = found.skeleton.attachments.find((root) => found.erased.includes(root));
       if (erased !== undefined) {
         throw new Error(`what it carries is erased (${erased})`);
       }
-      // the wire form (§4, `lift.ts`): the blocks the body names by id, back from `blobs/` — those the record's roots
+      // the wire form (`lift.ts`): the blocks the body names by id, back from `blobs/` — those the record's roots
       // reach and no other, as they were stripped; an attachment named after any other block is the wire's. A block
-      // of the object gone since (§4: damage, or a collection) is a refusal naming it, before anything is filled:
+      // of the object gone since (damage, or a collection) is a refusal naming it, before anything is filled:
       // under an absent block nothing can be told, and nothing partial goes on the wire
       const blobs = this.opened.vault.blobs;
       const { reached, absent } = await reach(found.skeleton.attachments, (cid) => blobs.getBlock(cid));
@@ -611,12 +609,12 @@ export class Outbox {
   }
 
   /**
-   * Why nothing is sent on this channel (§3.2), or null while it is one
+   * Why nothing is sent on this channel, or null while it is one
    * the contact is written to: the key of ours is retired, or under a
    * mediation that is not this device's current one (another device's,
    * or one since left); the key of theirs is not in their current
    * document; or the channel is claimed by more than one contact and is
-   * no one's to write from until merged (§7.1). The contact's `writeTo`
+   * no one's to write from until merged. The contact's `writeTo`
    * is the fold's word on the last two.
    */
   private frozen(contact: Contact, pair: ChannelKey, routed: Routed): string | null {
@@ -640,7 +638,7 @@ export class Outbox {
   }
 
   /**
-   * The mediator told of the key we write from (§5), when it has not
+   * The mediator told of the key we write from, when it has not
    * been yet: what comes back rides that mapping. The key is this
    * device's own by now (`frozen` let it through), so `register` takes
    * it; recorded once, it is not asked about again.

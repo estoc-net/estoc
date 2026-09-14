@@ -22,13 +22,13 @@ import type { PlainMessage } from "../records.js";
 import { AES256_GCM_HKDF_1MB, decryptStream } from "./streaming-aead.js";
 
 /**
- * object-share/1.0 (`docs/object-share.md`): hand a contact a whole
+ * object-share/1.0: hand a contact a whole
  * object — a folder-object hashed into a UnixFS tree. One message
  * carries the root in the body and blocks as attachments named by their
  * CID: always the tree's **skeleton** (every dag-pb block) and
  * `index.json`, and every leaf when the whole closure fits. When it does
  * not, the leaves go by the other road: the whole closure as one
- * encrypted CAR at a URL — a **package** (§8) — named in the share with
+ * encrypted CAR at a URL — a **package** — named in the share with
  * its hash and key, fetched by the receiver whenever it likes. Nothing
  * is asked back over DIDComm; a package that is gone leaves a partial
  * object whose files are all named and sized by the skeleton.
@@ -60,7 +60,7 @@ export interface ObjectShareBody {
   root: string;
   /** compact JWS over `{did, root}` — folder-object's card; present, the share is a signed object */
   card?: string;
-  /** the one package (§8): which attachment, how to open it, and how long its store promised to keep it */
+  /** the one package: which attachment, how to open it, and how long its store promised to keep it */
   package?: {
     attachment_id: string;
     ciphering: { algorithm: string; parameters: { key: string } };
@@ -72,7 +72,7 @@ export interface ObjectShareBody {
 /**
  * The package as a DIDComm linked attachment: `id` and `data.hash` are
  * the ciphertext's own name (sha-256 multihash, base32), `byte_count`
- * its size, `data.links` where it is — exactly one URL (§8); `media_type`
+ * its size, `data.links` where it is — exactly one URL; `media_type`
  * says what the plaintext is.
  */
 export interface PackageAttachment {
@@ -97,7 +97,7 @@ export interface SharePackage {
 /**
  * A share that names a package the receiver cannot use: the entry is
  * there but its shape, its attachment, or its algorithm is not what this
- * receiver can open. The share is still what its blocks make it (§7); the
+ * receiver can open. The share is still what its blocks make it; the
  * problem is reported, not swallowed, so a receiver can tell "no bytes
  * were offered" from "bytes were offered in a way I cannot take".
  */
@@ -124,7 +124,7 @@ export interface Closure {
   /** every block, CID → bytes */
   blocks: Map<string, Uint8Array>;
   /**
-   * The minimal share (`docs/object-share.md` §2): every dag-pb block —
+   * The minimal share: every dag-pb block —
    * the skeleton — plus the blocks of `index.json`. A subset of `blocks`.
    */
   minimal: Map<string, Uint8Array>;
@@ -220,7 +220,7 @@ export function attachmentsOf(blocks: Map<string, Uint8Array>): BlockAttachment[
  * The share's `body.package` and its attachment, read out as
  * `SharePackage` when both are there and well-formed under an algorithm
  * we know; null when the share names no package; a `PackageProblem`
- * when it names one that cannot be used (§8). A problem is not an error
+ * when it names one that cannot be used. A problem is not an error
  * in the share — the blocks it carries are what they are — but it is
  * not nothing either, and is reported as such.
  */
@@ -331,7 +331,7 @@ export function packageCar(closure: Closure): Uint8Array {
  * block returned hashes to its CID; whether it belongs to the closure is
  * for `verifyShare` to decide, block by block, as it walks. Throws when
  * the bytes are not the package, do not open, or open to a CAR rooted
- * elsewhere than `root` (§8): a package of some other object is not
+ * elsewhere than `root`: a package of some other object is not
  * this share's, however well it decrypts. What is missing from it is
  * not an error here — what walks is kept, the rest stays partial.
  */
@@ -354,7 +354,7 @@ export async function openPackage(
  * The blocks a share message carries, CID → bytes. Only attachments of
  * the block shape count; anything else riding along is ignored. Whether
  * the bytes match their CID is `verifyShare`'s question. Throws when an
- * `id` appears on two attachments (§2): that is malformed, whatever the
+ * `id` appears on two attachments: that is malformed, whatever the
  * bytes.
  */
 export function blocksOf(msg: PlainMessage): Map<string, Uint8Array> {

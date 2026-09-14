@@ -4,8 +4,8 @@
  * pickup round-trip with the mediator — none of it is a fact of the
  * vault, all of it is what an audit or a debugger wants, and it is bulky
  * and perishable. So it lives in the agent's local state
- * (`local/agent/trace/<stream>/`: event-store.md §7.2, vault-folder.md
- * §7), one stream per kind of observation, each with a retention of its
+ * (`local/agent/trace/<stream>/`), one stream per kind of observation,
+ * each with a retention of its
  * own, pruned whole segments at a time and never a line.
  *
  * Streams:
@@ -240,7 +240,7 @@ export class AgentTrace {
    * onion in canonical order, the outer layers first; empty when nothing
    * was kept: the record still stands, its trace has expired.
    *
-   * Outward is read the way §7.2 means a chain to be read: a `parent`
+   * Outward is read the way a local chain is meant to be read: a `parent`
    * is a lookup by `eid`, one filtered `scan` per link. Inward is a
    * fixed point — what hung on the chain, what hung on that, as deep as
    * the onion goes: each round scans the streams, keeping what hangs on

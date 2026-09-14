@@ -160,7 +160,7 @@ describe("v2 agent sharing objects", () => {
     expect((await verifyShare(carols.msg as PlainMessage, heldBy(carol))).card?.did).toBe(alice.v.anchor.did);
 
     // Bob erases the object from the record Alice sent him: the blocks live on for the share he
-    // passed to Carol, and it is the record, not the blocks, that says his copy is gone (§8.2)
+    // passed to Carol, and it is the record, not the blocks, that says his copy is gone
     await eraseMessage(bob.v.vault.events, bob.v.fold, record.mid, "user", [root]);
     const bobs = await recordsOf(bob);
     const erasedRecord = bobs.find((r) => r.mid === record.mid) as MessageRecord;

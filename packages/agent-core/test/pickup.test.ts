@@ -471,16 +471,17 @@ describe("v2 pickup: the mail the mediator holds for us", () => {
     ]);
     alice.log.length = 0;
 
-    // a frame that is neither status nor delivery: a line, and the socket stays up
+    // a frame not sealed by the mediator, whatever it carries: dropped with a line, and the socket stays up
     const carol = await party(mediator, 12);
     const stray = await carol.link.seal(plain(BASIC_MESSAGE, carol.me.identity.did, alice.me.identity.did, { content: "psst" }), alice.me.identity.did, carol.me.identity.did);
     alice.sockets[0]?.deliver(stray.packed);
-    await until("the stray frame logged", () => alice.log.includes(`unexpected frame type ${BASIC_MESSAGE}`));
+    const dropped = `a socket frame was dropped: the reply was not sealed by the mediator to us: sealed by ${carol.me.identity.did}`;
+    await until("the stray frame logged", () => alice.log.includes(dropped));
     expect(inbox.seen).toHaveLength(3);
     expect(alice.link.live).toBe(true);
     expect(closed).toBe(0);
     alice.link.closeSocket();
-    expect(alice.log).toEqual([`unexpected frame type ${BASIC_MESSAGE}`]);
+    expect(alice.log).toEqual([dropped]);
   });
 
   it("a status down the socket that is not about live delivery is nothing to tell", async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { attachmentsOf, closureOf, fillBlocks, stripBlocks, type PlainMessage } from "../src/index.js";
 
-describe("lifting a message's blocks (vault-events.md §4)", () => {
+describe("lifting a message's blocks", () => {
   const enc = new TextEncoder();
   const files = {
     "index.json": enc.encode(JSON.stringify({ format: "https://estoc.dev/post/1.0", id: "01900000-0000-7000-8000-000000000000" })),

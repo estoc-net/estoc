@@ -23,3 +23,5 @@ export const MESSAGES_RECEIVED =
   "https://didcomm.org/messagepickup/3.0/messages-received";
 export const LIVE_DELIVERY_CHANGE =
   "https://didcomm.org/messagepickup/3.0/live-delivery-change";
+export const RECIPIENT_QUERY = "https://didcomm.org/coordinate-mediation/3.0/recipient-query";
+export const RECIPIENT = "https://didcomm.org/coordinate-mediation/3.0/recipient";

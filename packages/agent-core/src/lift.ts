@@ -1,5 +1,5 @@
 /**
- * Lifting (vault-events.md §4, provisional): what is taken out of a
+ * Lifting: what is taken out of a
  * message's plaintext before it is recorded, and put back before it goes
  * out. A record's body is the plaintext *as stored*, not as it crossed
  * the wire — the trace keeps that. One thing is lifted today: the blocks
@@ -14,7 +14,7 @@
  * as it does for leaves that came by another road. A message nothing
  * was lifted from — a share that did not verify, a send naming no
  * `roots` — is stored as it came. Attachments carried inline in other
- * messages (`data.base64`, `data.json`) are not lifted yet (§11).
+ * messages (`data.base64`, `data.json`) are not lifted yet.
  */
 
 import { isCid, type BlobStore, type Cid } from "@estoc/event-store";

@@ -20,8 +20,8 @@
 
 import { base64urlToUtf8 } from "@estoc/did-peer";
 
-import type { IMessage } from "./protocol/didcomm.js";
-import { DELIVERY, DELIVERY_REQUEST, MESSAGES_RECEIVED, STATUS, STATUS_REQUEST } from "./protocol/mediation.js";
+import type { IMessage } from "../protocol/didcomm.js";
+import { DELIVERY, DELIVERY_REQUEST, MESSAGES_RECEIVED, STATUS, STATUS_REQUEST } from "../protocol/mediation.js";
 import type { MediatorLink, Opened } from "./link.js";
 
 /** What became of an opened message: taken (acknowledged, the mediator drops it) or left queued for a later pickup. */
@@ -142,7 +142,7 @@ export class Pickup {
       if (delivery.msg.type !== DELIVERY) {
         throw new Error(`mediator answered ${delivery.msg.type} to delivery-request`);
       }
-      const taken = await this.enqueue(() => this.take(delivery.msg, delivery.eid));
+      const taken = await this.enqueue(() => this.take(delivery.msg, delivery.seq));
       acked += taken;
       if (taken === 0) {
         this.log("nothing acknowledged this round; leaving the queue for a later pickup");
@@ -167,7 +167,7 @@ export class Pickup {
       return;
     }
     if (msg.type === DELIVERY) {
-      await this.enqueue(() => this.take(msg, opened.eid));
+      await this.enqueue(() => this.take(msg, opened.seq));
       return;
     }
     this.log(`unexpected frame type ${msg.type ?? "unknown"}`);
@@ -190,7 +190,7 @@ export class Pickup {
    * acknowledged. Returns how many the mediator was told of — none when
    * the acknowledgement itself failed, as they are all still queued.
    */
-  private async take(delivery: IMessage, parent?: string): Promise<number> {
+  private async take(delivery: IMessage, parent?: number): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const taken: string[] = [];
     for (const attachment of attachments) {
@@ -215,7 +215,7 @@ export class Pickup {
         this.log(`a delivered ${opened.msg.type} was not handled; leaving it queued: ${messageOf(err)}`);
         fate = "skip";
       }
-      if (opened.eid === undefined) {
+      if (opened.seq === undefined) {
         await this.link.noteOpen(opened);
       }
       if (fate === "acked" && attachment.id !== undefined) {

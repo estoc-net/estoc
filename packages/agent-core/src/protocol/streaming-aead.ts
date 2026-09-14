@@ -1,7 +1,11 @@
 /**
  * Tink's `AES256_GCM_HKDF_1MB` streaming AEAD (`AesGcmHkdfStreaming`),
- * on WebCrypto — the ciphering of an object-share package
- * (`docs/object-share.md` §8). Wire format, as Tink defines it:
+ * on WebCrypto — the ciphering of an object-share package. Tink itself
+ * ships no JavaScript streaming AEAD for the browser and workerd
+ * runtimes this package runs in, so the format is assembled here over
+ * Web Crypto's AES-GCM and HKDF rather than taken from a library; the
+ * primitives themselves are not reimplemented. Wire format, as Tink
+ * defines it:
  *
  *     header  = len(1) ‖ salt(32) ‖ noncePrefix(7)          — 40 bytes
  *     segment = AES-256-GCM(derivedKey, nonce, plaintextPart) — with tag
