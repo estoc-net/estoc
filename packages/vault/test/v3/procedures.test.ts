@@ -294,6 +294,39 @@ describe("unfinished work", () => {
     expect(work.pendingClaims).toEqual([]);
   });
 
+  it("lists a birth whose package already waits for the binding, since the binding is what recovery restores first, and none once the message is erased or its contact deleted", async () => {
+    const { scene, keys, a1, b1 } = await vaults();
+    const R = relationshipId(a1.did, b1.did);
+    const root = resolved(scene, a1.didId, b1);
+    const birth = intent(scene, R, { birth: { localDidId: a1.didId, peerDid: b1.did } });
+    const pkg = packageOf(scene, birth, { sender: a1.didId, recipient: b1, resolution: root });
+    const c = await checked(scene.events, keys);
+    expect(foldVault(VaultEventSet.of(c.events), c.checks).outbound.outbounds.get(birth.data.messageId)!.work).toEqual({ kind: "none", because: expect.stringContaining("binding") });
+    expectWorkOrderFree(c, {}, (work) => {
+      expect(work.births).toEqual([{ messageId: birth.data.messageId, relationshipId: R, birth: birth.data.birth }]);
+      expect(work.outbound).toEqual([]);
+    });
+
+    const base = scene.events.length;
+    bound(scene, a1, b1, root);
+    let work = workOf(await checked(scene.events, keys));
+    expect(work.births).toEqual([]);
+    expect(work.outbound).toEqual([{ messageId: birth.data.messageId, relationshipId: R, work: { kind: "submit", packageIds: [pkg.data.packageId] } }]);
+
+    scene.events.length = base;
+    scene.add("message.erased", { messageId: birth.data.messageId, dropCids: [birth.data.bodyCid], because: "user" });
+    work = workOf(await checked(scene.events, keys));
+    expect(work.births).toEqual([]);
+    expect(work.outbound).toEqual([]);
+
+    scene.events.length = base;
+    scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
+    scene.add("contact.deleted", { contactId: CONTACT });
+    const fold = foldVault(VaultEventSet.of(scene.events), (await checked(scene.events, keys)).checks);
+    expect(deletionOf(fold, CONTACT).erases.map((draft) => draft.data.messageId)).toEqual([birth.data.messageId]);
+    expect(unfinishedWork(fold).births).toEqual([]);
+  });
+
   it("lists the replies owed — acknowledgments requested, a natural response — with the sender gate's verdict, and the application inputs the early-privacy policy may take as a trigger", async () => {
     const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
     scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });

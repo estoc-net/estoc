@@ -667,6 +667,13 @@ describe("the outbound message", () => {
       expect(outbound.outbounds.get(other.data.messageId)!.work).toEqual({ kind: "prepare" });
     });
 
+    const set = VaultEventSet.of(scene.events);
+    const v = await verdicts(scene.events, keys);
+    const { routes, relationships } = foldWith(set, v);
+    const alone = foldOutbound(set, routes, relationships, foldInbound(set, relationships), { resolutionChecks: v.resolutionChecks });
+    expect(alone.outbounds.get(out.data.messageId)!.work).toEqual({ kind: "none", because: "erased" });
+    expect(alone.outbounds.get(other.data.messageId)!.work).toEqual({ kind: "prepare" });
+
     scene.events.length = base;
     scene.add("contact.deleted", { contactId: CONTACT });
     await expectFoldOrderFree(scene.events, keys, ({ outbound }) => {

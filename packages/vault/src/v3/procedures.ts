@@ -29,7 +29,6 @@ const CONTACT_DELETED = "contact-deleted";
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const PING = "https://didcomm.org/trust-ping/2.0/ping";
 
-/** The producing tuple of a response, apart from the execution it answers. */
 export type ResponseEffect = Omit<EffectTuple, "executionId">;
 
 /** The one Empty an execution may select: a pure acknowledgment, or the address notification a rotation trigger is owed. */
@@ -295,9 +294,12 @@ export function senderGate(fold: VaultFold, relationshipId: RelationshipId): str
  * A reply an execution is owed and no outbound has selected: its
  * protocol's natural response, or an Empty. Whatever the reply is, it
  * carries the acknowledgments the input requested, and when the input
- * triggered a local rotation it carries that transition's proof, the
- * notification the frozen trigger requires however the process ended
- * between the edge and the intent.
+ * triggered a local rotation it is the notification that frozen
+ * trigger requires, however the process ended between the edge and
+ * the intent. `notifies` says where that obligation comes from and
+ * nothing about the package: the proof a package carries is chosen at
+ * preparation from the current local end and what input has confirmed,
+ * not from the edge named here, which may no longer be the last.
  */
 export type ResponseWork = {
   readonly executionId: ExecutionId;
@@ -313,7 +315,7 @@ export type ResponseWork = {
 };
 
 export interface UnfinishedWork {
-  /** outbounds whose intent selected a birth and whose relationship has no standing binding yet: the binding comes before the package */
+  /** outbounds whose intent selected a birth and whose relationship has no standing binding yet: the binding comes before the package, so a package already prepared that waits for it hides nothing */
   readonly births: readonly { messageId: MessageId; relationshipId: RelationshipId; birth: Birth }[];
   /** every outbound with work: prepare, submit or repack */
   readonly outbound: readonly { messageId: MessageId; relationshipId: RelationshipId; work: Exclude<Work, { kind: "none" }> }[];
@@ -362,7 +364,7 @@ export function unfinishedWork(fold: VaultFold, options: WorkOptions = {}): Unfi
   for (const message of [...fold.outbound.outbounds.values()].sort((a, b) => cmp(a.messageId, b.messageId))) {
     if (message.intent === null) continue;
     const { relationshipId, birth, msgType, bodyCid } = message.intent;
-    if (birth !== null && stands(relationshipId) === null && message.work.kind !== "none") births.push({ messageId: message.messageId, relationshipId, birth });
+    if (birth !== null && stands(relationshipId) === null && !message.conflict && !message.submitted && message.failed === null && !fold.erasures.has(message.messageId) && !deletedContact(relationshipId)) births.push({ messageId: message.messageId, relationshipId, birth });
     if (message.work.kind !== "none") outbound.push({ messageId: message.messageId, relationshipId, work: message.work });
     if (profileTypes.has(msgType) && message.submitted && !erased(fold.erasures, message.messageId, bodyCid) && !deletedContact(relationshipId)) {
       if (!(fold.profiles.get(relationshipId)?.shares ?? []).some((share) => share.messageId === message.messageId)) outboundLifts.push({ messageId: message.messageId, relationshipId });

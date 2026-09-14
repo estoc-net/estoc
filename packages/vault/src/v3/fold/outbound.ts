@@ -28,7 +28,7 @@ import { executionId as executionIdOf, relationshipId as relationshipIdOf } from
 import { canonicalDidOf } from "../peer-document.js";
 import type { VaultEvent } from "../schema.js";
 import type { ContactId, Did, EventId, EventReference, ExecutionId, KeyName, MessageId, MessageOut, PackageId, RelationshipId, VaultData } from "../types.js";
-import type { Erasures } from "./held.js";
+import { foldErasures, type Erasures } from "./held.js";
 import type { InboundFold } from "./inbound.js";
 import type { EvidenceCheck, LocalNode, Relationship, RelationshipFold } from "./relationships.js";
 import type { RouteFold } from "./routes.js";
@@ -123,7 +123,7 @@ export interface OutboundFold {
 export type OutboundFoldOptions = {
   /** each `peer.resolved` event's snapshot against its document, by event ID */
   resolutionChecks?: ReadonlyMap<EventId, EvidenceCheck>;
-  /** the roots each message's erasures released; none when left out */
+  /** the roots each message's erasures released; folded from the set when left out */
   erasures?: Erasures;
 };
 
@@ -202,7 +202,7 @@ export function foldOutbound(set: VaultEventSet, routes: RouteFold, relationship
     localEdges: groupBy(set.of("relationship.localTransitioned"), (event) => event.data.relationshipId),
     peerEdges: groupBy(set.of("relationship.peerTransitioned"), (event) => event.data.relationshipId),
     confirmedKeys,
-    erasures: options.erasures ?? new Map(),
+    erasures: options.erasures ?? foldErasures(set),
     deletedContacts: new Set(set.of("contact.deleted").map((event) => event.data.contactId)),
   };
 
