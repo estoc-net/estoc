@@ -3,8 +3,10 @@
  * except what a message's erasure released from that message's events
  * and a prepared envelope whose message is closed. Erasure is the one
  * explicit release; submission and termination are the others, read
- * from the outbound fold, and submission counts only once the message
- * is verified, since contested or missing evidence releases nothing.
+ * from the outbound fold, and submission counts once the message
+ * stands and the package it names belongs, since contested or missing
+ * evidence releases nothing — and then for good, whatever another
+ * package of the message still waits for.
  * An event of a type this version does not name, or one whose payload
  * does not read, holds every root it names, and so does every event
  * that is not a message's: a peer document stays as long as the

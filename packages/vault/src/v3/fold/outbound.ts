@@ -2,20 +2,23 @@
  * The outbound messages: each an intent frozen under one message ID,
  * the packages prepared for it, what became of each — retired, failed,
  * submitted — and the receipts the peer's acknowledgments evidence.
- * Submission is one committed acceptance of a package of a verified
- * message and closes the message for good; a terminal failure closes
- * it too; an acknowledgment is a complete, scoped observation whose
- * explicit `ack` names the message, applied only once the message's
- * own membership in its relationship is verified — birth, binding and
- * every package agreeing on the one relationship, each package sent
- * from a node of the local chain to a document of the peer chain. What
- * contradicts is a conflict that stops every automatic step; what is
- * not here yet defers them, a submission included, since a record of
- * acceptance releases nothing until the package it names is known to
- * belong. The acknowledgment records are judged apart: they change no
- * work, outcome or retention. The fold reads no clock, so expiry is
- * the worker's to compare against `expiresTime`, and a committed
- * expired failure is what ends the message.
+ * Each fact is read from the evidence it needs and no more. Submission
+ * is one committed acceptance of a package that belongs to a message
+ * that stands in its relationship, and closes the message for good: a
+ * record of acceptance releases nothing until the package it names is
+ * known to belong, and once it is, what another package still waits
+ * for, or a conflict of the execution found later, takes nothing back.
+ * A terminal failure closes the message too. An acknowledgment is a
+ * complete, scoped observation whose explicit `ack` names the message,
+ * applied only once the message's whole membership is verified —
+ * birth, binding and every package agreeing on the one relationship,
+ * each package sent from a node of the local chain to a document of
+ * the peer chain. What contradicts is a conflict that stops every
+ * automatic step; what is not here yet defers them. The acknowledgment
+ * records are judged by the same witness rule and kept apart: they
+ * change no work, outcome or retention. The fold reads no clock, so
+ * expiry is the worker's to compare against `expiresTime`, and a
+ * committed expired failure is what ends the message.
  */
 
 import { canonicalText, compareEvents } from "@estoc/event-store/v3";
@@ -77,11 +80,11 @@ export interface Outbound {
   readonly intentEventIds: readonly EventReference<"message.out">[];
   /** every consistent package by ID; a package recorded with two contents, prepared for two messages or carrying another intent is a fault, not a package */
   readonly packages: ReadonlyMap<PackageId, Package>;
-  /** a committed submission names a package here and the message's membership is verified: closed to further preparation and submission, its envelopes released */
+  /** a committed submission names a package that belongs, of a message that stands: closed to further preparation and submission, its envelopes released; what another package waits for, and a conflict of the execution, take nothing back */
   readonly submitted: boolean;
   /** the code of the first message-scoped terminal failure in canonical order, null while none */
   readonly failed: string | null;
-  /** the message's membership in its relationship: intent, birth, binding and every package agreeing */
+  /** the message's whole membership: intent, birth, binding, every package and, for an automatic message, its execution agreeing; what an acknowledgment is applied under */
   readonly membership: Membership;
   /** the complete, scoped observations whose explicit `ack` names this message, in canonical order */
   readonly ackWitnesses: readonly EventId[];
@@ -116,6 +119,7 @@ export type OutboundFoldOptions = {
 
 type Receipt = VaultEvent<"message.in">;
 type Prepared = VaultEvent<"message.prepared">;
+type Verdict = { faults: string[]; deferred: string[] };
 
 type Context = {
   set: VaultEventSet;
@@ -260,7 +264,8 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
   }
 
   const relationship = intent === null ? undefined : context.relationships.relationships.get(intent.relationshipId);
-  const packages = judgeMembership(intent, relationship, drafts, context, faults, deferred);
+  const { packages, standing } = judgeMembership(intent, relationship, drafts, context, faults, deferred);
+  const submitted = standing.status === "verified" && [...packages.values()].some((pkg) => pkg.submitted && pkg.membership.status === "verified");
   if (intent !== null && intent.executionId !== null) {
     if (intent.ack.length > 0) {
       const others = (context.responses.get(intent.executionId) ?? []).filter((id) => id !== messageId);
@@ -269,12 +274,15 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
     judgeCarrier(intent, context, faults, deferred);
   }
   const membership: Membership = faults.length > 0 ? { status: "conflict", because: faults.join("; ") } : deferred.length > 0 ? { status: "deferred", because: deferred.join("; ") } : { status: "verified" };
-  const submitted = membership.status === "verified" && [...packages.values()].some((pkg) => pkg.submitted);
 
   const ackFaults: string[] = [];
   const ackDeferred: string[] = [];
   for (const event of events.acknowledgments) {
-    const witness = witnessOf(context, messageId, event.data);
+    if (intent === null) {
+      ackDeferred.push(`acknowledgment ${event.eventId} awaits one intent`);
+      continue;
+    }
+    const witness = witnessOf(context, messageId, intent.relationshipId, event.data);
     if (witness === "none") ackFaults.push(`acknowledgment ${event.eventId} names no complete witness among the observations of ${event.data.ackMessageId}`);
     else if (witness === "unknown") ackDeferred.push(`acknowledgment ${event.eventId} awaits the observations of ${event.data.ackMessageId}`);
   }
@@ -312,40 +320,72 @@ function foldOne(messageId: MessageId, intentEvents: readonly VaultEvent<"messag
 
 /**
  * Does an observation of the acknowledged message ID witness the
- * acknowledgment event: the same wire ID, local key and authenticated
- * peer key, its `ack` naming the outbound? `unknown` while an
- * observation's resolution is not here; `none` when every observation
- * here contradicts it.
+ * acknowledgment record: the same wire ID, local key and authenticated
+ * peer key, its `ack` naming the outbound, and the standing every
+ * acknowledging observation must have? `unknown` while a matching
+ * observation's resolution or standing is not yet known, or while none
+ * of the message's observations is here; `none` when every one here
+ * falls short.
  */
-function witnessOf(context: Context, messageId: MessageId, data: VaultData["delivery.acknowledged"]): "matched" | "unknown" | "none" {
+function witnessOf(context: Context, messageId: MessageId, relationshipId: RelationshipId, data: VaultData["delivery.acknowledged"]): "matched" | "unknown" | "none" {
   let unknown = false;
   for (const receipt of context.ackers.get(messageId) ?? []) {
     if (receipt.data.messageId !== data.ackMessageId || receipt.data.wireMessageId !== data.ackWireMessageId || receipt.data.localKeyName !== data.localKeyName) continue;
     if (receipt.data.peerResolutionEventId === null) continue;
     const resolved = context.set.resolve(receipt.data.peerResolutionEventId, "peer.resolved");
-    if (resolved.status === "missing") unknown = true;
-    else if (resolved.status === "present" && resolved.event.data.peerPublicKey === data.peerPublicKey) return "matched";
+    if (resolved.status === "missing") {
+      unknown = true;
+      continue;
+    }
+    if (resolved.status !== "present" || resolved.event.data.peerPublicKey !== data.peerPublicKey) continue;
+    const standing = witnessStanding(context.relationships, receipt, relationshipId);
+    if (standing === "complete") return "matched";
+    if (standing === "incomplete") unknown = true;
   }
   if (unknown) return "unknown";
   return context.relationships.groups.has(data.ackMessageId) ? "none" : "unknown";
 }
 
+/**
+ * Where an acknowledging observation stands: complete when its own row
+ * is scoped in the relationship and its group is complete there;
+ * incomplete while its scope or its group still waits; none when
+ * either contradicts or lies elsewhere.
+ */
+function witnessStanding(relationships: RelationshipFold, receipt: Receipt, relationshipId: RelationshipId): "complete" | "incomplete" | "none" {
+  const scope = relationships.observations.get(receipt.eventId);
+  if (scope === undefined) return "incomplete";
+  if (scope.status === "deferred") return scope.relationshipId === null || scope.relationshipId === relationshipId ? "incomplete" : "none";
+  if (scope.status !== "scoped" || scope.relationshipId !== relationshipId) return "none";
+  const group = relationships.groups.get(receipt.data.messageId);
+  if (group === undefined || group.status === "incomplete") return "incomplete";
+  return group.status === "complete" && group.relationshipId === relationshipId ? "complete" : "none";
+}
+
 /** A complete observation, scoped in the relationship, in a complete group: what acknowledges. */
 function isWitness(relationships: RelationshipFold, receipt: Receipt, relationshipId: RelationshipId): boolean {
-  const scope = relationships.observations.get(receipt.eventId);
-  if (scope === undefined || scope.status !== "scoped" || scope.relationshipId !== relationshipId) return false;
-  const group = relationships.groups.get(receipt.data.messageId);
-  return group !== undefined && group.status === "complete" && group.relationshipId === relationshipId;
+  return witnessStanding(relationships, receipt, relationshipId) === "complete";
 }
 
 /**
- * The message's membership in the relationship it names: a birth that
- * derives it and agrees with the binding, a relationship that stands
- * and does not contradict, and each package judged on its own. A
- * message with a birth and no binding yet stands on the birth alone;
- * one with neither waits.
+ * The message's membership in the relationship it names, in two parts
+ * that are read apart: the message's own standing — one intent, a
+ * birth that derives the ID and agrees with the binding, a
+ * relationship that stands and does not contradict — and each package
+ * judged on its own. A message with a birth and no binding yet stands
+ * on the birth alone; one with neither waits. Both parts are added to
+ * the message's diagnostics.
  */
-function judgeMembership(intent: MessageOut | null, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, faults: string[], deferred: string[]): Map<PackageId, Package> {
+function judgeMembership(intent: MessageOut | null, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, faults: string[], deferred: string[]): { packages: Map<PackageId, Package>; standing: Membership } {
+  const own: Verdict = { faults: [], deferred: [] };
+  const packages = judgeMessage(intent, relationship, drafts, context, own, faults, deferred);
+  faults.push(...own.faults);
+  deferred.push(...own.deferred);
+  const standing: Membership = own.faults.length > 0 ? { status: "conflict", because: own.faults.join("; ") } : own.deferred.length > 0 ? { status: "deferred", because: own.deferred.join("; ") } : { status: "verified" };
+  return { packages, standing };
+}
+
+function judgeMessage(intent: MessageOut | null, relationship: Relationship | undefined, drafts: ReadonlyMap<PackageId, PackageDraft>, context: Context, own: Verdict, faults: string[], deferred: string[]): Map<PackageId, Package> {
   const packages = new Map<PackageId, Package>();
   const settle = (membership: Membership) => {
     for (const draft of drafts.values()) packages.set(draft.packageId, { ...draft, active: draft.retired === null && draft.failed === null, membership });
@@ -357,32 +397,32 @@ function judgeMembership(intent: MessageOut | null, relationship: Relationship |
   if (intent.birth !== null) {
     const { localDidId, peerDid } = intent.birth;
     const entity = context.routes.dids.get(localDidId);
-    if (entity === undefined || entity.created === null) deferred.push(`the birth local DID ${localDidId} is not created`);
-    else if (entity.conflict) faults.push(`the birth local DID ${localDidId} is in conflict`);
+    if (entity === undefined || entity.created === null) own.deferred.push(`the birth local DID ${localDidId} is not created`);
+    else if (entity.conflict) own.faults.push(`the birth local DID ${localDidId} is in conflict`);
     else {
       try {
         birthPeer = canonicalDidOf(peerDid);
         const derived = relationshipIdOf(entity.created.did, birthPeer);
-        if (derived !== R) faults.push(`the birth addresses derive ${derived}, not ${R}`);
+        if (derived !== R) own.faults.push(`the birth addresses derive ${derived}, not ${R}`);
       } catch (err) {
         if (!(err instanceof InvalidDidDocument || err instanceof InvalidIdentifier)) throw err;
-        faults.push(`the birth addresses derive no relationship: ${err.message}`);
+        own.faults.push(`the birth addresses derive no relationship: ${err.message}`);
       }
     }
     if (relationship !== undefined && relationship.binding !== null) {
-      if (relationship.binding.localDidId !== localDidId) faults.push(`the binding roots ${relationship.binding.localDidId}, not the birth local DID ${localDidId}`);
+      if (relationship.binding.localDidId !== localDidId) own.faults.push(`the binding roots ${relationship.binding.localDidId}, not the birth local DID ${localDidId}`);
       const root = relationship.peerChain[0];
-      if (root !== undefined && birthPeer !== null && root.did !== birthPeer) faults.push(`the binding pins ${root.did}, not the birth peer DID ${birthPeer}`);
+      if (root !== undefined && birthPeer !== null && root.did !== birthPeer) own.faults.push(`the binding pins ${root.did}, not the birth peer DID ${birthPeer}`);
     }
   }
-  if (relationship !== undefined && relationship.conflict) faults.push(`relationship ${R} is in conflict: ${relationship.faults.join("; ")}`);
+  if (relationship !== undefined && relationship.conflict) own.faults.push(`relationship ${R} is in conflict: ${relationship.faults.join("; ")}`);
   if (relationship === undefined || relationship.bindingEventIds.length === 0) {
-    if (intent.birth === null) deferred.push(`relationship ${R} has no binding`);
-    else if (drafts.size > 0) deferred.push(`${drafts.size} package${drafts.size > 1 ? "s await" : " awaits"} the binding`);
+    if (intent.birth === null) own.deferred.push(`relationship ${R} has no binding`);
+    else if (drafts.size > 0) own.deferred.push(`${drafts.size} package${drafts.size > 1 ? "s await" : " awaits"} the binding`);
     return settle(drafts.size === 0 ? { status: "verified" } : { status: "deferred", because: "awaits the binding" });
   }
   if (relationship.localChain.length === 0) {
-    if (!relationship.conflict) deferred.push(`relationship ${R} does not stand: ${relationship.deferred.join("; ")}`);
+    if (!relationship.conflict) own.deferred.push(`relationship ${R} does not stand: ${relationship.deferred.join("; ")}`);
     return settle(relationship.conflict ? { status: "conflict", because: `relationship ${R} is in conflict` } : { status: "deferred", because: `relationship ${R} does not stand` });
   }
   for (const draft of drafts.values()) {
@@ -445,22 +485,25 @@ function judgePackage(data: VaultData["message.prepared"], relationship: Relatio
   return { status: "verified" };
 }
 
-/** The observation groups, each with its intent, by the execution ID their relationship and wire ID derive, and every group's wire ID. */
+/** The observation groups by the execution ID their relationship and wire ID derive, each with the intent of every observation of it whose own row is scoped, and every group's wire ID. */
 type Carriers = { byExecution: ReadonlyMap<ExecutionId, readonly Carrier[]>; wires: ReadonlyMap<MessageId, WireMessageId> };
-type Carrier = { group: ObservationGroup; intentHash: VaultData["message.in"]["intentHash"] };
+type Carrier = { group: ObservationGroup; scopedIntents: readonly VaultData["message.in"]["intentHash"][] };
 
 function carriersOf(set: VaultEventSet, relationships: RelationshipFold): Carriers {
   const wires = new Map<MessageId, WireMessageId>();
-  const intents = new Map<MessageId, Carrier["intentHash"]>();
+  const scopedIntents = new Map<MessageId, Carrier["scopedIntents"][number][]>();
   for (const receipt of set.of("message.in")) {
     wires.set(receipt.data.messageId, receipt.data.wireMessageId);
-    intents.set(receipt.data.messageId, receipt.data.intentHash);
+    if (relationships.observations.get(receipt.eventId)?.status !== "scoped") continue;
+    const intents = scopedIntents.get(receipt.data.messageId);
+    if (intents === undefined) scopedIntents.set(receipt.data.messageId, [receipt.data.intentHash]);
+    else intents.push(receipt.data.intentHash);
   }
   const byExecution = new Map<ExecutionId, Carrier[]>();
   for (const [messageId, group] of relationships.groups) {
     if (group.status === "anonymous" || group.relationshipId === null) continue;
     const executionId = executionIdOf(group.relationshipId, wires.get(messageId)!);
-    const carrier = { group, intentHash: intents.get(messageId)! };
+    const carrier = { group, scopedIntents: scopedIntents.get(messageId) ?? [] };
     const list = byExecution.get(executionId);
     if (list === undefined) byExecution.set(executionId, [carrier]);
     else list.push(carrier);
@@ -470,17 +513,21 @@ function carriersOf(set: VaultEventSet, relationships: RelationshipFold): Carrie
 
 /**
  * An automatic intent's carrier: the observation groups whose
- * relationship and wire ID derive the intent's execution ID, of which
- * one must be complete in the intent's own relationship, and every
- * complete one must agree on the intent — the peer's prior and
- * successor keys may each have carried the message, and one execution
- * cannot answer two intents. A carrier scoped elsewhere or in conflict
- * contradicts the intent; one still waiting, or not here, defers it.
- * When no group derives the ID from its own relationship, the groups
- * are looked up by the intent's relationship instead: a group that
- * derives it so but is anonymous, or scoped elsewhere, contradicts the
- * intent, since the intent claims a scope the carrier does not have;
- * one whose scope is not yet known waits.
+ * relationship and wire ID derive the intent's execution ID. Every
+ * observation of them whose own row is scoped there proves the intent
+ * it carried, and two that disagree contradict the execution — the
+ * peer's prior and successor keys may each have carried the message,
+ * and one execution cannot answer two intents — whatever another
+ * observation of their groups later waits for or contradicts, since a
+ * proven disagreement is not undone by less evidence; an observation
+ * whose row is not scoped proves nothing. Short of that, one group
+ * must be complete in the intent's own relationship: a carrier scoped
+ * elsewhere or in conflict contradicts the intent; one still waiting,
+ * or not here, defers it. When no group derives the ID from its own
+ * relationship, the groups are looked up by the intent's relationship
+ * instead: a group that derives it so but is anonymous, or scoped
+ * elsewhere, contradicts the intent, since the intent claims a scope
+ * the carrier does not have; one whose scope is not yet known waits.
  */
 function judgeCarrier(intent: MessageOut, context: Context, faults: string[], deferred: string[]): void {
   const executionId = intent.executionId!;
@@ -488,10 +535,10 @@ function judgeCarrier(intent: MessageOut, context: Context, faults: string[], de
   if (carriers.length > 0) {
     const groups = carriers.map((carrier) => carrier.group);
     const scoped = groups[0]! as { relationshipId: RelationshipId };
-    const complete = carriers.filter((carrier) => carrier.group.status === "complete");
+    const proven = carriers.flatMap((carrier) => carrier.scopedIntents);
     if (scoped.relationshipId !== intent.relationshipId) faults.push(`the carrier of execution ${executionId} is scoped in ${scoped.relationshipId}, not ${intent.relationshipId}`);
-    else if (new Set(complete.map((carrier) => carrier.intentHash)).size > 1) faults.push(`the carrier of execution ${executionId} is ${complete.length} complete groups that disagree on the intent`);
-    else if (complete.length > 0) return;
+    else if (new Set(proven).size > 1) faults.push(`the carrier of execution ${executionId} is ${proven.length} scoped observations that disagree on the intent`);
+    else if (groups.some((group) => group.status === "complete")) return;
     else if (groups.some((group) => group.status === "incomplete")) deferred.push(`the carrier of execution ${executionId} awaits its evidence`);
     else faults.push(`the carrier of execution ${executionId} is in conflict: ${(groups.find((group) => group.status === "conflict") as { because: string }).because}`);
     return;
@@ -522,13 +569,13 @@ function workOf(intent: MessageOut | null, relationship: Relationship | undefine
   if (entity === undefined || !entity.live) return { kind: "none", because: `the current local DID ${current} is not live` };
   if (active.length === 0) return { kind: "prepare" };
   const node = relationship?.localChain.find((node) => node.didId === current);
-  const proofRequired = node !== undefined && !confirmed(node, context.confirmedKeys.get(intent.relationshipId));
+  const proofRequired = node !== undefined && needsProof(node, context.confirmedKeys.get(intent.relationshipId));
   const submittable = active.filter((pkg) => pkg.membership.status === "verified" && pkg.data.senderDidId === current && (pkg.data.fromPrior !== null || !proofRequired)).map((pkg) => pkg.packageId);
   if (submittable.length > 0) return { kind: "submit", packageIds: submittable };
   return { kind: "repack", packageIds: active.map((pkg) => pkg.packageId) };
 }
 
-/** Is a node of the local chain confirmed: the root always, a successor once scoped input arrived at one of its keys. */
-function confirmed(node: LocalNode, keys: ReadonlySet<KeyName> | undefined): boolean {
-  return node.edgeEventIds.length === 0 || (keys !== undefined && (keys.has(node.keyNames.keyAgreement) || keys.has(node.keyNames.authentication)));
+/** Must a package from this node carry the rotation proof: the root has none to carry; a successor carries it until scoped input has arrived at one of its keys. */
+function needsProof(node: LocalNode, confirmedKeys: ReadonlySet<KeyName> | undefined): boolean {
+  return node.edgeEventIds.length > 0 && !(confirmedKeys !== undefined && (confirmedKeys.has(node.keyNames.keyAgreement) || confirmedKeys.has(node.keyNames.authentication)));
 }

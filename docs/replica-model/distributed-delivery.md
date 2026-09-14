@@ -965,11 +965,13 @@ recovery are in [relationships.md section 11](relationships.md#early-private-add
 
 An automatic DIDComm output is one effect identified by
 `(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
-derived execution ID of one conflict-free logical carrier after the
+derived execution ID of one complete, conflict-free logical carrier after the
 observation-group and cross-key checks in [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
-Two complete logical groups with that same execution ID and different
-intent hashes are an execution conflict; the presence of one complete
-group cannot authorize automatic work while that conflict exists. Each protocol
+Independently validated observations of that relationship and wire ID that
+disagree on the intent constitute an execution conflict under that section.
+An unresolved or conflicting sibling observation cannot clear that
+disagreement merely by making its group ineligible. One complete group
+cannot authorize automatic work while the execution conflict exists. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
 and output intent rules. Its outputs MUST obey [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s
 limit of one logical outbound carrying a non-empty `ack` per execution, across
@@ -1391,4 +1393,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     effects keep their identifiers; a submitted response is not reopened and
     no envelope is collected on that account. Groups that agree on the
     intent are one logical carrier under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold)
-    and share the execution.
+    and share the execution. The conflict is proven by the disagreeing
+    observations' own validated rows: a later duplicate that leaves one of
+    their groups waiting or contradicting does not clear it, while an alias
+    whose row is not validated proves no disagreement.

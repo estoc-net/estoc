@@ -96,8 +96,9 @@ document of the peer chain with the proof of the transition that
 added its sender — the complete scoped observations that acknowledge
 it, the earliest of them as the receipt and whether that is late, the
 displayed outcome, and the work the runtime may do next, prepare,
-submit, repack or nothing, a submission closing the message only once
-it is verified and receipt information changing no work; `heldRoots` / `retainEnvelope` /
+submit, repack or nothing, a submission closing the message once the
+package it names belongs, and then for good, and receipt information
+changing no work; `heldRoots` / `retainEnvelope` /
 `foldErasures` / `readState`, what collection must keep — every root
 an accepted event retains, a prepared envelope until its message is
 submitted, failed, retired or erased and never released by an

@@ -2,9 +2,9 @@ import type { Event } from "@estoc/event-store/v3";
 import { describe, expect, it } from "vitest";
 import { v7 as uuidv7 } from "uuid";
 
-import { foldErasures, foldOutbound, foldRelationships, heldRoots, rawCidOfBytes, readState, retainEnvelope, verifyResolutions, VaultEventSet, type Cid, type EventId, type Keys, type MessageId, type PackageId } from "../../../src/v3/index.js";
+import { executionId, foldErasures, foldOutbound, foldRelationships, heldRoots, rawCidOfBytes, readState, retainEnvelope, verifyResolutions, VaultEventSet, type Cid, type EventId, type Keys, type MessageId, type PackageId, type VaultData } from "../../../src/v3/index.js";
 import { AUTHOR, checksOf, expectOrderFree, foldChecked, type KeyChecks } from "./helpers.js";
-import { bound, intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
+import { automatic, bound, intent, noObjects, packageOf, receipt, resolved, vaults } from "./scene.js";
 
 type Verdicts = { keyChecks: KeyChecks; resolutionChecks: Awaited<ReturnType<typeof verifyResolutions>> };
 
@@ -162,6 +162,33 @@ describe("held roots", () => {
     expect([...folds.held].filter((cid) => envelopes.includes(cid))).toEqual([]);
     expect(folds.held.has(out.data.bodyCid)).toBe(true);
     expect(folds.outbound.outbounds.get(out.data.messageId)!.submitted).toBe(true);
+  });
+
+  it("release an envelope by a completed submission for good: a retirement naming an absent package, a package waiting for its resolution or an execution conflict found later holds nothing back", async () => {
+    const { scene, keys, R, a0, b0, root, binding } = await bornAtRoot();
+    const source = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const response = automatic(scene, R, { executionId: executionId(R, source.data.wireMessageId) });
+    const pkg = packageOf(scene, response, { sender: a0.didId, recipient: b0, resolution: root });
+    scene.add("delivery.submitted", { messageId: response.data.messageId, packageId: pkg.data.packageId });
+    let folds = heldWith(VaultEventSet.of(scene.events), await verdicts(scene.events, keys));
+    expect(folds.outbound.outbounds.get(response.data.messageId)!.submitted).toBe(true);
+    expect(folds.held.has(pkg.data.envelopeCid)).toBe(false);
+
+    scene.add("message.packageRetired", { messageId: response.data.messageId, packageId: uuidv7() as PackageId, because: "repacked", replacementPackageId: null });
+    const missing = resolved(scene, a0.didId, b0);
+    const waiting = packageOf(scene, response, { sender: a0.didId, recipient: b0, resolution: missing });
+    receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, wire: source.data.wireMessageId, overrides: { intentHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" as VaultData["message.in"]["intentHash"] } });
+    const events = scene.events.filter((e) => e !== missing);
+    const v = await verdicts(events, keys);
+    await expectOrderFree(events, (set) => heldWith(set, v).held);
+    folds = heldWith(VaultEventSet.of(events), v);
+    const message = folds.outbound.outbounds.get(response.data.messageId)!;
+    expect(message).toMatchObject({ submitted: true, conflict: true, outcome: "conflict", work: { kind: "none", because: "in conflict" }, membership: { status: "conflict" } });
+    expect(message.faults).toEqual([expect.stringMatching(/disagree on the intent$/)]);
+    expect(message.packages.get(waiting.data.packageId)!.membership.status).toBe("deferred");
+    expect(folds.held.has(pkg.data.envelopeCid)).toBe(false);
+    expect(folds.held.has(waiting.data.envelopeCid)).toBe(false);
+    expect(folds.held.has(response.data.bodyCid)).toBe(true);
   });
 
   it("hold a disputed package's envelopes and an orphan's, submitted or not, until erased", async () => {

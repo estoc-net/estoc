@@ -169,10 +169,12 @@
   keeps every package and works nothing; the consistent packages, a
   package recorded with two contents, prepared for two messages or
   carrying another intent being a fault; each package's retirement,
-  package-scoped failure and submission; `submitted` once a
-  package of a verified message has a committed submission, closing
-  the message for good, a submission of a package still waiting or
-  contradicting releasing nothing; the first message-scoped failure; the message's membership
+  package-scoped failure and submission; `submitted` once a package
+  that belongs, of a message that stands, has a committed submission,
+  closing the message for good — a submission of a package still
+  waiting or contradicting releasing nothing, and what another package
+  waits for or an execution conflict found later taking nothing back;
+  the first message-scoped failure; the message's membership
   in its relationship — a birth that derives the ID and agrees with
   the binding, a relationship that stands and does not contradict,
   each package sent from a node of the local chain (one a local edge
@@ -181,23 +183,27 @@
   recipient resolution taken at its key, verified against its document
   and pinned by a node of the peer chain (one a peer edge would add
   waits); the one ACK-bearing response per execution, a second message
-  ID conflicting both; an automatic intent's carrier groups, one
-  complete in the intent's relationship and every complete one
-  agreeing on the intent, else waiting, else — anonymous, scoped
-  elsewhere, in conflict, two complete groups of the peer's prior and
-  successor keys disagreeing — a contradiction; `ackWitnesses`, the
+  ID conflicting both; an automatic intent's carrier groups, every
+  observation of them whose own row is scoped proving the intent it
+  carried and two that disagree — at the peer's prior and successor
+  keys, or in one group — contradicting the execution whatever their
+  groups later wait for, else one group complete in the intent's
+  relationship, else waiting, else — anonymous, scoped elsewhere, in
+  conflict — a contradiction; `ackWitnesses`, the
   complete scoped observations of complete groups in the relationship
   whose `ack` names the message, applied only once membership is
   verified, the earliest as `receiptInstant`, `late` at or after
   `expiresTime`; a `delivery.acknowledged` event checked against the
-  observations it names, its diagnostics kept apart as `ackDeferred`
+  observations it names by the same witness rule — resolution, scope,
+  group and relationship — its diagnostics kept apart as `ackDeferred`
   / `ackFaults` since receipt information changes no work, outcome or
   retention; the displayed `outcome` in its precedence, and `work` —
   prepare, submit these packages, repack these, or nothing and why —
   from the events alone, the clock and the bytes being the worker's:
   work waits while a local transition of the relationship is still
-  unjudged, and a package from a successor no input has confirmed is
-  submittable only with the transition's proof. `heldRoots` (`fold/held.ts`) is what collection
+  unjudged, and a package from a successor no scoped input — of any
+  type, a problem report included — has confirmed is submittable only
+  with the transition's proof. `heldRoots` (`fold/held.ts`) is what collection
   keeps: every root an accepted event retains, an unknown or unreadable
   event's and a resolution's pinned document included, less what an
   erasure released from that message,

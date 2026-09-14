@@ -1352,16 +1352,29 @@ incompatible binding/proof evidence are conflicts. Missing evidence defers.
 Neither event timestamps nor a live predecessor can select a winner or roll
 back the current end. Changes to the two different ends of `R` commute.
 
+Address confirmation means evidence that the peer knows the exact local
+address. It requires at least one committed authenticated observation
+whose own evidence row is complete, whose unique scope is this `R`, and
+whose receiving local key belongs to that exact local node. Its message-ID
+group must not contradict the observation's row or intent. An unresolved
+sibling does not withhold the confirmation supplied by that complete row.
+
+Ordinary messages, acknowledgments and protocol errors use this same
+confirmation rule. Message type, application success and the contents of
+the message body do not participate in address confirmation. This does
+not assert application acceptance. Confirmation is reconstructed from
+retained observation and relationship evidence after body erasure.
+
 Before a local edge, require a committed conflict-free binding, a permitted
-contact assignment if one exists, `fromDidId == currentLocalDidId(R)`, and retained
-authenticated input in `R` addressed to that exact predecessor. A protocol
-error that declines interaction is not confirmation. This condition already
-holds for a normal first incoming message to the root address; it does not
-require either side to have a pairwise address or to rotate first. Each later
-edge waits for confirmation of its predecessor, so the peer can verify the
-next proof. Import validates confirmation using the rooted prefix without this
-edge or its descendants, not event timestamps. Receipt at another historical
-local address does not confirm this predecessor or successor.
+contact assignment if one exists, `fromDidId == currentLocalDidId(R)`, and
+address confirmation of that exact predecessor under the rule above. This
+condition already holds for a normal first incoming message to the root
+address; it does not require either side to have a pairwise address or to
+rotate first. Each later edge waits for confirmation of its predecessor, so
+the peer can verify the next proof. Import validates confirmation using the
+rooted prefix without this edge or its descendants, not event timestamps.
+Receipt at another historical local address does not confirm this
+predecessor or successor.
 
 The confirming observation's own row is judged against that prefix. A
 duplicate of its message committed at the successor this edge adds, or at any
@@ -1390,10 +1403,11 @@ do not depend on a handoff response. Repeated edge evidence must agree on it.
 
 Commit the successor and edge atomically before disclosure. Retain the exact
 keys, bound route, proof and trigger through restore and message erasure.
-Until authenticated scoped input arrives at that exact successor, every new
-package from it carries this proof and uses its long form. After confirmation,
-new packages omit the proof and may use the short form. Before the first local
-edge, a root sender carries no rotation proof. Explicit ACK information is
+Until that exact successor has address confirmation under the rule above,
+every new package from it carries this proof and uses its long form. After
+confirmation, new packages omit the proof and may use the short form. Before
+the first local edge, a root sender carries no rotation proof; the root still
+needs that same confirmation before an edge leaves it. Explicit ACK information is
 independent of exact-address confirmation and submission completion.
 
 A rotation keeps a previously live predecessor, its route and mediation live
@@ -1874,7 +1888,11 @@ by their earliest canonical observations. Body erasure removes its diagnostic,
 even if another reference retains the bytes; unavailable content supplies no
 inferred reason. An ambiguous or unmatched report supplies no attempt-specific
 diagnostic. Silent rejection supplies none. A report does not terminate R,
-confirm rotation, change submission completion or restart an outbound.
+change submission completion or restart an outbound. Its authenticated
+observation may supply address confirmation under [section 6.5](#relationship-localtransitioned),
+independently of the report's diagnostic or ACK contents. Erasing the body
+removes the diagnostic without removing confirmation supported by the
+retained observation and scope evidence.
 
 <a id="stored-message-document"></a>
 
@@ -2394,7 +2412,9 @@ protocol-specific ACK security preconditions. This set includes all valid
 duplicates and distinct ACK carriers; it is not restricted to the group or
 witness selected for one `delivery.acknowledged` event.
 
-For a valid outbound:
+For each consistent outbound intent, derive package and delivery facts
+from the evidence each requires. A wait or conflict in one projection
+does not by itself invalidate another projection's complete evidence:
 
 - `packages[]` is every consistent `message.prepared` by `packageId`;
 - all packages use the outbound `messageId` as plaintext `id` and agree on `intentHash`;
@@ -2403,10 +2423,14 @@ For a valid outbound:
 - one package is inactive after `message.packageRetired` or a package-scoped
   terminal failure, while its skeleton remains historical evidence;
 - `acknowledged` is true exactly when `ackWitnesses` is non-empty;
-- `submitted` is true if any valid package has a committed
-  `delivery.submitted` naming this exact `messageId` and `packageId`. Validation uses
-  the retained intent/package skeletons; collecting or erasing an envelope,
-  retiring a package or later changing a route cannot remove completion;
+- `submitted` is true when at least one valid package has a committed
+  `delivery.submitted` naming this exact `messageId` and `packageId`.
+  Validate that witness using the unique consistent retained intent and
+  package skeletons and the historical binding, address and proof evidence
+  required by that package. Missing evidence for a different package or
+  package operation does not invalidate this witness. Collecting or
+  erasing an envelope, retiring a package or later changing a route cannot
+  remove completion;
 - once `submitted` is true, no new automatic preparation, repackaging or
   submission is permitted for any package of that message ID, including on duplicate
   input, restore or missing ACK;
@@ -2425,6 +2449,14 @@ For a valid outbound:
 - `pleaseAck` and `acknowledged` do not affect these work predicates. An ACK
   received while `delivery.submitted` is absent does not synthesize completion;
   eligible submission may still resume.
+
+Submission completion and authority for new automatic work are separate
+facts. An automatic carrier's execution conflict can coexist with a valid
+submission witness. It suppresses new work and may take precedence in the
+displayed outcome, but does not clear `submitted` or require an envelope
+already released by that submission. A missing or invalid submission
+witness does not establish completion; an unrelated wait cannot erase a
+witness that remains valid.
 
 For receipt timing, `receiptInstant` is the earliest parsed RFC 3339 `at` among
 all observations in `ackWitnesses`. `late` is true exactly when `acknowledged`
@@ -2805,13 +2837,25 @@ by verified scoped transitions under [distributed-delivery.md section 9](distrib
 and agree on intent hashes with valid package evidence.
 This is the only cross-peer-key wire-ID merge.
 
-Before authorizing new automatic work, compare the complete authenticated
-logical groups that derive the same execution ID. If two such groups have
-different intent hashes, that execution is in intent conflict, even when
-each observation message-ID group is individually consistent and their
-sender keys are authorized by the same pinned document or by validated
-transitions of the same relationship. Keeping those groups separate does
-not give either group independent authority to execute under that ID.
+Before authorizing new automatic work, compare the intent hashes of
+authenticated observations whose own evidence rows are complete and
+validate the same unique relationship scope and wire ID. Each observation
+must independently satisfy its addressing, document authorization and
+required transition-proof checks. Two such observations with different
+intent hashes put their derived execution ID in intent conflict, whether
+they belong to the same observation message-ID group or to different
+groups under keys authorized by a pinned document or verified scoped
+transitions.
+
+This comparison detects contradictory evidence; it does not authorize
+per-observation execution. An observation whose own row remains complete
+continues to supply its validated intent hash when another observation of
+its message-ID group is unresolved or makes that group conflicted.
+Changing that group's execution eligibility does not discard the
+contradictory evidence. An incomplete or invalid row supplies no
+authenticated intent hash for this comparison. Derive the result from the
+current event set and its verified evidence, independently of import order
+or any previously cached execution status.
 
 An execution in intent conflict authorizes no new automatic effect,
 preparation, repackaging or submission of an automatic outbound produced by
@@ -2819,12 +2863,12 @@ that execution. Retain all committed observations and effects under their
 original identifiers. This conflict does not reopen a submitted message,
 change effect identity, or authorize envelope collection.
 
-When there is no such conflict, the resulting conflict-free logical group
-uses its derived execution ID under
+When there is no such conflict, a complete, conflict-free logical carrier
+group uses its derived execution ID under
 [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) for ACK processing and automatic effects.
-Missing observation evidence continues to follow the per-message-ID group
-rules above; it does not by itself prove an intent conflict between complete
-logical groups.
+All per-message-ID group checks above still apply. Missing observation
+evidence continues to follow those group rules; it does not by itself
+prove an intent conflict or supply authority to execute.
 
 A **control observation** is one of:
 
@@ -2836,10 +2880,13 @@ A **control observation** is one of:
 - a valid no-response error under [relationships.md section 13](relationships.md#remote-errors-and-integrity-failures), with null
   `fromPrior` and `pleaseAck`, valid protocol content and authenticated R scope.
 
-Control input remains durable and may form a binding, validate a transition,
-confirm an exact local successor or process permitted explicit/asked-for ACKs.
-No-response errors generate no reply. Control input is excluded from content
-threads, unread counts, notifications and application-content handlers; remote
+Control input remains durable and may form a binding, validate a
+transition, confirm an exact local address under [section 6.5](#relationship-localtransitioned),
+or process permitted explicit or requested ACKs. No-response errors can
+supply that same address confirmation and generate no reply. Address
+confirmation does not make control input an automatic privacy-rotation
+trigger or authorize a response forbidden by its protocol. Control input is
+excluded from content threads, unread counts, notifications and application-content handlers; remote
 error diagnostics follow [section 7.6](#contact-fold). An ordinary Trust Ping request remains
 application input even when it is the first message.
 
@@ -2945,7 +2992,9 @@ specified scope; a committed expired failure is message-terminal. Sampling wall
 time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
 until that durable termination is committed. `submitted(M)` is defined by
 [section 9.8](#outbound-message-and-delivery-fold) and remains true after envelope collection or package retirement.
-It releases this message's envelope contribution for every package. An ACK
+It releases this message's envelope contribution for every package. Missing
+evidence for another package or operation of `M`, and an execution conflict
+of an automatic `M`, do not withdraw it or require these bytes again. An ACK
 does not affect retention, including when an outcome-unknown transport attempt
 has no `delivery.submitted`.
 
@@ -3925,7 +3974,39 @@ There is no migration requirement from an earlier event vocabulary.
      ID; two that disagree put that execution in intent conflict under
      [section 10.6](#inbound-message-and-execution-fold): no automatic outbound
      of that execution is prepared, repacked or submitted, an already
-     submitted one is not reopened, its envelopes are not collected, and a
-     response under another handler ID or ordinal is likewise suppressed.
-     An execution of another R or another wire ID is unaffected. The result
-     is the same in every import order.
+     submitted one is not reopened, no envelope is collected on that
+     account, and a response under another handler ID or ordinal is
+     likewise suppressed. An execution of another R or another wire ID is
+     unaffected. The result is the same in every import order. Starting
+     with two independently complete observations that disagree on the
+     intent, add a duplicate whose evidence is missing to one message-ID
+     group, then test a separate union in which a duplicate contradicts
+     that group's intent. While the original observations' own rows and
+     relationship evidence remain complete, both unions retain the
+     execution conflict and authorize no automatic work. Test each union
+     in multiple enumeration orders. A previously unverified alias with no
+     validated differing intent does not by itself establish this
+     conflict.
+
+### Completion witnesses and address confirmation (VE-143–VE-144)
+
+143. <a id="ve-143"></a> A valid package with a committed submission completes its message
+     while another package of the message waits for its resolution, a
+     retirement names a package that is absent, or the automatic message's
+     execution later enters intent conflict: `submitted` stays true, the
+     collected envelope is not required again, and no package is prepared,
+     repacked or submitted, under the conflict or otherwise. A submission
+     naming a package that is invalid or still waiting, or of a message
+     whose intent, birth or relationship evidence conflicts, completes
+     nothing and releases no envelope. The result is the same in every
+     import order.
+144. <a id="ve-144"></a> An unconfirmed local successor's proof-free package is not submittable
+     until a complete, uniquely scoped observation of R arrives at that
+     exact successor in a group with no contradiction; an ordinary
+     message, a pure ACK and a no-response Report Problem confirm it
+     alike, the ACK without naming a rotation notification. An observation
+     at a historical predecessor, in another relationship, waiting for its
+     own evidence or in a contradicting group confirms nothing, and a
+     waiting sibling withholds nothing a complete row supplies. Erasing the
+     confirming body changes nothing; the error still generates no reply
+     and triggers no automatic rotation.
