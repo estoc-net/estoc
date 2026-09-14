@@ -7,7 +7,9 @@
  * `from_prior` proof, and the first folds: the event set they read,
  * the authors and label, the mediations, the routes and local DIDs,
  * the relationships with their chains and address index, the
- * invitations and the contacts' own decisions.
+ * invitations and the contacts' own decisions, the outbound messages
+ * with their packages, deliveries and acknowledgments, the held roots
+ * and the read state of a root, and the relationship profiles.
  */
 
 export type {
@@ -178,6 +180,8 @@ export {
   type PendingClaim,
   type RelationshipFold,
   type RelationshipFoldOptions,
+  type ObservationScope,
+  type ObservationGroup,
   type ReadObject,
   foldRelationships,
   bindingHolds,
@@ -187,3 +191,6 @@ export {
 } from "./fold/relationships.js";
 export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
 export { type PeerDidSeed, type ContactDecisions, foldContacts } from "./fold/contacts.js";
+export { type Membership, type Package, type Outcome, type Work, type Outbound, type OutboundFold, type OutboundFoldOptions, foldOutbound } from "./fold/outbound.js";
+export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, heldRoots, readState } from "./fold/held.js";
+export { type SourceKey, type NameClaim, type Share, type Profile, compareKeys, foldProfiles, profileOf } from "./fold/profile.js";

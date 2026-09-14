@@ -84,8 +84,27 @@ consistent binding, its local and peer chains from the root, each edge
 applied only once everything it names is here and agrees, the current
 two ends, the recipient key names, the one contact, the address index
 over every historical pair, the pending claims a proof-free delivery
-waits at; `foldContacts`, the decisions
-a contact ID holds on its own. Every fold is a pure function of the
+waits at, and every observation's standing — scoped in one
+relationship, waiting, contradicting, anonymous — with each message
+ID's observations as a group; `foldContacts`, the decisions
+a contact ID holds on its own; `foldOutbound`, each outbound message's
+one intent or its conflict, its consistent packages and what became of
+each, whether it is submitted, failed or in conflict, its membership
+in the relationship it names — birth, binding and every package
+agreeing, each package sent from a node of the local chain to a
+document of the peer chain with the proof of the transition that
+added its sender — the complete scoped observations that acknowledge
+it, the earliest of them as the receipt and whether that is late, the
+displayed outcome, and the work the runtime may do next, prepare,
+submit, repack or nothing; `heldRoots` / `retainEnvelope` /
+`foldErasures` / `readState`, what collection must keep, a prepared
+envelope until its message is submitted, failed, retired or erased and
+never released by an acknowledgment, a disputed or intent-less package
+held until erased, and how a root reads, erased before absent;
+`foldProfiles`, each relationship's claimed name from the latest
+complete scoped inbound source, the names in conflict at one source,
+and the latest submitted disclosure of our own profile, sources ordered
+by their earliest event and never by their lift. Every fold is a pure function of the
 event set, checked by shuffling; what needs the seed, whether an
 entity's document carries the keys its ID derives, is `verifyDidKeys` /
 `verifyMediationKeys` beside the fold, whose verdicts are handed back

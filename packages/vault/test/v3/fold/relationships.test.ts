@@ -7,14 +7,8 @@ import { v7 as uuidv7 } from "uuid";
 import {
   authorizedMethodIds,
   didKeyName,
-  foldMediations,
   foldRelationships,
-  foldRelationshipsVerified,
-  foldRoutes,
   inboundMessageId,
-  methodPublicKey,
-  mintDid,
-  peerResolution,
   rawCidOfBytes,
   relationshipId,
   signFromPrior,
@@ -22,207 +16,17 @@ import {
   verifyTransitions,
   VaultEventSet,
   type Cid,
-  type ContactId,
   type Did,
-  type DidId,
   type EventId,
   type EventReference,
-  type Keys,
-  type MessageId,
-  type PeerResolution,
   type EvidenceCheck,
-  type PublicKey,
   type RelationshipFold,
-  type RelationshipId,
-  type RouteFold,
-  type VaultEventSet as EventSet,
   type VaultData,
   type VaultEvent,
   type WireMessageId,
 } from "../../../src/v3/index.js";
-import { DID_ID, DID_ID2, DID_ID3, DIRECT, HASH, MEDIATED, OTHER_SEED, ROUTE, Scene, cidOf, createdDid, expectOrderFree, mediatedRoute, openKeys, shuffled, snapshot } from "./helpers.js";
-
-const PEER_ID0 = "019b7000-0000-7000-8000-000000000b00" as DidId;
-const PEER_ID1 = "019b7000-0000-7000-8000-000000000b01" as DidId;
-const PEER_ID2 = "019b7000-0000-7000-8000-000000000b02" as DidId;
-const PEER_ID3 = "019b7000-0000-7000-8000-000000000b03" as DidId;
-const CONTACT = "019b2a63-48bf-7214-961d-4c3f97cb95da" as ContactId;
-const CONTACT2 = "019b2a63-48bf-7214-961d-4c3f97cb95db" as ContactId;
-const IAT = 1_757_700_000;
-const WEB_DID = "did:web:bob.example" as Did;
-
-type Peer = { didId: DidId; did: Did; longFormDid: Did; resolution: PeerResolution; publicKey: PublicKey };
-
-async function peerDid(keys: Keys, didId: DidId): Promise<Peer> {
-  const minted = await mintDid(keys, didId, DIRECT);
-  const resolution = peerResolution(minted.longFormDid);
-  const [keyAgreement] = authorizedMethodIds(resolution.document, "keyAgreement");
-  return { didId, did: minted.did, longFormDid: minted.longFormDid, resolution, publicKey: methodPublicKey(resolution.document, keyAgreement!) };
-}
-
-type Local = { didId: DidId; did: Did; longFormDid: Did };
-
-/** The two vaults of a scene: ours with three communication DIDs on a mediated route, the peer's with four. */
-async function vaults() {
-  const keys = await openKeys();
-  const peerKeys = await openKeys(OTHER_SEED);
-  const scene = new Scene();
-  mediatedRoute(scene, { me: "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc" as Did });
-  const a0 = await createdDid(scene, keys, DID_ID, ROUTE, MEDIATED);
-  const a1 = await createdDid(scene, keys, DID_ID2, ROUTE, MEDIATED);
-  const a2 = await createdDid(scene, keys, DID_ID3, ROUTE, MEDIATED);
-  const b0 = await peerDid(peerKeys, PEER_ID0);
-  const b1 = await peerDid(peerKeys, PEER_ID1);
-  const b2 = await peerDid(peerKeys, PEER_ID2);
-  const b3 = await peerDid(peerKeys, PEER_ID3);
-  return { keys, peerKeys, scene, a0, a1, a2, b0, b1, b2, b3 };
-}
-
-type ResolvedOptions = Partial<VaultData["peer.resolved"]> & { short?: boolean };
-
-function resolved(scene: Scene, local: DidId, peer: Peer, options: ResolvedOptions = {}): VaultEvent<"peer.resolved"> {
-  const { short, ...data } = options;
-  return scene.add("peer.resolved", {
-    localKeyName: didKeyName(local, "key-agreement"),
-    peerPublicKey: peer.publicKey,
-    presentedDid: short ? peer.did : peer.longFormDid,
-    did: peer.did,
-    documentCid: peer.resolution.cid,
-    authenticationMethodIds: authorizedMethodIds(peer.resolution.document, "authentication"),
-    keyAgreementMethodIds: authorizedMethodIds(peer.resolution.document, "keyAgreement"),
-    service: null,
-    ...data,
-  });
-}
-
-const ref = <T extends VaultEvent>(event: T) => event.eventId as EventReference<T["type"]>;
-
-function bound(scene: Scene, local: Local, peer: Peer, resolution: VaultEvent<"peer.resolved">, R = relationshipId(local.did, peer.did)) {
-  const event = scene.add("relationship.bound", { relationshipId: R, localDidId: local.didId, peerResolutionEventId: ref(resolution) });
-  return { R, bound: ref(event) };
-}
-
-type Receipt = {
-  local: DidId;
-  peer: Peer;
-  resolution: VaultEvent<"peer.resolved">;
-  binding: EventReference<"relationship.bound"> | null;
-  ordinal: number;
-  fromPrior?: string | null;
-  transition?: EventReference<"relationship.peerTransitioned"> | null;
-  wire?: string;
-  presentedDid?: Did;
-  overrides?: Partial<VaultData["message.in"]>;
-};
-
-/** An authenticated receipt from the peer at one of our DIDs, with or without a proof. */
-function receipt(scene: Scene, r: Receipt): VaultEvent<"message.in"> {
-  const wire = (r.wire ?? uuidv7()) as WireMessageId;
-  return scene.add("message.in", {
-    messageId: inboundMessageId(r.peer.publicKey, wire),
-    wireMessageId: wire,
-    receiptOrdinal: String(r.ordinal) as VaultData["message.in"]["receiptOrdinal"],
-    intentHash: HASH as VaultData["message.in"]["intentHash"],
-    plaintextHash: HASH as VaultData["message.in"]["plaintextHash"],
-    localKeyName: didKeyName(r.local, "key-agreement"),
-    msgType: "https://didcomm.org/basicmessage/2.0/message",
-    peerResolutionEventId: ref(r.resolution),
-    relationshipBindingEventId: r.binding,
-    peerTransitionEventId: r.transition ?? null,
-    presentedDid: r.presentedDid ?? r.resolution.data.presentedDid,
-    did: r.peer.did,
-    thid: null,
-    pthid: null,
-    createdTime: null,
-    expiresTime: null,
-    pleaseAck: null,
-    ack: [],
-    headers: {},
-    fromPrior: r.fromPrior ?? null,
-    bodyCid: cidOf(`body ${wire}`),
-    attachmentCids: [],
-    bytes: 100,
-    signedBy: null,
-    receivedVia: { mediationId: null, deliveryId: null },
-    ...r.overrides,
-  });
-}
-
-type PeerEdge = {
-  R: RelationshipId;
-  local: DidId;
-  from: Peer;
-  to: Peer;
-  jwt: string;
-  prior: VaultEvent<"peer.resolved">;
-  successor: VaultEvent<"peer.resolved">;
-  messageId: MessageId;
-  overrides?: Partial<VaultData["relationship.peerTransitioned"]>;
-};
-
-function peerEdge(scene: Scene, e: PeerEdge): VaultEvent<"relationship.peerTransitioned"> {
-  return scene.add("relationship.peerTransitioned", {
-    relationshipId: e.R,
-    localKeyName: didKeyName(e.local, "key-agreement"),
-    peerPublicKey: e.to.publicKey,
-    fromDid: e.from.did,
-    presentedFromDid: e.from.longFormDid,
-    toDid: e.to.did,
-    presentedToDid: e.to.longFormDid,
-    fromPrior: e.jwt,
-    priorResolutionEventId: ref(e.prior),
-    peerResolutionEventId: ref(e.successor),
-    messageId: e.messageId,
-    ...e.overrides,
-  });
-}
-
-function localEdge(scene: Scene, R: RelationshipId, from: DidId, to: DidId, jwt: string, trigger: EventReference<"message.in"> | null = null): VaultEvent<"relationship.localTransitioned"> {
-  return scene.add("relationship.localTransitioned", { relationshipId: R, fromDidId: from, toDidId: to, fromPrior: jwt, triggerEventId: trigger });
-}
-
-const routesOf = (set: VaultEventSet): RouteFold => foldRoutes(set, foldMediations(set));
-
-const noObjects = async () => null;
-
-async function fold(events: readonly Event[], readObject: (cid: Cid) => Promise<Uint8Array | null> = noObjects): Promise<RelationshipFold> {
-  const set = VaultEventSet.of(events);
-  return foldRelationshipsVerified(set, routesOf(set), readObject);
-}
-
-/** The document verdicts of a scene, computed once: they depend on the set, not on its order. */
-async function checksOf(events: readonly Event[], readObject: (cid: Cid) => Promise<Uint8Array | null> = noObjects) {
-  const set = VaultEventSet.of(events);
-  return { resolutionChecks: await verifyResolutions(set, readObject), proofChecks: await verifyTransitions(set, routesOf(set), readObject) };
-}
-
-/** The fold with every snapshot verified but no proof checked. */
-async function foldUnproven(events: readonly Event[]): Promise<RelationshipFold> {
-  const set = VaultEventSet.of(events);
-  return foldRelationships(set, routesOf(set), { resolutionChecks: await verifyResolutions(set, noObjects) });
-}
-
-/** The verdicts of a scene computed once, then the fold checked over shuffles of the events. */
-async function expectFoldOrderFree(events: readonly Event[], check: (fold: RelationshipFold) => void, readObject: (cid: Cid) => Promise<Uint8Array | null> = noObjects): Promise<void> {
-  const checks = await checksOf(events, readObject);
-  const foldWith = (s: EventSet) => foldRelationships(s, routesOf(s), checks);
-  check(foldWith(VaultEventSet.of(events)));
-  expectOrderFree(events, foldWith);
-}
-
-const dids = (fold: RelationshipFold, R: RelationshipId) => ({
-  local: fold.relationships.get(R)!.localChain.map((node) => node.didId),
-  peer: fold.relationships.get(R)!.peerChain.map((node) => node.did),
-});
-
-/** A peer rotation B0 → B1 carried to one of our DIDs: the successor's resolution, the carrier and the edge. */
-async function peerRotation(scene: Scene, peerKeys: Keys, R: RelationshipId, local: DidId, from: Peer, to: Peer, prior: VaultEvent<"peer.resolved">, binding: EventReference<"relationship.bound"> | null, ordinal: number) {
-  const jwt = await signFromPrior(peerKeys, { didId: from.didId, longFormDid: from.longFormDid }, to.longFormDid, IAT);
-  const successor = resolved(scene, local, to);
-  const carrier = receipt(scene, { local, peer: to, resolution: successor, binding, ordinal, fromPrior: jwt });
-  const edge = peerEdge(scene, { R, local, from, to, jwt, prior, successor, messageId: carrier.data.messageId });
-  return { jwt, successor, carrier, edge };
-}
+import { cidOf, shuffled, snapshot } from "./helpers.js";
+import { PEER_ID0, CONTACT, CONTACT2, IAT, WEB_DID, type Peer, vaults, resolved, ref, bound, receipt, peerEdge, localEdge, routesOf, noObjects, fold, documentChecksOf, foldUnproven, expectFoldOrderFree, dids, peerRotation } from "./scene.js";
 
 describe("the binding", () => {
   it("pins the root local DID and the exact peer document; equivalent bindings are one, and the roots derive the ID", async () => {
@@ -245,7 +49,6 @@ describe("the binding", () => {
       expect(fold.retainedDidIds).toEqual(new Set([a0.didId]));
     });
   });
-
   it("conflicts when bindings disagree on the local DID, the peer DID or the peer document", async () => {
     const { scene, a0, a1, b0, b1 } = await vaults();
     const otherDocument = { ...b0.resolution.document, service: [] };
@@ -269,7 +72,6 @@ describe("the binding", () => {
       expect(fold.claimants(a0.did, b0.did), what).toEqual([]);
     }
   });
-
   it("conflicts when the binding does not hold: resolution at another key, or roots that derive another ID", async () => {
     const { scene, a0, a1, b0 } = await vaults();
     const atA1 = resolved(scene, a1.didId, b0);
@@ -281,7 +83,6 @@ describe("the binding", () => {
     expect(fold.relationships.get(wrongKey)!.faults).toEqual([expect.stringMatching(/^binding .* does not hold: its resolution, local DID and relationship ID disagree$/)]);
     expect(fold.relationships.get(wrongId)!.faults).toEqual([expect.stringMatching(/^binding .* does not hold: its resolution, local DID and relationship ID disagree$/)]);
   });
-
   it("defers while the peer resolution or the root local DID is not here, without a chain or an index entry", async () => {
     const { keys, scene, a0, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
@@ -312,13 +113,11 @@ describe("contact assignment", () => {
     expect(fold.relationships.get(R)!.binding).toBeNull();
     expect(fold.relationships.get(R)!.deferred).toEqual(["no binding"]);
     expect(fold.relationships.get(R)!.conflict).toBe(false);
-
     bound(scene, a0, b0, resolved(scene, a0.didId, b0));
     scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT });
     fold = await fold_(scene.events);
     expect(fold.relationships.get(R)!.contactId).toBe(CONTACT);
     expect(fold.relationships.get(R)!.conflict).toBe(false);
-
     scene.add("relationship.contactAssigned", { relationshipId: R, contactId: CONTACT2 });
     await expectFoldOrderFree(scene.events, (f) => {
       expect(f.relationships.get(R)!.contactId).toBeNull();
@@ -339,7 +138,6 @@ describe("the local chain", () => {
     const edge = localEdge(scene, R, a0.didId, a1.didId, jwt, ref(confirmation));
     return { ...v, R, binding, root, confirmation, jwt, edge };
   }
-
   it("applies a verified edge from the confirmed root, freezing successor, proof and trigger; the root and the peer end stay", async () => {
     const { scene, R, a0, a1, b0, edge } = await rotated();
     await expectFoldOrderFree(scene.events, (fold) => {
@@ -357,7 +155,6 @@ describe("the local chain", () => {
       expect(r.deferred).toEqual([]);
     });
   });
-
   it("is idempotent under equal edges, and conflicts on competing successors, a cycle or an invalid proof in every order", async () => {
     const { scene, keys, R, a0, a1, a2, jwt, confirmation } = await rotated();
     const base = scene.events.length;
@@ -366,7 +163,6 @@ describe("the local chain", () => {
       expect(dids(fold, R).local).toEqual([a0.didId, a1.didId]);
       expect(fold.relationships.get(R)!.conflict).toBe(false);
     });
-
     scene.events.length = base;
     const toA2 = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a2.longFormDid, IAT);
     const competing = localEdge(scene, R, a0.didId, a2.didId, toA2, ref(confirmation));
@@ -376,7 +172,6 @@ describe("the local chain", () => {
       expect(fold.transitions.get(competing.eventId)!.status).toBe("conflict");
       expect(fold.claimants(a1.did, fold.relationships.get(R)!.peerChain[0]!.did)).toEqual([]);
     });
-
     scene.events.length = base;
     const back = await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a0.longFormDid, IAT);
     const cycle = localEdge(scene, R, a1.didId, a0.didId, back);
@@ -385,7 +180,6 @@ describe("the local chain", () => {
       expect(fold.relationships.get(R)!.faults).toEqual([`local edge ${a1.didId} → ${a0.didId}: ${a0.didId} is already in the local chain`]);
       expect(fold.transitions.get(cycle.eventId)!.status).toBe("conflict");
     });
-
     scene.events.length = base;
     const forged = await signFromPrior(keys, { didId: a2.didId, longFormDid: a2.longFormDid }, a1.longFormDid, IAT);
     scene.events.pop();
@@ -395,7 +189,6 @@ describe("the local chain", () => {
       expect(fold.transitions.get(invalid.eventId)).toEqual({ status: "conflict", because: "the proof does not verify against the predecessor's document" });
     });
   });
-
   it("defers an edge whose prefix, successor creation, confirmation or proof check is not here, and never applies it", async () => {
     const { scene, keys, R, a0, a1, a2, confirmation, edge } = await rotated();
     const secondHop = await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a2.longFormDid, IAT);
@@ -404,25 +197,20 @@ describe("the local chain", () => {
     expect(dids(fold, R).local).toEqual([a0.didId]);
     expect(fold.transitions.get(unreached.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("no rooted prefix reaches the edge") });
     expect(fold.relationships.get(R)!.conflict).toBe(false);
-
     fold = await fold_(scene.events);
     expect(dids(fold, R).local).toEqual([a0.didId, a1.didId]);
     expect(fold.transitions.get(unreached.eventId)).toEqual({ status: "deferred", because: `${a1.didId} is not confirmed by input in this relationship` });
-
     fold = await fold_(scene.events.filter((event) => !(event.type === "did.created" && (event.data as VaultData["did.created"]).didId === a1.didId)));
     expect(dids(fold, R).local).toEqual([a0.didId]);
     expect(fold.transitions.get(edge.eventId)!.status).toBe("deferred");
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ because: expect.stringContaining(`successor ${a1.didId} is not created`) });
-
     fold = await fold_(scene.events.filter((event) => event !== confirmation));
     expect(dids(fold, R).local).toEqual([a0.didId]);
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("the trigger") });
-
     const unchecked = await foldUnproven(scene.events);
     expect(dids(unchecked, R).local).toEqual([a0.didId]);
     expect(unchecked.transitions.get(edge.eventId)).toEqual({ status: "deferred", because: "the proof is not yet verified" });
   });
-
   it("conflicts on a trigger that is not a confirmation of the predecessor", async () => {
     const { scene, R, a0, a1, b0, root, jwt, edge, binding } = await rotated();
     const elsewhere = receipt(scene, { local: a1.didId, peer: b0, resolution: root, binding, ordinal: 2 });
@@ -442,7 +230,6 @@ describe("the peer chain", () => {
     const { R, bound: binding } = bound(scene, a0, b0, root);
     return { ...v, R, binding, root };
   }
-
   it("applies a verified proof carried to the root, pinning the successor document; a repeated proof reuses the edge", async () => {
     const { scene, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const { edge, successor, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -463,7 +250,6 @@ describe("the peer chain", () => {
       expect(r.deferred).toEqual([]);
     });
   });
-
   it("extends the same relationship from a proof carried to a historical local address, root or successor", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const confirmation = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
@@ -477,7 +263,6 @@ describe("the peer chain", () => {
       for (const local of [a0, a1]) for (const peer of [b0, b1, b2]) expect(fold.claimants(local.did, peer.did)).toEqual([R]);
     });
   });
-
   it("cannot be extended by a forged signature, a wrong sub, a wrong recipient relationship, an unauthorized signing key or an incompatible pinned document", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const base = scene.events.length;
@@ -487,27 +272,23 @@ describe("the peer chain", () => {
       expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(because) });
       expect(fold.relationships.get(R)!.conflict).toBe(true);
     };
-
     const forged = await signFromPrior(peerKeys, { didId: b2.didId, longFormDid: b2.longFormDid }, b1.longFormDid, IAT);
     let successor = resolved(scene, a0.didId, b1);
     let carrier = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 1, fromPrior: forged });
     let edge = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt: forged, prior: root, successor, messageId: carrier.data.messageId });
     await expectConflict(edge, "the proof does not verify against the pinned predecessor document");
-
     scene.events.length = base;
     const toB2 = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b2.longFormDid, IAT);
     successor = resolved(scene, a0.didId, b1);
     carrier = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 1, fromPrior: toB2 });
     edge = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt: toB2, prior: root, successor, messageId: carrier.data.messageId });
     await expectConflict(edge, "the proof does not verify against the pinned predecessor document");
-
     scene.events.length = base;
     const good = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b1.longFormDid, IAT);
     successor = resolved(scene, a1.didId, b1);
     carrier = receipt(scene, { local: a1.didId, peer: b1, resolution: successor, binding: null, ordinal: 1, fromPrior: good });
     edge = peerEdge(scene, { R, local: a1.didId, from: b0, to: b1, jwt: good, prior: root, successor, messageId: carrier.data.messageId });
     await expectConflict(edge, `${didKeyName(a1.didId, "key-agreement")} is not in the local history`);
-
     scene.events.length = base;
     const [agreement] = authorizedMethodIds(b0.resolution.document, "keyAgreement");
     const signer = await peerKeys.signing(didKeyName(b0.didId, "authentication"));
@@ -516,7 +297,6 @@ describe("the peer chain", () => {
     carrier = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 1, fromPrior: unauthorized });
     edge = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt: unauthorized, prior: root, successor, messageId: carrier.data.messageId });
     await expectConflict(edge, "the proof does not verify against the pinned predecessor document");
-
     scene.events.length = base;
     const otherDocument = { ...b0.resolution.document, service: [] };
     const otherPin = resolved(scene, a0.didId, b0, { short: true, documentCid: rawCidOfBytes(canonicalize(otherDocument)) });
@@ -528,13 +308,11 @@ describe("the peer chain", () => {
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining("the prior resolution is not its document's") });
     expect(keys).toBeDefined();
   });
-
   it("conflicts on competing successors, a cycle, a proof whose successor document differs, or a carrier bound elsewhere", async () => {
     const { scene, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const base = scene.events.length;
     const first = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
     const rotated = scene.events.length;
-
     const competing = await peerRotation(scene, peerKeys, R, a0.didId, b0, b2, root, binding, 2);
     await expectFoldOrderFree(scene.events, (fold) => {
       expect(dids(fold, R).peer).toEqual([b0.did]);
@@ -542,14 +320,12 @@ describe("the peer chain", () => {
       expect(fold.transitions.get(first.edge.eventId)!.status).toBe("conflict");
       expect(fold.transitions.get(competing.edge.eventId)!.status).toBe("conflict");
     });
-
     scene.events.length = rotated;
     const back = await peerRotation(scene, peerKeys, R, a0.didId, b1, b0, first.successor, binding, 2);
     await expectFoldOrderFree(scene.events, (fold) => {
       expect(dids(fold, R).peer).toEqual([b0.did, b1.did]);
       expect(fold.transitions.get(back.edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`${b0.did} is already in the peer chain`) });
     });
-
     scene.events.length = rotated;
     const enlarged = { ...b1.resolution.document, keyAgreement: [...(b1.resolution.document["keyAgreement"] as string[]), "#key-1"] };
     const enlargedBytes = canonicalize(enlarged);
@@ -563,7 +339,6 @@ describe("the peer chain", () => {
       expect(fold.transitions.get(first.edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`observation ${enlargingCarrier.eventId} of message ${first.carrier.data.messageId} contradicts its resolution`) });
       expect(fold.relationships.get(R)!.conflict).toBe(true);
     }, async (wanted) => (wanted === enlargedResolution.data.documentCid ? enlargedBytes : null));
-
     scene.events.length = base;
     const other = bound(scene, a1, b0, resolved(scene, a1.didId, b0));
     const jwt = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b1.longFormDid, IAT);
@@ -573,7 +348,6 @@ describe("the peer chain", () => {
     const fold = await fold_(scene.events);
     expect(fold.transitions.get(elsewhere.eventId)).toEqual({ status: "conflict", because: `observation ${carrier.eventId} of message ${carrier.data.messageId} is bound to another relationship` });
   });
-
   it("defers while the prior resolution, the successor resolution, the carrier or the proof check is not here, and never applies", async () => {
     const { scene, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const { edge, successor, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -587,13 +361,10 @@ describe("the peer chain", () => {
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("the prior resolution is not here") });
     expect(fold.relationships.get(R)!.conflict).toBe(false);
     expect(rebound).toBeDefined();
-
     fold = await fold_(without(successor));
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("the successor's resolution is not here") });
-
     fold = await fold_(without(carrier));
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining(`no observation of message ${carrier.data.messageId} is here`) });
-
     const unchecked = await foldUnproven(scene.events);
     expect(unchecked.transitions.get(edge.eventId)).toMatchObject({ status: "deferred", because: expect.stringContaining("the proof is not yet verified") });
     for (const f of [fold, unchecked]) {
@@ -602,7 +373,6 @@ describe("the peer chain", () => {
       expect(f.pendingAt(a0.did, b1.did).map((claim) => claim.because)).toContain("edge");
     }
   });
-
   it("verifies against a retained did:web document read from the object store, and waits while the object is not here", async () => {
     const { scene, peerKeys, a0, b1 } = await vaults();
     const signer = await peerKeys.signing(didKeyName(PEER_ID0, "authentication"));
@@ -617,7 +387,6 @@ describe("the peer chain", () => {
     const successor = resolved(scene, a0.didId, b1);
     const carrier = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 1, fromPrior: jwt });
     const edge = peerEdge(scene, { R, local: a0.didId, from: web, to: b1, jwt, prior: root, successor, messageId: carrier.data.messageId, overrides: { presentedFromDid: WEB_DID } });
-
     let fold = await fold_(scene.events);
     expect(fold.relationships.get(R)!.binding).not.toBeNull();
     expect(fold.relationships.get(R)!.deferred).toContain("no root resolution is yet verified against its document");
@@ -626,7 +395,6 @@ describe("the peer chain", () => {
     fold = await fold_(scene.events, async (wanted) => objects.get(wanted) ?? null);
     expect(fold.transitions.get(edge.eventId)).toEqual({ status: "applied" });
     expect(dids(fold, R).peer).toEqual([WEB_DID, b1.did]);
-
     const revised = { ...document, service: [] };
     const revisedBytes = canonicalize(revised);
     objects.set(rawCidOfBytes(revisedBytes), revisedBytes);
@@ -651,7 +419,7 @@ describe("crossed changes of the two ends", () => {
     localEdge(scene, R, a1.didId, a2.didId, await signFromPrior(keys, { didId: a1.didId, longFormDid: a1.longFormDid }, a2.longFormDid, IAT), ref(atA1));
     await peerRotation(scene, peerKeys, R, a2.didId, b1, b2, first.successor, binding, 4);
     const set = VaultEventSet.of(scene.events);
-    const checks = await checksOf(scene.events);
+    const checks = await documentChecksOf(scene.events);
     const expected = snapshot(foldRelationships(set, routesOf(set), checks));
     for (let seed = 1; seed <= 8; seed++) {
       const shuffledSet = VaultEventSet.of(shuffled(scene.events, seed));
@@ -678,7 +446,6 @@ describe("the address index", () => {
     expect(fold.claimants(a0.did, b0.did)).toEqual([R]);
     expect(fold.claimants(a0.did, b3.did)).toEqual([shared]);
     expect([...fold.relationships.values()].every((r) => !r.conflict)).toBe(true);
-
     const rootB1 = resolved(scene, a1.didId, b1);
     const { R: born, bound: binding } = bound(scene, a1, b1, rootB1);
     const confirmation = receipt(scene, { local: a1.didId, peer: b1, resolution: rootB1, binding, ordinal: 1 });
@@ -709,17 +476,14 @@ describe("pending claims", () => {
     expect(fold.pendingAt(a1.did, b1.did)).toEqual([{ localKeyName: didKeyName(a1.didId, "key-agreement"), localDid: a1.did, peerDid: b1.did, because: "carrier", eventIds: [carrier.eventId], conflict: false }]);
     expect(fold.pendingAt(a0.did, b1.did)).toEqual([]);
     expect(fold.claimants(a1.did, b1.did)).toEqual([]);
-
     const unrelated = receipt(scene, { local: a0.didId, peer: b2, resolution: resolved(scene, a0.didId, b2), binding: null, ordinal: 2, fromPrior: jwt });
     fold = await fold_(scene.events);
     expect(fold.pendingAt(a0.did, b2.did)).toEqual([]);
     expect(unrelated.data.fromPrior).toBe(jwt);
-
     const edge = peerEdge(scene, { R, local: a1.didId, from: b0, to: b1, jwt, prior: root, successor, messageId: carrier.data.messageId });
     fold = await fold_(scene.events);
     expect(fold.transitions.get(edge.eventId)!.status).toBe("conflict");
     expect(fold.pendingAt(a1.did, b1.did)).toEqual([expect.objectContaining({ because: "carrier", conflict: true })]);
-
     scene.events.splice(scene.events.indexOf(edge), 1);
     const successorAtRoot = resolved(scene, a0.didId, b1);
     const atRoot = receipt(scene, { local: a0.didId, peer: b1, resolution: successorAtRoot, binding, ordinal: 3, fromPrior: jwt });
@@ -730,7 +494,6 @@ describe("pending claims", () => {
       expect(f.pendingAt(a1.did, b1.did)).toEqual([expect.objectContaining({ because: "carrier", eventIds: [carrier.eventId], conflict: false })]);
     });
   });
-
   it("name a deferred local edge's successor against every peer node, by the successor's key", async () => {
     const { scene, keys, a0, a1, b0 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
@@ -755,11 +518,9 @@ describe("verifyTransitions", () => {
     const set = VaultEventSet.of(scene.events);
     const checks = await verifyTransitions(set, routesOf(set), noObjects);
     expect(checks).toEqual(new Map<EventId, EvidenceCheck>([[local.eventId, "verified"], [twin.eventId, "verified"], [peer.edge.eventId, "verified"]]));
-
     const withoutPredecessor = VaultEventSet.of(scene.events.filter((event) => event !== root && !(event.type === "did.created" && (event.data as VaultData["did.created"]).didId === a0.didId)));
     expect(await verifyTransitions(withoutPredecessor, routesOf(withoutPredecessor), noObjects)).toEqual(new Map());
   });
-
   it("finds a peer proof whose iss or sub is not the presented spelling invalid, whatever the signature", async () => {
     const { scene, peerKeys, a0, b0, b1, b2 } = await vaults();
     const root = resolved(scene, a0.didId, b0);
@@ -784,7 +545,6 @@ describe("evidence that authorizes nothing", () => {
     const { R, bound: binding } = bound(scene, a0, b0, root);
     return { ...v, R, binding, root };
   }
-
   it("a receipt whose resolution is missing, or contradicts it, confirms no local predecessor", async () => {
     const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
     const jwt = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
@@ -800,7 +560,6 @@ describe("evidence that authorizes nothing", () => {
     fold = await fold_(scene.events);
     expect(fold.transitions.get(edge.eventId)).toEqual({ status: "applied" });
   });
-
   it("a carrier confirms the predecessor only through the applied transition it witnesses, bound or not", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, root } = await bornAtRoot();
     const toA1 = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
@@ -811,7 +570,6 @@ describe("evidence that authorizes nothing", () => {
     let fold = await fold_(scene.events);
     expect(fold.transitions.get(local.eventId)).toEqual({ status: "deferred", because: `${a0.didId} is not confirmed by input in this relationship` });
     expect(fold.pendingAt(a0.did, b1.did)).toHaveLength(1);
-
     const peer = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt: proof, prior: root, successor, messageId: carrier.data.messageId });
     await expectFoldOrderFree(scene.events, (f) => {
       expect(f.transitions.get(peer.eventId)).toEqual({ status: "applied" });
@@ -820,7 +578,6 @@ describe("evidence that authorizes nothing", () => {
       expect(f.pendingAt(a0.did, b1.did)).toEqual([]);
     });
   });
-
   it("a snapshot that is not its document's — another CID, other methods — conflicts what pins it, root or successor", async () => {
     const { scene, peerKeys, R, a0, b0, b1, b2, root, binding } = await bornAtRoot();
     const jwt = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b1.longFormDid, IAT);
@@ -830,11 +587,9 @@ describe("evidence that authorizes nothing", () => {
     let fold = await fold_(scene.events);
     expect(fold.transitions.get(edge.eventId)).toEqual({ status: "conflict", because: `the successor's resolution is not its document's; observation ${carrier.eventId} of message ${carrier.data.messageId} contradicts its resolution` });
     expect(dids(fold, R).peer).toEqual([b0.did]);
-
     const set = VaultEventSet.of(scene.events);
     expect((await verifyResolutions(set, noObjects)).get(forged.eventId)).toBe("invalid");
     expect((await verifyResolutions(set, noObjects)).get(root.eventId)).toBe("verified");
-
     scene.events.splice(scene.events.indexOf(root), 1, resolved(scene, a0.didId, b0, { authenticationMethodIds: [] }));
     scene.events.pop();
     const rootEvent = scene.events.find((event) => event.type === "peer.resolved" && (event.data as VaultData["peer.resolved"]).did === b0.did)!;
@@ -845,7 +600,6 @@ describe("evidence that authorizes nothing", () => {
     expect(fold.relationships.get(R)!.binding).toBeNull();
     expect(fold.transitions.get(edge.eventId)!.status).toBe("conflict");
   });
-
   it("a duplicate of an applied transition with a contradiction of its own stays a conflict, whichever sorts first", async () => {
     const { scene, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const { edge, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -860,7 +614,6 @@ describe("evidence that authorizes nothing", () => {
     const swapped = scene.events.map((event) => (event === edge ? { ...event, at: corrupted.at } : event === corrupted ? { ...event, at: edge.at } : event));
     await expectFoldOrderFree(swapped, check);
   });
-
   it("an applied transition at one local address does not clear a carrier's claim at another", async () => {
     const { scene, peerKeys, R, a0, a2, b0, b1, root, binding } = await bornAtRoot();
     const { jwt, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -872,7 +625,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.claimants(a2.did, b1.did)).toEqual([]);
     });
   });
-
   it("a deferred peer transition claims its successor against every validated local address of its relationship", async () => {
     const { scene, keys, peerKeys, R, a0, a1, a2, b0, b1, root, binding } = await bornAtRoot();
     const confirmation = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
@@ -885,7 +637,6 @@ describe("evidence that authorizes nothing", () => {
     expect(fold.pendingAt(a1.did, b1.did)).toHaveLength(1);
     expect(fold.pendingAt(a2.did, b1.did)).toEqual([]);
   });
-
   it("a second binding whose resolution was taken at another key is a conflict, whichever sorts first", async () => {
     const { scene, a0, a2, b0, root, R } = await bornAtRoot();
     const wrong = scene.add("relationship.bound", { relationshipId: R, localDidId: a0.didId, peerResolutionEventId: ref(resolved(scene, a2.didId, b0)) });
@@ -898,7 +649,6 @@ describe("evidence that authorizes nothing", () => {
     await expectFoldOrderFree(scene.events.map((event) => (event === first ? { ...event, at: wrong.at } : event === wrong ? { ...event, at: first.at } : event)), check);
     expect(root).toBeDefined();
   });
-
   it("an observation that does not derive the message ID it claims conflicts its group, and a group in intent conflict witnesses nothing", async () => {
     const { scene, peerKeys, R, a0, b0, b1, b2, root, binding } = await bornAtRoot();
     const jwt = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b1.longFormDid, IAT);
@@ -908,7 +658,6 @@ describe("evidence that authorizes nothing", () => {
     const edge = peerEdge(scene, { R, local: a0.didId, from: b0, to: b1, jwt, prior: root, successor, messageId: misnamed.data.messageId });
     let fold = await fold_(scene.events);
     expect(fold.transitions.get(edge.eventId)).toEqual({ status: "conflict", because: `observation ${misnamed.eventId} of message ${misnamed.data.messageId} contradicts its resolution` });
-
     scene.events.splice(scene.events.indexOf(misnamed), 1);
     scene.events.splice(scene.events.indexOf(edge), 1);
     const carrier = receipt(scene, { local: a0.didId, peer: b1, resolution: successor, binding, ordinal: 1, fromPrior: jwt, wire });
@@ -918,7 +667,6 @@ describe("evidence that authorizes nothing", () => {
     expect(fold.transitions.get(disputed.eventId)).toEqual({ status: "conflict", because: `the observations of message ${carrier.data.messageId} disagree on the intent` });
     expect(dids(fold, R).peer).toEqual([b0.did]);
   });
-
   it("a successor reference of another type, and an invalid proof beside a missing successor, are conflicts, not waits", async () => {
     const { scene, peerKeys, R, a0, b0, b1, b2, root, binding } = await bornAtRoot();
     const jwt = await signFromPrior(peerKeys, { didId: b0.didId, longFormDid: b0.longFormDid }, b1.longFormDid, IAT);
@@ -932,7 +680,6 @@ describe("evidence that authorizes nothing", () => {
     expect(fold.transitions.get(invalid.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining("the proof does not verify against the pinned predecessor document") });
     expect(dids(fold, R).peer).toEqual([b0.did]);
   });
-
   it("a numalgo-4 document read back must be what its long form derives: another key's document under this DID's id is no snapshot of it", async () => {
     const { scene, a0, b0, b2 } = await vaults();
     const forgedDocument = { ...b2.resolution.document, id: b0.longFormDid, alsoKnownAs: [b0.did] };
@@ -945,7 +692,6 @@ describe("evidence that authorizes nothing", () => {
     expect((await verifyResolutions(VaultEventSet.of(scene.events), readObject)).get(forged.eventId)).toBe("invalid");
     expect(fold.relationships.get(R)!.faults).toEqual([`the root resolution ${forged.eventId} is not its document's`]);
     expect(fold.relationships.get(R)!.binding).toBeNull();
-
     scene.events.splice(scene.events.indexOf(forged), 1);
     scene.events.pop();
     const genuine = resolved(scene, a0.didId, b0, { short: true });
@@ -955,7 +701,6 @@ describe("evidence that authorizes nothing", () => {
     expect(dids(fold, R).peer).toEqual([b0.did]);
     expect(fold.relationships.get(R)!.peerChain[0]!.documentCid).toBe(b0.resolution.cid);
   });
-
   it("a resolution found not to be its document's authenticates no observation and verifies no proof: the group it is in conflicts", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const wire = uuidv7() as WireMessageId;
@@ -967,7 +712,6 @@ describe("evidence that authorizes nothing", () => {
     expect((await verifyResolutions(VaultEventSet.of(scene.events), noObjects)).get(wrongKey.eventId)).toBe("invalid");
     expect(fold.transitions.get(edge.eventId)).toMatchObject({ status: "conflict", because: expect.stringContaining(`the trigger ${input.eventId} does not confirm ${a0.didId}`) });
     expect(dids(fold, R).local).toEqual([a0.didId]);
-
     scene.events.length = scene.events.indexOf(wrongKey);
     const noMethods = resolved(scene, a0.didId, b0, { authenticationMethodIds: [] });
     const { edge: peer } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, noMethods, binding, 2);
@@ -976,7 +720,6 @@ describe("evidence that authorizes nothing", () => {
     expect(dids(fold, R).peer).toEqual([b0.did]);
     expect(root).toBeDefined();
   });
-
   it("an observation of the message whose resolution is not here waits alone: the carrier's transition and its confirmation stand, and a resolution that contradicts conflicts them", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const { edge: peer, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1006,7 +749,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.pendingAt(a0.did, b1.did)).toEqual([]);
     });
   });
-
   it("every applied equal transition names its node: a proof-free successor scoped by any of them confirms, whichever sorts first", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
     const { edge: first, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1023,7 +765,6 @@ describe("evidence that authorizes nothing", () => {
     await expectFoldOrderFree(scene.events, check);
     await expectFoldOrderFree(scene.events.map((event) => (event === first ? { ...event, at: duplicate.at } : event === duplicate ? { ...event, at: first.at } : event)), check);
   });
-
   it("equal transitions whose successor snapshot is not here share one wait, never compete; one proof pinning two documents here is a conflict", async () => {
     const { scene, peerKeys, R, a0, b0, b1, b2, root, binding } = await bornAtRoot();
     const { edge, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1047,7 +788,6 @@ describe("evidence that authorizes nothing", () => {
       for (const twin of twins) expect(fold.transitions.get(twin.eventId)).toEqual({ status: "applied" });
       expect(dids(fold, R).peer).toEqual([b0.did, b1.did]);
     });
-
     const other = resolved(scene, a0.didId, b1, { documentCid: b2.resolution.cid, keyAgreementMethodIds: authorizedMethodIds(b2.resolution.document, "keyAgreement") });
     const forgedTwin = [...scene.events.filter((event) => !twins.includes(event as VaultEvent<"relationship.peerTransitioned">)), { ...twins[0]!, data: { ...twins[0]!.data, peerResolutionEventId: ref(other) } }];
     await expectFoldOrderFree(forgedTwin, (fold) => {
@@ -1055,7 +795,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.transitions.get(edge.eventId)).toEqual({ status: "applied" });
       expect(dids(fold, R).peer).toEqual([b0.did, b1.did]);
     });
-
     const signer = await peerKeys.signing(didKeyName(b0.didId, "authentication"));
     const method = { id: `${WEB_DID}#key-1`, type: "Multikey", controller: WEB_DID, publicKeyMultibase: signer.publicKey };
     const versions = [{ id: WEB_DID, verificationMethod: [method], authentication: [`${WEB_DID}#key-1`], keyAgreement: [`${WEB_DID}#key-1`] }, { id: WEB_DID, verificationMethod: [method], authentication: [`${WEB_DID}#key-1`], keyAgreement: [`${WEB_DID}#key-1`], service: [] }].map((document) => {
@@ -1076,7 +815,6 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R).peer).toEqual([b0.did]);
     }, async (wanted) => objects.get(wanted) ?? null);
   });
-
   it("control input — Empty, a ping response, a problem report — starts no rotation, even at the exact predecessor", async () => {
     const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
     const jwt = await signFromPrior(keys, { didId: a0.didId, longFormDid: a0.longFormDid }, a1.longFormDid, IAT);
@@ -1094,7 +832,6 @@ describe("evidence that authorizes nothing", () => {
     const edge = localEdge(scene, R, a0.didId, a1.didId, jwt, ref(ping));
     expect((await fold_(scene.events)).transitions.get(edge.eventId)).toEqual({ status: "applied" });
   });
-
   it("while the binding does not stand, an edge's own contradictions are still conflicts, and only what needs the root waits", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, root, binding } = await bornAtRoot();
     const { edge: genuine, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1110,7 +847,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.relationships.get(R)!.conflict).toBe(true);
     });
   });
-
   it("a proof-free duplicate naming a transition not here waits alone; one at a key no node and no local edge adds conflicts the group, one at a key an unapplied edge adds waits", async () => {
     const { scene, keys, peerKeys, R, a0, a1, a2, b0, b1, root, binding } = await bornAtRoot();
     const { edge: peer, successor, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1122,7 +858,6 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual({ local: [a0.didId, a1.didId], peer: [b0.did, b1.did] });
       expect(fold.relationships.get(R)!.conflict).toBe(false);
     });
-
     scene.events.splice(scene.events.indexOf(named), 1);
     scene.events.splice(scene.events.indexOf(local), 1);
     const elsewhere = receipt(scene, { local: a2.didId, peer: b1, resolution: resolved(scene, a2.didId, b1), binding, ordinal: 3, wire: carrier.data.wireMessageId, transition: ref(peer) });
@@ -1146,7 +881,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.relationships.get(R)!.conflict).toBe(false);
     });
   });
-
   it("another observation of the message carrying a proof found invalid conflicts the group: the valid carrier's transition and what it confirmed with it", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const { edge: peer, successor, carrier } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1161,7 +895,6 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual({ local: [a0.didId], peer: [b0.did] });
     });
   });
-
   it("a snapshot whose presented spelling is not the canonical DID's — another short form, did:web in another case — is not its document's, whatever document it names", async () => {
     const { scene, peerKeys, a0, b0, b2 } = await vaults();
     const objects = new Map([[b0.resolution.cid, b0.resolution.bytes]]);
@@ -1172,7 +905,6 @@ describe("evidence that authorizes nothing", () => {
     expect((await verifyResolutions(VaultEventSet.of(scene.events), readObject)).get(misspelt.eventId)).toBe("invalid");
     expect(fold.relationships.get(R)!.faults).toEqual([`the root resolution ${misspelt.eventId} is not its document's`]);
     expect(dids(fold, R).peer).toEqual([]);
-
     scene.events.length = scene.events.indexOf(misspelt);
     const signer = await peerKeys.signing(didKeyName(PEER_ID0, "authentication"));
     const method = { id: `${WEB_DID}#key-1`, type: "Multikey", controller: WEB_DID, publicKeyMultibase: signer.publicKey };
@@ -1185,14 +917,12 @@ describe("evidence that authorizes nothing", () => {
     fold = await fold_(scene.events, readObject);
     expect((await verifyResolutions(VaultEventSet.of(scene.events), readObject)).get(recased.eventId)).toBe("invalid");
     expect(fold.relationships.get(webR)!.faults).toEqual([`the root resolution ${recased.eventId} is not its document's`]);
-
     scene.events.length = scene.events.indexOf(recased);
     const exact = resolved(scene, a0.didId, web);
     bound(scene, a0, web, exact);
     fold = await fold_(scene.events, readObject);
     expect(dids(fold, webR).peer).toEqual([WEB_DID]);
   });
-
   it("a document read back must be in canonical form: the same did:web document pretty-printed, under its own CID, is no snapshot", async () => {
     const { scene, peerKeys, a0 } = await vaults();
     const signer = await peerKeys.signing(didKeyName(PEER_ID0, "authentication"));
@@ -1210,7 +940,6 @@ describe("evidence that authorizes nothing", () => {
     expect(fold.relationships.get(R)!.faults).toEqual([`the root resolution ${root.eventId} is not its document's`]);
     expect(dids(fold, R).peer).toEqual([]);
   });
-
   it("an anonymous trigger can never confirm: a conflict whether or not the binding is here", async () => {
     const { scene, keys, R, a0, a1, b0, root, binding } = await bornAtRoot();
     const wire = uuidv7() as WireMessageId;
@@ -1270,7 +999,6 @@ describe("evidence that authorizes nothing", () => {
       expect(dids(fold, R)).toEqual(rotated);
     });
   });
-
   it("another carrier of the message whose only edge lacks its prior snapshot waits alone: the complete carrier's edge applies", async () => {
     const { scene, peerKeys, R, a0, b0, b1, root, binding } = await bornAtRoot();
     const { edge: complete, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1284,7 +1012,6 @@ describe("evidence that authorizes nothing", () => {
       expect(fold.relationships.get(R)!.conflict).toBe(false);
     });
   });
-
   it("a duplicate of the confirming message repacked to the successor keeps the rotation applied, with a named or a null trigger; one at a key nothing names conflicts it", async () => {
     const { scene, keys, R, a0, a1, a2, b0, root, binding } = await bornAtRoot();
     const input = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
@@ -1326,7 +1053,6 @@ describe("evidence that authorizes nothing", () => {
       await expectFoldOrderFree(scene.events, check);
     }
   });
-
   it("an edge naming another predecessor is not equal to an applied one, whatever proof it copies: the observation naming it waits", async () => {
     const { scene, keys, peerKeys, R, a0, a1, b0, b1, b2, root, binding } = await bornAtRoot();
     const { edge: valid, successor, carrier, jwt } = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 1);
@@ -1373,3 +1099,60 @@ describe("evidence that authorizes nothing", () => {
     }
   });
 });
+
+describe("observations and groups", () => {
+  it("scope each observation in the relationship its row holds in, wait for what it names, contradict what disagrees; a group is complete when every observation is scoped in one relationship", async () => {
+    const { scene, peerKeys, a0, a1, b0, b1 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const { R, bound: binding } = bound(scene, a0, b0, root);
+    const scoped = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    const duplicate = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, wire: scoped.data.wireMessageId });
+    const again = resolved(scene, a0.didId, b0);
+    const waiting = receipt(scene, { local: a0.didId, peer: b0, resolution: again, binding, ordinal: 3 });
+    const wrongPeer = receipt(scene, { local: a0.didId, peer: b1, resolution: root, binding, ordinal: 4 });
+    const wire = uuidv7() as WireMessageId;
+    const anonymous = scene.add("message.in", { ...scoped.data, messageId: inboundMessageId({ localKeyName: scoped.data.localKeyName }, wire), wireMessageId: wire, receiptOrdinal: "5" as VaultData["message.in"]["receiptOrdinal"], peerResolutionEventId: null, relationshipBindingEventId: null, presentedDid: null, did: null });
+    const rotation = await peerRotation(scene, peerKeys, R, a0.didId, b0, b1, root, binding, 6);
+    const unbound = receipt(scene, { local: a1.didId, peer: b0, resolution: resolved(scene, a1.didId, b0), binding: uuidv7() as never, ordinal: 7 });
+    const withoutResolution = scene.events.filter((event) => event !== again);
+    await expectFoldOrderFree(withoutResolution, (fold) => {
+      expect(fold.observations.get(scoped.eventId)).toEqual({ status: "scoped", relationshipId: R });
+      expect(fold.observations.get(duplicate.eventId)).toEqual({ status: "scoped", relationshipId: R });
+      expect(fold.observations.get(waiting.eventId)).toEqual({ status: "deferred", relationshipId: R, because: "awaits its resolution" });
+      expect(fold.observations.get(wrongPeer.eventId)).toEqual({ status: "conflict", relationshipId: R, because: "contradicts its resolution" });
+      expect(fold.observations.get(anonymous.eventId)).toEqual({ status: "anonymous" });
+      expect(fold.observations.get(rotation.carrier.eventId)).toEqual({ status: "scoped", relationshipId: R });
+      expect(fold.observations.get(unbound.eventId)).toEqual({ status: "deferred", relationshipId: null, because: "awaits its binding" });
+      expect(fold.groups.get(scoped.data.messageId)).toEqual({ status: "complete", relationshipId: R, eventIds: [scoped.eventId, duplicate.eventId] });
+      expect(fold.groups.get(waiting.data.messageId)).toEqual({ status: "incomplete", relationshipId: R, because: `observation ${waiting.eventId} awaits its resolution` });
+      expect(fold.groups.get(wrongPeer.data.messageId)).toEqual({ status: "conflict", relationshipId: R, because: `observation ${wrongPeer.eventId} contradicts its resolution` });
+      expect(fold.groups.get(anonymous.data.messageId)).toEqual({ status: "anonymous", eventIds: [anonymous.eventId] });
+      expect(fold.groups.get(unbound.data.messageId)).toEqual({ status: "incomplete", relationshipId: null, because: `observation ${unbound.eventId} awaits its binding` });
+    });
+
+    const withoutEdge = scene.events.filter((event) => event !== rotation.edge);
+    const fold = await fold_(withoutEdge);
+    expect(fold.observations.get(rotation.carrier.eventId)).toEqual({ status: "deferred", relationshipId: R, because: "awaits the transition carrying its proof" });
+    expect(fold.groups.get(rotation.carrier.data.messageId)!.status).toBe("incomplete");
+  });
+
+  it("conflict a group whose observations disagree on the intent, or are scoped in two relationships", async () => {
+    const { scene, a0, a1, b0, b1 } = await vaults();
+    const root = resolved(scene, a0.didId, b0);
+    const { R, bound: binding } = bound(scene, a0, b0, root);
+    const first = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 1 });
+    receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 2, wire: first.data.wireMessageId, overrides: { intentHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" as VaultData["message.in"]["intentHash"] } });
+    const other = resolved(scene, a1.didId, b0);
+    const { R: R2, bound: binding2 } = bound(scene, a1, b0, other);
+    const atA0 = receipt(scene, { local: a0.didId, peer: b0, resolution: root, binding, ordinal: 3 });
+    const atA1 = receipt(scene, { local: a1.didId, peer: b0, resolution: other, binding: binding2, ordinal: 4, wire: atA0.data.wireMessageId });
+    await expectFoldOrderFree(scene.events, (fold) => {
+      expect(fold.groups.get(first.data.messageId)).toMatchObject({ status: "conflict", relationshipId: R, because: "the observations disagree on the intent" });
+      expect(fold.observations.get(atA0.eventId)).toEqual({ status: "scoped", relationshipId: R });
+      expect(fold.observations.get(atA1.eventId)).toEqual({ status: "scoped", relationshipId: R2 });
+      expect(fold.groups.get(atA0.data.messageId)).toEqual({ status: "conflict", relationshipId: null, because: `the observations are scoped in 2 relationships: ${[R, R2].sort().join(", ")}` });
+    });
+    expect(b1).toBeDefined();
+  });
+});
+
