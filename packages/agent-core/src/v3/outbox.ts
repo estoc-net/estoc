@@ -36,7 +36,7 @@ export interface RetryPolicy {
 export const RETRY_POLICY: RetryPolicy = { firstWaitMs: 30_000, longestWaitMs: 21_600_000, posts: 32 };
 
 /** Timers take no longer delay, and fire at once for one past it: a wake further off is reached by waits of this length, each pass reading the clock again. */
-const LONGEST_TIMER_MS = 2 ** 31 - 1;
+export const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 /** What waits are kept by: the global timers by default, a test's own otherwise. */
 export interface Timers {
@@ -44,7 +44,7 @@ export interface Timers {
   clear(handle: unknown): void;
 }
 
-const GLOBAL_TIMERS: Timers = {
+export const GLOBAL_TIMERS: Timers = {
   set: (fire, ms) => setTimeout(fire, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };

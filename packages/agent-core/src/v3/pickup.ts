@@ -1,17 +1,17 @@
 /**
  * Pickup (messagepickup 3.0): the mail the mediator holds for this
  * device, fetched and acknowledged over the link. A drain asks what is
- * queued, fetches it, opens every attachment and hands each one over;
- * the ones taken are acknowledged and the mediator drops them. The
- * socket's frames come here too: the status that says live delivery is
- * on is told to the caller, a delivery pushed down is taken like one
- * fetched. What an opened message means is the handle's, and so is its
- * fate: `acked`, the mediator may drop it; `skip`, it stays queued for a
- * later pickup — as does one that would not open, or read (an attachment
- * by link is not fetched here), or that the handle threw on. The
- * mediator's copy is the only copy, so nothing here drops mail it could
- * not hand over, and nothing is counted acknowledged that the mediator
- * was not told of.
+ * queued, fetches it and hands every attachment over as it came: the
+ * envelope it carries, unopened, or why it does not read. Whether an
+ * envelope may be opened, and with which key, is the handle's to decide
+ * before anything is decrypted. The socket's frames come here too: the
+ * status that says live delivery is on is told to the caller, a delivery
+ * pushed down is taken like one fetched. The handle decides each
+ * attachment's fate: `acked`, the mediator may drop it; `skip`, it stays
+ * queued for a later pickup — as does one the handle threw on, or one
+ * with no ID to acknowledge it by. The mediator's copy is the only copy,
+ * so nothing here drops mail it could not hand over, and nothing is
+ * counted acknowledged that the mediator was not told of.
  *
  * Every inbound step runs after the one before it — a delivery down the
  * socket, a delivery fetched — so what the handle records is in the
@@ -24,15 +24,13 @@ import type { IMessage } from "../protocol/didcomm.js";
 import { DELIVERY, DELIVERY_REQUEST, MESSAGES_RECEIVED, STATUS, STATUS_REQUEST } from "../protocol/mediation.js";
 import type { MediatorLink, Opened } from "./link.js";
 
-/** What became of an opened message: taken (acknowledged, the mediator drops it) or left queued for a later pickup. */
+/** What became of a delivered attachment: taken (acknowledged, the mediator drops it) or left queued for a later pickup. */
 export type Fate = "acked" | "skip";
 
-/**
- * What to do with an opened message. It is the handle's to note the
- * open (`link.noteOpen`) once it knows the record the message ended in;
- * one it did not note is noted here, naming no record.
- */
-export type Handle = (opened: Opened) => Promise<Fate> | Fate;
+/** One attachment of a delivery: the envelope it carries, or why it does not read; `parent` is the trace entry of the delivery it came in. */
+export type Delivered = { attachmentId: string; parent?: number } & ({ packed: string } | { unreadable: string });
+
+export type Handle = (delivered: Delivered) => Promise<Fate> | Fate;
 
 export interface PickupOptions {
   /** live delivery came on: the mediator's answer to the socket's first frame */
@@ -180,56 +178,52 @@ export class Pickup {
     return run;
   }
 
+  /** Tell the mediator these attachments are taken; throws when it was not told. */
+  async acknowledge(attachmentIds: readonly string[]): Promise<void> {
+    const answer = await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: [...attachmentIds] });
+    if (answer.type !== STATUS) {
+      throw new Error(`mediator answered ${answer.type} to messages-received`);
+    }
+  }
+
   /**
-   * One delivery: every attachment opened and handed over, the taken
-   * ones acknowledged. One that will not read (by link, or bytes that
-   * will not decode) or open — sealed to a key this device no longer
-   * holds, or a resolver hiccup — is logged and left queued (the link
-   * writes `envelope.error` for the latter); so is one the handle threw
-   * on. One bad attachment stops nothing: the rest are handed over and
-   * acknowledged. Returns how many the mediator was told of — none when
-   * the acknowledgement itself failed, as they are all still queued.
+   * One delivery: every attachment handed over, the taken ones
+   * acknowledged. One bad attachment stops nothing: the rest are handed
+   * over and acknowledged. Returns how many the mediator was told of —
+   * none when the acknowledgement itself failed, as they are all still
+   * queued.
    */
   private async take(delivery: IMessage, parent?: number): Promise<number> {
     const attachments = (delivery.attachments ?? []) as DeliveryAttachment[];
     const taken: string[] = [];
     for (const attachment of attachments) {
-      let packed: string;
-      try {
-        packed = insideOf(attachment);
-      } catch (err) {
-        this.log(`could not read a delivered attachment; leaving it queued: ${messageOf(err)}`);
+      const attachmentId = attachment.id;
+      if (attachmentId === undefined) {
+        this.log("a delivered attachment has no id to acknowledge it by; leaving it queued");
         continue;
       }
-      let opened: Opened;
+      let delivered: Delivered;
       try {
-        opened = await this.link.unpack(packed, parent);
+        delivered = { attachmentId, parent, packed: insideOf(attachment) };
       } catch (err) {
-        this.log(`could not open a delivered envelope; leaving it queued: ${messageOf(err)}`);
-        continue;
+        delivered = { attachmentId, parent, unreadable: messageOf(err) };
       }
       let fate: Fate;
       try {
-        fate = await this.handle(opened);
+        fate = await this.handle(delivered);
       } catch (err) {
-        this.log(`a delivered ${opened.msg.type} was not handled; leaving it queued: ${messageOf(err)}`);
+        this.log(`a delivered attachment was not handled; leaving it queued: ${messageOf(err)}`);
         fate = "skip";
       }
-      if (opened.seq === undefined) {
-        await this.link.noteOpen(opened);
-      }
-      if (fate === "acked" && attachment.id !== undefined) {
-        taken.push(attachment.id);
+      if (fate === "acked") {
+        taken.push(attachmentId);
       }
     }
     if (taken.length === 0) {
       return 0;
     }
     try {
-      const answer = await this.link.roundTrip(MESSAGES_RECEIVED, { message_id_list: taken });
-      if (answer.type !== STATUS) {
-        throw new Error(`mediator answered ${answer.type} to messages-received`);
-      }
+      await this.acknowledge(taken);
     } catch (err) {
       this.log(`ack failed (${messageOf(err)}); messages stay queued and will be deduplicated on the next pickup`);
       return 0;

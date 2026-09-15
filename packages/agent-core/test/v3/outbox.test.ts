@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { scanVault, type DidId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { EXPIRED, Outbox, prepare, retireDid, send, type Content, type OutboxOptions, type Timers } from "../../src/v3/index.js";
-import { didcomm, directParty, posting, refuseSubmissions, type DirectParty } from "./helpers.js";
+import { EXPIRED, Outbox, prepare, retireDid, send, type Content, type OutboxOptions } from "../../src/v3/index.js";
+import { didcomm, directParty, handTimers, posting, refuseSubmissions, type DirectParty } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
@@ -16,24 +16,6 @@ const HELLO: Content = { type: BASIC_MESSAGE, body: { content: "hello" } };
 
 const accepted = (): Response => new Response(null, { status: 202 });
 const later = (): Response => new Response("later", { status: 503 });
-
-type Wait = { fire: () => void; ms: number; cleared: boolean };
-
-/** Timers the test fires by hand: every wait set, in order, and whether it was cleared. */
-function handTimers(): Timers & { waits: Wait[] } {
-  const waits: Wait[] = [];
-  return {
-    waits,
-    set: (fire, ms) => {
-      const wait = { fire, ms, cleared: false };
-      waits.push(wait);
-      return wait;
-    },
-    clear: (handle) => {
-      (handle as Wait).cleared = true;
-    },
-  };
-}
 
 async function pair(): Promise<{ a: DirectParty; b: DirectParty; sendTo: (messageId: MessageId, content?: Content) => Promise<unknown> }> {
   const a = await directParty(1, "https://alice.example/didcomm", DID);

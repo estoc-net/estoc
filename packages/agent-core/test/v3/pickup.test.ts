@@ -4,7 +4,7 @@ import { Message } from "didcomm-node";
 import { resolveDIDCommDoc } from "@estoc/did-peer";
 
 import { BASIC_MESSAGE, PLAIN_TYP, STATUS, plainMessage, secretsResolverFor, type IMessage } from "../../src/index.js";
-import { Pickup, createDid, ensureRoute, establish, reconcile, type Opened } from "../../src/v3/index.js";
+import { Pickup, createDid, ensureRoute, establish, reconcile, type Delivered, type Opened } from "../../src/v3/index.js";
 import { newMediator, party, reloaded, until } from "./helpers.js";
 
 const resolver = { resolve: resolveDIDCommDoc };
@@ -17,7 +17,7 @@ async function sealedTo(to: string, content: string): Promise<string> {
 }
 
 describe("pickup over the v3 ring", () => {
-  it("drains what the mediator holds for the account, opens it with a communication DID's key and acknowledges what was taken", async () => {
+  it("drains what the mediator holds for the account, hands each attachment over unopened and acknowledges what was taken", async () => {
     const mediator = await newMediator();
     const p = await party(mediator);
     await establish(p.link, p.runtime, p.keys, p.mediationId);
@@ -26,25 +26,26 @@ describe("pickup over the v3 ring", () => {
     await reloaded(p);
     await reconcile(p.link, p.runtime, p.keys, p.mediationId);
     const account = p.created.data.me.did;
+    const hello = await sealedTo(minted.longFormDid, "hello");
+    const skipped = await sealedTo(minted.longFormDid, "skip me");
     mediator.queues.set(account, [
-      { id: "q1", packed: await sealedTo(minted.longFormDid, "hello") },
-      { id: "q2", packed: await sealedTo(minted.longFormDid, "skip me") },
+      { id: "q1", packed: hello },
+      { id: "q2", packed: skipped },
     ]);
-    const taken: Opened[] = [];
-    const pickup = new Pickup(p.link, (opened) => {
-      taken.push(opened);
-      return (opened.msg.body as { content: string }).content === "hello" ? "acked" : "skip";
+    const taken: Delivered[] = [];
+    const pickup = new Pickup(p.link, (delivered) => {
+      taken.push(delivered);
+      return delivered.attachmentId === "q1" ? "acked" : "skip";
     });
     const drained = await pickup.drain();
     expect(drained).toEqual({ acked: 1, ended: "left" });
     // two rounds: the first takes both and acknowledges one; the second fetches the one left and acknowledges nothing
-    expect(taken.map((opened) => [opened.recipient, opened.sender, (opened.msg.body as { content: string }).content])).toEqual([
-      [minted.longFormDid, null, "hello"],
-      [minted.longFormDid, null, "skip me"],
-      [minted.longFormDid, null, "skip me"],
+    expect(taken.map((delivered) => ["packed" in delivered ? JSON.parse(delivered.packed) : delivered.unreadable, delivered.attachmentId])).toEqual([
+      [JSON.parse(hello), "q1"],
+      [JSON.parse(skipped), "q2"],
+      [JSON.parse(skipped), "q2"],
     ]);
     expect(mediator.queues.get(account)?.map((item) => item.id)).toEqual(["q2"]);
-    expect((await p.trace.read({ stream: "envelope" })).filter((entry) => entry.type === "envelope.open").length).toBeGreaterThanOrEqual(2);
     await p.runtime.close();
   });
 
