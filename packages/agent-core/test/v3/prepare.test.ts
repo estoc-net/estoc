@@ -460,6 +460,45 @@ describe("prepare to a did:web peer", () => {
     expect(fold.outbound.outbounds.get(MESSAGE)?.outcome).toBe("failed");
     await a.runtime.close();
   });
+  it("a document that also authorizes a key-agreement method of a suite didcomm does not pack with: the method it packs with is chosen whatever the order, even when both carry one key; a document with only the other suite fails the message and binds nothing", async () => {
+    const other = await webIdentity(BOB, 91);
+    const foreign = (bob: WebIdentity, shared: boolean): JsonObject => ({
+      ...(shared ? (bob.document.verificationMethod as JsonObject[])[1]! : (other.document.verificationMethod as JsonObject[])[1]!),
+      id: `${BOB}#extension`,
+      type: "ExampleX25519Key",
+    });
+    const withForeign = (bob: WebIdentity, shared: boolean, keyAgreement: string[]): WebIdentity => ({ ...bob, document: { ...bob.document, verificationMethod: [foreign(bob, shared), ...(bob.document.verificationMethod as JsonObject[])], keyAgreement } });
+    for (const [birth, shared] of [
+      [true, false],
+      [false, false],
+      [false, true],
+    ] as const) {
+      const a = await alice();
+      const bob = withForeign(await webIdentity(BOB), shared, [`${BOB}#extension`, `${BOB}#agree`]);
+      const resolution = await webResolution(bob);
+      expect(authorizedKeys(resolution, "keyAgreement").size).toBe(2);
+      if (!birth) await bound(a, resolution);
+      await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+      const result = await prepare(a.runtime, a.keys, MESSAGE, serving(bob));
+      expect(result.outcome).toBe("prepared");
+      if (result.outcome !== "prepared") return;
+      expect(result.bound === null).toBe(!birth);
+      const fold = await scanVault(a.runtime.vault, a.keys);
+      expect(fold.outbound.outbounds.get(MESSAGE)?.packages.get(result.packageId)?.membership).toEqual({ status: "verified" });
+      const { packed } = await envelopeOf(a, result);
+      const { metadata } = await opened(a, packed, bob.secrets, [bob.document]);
+      expect(metadata.encrypted_to_kids).toEqual([`${BOB}#agree`]);
+      await a.runtime.close();
+    }
+    const a = await alice();
+    const bob = withForeign(await webIdentity(BOB), false, [`${BOB}#extension`]);
+    await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+    expect(await prepare(a.runtime, a.keys, MESSAGE, serving(bob))).toMatchObject({ outcome: "failed", code: PEER_KEY_CHANGED });
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.set.of("relationship.bound")).toEqual([]);
+    expect(fold.set.of("peer.resolved")).toEqual([]);
+    await a.runtime.close();
+  });
 });
 
 describe("prepare to a numalgo-4 peer", () => {

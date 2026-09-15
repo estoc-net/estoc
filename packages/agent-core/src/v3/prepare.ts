@@ -53,7 +53,7 @@ import {
 
 import { secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
 import { UnknownEntity } from "./errors.js";
-import { authorizedKeys, commitResolution, pinnedResolver, readResolution } from "./evidence.js";
+import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver, readResolution } from "./evidence.js";
 import { secretsOf } from "./keyring.js";
 import { bounded, sealData } from "./link.js";
 import { serially } from "./procedure.js";
@@ -70,7 +70,7 @@ export const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 const REPACKED = "repacked";
 /** How many times the fold may move the question while its answer is fetched before the attempt is given up as unavailable. */
 const MOST_ASKINGS = 3;
-/** How long a trace entry is waited for after the package is committed; a slower trace loses the entry, not the package. */
+/** How long a trace entry is waited for after the package is committed; past it the result is returned without waiting, whether or not the entry lands. */
 const TRACE_WAIT_MS = 10_000;
 
 export interface PrepareOptions extends ResolverOptions {
@@ -161,12 +161,6 @@ async function prepareSerially(runtime: VaultRuntime, keys: Keys, messageId: Mes
   }
 }
 
-/**
- * The locked step: the fold read again and, while it still asks what
- * `asked` answers, the answer applied — the message failed for good,
- * or the pair bound, the ends selected, the package built, packed,
- * canonicalized and committed with its envelope in one batch.
- */
 async function settle(held: Held, keys: Keys, messageId: MessageId, asked: Asked, now: () => number, didcomm: DidcommApi): Promise<Settled> {
   const notes: Note[] = [];
   const none = (because: string): Settled => ({ result: { outcome: "none", messageId, because }, notes });
@@ -279,9 +273,19 @@ function targetOf(fold: VaultFold, { outbound, intent }: Open): Did | null {
   return !isPeerDID4(peer) && outbound.packages.size === 0 ? peer : null;
 }
 
-/** The keys among `authorized` that authcrypt from `sender` can seal to: didcomm agrees both ends over one curve, so a key on another is authorized by the document and still unusable here. */
-function sealable(authorized: Map<DidUrl, PublicKey>, sender: DidKeys): [DidUrl, PublicKey][] {
-  return [...authorized].filter(([, key]) => decodePublicKey(key).type === sender.keyAgreement.type);
+/**
+ * The key-agreement methods of a resolved document that authcrypt from
+ * `sender` can seal to, in the document's order. The document may
+ * authorize more: a method of a suite didcomm does not pack with, which
+ * its projection marks `Other`, or a key on another curve than the
+ * sender's, since didcomm agrees both ends over one curve. Either is
+ * authorized and still unusable here, and naming it as the recipient
+ * key ID would fail the seal.
+ */
+function sealable(resolution: Resolution, sender: DidKeys): [DidUrl, PublicKey][] {
+  const projected = didcommDocumentOf(resolution, resolution.document["id"] as string);
+  const packable = new Set(projected.verificationMethod.filter((method) => method.type !== "Other").map((method) => method.id));
+  return [...authorizedKeys(resolution, "keyAgreement")].filter(([id, key]) => packable.has(id) && decodePublicKey(key).type === sender.keyAgreement.type);
 }
 
 /**
@@ -301,7 +305,7 @@ async function bind(held: Held, keys: Keys, fold: VaultFold, intent: MessageOut,
   if (claimants.length > 0) return { because: `the pair ${localDid} / ${resolution.did} is claimed by ${claimants.join(", ")}` };
   const pending = fold.relationships.pendingAt(localDid, resolution.did);
   if (pending.length > 0) return { because: `the pair ${localDid} / ${resolution.did} awaits the evidence of ${pending.flatMap((claim) => claim.eventIds).join(", ")}` };
-  const [chosen] = sealable(authorizedKeys(resolution, "keyAgreement"), await keys.didKeys(birth.localDidId));
+  const [chosen] = sealable(resolution, await keys.didKeys(birth.localDidId));
   if (chosen === undefined) return { code: PEER_KEY_CHANGED, reason: `${resolution.presentedDid} authorizes no key-agreement key ${localDid} can seal to` };
   const evidence = await commitResolution(held, { resolution, localKeyName: entity.keyNames.keyAgreement, peerPublicKey: chosen[1] }, { fresh: !isPeerDID4(resolution.did) });
   const [bound] = (await held.commit([], [vaultDraft("relationship.bound", { relationshipId: intent.relationshipId, localDidId: birth.localDidId, peerResolutionEventId: evidence.eventId as EventReference<"peer.resolved"> })])).map(readVaultEvent);
@@ -347,7 +351,7 @@ async function selectEnds(held: Held, keys: Keys, fold: VaultFold, relationship:
   const pinned = await readResolution(pinnedEvent.event, objectReader(held.objects));
   if (pinned === null) return { because: `the document ${peerNode.documentCid} pinned for ${peerNode.did} is not here` };
   const senderKeys = await keys.didKeys(sender.didId);
-  let usable = sealable(authorizedKeys(pinned, "keyAgreement"), senderKeys);
+  let usable = sealable(pinned, senderKeys);
   if (current !== null) {
     const offered = new Set(authorizedKeys(current, "keyAgreement").values());
     usable = usable.filter(([, key]) => offered.has(key));

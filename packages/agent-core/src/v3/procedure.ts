@@ -21,16 +21,31 @@ import { readVaultEvent, scanVault, type Keys, type VaultDraft, type VaultEvent,
 
 const queues = new WeakMap<object, Map<string, Promise<unknown>>>();
 
-/** Run `work` after every earlier `serially` call for the same `owner` and `key` has settled, and before every later one. */
+/**
+ * Run `work` after every earlier `serially` call for the same `owner`
+ * and `key` has settled, and before every later one. The queue keeps
+ * only the tail of what is still running, as a promise of nothing:
+ * neither a result nor a key outlives the work it ordered.
+ */
 export function serially<T>(owner: object, key: string, work: () => Promise<T>): Promise<T> {
   let byKey = queues.get(owner);
   if (byKey === undefined) {
     byKey = new Map();
     queues.set(owner, byKey);
   }
-  const previous = byKey.get(key) ?? Promise.resolve();
+  const queue = byKey;
+  const previous = queue.get(key) ?? Promise.resolve();
   const running = previous.then(work, work);
-  byKey.set(key, running.catch(() => undefined));
+  const tail: Promise<void> = running.then(
+    () => undefined,
+    () => undefined
+  );
+  queue.set(key, tail);
+  void tail.then(() => {
+    if (queue.get(key) !== tail) return;
+    queue.delete(key);
+    if (queue.size === 0) queues.delete(owner);
+  });
   return running;
 }
 
