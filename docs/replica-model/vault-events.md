@@ -2086,9 +2086,13 @@ yet committed, it contains the offline selection:
 The local DID must exist and be live. Canonicalize the exact selected peer
 spelling and derive `relationshipId` from the two birth addresses under
 [relationships.md section 5](relationships.md#symmetric-relationship-identity). No online resolution is required to commit intent.
-Repeated unbound sends freeze the same selection. A known binding uses null;
-any non-null birth must agree with it. Missing evidence defers preparation,
-and contradictory birth/binding evidence is a relationship conflict.
+Unbound sends for the same canonical address pair use the same relationshipId.
+Each message ID freezes its birth when its first intent is committed; repeating
+that ID preserves the recorded birth. Different message IDs may retain different
+exact peer spellings that canonicalize to the same peer DID.
+A known binding uses null; any non-null birth must agree with it.
+Missing evidence defers preparation, and contradictory birth/binding evidence
+is a relationship conflict.
 
 `birth` is creation evidence, not an initial-message protocol or a pinned
 current sender. It remains unchanged if the same `R` later rotates either end.
