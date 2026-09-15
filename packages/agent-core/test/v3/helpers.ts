@@ -4,9 +4,9 @@ import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
 import type { JsonObject, SqliteDriver } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
-import { scanVault, type Did, type MediationId, type VaultEvent } from "@estoc/vault/v3";
+import { scanVault, type Did, type DidId, type MediationId, type VaultEvent } from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, createMediation, createVault, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
+import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -137,3 +137,35 @@ export function webFetch(routes: Record<string, (init?: RequestInit) => Response
 }
 
 export const json = (document: unknown, status = 200): Response => new Response(JSON.stringify(document), { status, headers: { "content-type": "application/did+json" } });
+
+export interface DirectParty extends Fresh {
+  didId: DidId;
+  did: Did;
+  longFormDid: Did;
+}
+
+/** A vault created in `driver` with one communication DID, `didId`, on a direct route to `endpoint`. */
+export async function directParty(fill: number, endpoint: string, didId: DidId, driver = memoryDriver()): Promise<DirectParty> {
+  const fresh = await freshVault(fill, `party ${fill}`, driver);
+  const route = await configureRoute(fresh.runtime, fresh.keys, { kind: "direct", endpoint });
+  const { minted } = await createDid(fresh.runtime, fresh.keys, route.data.routeId, didId);
+  return { ...fresh, didId, did: minted.did, longFormDid: minted.longFormDid };
+}
+
+export interface Post {
+  url: string;
+  body: string;
+  init: RequestInit;
+}
+
+/** A transport that records every request it is given, in order, and answers each with `answer`. */
+export function posting(answer: (post: Post) => Response | Promise<Response>): { fetch: typeof globalThis.fetch; posts: Post[] } {
+  const posts: Post[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const post: Post = { url, body: String(init?.body), init: init ?? {} };
+    posts.push(post);
+    return answer(post);
+  };
+  return { fetch, posts };
+}

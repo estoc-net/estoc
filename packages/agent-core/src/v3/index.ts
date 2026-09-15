@@ -13,7 +13,11 @@
  * headers frozen as one intent in the relationship its target
  * selects, without a byte on the wire (`send`); that intent turned into
  * the one exact envelope its submission will carry, the pair bound
- * first when it was born offline (`prepare`). The protocols themselves —
+ * first when it was born offline (`prepare`); that envelope posted where
+ * the peer receives, directly or forwarded through its mediator, and
+ * the acceptance recorded (`submit`); and every message still owed work
+ * tried in turn, waiting between attempts that may succeed later
+ * (`outbox`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
@@ -88,3 +92,5 @@ export {
 } from "./evidence.js";
 export { selectTarget, send, type Content, type Selection, type SendOptions, type Sender, type Sent, type Target } from "./send.js";
 export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
+export { MAX_ENVELOPE_BYTES, SUBMIT_TIMEOUT_MS, submit, type SubmitOptions, type Submitted } from "./submit.js";
+export { Outbox, RETRY_POLICY, type Backoff, type OutboxOptions, type RetryPolicy, type Step, type Timers } from "./outbox.js";
