@@ -31,9 +31,9 @@ export const ENCRYPTED_MIME = "application/didcomm-encrypted+json";
 /*
  * The binding keeps every `Message` and `FromPrior` in WebAssembly memory
  * that no garbage collection reclaims: each lives only as long as the one
- * call made with it, and is freed once that call has settled — after the
- * caller has the result, or has stopped waiting for it at a deadline of
- * its own, whichever comes first.
+ * call made with it. It is freed only after that call settles, even when
+ * its caller has already stopped waiting at a deadline of its own, since
+ * the call may still be using it.
  */
 
 /** `pack_encrypted` over a `Message` made for this pack alone. */

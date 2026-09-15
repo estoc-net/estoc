@@ -33,6 +33,10 @@ export async function recordAcceptance(runtime: VaultRuntime, messageId: Message
   return recorded;
 }
 
+export function owesAcceptance(runtime: VaultRuntime, messageId: MessageId): boolean {
+  return unrecorded.get(runtime)?.has(messageId) ?? false;
+}
+
 /** The acceptance of a package of `messageId` this runtime saw and has not recorded, recorded now; null when there is none. */
 export async function recordOwedAcceptance(runtime: VaultRuntime, messageId: MessageId): Promise<VaultEvent<"delivery.submitted"> | null> {
   const packageId = unrecorded.get(runtime)?.get(messageId);

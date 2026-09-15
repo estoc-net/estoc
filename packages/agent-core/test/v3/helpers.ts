@@ -1,8 +1,9 @@
 import { FromPrior, Message } from "didcomm-node";
+import { vi } from "vitest";
 
 import { resolveDIDCommDoc, type DIDDoc, type Secret } from "@estoc/did-peer";
 import { openNodeSqlite } from "@estoc/event-store/node";
-import type { JsonObject, SqliteDriver } from "@estoc/event-store/v3";
+import type { Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-store/v3";
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import { scanVault, type Did, type DidId, type MediationId, type VaultEvent } from "@estoc/vault/v3";
 
@@ -150,6 +151,29 @@ export async function directParty(fill: number, endpoint: string, didId: DidId, 
   const route = await configureRoute(fresh.runtime, fresh.keys, { kind: "direct", endpoint });
   const { minted } = await createDid(fresh.runtime, fresh.keys, route.data.routeId, didId);
   return { ...fresh, didId, did: minted.did, longFormDid: minted.longFormDid };
+}
+
+/** The next `times` commits of `delivery.submitted` refused, as a disk full for now refuses them; every other commit goes through. */
+export function refuseSubmissions(runtime: VaultRuntime, times: number): void {
+  const locked = runtime.locked.bind(runtime);
+  let left = times;
+  const refusing = (held: Held): Held =>
+    new Proxy(held, {
+      get(target, key) {
+        if (key === "commit") {
+          return async (...args: Parameters<Held["commit"]>) => {
+            if (left > 0 && args[1].some((draft) => draft.type === "delivery.submitted")) {
+              left--;
+              throw new Error("the disk is full for now");
+            }
+            return target.commit(...args);
+          };
+        }
+        const value = Reflect.get(target, key, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+  vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(refusing(held)))) as VaultRuntime["locked"]);
 }
 
 export interface Post {

@@ -4,7 +4,7 @@ import { scanVault, type DidId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import { EXPIRED, Outbox, send, type Content, type OutboxOptions, type Timers } from "../../src/v3/index.js";
-import { didcomm, directParty, posting, type DirectParty } from "./helpers.js";
+import { didcomm, directParty, posting, refuseSubmissions, type DirectParty } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
@@ -181,6 +181,124 @@ describe("the outbox", () => {
     expect(wire.posts).toHaveLength(1);
     await outbox.close();
     await next.close();
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("an acceptance of the last post the budget allows, not recorded at first, is recorded by the passes its waits wake, with no other post and no expired failure in its place", async () => {
+    for (const expiresTime of [undefined, START / 1000 + 45]) {
+      const { a, b, sendTo } = await pair();
+      await sendTo(MESSAGE, { ...HELLO, expiresTime });
+      refuseSubmissions(a.runtime, 2);
+      let clock = START;
+      const wire = posting(accepted);
+      const timers = handTimers();
+      const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock, retry: { posts: 1 } });
+      const [first] = await outbox.drain();
+      expect(first?.error).toBe("the disk is full for now");
+      expect(outbox.waiting()).toEqual([{ messageId: MESSAGE, posts: 1, failures: 1, nextAt: START + 30_000, reason: "the disk is full for now" }]);
+      expect(timers.waits.at(-1)).toMatchObject({ ms: 30_000, cleared: false });
+
+      clock = START + 45_000;
+      timers.waits.at(-1)!.fire();
+      expect(await outbox.drain()).toEqual([]);
+      expect(outbox.waiting()).toMatchObject([{ posts: 1, failures: 2, nextAt: START + 105_000 }]);
+      expect(timers.waits.at(-1)).toMatchObject({ ms: 60_000, cleared: false });
+
+      clock = START + 105_000;
+      timers.waits.at(-1)!.fire();
+      expect(await outbox.drain()).toEqual([]);
+      expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: "submitted", submitted: true, failed: null });
+      expect(outbox.waiting()).toEqual([]);
+      expect(wire.posts).toHaveLength(1);
+      await outbox.close();
+      await a.runtime.close();
+      await b.runtime.close();
+    }
+  });
+
+  it("a wait that comes while a later message is worked on runs the next pass at once", async () => {
+    const { a, b, sendTo } = await pair();
+    await sendTo(MESSAGE);
+    await sendTo(SECOND);
+    let clock = START;
+    const wire = posting(() => {
+      if (wire.posts.length === 1) return later();
+      clock = START + 40_000;
+      return accepted();
+    });
+    const timers = handTimers();
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock });
+    const steps = await outbox.drain();
+    expect(steps.map((step) => [step.messageId, step.submitted?.outcome])).toEqual([
+      [MESSAGE, "retry"],
+      [SECOND, "submitted"],
+    ]);
+    expect(outbox.waiting()).toMatchObject([{ messageId: MESSAGE, nextAt: START + 30_000 }]);
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 0, cleared: false });
+    timers.waits.at(-1)!.fire();
+    expect(await outbox.drain()).toEqual([]);
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)?.outcome).toBe("submitted");
+    expect(wire.posts).toHaveLength(3);
+    await outbox.close();
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("an expiry that comes while a later message is worked on runs the next pass at once", async () => {
+    const { a, b, sendTo } = await pair();
+    await sendTo(MESSAGE, { ...HELLO, expiresTime: START / 1000 + 45 });
+    await sendTo(SECOND);
+    let clock = START;
+    const wire = posting(() => {
+      if (wire.posts.length === 1) return later();
+      clock = START + 50_000;
+      return accepted();
+    });
+    const timers = handTimers();
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock, retry: { posts: 1 } });
+    const steps = await outbox.drain();
+    expect(steps.map((step) => [step.messageId, step.submitted?.outcome])).toEqual([
+      [MESSAGE, "retry"],
+      [SECOND, "submitted"],
+    ]);
+    expect(outbox.waiting()).toMatchObject([{ messageId: MESSAGE, nextAt: null }]);
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 0, cleared: false });
+    timers.waits.at(-1)!.fire();
+    expect(await outbox.drain()).toEqual([]);
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: "failed", failed: EXPIRED });
+    expect(wire.posts).toHaveLength(2);
+    await outbox.close();
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("an expiry further off than a timer can wait is reached by the longest waits a timer takes, the passes before it posting nothing", async () => {
+    const { a, b, sendTo } = await pair();
+    const expiresAt = START + 30 * 24 * 60 * 60 * 1000;
+    await sendTo(MESSAGE, { ...HELLO, expiresTime: expiresAt / 1000 });
+    let clock = START;
+    const wire = posting(later);
+    const timers = handTimers();
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock, retry: { posts: 1 } });
+    await outbox.drain();
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 2 ** 31 - 1, cleared: false });
+
+    clock += 2 ** 31 - 1;
+    timers.waits.at(-1)!.fire();
+    expect(await outbox.drain()).toEqual([]);
+    expect(timers.waits.at(-1)).toMatchObject({ ms: expiresAt - clock, cleared: false });
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)?.failed).toBeNull();
+
+    clock = expiresAt;
+    const wake = timers.waits.at(-1)!;
+    wake.fire();
+    expect(await outbox.drain()).toEqual([]);
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: "failed", failed: EXPIRED });
+    expect(timers.waits.at(-1)).toBe(wake);
+    expect(timers.waits.map((wait) => wait.ms)).toEqual([2 ** 31 - 1, wake.ms, wake.ms]);
+    expect(wire.posts).toHaveLength(1);
+    await outbox.close();
     await a.runtime.close();
     await b.runtime.close();
   });

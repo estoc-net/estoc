@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openNodeSqlite } from "@estoc/event-store/node";
-import { canonicalize, parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
+import { canonicalize, parseStrict, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
 import { scanVault, vaultDraft, type Did, type DidId, type Keys, type MediationId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
@@ -31,7 +31,7 @@ import {
   type Prepared,
   type SubmitOptions,
 } from "../../src/v3/index.js";
-import { didcomm, directParty, newMediator, party, posting, type Party } from "./helpers.js";
+import { didcomm, directParty, newMediator, party, posting, refuseSubmissions, type Party } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
@@ -71,29 +71,6 @@ async function mediatedParty(mediator: Awaited<ReturnType<typeof newMediator>>, 
   const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
   const { minted } = await createDid(p.runtime, p.keys, routeId, DID);
   return { ...p, did: minted.did, longFormDid: minted.longFormDid };
-}
-
-/** The next `times` commits of `delivery.submitted` refused, as a disk full for now refuses them; every other commit goes through. */
-function refuseSubmissions(runtime: VaultRuntime, times: number): void {
-  const locked = runtime.locked.bind(runtime);
-  let left = times;
-  const refusing = (held: Held): Held =>
-    new Proxy(held, {
-      get(target, key) {
-        if (key === "commit") {
-          return async (...args: Parameters<Held["commit"]>) => {
-            if (left > 0 && args[1].some((draft) => draft.type === "delivery.submitted")) {
-              left--;
-              throw new Error("the disk is full for now");
-            }
-            return target.commit(...args);
-          };
-        }
-        const value = Reflect.get(target, key, target) as unknown;
-        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      },
-    });
-  vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(refusing(held)))) as VaultRuntime["locked"]);
 }
 
 /** A trace like `trace`, but for the `diag.reconcile` entries, which `append` writes instead. */

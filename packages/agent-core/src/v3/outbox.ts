@@ -7,16 +7,18 @@
  * another in message order. An attempt that may succeed later waits
  * before the next one: thirty seconds, doubling up to six hours, never
  * past the message's expiry, where the expired failure is recorded
- * instead. No message is posted more times than its budget, and one out
- * of posts is still failed at its expiry, since that posts nothing. A
- * new runtime counts from nothing again, which is safe because what a
- * retry posts is the same package. A pass asked for while one runs is
- * run once after it, however often it was asked for.
+ * instead. No message is posted more times than its budget, but one out
+ * of posts is still worked on for what posts nothing: an acceptance the
+ * wire gave that is not recorded yet, and the expired failure. A new
+ * runtime counts from nothing again, which is safe because what a retry
+ * posts is the same package. A pass asked for while one runs is run once
+ * after it, however often it was asked for.
  */
 
 import type { VaultRuntime } from "@estoc/event-store/v3";
 import { scanVault, type Keys, type MessageId, type Outbound } from "@estoc/vault/v3";
 
+import { owesAcceptance } from "./acceptance.js";
 import { hasExpired, prepare, type Prepared } from "./prepare.js";
 import { submit, type SubmitOptions, type Submitted } from "./submit.js";
 
@@ -30,6 +32,9 @@ export interface RetryPolicy {
 }
 
 export const RETRY_POLICY: RetryPolicy = { firstWaitMs: 30_000, longestWaitMs: 21_600_000, posts: 32 };
+
+/** Timers take no longer delay, and fire at once for one past it: a wake further off is reached by waits of this length, each pass reading the clock again. */
+const LONGEST_TIMER_MS = 2 ** 31 - 1;
 
 /** What waits are kept by: the global timers by default, a test's own otherwise. */
 export interface Timers {
@@ -95,9 +100,9 @@ export class Outbox {
   /**
    * One pass over the messages owed work: what the runtime runs on
    * open, on reconnecting, after a send, and when a wait ends. A
-   * message still waiting, or out of posts before its expiry, is left
-   * for later. Asked while a pass runs, it runs once more after that
-   * one.
+   * message still waiting, or out of posts while what it has left would
+   * post, is left for later. Asked while a pass runs, it runs once more
+   * after that one.
    */
   drain(): Promise<Step[]> {
     if (this.closed) return Promise.resolve([]);
@@ -137,7 +142,7 @@ export class Outbox {
   private async pass(): Promise<Step[]> {
     const fold = await scanVault(this.runtime.vault, this.keys);
     const steps: Step[] = [];
-    const expiries: number[] = [];
+    let wake: number | null = null;
     for (const outbound of fold.outbound.outbounds.values()) {
       if (this.closed) break;
       if (outbound.work.kind === "none") {
@@ -149,10 +154,10 @@ export class Outbox {
         steps.push(step);
         if (closes(step)) continue;
       }
-      const expiresAt = expiryOf(outbound);
-      if (expiresAt !== null && expiresAt > this.now()) expiries.push(expiresAt);
+      const at = this.wakeOf(outbound);
+      if (at !== null && (wake === null || at < wake)) wake = at;
     }
-    this.schedule(expiries);
+    this.schedule(wake);
     return steps;
   }
 
@@ -160,7 +165,21 @@ export class Outbox {
     const backoff = this.backoffs.get(outbound.messageId);
     if (backoff === undefined) return true;
     if (backoff.nextAt !== null && backoff.nextAt > this.now()) return false;
-    return backoff.posts < this.policy.posts || (outbound.intent !== null && hasExpired(outbound.intent, this.now));
+    return backoff.posts < this.policy.posts || this.postsNothing(outbound);
+  }
+
+  /** Whether all a message has left is to record: an acceptance this runtime saw, or its expired failure. */
+  private postsNothing(outbound: Outbound): boolean {
+    return owesAcceptance(this.runtime, outbound.messageId) || (outbound.intent !== null && hasExpired(outbound.intent, this.now));
+  }
+
+  /** When a message still owed work is to be tried again: the earlier of its wait and its expiry, the expiry only while it is ahead. */
+  private wakeOf(outbound: Outbound): number | null {
+    const nextAt = this.backoffs.get(outbound.messageId)?.nextAt ?? null;
+    const expiresAt = expiryOf(outbound);
+    const ahead = expiresAt !== null && expiresAt > this.now() ? expiresAt : null;
+    if (nextAt === null || ahead === null) return nextAt ?? ahead;
+    return Math.min(nextAt, ahead);
   }
 
   private async step(outbound: Outbound): Promise<Step> {
@@ -201,9 +220,8 @@ export class Outbox {
 
   /**
    * The next attempt after one that may succeed later. A message out of
-   * posts waits for nothing but its expiry, which the pass wakes for;
-   * one whose expiry has passed, and whose failure could not be
-   * recorded, waits like any other, since recording it posts nothing.
+   * posts waits for nothing but its expiry, which the pass wakes for,
+   * unless what it has left posts nothing: then it waits like any other.
    */
   private wait(outbound: Outbound, reason: string): void {
     const backoff = this.backoffOf(outbound.messageId);
@@ -212,7 +230,7 @@ export class Outbox {
     const now = this.now();
     const expiresAt = expiryOf(outbound);
     const expired = expiresAt !== null && expiresAt <= now;
-    if (backoff.posts >= this.policy.posts && !expired) {
+    if (backoff.posts >= this.policy.posts && !this.postsNothing(outbound)) {
       backoff.nextAt = null;
       return;
     }
@@ -232,21 +250,17 @@ export class Outbox {
     backoff.nextAt = null;
   }
 
-  /** One timer, for the earliest of the waits and the expiries still ahead. */
-  private schedule(expiries: readonly number[]): void {
+  /** One timer, for the earliest wake; one that came while the pass worked on later messages runs the next pass at once. */
+  private schedule(wake: number | null): void {
     this.cancel();
-    if (this.closed) return;
-    const now = this.now();
-    let at: number | null = null;
-    for (const candidate of [...expiries, ...[...this.backoffs.values()].map((backoff) => backoff.nextAt)]) {
-      if (candidate === null || candidate <= now) continue;
-      if (at === null || candidate < at) at = candidate;
-    }
-    if (at === null) return;
-    this.timer = this.timers.set(() => {
-      this.timer = null;
-      this.drain().catch((err: unknown) => this.log(`an outbox pass failed: ${err instanceof Error ? err.message : String(err)}`));
-    }, at - now);
+    if (this.closed || wake === null) return;
+    this.timer = this.timers.set(
+      () => {
+        this.timer = null;
+        this.drain().catch((err: unknown) => this.log(`an outbox pass failed: ${err instanceof Error ? err.message : String(err)}`));
+      },
+      Math.min(LONGEST_TIMER_MS, Math.max(0, wake - this.now()))
+    );
   }
 
   private cancel(): void {
