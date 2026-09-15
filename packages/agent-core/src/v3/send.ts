@@ -67,11 +67,12 @@ export type Sender = { didId: DidId; fresh?: undefined } | { fresh: RouteId; did
 
 /**
  * Whom to send to: a contact, in the one relationship it may be
- * written in — the preferred one when a preference names it — or a
- * new pair with the one peer DID added to it; or an exact peer
- * spelling from a sender, in the relationship whose histories hold
- * that pair or a new one born at it, assigned to `contactId` when
- * named.
+ * written in — the preferred one when a preference names it — or,
+ * only when none is, a new pair with the one peer DID added to it,
+ * born at `sender`; or an exact peer spelling from a sender, in the
+ * relationship whose histories hold that pair or a new one born at
+ * it, assigned to `contactId` when named. A contact target is the
+ * contact: the sender it carries is not part of what it names.
  */
 export type Target = { contactId: ContactId; peerDid?: undefined; sender?: Sender } | { peerDid: string; sender: Sender; contactId?: ContactId };
 
@@ -167,7 +168,6 @@ export async function send(runtime: VaultRuntime, keys: Keys, target: Target, co
   });
 }
 
-/** A message ID the vault has: the recorded intent, once the caller's content and target agree with it, repaired when an object of it is missing. */
 async function repeat(held: Held, fold: VaultFold, existing: Outbound, target: Target, fields: IntentFields, objects: { cid: Cid; source: Uint8Array }[], roots: readonly Cid[]): Promise<Sent> {
   const { messageId } = fields;
   if (existing.intent === null) throw new EntityConflict("message", messageId, "intents that disagree");
@@ -184,14 +184,16 @@ async function repeat(held: Held, fold: VaultFold, existing: Outbound, target: T
 
 /**
  * Does `target` name the relationship a recorded intent is in: a
- * contact it is assigned to, or a pair its histories or birth hold at
- * a sender that is the intent's own — the DID named, or, for one
- * minted then, the DID the birth or binding roots, on the route named.
+ * contact it is assigned to, whatever sender the target carries for a
+ * pair it did not need to start; or a pair its histories or birth
+ * hold at a sender that is the intent's own — the DID named, or, for
+ * one minted then, the DID the birth or binding roots, on the route
+ * named.
  */
 function targetAgrees(fold: VaultFold, target: Target, intent: MessageOut): boolean {
   const relationship = fold.relationships.relationships.get(intent.relationshipId);
   if (target.contactId !== undefined && relationship?.contactId !== target.contactId) return false;
-  if (target.peerDid === undefined) return target.sender === undefined || intent.birth === null || senderAgrees(fold, target.sender, intent.birth.localDidId);
+  if (target.peerDid === undefined) return true;
   const localDidId = target.sender.didId ?? intent.birth?.localDidId ?? relationship?.binding?.localDidId ?? null;
   const localDid = localDidId === null ? undefined : fold.routes.dids.get(localDidId)?.created?.did;
   if (localDidId === null || localDid === undefined || !senderAgrees(fold, target.sender, localDidId)) return false;
@@ -321,18 +323,19 @@ function pairGate(fold: VaultFold, relationshipId: RelationshipId, localDid: Did
  * The birth of an unbound relationship, for a message sent in it with
  * no spelling of its own: the one frozen by the lowest message ID
  * still queued or prepared, so the messages awaiting one resolution
- * share it; else the one its last message froze, terminal messages
- * having settled the pair but not the relationship. Null when no
- * message of it stands.
+ * share it; else the one frozen by the highest message ID, terminal
+ * messages having settled the pair but not the relationship. Message
+ * IDs order the outbounds, not the commits: an ID given may be lower
+ * than one recorded. Null when no message of it stands.
  */
 function birthOf(fold: VaultFold, relationshipId: RelationshipId): Birth | null {
-  let last: Birth | null = null;
+  let highest: Birth | null = null;
   for (const outbound of fold.outbound.outbounds.values()) {
     if (outbound.conflict || outbound.intent === null || outbound.intent.relationshipId !== relationshipId || outbound.intent.birth === null) continue;
     if (outbound.outcome === "queued" || outbound.outcome === "prepared") return outbound.intent.birth;
-    last = outbound.intent.birth;
+    highest = outbound.intent.birth;
   }
-  return last;
+  return highest;
 }
 
 /** The contact to assign the relationship to now: null when it is assigned to `contactId` already; a throw when it is assigned elsewhere or the contact is gone. */

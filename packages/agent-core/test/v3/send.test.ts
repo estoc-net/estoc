@@ -33,6 +33,7 @@ import { AmbiguousTarget, EntityConflict, UnknownEntity, Unusable, authorizedKey
 import { freshVault, json, newMediator, webFetch, webIdentity, type Fresh } from "./helpers.js";
 
 const ROUTE = "019b0000-0000-7000-8000-00000000000a" as RouteId;
+const OTHER_ROUTE = "019b0000-0000-7000-8000-00000000000d" as RouteId;
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const FRESH = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
@@ -348,6 +349,30 @@ describe("send to a contact", () => {
     await contact(a, OTHER, [carol.did, (await newMediator(203)).did]);
     await expect(send(a.runtime, a.keys, { contactId: OTHER, sender: { fresh: ROUTE } }, HELLO)).rejects.toBeInstanceOf(Unusable);
     await expect(send(a.runtime, a.keys, { contactId: "019b0000-0000-7000-8000-0000000002ff" as ContactId }, HELLO)).rejects.toBeInstanceOf(UnknownEntity);
+    await a.runtime.close();
+  });
+
+  it("the sender a contact target carries is for a pair it has to start: a contact written in at its queued birth ignores it, and a send repeated with it returns the record", async () => {
+    const a = await alice();
+    await configureRoute(a.runtime, a.keys, { kind: "direct", endpoint: "https://other.example/didcomm" }, OTHER_ROUTE);
+    await createDid(a.runtime, a.keys, OTHER_ROUTE, FRESH);
+    await contact(a, CONTACT);
+    const prior = await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID }, contactId: CONTACT }, HELLO);
+    for (const [messageId, sender] of [
+      [MESSAGE, { didId: FRESH }],
+      [SECOND, { fresh: OTHER_ROUTE }],
+    ] as const) {
+      const target = { contactId: CONTACT, sender };
+      const first = await send(a.runtime, a.keys, target, HELLO, { messageId });
+      expect(first).toMatchObject({ relationshipId: prior.relationshipId, birth: prior.birth, created: null, assigned: null, existed: false });
+      const again = await send(a.runtime, a.keys, target, HELLO, { messageId });
+      expect(again).toMatchObject({ existed: true, created: null, assigned: null, relationshipId: prior.relationshipId, birth: prior.birth });
+      expect(again.intent.eventId).toBe(first.intent.eventId);
+    }
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.set.of("message.out")).toHaveLength(3);
+    expect(fold.set.of("did.created")).toHaveLength(2);
+    expect(fold.set.of("relationship.contactAssigned")).toHaveLength(1);
     await a.runtime.close();
   });
 
