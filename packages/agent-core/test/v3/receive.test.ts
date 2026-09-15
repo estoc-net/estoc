@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
+import { resolveDIDCommDoc } from "@estoc/did-peer";
 import type { JsonObject, VaultRuntime } from "@estoc/event-store/v3";
 import { didKeyName, relationshipId, scanVault, splitDidUrl, vaultDraft, type Did, type DidId, type EventReference, type MediationId, type PublicKey, type RouteId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { PLAIN_TYP, packEncrypted, packFromPrior, secretsResolverFor, type DIDResolver, type IMessage } from "../../src/protocol/didcomm.js";
+import { PLAIN_TYP, packFromPrior, secretsResolverFor, type DIDResolver } from "../../src/protocol/didcomm.js";
 import { MESSAGES_RECEIVED } from "../../src/protocol/mediation.js";
 import {
   AgentTrace,
@@ -32,7 +32,7 @@ import {
   type Resolution,
   type Source,
 } from "../../src/v3/index.js";
-import { didcomm, directParty, freshVault, handTimers, json, newMediator, party, reloaded, webIdentity, type DirectParty, type Fresh, type Party, type WebIdentity } from "./helpers.js";
+import { didcomm, directParty, freshVault, handTimers, json, newMediator, party, peerSealer, reloaded, sealed, webIdentity, webResolution, webSealer, type DirectParty, type Fresh, type Party, type Sealer, type WebIdentity } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -47,33 +47,10 @@ const START = 1_800_000_000_000;
 const PICKUP: Source = { kind: "pickup", mediationId: MEDIATION, deliveryId: "d1" };
 const DIRECT: Source = { kind: "direct" };
 
-/** Someone who seals: a DID, its secrets, and how the documents it seals against resolve. */
-interface Sealer {
-  did: string;
-  secrets: Secret[];
-  resolver: DIDResolver;
-}
-
-async function webResolution(identity: WebIdentity): Promise<Resolution> {
-  const outcome = await resolve(identity.did, () => null, { fetch: async () => json(identity.document) });
-  if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
-  return outcome.resolution;
-}
-
 async function peerResolutionOf(did: string): Promise<Resolution> {
   const outcome = await resolve(did, () => null);
   if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
   return outcome.resolution;
-}
-
-async function webSealer(identity: WebIdentity): Promise<Sealer> {
-  const document = didcommDocumentOf(await webResolution(identity));
-  return { did: identity.did, secrets: identity.secrets, resolver: { resolve: async (did) => (did === identity.did ? document : resolveDIDCommDoc(did)) } };
-}
-
-async function peerSealer(holder: DirectParty): Promise<Sealer> {
-  const ring = await Keyring.load(holder.keys, await scanVault(holder.runtime.vault, holder.keys));
-  return { did: holder.longFormDid, secrets: ring.secrets(), resolver: { resolve: resolveDIDCommDoc } };
 }
 
 /** `sealer` able to seal against `prior`'s document, and the `from_prior` that `prior` signs over it. */
@@ -82,13 +59,6 @@ async function rotatedFrom(prior: WebIdentity, sealer: Sealer): Promise<{ sealer
   const resolver: DIDResolver = { resolve: async (did) => (did === prior.did ? document : sealer.resolver.resolve(did)) };
   const [fromPrior] = await packFromPrior(didcomm, { iss: prior.did, sub: sealer.did, iat: 1_757_700_000 }, null, resolver, secretsResolverFor(prior.secrets));
   return { sealer: { ...sealer, resolver }, fromPrior };
-}
-
-/** A basic message sealed to `to`: authcrypt from the sealer, anoncrypt without one. */
-async function sealed(from: Sealer | null, to: string, extra: Partial<IMessage> = {}): Promise<string> {
-  const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, ...(from === null ? {} : { from: from.did }), to: [to], body: { content: "hello" }, ...extra } as IMessage;
-  const [packed] = await packEncrypted(didcomm, plain, to, from?.did ?? null, null, from?.resolver ?? { resolve: resolveDIDCommDoc }, secretsResolverFor(from?.secrets ?? []), { forward: false });
-  return packed;
 }
 
 const kidOf = (packed: string): string => (JSON.parse(packed) as { recipients: { header: { kid: string } }[] }).recipients[0]!.header.kid;

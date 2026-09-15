@@ -20,7 +20,9 @@
  * (`outbox`); and every delivery that arrives put through the gate
  * before the vault — the recipients it names, the key it opens with,
  * the sender it proves resolved for it — terminal, held for what it
- * waits on, or handed to the receipt (`receive`). The protocols themselves —
+ * waits on, or handed to the receipt, which records it in the
+ * relationship its address pair or its proof's issuer finds, or a new
+ * one born at the pair (`receive`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
@@ -114,3 +116,4 @@ export {
   type WaitKind,
   type Waiting,
 } from "./receive/receiver.js";
+export { receiptOf, recordReceipt, type ReceiptOptions } from "./receive/receipt.js";

@@ -73,10 +73,12 @@ export interface Authenticated {
 
 /**
  * What the receipt made of an authenticated delivery: recorded, which
- * ends it; terminal; waiting for relationship evidence at its address
- * pair; or held for something of this runtime's that is not ready.
+ * ends it; terminal; waiting for relationship evidence at an address
+ * pair — the recipient's and the sender's, or the recipient's and
+ * `peerDid`, as for a proof whose issuer's pair decides it; or held for
+ * something of this runtime's that is not ready.
  */
-export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "wait"; reason: string } | { outcome: "deferred"; reason: string };
+export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "wait"; reason: string; peerDid?: Did } | { outcome: "deferred"; reason: string };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
@@ -413,7 +415,7 @@ export class Receiver {
       case "wait": {
         if (proof.sender === null) return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: outcome.reason });
         const localDid = recipients.did;
-        const peerDid = proof.sender.resolution.did;
+        const peerDid = outcome.peerDid ?? proof.sender.resolution.did;
         return this.defer(key, delivery, { kind: "relationship", source: delivery.source, reason: outcome.reason, localDid, peerDid, evidence: this.evidenceOf(fold, localDid, peerDid), retry: false });
       }
     }
