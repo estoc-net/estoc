@@ -95,7 +95,7 @@ export async function objectsHeld(held: Held, cids: Iterable<Cid>): Promise<bool
 
 /**
  * `peer.resolved` for the evidence, with its document object, under
- * the writer lock. An event already recording exactly this — same
+ * the writer lock — the runtime's, or one already held. An event already recording exactly this — same
  * spellings, document, methods, service and keys — is returned instead
  * of being repeated, unless `fresh` asks for a new one or the document
  * it names is not here: evidence that arrived without its object, or
@@ -103,7 +103,7 @@ export async function objectsHeld(held: Held, cids: Iterable<Cid>): Promise<bool
  * and the new event carries them in while the old event's pin reads
  * again.
  */
-export async function commitResolution(runtime: VaultRuntime, evidence: ResolutionEvidence, options: CommitResolutionOptions = {}): Promise<VaultEvent<"peer.resolved">> {
+export async function commitResolution(runtime: Pick<VaultRuntime, "locked">, evidence: ResolutionEvidence, options: CommitResolutionOptions = {}): Promise<VaultEvent<"peer.resolved">> {
   const data = resolutionData(evidence);
   return runtime.locked(async (held) => {
     if (!options.fresh) {
