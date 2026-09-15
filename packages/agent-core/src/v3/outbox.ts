@@ -176,10 +176,10 @@ export class Outbox {
 
   /**
    * A wait is never set later than an expiry still ahead, and one set
-   * past the expiry is for a record that could not be written, which must
-   * not be tried at once again; so a wait decides alone. Without one, the
-   * expiry wakes the pass even when it has come already, as it may have
-   * while the message was worked on.
+   * after the expiry defers recording the outcome, which the expiry
+   * already come must not turn into an attempt at once; so a wait decides
+   * alone. Without one, the expiry wakes the pass even when it has come
+   * already, as it may have while the message was worked on.
    */
   private wakeOf(outbound: Outbound): number | null {
     return this.backoffs.get(outbound.messageId)?.nextAt ?? expiryOf(outbound);
