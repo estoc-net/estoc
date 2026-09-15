@@ -73,8 +73,17 @@ export class ResolutionSequence {
   /** Why no further call may be made, or null while one may. */
   stopped(now: number): string | null {
     if (this.calls >= this.policy.attempts) return `no definitive answer after ${this.calls} resolutions`;
-    if (this.stopMs !== null && this.elapsed(now) >= this.stopMs) return `no definitive answer within the ${this.stopMs} ms the mediator keeps the delivery`;
-    return null;
+    return this.pastStop(now);
+  }
+
+  /** Why the retention stop has come, or null while it has not. */
+  pastStop(now: number): string | null {
+    return this.stopMs !== null && this.elapsed(now) >= this.stopMs ? `no definitive answer within the ${this.stopMs} ms the mediator keeps the delivery` : null;
+  }
+
+  /** The active time left before the stop, which also bounds a call in progress; null when nothing stops the sequence. */
+  remaining(now: number): number | null {
+    return this.stopMs === null ? null : Math.max(0, this.stopMs - this.elapsed(now));
   }
 
   due(now: number): boolean {
@@ -86,20 +95,20 @@ export class ResolutionSequence {
     this.calls++;
   }
 
-  /** An unavailable answer: when to look again — the next call, or the stop when it comes first; null when no call is left. */
-  unavailable(now: number): number | null {
-    if (this.calls >= this.policy.attempts) {
-      this.nextAt = null;
-      return null;
-    }
-    this.nextAt = now + Math.min(this.policy.longestWaitMs, this.policy.firstWaitMs * 2 ** (this.calls - 1));
-    return this.wake(now);
+  /** An unavailable answer while a call is left: when to look again — the next call, or the stop when it comes first. */
+  unavailable(now: number): number {
+    const nextAt = now + Math.min(this.policy.longestWaitMs, this.policy.firstWaitMs * 2 ** (this.calls - 1));
+    this.nextAt = nextAt;
+    return this.until(nextAt, now);
   }
 
   /** When to look again while a call waits; null when none does. */
   wake(now: number): number | null {
-    if (this.nextAt === null) return null;
-    if (this.stopMs === null) return this.nextAt;
-    return Math.min(this.nextAt, now + Math.max(0, this.stopMs - this.elapsed(now)));
+    return this.nextAt === null ? null : this.until(this.nextAt, now);
+  }
+
+  private until(at: number, now: number): number {
+    const left = this.remaining(now);
+    return left === null ? at : Math.min(at, now + left);
   }
 }

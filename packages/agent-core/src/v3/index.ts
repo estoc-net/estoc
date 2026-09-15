@@ -25,7 +25,7 @@
  * `protocol/`.
  */
 
-export { AmbiguousTarget, EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -100,6 +100,7 @@ export { Outbox, RETRY_POLICY, type Backoff, type OutboxOptions, type RetryPolic
 export { RESOLUTION_POLICY, ResolutionSequence, type ResolutionPolicy, type Retention } from "./receive/accounting.js";
 export { classifyRecipients, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
 export {
+  ENDED_KEPT,
   MAX_HELD_BYTES,
   Receiver,
   deliveryKey,

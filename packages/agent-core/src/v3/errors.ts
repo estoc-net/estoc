@@ -84,3 +84,19 @@ export class AmbiguousTarget extends Error {
     this.name = "AmbiguousTarget";
   }
 }
+
+/** A runtime receives through one receiver at a time: every way a delivery arrives shares one accounting of it and one wait. */
+export class ReceiverInUse extends Error {
+  constructor() {
+    super("the runtime already has an open receiver");
+    this.name = "ReceiverInUse";
+  }
+}
+
+/** The receiver is closed: the delivery was neither opened nor found terminal, and stays wherever it came from. */
+export class ReceiverClosed extends Error {
+  constructor() {
+    super("the receiver is closed");
+    this.name = "ReceiverClosed";
+  }
+}

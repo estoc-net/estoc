@@ -9,7 +9,8 @@
  * pushed down is taken like one fetched. The handle decides each
  * attachment's fate: `acked`, the mediator may drop it; `skip`, it stays
  * queued for a later pickup — as does one the handle threw on, or one
- * with no ID to acknowledge it by. The mediator's copy is the only copy,
+ * with no ID to acknowledge it by. A handle that asks is told which
+ * attachments the mediator was told of. The mediator's copy is the only copy,
  * so nothing here drops mail it could not hand over, and nothing is
  * counted acknowledged that the mediator was not told of.
  *
@@ -30,7 +31,7 @@ export type Fate = "acked" | "skip";
 /** One attachment of a delivery: the envelope it carries, or why it does not read; `parent` is the trace entry of the delivery it came in. */
 export type Delivered = { attachmentId: string; parent?: number } & ({ packed: string } | { unreadable: string });
 
-export type Handle = (delivered: Delivered) => Promise<Fate> | Fate;
+export type Handle = ((delivered: Delivered) => Promise<Fate> | Fate) & { acknowledged?: (attachmentIds: readonly string[]) => void };
 
 export interface PickupOptions {
   /** live delivery came on: the mediator's answer to the socket's first frame */
@@ -184,6 +185,7 @@ export class Pickup {
     if (answer.type !== STATUS) {
       throw new Error(`mediator answered ${answer.type} to messages-received`);
     }
+    this.handle.acknowledged?.(attachmentIds);
   }
 
   /**

@@ -2,16 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveDIDCommDoc, type Secret } from "@estoc/did-peer";
 import type { JsonObject, VaultRuntime } from "@estoc/event-store/v3";
-import { didKeyName, relationshipId, scanVault, splitDidUrl, vaultDraft, type DidId, type EventReference, type MediationId, type PublicKey, type RouteId } from "@estoc/vault/v3";
+import { didKeyName, relationshipId, scanVault, splitDidUrl, vaultDraft, type Did, type DidId, type EventReference, type MediationId, type PublicKey, type RouteId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import { PLAIN_TYP, packEncrypted, packFromPrior, secretsResolverFor, type DIDResolver, type IMessage } from "../../src/protocol/didcomm.js";
+import { MESSAGES_RECEIVED } from "../../src/protocol/mediation.js";
 import {
   AgentTrace,
   DEFINITIVE_TRANSPORT_CODES,
   Keyring,
   Pickup,
   Receiver,
+  ReceiverClosed,
+  ReceiverInUse,
   authorizedKeys,
   commitResolution,
   createDid,
@@ -29,7 +32,7 @@ import {
   type Resolution,
   type Source,
 } from "../../src/v3/index.js";
-import { didcomm, directParty, freshVault, handTimers, json, newMediator, party, reloaded, webIdentity, type DirectParty, type Fresh, type WebIdentity } from "./helpers.js";
+import { didcomm, directParty, freshVault, handTimers, json, newMediator, party, reloaded, webIdentity, type DirectParty, type Fresh, type Party, type WebIdentity } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -38,6 +41,7 @@ const ALICE_ENDPOINT = "https://alice.example/didcomm";
 const CAROL_ENDPOINT = "https://carol.example/didcomm";
 const BOB = "did:web:bob.example";
 const BOB_URL = "https://bob.example/.well-known/did.json";
+const PRIOR = "did:web:prior.example";
 const START = 1_800_000_000_000;
 
 const PICKUP: Source = { kind: "pickup", mediationId: MEDIATION, deliveryId: "d1" };
@@ -72,6 +76,14 @@ async function peerSealer(holder: DirectParty): Promise<Sealer> {
   return { did: holder.longFormDid, secrets: ring.secrets(), resolver: { resolve: resolveDIDCommDoc } };
 }
 
+/** `sealer` able to seal against `prior`'s document, and the `from_prior` that `prior` signs over it. */
+async function rotatedFrom(prior: WebIdentity, sealer: Sealer): Promise<{ sealer: Sealer; fromPrior: string }> {
+  const document = didcommDocumentOf(await webResolution(prior));
+  const resolver: DIDResolver = { resolve: async (did) => (did === prior.did ? document : sealer.resolver.resolve(did)) };
+  const [fromPrior] = await packFromPrior(didcomm, { iss: prior.did, sub: sealer.did, iat: 1_757_700_000 }, null, resolver, secretsResolverFor(prior.secrets));
+  return { sealer: { ...sealer, resolver }, fromPrior };
+}
+
 /** A basic message sealed to `to`: authcrypt from the sealer, anoncrypt without one. */
 async function sealed(from: Sealer | null, to: string, extra: Partial<IMessage> = {}): Promise<string> {
   const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, ...(from === null ? {} : { from: from.did }), to: [to], body: { content: "hello" }, ...extra } as IMessage;
@@ -104,7 +116,6 @@ function host(document: JsonObject): { fetch: typeof globalThis.fetch; calls: st
   return { fetch, calls, state };
 }
 
-/** A receipt that records what reaches it and answers `answer`. */
 function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received" })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
   const seen: Authenticated[] = [];
   return {
@@ -150,20 +161,32 @@ async function boundRouteOf(holder: Fresh): Promise<RouteId> {
   return (await scanVault(holder.runtime.vault, holder.keys)).routes.dids.get(DID)!.created!.boundRouteId;
 }
 
-/** A relationship bound at `DID` with the peer's document as its root, as a receipt binds it. */
-async function bindTo(holder: DirectParty, resolution: Resolution): Promise<void> {
-  const root = await commitResolution(holder.runtime, { resolution, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: agreementKey(resolution) });
-  await holder.runtime.vault.commit([], [vaultDraft("relationship.bound", { relationshipId: relationshipId(holder.did, resolution.did), localDidId: DID, peerResolutionEventId: root.eventId as EventReference<"peer.resolved"> })]);
+/** A relationship bound at `local` with the peer's document as its root, as a receipt binds it. */
+async function bindTo(holder: DirectParty, resolution: Resolution, local: { didId: DidId; did: Did } = holder): Promise<void> {
+  const root = await commitResolution(holder.runtime, { resolution, localKeyName: didKeyName(local.didId, "key-agreement"), peerPublicKey: agreementKey(resolution) });
+  await holder.runtime.vault.commit([], [vaultDraft("relationship.bound", { relationshipId: relationshipId(local.did, resolution.did), localDidId: local.didId, peerResolutionEventId: root.eventId as EventReference<"peer.resolved"> })]);
 }
 
-async function eventsOf(runtime: VaultRuntime, type: string): Promise<unknown[]> {
+async function eventsOf(runtime: VaultRuntime, ...types: string[]): Promise<unknown[]> {
   const events: unknown[] = [];
-  for await (const event of runtime.vault.events.scan()) if (event.type === type) events.push(event);
+  for await (const event of runtime.vault.events.scan()) if (types.includes(event.type)) events.push(event);
   return events;
 }
 
+/** A party whose DID `DID` is registered with a fake mediator, and the account the mediator queues its mail under. */
+async function mediated(): Promise<{ mediator: Awaited<ReturnType<typeof newMediator>>; p: Party; longFormDid: string; account: string }> {
+  const mediator = await newMediator();
+  const p = await party(mediator);
+  await establish(p.link, p.runtime, p.keys, p.mediationId);
+  const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
+  const { minted } = await createDid(p.runtime, p.keys, routeId, DID);
+  await reloaded(p);
+  await reconcile(p.link, p.runtime, p.keys, p.mediationId);
+  return { mediator, p, longFormDid: minted.longFormDid, account: p.created.data.me.did };
+}
+
 describe("the gate before the vault", () => {
-  it("a delivery to the exact key-agreement method of a DID that may receive opens with that key, its did:web sender resolved for this delivery; the same envelope again is resolved again", async () => {
+  it("a delivery to the exact key-agreement method of a DID that may receive opens with that key, its did:web sender resolved for this delivery: another envelope is resolved again, the same one again is only told again", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
     const bob = await webIdentity(BOB);
     const web = host(bob.document);
@@ -185,7 +208,8 @@ describe("the gate before the vault", () => {
     ]);
     expect(web.calls).toEqual([BOB_URL]);
 
-    await receiver.receive(delivery);
+    await receiver.receive({ ...delivery, packed: await sealed(await webSealer(bob), alice.longFormDid) });
+    expect(await receiver.receive(delivery)).toEqual({ outcome: "received", key: deliveryKey(delivery) });
     expect(web.calls).toEqual([BOB_URL, BOB_URL]);
     expect(seen).toHaveLength(2);
     expect((await trace.read({ type: "diag.receive" })).map((entry) => entry.data["outcome"])).toEqual(["received", "received"]);
@@ -283,6 +307,62 @@ describe("the gate before the vault", () => {
   });
 });
 
+describe("the receiver's lifecycle", () => {
+  it("a runtime receives through one receiver: a second is refused while it is open; two handles taking the same attachment at once make one call and share its wait, and while it waits for relationship evidence a redelivery through either opens nothing", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    web.state.plan.push(503);
+    const time = clock();
+    const timers = handTimers();
+    const { receipt, seen } = recording(() => ({ outcome: "wait", reason: "the pair's membership is pending" }));
+    const receiver = await receiverOver(alice, { receipt, fetch: web.fetch, now: time.now, timers });
+    await expect(receiverOver(alice, { receipt })).rejects.toThrow(ReceiverInUse);
+    const [socket, drain] = [receiver.pickupHandle(MEDIATION), receiver.pickupHandle(MEDIATION)];
+    const delivered = { attachmentId: PICKUP.deliveryId, packed: await sealed(await webSealer(bob), alice.longFormDid) };
+
+    expect(await Promise.all([socket(delivered), drain(delivered)])).toEqual(["skip", "skip"]);
+    expect(web.calls).toHaveLength(1);
+    expect(receiver.waiting()).toEqual([expect.objectContaining({ wait: "resolution", attempts: 1 })]);
+
+    time.advance(30_000);
+    timers.waits.at(-1)!.fire();
+    await vi.waitFor(() => expect(receiver.waiting()).toEqual([expect.objectContaining({ wait: "relationship" })]));
+    expect(await Promise.all([socket(delivered), drain(delivered)])).toEqual(["skip", "skip"]);
+    expect([web.calls.length, seen.length]).toEqual([2, 1]);
+
+    receiver.close();
+    (await receiverOver(alice, { receipt })).close();
+    await alice.runtime.close();
+  });
+
+  it("after close nothing is opened or handed to the receipt, not even a delivery already waiting its turn: each is refused, a pickup handle refuses too, and what was held is let go", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    let calls = 0;
+    let serve!: () => void;
+    const served = new Promise<void>((resolve) => {
+      serve = resolve;
+    });
+    const fetch: typeof globalThis.fetch = async () => (++calls === 1 ? new Response("not now", { status: 503 }) : served.then(() => json(bob.document)));
+    const { receipt, seen } = recording();
+    const receiver = await receiverOver(alice, { receipt, fetch, now: clock().now, timers: handTimers() });
+    const sealer = await webSealer(bob);
+    expect((await receiver.receive({ packed: await sealed(sealer, alice.longFormDid), source: PICKUP })).outcome).toBe("deferred");
+    const packed = await sealed(sealer, alice.longFormDid);
+
+    const outcomes = Promise.allSettled([receiver.receive({ packed, source: DIRECT }), receiver.receive({ packed, source: DIRECT })]);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    receiver.close();
+    serve();
+    expect((await outcomes).map((outcome) => (outcome.status === "rejected" ? outcome.reason : outcome.value))).toEqual([new ReceiverClosed(), new ReceiverClosed()]);
+    await expect(receiver.pickupHandle(MEDIATION)({ attachmentId: "d2", packed })).rejects.toThrow(ReceiverClosed);
+    await expect(receiver.receive({ packed, source: DIRECT })).rejects.toThrow(ReceiverClosed);
+    expect([seen, receiver.waiting(), calls]).toEqual([[], [], 2]);
+    await alice.runtime.close();
+  });
+});
+
 describe("the sender's resolution", () => {
   it("a sender that does not resolve now holds the delivery: a redelivery before the next call calls nothing, the calls come on time from the held bytes, and running out of calls is terminal and acknowledged", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
@@ -354,6 +434,48 @@ describe("the sender's resolution", () => {
     await alice.runtime.close();
   });
 
+  it("the retention stop bounds the call in progress: a call still waiting at the stop is cut, and a document that arrives after the stop is not taken", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const packed = await sealed(await webSealer(bob), alice.longFormDid);
+    const { receipt, seen } = recording();
+
+    const cutTime = clock();
+    let signal: AbortSignal | undefined;
+    const cutting = await receiverOver(alice, {
+      receipt,
+      now: cutTime.now,
+      timers: handTimers(),
+      retention: () => ({ durationMs: 30 }),
+      fetch: (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = init?.signal ?? undefined;
+          signal?.addEventListener("abort", () => {
+            cutTime.advance(30);
+            reject(signal?.reason);
+          });
+        }),
+    });
+    expect(await cutting.receive({ packed, source: DIRECT })).toMatchObject({ outcome: "terminal", reason: expect.stringContaining("no definitive answer within the 30 ms the mediator keeps the delivery") });
+    expect(signal?.aborted).toBe(true);
+    cutting.close();
+
+    const lateTime = clock();
+    const late = await receiverOver(alice, {
+      receipt,
+      now: lateTime.now,
+      timers: handTimers(),
+      retention: () => ({ durationMs: 1_000 }),
+      fetch: async () => {
+        lateTime.advance(5_000);
+        return json(bob.document);
+      },
+    });
+    expect(await late.receive({ packed, source: DIRECT })).toMatchObject({ outcome: "terminal", reason: expect.stringContaining("resolved only after the retention stop") });
+    expect(seen).toEqual([]);
+    await alice.runtime.close();
+  });
+
   it("a sender that resolves definitively, not found or a name with no address, is terminal at once; so is a current document that no longer authorizes the key the envelope was sealed with, whatever was pinned before", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
     const bob = await webIdentity(BOB);
@@ -391,6 +513,53 @@ describe("the sender's resolution", () => {
     expect((await receiver.receive({ packed: respaced, source: DIRECT })).outcome).toBe("deferred");
     expect(web.calls).toHaveLength(1);
     expect(receiver.waiting()).toEqual([expect.objectContaining({ attempts: 1 })]);
+    await alice.runtime.close();
+  });
+
+  it("an envelope posted again after its sender ran out of calls is told terminal again, with no call", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    web.state.plan.push(503);
+    const { receipt, seen } = recording();
+    const receiver = await receiverOver(alice, { receipt, fetch: web.fetch, policy: { attempts: 1 }, timers: handTimers() });
+    const packed = await sealed(await webSealer(bob), alice.longFormDid);
+
+    const terminal = await receiver.receive({ packed, source: DIRECT });
+    expect(terminal).toMatchObject({ outcome: "terminal", reason: expect.stringContaining("no definitive answer after 1 resolutions") });
+    expect(await receiver.receive({ packed, source: DIRECT })).toEqual(terminal);
+    expect([web.calls.length, seen.length]).toEqual([1, 0]);
+    await alice.runtime.close();
+  });
+
+  it("the bytes of a delivery waiting for its sender's next resolution are held before any other's: one waiting for evidence gives its bytes up, one that still does not fit is terminal at once, and the held one is retried on time", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    web.state.plan.push("ok", 503, 503);
+    const time = clock();
+    const timers = handTimers();
+    let receipts = 0;
+    const { receipt } = recording(() => (++receipts === 1 ? { outcome: "wait", reason: "the pair's membership is pending" } : { outcome: "received" }));
+    const { acknowledge, acknowledged } = acknowledging();
+    const sealer = await webSealer(bob);
+    const letters = [await sealed(sealer, alice.longFormDid), await sealed(sealer, alice.longFormDid), await sealed(sealer, alice.longFormDid)];
+    const receiver = await receiverOver(alice, { receipt, fetch: web.fetch, now: time.now, timers, acknowledge, maxHeldBytes: Math.max(...letters.map((letter) => letter.length)) });
+    const at = (n: number): Source => ({ kind: "pickup", mediationId: MEDIATION, deliveryId: `d${n}` });
+
+    expect(await receiver.receive({ packed: letters[0]!, source: at(1) })).toMatchObject({ outcome: "deferred", wait: "relationship" });
+    expect(await receiver.receive({ packed: letters[1]!, source: at(2) })).toMatchObject({ outcome: "deferred", wait: "resolution" });
+    expect(receiver.waiting().map(({ source, held }) => [source, held])).toEqual([
+      [at(1), false],
+      [at(2), true],
+    ]);
+    expect(await receiver.receive({ packed: letters[2]!, source: at(3) })).toMatchObject({ outcome: "terminal", reason: expect.stringContaining("no room to hold its") });
+
+    time.advance(30_000);
+    timers.waits.find((wait) => !wait.cleared)!.fire();
+    await vi.waitFor(() => expect(acknowledged).toEqual([at(2)]));
+    expect([web.calls.length, receipts]).toEqual([4, 2]);
+    expect(receiver.waiting().map(({ source }) => source)).toEqual([at(1)]);
     await alice.runtime.close();
   });
 });
@@ -450,17 +619,44 @@ describe("waits for evidence", () => {
     await alice.runtime.close();
     await carol.runtime.close();
   });
+
+  it("a Web from_prior issuer is verified against the snapshot pinned by the relationship at the receiving address, and no other's: received where its document is pinned, not opened where another document of it is; pinned without its document, it waits until the document is back", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const { minted: other } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), OTHER);
+    const prior = await webIdentity(PRIOR, 78);
+    const priorResolution = await webResolution(prior);
+    await bindTo(alice, priorResolution);
+    await bindTo(alice, await webResolution(await webIdentity(PRIOR, 79)), { didId: OTHER, did: other.did });
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    const { sealer, fromPrior } = await rotatedFrom(prior, await webSealer(bob));
+    const carrier = await sealed(sealer, alice.longFormDid, { from_prior: fromPrior });
+    const { receipt, seen } = recording();
+    const receiver = await receiverOver(alice, { receipt, fetch: web.fetch });
+
+    expect((await receiver.receive({ packed: carrier, source: DIRECT })).outcome).toBe("received");
+    expect(seen.map(({ recipient, fromPrior }) => [recipient.didId, fromPrior?.iss])).toEqual([[DID, PRIOR]]);
+    expect(await receiver.receive({ packed: await sealed(sealer, other.longFormDid, { from_prior: fromPrior }), source: DIRECT })).toMatchObject({ outcome: "terminal", reason: expect.stringMatching(/^the envelope does not open: /) });
+    expect(seen).toHaveLength(1);
+    receiver.close();
+
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(await eventsOf(alice.runtime, "did.created", "route.configured", "peer.resolved", "relationship.bound"));
+    const copied = await receiverOver(copy, { receipt, fetch: web.fetch });
+    expect(await copied.receive({ packed: carrier, source: DIRECT })).toMatchObject({ outcome: "deferred", wait: "history", reason: `the envelope names ${PRIOR}, whose document no evidence holds` });
+    expect(await copied.evidenceChanged()).toEqual([]);
+
+    await commitResolution(copy.runtime, { resolution: priorResolution, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: agreementKey(priorResolution) });
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    expect(seen).toHaveLength(2);
+    await alice.runtime.close();
+    await copy.runtime.close();
+  });
 });
 
 describe("the gate over pickup", () => {
   it("a delivery for no key of this vault and one received are acknowledged in the same round; one whose sender does not resolve now stays queued until its call comes due, then it is received and acknowledged", async () => {
-    const mediator = await newMediator();
-    const p = await party(mediator);
-    await establish(p.link, p.runtime, p.keys, p.mediationId);
-    const routeId = await ensureRoute(p.runtime, p.keys, p.mediationId);
-    const { minted } = await createDid(p.runtime, p.keys, routeId, DID);
-    await reloaded(p);
-    await reconcile(p.link, p.runtime, p.keys, p.mediationId);
+    const { mediator, p, longFormDid, account } = await mediated();
     const bob = await webIdentity(BOB);
     const web = host(bob.document);
     web.state.plan.push("ok", 503);
@@ -471,12 +667,11 @@ describe("the gate over pickup", () => {
     const receiver = new Receiver(p.runtime, p.keys, p.ring, { didcomm, receipt, fetch: web.fetch, now: time.now, timers, acknowledge: (source) => pickup!.acknowledge([source.deliveryId]) });
     pickup = new Pickup(p.link, receiver.pickupHandle(p.mediationId));
     const sealer = await webSealer(bob);
-    const packed = await sealed(sealer, minted.longFormDid);
-    const account = p.created.data.me.did;
+    const packed = await sealed(sealer, longFormDid);
     mediator.queues.set(account, [
       { id: "q1", packed: addressedTo(packed, `${BOB}#agree`) },
       { id: "q2", packed },
-      { id: "q3", packed: await sealed(sealer, minted.longFormDid) },
+      { id: "q3", packed: await sealed(sealer, longFormDid) },
     ]);
 
     expect(await pickup.drain()).toEqual({ acked: 2, ended: "left" });
@@ -487,6 +682,37 @@ describe("the gate over pickup", () => {
     timers.waits.at(-1)!.fire();
     await vi.waitFor(() => expect(mediator.queues.get(account)).toEqual([]));
     expect([web.calls.length, seen.length]).toEqual([3, 2]);
+    await p.runtime.close();
+  });
+
+  it("a delivery that ended is only told again when it comes again before the mediator was told: a lost acknowledgement costs no second resolution or receipt, and once the mediator is told it is forgotten", async () => {
+    const { mediator, p, longFormDid, account } = await mediated();
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    web.state.plan.push(503);
+    const { receipt, seen } = recording();
+    const receiver = new Receiver(p.runtime, p.keys, p.ring, { didcomm, receipt, fetch: web.fetch, policy: { attempts: 1 }, timers: handTimers() });
+    const pickup = new Pickup(p.link, receiver.pickupHandle(p.mediationId));
+    const packed = await sealed(await webSealer(bob), longFormDid);
+    const roundTrip = p.link.roundTrip.bind(p.link);
+    let cut = true;
+    vi.spyOn(p.link, "roundTrip").mockImplementation(async (...args: Parameters<typeof roundTrip>) => {
+      if (cut && args[0] === MESSAGES_RECEIVED) {
+        cut = false;
+        throw new Error("the line dropped");
+      }
+      return roundTrip(...args);
+    });
+    mediator.queues.set(account, [{ id: "q1", packed }]);
+
+    expect(await pickup.drain()).toEqual({ acked: 0, ended: "left" });
+    expect(mediator.queues.get(account)).toHaveLength(1);
+    expect(await pickup.drain()).toEqual({ acked: 1, ended: "empty" });
+    expect([web.calls.length, seen.length, mediator.queues.get(account)]).toEqual([1, 0, []]);
+
+    mediator.queues.set(account, [{ id: "q1", packed }]);
+    expect(await pickup.drain()).toEqual({ acked: 1, ended: "empty" });
+    expect([web.calls.length, seen.length]).toEqual([2, 1]);
     await p.runtime.close();
   });
 });
