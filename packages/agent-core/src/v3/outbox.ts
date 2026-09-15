@@ -5,11 +5,13 @@
  * it has been posted in this runtime's life. A message is prepared when
  * it needs a package and submitted once one is ready, one message after
  * another in message order. An attempt that may succeed later waits
- * before the next one: thirty seconds, doubling up to six hours, never
- * past the message's expiry, where the expired failure is recorded
- * instead. No message is posted more times than its budget, but one out
- * of posts is still worked on for what posts nothing: an acceptance the
- * wire gave that is not recorded yet, and the expired failure. A new
+ * before the next one: thirty seconds, doubling up to six hours. A wait
+ * for another post ends at the message's expiry at the latest, where the
+ * expired failure is recorded instead; a record that could not be
+ * written waits on past it. No message is posted more times than its
+ * budget, but one out of posts, or with nothing left to post, is still
+ * worked on for what posts nothing: an acceptance the wire gave that is
+ * not recorded yet, and the expired failure. A new
  * runtime counts from nothing again, which is safe because what a retry
  * posts is the same package. A pass asked for while one runs is run once
  * after it, however often it was asked for.
@@ -145,7 +147,7 @@ export class Outbox {
     let wake: number | null = null;
     for (const outbound of fold.outbound.outbounds.values()) {
       if (this.closed) break;
-      if (outbound.work.kind === "none") {
+      if (outbound.work.kind === "none" && !owesAcceptance(this.runtime, outbound.messageId)) {
         this.settle(outbound);
         continue;
       }
@@ -168,18 +170,19 @@ export class Outbox {
     return backoff.posts < this.policy.posts || this.postsNothing(outbound);
   }
 
-  /** Whether all a message has left is to record: an acceptance this runtime saw, or its expired failure. */
   private postsNothing(outbound: Outbound): boolean {
     return owesAcceptance(this.runtime, outbound.messageId) || (outbound.intent !== null && hasExpired(outbound.intent, this.now));
   }
 
-  /** When a message still owed work is to be tried again: the earlier of its wait and its expiry, the expiry only while it is ahead. */
+  /**
+   * A wait is never set later than an expiry still ahead, and one set
+   * past the expiry is for a record that could not be written, which must
+   * not be tried at once again; so a wait decides alone. Without one, the
+   * expiry wakes the pass even when it has come already, as it may have
+   * while the message was worked on.
+   */
   private wakeOf(outbound: Outbound): number | null {
-    const nextAt = this.backoffs.get(outbound.messageId)?.nextAt ?? null;
-    const expiresAt = expiryOf(outbound);
-    const ahead = expiresAt !== null && expiresAt > this.now() ? expiresAt : null;
-    if (nextAt === null || ahead === null) return nextAt ?? ahead;
-    return Math.min(nextAt, ahead);
+    return this.backoffs.get(outbound.messageId)?.nextAt ?? expiryOf(outbound);
   }
 
   private async step(outbound: Outbound): Promise<Step> {

@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { scanVault, type DidId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { EXPIRED, Outbox, send, type Content, type OutboxOptions, type Timers } from "../../src/v3/index.js";
+import { EXPIRED, Outbox, prepare, retireDid, send, type Content, type OutboxOptions, type Timers } from "../../src/v3/index.js";
 import { didcomm, directParty, posting, refuseSubmissions, type DirectParty } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
@@ -215,6 +215,70 @@ describe("the outbox", () => {
       await a.runtime.close();
       await b.runtime.close();
     }
+  });
+
+  it("an acceptance not recorded at first is recorded by the pass its wait wakes though its sender was retired since, leaving nothing to post", async () => {
+    const { a, b, sendTo } = await pair();
+    await sendTo(MESSAGE);
+    refuseSubmissions(a.runtime, 1);
+    let clock = START;
+    const wire = posting(accepted);
+    const timers = handTimers();
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock });
+    const [first] = await outbox.drain();
+    expect(first?.error).toBe("the disk is full for now");
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 30_000, cleared: false });
+    await retireDid(a.runtime, a.keys, DID, "no longer in use");
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)?.work.kind).toBe("none");
+
+    clock += 30_000;
+    timers.waits.at(-1)!.fire();
+    expect(await outbox.drain()).toEqual([]);
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    const outbound = fold.outbound.outbounds.get(MESSAGE)!;
+    expect(outbound).toMatchObject({ outcome: "submitted", submitted: true, failed: null });
+    expect(fold.held.has([...outbound.packages.values()][0]!.data.envelopeCid)).toBe(false);
+    expect(outbox.waiting()).toEqual([]);
+    expect(wire.posts).toHaveLength(1);
+    await outbox.close();
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("an expiry that comes while the message's own step is worked on runs the next pass at once, though the step left nothing to wait for", async () => {
+    const { a, b, sendTo } = await pair();
+    await sendTo(MESSAGE, { ...HELLO, expiresTime: START / 1000 + 45 });
+    let clock = START;
+    const prepared = await prepare(a.runtime, a.keys, MESSAGE, { didcomm, now: () => clock });
+    if (prepared.outcome !== "prepared") throw new Error(`not prepared: ${JSON.stringify(prepared)}`);
+    const { envelopeCid } = prepared.prepared.data;
+    const objects = a.runtime.vault.objects;
+    const read = objects.read.bind(objects);
+    let missing = 0;
+    vi.spyOn(objects, "read").mockImplementation(async (cid, maxBytes) => {
+      if (cid !== envelopeCid) return read(cid, maxBytes);
+      missing++;
+      clock = START + 50_000;
+      return null;
+    });
+    const wire = posting(accepted);
+    const timers = handTimers();
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, timers, now: () => clock });
+    const steps = await outbox.drain();
+    expect(steps.map((step) => [step.prepared, step.submitted?.outcome])).toEqual([[null, "none"]]);
+    expect(outbox.waiting()).toEqual([]);
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 0, cleared: false });
+
+    timers.waits.at(-1)!.fire();
+    expect(await outbox.drain()).toEqual([]);
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: "failed", failed: EXPIRED });
+    expect(fold.held.has(envelopeCid)).toBe(false);
+    expect(missing).toBe(1);
+    expect(wire.posts).toHaveLength(0);
+    await outbox.close();
+    await a.runtime.close();
+    await b.runtime.close();
   });
 
   it("a wait that comes while a later message is worked on runs the next pass at once", async () => {
