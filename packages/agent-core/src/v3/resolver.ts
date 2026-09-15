@@ -92,7 +92,7 @@ export interface ResolverOptions extends WebResolverOptions {
 }
 
 export const MAX_DOCUMENT_BYTES = 256 * 1024;
-const DEFAULT_TIMEOUT_MS = 10_000;
+export const DEFAULT_TIMEOUT_MS = 10_000;
 
 const DID_METHOD = /^did:([a-z0-9]+):/;
 const WEB_PREFIX = "did:web:";

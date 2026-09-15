@@ -1021,7 +1021,8 @@ irrespective of the recipient's allocation policy. Under the operation lock:
 1. look for the received local DID and canonical sender DID in the address
    histories of existing relationships under [section 6.6](#relationship-fold-and-address-index);
 2. if a `from_prior` is carried, use `iss` only as an additional lookup hint;
-   [section 6.4](#relationship-peertransitioned) must verify the proof before it authorizes any continuation;
+   its carrier commits only after the pre-receipt checks below, and only a
+   transition validated under [section 6.4](#relationship-peertransitioned) authorizes any continuation;
 3. for proof-free input, select the unique existing binding and, for a peer
    successor, the committed transition that pins that successor document;
 4. only for a previously unknown address pair with no carried proof, no known
@@ -1036,12 +1037,34 @@ irrespective of the recipient's allocation policy. Under the operation lock:
 
 The root addresses are canonical DIDs, not authentication keys. An unknown key
 under a recognized DID is [section 7.6](#contact-fold)'s diagnostic, never a new relationship.
-A new input with an unresolved carried proof may commit with a null binding;
-its eventual scope must come from the validated transition carrying that exact
-observation. Missing relationship evidence defers and conflicting matches
-suppress effects; neither permits a new birth-address fallback. A proof-free
-input lacking enough local history to choose its binding remains pending before
-durable receipt, without pickup ACK, under [relationships.md section 9.1](relationships.md#deferred-delivery)'s
+Under this lock and before committing a new carrier, the producer selects the
+unique relationship from the actual recipient and proof issuer, and checks
+the proof's signature, claims, authorized method, exact sender spelling and
+rooted predecessor membership required by section 6.4, using that
+relationship's exact retained predecessor snapshot and this delivery's
+authenticated successor resolution. A signature already verified during
+authentication against that same exact snapshot need not be verified again.
+These pre-receipt checks do not require the new carrier's `message.in`, its
+resolution event, a complete committed observation witness or a committed
+transition to exist yet. An `iss` pair with no unique relationship supplies no
+predecessor to check against; the carrier defers as for missing evidence, and
+its proof is not thereby invalid. A proof known invalid against the exact
+required predecessor evidence is terminal malformed crypto under
+[relationships.md section 9.2](relationships.md#hard-pre-vault-gate).
+
+These pre-receipt checks establish no scope and no address-index edge. After
+committing the carrier and its exact evidence references, validate the
+transition under section 6.4, including section 10.5's complete committed
+observation witness and group-consistency requirements, and commit/reuse it
+before scope, explicit ACK processing or effects; the carrier's scope comes
+from that validated transition. If that work is interrupted, recovery uses the
+committed carrier and its retained evidence.
+
+Missing relationship evidence defers and conflicting matches suppress effects;
+neither permits a new birth-address fallback. A carrier whose pre-receipt
+checks lack their evidence, and a proof-free input lacking enough local history
+to choose its binding, remain pending before durable receipt, without pickup
+ACK, under [relationships.md section 9.1](relationships.md#deferred-delivery)'s
 relationship-evidence retry rule.
 
 **Missing relationship evidence** means a binding, rooted transition prefix,
@@ -1056,9 +1079,12 @@ an existing binding/edge claim for the exact canonical `(local recipient DID,
 sender DID)` pair, or a committed authenticated `message.in` at that pair with
 a syntactically valid `fromPrior` whose `sub` equals its authenticated
 `presentedDid`, for which [section 6.4](#relationship-peertransitioned)'s valid `relationship.peerTransitioned`
-has not yet committed. A missing `iss`-pair binding, rooted prefix or historical snapshot
-all count, as does verification work left unfinished after receipt. A known
-invalid proof is conflicting membership instead. The carrier's unverified
+has not yet committed. A producer commits a carrier only after its pre-receipt
+checks, so such a `message.in` is left by transition validation or its commit
+unfinished after receipt, such as a crash before the transition commit, or is
+brought by import; a missing `iss`-pair binding, rooted prefix or historical
+snapshot for it all count. A known invalid proof in committed evidence is
+conflicting membership instead. The carrier's unverified
 claims supply no scope and create no address-index edge, but its exact pair
 MUST wait for verification
 before a later proof-free delivery can commit; omitting the proof is not a new
@@ -1223,6 +1249,12 @@ inbound message.
   authentication method verify `fromPrior`;
 - `peerResolutionEventId` names the successor's exact `peer.resolved`; and
 - `messageId` names the inbound observation group carrying the proof.
+
+[Section 6.1](#receipt-and-relationship-evidence)'s pre-receipt checks use the authenticated delivery and
+selected historical evidence without requiring its receipt to have committed.
+The requirements below establish a committed transition and its scope; they
+apply after durable receipt or during recovery/import and require the complete
+committed witness described here.
 
 Apply [section 10.5](#complete-observation-witnesses) to committed observations with that `messageId`. Each
 complete witness must match this event's `peerResolutionEventId`, `localKeyName`
@@ -1465,10 +1497,11 @@ claims under its lock; import preserves conflicts and suppresses new work.
 Scope for an incoming message is derived from its immutable binding reference
 and the exact root or successor document authorizing its peer key. A carried
 proof additionally needs the verified `relationship.peerTransitioned` for that
-observation; a proof-free successor uses its frozen `peerTransitionEventId`. Null binding on a
-proof carrier remains pending until its transition supplies the binding. No
+observation; a proof-free successor uses its frozen `peerTransitionEventId`. A
+committed proof carrier without its transition, null binding included, remains
+pending until that transition commits. No
 incomplete/conflicting proof or known address claim authorizes a new birth.
-[Section 6.1](#receipt-and-relationship-evidence) defines the pending claim from an unmatched committed carrier;
+[Section 6.1](#receipt-and-relationship-evidence) defines the pending claim from such a committed carrier;
 that claim defers new receipt without adding an unverified edge to this index.
 The same-DID unknown-key diagnostic follows [section 7.6](#contact-fold). Full per-observation
 and message ID-group scope validation belongs to [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity).
@@ -2584,11 +2617,11 @@ Requirements:
   `relationship.bound` selected under [sections 6.1](#receipt-and-relationship-evidence) and [6.6](#relationship-fold-and-address-index). Obtain its `eventId`
   from a previously completed commit, as for `peerResolutionEventId`; it cannot refer
   to another draft in the inbound batch. Every authenticated proof-free
-  observation has this reference, including a new birth receipt. Null is used
-  for anonymous input and a carried proof whose existing
-  relationship is still unresolved. The latter can obtain scope only through
-  that carrier's verified `relationship.peerTransitioned`, never a new birth
-  from its sender;
+  observation has this reference, including a new birth receipt, and so does a
+  carried proof, whose relationship its pre-receipt checks select. A producer
+  uses null only for anonymous input. A null-binding carrier brought by import
+  can obtain scope only through that carrier's verified
+  `relationship.peerTransitioned`, never a new birth from its sender;
 - `peerTransitionEventId` is REQUIRED and nullable. A proof-free peer successor
   references the already committed `relationship.peerTransitioned` that pins its
   canonical DID and successor document in the selected binding's `R`. A root sender or
@@ -2692,8 +2725,8 @@ Pre-receipt deferrals follow [relationships.md section 9.1](relationships.md#def
 and produce no `message.in` or pickup ACK. That definition and its linked
 [resolution-accounting rules](relationships.md#shared-accounting-and-lost-wait-state)
 govern wait/retry scheduling; [section 6.1](#receipt-and-relationship-evidence)
-governs missing relationship evidence and pending-pair claims. Carriers allowed
-to commit with a null binding still follow durable receipt before pickup ACK.
+governs missing relationship evidence and pending-pair claims. A carrier whose
+pre-receipt checks wait for missing relationship evidence is such a deferral.
 Safely classified terminal input, including sender-resolution exhaustion,
 MUST instead be pickup-ACKed without `message.in` under
 [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt).
@@ -3860,11 +3893,22 @@ There is no migration requirement from an earlier event vocabulary.
      validated DID equivalence and the same authorized method. A changed
      fragment, unrelated DID, invalid long form or newer document's key fails;
      retained bytes and CID stay unchanged.
-129. <a id="ve-129"></a> A committed unknown-iss carrier with sub equal to its authenticated sender
-     leaves its exact local/sender pair pending. Later proof-free input creates
+129. <a id="ve-129"></a> An unknown-iss carrier that is not committed waits before receipt with no
+     message.in or pickup ACK. A committed carrier with sub equal to its
+     authenticated sender and no committed transition, as a crash before the
+     transition commit or an import leaves, leaves its exact local/sender pair
+     pending. Later proof-free input creates
      no binding, message.in or pickup ACK before predecessor recovery and edge
      verification. Restart and body erasure retain the claim; unrelated local
      pairs remain eligible, and restored incompatible evidence conflicts.
+     After the sender has received valid confirmation, restore the receiver to
+     history that lacks the original relationship or its continuation, deliver
+     an older carrier that cannot yet be verified, then a valid proof-free
+     package from the confirmed successor: the uncommitted carrier contributes
+     no portable pending claim, ordinary pair lookup governs the later package
+     and may form a new birth when that exact pair has no retained claim, and
+     later incompatible relationship recovery conflicts without reassigning
+     committed receipts.
      Time spent awaiting relationship evidence does not consume a resolver
      budget or permit terminal ACK by timeout. While local wait state is
      retained, repeated delivery and reconnect do not resolve again. If that

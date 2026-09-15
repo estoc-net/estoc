@@ -7,7 +7,7 @@ import type { Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import { scanVault, type Did, type DidId, type MediationId, type VaultEvent } from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, type LinkOptions, type OpenedVault } from "../../src/v3/index.js";
+import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, type LinkOptions, type OpenedVault, type Timers } from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -180,6 +180,24 @@ export interface Post {
   url: string;
   body: string;
   init: RequestInit;
+}
+
+export type HandWait = { fire: () => void; ms: number; cleared: boolean };
+
+/** Timers the test fires by hand: every wait set, in order, and whether it was cleared. */
+export function handTimers(): Timers & { waits: HandWait[] } {
+  const waits: HandWait[] = [];
+  return {
+    waits,
+    set: (fire, ms) => {
+      const wait = { fire, ms, cleared: false };
+      waits.push(wait);
+      return wait;
+    },
+    clear: (handle) => {
+      (handle as HandWait).cleared = true;
+    },
+  };
 }
 
 /** A transport that records every request it is given, in order, and answers each with `answer`. */

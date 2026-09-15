@@ -15,14 +15,17 @@
  * the one exact envelope its submission will carry, the pair bound
  * first when it was born offline (`prepare`); that envelope posted where
  * the peer receives, directly or forwarded through its mediator, and
- * the acceptance recorded (`submit`); and every message still owed work
+ * the acceptance recorded (`submit`); every message still owed work
  * tried in turn, waiting between attempts that may succeed later
- * (`outbox`). The protocols themselves —
+ * (`outbox`); and every delivery that arrives put through the gate
+ * before the vault — the recipients it names, the key it opens with,
+ * the sender it proves resolved for it — terminal, held for what it
+ * waits on, or handed to the receipt (`receive`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
 
-export { AmbiguousTarget, EntityConflict, MediatorRefused, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
+export { AmbiguousTarget, EntityConflict, MediatorRefused, ReceiverClosed, ReceiverInUse, UnauthorizedKey, UnknownEntity, Unregistered, Unusable, UnverifiedReply, WrongAccount, WrongMediator } from "./errors.js";
 export {
   createVault,
   inspectRuntime,
@@ -57,7 +60,7 @@ export {
   type TraceStream,
 } from "./trace.js";
 export { MediatorLink, bounded, ritual, sealData, sealerOf, senderOf, type LinkOptions, type Opened, type Sealed } from "./link.js";
-export { Pickup, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
+export { Pickup, type Delivered, type Drained, type Fate, type Handle, type PickupOptions } from "./pickup.js";
 export { decide, serially, type Decided } from "./procedure.js";
 export { canonicalDid, sameDid } from "./same-did.js";
 export { createMediation, establish, mediationOf, reconcile, reconcileNow, registered, selectMediation, type EstablishStep, type Established, type Reconciled } from "./mediation.js";
@@ -94,3 +97,20 @@ export { selectTarget, send, type Content, type Selection, type SendOptions, typ
 export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
 export { MAX_ENVELOPE_BYTES, SUBMIT_TIMEOUT_MS, submit, type SubmitOptions, type Submitted } from "./submit.js";
 export { Outbox, RETRY_POLICY, type Backoff, type OutboxOptions, type RetryPolicy, type Step, type Timers } from "./outbox.js";
+export { RESOLUTION_POLICY, ResolutionSequence, type ResolutionPolicy, type Retention } from "./receive/accounting.js";
+export { classifyRecipients, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
+export {
+  ENDED_KEPT,
+  MAX_HELD_BYTES,
+  Receiver,
+  deliveryKey,
+  type Authenticated,
+  type Delivery,
+  type Receipt,
+  type ReceiptOutcome,
+  type Received,
+  type ReceiverOptions,
+  type Source,
+  type WaitKind,
+  type Waiting,
+} from "./receive/receiver.js";
