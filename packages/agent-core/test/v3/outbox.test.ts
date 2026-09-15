@@ -149,6 +149,42 @@ describe("the outbox", () => {
     await b.runtime.close();
   });
 
+  it("a message out of posts is still failed at its expiry: the pass woken there records the failure without a post, and a clock set back after it posts nothing", async () => {
+    const { a, b, sendTo } = await pair();
+    await sendTo(MESSAGE, { ...HELLO, expiresTime: START / 1000 + 45 });
+    let clock = START;
+    const wire = posting(later);
+    const timers = handTimers();
+    const options: OutboxOptions = { didcomm, fetch: wire.fetch, timers, now: () => clock, retry: { posts: 1 } };
+    const outbox = new Outbox(a.runtime, a.keys, options);
+    await outbox.drain();
+    expect(outbox.waiting()).toEqual([{ messageId: MESSAGE, posts: 1, failures: 1, nextAt: null, reason: "the endpoint answered 503" }]);
+    expect(timers.waits.at(-1)).toMatchObject({ ms: 45_000, cleared: false });
+    clock = START + 44_999;
+    expect(await outbox.drain()).toEqual([]);
+    const wait = timers.waits.at(-1)!;
+    expect(wait).toMatchObject({ ms: 1, cleared: false });
+    clock = START + 45_000;
+    wait.fire();
+    await outbox.drain();
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    const outbound = fold.outbound.outbounds.get(MESSAGE)!;
+    expect(outbound).toMatchObject({ outcome: "failed", failed: EXPIRED });
+    expect(fold.held.has([...outbound.packages.values()][0]!.data.envelopeCid)).toBe(false);
+    expect(outbox.waiting()).toEqual([]);
+    expect(timers.waits.at(-1)).toBe(wait);
+    expect(wire.posts).toHaveLength(1);
+
+    clock = START;
+    const next = new Outbox(a.runtime, a.keys, { ...options, timers: handTimers() });
+    expect(await next.drain()).toEqual([]);
+    expect(wire.posts).toHaveLength(1);
+    await outbox.close();
+    await next.close();
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
   it("passes asked for while one runs are run once, after it", async () => {
     const { a, b, sendTo } = await pair();
     await sendTo(MESSAGE);

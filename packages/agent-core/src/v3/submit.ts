@@ -18,7 +18,6 @@
 
 import { DamagedObject, ObjectTooLarge, parseStrict, type VaultRuntime } from "@estoc/event-store/v3";
 import {
-  VaultEventSet,
   readVaultEvent,
   scanVault,
   vaultDraft,
@@ -35,8 +34,9 @@ import {
   type VaultFold,
 } from "@estoc/vault/v3";
 
-import { ENCRYPTED_MIME, PLAIN_TYP, endpointOf, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { ENCRYPTED_MIME, PLAIN_TYP, endpointOf, packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
 import { FORWARD } from "../protocol/spec.js";
+import { recordAcceptance, recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { didcommDocumentOf } from "./evidence.js";
 import { bounded, sealData, type MediatorLink } from "./link.js";
@@ -113,6 +113,8 @@ async function submitInTurn(runtime: VaultRuntime, keys: Keys, messageId: Messag
     await note(trace, { stream: "diag", what: "delivery", data: { messageId, packageId: packageId ?? undefined, phase, reason } });
     return { outcome: "retry", messageId, packageId, reason };
   };
+  const owed = await recordOwedAcceptance(runtime, messageId);
+  if (owed !== null) return { outcome: "submitted", messageId, packageId: owed.data.packageId, submitted: owed };
   for (let choice = 1; ; choice++) {
     const fold = await scanVault(runtime.vault, keys);
     const open = openPackages(fold, messageId);
@@ -133,9 +135,12 @@ async function submitInTurn(runtime: VaultRuntime, keys: Keys, messageId: Messag
     options.beforePost?.();
     const answer = await post(options.fetch, carried, deadline);
     if ("status" in answer && answer.status >= 200 && answer.status < 300) {
-      const submitted = await recordSubmission(runtime, messageId, packageId);
-      await noteAttempt(trace, messageId, packageId, carried, answer);
-      return { outcome: "submitted", messageId, packageId, submitted };
+      try {
+        const submitted = await recordAcceptance(runtime, messageId, packageId);
+        return { outcome: "submitted", messageId, packageId, submitted };
+      } finally {
+        await noteAttempt(trace, messageId, packageId, carried, answer);
+      }
     }
     await noteAttempt(trace, messageId, packageId, carried, answer);
     return retry(packageId, "post", "status" in answer ? `the endpoint answered ${answer.status}` : answer.error);
@@ -274,7 +279,7 @@ async function carry(fold: VaultFold, { pkg, envelope, hop }: Chosen, options: S
   } as unknown as IMessage;
   const resolver = { resolve: async (did: string) => (did === routingDid ? document : null) };
   try {
-    const [packed] = await bounded(deadline, () => new options.didcomm.Message(message).pack_encrypted(routingDid, null, null, resolver, secretsResolverFor([]), { forward: false }));
+    const [packed] = await bounded(deadline, () => packEncrypted(options.didcomm, message, routingDid, null, null, resolver, secretsResolverFor([]), { forward: false }));
     return { endpoint, body: packed, forward: { packed, message } };
   } catch (err) {
     if (deadline.aborted) return { reason: `the forward to ${routingDid} was not sealed in time` };
@@ -292,17 +297,6 @@ async function post(fetch: typeof globalThis.fetch, { endpoint, body }: Carried,
   } catch (err) {
     return { error: messageOf(err), ms: Date.now() - started };
   }
-}
-
-/** `delivery.submitted` for the package, under the lock; one already recording it is returned instead of being repeated. */
-async function recordSubmission(runtime: VaultRuntime, messageId: MessageId, packageId: PackageId): Promise<VaultEvent<"delivery.submitted">> {
-  return runtime.locked(async (held) => {
-    const set = await VaultEventSet.from(held.events.scan());
-    const recorded = set.of("delivery.submitted").find((event) => event.data.messageId === messageId && event.data.packageId === packageId);
-    if (recorded !== undefined) return recorded;
-    const [event] = (await held.commit([], [vaultDraft("delivery.submitted", { messageId, packageId })])).map(readVaultEvent);
-    return event as VaultEvent<"delivery.submitted">;
-  });
 }
 
 /** The post as the trace keeps it: the frame out, the forward sealed inside it when there was one, and the answer or the failure hung on the frame. */

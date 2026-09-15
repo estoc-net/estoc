@@ -21,7 +21,7 @@ import { reach, reachable, type Cid, type EventStore } from "@estoc/event-store"
 import { drafts, notePeerResolved, record, recordMessage, sameChannel, type ChannelKey, type Contact, type Message, type MyKey, type VaultEvent, type VaultFold } from "@estoc/vault";
 import { v7 as uuidv7 } from "uuid";
 
-import { ENCRYPTED_MIME, endpointOf, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "./protocol/didcomm.js";
+import { ENCRYPTED_MIME, endpointOf, packFromPrior, plainMessage, secretsResolverFor, serviceUris, type DidcommApi, type IMessage } from "./protocol/didcomm.js";
 import { FORWARD } from "./protocol/spec.js";
 import { outboundPair, resolvedOf } from "./channel.js";
 import type { SendOptions } from "./handler.js";
@@ -380,7 +380,9 @@ export class Outbound {
       this.log(`${nameOf(contact)} knows us by a DID this seed does not hold; sending without from_prior`);
       return null;
     }
-    const [jwt] = await new this.didcomm.FromPrior({ iss: prior, sub: from.identity.did, iat: Math.floor(this.clock().getTime() / 1000) }).pack(
+    const [jwt] = await packFromPrior(
+      this.didcomm,
+      { iss: prior, sub: from.identity.did, iat: Math.floor(this.clock().getTime() / 1000) },
       `${prior}#key-1`,
       this.resolver,
       secretsResolverFor(held.secrets)

@@ -2,17 +2,35 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { openNodeSqlite } from "@estoc/event-store/node";
-import { canonicalize, parseStrict, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
+import { canonicalize, parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
 import { scanVault, vaultDraft, type Did, type DidId, type Keys, type MediationId, type MessageId } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
 import { ENCRYPTED_MIME, secretsResolverFor, type IMessage } from "../../src/protocol/didcomm.js";
 import { RECIPIENT_QUERY } from "../../src/protocol/mediation.js";
 import { FORWARD } from "../../src/protocol/spec.js";
-import { AgentTrace, EXPIRED, Keyring, createDid, ensureRoute, establish, openVault, pinnedResolver, prepare, reconcile, send, submit, type Content, type Prepared, type SubmitOptions } from "../../src/v3/index.js";
+import {
+  AgentTrace,
+  EXPIRED,
+  Keyring,
+  MediatorLink,
+  Outbox,
+  createDid,
+  ensureRoute,
+  establish,
+  openVault,
+  pinnedResolver,
+  prepare,
+  reconcile,
+  send,
+  submit,
+  type Content,
+  type Prepared,
+  type SubmitOptions,
+} from "../../src/v3/index.js";
 import { didcomm, directParty, newMediator, party, posting, type Party } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
@@ -55,6 +73,36 @@ async function mediatedParty(mediator: Awaited<ReturnType<typeof newMediator>>, 
   return { ...p, did: minted.did, longFormDid: minted.longFormDid };
 }
 
+/** The next `times` commits of `delivery.submitted` refused, as a disk full for now refuses them; every other commit goes through. */
+function refuseSubmissions(runtime: VaultRuntime, times: number): void {
+  const locked = runtime.locked.bind(runtime);
+  let left = times;
+  const refusing = (held: Held): Held =>
+    new Proxy(held, {
+      get(target, key) {
+        if (key === "commit") {
+          return async (...args: Parameters<Held["commit"]>) => {
+            if (left > 0 && args[1].some((draft) => draft.type === "delivery.submitted")) {
+              left--;
+              throw new Error("the disk is full for now");
+            }
+            return target.commit(...args);
+          };
+        }
+        const value = Reflect.get(target, key, target) as unknown;
+        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+  vi.spyOn(runtime, "locked").mockImplementation(((work: (held: Held) => Promise<unknown>) => locked((held) => work(refusing(held)))) as VaultRuntime["locked"]);
+}
+
+/** A trace like `trace`, but for the `diag.reconcile` entries, which `append` writes instead. */
+function divertingReconcile(trace: AgentTrace, append: AgentTrace["append"]): AgentTrace {
+  const diverted = Object.create(trace) as AgentTrace;
+  (diverted as { append: AgentTrace["append"] }).append = (stream, what, data) => (stream === "diag" && what === "reconcile" ? append(stream, what, data) : trace.append(stream, what, data));
+  return diverted;
+}
+
 describe("submit to a direct endpoint", () => {
   const fetch = globalThis.fetch;
   beforeEach(() => {
@@ -87,6 +135,7 @@ describe("submit to a direct endpoint", () => {
     expect(entries.map((entry) => entry.type)).toEqual(["wire.out", "wire.in"]);
     expect(entries[0]!.data).toMatchObject({ via: "http", endpoint: BOB_ENDPOINT, messageId: MESSAGE, packageId: prepared.packageId });
     expect(entries[1]!.data).toMatchObject({ parent: entries[0]!.seq, status: 202 });
+    expect(await trace.traceOf(MESSAGE)).toEqual(entries);
 
     expect(await submit(a.runtime, a.keys, MESSAGE, { didcomm, fetch: wire.fetch })).toEqual({ outcome: "none", messageId: MESSAGE, because: "submitted" });
     expect(await prepare(a.runtime, a.keys, MESSAGE, { didcomm })).toMatchObject({ outcome: "none", because: "submitted" });
@@ -120,7 +169,9 @@ describe("submit to a direct endpoint", () => {
     expect(wire.posts.map((post) => post.body)).toEqual([envelope, envelope, envelope, envelope]);
     const diagnostics = await trace.read({ type: "diag.delivery" });
     expect(diagnostics.map((entry) => [entry.data["messageId"], entry.data["packageId"], entry.data["phase"], entry.data["reason"]])).toEqual(reasons.map((reason) => [MESSAGE, prepared.packageId, "post", reason]));
-    expect((await trace.read({ stream: "wire" })).map((entry) => entry.type)).toEqual(["wire.out", "wire.error", "wire.out", "wire.in", "wire.out", "wire.in", "wire.out", "wire.in"]);
+    const attempts = ["wire.out", "wire.error", "wire.out", "wire.in", "wire.out", "wire.in", "wire.out", "wire.in"];
+    expect((await trace.read({ stream: "wire" })).map((entry) => entry.type)).toEqual(attempts);
+    expect((await trace.traceOf(MESSAGE)).map((entry) => entry.type)).toEqual(attempts);
     await a.runtime.close();
     await b.runtime.close();
   });
@@ -144,6 +195,32 @@ describe("submit to a direct endpoint", () => {
     const fold = await scanVault(a.runtime.vault, a.keys);
     expect([MESSAGE, SECOND].map((messageId) => fold.outbound.outbounds.get(messageId)?.outcome)).toEqual(["failed", "submitted"]);
     expect(fold.set.of("delivery.failed").map((event) => event.data.messageId)).toEqual([MESSAGE]);
+    expect(wire.posts).toHaveLength(1);
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("an acceptance whose record could not be committed is recorded before anything else is done with the message: nothing is posted again, and no expired failure takes its place", async () => {
+    const a = await directParty(1, ALICE_ENDPOINT, DID);
+    const b = await directParty(101, BOB_ENDPOINT, DID);
+    const prepared = await queued(a, b.longFormDid, MESSAGE, { ...HELLO, expiresTime: 2_000 }, () => 1_000 * 1000);
+    const wire = posting(accepted);
+    const trace = await AgentTrace.open(a.runtime.local);
+    const late = () => 2_000 * 1000;
+    refuseSubmissions(a.runtime, 2);
+    await expect(submit(a.runtime, a.keys, MESSAGE, { didcomm, fetch: wire.fetch, trace, now: () => 1_500 * 1000 })).rejects.toThrow("the disk is full for now");
+    expect((await trace.read({ stream: "wire" })).map((entry) => [entry.type, entry.data["status"]])).toEqual([
+      ["wire.out", undefined],
+      ["wire.in", 202],
+    ]);
+    await expect(prepare(a.runtime, a.keys, MESSAGE, { didcomm, now: late })).rejects.toThrow("the disk is full for now");
+    const refused = await scanVault(a.runtime.vault, a.keys);
+    expect([refused.set.of("delivery.submitted"), refused.set.of("delivery.failed")]).toEqual([[], []]);
+
+    const recorded = await submit(a.runtime, a.keys, MESSAGE, { didcomm, fetch: wire.fetch, now: late });
+    expect(recorded).toMatchObject({ outcome: "submitted", packageId: prepared.packageId, submitted: { data: { messageId: MESSAGE, packageId: prepared.packageId } } });
+    expect((await scanVault(a.runtime.vault, a.keys)).outbound.outbounds.get(MESSAGE)).toMatchObject({ outcome: "submitted", failed: null });
+    expect(await submit(a.runtime, a.keys, MESSAGE, { didcomm, fetch: wire.fetch, now: late })).toMatchObject({ outcome: "none", because: "submitted" });
     expect(wire.posts).toHaveLength(1);
     await a.runtime.close();
     await b.runtime.close();
@@ -229,6 +306,30 @@ describe("submit from a mediated address", () => {
     await b.runtime.close();
   });
 
+  it("the diagnostic of the reconciliation is observation only: one that never lands, or fails, still lets a sender the mediator holds post", async () => {
+    const mediator = await newMediator();
+    const a = await mediatedParty(mediator, 1);
+    const b = await directParty(101, BOB_ENDPOINT, DID);
+    await queued(a, b.longFormDid, MESSAGE);
+    const wire = posting(accepted);
+    const stalled = new MediatorLink({ ...a.linkOptions, trace: divertingReconcile(a.trace, () => new Promise(() => undefined)), timeoutMs: 300 });
+    const outbox = new Outbox(a.runtime, a.keys, { didcomm, fetch: wire.fetch, links: () => stalled, timers: { set: () => null, clear: () => undefined } });
+    const started = Date.now();
+    expect((await outbox.drain()).map((step) => step.submitted?.outcome)).toEqual(["submitted"]);
+    await outbox.close();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(a.log).toContain("trace not written: the deadline passed while noting");
+
+    await queued(a, b.longFormDid, SECOND);
+    const failing = new MediatorLink({ ...a.linkOptions, trace: divertingReconcile(a.trace, () => Promise.reject(new Error("the trace is full"))) });
+    expect((await submit(a.runtime, a.keys, SECOND, { didcomm, fetch: wire.fetch, links: () => failing })).outcome).toBe("submitted");
+    expect(a.log).toContain("trace not written: the trace is full");
+    expect(mediator.recipients.get(a.did)).toBe(a.created.data.me.did);
+    expect(wire.posts).toHaveLength(2);
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
   it("the fold is read again right before the post: a package retired while the mediator was asked is not posted", async () => {
     const mediator = await newMediator();
     const a = await mediatedParty(mediator, 1);
@@ -262,11 +363,25 @@ describe("submit to a peer behind a mediator", () => {
       return undefined;
     };
     const trace = await AgentTrace.open(a.runtime.local);
-    const options: SubmitOptions = { didcomm, fetch: mediator.fetch, trace };
+    const native = { made: 0, freed: 0 };
+    const Counted = new Proxy(didcomm.Message, {
+      construct(target, args: [IMessage]) {
+        const message = new target(...args);
+        native.made++;
+        const free = message.free.bind(message);
+        message.free = () => {
+          native.freed++;
+          free();
+        };
+        return message;
+      },
+    });
+    const options: SubmitOptions = { didcomm: { ...didcomm, Message: Counted }, fetch: mediator.fetch, trace };
 
     expect(await submit(a.runtime, a.keys, MESSAGE, options)).toMatchObject({ outcome: "retry", packageId: prepared.packageId, reason: expect.stringContaining("unknown recipient") });
     await reconcile(b.link, b.runtime, b.keys, b.mediationId);
     expect(await submit(a.runtime, a.keys, MESSAGE, options)).toMatchObject({ outcome: "submitted", packageId: prepared.packageId });
+    expect(native).toEqual({ made: 2, freed: 2 });
 
     expect(forwards).toHaveLength(2);
     for (const { msg, from } of forwards) {

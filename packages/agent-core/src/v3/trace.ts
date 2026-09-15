@@ -155,18 +155,19 @@ export class AgentTrace {
 
   /**
    * Everything observed about one message, across every stream: the
-   * envelopes that name `messageId`, everything they happened inside
-   * (`parent`, up to the outermost frame), and what happened inside
-   * those — the frame's bytes, the answer to it, the mediator's ritual
-   * on it — but not the other envelopes that shared the frame: a
-   * delivery that carried two messages is two onions, each its own.
-   * The whole onion in the order written; empty when nothing was kept.
+   * envelopes and the requests that name `messageId`, everything they
+   * happened inside (`parent`, up to the outermost frame), and what
+   * happened inside those — the frame's bytes, the answer to it, the
+   * mediator's ritual on it — but not the other envelopes that shared
+   * the frame: a delivery that carried two messages is two onions, each
+   * its own. The whole onion in the order written; empty when nothing
+   * was kept.
    */
   async traceOf(messageId: string): Promise<TraceEntry[]> {
     const all = await this.read();
     const bySeq = new Map(all.map((entry) => [entry.seq, entry]));
     const found = new Map<number, TraceEntry>();
-    const ends = all.filter((entry) => streamOf(entry.type) === "envelope" && entry.data["messageId"] === messageId);
+    const ends = all.filter((entry) => (streamOf(entry.type) === "envelope" || streamOf(entry.type) === "wire") && entry.data["messageId"] === messageId);
     if (ends.length === 0) return [];
     for (const end of ends) found.set(end.seq, end);
     // outward: the chain of parents
@@ -214,7 +215,6 @@ export async function note(trace: AgentTrace | null, { stream, what, data }: Not
   return bounded(AbortSignal.timeout(NOTE_WAIT_MS), () => trace.append(stream, what, data)).catch(() => undefined);
 }
 
-/** Write each entry in turn, as `note` does. */
 export async function noteAll(trace: AgentTrace | null, notes: readonly Note[]): Promise<void> {
   for (const entry of notes) await note(trace, entry);
 }

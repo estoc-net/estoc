@@ -51,7 +51,8 @@ import {
   type VaultFold,
 } from "@estoc/vault/v3";
 
-import { secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { packEncrypted, secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/didcomm.js";
+import { recordOwedAcceptance } from "./acceptance.js";
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, didcommDocumentOf, pinnedResolver, readResolution } from "./evidence.js";
 import { secretsOf } from "./keyring.js";
@@ -109,8 +110,9 @@ export function outboundWorkKey(messageId: MessageId): string {
  * the pair was born offline, the binding that pins the peer's document.
  * A first package to a peer that is not a numalgo-4 DID resolves the
  * peer afresh first; that no answer came leaves the message queued,
- * an answer that closes the attempt fails it for good. One message is
- * prepared by one caller at a time.
+ * an answer that closes the attempt fails it for good. An acceptance
+ * this runtime saw for the message and has not recorded is recorded
+ * first. One message is prepared by one caller at a time.
  */
 export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   return serially(runtime, outboundWorkKey(messageId), () => prepareSerially(runtime, keys, messageId, options));
@@ -137,6 +139,7 @@ type Settled = { result: Prepared | null; notes: Note[] };
 async function prepareSerially(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
   const now = options.now ?? Date.now;
   const trace = options.trace ?? null;
+  await recordOwedAcceptance(runtime, messageId);
   for (let asking = 1; ; asking++) {
     const fold = await scanVault(runtime.vault, keys);
     const open = openWork(fold, messageId);
@@ -236,7 +239,6 @@ function openWork(fold: VaultFold, messageId: MessageId): Open | { because: stri
   return { outbound, intent: outbound.intent as MessageOut };
 }
 
-/** Has the intent's expiry passed by `now`? Equality counts as passed. */
 export function hasExpired(intent: MessageOut, now: () => number): boolean {
   return intent.expiresTime !== null && now() >= intent.expiresTime * 1000;
 }
@@ -428,6 +430,6 @@ async function pack(fold: VaultFold, selected: Selected, plaintext: JsonObject, 
   const recipientKid = selected.to + splitDidUrl(selected.methodId)[1];
   const secrets = secretsOf(selected.senderKeys, [entity.created.longFormDid, entity.created.did], entity.methodIds);
   const resolver = pinnedResolver(fold, { current: [selected.pinned] });
-  const [packed] = await new didcomm.Message(plaintext as unknown as IMessage).pack_encrypted(recipientKid, senderKid, null, resolver, secretsResolverFor(secrets), { forward: false });
+  const [packed] = await packEncrypted(didcomm, plaintext as unknown as IMessage, recipientKid, senderKid, null, resolver, secretsResolverFor(secrets), { forward: false });
   return packed;
 }

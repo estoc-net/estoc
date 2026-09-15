@@ -336,7 +336,7 @@ describe("v2 link: the line to the mediator", () => {
     const stubbed = await party(mediator, 13, {
       didcomm: {
         ...didcomm,
-        Message: { unpack: async () => [{ as_value: () => crafted }, metadata] } as unknown as typeof Message,
+        Message: { unpack: async () => [{ as_value: () => crafted, free: () => undefined }, metadata] } as unknown as typeof Message,
       },
       secrets: () => alice.ring.secrets(),
     });
@@ -349,7 +349,7 @@ describe("v2 link: the line to the mediator", () => {
     const nobody = await party(mediator, 15, {
       didcomm: {
         ...didcomm,
-        Message: { unpack: async () => [{ as_value: () => crafted }, metadata] } as unknown as typeof Message,
+        Message: { unpack: async () => [{ as_value: () => crafted, free: () => undefined }, metadata] } as unknown as typeof Message,
       },
     });
     expect((await nobody.link.unpack(JSON.stringify({ protected: "e30", recipients: [], ciphertext: "x" }))).recipient).toBeNull();
