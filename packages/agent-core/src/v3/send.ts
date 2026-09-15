@@ -68,11 +68,12 @@ export type Sender = { didId: DidId; fresh?: undefined } | { fresh: RouteId; did
 /**
  * Whom to send to: a contact, in the one relationship it may be
  * written in — the preferred one when a preference names it — or,
- * only when none is, a new pair with the one peer DID added to it,
- * born at `sender`; or an exact peer spelling from a sender, in the
- * relationship whose histories hold that pair or a new one born at
- * it, assigned to `contactId` when named. A contact target is the
- * contact: the sender it carries is not part of what it names.
+ * only when the contact has no assigned relationship, a new pair with
+ * the one peer DID added to it, born at `sender`; or an exact peer
+ * spelling from a sender, in the relationship whose histories hold
+ * that pair or a new one born at it, assigned to `contactId` when
+ * named. A contact target is the contact: the sender it carries is
+ * not part of what it names.
  */
 export type Target = { contactId: ContactId; peerDid?: undefined; sender?: Sender } | { peerDid: string; sender: Sender; contactId?: ContactId };
 
