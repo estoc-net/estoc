@@ -353,9 +353,11 @@ relationship.
    recoverable prerequisites defer.
 3. Under the [operation lock and pair-lookup rules](vault-events.md#receipt-and-relationship-evidence),
    select the unique binding and transition evidence or a genuinely new live
-   root pair. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
+   root pair, and apply that section's pre-receipt checks to every carried
+   proof. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
    superseded-sender and invitation/relationship-integrity checks. Required
-   pre-receipt evidence deferral follows [section 9.1](relationships.md#deferred-delivery),
+   pre-receipt evidence deferral, including a carrier whose pre-receipt checks
+   lack evidence, follows [section 9.1](relationships.md#deferred-delivery),
    with no `message.in` or pickup ACK. Known pending membership, missing
    relationship evidence and conflicting membership, as defined in
    [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence),
@@ -372,10 +374,12 @@ relationship.
    pickup ACK until recovery under [vault-sqlite.md section 12.1](vault-sqlite.md#restore).
 5. Only after durable receipt, ACK the mediator delivery. A crash before this
    point leaves it pending or causes idempotent redelivery.
-6. Validate every carried rotation against its exact retained predecessor and
-   carrier evidence; commit/reuse `relationship.peerTransitioned` before
-   scope/ACK/effects.
-   Missing evidence leaves that input deferred, without a new-birth fallback.
+6. Validate every carried transition against the carrier's committed evidence
+   and complete observation witness under
+   [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned),
+   then commit/reuse it before scope/ACK/effects. A committed carrier without
+   its transition, as a crash before this commit leaves, stays deferred without
+   a new-birth fallback and is validated again from its retained evidence.
 7. Derive per-observation scope and message ID-group consistency under section 9,
    then process explicit ACKs through section 8.3's exact outbound membership.
 8. Apply contact and early-privacy policy only to eligible application input
@@ -1367,16 +1371,24 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     when the incoming message is a pure ACK control observation. The enclosing
     receive operation holds the shared operation lock across lookup and these
     commits, excluding a competing outbound binding until it releases the lock.
-69. <a id="dd-69"></a> After an authenticated unknown-iss carrier commits, its exact local/sender
-    pair remains pending for later proof-free input until predecessor evidence
-    and the verified edge are available. No new birth or provisional scope
-    bypasses that deferral; unrelated local pairs are unaffected by the claim.
-    The waiting proof-free delivery gets no message.in or pickup ACK. Evidence
-    changes relevant to that pair trigger retry with a fresh bounded sender-
-    resolution sequence when needed. While local wait state is retained, mere
+69. <a id="dd-69"></a> An unknown-iss carrier waits before receipt, unopened when its DIDComm
+    implementation needs the predecessor document to open it, and gets no
+    message.in or pickup ACK; no new birth or provisional scope bypasses that
+    carrier's deferral, and unrelated local pairs are unaffected. A committed
+    carrier without its transition keeps its exact local/sender pair pending
+    for later proof-free input until the validated transition commits; that
+    waiting delivery also gets no message.in or pickup ACK. Evidence changes
+    relevant to the pair, or supplying the document an unopened carrier waits
+    for, trigger retry with a fresh bounded sender-resolution sequence when
+    needed. While local wait state is retained, mere
     redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Time in the evidence wait consumes neither
     resolver attempts nor its local retention stop. No local retention timeout
-    clears the pending claim.
+    clears the pending claim. After the sender has received valid confirmation
+    and the receiver is restored to history lacking the original relationship
+    or its continuation, an uncommitted carrier leaves no such claim: a later
+    valid proof-free package follows ordinary pair lookup and may form a new
+    birth, and later incompatible recovery conflicts without reassigning
+    committed receipts.
 
 ### Group waits and transition validity (DD-70–DD-71)
 

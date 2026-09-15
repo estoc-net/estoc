@@ -266,7 +266,7 @@ export class Receiver {
   }
 
   /**
-   * No delivery is handed to the receipt or found terminal after this.
+   * No delivery is handed to the receipt after this.
    * One not yet handed to the receipt — waiting its turn, or with its
    * vault read, resolution or opening still under way, however that then
    * ends — is refused with `ReceiverClosed` and stays wherever it came
