@@ -99,21 +99,18 @@ async function boundRouteOf(holder: DirectParty) {
   return (await foldOf(holder)).routes.dids.get(holder.didId)!.created!.boundRouteId;
 }
 
-/** Every event of the vault, in canonical order, for an import that leaves one out. */
 async function everyEvent(runtime: VaultRuntime): Promise<VaultEvent<VaultEventType>[]> {
   const events: VaultEvent<VaultEventType>[] = [];
   for await (const event of runtime.vault.events.scan()) events.push(event as VaultEvent<VaultEventType>);
   return events;
 }
 
-/** A relationship bound at `holder`'s `DID` with `resolution` as its root, as a receipt binds it. */
 async function bindTo(holder: DirectParty, resolution: Resolution): Promise<void> {
   const [peerPublicKey] = authorizedKeys(resolution, "keyAgreement").values();
   const root = await commitResolution(holder.runtime, { resolution, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
   await holder.runtime.vault.commit([], [vaultDraft("relationship.bound", { relationshipId: relationshipId(holder.did, resolution.did), localDidId: DID, peerResolutionEventId: root.eventId as EventReference<"peer.resolved"> })]);
 }
 
-/** Alice bound to Carol by a first message at `DID`, her end of that relationship then moved to `OTHER` by a committed transition. */
 async function rotatedLocally(alice: DirectParty, carol: DirectParty, receiver: Receiver) {
   expect((await receiver.receive({ packed: await sealed(await peerSealer(carol), alice.longFormDid), source: DIRECT })).outcome).toBe("received");
   const { minted: successor } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), OTHER);
@@ -503,7 +500,7 @@ describe("a pair something already claims", () => {
     await copy.runtime.close();
   });
 
-  it("a local transition in conflict claims the pair it would have added: a delivery to that successor address is terminal and nothing is born there", async () => {
+  it("competing local transitions claim the pair each would have added: a delivery to one of those successor addresses waits for them to be settled and nothing is born there", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
     const carol = await directParty(3, CAROL_ENDPOINT, DID);
     const receiver = await receiving(alice);
@@ -515,8 +512,9 @@ describe("a pair something already claims", () => {
     expect([transitions.get(edge.eventId)?.status, transitions.get(other!.eventId)?.status]).toEqual(["conflict", "conflict"]);
 
     expect(await receiver.receive({ packed: await sealed(await peerSealer(carol), successor.longFormDid), source: DIRECT })).toMatchObject({
-      outcome: "terminal",
-      reason: `the pair ${successor.did} / ${carol.did} is claimed by the transition ${edge.eventId}, which is in conflict`,
+      outcome: "deferred",
+      wait: "relationship",
+      reason: expect.stringContaining(`the pair ${successor.did} / ${carol.did} awaits the claim of ${R}, which does not hold the pair yet: `),
     });
     const fold = await foldOf(alice);
     expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
@@ -525,28 +523,106 @@ describe("a pair something already claims", () => {
     await carol.runtime.close();
   });
 
-  it("a delivery at a pair whose bindings do not stand waits for the resolutions they name, and is terminal once those resolutions show the bindings disagree", async () => {
+  it("an import that lost the first of two local transitions leaves the second one in conflict for want of it: the delivery at the address it adds waits, takes no pickup acknowledgement, and is received in the same relationship once the first is back", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const sealer = await peerSealer(carol);
+    const receiver = await receiving(alice);
+    const { successor, edge, R } = await rotatedLocally(alice, carol, receiver);
+    expect((await receiver.receive({ packed: await sealed(sealer, successor.longFormDid), source: DIRECT })).outcome).toBe("received");
+    const trigger = (await foldOf(alice)).set.of("message.in").at(-1)!;
+    const { minted: last } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), STRANGER);
+    const proof = await signFromPrior(alice.keys, { didId: OTHER, longFormDid: successor.longFormDid }, last.longFormDid, IAT + 1);
+    const [later] = await alice.runtime.vault.commit([], [vaultDraft("relationship.localTransitioned", { relationshipId: R, fromDidId: OTHER, toDidId: STRANGER, fromPrior: proof, triggerEventId: trigger.eventId as EventReference<"message.in"> })]);
+    expect((await foldOf(alice)).relationships.transitions.get(later!.eventId)?.status).toBe("applied");
+    receiver.close();
+
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest((await everyEvent(alice.runtime)).filter((event) => event.eventId !== edge.eventId));
+    expect((await foldOf(copy)).relationships.transitions.get(later!.eventId)?.status).toBe("conflict");
+    const acknowledged: string[] = [];
+    const copied = await receiving(copy, { acknowledge: async ({ deliveryId }) => void acknowledged.push(deliveryId) });
+    const delivery = pickup("d1");
+
+    expect(await copied.receive({ packed: await sealed(sealer, last.longFormDid), source: delivery })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: expect.stringContaining(`the pair ${last.did} / ${carol.did} awaits the claim of ${R}, which does not hold the pair yet: `),
+    });
+    expect([acknowledged, (await foldOf(copy)).set.of("relationship.bound")]).toEqual([[], [expect.anything()]]);
+
+    await copy.runtime.ingest([edge]);
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    const fold = await foldOf(copy);
+    expect(acknowledged).toEqual(["d1"]);
+    expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
+    expect(fold.relationships.claimants(last.did, carol.did)).toEqual([R]);
+    expect(fold.relationships.observations.get(fold.set.of("message.in").at(-1)!.eventId)).toEqual({ status: "scoped", relationshipId: R });
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
+
+  it("an import that lost only the root resolution keeps the pair a local transition names, though no history reaches it and nothing was ever received there: the delivery waits, and the resolution restored receives it in the same relationship", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const sealer = await peerSealer(carol);
+    const receiver = await receiving(alice);
+    const { successor, R } = await rotatedLocally(alice, carol, receiver);
+    receiver.close();
+
+    const events = await everyEvent(alice.runtime);
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => event.type !== "peer.resolved"));
+    const copied = await receiving(copy);
+
+    expect(await copied.receive({ packed: await sealed(sealer, successor.longFormDid), source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the pair ${successor.did} / ${carol.did} awaits the claim of ${R}, which does not hold the pair yet: 1 binding names a peer resolution that is not here`,
+    });
+    expect((await foldOf(copy)).set.of("relationship.bound")).toHaveLength(1);
+
+    await copy.runtime.ingest(events.filter((event) => event.type === "peer.resolved"));
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    const fold = await foldOf(copy);
+    expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
+    expect(fold.relationships.claimants(successor.did, carol.did)).toEqual([R]);
+    expect(fold.relationships.observations.get(fold.set.of("message.in").at(-1)!.eventId)).toEqual({ status: "scoped", relationshipId: R });
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
+
+  it("a delivery at a pair whose bindings do not stand waits for the resolutions they name, and those resolutions showing the bindings disagree make it terminal, an observation still waiting at the same pair notwithstanding", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
     const bob = await webIdentity(BOB);
-    await bindTo(alice, await webResolution(bob));
+    const sealer = await webSealer(bob);
+    const first = await receiving(alice, { fetch: bobHost(bob.document).fetch });
+    expect((await first.receive({ packed: await sealed(sealer, alice.longFormDid), source: DIRECT })).outcome).toBe("received");
+    first.close();
     await bindTo(alice, await webResolution(await webIdentity(BOB, 78)));
     const events = await everyEvent(alice.runtime);
     const copy = await freshVault(1, "copy");
     await copy.runtime.ingest(events.filter((event) => event.type !== "peer.resolved"));
     const receiver = await receiving(copy, { fetch: bobHost(bob.document).fetch });
-    const packed = await sealed(await webSealer(bob), alice.longFormDid);
+    const packed = await sealed(sealer, alice.longFormDid);
     const R = relationshipId(alice.did, BOB);
+    const [earlier] = (await foldOf(copy)).set.of("message.in");
 
     expect(await receiver.receive({ packed, source: DIRECT })).toMatchObject({
       outcome: "deferred",
       wait: "relationship",
-      reason: `the binding of ${R} awaits: 2 bindings name a peer resolution that is not here`,
+      reason: `the pair ${alice.did} / ${BOB} awaits the claim of ${R}, which does not hold the pair yet: 2 bindings name a peer resolution that is not here; the standing of ${earlier!.eventId} at the same pair, which awaits its resolution; arrived at a key not yet in the local history; awaits the root`,
     });
     expect((await receiver.receive({ packed, source: DIRECT })).outcome).toBe("deferred");
 
     await copy.runtime.ingest(events.filter((event) => event.type === "peer.resolved"));
-    expect(await receiver.evidenceChanged()).toMatchObject([{ outcome: "terminal", reason: `the binding of ${R} does not stand: bindings disagree on the root peer document` }]);
-    expect((await foldOf(copy)).set.of("message.in")).toEqual([]);
+    expect(await receiver.evidenceChanged()).toMatchObject([
+      { outcome: "terminal", reason: `the pair ${alice.did} / ${BOB} is claimed by the binding of ${R}, which does not stand: bindings disagree on the root peer document` },
+    ]);
+    const fold = await foldOf(copy);
+    expect([fold.set.of("message.in").length, fold.set.of("relationship.bound").length, fold.set.of("peer.resolved").length]).toEqual([1, 2, 2]);
     await alice.runtime.close();
     await copy.runtime.close();
   });

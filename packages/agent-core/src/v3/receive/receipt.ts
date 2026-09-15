@@ -212,31 +212,28 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
  * A proof-free delivery's place, by its address pair. The one
  * relationship holding the pair in its histories is the place. Two
  * holding it contradict each other, and neither may take it. Where none
- * does, the pair is new only when nothing retained claims it: a claim
- * whose evidence is not all here — a carrier, a transition not yet
- * applied, an observation at the pair that is not scoped — may still
- * be settled, and the delivery waits for that rather than being born
- * beside it; a transition in conflict there never will be, and a
- * binding of the pair that contradicts itself never stands. Only then
- * is the pair born with this delivery — unless the local address is
- * retired, which takes no new relationship.
+ * does, the pair is new only when nothing retained claims it. A claim
+ * whose evidence disagrees with itself, every event of it here, leaves
+ * the pair to no one: the delivery is terminal rather than born beside
+ * that claim. A claim evidence may yet settle — a carrier, a transition
+ * not applied, another relationship whose own evidence names both
+ * addresses, an observation at the pair that is not scoped — holds the
+ * delivery until it settles, since recovering what is missing decides
+ * where the delivery belongs. Only a pair nothing claims is born with
+ * this delivery, and only at a local address still taking relationships.
  */
 function placeProofFree(fold: VaultFold, recipient: Authenticated["recipient"], sender: AuthenticatedSender): Placement | ReceiptOutcome {
   const localDid = recipient.did;
   const peerDid = sender.resolution.did;
   const pair = `${localDid} / ${peerDid}`;
-  const waits = (reason: string): ReceiptOutcome => ({ outcome: "wait", reason, dependencies: [{ kind: "pair", localDid, peerDid }] });
-  const { claimants, contradicted, awaited, born } = pairEvidence(fold, localDid, peerDid);
+  const { claimants, contradicted, awaited } = pairEvidence(fold, localDid, peerDid);
   if (claimants.length > 1) return terminal(`the pair ${pair} is in the histories of ${claimants.join(", ")}`);
   if (claimants.length === 1) return inHistories(fold, fold.relationships.relationships.get(claimants[0] as RelationshipId) as Relationship, recipient.didId, peerDid, true);
 
   if (contradicted.length > 0) return terminal(`the pair ${pair} is claimed by ${contradicted.join("; ")}`);
-  if (awaited.length > 0) return waits(`the pair ${pair} awaits ${awaited.join("; ")}`);
+  if (awaited.length > 0) return { outcome: "wait", reason: `the pair ${pair} awaits ${awaited.join("; ")}`, dependencies: [{ kind: "pair", localDid, peerDid }] };
 
   if (localDid === peerDid) return terminal(`the sender ${peerDid} is the recipient`);
-  if (born !== null && born.bindingEventIds.length > 0) {
-    return born.deferred.length > 0 ? waits(`the binding of ${born.relationshipId} awaits: ${born.deferred.join("; ")}`) : terminal(`the binding of ${born.relationshipId} does not stand: ${born.faults.join("; ")}`);
-  }
   if (fold.routes.dids.get(recipient.didId)?.retired != null) return terminal(`${localDid} is retired and takes no new relationship`);
   return { relationshipId: relationshipIdOf(localDid, peerDid), bindingEventId: null, transitionEventId: null, superseded: false, root: true };
 }

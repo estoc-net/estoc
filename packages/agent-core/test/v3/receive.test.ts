@@ -86,7 +86,6 @@ function host(document: JsonObject): { fetch: typeof globalThis.fetch; calls: st
   return { fetch, calls, state };
 }
 
-/** What a receipt says of a delivery whose pair is not settled: it waits on the pair its local and sender addresses make. */
 const pendingPair = (localDid: Did): ReceiptOutcome => ({ outcome: "wait", reason: "the pair's membership is pending", dependencies: [{ kind: "pair", localDid, peerDid: BOB as Did }] });
 
 function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received" })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
