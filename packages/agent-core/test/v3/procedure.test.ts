@@ -1,8 +1,17 @@
+import v8 from "node:v8";
+import vm from "node:vm";
+
 import { describe, expect, it } from "vitest";
 
 import { serially } from "../../src/v3/index.js";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
+
+/** V8's collector, exposed here whether or not the process was started with the flag. */
+function collector(): () => void {
+  v8.setFlagsFromString("--expose-gc");
+  return vm.runInNewContext("gc") as () => void;
+}
 
 describe("serially", () => {
   it("runs the work of one key in the order it was asked, a rejection holding up nothing after it, and keys apart", async () => {
@@ -39,8 +48,7 @@ describe("serially", () => {
   });
 
   it("keeps a caller queued behind a tail that settled while it waited, and holds neither a key nor a result once every caller of that key has settled", async () => {
-    const gc = globalThis.gc as (() => void) | undefined;
-    expect(gc).toBeTypeOf("function");
+    const gc = collector();
     const owner = {};
     const remembered = async (n: number): Promise<WeakRef<object>> => new WeakRef(await serially(owner, `outbound ${n}`, async () => ({ n, payload: new Uint8Array(1 << 16) })));
     const results: WeakRef<object>[] = [];
@@ -62,7 +70,7 @@ describe("serially", () => {
     expect(order).toEqual([1, 2]);
     for (let round = 0; round < 5; round++) {
       await tick();
-      gc?.();
+      gc();
     }
     expect(results.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
   });
