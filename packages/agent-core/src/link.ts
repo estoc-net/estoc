@@ -19,7 +19,7 @@ import type { DIDDoc, Secret } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store";
 
 import type { PeerIdentity } from "./identity/peer.js";
-import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "./protocol/didcomm.js";
+import { ENCRYPTED_MIME, didOf, endpointOf, packEncrypted, plainMessage, secretsResolverFor, unpackMessage, type DidcommApi, type IMessage, type UnpackMetadata } from "./protocol/didcomm.js";
 import { envelopeHeader } from "./protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "./protocol/mediation.js";
 import { sealerOf, senderOf } from "./channel.js";
@@ -233,7 +233,7 @@ export class MediatorLink {
    */
   async seal(message: IMessage, to: string, from: string | null, documents?: ReadonlyMap<string, DIDDoc>): Promise<Sealed> {
     const resolver = documents === undefined ? this.resolver : { resolve: async (did: string): Promise<DIDDoc | null> => documents.get(did) ?? this.resolver.resolve(did) };
-    const [packed] = await new this.didcomm.Message(message).pack_encrypted(to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
+    const [packed] = await packEncrypted(this.didcomm, message, to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
     return { packed, seal: sealData(packed, message) };
   }
 
@@ -275,15 +275,14 @@ export class MediatorLink {
         return resolving;
       },
     };
-    let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
+    let value: IMessage;
+    let metadata: UnpackMetadata;
     try {
-      unpacked = await this.didcomm.Message.unpack(packed, resolver, secretsResolverFor(secrets), {});
+      [value, metadata] = await unpackMessage(this.didcomm, packed, resolver, secretsResolverFor(secrets), {});
     } catch (err) {
       void this.note("envelope", "envelope.error", { ...open, error: messageOf(err) });
       throw err;
     }
-    const [msg, metadata] = unpacked;
-    const value = msg.as_value();
     // the binding hands back null, not undefined, for a header that is not there
     const rotation = metadata.from_prior ?? null;
     open.type = value.type;

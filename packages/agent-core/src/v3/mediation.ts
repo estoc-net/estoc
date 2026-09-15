@@ -156,7 +156,7 @@ export async function reconcileNow(link: MediatorLink, fold: VaultFold, mediatio
     for (const did of removed) if (!done(did, "remove")) refused.push(did);
   }
   const reconciled: Reconciled = { mediationId, desired, held, added: added.filter((did) => !refused.includes(did)), removed: removed.filter((did) => !refused.includes(did)), refused };
-  await link.trace.append("diag", "reconcile", { ...reconciled });
+  await link.observe("diag", "reconcile", { ...reconciled });
   return reconciled;
 }
 

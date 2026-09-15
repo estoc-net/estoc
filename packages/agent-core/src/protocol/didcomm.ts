@@ -28,6 +28,44 @@ export type { DIDResolver, IMessage, SecretsResolver, UnpackMetadata };
 export const PLAIN_TYP = "application/didcomm-plain+json";
 export const ENCRYPTED_MIME = "application/didcomm-encrypted+json";
 
+/*
+ * The binding keeps every `Message` and `FromPrior` in WebAssembly memory
+ * that no garbage collection reclaims: each lives only as long as the one
+ * call made with it. It is freed only after that call settles, even when
+ * its caller has already stopped waiting at a deadline of its own, since
+ * the call may still be using it.
+ */
+
+/** `pack_encrypted` over a `Message` made for this pack alone. */
+export async function packEncrypted(didcomm: DidcommApi, message: IMessage, ...args: Parameters<MessageClass["pack_encrypted"]>): ReturnType<MessageClass["pack_encrypted"]> {
+  const native = new didcomm.Message(message);
+  try {
+    return await native.pack_encrypted(...args);
+  } finally {
+    native.free();
+  }
+}
+
+/** `Message.unpack`, the opened message read out as a plain value. */
+export async function unpackMessage(didcomm: DidcommApi, ...args: Parameters<DidcommApi["Message"]["unpack"]>): Promise<[IMessage, UnpackMetadata]> {
+  const [native, metadata] = await didcomm.Message.unpack(...args);
+  try {
+    return [native.as_value(), metadata];
+  } finally {
+    native.free();
+  }
+}
+
+/** `pack` over a `FromPrior` made for this signature alone. */
+export async function packFromPrior(didcomm: DidcommApi, value: ConstructorParameters<DidcommApi["FromPrior"]>[0], ...args: Parameters<FromPriorClass["pack"]>): ReturnType<FromPriorClass["pack"]> {
+  const native = new didcomm.FromPrior(value);
+  try {
+    return await native.pack(...args);
+  } finally {
+    native.free();
+  }
+}
+
 /** A SecretsResolver over a fixed set of secrets. */
 export function secretsResolverFor(secrets: Secret[]): SecretsResolver {
   const byId = new Map(secrets.map((secret) => [secret.id, secret]));

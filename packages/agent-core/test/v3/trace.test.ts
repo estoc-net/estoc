@@ -45,6 +45,20 @@ describe("the trace over the runtime's local state", () => {
     await runtime.close();
   });
 
+  it("a request that names the message starts its onion too: what hangs on it comes along, and a request for another message stays out", async () => {
+    const { runtime } = await freshVault();
+    const trace = new AgentTrace(runtime.local, { level: "verbose" });
+    const out = await trace.append("wire", "out", { via: "http", messageId: "M" });
+    const bytes = await trace.append("bytes", "out", { parent: out, body: "…" });
+    const answer = await trace.append("wire", "in", { via: "http", parent: out, status: 202 });
+    const other = await trace.append("wire", "out", { via: "http", messageId: "N" });
+    const refused = await trace.append("wire", "in", { via: "http", parent: other, status: 503 });
+    await trace.append("diag", "delivery", { messageId: "M", reason: "…" });
+    expect((await trace.traceOf("M")).map((entry) => entry.seq)).toEqual([out, bytes, answer]);
+    expect((await trace.traceOf("N")).map((entry) => entry.seq)).toEqual([other, refused]);
+    await runtime.close();
+  });
+
   it("prunes by the level's policy", async () => {
     const { runtime } = await freshVault();
     const trace = new AgentTrace(runtime.local, { policy: { keepMs: 60_000, capRows: 2, streams: new Set(["diag"]) } });

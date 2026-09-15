@@ -18,7 +18,7 @@
 import type { DIDDoc, Secret } from "@estoc/did-peer";
 import type { JsonObject } from "@estoc/event-store/v3";
 
-import { ENCRYPTED_MIME, didOf, endpointOf, plainMessage, secretsResolverFor, type DidcommApi, type IMessage, type UnpackMetadata } from "../protocol/didcomm.js";
+import { ENCRYPTED_MIME, didOf, endpointOf, packEncrypted, plainMessage, secretsResolverFor, unpackMessage, type DidcommApi, type IMessage, type UnpackMetadata } from "../protocol/didcomm.js";
 import { envelopeHeader } from "../protocol/envelope.js";
 import { LIVE_DELIVERY_CHANGE } from "../protocol/mediation.js";
 import { UnverifiedReply } from "./errors.js";
@@ -215,7 +215,7 @@ export class MediatorLink {
    */
   async seal(message: IMessage, to: string, from: string | null, documents?: ReadonlyMap<string, DIDDoc>): Promise<Sealed> {
     const resolver = documents === undefined ? this.resolver : { resolve: async (did: string): Promise<DIDDoc | null> => documents.get(did) ?? this.resolver.resolve(did) };
-    const [packed] = await new this.didcomm.Message(message).pack_encrypted(to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
+    const [packed] = await packEncrypted(this.didcomm, message, to, from, null, resolver, secretsResolverFor(this.secrets()), { forward: false });
     return { packed, seal: sealData(packed, message) };
   }
 
@@ -249,15 +249,14 @@ export class MediatorLink {
         return resolving;
       },
     };
-    let unpacked: Awaited<ReturnType<DidcommApi["Message"]["unpack"]>>;
+    let value: IMessage;
+    let metadata: UnpackMetadata;
     try {
-      unpacked = await this.didcomm.Message.unpack(packed, resolver, secretsResolverFor(secrets), {});
+      [value, metadata] = await unpackMessage(this.didcomm, packed, resolver, secretsResolverFor(secrets), {});
     } catch (err) {
       void this.note("envelope", "error", { ...open, error: messageOf(err) });
       throw err;
     }
-    const [msg, metadata] = unpacked;
-    const value = msg.as_value();
     // the binding hands back null, not undefined, for a header that is not there
     const rotation = metadata.from_prior ?? null;
     open.type = value.type;
@@ -464,6 +463,11 @@ export class MediatorLink {
   /** An opened ritual message from a mediator, in the clear on `mediation`. */
   noteRitual(opened: Opened): void {
     void this.note("mediation", "in", { parent: opened.seq, msg: ritual(opened.msg) });
+  }
+
+  /** One entry of what a caller did over the link, waited for no longer than a round trip may take: what it records stands whether or not the entry lands. */
+  observe(stream: TraceStream, what: string, data: TraceData): Promise<number | undefined> {
+    return this.noted(AbortSignal.timeout(this.timeoutMs), () => this.note(stream, what, data));
   }
 
   /** One entry of the trace. A trace that cannot be written is not a reason to stop sending: the failure is logged and the entry has no number. */

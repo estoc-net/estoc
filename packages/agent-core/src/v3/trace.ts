@@ -25,6 +25,8 @@
 
 import type { JsonObject, JsonValue, LocalState, TraceEntry, TracePolicy as PrunePolicy } from "@estoc/event-store/v3";
 
+import { bounded } from "./link.js";
+
 export const TRACE_STREAMS = ["envelope", "wire", "bytes", "mediation", "diag"] as const;
 export type TraceStream = (typeof TRACE_STREAMS)[number];
 
@@ -153,18 +155,19 @@ export class AgentTrace {
 
   /**
    * Everything observed about one message, across every stream: the
-   * envelopes that name `messageId`, everything they happened inside
-   * (`parent`, up to the outermost frame), and what happened inside
-   * those — the frame's bytes, the answer to it, the mediator's ritual
-   * on it — but not the other envelopes that shared the frame: a
-   * delivery that carried two messages is two onions, each its own.
-   * The whole onion in the order written; empty when nothing was kept.
+   * envelopes and the requests that name `messageId`, everything they
+   * happened inside (`parent`, up to the outermost frame), and what
+   * happened inside those — the frame's bytes, the answer to it, the
+   * mediator's ritual on it — but not the other envelopes that shared
+   * the frame: a delivery that carried two messages is two onions, each
+   * its own. The whole onion in the order written; empty when nothing
+   * was kept.
    */
   async traceOf(messageId: string): Promise<TraceEntry[]> {
     const all = await this.read();
     const bySeq = new Map(all.map((entry) => [entry.seq, entry]));
     const found = new Map<number, TraceEntry>();
-    const ends = all.filter((entry) => streamOf(entry.type) === "envelope" && entry.data["messageId"] === messageId);
+    const ends = all.filter((entry) => (streamOf(entry.type) === "envelope" || streamOf(entry.type) === "wire") && entry.data["messageId"] === messageId);
     if (ends.length === 0) return [];
     for (const end of ends) found.set(end.seq, end);
     // outward: the chain of parents
@@ -198,4 +201,20 @@ export class AgentTrace {
     const { keepMs, capRows } = this.policy;
     return this.local.trace.prune({ keepMs, capRows });
   }
+}
+
+/** How long an entry is waited for once what it records has happened; past it the work goes on without waiting, whether or not the entry lands. */
+const NOTE_WAIT_MS = 10_000;
+
+/** One trace entry owed by work the trace only observes. */
+export type Note = { stream: TraceStream; what: string; data: TraceData };
+
+/** Write one entry with a deadline and without a throw: what it observed already stands. Its sequence number, or `undefined` when nothing was written in time. */
+export async function note(trace: AgentTrace | null, { stream, what, data }: Note): Promise<number | undefined> {
+  if (trace === null) return undefined;
+  return bounded(AbortSignal.timeout(NOTE_WAIT_MS), () => trace.append(stream, what, data)).catch(() => undefined);
+}
+
+export async function noteAll(trace: AgentTrace | null, notes: readonly Note[]): Promise<void> {
+  for (const entry of notes) await note(trace, entry);
 }
