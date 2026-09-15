@@ -336,7 +336,7 @@ describe("the receiver's lifecycle", () => {
     await alice.runtime.close();
   });
 
-  it("after close nothing is opened or handed to the receipt, not even a delivery already waiting its turn: each is refused, a pickup handle refuses too, and what was held is let go", async () => {
+  it("after close nothing is handed to the receipt, not even a delivery already waiting its turn or with its resolution under way: each is refused, a pickup handle refuses too, and what was held is let go", async () => {
     const alice = await directParty(1, ALICE_ENDPOINT, DID);
     const bob = await webIdentity(BOB);
     let calls = 0;
@@ -360,6 +360,87 @@ describe("the receiver's lifecycle", () => {
     await expect(receiver.receive({ packed, source: DIRECT })).rejects.toThrow(ReceiverClosed);
     expect([seen, receiver.waiting(), calls]).toEqual([[], [], 2]);
     await alice.runtime.close();
+  });
+
+  it.each<[string, (signal: AbortSignal, closed: Promise<void>) => Promise<Response>]>([
+    [
+      "answers HTTP 503",
+      async (_signal, closed) => {
+        await closed;
+        return new Response("not now", { status: 503 });
+      },
+    ],
+    ["times out", (signal) => new Promise<Response>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)))],
+  ])("a sender's resolution that %s only after close ends nothing: the delivery stays queued, and the runtime's next receiver receives it", async (_, answer) => {
+    const { mediator, p, longFormDid, account } = await mediated();
+    const bob = await webIdentity(BOB);
+    let fetching!: () => void;
+    const fetched = new Promise<void>((resolve) => {
+      fetching = resolve;
+    });
+    let closing!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      closing = resolve;
+    });
+    const { receipt, seen } = recording();
+    const first = new Receiver(p.runtime, p.keys, p.ring, {
+      didcomm,
+      receipt,
+      timers: handTimers(),
+      timeoutMs: 50,
+      fetch: (_input, init) => {
+        fetching();
+        return answer(init!.signal!, closed);
+      },
+    });
+    mediator.queues.set(account, [{ id: "q1", packed: await sealed(await webSealer(bob), longFormDid) }]);
+
+    const draining = new Pickup(p.link, first.pickupHandle(p.mediationId)).drain();
+    await fetched;
+    first.close();
+    closing();
+    expect(await draining).toEqual({ acked: 0, ended: "left" });
+    expect([seen, mediator.queues.get(account)?.map((item) => item.id)]).toEqual([[], ["q1"]]);
+
+    const web = host(bob.document);
+    const next = new Receiver(p.runtime, p.keys, p.ring, { didcomm, receipt, fetch: web.fetch, timers: handTimers() });
+    expect(await new Pickup(p.link, next.pickupHandle(p.mediationId)).drain()).toEqual({ acked: 1, ended: "empty" });
+    expect([web.calls.length, seen.length, mediator.queues.get(account)]).toEqual([1, 1, []]);
+    next.close();
+    await p.runtime.close();
+  });
+
+  it("a delivery already handed to the receipt when the receiver closes ends as the receipt says: received through a pickup, it is acknowledged", async () => {
+    const { mediator, p, longFormDid, account } = await mediated();
+    const bob = await webIdentity(BOB);
+    const web = host(bob.document);
+    let handing!: () => void;
+    const handed = new Promise<void>((resolve) => {
+      handing = resolve;
+    });
+    let recording!: () => void;
+    const recorded = new Promise<void>((resolve) => {
+      recording = resolve;
+    });
+    const receiver = new Receiver(p.runtime, p.keys, p.ring, {
+      didcomm,
+      fetch: web.fetch,
+      timers: handTimers(),
+      receipt: async () => {
+        handing();
+        await recorded;
+        return { outcome: "received" };
+      },
+    });
+    mediator.queues.set(account, [{ id: "q1", packed: await sealed(await webSealer(bob), longFormDid) }]);
+
+    const draining = new Pickup(p.link, receiver.pickupHandle(p.mediationId)).drain();
+    await handed;
+    receiver.close();
+    recording();
+    expect(await draining).toEqual({ acked: 1, ended: "empty" });
+    expect(mediator.queues.get(account)).toEqual([]);
+    await p.runtime.close();
   });
 });
 

@@ -266,9 +266,13 @@ export class Receiver {
   }
 
   /**
-   * Nothing is opened or handed to the receipt after this, not even a
-   * delivery already waiting its turn: each is refused with
-   * `ReceiverClosed` and stays wherever it came from. Every timer is
+   * No delivery is handed to the receipt or found terminal after this.
+   * One not yet handed to the receipt — waiting its turn, or with its
+   * vault read, resolution or opening still under way, however that then
+   * ends — is refused with `ReceiverClosed` and stays wherever it came
+   * from; its sender's accounting went with this receiver and is not
+   * taken to be spent. One whose receipt was already called ends as the
+   * receipt says, since the receipt may have recorded it. Every timer is
    * cancelled and everything kept is let go; the runtime may then have
    * another receiver.
    */
@@ -317,7 +321,13 @@ export class Receiver {
       if (wait.kind === "relationship" || wait.kind === "history") wait.retry = true;
       return null;
     }
-    const received = await this.attempt(key, delivery);
+    let received: Received;
+    try {
+      received = await this.attempt(key, delivery);
+    } catch (err) {
+      if (err instanceof ReceiverClosed) return null;
+      throw err;
+    }
     if (received.outcome !== "deferred" && delivery.source.kind === "pickup" && this.options.acknowledge !== undefined) {
       try {
         await this.options.acknowledge(delivery.source);
@@ -335,14 +345,17 @@ export class Receiver {
     try {
       fold = await scanVault(this.runtime.vault, this.keys);
     } catch (err) {
+      this.refuseClosed();
       return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: `the vault is not read: ${messageOf(err)}` });
     }
+    this.refuseClosed();
     const header = envelopeHeader(delivery.packed);
     if (header.kind !== "authcrypt" && header.kind !== "anoncrypt") return this.finish(key, delivery, `not an envelope encrypted to its recipients (${header.kind})`);
     const recipients = classifyRecipients(fold, header.kids ?? []);
     if (recipients.verdict === "terminal") return this.finish(key, delivery, recipients.reason);
     if (recipients.verdict === "pending") return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: recipients.reason });
     await this.ring.reload(fold);
+    this.refuseClosed();
     const secrets: Secret[] = this.ring.secrets().filter((secret) => secret.id === recipients.kid);
     if (secrets.length === 0) return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: `no key in hand for ${recipients.kid}` });
 
@@ -359,13 +372,13 @@ export class Receiver {
 
     const asked: Asked = { sender: null, missing: [] };
     const sealing = sealingOf(delivery.packed);
-    this.refuseClosed();
     let plaintext: IMessage;
     let metadata: UnpackMetadata;
     try {
       [plaintext, metadata] = await unpackMessage(this.options.didcomm, delivery.packed, this.resolverFor(key, delivery.source, fold, recipients.did, sealing.skid, asked), secretsResolverFor(secrets), {});
     } catch (err) {
       await note(this.options.trace ?? null, { stream: "envelope", what: "error", data: { ...header, parent: delivery.parent, error: messageOf(err) } });
+      this.refuseClosed();
       return this.unopened(key, delivery, recipients.did, asked, err);
     }
     const resolution = asked.sender?.answer.outcome === "resolved" ? asked.sender.answer.resolution : null;
@@ -373,6 +386,7 @@ export class Receiver {
     this.sequences.delete(key);
     const rotation = metadata.from_prior ?? null;
     await note(this.options.trace ?? null, { stream: "envelope", what: "open", data: { ...header, parent: delivery.parent, type: plaintext.type, ...(rotation === null ? {} : { from_prior: { iss: rotation.iss, sub: rotation.sub } }) } });
+    this.refuseClosed();
     if ("refused" in proof) return this.finish(key, delivery, proof.refused);
 
     const authenticated: Authenticated = {
@@ -383,7 +397,6 @@ export class Receiver {
       sender: proof.sender,
       fromPrior: rotation === null ? null : { iss: rotation.iss, sub: rotation.sub, jwt: plaintext.from_prior as string },
     };
-    this.refuseClosed();
     let outcome: ReceiptOutcome;
     try {
       outcome = await this.options.receipt(authenticated);
@@ -438,6 +451,7 @@ export class Receiver {
     const known = knownLongForms(fold);
     return {
       resolve: async (did: string): Promise<DIDDoc | null> => {
+        if (this.closed) return null;
         if (asked.sender === null && (senderDid === null || did === senderDid)) {
           asked.sender = { did, answer: await this.resolveSender(key, source, did, known) };
         }
@@ -513,7 +527,6 @@ export class Receiver {
     return { outcome: "deferred", key, wait: wait.kind, reason: wait.reason };
   }
 
-  /** A delivery that ends here: received when `reason` is null, terminal otherwise. Only how it ended is kept. */
   private async finish(key: string, delivery: Delivery, reason: string | null): Promise<Received> {
     this.waits.delete(key);
     this.sequences.delete(key);
