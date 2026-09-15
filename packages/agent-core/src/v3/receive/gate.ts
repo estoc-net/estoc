@@ -10,7 +10,7 @@
  */
 
 import { base64urlToUtf8 } from "@estoc/did-peer";
-import { splitDidUrl, type Did, type DidId, type DidUrl, type KeyName, type PublicKey, type VaultFold } from "@estoc/vault/v3";
+import { didKeyName, relationshipId as relationshipIdOf, splitDidUrl, type Did, type DidId, type DidUrl, type EventId, type KeyName, type PublicKey, type Relationship, type RelationshipId, type VaultFold } from "@estoc/vault/v3";
 
 import type { IMessage, UnpackMetadata } from "../../protocol/didcomm.js";
 import { authorizedKeys } from "../evidence.js";
@@ -135,20 +135,84 @@ function methodKey(resolution: Resolution, use: "authentication" | "keyAgreement
   return null;
 }
 
+/** What a held delivery waits on in the vault: the evidence that places an address pair, or the evidence of who took an invitation. */
+export type Dependency = { kind: "pair"; localDid: Did; peerDid: Did } | { kind: "invitation"; oobId: string };
+
 /**
- * What of the vault decides whether a delivery at this address pair can
- * select its relationship: the relationships whose histories hold the
- * pair, how they stand, and the claims that keep a proof-free delivery
- * there waiting. A wait for relationship evidence is retried when this
- * changes, and only then.
+ * What the vault says about one address pair, as a delivery at it is
+ * placed: the relationships whose histories hold it, what claims it
+ * and no evidence can settle, what claims it and evidence may yet
+ * settle, and the relationship a birth there would take. Everything
+ * the placement reads is read here, so that a wait for evidence
+ * watches the whole of what decided it.
  */
-export function pairEvidence(fold: VaultFold, localDid: Did, peerDid: Did): string {
+export interface PairEvidence {
+  /** the relationships whose validated histories hold the pair; more than one is a conflict for each */
+  readonly claimants: readonly RelationshipId[];
+  /** claims on the pair that can never be applied: nothing may be born there */
+  readonly contradicted: readonly string[];
+  /** claims on the pair whose evidence is not all here: it may yet be placed among them */
+  readonly awaited: readonly string[];
+  /** the relationship a birth at the pair would take, while events already stand under that ID */
+  readonly born: Relationship | null;
+}
+
+export function pairEvidence(fold: VaultFold, localDid: Did, peerDid: Did): PairEvidence {
   const { relationships } = fold;
-  return JSON.stringify({
-    claimants: relationships.claimants(localDid, peerDid).map((relationshipId) => {
-      const relationship = relationships.relationships.get(relationshipId);
+  const contradicted: string[] = [];
+  const awaited: string[] = [];
+  const claimed = new Set<string>();
+  for (const claim of relationships.pendingAt(localDid, peerDid)) {
+    for (const eventId of claim.eventIds) claimed.add(eventId);
+    if (claim.conflict) contradicted.push(`the ${claim.because} ${claim.eventIds.join(", ")}, whose transition is in conflict`);
+    else awaited.push(`the evidence of ${claim.eventIds.join(", ")}`);
+  }
+  for (const eventId of contradictingTransitions(fold, localDid, peerDid)) contradicted.push(`the transition ${eventId}, which is in conflict`);
+  const didId = fold.routes.entityOfDid(localDid);
+  const localKeyName = didId === null ? null : didKeyName(didId, "key-agreement");
+  for (const event of fold.set.of("message.in")) {
+    if (event.data.localKeyName !== localKeyName || event.data.did !== peerDid || claimed.has(event.eventId)) continue;
+    const scope = relationships.observations.get(event.eventId);
+    if (scope === undefined || scope.status === "scoped" || scope.status === "anonymous") continue;
+    awaited.push(`the standing of ${event.eventId} at the same pair, which ${scope.because}`);
+  }
+  const born = localDid === peerDid ? null : (relationships.relationships.get(relationshipIdOf(localDid, peerDid)) ?? null);
+  return { claimants: relationships.claimants(localDid, peerDid), contradicted, awaited, born };
+}
+
+/** The transitions in conflict that would have put the pair in the address index: they never will, so nothing is born there either. */
+function* contradictingTransitions(fold: VaultFold, localDid: Did, peerDid: Did): Generator<string> {
+  const { relationships, routes } = fold;
+  const contradicts = (eventId: EventId) => relationships.transitions.get(eventId)?.status === "conflict";
+  for (const edge of fold.set.of("relationship.localTransitioned")) {
+    if (routes.dids.get(edge.data.toDidId)?.created?.did !== localDid || !contradicts(edge.eventId)) continue;
+    if (relationships.relationships.get(edge.data.relationshipId)?.peerChain.some((node) => node.did === peerDid) === true) yield edge.eventId;
+  }
+  for (const edge of fold.set.of("relationship.peerTransitioned")) {
+    if (edge.data.toDid !== peerDid || !contradicts(edge.eventId)) continue;
+    if (relationships.relationships.get(edge.data.relationshipId)?.localChain.some((node) => node.did === localDid) === true) yield edge.eventId;
+  }
+}
+
+/** What a wait watches, as text: the delivery is retried when this changes, and only then. */
+export function evidenceOf(fold: VaultFold, dependencies: readonly Dependency[]): string {
+  return JSON.stringify(dependencies.map((dependency) => (dependency.kind === "pair" ? pairFingerprint(fold, dependency.localDid, dependency.peerDid) : invitationFingerprint(fold, dependency.oobId))));
+}
+
+function pairFingerprint(fold: VaultFold, localDid: Did, peerDid: Did): unknown {
+  const { claimants, contradicted, awaited, born } = pairEvidence(fold, localDid, peerDid);
+  return {
+    claimants: claimants.map((relationshipId) => {
+      const relationship = fold.relationships.relationships.get(relationshipId);
       return [relationshipId, relationship?.conflict ?? null, relationship?.faults ?? [], relationship?.deferred ?? [], relationship?.localChain.length ?? 0, relationship?.peerChain.length ?? 0];
     }),
-    pending: relationships.pendingAt(localDid, peerDid).map((claim) => [claim.because, claim.eventIds, claim.conflict]),
-  });
+    contradicted,
+    awaited,
+    born: born === null ? null : [born.bindingEventIds, born.deferred, born.faults, born.conflict],
+  };
+}
+
+function invitationFingerprint(fold: VaultFold, oobId: string): unknown {
+  const invitation = fold.invitations.invitations.get(oobId);
+  return invitation === undefined ? null : [invitation.consumers, invitation.pending, invitation.inconsistent, invitation.faults, invitation.available];
 }

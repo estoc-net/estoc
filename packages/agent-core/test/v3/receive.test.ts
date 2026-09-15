@@ -86,6 +86,9 @@ function host(document: JsonObject): { fetch: typeof globalThis.fetch; calls: st
   return { fetch, calls, state };
 }
 
+/** What a receipt says of a delivery whose pair is not settled: it waits on the pair its local and sender addresses make. */
+const pendingPair = (localDid: Did): ReceiptOutcome => ({ outcome: "wait", reason: "the pair's membership is pending", dependencies: [{ kind: "pair", localDid, peerDid: BOB as Did }] });
+
 function recording(answer: () => ReceiptOutcome = () => ({ outcome: "received" })): { receipt: ReceiverOptions["receipt"]; seen: Authenticated[] } {
   const seen: Authenticated[] = [];
   return {
@@ -285,7 +288,7 @@ describe("the receiver's lifecycle", () => {
     web.state.plan.push(503);
     const time = clock();
     const timers = handTimers();
-    const { receipt, seen } = recording(() => ({ outcome: "wait", reason: "the pair's membership is pending" }));
+    const { receipt, seen } = recording(() => pendingPair(alice.did));
     const receiver = await receiverOver(alice, { receipt, fetch: web.fetch, now: time.now, timers });
     await expect(receiverOver(alice, { receipt })).rejects.toThrow(ReceiverInUse);
     const [socket, drain] = [receiver.pickupHandle(MEDIATION), receiver.pickupHandle(MEDIATION)];
@@ -591,7 +594,7 @@ describe("the sender's resolution", () => {
     const time = clock();
     const timers = handTimers();
     let receipts = 0;
-    const { receipt } = recording(() => (++receipts === 1 ? { outcome: "wait", reason: "the pair's membership is pending" } : { outcome: "received" }));
+    const { receipt } = recording(() => (++receipts === 1 ? pendingPair(alice.did) : { outcome: "received" }));
     const { acknowledge, acknowledged } = acknowledging();
     const sealer = await webSealer(bob);
     const letters = [await sealed(sealer, alice.longFormDid), await sealed(sealer, alice.longFormDid), await sealed(sealer, alice.longFormDid)];
@@ -622,7 +625,7 @@ describe("waits for evidence", () => {
     const web = host(bob.document);
     const time = clock();
     const timers = handTimers();
-    let answer: ReceiptOutcome = { outcome: "wait", reason: "the pair's membership is pending" };
+    let answer: ReceiptOutcome = pendingPair(alice.did);
     const { receipt, seen } = recording(() => answer);
     const { acknowledge, acknowledged } = acknowledging();
     const receiver = await receiverOver(alice, { receipt, fetch: web.fetch, now: time.now, timers, acknowledge });

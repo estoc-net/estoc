@@ -47,7 +47,7 @@ import { serially } from "../procedure.js";
 import { DEFAULT_TIMEOUT_MS, knownLongForms, resolve, type KnownLongForms, type Resolution, type Resolved, type ResolverOptions } from "../resolver.js";
 import { note, type TraceData } from "../trace.js";
 import { RESOLUTION_POLICY, ResolutionSequence, type ResolutionPolicy, type Retention } from "./accounting.js";
-import { classifyRecipients, pairEvidence, sealingOf, senderProof, type AuthenticatedSender } from "./gate.js";
+import { classifyRecipients, evidenceOf, sealingOf, senderProof, type AuthenticatedSender, type Dependency } from "./gate.js";
 
 /** Where a delivery came from: an attachment of a pickup delivery, by the arrangement and attachment ID, or a post straight to this runtime. */
 export type Source = { kind: "pickup"; mediationId: MediationId; deliveryId: string } | { kind: "direct" };
@@ -73,20 +73,26 @@ export interface Authenticated {
 
 /**
  * What the receipt made of an authenticated delivery: recorded, which
- * ends it; terminal; waiting for relationship evidence at an address
- * pair — the recipient's and the sender's, or the recipient's and
- * `peerDid`, as for a proof whose issuer's pair decides it; or held for
- * something of this runtime's that is not ready.
+ * ends it; terminal; waiting for evidence the vault does not hold,
+ * naming everything its decision read, so that a change in any of it
+ * retries the delivery; or held for something of this runtime's that
+ * is not ready.
  */
-export type ReceiptOutcome = { outcome: "received" } | { outcome: "terminal"; reason: string } | { outcome: "wait"; reason: string; peerDid?: Did } | { outcome: "deferred"; reason: string };
+export type ReceiptOutcome =
+  | { outcome: "received" }
+  | { outcome: "terminal"; reason: string }
+  | { outcome: "wait"; reason: string; dependencies: readonly Dependency[] }
+  | { outcome: "deferred"; reason: string };
 
 export type Receipt = (authenticated: Authenticated) => Promise<ReceiptOutcome>;
 
 /**
  * What a held delivery waits for: `local`, something of this runtime's
  * — the vault, a recipient's route or key check; `resolution`, its
- * sender's next resolution; `relationship`, evidence to select its
- * relationship; `history`, a document it names that no evidence holds.
+ * sender's next resolution; `relationship`, evidence the vault does
+ * not hold yet — which relationship an address pair belongs to, or
+ * which relationship took an invitation; `history`, a document it
+ * names that no evidence holds.
  */
 export type WaitKind = "local" | "resolution" | "relationship" | "history";
 
@@ -115,8 +121,8 @@ export interface ReceiverOptions extends ResolverOptions {
   /** what the mediator says of how long it keeps a delivery; unknown by default */
   retention?: (source: Source) => Retention;
   policy?: Partial<ResolutionPolicy>;
-  /** what a wait for relationship evidence at a pair is retried on a change of; `pairEvidence` by default */
-  evidenceOf?: (fold: VaultFold, localDid: Did, peerDid: Did) => string;
+  /** what a wait for relationship evidence is retried on a change of; `evidenceOf` by default */
+  evidenceOf?: (fold: VaultFold, dependencies: readonly Dependency[]) => string;
   /** the most envelope bytes held for retries, all deliveries together */
   maxHeldBytes?: number;
   timers?: Timers;
@@ -131,7 +137,7 @@ export const ENDED_KEPT = 1024;
 
 type Wait =
   | { kind: "local" | "resolution"; source: Source; reason: string }
-  | { kind: "relationship"; source: Source; reason: string; localDid: Did; peerDid: Did; evidence: string; retry: boolean }
+  | { kind: "relationship"; source: Source; reason: string; dependencies: readonly Dependency[]; evidence: string; retry: boolean }
   | { kind: "history"; source: Source; reason: string; localDid: Did; did: string; retry: boolean };
 
 type Ended = Exclude<Received, { outcome: "deferred" }>;
@@ -152,7 +158,7 @@ export class Receiver {
   private readonly timers: Timers;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
-  private readonly evidenceOf: (fold: VaultFold, localDid: Did, peerDid: Did) => string;
+  private readonly evidenceOf: (fold: VaultFold, dependencies: readonly Dependency[]) => string;
   private readonly maxHeldBytes: number;
   private readonly waits = new Map<string, Wait>();
   private readonly sequences = new Map<string, ResolutionSequence>();
@@ -175,7 +181,7 @@ export class Receiver {
     this.timers = options.timers ?? GLOBAL_TIMERS;
     this.now = options.now ?? Date.now;
     this.log = options.log ?? (() => undefined);
-    this.evidenceOf = options.evidenceOf ?? pairEvidence;
+    this.evidenceOf = options.evidenceOf ?? evidenceOf;
     this.maxHeldBytes = options.maxHeldBytes ?? MAX_HELD_BYTES;
   }
 
@@ -240,7 +246,7 @@ export class Receiver {
   private async changed(fold: VaultFold, wait: Wait): Promise<boolean> {
     switch (wait.kind) {
       case "relationship":
-        return this.evidenceOf(fold, wait.localDid, wait.peerDid) !== wait.evidence;
+        return this.evidenceOf(fold, wait.dependencies) !== wait.evidence;
       case "history":
         return (await this.fromEvidence(fold, wait.localDid, wait.did, [])) !== null;
       default:
@@ -412,12 +418,8 @@ export class Receiver {
         return this.finish(key, delivery, outcome.reason);
       case "deferred":
         return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: outcome.reason });
-      case "wait": {
-        if (proof.sender === null) return this.defer(key, delivery, { kind: "local", source: delivery.source, reason: outcome.reason });
-        const localDid = recipients.did;
-        const peerDid = outcome.peerDid ?? proof.sender.resolution.did;
-        return this.defer(key, delivery, { kind: "relationship", source: delivery.source, reason: outcome.reason, localDid, peerDid, evidence: this.evidenceOf(fold, localDid, peerDid), retry: false });
-      }
+      case "wait":
+        return this.defer(key, delivery, { kind: "relationship", source: delivery.source, reason: outcome.reason, dependencies: outcome.dependencies, evidence: this.evidenceOf(fold, outcome.dependencies), retry: false });
     }
   }
 

@@ -12,7 +12,9 @@ import {
   type ContactId,
   type Did,
   type DidId,
+  type EventReference,
   type MediationId,
+  type PublicKey,
   type RelationshipId,
   type VaultEvent,
   type VaultEventType,
@@ -21,8 +23,8 @@ import {
 } from "@estoc/vault/v3";
 
 import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
-import { Keyring, Receiver, createDid, disclose, prepare, receiptOf, recordReceipt, retireDid, send, type Authenticated, type ReceiverOptions, type Source } from "../../src/v3/index.js";
-import { didcomm, directParty, freshVault, handTimers, json, peerSealer, sealed, webFetch, webIdentity, webSealer, type DirectParty, type Fresh } from "./helpers.js";
+import { Keyring, Receiver, authorizedKeys, commitResolution, createDid, disclose, prepare, receiptOf, recordReceipt, retireDid, send, type Authenticated, type ReceiverOptions, type Resolution, type Source } from "../../src/v3/index.js";
+import { didcomm, directParty, freshVault, handTimers, json, peerSealer, sealed, webFetch, webIdentity, webResolution, webSealer, type DirectParty, type Fresh } from "./helpers.js";
 
 const DID = "019b0000-0000-7000-8000-00000000000b" as DidId;
 const OTHER = "019b0000-0000-7000-8000-00000000000c" as DidId;
@@ -95,6 +97,30 @@ function watchCommits(runtime: VaultRuntime, refuse: (types: string[]) => boolea
 
 async function boundRouteOf(holder: DirectParty) {
   return (await foldOf(holder)).routes.dids.get(holder.didId)!.created!.boundRouteId;
+}
+
+/** Every event of the vault, in canonical order, for an import that leaves one out. */
+async function everyEvent(runtime: VaultRuntime): Promise<VaultEvent<VaultEventType>[]> {
+  const events: VaultEvent<VaultEventType>[] = [];
+  for await (const event of runtime.vault.events.scan()) events.push(event as VaultEvent<VaultEventType>);
+  return events;
+}
+
+/** A relationship bound at `holder`'s `DID` with `resolution` as its root, as a receipt binds it. */
+async function bindTo(holder: DirectParty, resolution: Resolution): Promise<void> {
+  const [peerPublicKey] = authorizedKeys(resolution, "keyAgreement").values();
+  const root = await commitResolution(holder.runtime, { resolution, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: peerPublicKey as PublicKey });
+  await holder.runtime.vault.commit([], [vaultDraft("relationship.bound", { relationshipId: relationshipId(holder.did, resolution.did), localDidId: DID, peerResolutionEventId: root.eventId as EventReference<"peer.resolved"> })]);
+}
+
+/** Alice bound to Carol by a first message at `DID`, her end of that relationship then moved to `OTHER` by a committed transition. */
+async function rotatedLocally(alice: DirectParty, carol: DirectParty, receiver: Receiver) {
+  expect((await receiver.receive({ packed: await sealed(await peerSealer(carol), alice.longFormDid), source: DIRECT })).outcome).toBe("received");
+  const { minted: successor } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), OTHER);
+  const R = relationshipId(alice.did, carol.did) as RelationshipId;
+  const proof = await signFromPrior(alice.keys, { didId: DID, longFormDid: alice.longFormDid }, successor.longFormDid, IAT);
+  const [edge] = await alice.runtime.vault.commit([], [vaultDraft("relationship.localTransitioned", { relationshipId: R, fromDidId: DID, toDidId: OTHER, fromPrior: proof, triggerEventId: null })]);
+  return { successor, edge: edge!, R };
 }
 
 describe("a pair born with its first message", () => {
@@ -313,7 +339,7 @@ describe("the receipt's integrity checks", () => {
     expect(await copied.receive({ packed: await sealed(carolSealer, alice.longFormDid), source: DIRECT })).toMatchObject({
       outcome: "deferred",
       wait: "relationship",
-      reason: `${earlier!.eventId} at the same pair names the binding ${binding!.eventId}, which is not here`,
+      reason: `the pair ${alice.did} / ${carol.did} awaits the standing of ${earlier!.eventId} at the same pair, which awaits its binding`,
     });
     expect((await foldOf(copy)).set.of("relationship.bound")).toEqual([]);
 
@@ -441,5 +467,154 @@ describe("recording before the vault answers", () => {
     expect(await eventsOf(alice.runtime, "peer.resolved")).toEqual([]);
     await alice.runtime.close();
     await carol.runtime.close();
+  });
+});
+
+describe("a pair something already claims", () => {
+  it("an import that lost only the local transition makes no second relationship at the same pair: the delivery waits for the standing of the observation already there, and the transition restored receives it where the pair belongs", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const sealer = await peerSealer(carol);
+    const receiver = await receiving(alice);
+    const { successor, edge, R } = await rotatedLocally(alice, carol, receiver);
+    expect((await receiver.receive({ packed: await sealed(sealer, successor.longFormDid), source: DIRECT })).outcome).toBe("received");
+    receiver.close();
+
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest((await everyEvent(alice.runtime)).filter((event) => event.eventId !== edge.eventId));
+    const copied = await receiving(copy);
+    const [, earlier] = (await foldOf(copy)).set.of("message.in");
+
+    expect(await copied.receive({ packed: await sealed(sealer, successor.longFormDid), source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the pair ${successor.did} / ${carol.did} awaits the standing of ${earlier!.eventId} at the same pair, which arrived at a key outside the local history`,
+    });
+    expect((await foldOf(copy)).set.of("relationship.bound")).toHaveLength(1);
+
+    await copy.runtime.ingest([edge]);
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    const fold = await foldOf(copy);
+    expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
+    expect(fold.relationships.claimants(successor.did, carol.did)).toEqual([R]);
+    expect(fold.relationships.observations.get(fold.set.of("message.in").at(-1)!.eventId)).toEqual({ status: "scoped", relationshipId: R });
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
+
+  it("a local transition in conflict claims the pair it would have added: a delivery to that successor address is terminal and nothing is born there", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const receiver = await receiving(alice);
+    const { successor, edge, R } = await rotatedLocally(alice, carol, receiver);
+    const { minted: competitor } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), STRANGER);
+    const competing = await signFromPrior(alice.keys, { didId: DID, longFormDid: alice.longFormDid }, competitor.longFormDid, IAT + 1);
+    const [other] = await alice.runtime.vault.commit([], [vaultDraft("relationship.localTransitioned", { relationshipId: R, fromDidId: DID, toDidId: STRANGER, fromPrior: competing, triggerEventId: null })]);
+    const transitions = (await foldOf(alice)).relationships.transitions;
+    expect([transitions.get(edge.eventId)?.status, transitions.get(other!.eventId)?.status]).toEqual(["conflict", "conflict"]);
+
+    expect(await receiver.receive({ packed: await sealed(await peerSealer(carol), successor.longFormDid), source: DIRECT })).toMatchObject({
+      outcome: "terminal",
+      reason: `the pair ${successor.did} / ${carol.did} is claimed by the transition ${edge.eventId}, which is in conflict`,
+    });
+    const fold = await foldOf(alice);
+    expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
+    expect(fold.set.of("message.in")).toHaveLength(1);
+    await alice.runtime.close();
+    await carol.runtime.close();
+  });
+
+  it("a delivery at a pair whose bindings do not stand waits for the resolutions they name, and is terminal once those resolutions show the bindings disagree", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    await bindTo(alice, await webResolution(bob));
+    await bindTo(alice, await webResolution(await webIdentity(BOB, 78)));
+    const events = await everyEvent(alice.runtime);
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => event.type !== "peer.resolved"));
+    const receiver = await receiving(copy, { fetch: bobHost(bob.document).fetch });
+    const packed = await sealed(await webSealer(bob), alice.longFormDid);
+    const R = relationshipId(alice.did, BOB);
+
+    expect(await receiver.receive({ packed, source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the binding of ${R} awaits: 2 bindings name a peer resolution that is not here`,
+    });
+    expect((await receiver.receive({ packed, source: DIRECT })).outcome).toBe("deferred");
+
+    await copy.runtime.ingest(events.filter((event) => event.type === "peer.resolved"));
+    expect(await receiver.evidenceChanged()).toMatchObject([{ outcome: "terminal", reason: `the binding of ${R} does not stand: bindings disagree on the root peer document` }]);
+    expect((await foldOf(copy)).set.of("message.in")).toEqual([]);
+    await alice.runtime.close();
+    await copy.runtime.close();
+  });
+});
+
+describe("an invitation waiting for the evidence of who took it", () => {
+  it("the delivery it holds is retried when that evidence arrives: another relationship's consumption makes it terminal", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const { disclosed } = await disclose(null, alice.runtime, alice.keys, DID, { as: "oob", uses: "one" });
+    const oobId = disclosed.data.oobId as string;
+    const receiver = await receiving(alice, { fetch: bobHost(bob.document).fetch });
+    expect((await receiver.receive({ packed: await sealed(await webSealer(bob), alice.longFormDid, { pthid: oobId }), source: DIRECT })).outcome).toBe("received");
+    receiver.close();
+
+    const events = await everyEvent(alice.runtime);
+    const binding = events.find((event) => event.type === "relationship.bound")!;
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => event.eventId !== binding.eventId));
+    const copied = await receiving(copy, { fetch: bobHost(bob.document).fetch });
+
+    expect(await copied.receive({ packed: await sealed(await peerSealer(carol), alice.longFormDid, { pthid: oobId }), source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the invitation ${oobId} awaits evidence of who took it`,
+    });
+    expect((await foldOf(copy)).set.of("message.in")).toHaveLength(1);
+
+    await copy.runtime.ingest([binding]);
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "terminal", reason: `the invitation ${oobId} is not open to ${relationshipId(alice.did, carol.did)}` }]);
+    expect((await foldOf(copy)).invitations.invitations.get(oobId)?.consumers).toEqual([relationshipId(alice.did, BOB)]);
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
+
+  it("the delivery it holds is retried when that evidence arrives: evidence that the earlier input only continued a relationship leaves it open, and the delivery is received and consumes it", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const bob = await webIdentity(BOB);
+    const receiver = await receiving(alice, { fetch: bobHost(bob.document).fetch });
+    const { successor } = await rotatedLocally(alice, carol, receiver);
+    const { disclosed } = await disclose(null, alice.runtime, alice.keys, OTHER, { as: "oob", uses: "one" });
+    const oobId = disclosed.data.oobId as string;
+
+    expect((await receiver.receive({ packed: await sealed(await peerSealer(carol), successor.longFormDid, { pthid: oobId }), source: DIRECT })).outcome).toBe("received");
+    expect((await foldOf(alice)).invitations.invitations.get(oobId)?.available).toBe(true);
+    receiver.close();
+
+    const events = await everyEvent(alice.runtime);
+    const binding = events.find((event) => event.type === "relationship.bound")!;
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => event.eventId !== binding.eventId));
+    const copied = await receiving(copy, { fetch: bobHost(bob.document).fetch });
+    const fromBob = await sealed(await webSealer(bob), successor.longFormDid, { pthid: oobId });
+
+    expect(await copied.receive({ packed: fromBob, source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the invitation ${oobId} awaits evidence of who took it`,
+    });
+
+    await copy.runtime.ingest([binding]);
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    expect((await foldOf(copy)).invitations.invitations.get(oobId)?.consumers).toEqual([relationshipId(successor.did, BOB)]);
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
   });
 });

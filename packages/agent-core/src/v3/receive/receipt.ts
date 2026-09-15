@@ -41,7 +41,6 @@ import {
   type EventReference,
   type FromPriorClaims,
   type Keys,
-  type KeyName,
   type MessageId,
   type MessageIn,
   type ReadPlaintext,
@@ -54,7 +53,7 @@ import {
 } from "@estoc/vault/v3";
 
 import { commitResolution, objectsHeld, pinnedResolution } from "../evidence.js";
-import type { AuthenticatedSender } from "./gate.js";
+import { pairEvidence, type AuthenticatedSender, type Dependency } from "./gate.js";
 import type { Authenticated, Receipt, ReceiptOutcome } from "./receiver.js";
 
 export interface ReceiptOptions {
@@ -62,7 +61,6 @@ export interface ReceiptOptions {
   log?: (line: string) => void;
 }
 
-/** The receipt a receiver of `runtime` records its deliveries with. */
 export function receiptOf(runtime: VaultRuntime, keys: Keys, options: ReceiptOptions = {}): Receipt {
   return (authenticated) => recordReceipt(runtime, keys, authenticated, options);
 }
@@ -71,7 +69,6 @@ type Observed = Omit<MessageIn, "receiptOrdinal" | "peerResolutionEventId" | "re
 
 type Objects = { cid: Cid; source: Uint8Array }[];
 
-/** Where an authenticated delivery is recorded. */
 interface Placement {
   relationshipId: RelationshipId;
   /** the binding the observation names; null for a pair born with this delivery */
@@ -197,7 +194,7 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
   if (placed.superseded && !observedIn(fold, observed.messageId, relationshipId)) {
     return ends(terminal(`${sender.resolution.did} is a peer address ${relationshipId} has moved on from, and ${observed.messageId} was not received there before`));
   }
-  const invitation = invitationGate(fold, recipient.didId, placed, observed.pthid);
+  const invitation = invitationGate(fold, recipient, sender.resolution.did, placed, observed.pthid);
   if (invitation !== null) return ends(invitation);
   const resolution = await commitResolution(held, { resolution: sender.resolution, localKeyName: recipient.localKeyName, peerPublicKey: sender.peerPublicKey });
   const bindingEventId = placed.bindingEventId ?? (await bind(held, relationshipId, recipient.didId, resolution));
@@ -215,38 +212,33 @@ async function settle(held: Held, keys: Keys, { recipient, sender }: Authenticat
  * A proof-free delivery's place, by its address pair. The one
  * relationship holding the pair in its histories is the place. Two
  * holding it contradict each other, and neither may take it. Where none
- * does, a claim on the pair waiting for its evidence, a binding of the
- * pair that does not stand yet, or an observation at the pair naming
- * evidence that is not here keeps the delivery waiting, since that
- * evidence may place it; a claim or binding already contradicted never
- * will. Only then is the pair new, and it is born with this delivery —
- * unless the local address is retired, which takes no new relationship.
+ * does, the pair is new only when nothing retained claims it: a claim
+ * whose evidence is not all here — a carrier, a transition not yet
+ * applied, an observation at the pair that is not scoped — may still
+ * be settled, and the delivery waits for that rather than being born
+ * beside it; a transition in conflict there never will be, and a
+ * binding of the pair that contradicts itself never stands. Only then
+ * is the pair born with this delivery — unless the local address is
+ * retired, which takes no new relationship.
  */
 function placeProofFree(fold: VaultFold, recipient: Authenticated["recipient"], sender: AuthenticatedSender): Placement | ReceiptOutcome {
   const localDid = recipient.did;
   const peerDid = sender.resolution.did;
   const pair = `${localDid} / ${peerDid}`;
-  const { relationships } = fold;
-  const claimants = relationships.claimants(localDid, peerDid);
+  const waits = (reason: string): ReceiptOutcome => ({ outcome: "wait", reason, dependencies: [{ kind: "pair", localDid, peerDid }] });
+  const { claimants, contradicted, awaited, born } = pairEvidence(fold, localDid, peerDid);
   if (claimants.length > 1) return terminal(`the pair ${pair} is in the histories of ${claimants.join(", ")}`);
-  if (claimants.length === 1) return inHistories(fold, relationships.relationships.get(claimants[0] as RelationshipId) as Relationship, recipient.didId, peerDid, true);
+  if (claimants.length === 1) return inHistories(fold, fold.relationships.relationships.get(claimants[0] as RelationshipId) as Relationship, recipient.didId, peerDid, true);
 
-  const pending = relationships.pendingAt(localDid, peerDid);
-  const named = (claims: typeof pending) => claims.flatMap((claim) => claim.eventIds).join(", ");
-  const contradicted = pending.filter((claim) => claim.conflict);
-  if (contradicted.length > 0) return terminal(`the pair ${pair} is claimed by a transition in conflict: ${named(contradicted)}`);
-  if (pending.length > 0) return { outcome: "wait", reason: `the pair ${pair} awaits the evidence of ${named(pending)}` };
+  if (contradicted.length > 0) return terminal(`the pair ${pair} is claimed by ${contradicted.join("; ")}`);
+  if (awaited.length > 0) return waits(`the pair ${pair} awaits ${awaited.join("; ")}`);
 
   if (localDid === peerDid) return terminal(`the sender ${peerDid} is the recipient`);
-  const relationshipId = relationshipIdOf(localDid, peerDid);
-  const born = relationships.relationships.get(relationshipId);
-  if (born !== undefined && born.bindingEventIds.length > 0) {
-    return born.deferred.length > 0 ? { outcome: "wait", reason: `the binding of ${relationshipId} awaits: ${born.deferred.join("; ")}` } : terminal(`the binding of ${relationshipId} does not stand: ${born.faults.join("; ")}`);
+  if (born !== null && born.bindingEventIds.length > 0) {
+    return born.deferred.length > 0 ? waits(`the binding of ${born.relationshipId} awaits: ${born.deferred.join("; ")}`) : terminal(`the binding of ${born.relationshipId} does not stand: ${born.faults.join("; ")}`);
   }
-  const missing = missingAt(fold, recipient.localKeyName, peerDid);
-  if (missing !== null) return { outcome: "wait", reason: missing };
   if (fold.routes.dids.get(recipient.didId)?.retired != null) return terminal(`${localDid} is retired and takes no new relationship`);
-  return { relationshipId, bindingEventId: null, transitionEventId: null, superseded: false, root: true };
+  return { relationshipId: relationshipIdOf(localDid, peerDid), bindingEventId: null, transitionEventId: null, superseded: false, root: true };
 }
 
 /**
@@ -274,14 +266,18 @@ async function placeCarrier(held: Held, fold: VaultFold, recipient: Authenticate
   }
   if (claims.sub !== sender.resolution.presentedDid) return terminal(`the from_prior names ${claims.sub} as the successor, not the sender ${sender.resolution.presentedDid}`);
   const issuerPair = `${localDid} / ${issuer}`;
+  const dependencies: Dependency[] = [
+    { kind: "pair", localDid, peerDid: issuer },
+    { kind: "pair", localDid, peerDid },
+  ];
   const claimants = fold.relationships.claimants(localDid, issuer);
   if (claimants.length !== 1) {
     const holding = claimants.length === 0 ? "no relationship holds" : `${claimants.join(", ")} all hold`;
-    return { outcome: "wait", reason: `${holding} the pair ${issuerPair} the from_prior continues`, peerDid: issuer };
+    return { outcome: "wait", reason: `${holding} the pair ${issuerPair} the from_prior continues`, dependencies };
   }
   const relationshipId = claimants[0] as RelationshipId;
   const pinned = await pinnedResolution(fold, objectReader(held.objects), relationshipId, issuer);
-  if (pinned === null) return { outcome: "wait", reason: `the snapshot ${relationshipId} pinned for ${issuer} is not here`, peerDid: issuer };
+  if (pinned === null) return { outcome: "wait", reason: `the snapshot ${relationshipId} pinned for ${issuer} is not here`, dependencies };
   try {
     await verifyFromPrior(fromPrior, { did: pinned.did, document: pinned.document });
   } catch (err) {
@@ -317,17 +313,6 @@ function inHistories(fold: VaultFold, relationship: Relationship, localDidId: Di
   };
 }
 
-/** An observation at this local key from this peer naming a binding or a transition that is not here: evidence that places the pair, still to arrive. */
-function missingAt(fold: VaultFold, localKeyName: KeyName, peerDid: Did): string | null {
-  for (const event of fold.set.of("message.in")) {
-    if (event.data.localKeyName !== localKeyName || event.data.did !== peerDid) continue;
-    const { relationshipBindingEventId: binding, peerTransitionEventId: transition } = event.data;
-    if (binding !== null && fold.set.resolve(binding, "relationship.bound").status === "missing") return `${event.eventId} at the same pair names the binding ${binding}, which is not here`;
-    if (transition !== null && fold.set.resolve(transition, "relationship.peerTransitioned").status === "missing") return `${event.eventId} at the same pair names the transition ${transition}, which is not here`;
-  }
-  return null;
-}
-
 /** Whether an observation of this message ID was already recorded in the relationship: by the scope it stands in, or the binding it names. */
 function observedIn(fold: VaultFold, messageId: MessageId, relationshipId: RelationshipId): boolean {
   return fold.set.of("message.in").some((event) => {
@@ -343,16 +328,27 @@ function observedIn(fold: VaultFold, messageId: MessageId, relationshipId: Relat
  * A root-address receipt whose parent thread is one of the recipient's
  * invitations consumes it when committed, so the invitation decides
  * first: taken by another relationship or no longer open, the delivery
- * is terminal; waiting for evidence of who took it, the delivery is held.
+ * is terminal; while evidence still to arrive says who took it, the
+ * delivery waits for that evidence, and for the evidence of its own
+ * pair, which decides whether it is a root-address receipt at all.
  * Any other input with that thread ID takes nothing and is not stopped.
  */
-function invitationGate(fold: VaultFold, recipient: DidId, placed: Placement, pthid: string | null): ReceiptOutcome | null {
+function invitationGate(fold: VaultFold, recipient: Authenticated["recipient"], peerDid: Did, placed: Placement, pthid: string | null): ReceiptOutcome | null {
   if (!placed.root || pthid === null) return null;
   const invitation = fold.invitations.invitations.get(pthid);
-  if (invitation === undefined || !invitation.disclosures.some((disclosure) => disclosure.data.didId === recipient)) return null;
+  if (invitation === undefined || !invitation.disclosures.some((disclosure) => disclosure.data.didId === recipient.didId)) return null;
   const consumability = fold.invitations.consumable(pthid, placed.relationshipId);
   if (consumability === "unavailable") return terminal(`the invitation ${pthid} is not open to ${placed.relationshipId}`);
-  if (consumability === "pending") return { outcome: "deferred", reason: `the invitation ${pthid} awaits evidence of who took it` };
+  if (consumability === "pending") {
+    return {
+      outcome: "wait",
+      reason: `the invitation ${pthid} awaits evidence of who took it`,
+      dependencies: [
+        { kind: "invitation", oobId: pthid },
+        { kind: "pair", localDid: recipient.did, peerDid },
+      ],
+    };
+  }
   return null;
 }
 

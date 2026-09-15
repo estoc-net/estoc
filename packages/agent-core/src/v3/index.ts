@@ -100,7 +100,7 @@ export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, outboundWorkKey, prepare,
 export { MAX_ENVELOPE_BYTES, SUBMIT_TIMEOUT_MS, submit, type SubmitOptions, type Submitted } from "./submit.js";
 export { Outbox, RETRY_POLICY, type Backoff, type OutboxOptions, type RetryPolicy, type Step, type Timers } from "./outbox.js";
 export { RESOLUTION_POLICY, ResolutionSequence, type ResolutionPolicy, type Retention } from "./receive/accounting.js";
-export { classifyRecipients, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
+export { classifyRecipients, evidenceOf, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Dependency, type PairEvidence, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
 export {
   ENDED_KEPT,
   MAX_HELD_BYTES,
