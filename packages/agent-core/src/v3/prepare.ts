@@ -5,13 +5,13 @@
  * the current local end, under its long form and with the proof of the
  * transition that added it until the peer's input has confirmed it; the
  * recipient is the current peer end, at a key its pinned document
- * authorizes. What the network has to say is asked before the lock — a
- * fresh document for a first package to a peer that is not a numalgo-4
- * DID — and everything the answer changes is decided under it, over the
- * fold read again: a pair whose birth no binding holds yet is bound
- * first, then the package is built, packed, canonicalized and committed
- * with its envelope in one batch. Nothing here submits; the package
- * waits for the outbox with its exact bytes.
+ * authorizes. What the network has to say is asked before the lock;
+ * everything the answer changes is decided under it, over the fold read
+ * again, and only once the fold still asks the question the answer is
+ * to — receipt goes on meanwhile and can bind the pair, or move its
+ * peer end by a verified continuation, in which case the answer is
+ * dropped and the question asked again. The trace is written after the
+ * lock and is never a reason to stop: the package is what was made.
  */
 
 import { v7 as uuidv7 } from "uuid";
@@ -19,6 +19,7 @@ import { v7 as uuidv7 } from "uuid";
 import { isPeerDID4 } from "@estoc/did-peer";
 import { DamagedObject, ObjectTooLarge, canonicalize, isJsonObject, parseStrict, type Held, type JsonObject, type VaultRuntime } from "@estoc/event-store/v3";
 import {
+  decodePublicKey,
   intentOfOutbound,
   objectReader,
   plaintextHash,
@@ -31,7 +32,7 @@ import {
   wirePlaintext,
   type Cid,
   type Did,
-  type DidId,
+  type DidKeys,
   type DidUrl,
   type EventReference,
   type KeyName,
@@ -42,6 +43,7 @@ import {
   type Outbound,
   type PackageId,
   type PeerNode,
+  type PublicKey,
   type Relationship,
   type RelationshipId,
   type VaultDraft,
@@ -53,9 +55,10 @@ import { secretsResolverFor, type DidcommApi, type IMessage } from "../protocol/
 import { UnknownEntity } from "./errors.js";
 import { authorizedKeys, commitResolution, pinnedResolver, readResolution } from "./evidence.js";
 import { secretsOf } from "./keyring.js";
-import { sealData } from "./link.js";
-import { knownLongForms, resolve, type Resolution, type ResolverOptions } from "./resolver.js";
-import type { AgentTrace } from "./trace.js";
+import { bounded, sealData } from "./link.js";
+import { serially } from "./procedure.js";
+import { knownLongForms, resolve, type Resolution, type Resolved, type ResolverOptions } from "./resolver.js";
+import type { AgentTrace, TraceData, TraceStream } from "./trace.js";
 
 /** The failure code of an outbound whose expiry passed before it was submitted. */
 export const EXPIRED = "expired";
@@ -65,6 +68,10 @@ export const PEER_KEY_CHANGED = "peer-key-changed";
 export const MAX_CONTENT_BYTES = 16 * 1024 * 1024;
 
 const REPACKED = "repacked";
+/** How many times the fold may move the question while its answer is fetched before the attempt is given up as unavailable. */
+const MOST_ASKINGS = 3;
+/** How long a trace entry is waited for after the package is committed; a slower trace loses the entry, not the package. */
+const TRACE_WAIT_MS = 10_000;
 
 export interface PrepareOptions extends ResolverOptions {
   didcomm: DidcommApi;
@@ -92,7 +99,10 @@ export type Prepared =
   /** a terminal failure was recorded: `expired`, or `peer-key-changed` */
   | { outcome: "failed"; messageId: MessageId; code: string; failed: VaultEvent<"delivery.failed"> };
 
-type Open = { outbound: Outbound; intent: MessageOut };
+/** The key every piece of work on one outbound runs under, serially per runtime (`serially`): its preparation here, its submission after. */
+export function outboundWorkKey(messageId: MessageId): string {
+  return `outbound ${messageId}`;
+}
 
 /**
  * Prepare the package a queued or repackable outbound is owed, from
@@ -101,79 +111,11 @@ type Open = { outbound: Outbound; intent: MessageOut };
  * the pair was born offline, the binding that pins the peer's document.
  * A first package to a peer that is not a numalgo-4 DID resolves the
  * peer afresh first; that no answer came leaves the message queued,
- * an answer that closes the attempt fails it for good.
+ * an answer that closes the attempt fails it for good. One message is
+ * prepared by one caller at a time.
  */
-export async function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
-  const now = options.now ?? Date.now;
-  const trace = options.trace ?? null;
-  const first = await scanVault(runtime.vault, keys);
-  const queued = openWork(first, messageId);
-  if ("because" in queued) return { outcome: "none", messageId, because: queued.because };
-  if (expired(queued.intent, now)) return fail(runtime, keys, messageId, EXPIRED, "the expiry passed before preparation", trace);
-  const target = targetOf(first, queued);
-  let resolution: Resolution | null = null;
-  if (target !== null) {
-    const resolved = await resolve(target, knownLongForms(first), options);
-    if (resolved.outcome === "unavailable") return { outcome: "unavailable", messageId, reason: resolved.reason };
-    if (resolved.outcome === "definitive") return fail(runtime, keys, messageId, PEER_KEY_CHANGED, resolved.reason, trace);
-    resolution = resolved.resolution;
-  }
-  return runtime.locked(async (held) => {
-    let fold = await scanVault(held, keys);
-    let open = openWork(fold, messageId);
-    if ("because" in open) return { outcome: "none", messageId, because: open.because };
-    if (expired(open.intent, now)) return failHeld(held, messageId, EXPIRED, "the expiry passed before preparation", trace);
-    let bound: VaultEvent<"relationship.bound"> | null = null;
-    if (!isBound(fold.relationships.relationships.get(open.intent.relationshipId))) {
-      const birth = await bind(held, fold, open.intent, resolution as Resolution);
-      if ("because" in birth) return { outcome: "none", messageId, because: birth.because };
-      if ("code" in birth) return failHeld(held, messageId, birth.code, birth.reason, trace);
-      bound = birth.bound;
-      fold = await scanVault(held, keys);
-      open = openWork(fold, messageId);
-      if ("because" in open) return { outcome: "none", messageId, because: open.because };
-    }
-    const relationship = fold.relationships.relationships.get(open.intent.relationshipId) as Relationship;
-    const selected = await selectEnds(held, fold, relationship, resolution !== null && !isPeerDID4(resolution.did) ? resolution : null);
-    if ("because" in selected) return { outcome: "none", messageId, because: selected.because };
-    if ("code" in selected) return failHeld(held, messageId, selected.code, selected.reason, trace);
-    const content = await readContent(held, open.intent);
-    if ("because" in content) return { outcome: "none", messageId, because: content.because };
-    const plaintext = wirePlaintext(intentOfOutbound(open.intent, content.document), { from: selected.from, to: [selected.to], fromPrior: selected.fromPrior }, (root) => content.payloads.get(root) as Uint8Array);
-    const packed = await pack(fold, keys, selected, plaintext, options.didcomm);
-    const envelope = parseStrict(packed);
-    if (!isJsonObject(envelope)) throw new TypeError("the encrypted envelope is a JSON object");
-    const bytes = canonicalize(envelope);
-    const envelopeCid = rawCidOfBytes(bytes);
-    const packageId = uuidv7() as PackageId;
-    const retiring = open.outbound.work.kind === "repack" ? open.outbound.work.packageIds : [];
-    const drafts: VaultDraft[] = retiring.map((retired) => vaultDraft("message.packageRetired", { messageId, packageId: retired, because: REPACKED, replacementPackageId: packageId }));
-    drafts.push(
-      vaultDraft("message.prepared", {
-        messageId,
-        packageId,
-        senderDidId: selected.senderDidId,
-        localKeyName: selected.localKeyName,
-        recipientDid: selected.to,
-        peerResolutionEventId: selected.named.eventId as EventReference<"peer.resolved">,
-        fromPrior: selected.fromPrior,
-        intentHash: open.intent.intentHash,
-        plaintextHash: plaintextHash(plaintext),
-        envelopeCid,
-      })
-    );
-    const events = (await held.commit([{ cid: envelopeCid, source: bytes }], drafts)).map(readVaultEvent);
-    await trace?.append("envelope", "seal", { ...sealData(packed, plaintext as unknown as IMessage), messageId, packageId });
-    return {
-      outcome: "prepared",
-      messageId,
-      packageId,
-      prepared: events.find((event) => event.type === "message.prepared") as VaultEvent<"message.prepared">,
-      retired: events.filter((event): event is VaultEvent<"message.packageRetired"> => event.type === "message.packageRetired"),
-      bound,
-      resolved: selected.recorded,
-    };
-  });
+export function prepare(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
+  return serially(runtime, outboundWorkKey(messageId), () => prepareSerially(runtime, keys, messageId, options));
 }
 
 /** Prepare every outbound the fold says is owed a package, in message order: what a worker runs between operations and recovery runs on open. */
@@ -186,7 +128,124 @@ export async function prepareAll(runtime: VaultRuntime, keys: Keys, options: Pre
   return results;
 }
 
-/** The outbound while the fold says a package is to be prepared for it; otherwise why not. */
+type Open = { outbound: Outbound; intent: MessageOut };
+
+/** What was asked of the network before the lock: the DID the fold wanted resolved, and the answer; nothing, when the pinned evidence was all a package needs. */
+type Asked = { target: Did | null; answer: Resolved | null };
+
+/** One trace entry owed, written once the lock is released. */
+type Note = { stream: TraceStream; what: string; data: TraceData };
+
+/** What one locked step ends in: a result, or null when the fold no longer asks what was answered and the question is to be asked again. */
+type Settled = { result: Prepared | null; notes: Note[] };
+
+async function prepareSerially(runtime: VaultRuntime, keys: Keys, messageId: MessageId, options: PrepareOptions): Promise<Prepared> {
+  const now = options.now ?? Date.now;
+  const trace = options.trace ?? null;
+  for (let asking = 1; ; asking++) {
+    const fold = await scanVault(runtime.vault, keys);
+    const open = openWork(fold, messageId);
+    if ("because" in open) return { outcome: "none", messageId, because: open.because };
+    const asked: Asked = { target: null, answer: null };
+    if (!expired(open.intent, now)) {
+      asked.target = targetOf(fold, open);
+      if (asked.target !== null) {
+        asked.answer = await resolve(asked.target, knownLongForms(fold), options);
+        if (asked.answer.outcome === "unavailable") return { outcome: "unavailable", messageId, reason: asked.answer.reason };
+      }
+    }
+    const { result, notes } = await runtime.locked((held) => settle(held, keys, messageId, asked, now, options.didcomm));
+    await noteAll(trace, notes);
+    if (result !== null) return result;
+    if (asking >= MOST_ASKINGS) return { outcome: "unavailable", messageId, reason: `the relationship changed under each of ${asking} resolutions of its peer` };
+  }
+}
+
+/**
+ * The locked step: the fold read again and, while it still asks what
+ * `asked` answers, the answer applied — the message failed for good,
+ * or the pair bound, the ends selected, the package built, packed,
+ * canonicalized and committed with its envelope in one batch.
+ */
+async function settle(held: Held, keys: Keys, messageId: MessageId, asked: Asked, now: () => number, didcomm: DidcommApi): Promise<Settled> {
+  const notes: Note[] = [];
+  const none = (because: string): Settled => ({ result: { outcome: "none", messageId, because }, notes });
+  const failed = async (code: string, reason: string): Promise<Settled> => {
+    const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, scope: "message", packageId: null, code })])).map(readVaultEvent);
+    notes.push({ stream: "diag", what: "delivery", data: { messageId, code, reason } });
+    return { result: { outcome: "failed", messageId, code, failed: event as VaultEvent<"delivery.failed"> }, notes };
+  };
+  let fold = await scanVault(held, keys);
+  let open = openWork(fold, messageId);
+  if ("because" in open) return none(open.because);
+  if (expired(open.intent, now)) return failed(EXPIRED, "the expiry passed before preparation");
+  if (targetOf(fold, open) !== asked.target) return { result: null, notes };
+  const { answer } = asked;
+  if (answer !== null && answer.outcome !== "resolved") return failed(PEER_KEY_CHANGED, answer.reason);
+  const resolution = answer === null ? null : answer.resolution;
+  let bound: VaultEvent<"relationship.bound"> | null = null;
+  if (!isBound(fold.relationships.relationships.get(open.intent.relationshipId))) {
+    const birth = await bind(held, keys, fold, open.intent, resolution as Resolution);
+    if ("because" in birth) return none(birth.because);
+    if ("code" in birth) return failed(birth.code, birth.reason);
+    bound = birth.bound;
+    fold = await scanVault(held, keys);
+    open = openWork(fold, messageId);
+    if ("because" in open) return none(open.because);
+  }
+  const relationship = fold.relationships.relationships.get(open.intent.relationshipId) as Relationship;
+  const selected = await selectEnds(held, keys, fold, relationship, resolution !== null && !isPeerDID4(resolution.did) ? resolution : null);
+  if ("because" in selected) return none(selected.because);
+  if ("code" in selected) return failed(selected.code, selected.reason);
+  const content = await readContent(held, open.intent);
+  if ("because" in content) return none(content.because);
+  const plaintext = wirePlaintext(intentOfOutbound(open.intent, content.document), { from: selected.from, to: [selected.to], fromPrior: selected.fromPrior }, (root) => content.payloads.get(root) as Uint8Array);
+  const packed = await pack(fold, selected, plaintext, didcomm);
+  const envelope = parseStrict(packed);
+  if (!isJsonObject(envelope)) throw new TypeError("the encrypted envelope is a JSON object");
+  const bytes = canonicalize(envelope);
+  const envelopeCid = rawCidOfBytes(bytes);
+  const packageId = uuidv7() as PackageId;
+  const retiring = open.outbound.work.kind === "repack" ? open.outbound.work.packageIds : [];
+  const drafts: VaultDraft[] = retiring.map((retired) => vaultDraft("message.packageRetired", { messageId, packageId: retired, because: REPACKED, replacementPackageId: packageId }));
+  drafts.push(
+    vaultDraft("message.prepared", {
+      messageId,
+      packageId,
+      senderDidId: selected.sender.didId,
+      localKeyName: selected.sender.keyNames.keyAgreement,
+      recipientDid: selected.to,
+      peerResolutionEventId: selected.named.eventId as EventReference<"peer.resolved">,
+      fromPrior: selected.fromPrior,
+      intentHash: open.intent.intentHash,
+      plaintextHash: plaintextHash(plaintext),
+      envelopeCid,
+    })
+  );
+  const events = (await held.commit([{ cid: envelopeCid, source: bytes }], drafts)).map(readVaultEvent);
+  notes.push({ stream: "envelope", what: "seal", data: { ...sealData(packed, plaintext as unknown as IMessage), messageId, packageId } });
+  return {
+    result: {
+      outcome: "prepared",
+      messageId,
+      packageId,
+      prepared: events.find((event) => event.type === "message.prepared") as VaultEvent<"message.prepared">,
+      retired: events.filter((event): event is VaultEvent<"message.packageRetired"> => event.type === "message.packageRetired"),
+      bound,
+      resolved: selected.recorded,
+    },
+    notes,
+  };
+}
+
+/** Each entry written in turn, with a deadline and without a throw: the trace observes; what it observed already stands. */
+async function noteAll(trace: AgentTrace | null, notes: Note[]): Promise<void> {
+  if (trace === null) return;
+  for (const { stream, what, data } of notes) {
+    await bounded(AbortSignal.timeout(TRACE_WAIT_MS), () => trace.append(stream, what, data)).catch(() => undefined);
+  }
+}
+
 function openWork(fold: VaultFold, messageId: MessageId): Open | { because: string } {
   const outbound = fold.outbound.outbounds.get(messageId);
   if (outbound === undefined) throw new UnknownEntity("message", messageId);
@@ -205,11 +264,13 @@ function isBound(relationship: Relationship | undefined): boolean {
 }
 
 /**
- * The DID to resolve before the lock, or null when the pinned
- * evidence is all a package needs: a birth's peer, under the exact
- * spelling the intent froze; a bound relationship's current peer end,
- * only for the first package of a message to a peer that is not a
- * numalgo-4 DID, whose retained document needs no fresh resolution.
+ * The DID the fold wants resolved before this package, or null when
+ * the pinned evidence is all it needs. A birth no binding holds yet
+ * wants its peer, under the exact spelling the intent froze. A bound
+ * relationship wants its current peer end for the first package of a
+ * message only, and only when that end is not a numalgo-4 DID: the
+ * long form's retained document is the document, and nothing fresher
+ * exists to ask for.
  */
 function targetOf(fold: VaultFold, { outbound, intent }: Open): Did | null {
   const relationship = fold.relationships.relationships.get(intent.relationshipId);
@@ -218,20 +279,9 @@ function targetOf(fold: VaultFold, { outbound, intent }: Open): Did | null {
   return !isPeerDID4(peer) && outbound.packages.size === 0 ? peer : null;
 }
 
-/** The terminal failure of a message, under the lock, once the fold still says the message is open. */
-async function fail(runtime: VaultRuntime, keys: Keys, messageId: MessageId, code: string, reason: string, trace: AgentTrace | null): Promise<Prepared> {
-  return runtime.locked(async (held) => {
-    const open = openWork(await scanVault(held, keys), messageId);
-    if ("because" in open) return { outcome: "none", messageId, because: open.because };
-    return failHeld(held, messageId, code, reason, trace);
-  });
-}
-
-/** The message-scoped failure committed; the reason, which the event does not carry, goes to the local diagnostics. */
-async function failHeld(held: Held, messageId: MessageId, code: string, reason: string, trace: AgentTrace | null): Promise<Prepared> {
-  const [event] = (await held.commit([], [vaultDraft("delivery.failed", { messageId, scope: "message", packageId: null, code })])).map(readVaultEvent);
-  await trace?.append("diag", "delivery", { messageId, code, reason });
-  return { outcome: "failed", messageId, code, failed: event as VaultEvent<"delivery.failed"> };
+/** The keys among `authorized` that authcrypt from `sender` can seal to: didcomm agrees both ends over one curve, so a key on another is authorized by the document and still unusable here. */
+function sealable(authorized: Map<DidUrl, PublicKey>, sender: DidKeys): [DidUrl, PublicKey][] {
+  return [...authorized].filter(([, key]) => decodePublicKey(key).type === sender.keyAgreement.type);
 }
 
 /**
@@ -242,7 +292,7 @@ async function failHeld(held: Held, messageId: MessageId, code: string, reason: 
  * binding that pins it. A reverse-direction receipt that bound the
  * pair meanwhile is found by the caller's rescan, not here.
  */
-async function bind(held: Held, fold: VaultFold, intent: MessageOut, resolution: Resolution): Promise<{ bound: VaultEvent<"relationship.bound"> } | { because: string } | { code: string; reason: string }> {
+async function bind(held: Held, keys: Keys, fold: VaultFold, intent: MessageOut, resolution: Resolution): Promise<{ bound: VaultEvent<"relationship.bound"> } | { because: string } | { code: string; reason: string }> {
   const birth = intent.birth as NonNullable<MessageOut["birth"]>;
   const entity = fold.routes.dids.get(birth.localDidId);
   if (entity === undefined || entity.created === null || !entity.live) return { because: `the birth local DID ${birth.localDidId} is not live` };
@@ -251,17 +301,16 @@ async function bind(held: Held, fold: VaultFold, intent: MessageOut, resolution:
   if (claimants.length > 0) return { because: `the pair ${localDid} / ${resolution.did} is claimed by ${claimants.join(", ")}` };
   const pending = fold.relationships.pendingAt(localDid, resolution.did);
   if (pending.length > 0) return { because: `the pair ${localDid} / ${resolution.did} awaits the evidence of ${pending.flatMap((claim) => claim.eventIds).join(", ")}` };
-  const [key] = authorizedKeys(resolution, "keyAgreement").values();
-  if (key === undefined) return { code: PEER_KEY_CHANGED, reason: `${resolution.presentedDid} authorizes no key-agreement key this vault can use` };
-  const evidence = await commitResolution(held, { resolution, localKeyName: entity.keyNames.keyAgreement, peerPublicKey: key }, { fresh: !isPeerDID4(resolution.did) });
+  const [chosen] = sealable(authorizedKeys(resolution, "keyAgreement"), await keys.didKeys(birth.localDidId));
+  if (chosen === undefined) return { code: PEER_KEY_CHANGED, reason: `${resolution.presentedDid} authorizes no key-agreement key ${localDid} can seal to` };
+  const evidence = await commitResolution(held, { resolution, localKeyName: entity.keyNames.keyAgreement, peerPublicKey: chosen[1] }, { fresh: !isPeerDID4(resolution.did) });
   const [bound] = (await held.commit([], [vaultDraft("relationship.bound", { relationshipId: intent.relationshipId, localDidId: birth.localDidId, peerResolutionEventId: evidence.eventId as EventReference<"peer.resolved"> })])).map(readVaultEvent);
   return { bound: bound as VaultEvent<"relationship.bound"> };
 }
 
-/** What one package is built from: its two ends, the key at each, the evidence it names and the proof it carries. */
 interface Selected {
-  senderDidId: DidId;
-  localKeyName: KeyName;
+  sender: LocalNode;
+  senderKeys: DidKeys;
   /** the sender's spelling: the long form until the peer's input has confirmed the address, the short form after */
   from: Did;
   fromPrior: string | null;
@@ -279,33 +328,34 @@ interface Selected {
 
 /**
  * The two current ends of a bound relationship and the evidence between
- * them. The recipient key is one the pinned document authorizes and,
- * when a fresh document was resolved, one that document still
- * authorizes: a fresh resolution offering none of the pinned keys is
- * the peer's key changed under the same DID, which is terminal for the
- * message and extends no chain. The package names the pinned snapshot
- * under the sender's key, which is the fresh event itself when the
- * document is unchanged and a re-expression of the pin otherwise; the
- * fresh evidence is recorded either way.
+ * them. The recipient key is one the pinned document authorizes, the
+ * sender can seal to and, when a fresh document was resolved, one that
+ * document still authorizes: a fresh resolution offering none of the
+ * pinned keys is the peer's key changed under the same DID, which is
+ * terminal for the message and extends no chain. The package names the
+ * pinned snapshot under the sender's key, which is the fresh event
+ * itself when the document is unchanged and a re-expression of the pin
+ * otherwise; the fresh evidence is recorded either way.
  */
-async function selectEnds(held: Held, fold: VaultFold, relationship: Relationship, current: Resolution | null): Promise<Selected | { because: string } | { code: string; reason: string }> {
-  const node = relationship.localChain.at(-1) as LocalNode;
-  const entity = fold.routes.dids.get(node.didId);
-  if (entity === undefined || entity.created === null || !entity.live) return { because: `the current local DID ${node.didId} is not live` };
+async function selectEnds(held: Held, keys: Keys, fold: VaultFold, relationship: Relationship, current: Resolution | null): Promise<Selected | { because: string } | { code: string; reason: string }> {
+  const sender = relationship.localChain.at(-1) as LocalNode;
+  const entity = fold.routes.dids.get(sender.didId);
+  if (entity === undefined || entity.created === null || !entity.live) return { because: `the current local DID ${sender.didId} is not live` };
   const peerNode = relationship.peerChain.at(-1) as PeerNode;
   const pinnedEvent = fold.set.resolve(peerNode.resolutionEventId, "peer.resolved");
   if (pinnedEvent.status !== "present") return { because: `the resolution ${peerNode.resolutionEventId} pinning ${peerNode.did} is not here` };
   const pinned = await readResolution(pinnedEvent.event, objectReader(held.objects));
   if (pinned === null) return { because: `the document ${peerNode.documentCid} pinned for ${peerNode.did} is not here` };
-  let usable = [...authorizedKeys(pinned, "keyAgreement")];
+  const senderKeys = await keys.didKeys(sender.didId);
+  let usable = sealable(authorizedKeys(pinned, "keyAgreement"), senderKeys);
   if (current !== null) {
     const offered = new Set(authorizedKeys(current, "keyAgreement").values());
     usable = usable.filter(([, key]) => offered.has(key));
   }
   const chosen = usable.find(([, key]) => key === pinnedEvent.event.data.peerPublicKey) ?? usable[0];
-  if (chosen === undefined) return { code: PEER_KEY_CHANGED, reason: current === null ? `the document pinned for ${peerNode.did} authorizes no key-agreement key this vault can use` : `${current.presentedDid} no longer authorizes a key the relationship pins` };
+  if (chosen === undefined) return { code: PEER_KEY_CHANGED, reason: current === null ? `the document pinned for ${peerNode.did} authorizes no key-agreement key ${entity.created.did} can seal to` : `${current.presentedDid} no longer authorizes a key the relationship pins` };
   const [methodId, peerPublicKey] = chosen;
-  const localKeyName = node.keyNames.keyAgreement;
+  const localKeyName = sender.keyNames.keyAgreement;
   let recorded: VaultEvent<"peer.resolved"> | null = null;
   let named: VaultEvent<"peer.resolved">;
   if (current !== null) {
@@ -315,16 +365,16 @@ async function selectEnds(held: Held, fold: VaultFold, relationship: Relationshi
     named = await commitResolution(held, { resolution: pinned, localKeyName, peerPublicKey });
   }
   const confirmed = confirmedKeyNames(fold, relationship.relationshipId);
-  const confirmedHere = confirmed.has(node.keyNames.keyAgreement) || confirmed.has(node.keyNames.authentication);
+  const confirmedHere = confirmed.has(sender.keyNames.keyAgreement) || confirmed.has(sender.keyNames.authentication);
   let fromPrior: string | null = null;
-  if (!confirmedHere && node.edgeEventIds.length > 0) {
-    const edge = fold.set.resolve(node.edgeEventIds[0] as EventReference<"relationship.localTransitioned">, "relationship.localTransitioned");
-    if (edge.status !== "present") return { because: `the transition ${node.edgeEventIds[0]} adding ${node.didId} is not here` };
+  if (!confirmedHere && sender.edgeEventIds.length > 0) {
+    const edge = fold.set.resolve(sender.edgeEventIds[0] as EventReference<"relationship.localTransitioned">, "relationship.localTransitioned");
+    if (edge.status !== "present") return { because: `the transition ${sender.edgeEventIds[0]} adding ${sender.didId} is not here` };
     fromPrior = edge.event.data.fromPrior;
   }
   return {
-    senderDidId: node.didId,
-    localKeyName,
+    sender,
+    senderKeys,
     from: confirmedHere ? entity.created.did : entity.created.longFormDid,
     fromPrior,
     to: peerNode.did,
@@ -348,7 +398,7 @@ function confirmedKeyNames(fold: VaultFold, relationshipId: RelationshipId): Set
 
 type Content = { document: ReturnType<typeof readStoredDocument>; payloads: Map<Cid, Uint8Array> };
 
-/** The stored document and every inline attachment payload the intent names, read from the objects; why not, when one is not here. */
+/** An object that is damaged or too large for the wire is a reason the package cannot be made now, not a throw. */
 async function readContent(held: Held, intent: MessageOut): Promise<Content | { because: string }> {
   const read = async (cid: Cid): Promise<Uint8Array | null> => {
     try {
@@ -379,12 +429,12 @@ async function readContent(held: Held, intent: MessageOut): Promise<Content | { 
  * plaintext addresses. The documents are answered from the fold and the
  * pinned snapshot; nothing is resolved again.
  */
-async function pack(fold: VaultFold, keys: Keys, selected: Selected, plaintext: JsonObject, didcomm: DidcommApi): Promise<string> {
-  const entity = fold.routes.dids.get(selected.senderDidId);
-  if (entity === undefined || entity.created === null) throw new UnknownEntity("DID", selected.senderDidId);
+async function pack(fold: VaultFold, selected: Selected, plaintext: JsonObject, didcomm: DidcommApi): Promise<string> {
+  const entity = fold.routes.dids.get(selected.sender.didId);
+  if (entity === undefined || entity.created === null) throw new UnknownEntity("DID", selected.sender.didId);
   const senderKid = selected.from + splitDidUrl(entity.methodIds.keyAgreement[0] as string)[1];
   const recipientKid = selected.to + splitDidUrl(selected.methodId)[1];
-  const secrets = secretsOf(await keys.didKeys(selected.senderDidId), [entity.created.longFormDid, entity.created.did], entity.methodIds);
+  const secrets = secretsOf(selected.senderKeys, [entity.created.longFormDid, entity.created.did], entity.methodIds);
   const resolver = pinnedResolver(fold, { current: [selected.pinned] });
   const [packed] = await new didcomm.Message(plaintext as unknown as IMessage).pack_encrypted(recipientKid, senderKid, null, resolver, secretsResolverFor(secrets), { forward: false });
   return packed;

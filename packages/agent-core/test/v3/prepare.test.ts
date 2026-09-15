@@ -14,6 +14,7 @@ import {
   vaultDraft,
   type Did,
   type DidId,
+  type DidUrl,
   type EventReference,
   type MessageId,
   type PublicKey,
@@ -36,8 +37,11 @@ const FRESH = "019b0000-0000-7000-8000-00000000000c" as DidId;
 const MESSAGE = "019b0000-0000-7000-8000-000000000101" as MessageId;
 const SECOND = "019b0000-0000-7000-8000-000000000102" as MessageId;
 const THIRD = "019b0000-0000-7000-8000-000000000103" as MessageId;
+const FOURTH = "019b0000-0000-7000-8000-000000000104" as MessageId;
 const BOB = "did:web:bob.example";
 const BOB_URL = "https://bob.example/.well-known/did.json";
+const NEXT = "did:web:next.example";
+const NEXT_URL = "https://next.example/.well-known/did.json";
 const IAT = 1_757_700_000;
 
 const HELLO: Content = { type: BASIC_MESSAGE, body: { content: "hello" } };
@@ -63,8 +67,8 @@ function serving(bob: WebIdentity): PrepareOptions & { calls: string[] } {
   return { ...options({ fetch: web.fetch }), calls: web.calls };
 }
 
-async function webResolution(bob: WebIdentity): Promise<Resolution> {
-  const outcome = await resolve(bob.did, () => null, { fetch: webFetch({ [BOB_URL]: () => json(bob.document) }).fetch });
+async function webResolution(bob: WebIdentity, url = BOB_URL): Promise<Resolution> {
+  const outcome = await resolve(bob.did, () => null, { fetch: webFetch({ [url]: () => json(bob.document) }).fetch });
   if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
   return outcome.resolution;
 }
@@ -126,6 +130,61 @@ async function confirmedAt(a: Party, R: RelationshipId, localDidId: DidId, resol
   const fold = await scanVault(a.runtime.vault, a.keys);
   const scope = fold.relationships.observations.get(fold.set.of("message.in").find((event) => event.data.wireMessageId === wire)!.eventId);
   expect(scope).toEqual({ status: "scoped", relationshipId: R });
+}
+
+/** The peer's verified continuation from `bob` to `next`, committed as receipt commits it: the carrying receipt at Alice's key with the proof, and the transition it verifies. */
+async function continuedTo(a: Party, R: RelationshipId, root: VaultEvent<"peer.resolved">, binding: VaultEvent<"relationship.bound">, bob: WebIdentity, next: WebIdentity, evidence: VaultEvent<"peer.resolved">): Promise<void> {
+  const issuer = { resolve: async (did: string): Promise<DIDDoc | null> => (did === bob.did ? toDIDCommDIDDoc(bob.document) : null) };
+  const [fromPrior] = await new didcomm.FromPrior({ iss: bob.did, sub: next.did, iat: IAT }).pack(`${bob.did}#auth`, issuer, secretsResolverFor(bob.secrets));
+  const localKeyName = didKeyName(DID, "key-agreement");
+  const peerPublicKey = evidence.data.peerPublicKey;
+  const wire = "continuation-carrier" as WireMessageId;
+  const plaintext = { id: wire, type: BASIC_MESSAGE, body: { content: "moved" }, from: next.did, to: [a.did], from_prior: fromPrior };
+  const read = readPlaintext(plaintext);
+  const messageId = inboundMessageId(peerPublicKey, wire);
+  const receipt: VaultData["message.in"] = {
+    messageId,
+    wireMessageId: wire,
+    receiptOrdinal: "1" as ReceiptOrdinal,
+    intentHash: read.intentHash,
+    plaintextHash: read.plaintextHash,
+    localKeyName,
+    msgType: BASIC_MESSAGE,
+    peerResolutionEventId: evidence.eventId as EventReference<"peer.resolved">,
+    relationshipBindingEventId: binding.eventId as EventReference<"relationship.bound">,
+    peerTransitionEventId: null,
+    presentedDid: next.did as Did,
+    did: next.did as Did,
+    thid: null,
+    pthid: null,
+    createdTime: null,
+    expiresTime: null,
+    pleaseAck: null,
+    ack: [],
+    headers: {},
+    fromPrior,
+    bodyCid: read.stored.bodyCid,
+    attachmentCids: [],
+    bytes: 100,
+    signedBy: null,
+    receivedVia: { mediationId: null, deliveryId: null },
+  };
+  const transition: VaultData["relationship.peerTransitioned"] = {
+    relationshipId: R,
+    localKeyName,
+    peerPublicKey,
+    fromDid: bob.did as Did,
+    presentedFromDid: bob.did as Did,
+    toDid: next.did as Did,
+    presentedToDid: next.did as Did,
+    fromPrior,
+    priorResolutionEventId: root.eventId as EventReference<"peer.resolved">,
+    peerResolutionEventId: evidence.eventId as EventReference<"peer.resolved">,
+    messageId,
+  };
+  await a.runtime.vault.commit([{ cid: read.stored.bodyCid, source: read.stored.bytes }], [vaultDraft("message.in", receipt), vaultDraft("relationship.peerTransitioned", transition)]);
+  const relationship = (await scanVault(a.runtime.vault, a.keys)).relationships.relationships.get(R);
+  expect(relationship).toMatchObject({ conflict: false, currentPeerDid: next.did });
 }
 
 /** The envelope opened on the peer's side: with the peer's secrets, Alice's documents as she holds them, and the peer's own. */
@@ -301,6 +360,106 @@ describe("prepare to a did:web peer", () => {
     expect((await prepare(a.runtime, a.keys, SECOND, { ...web, now: () => 1_999 * 1000 })).outcome).toBe("prepared");
     await a.runtime.close();
   });
+
+  it("a verified continuation to another DID committed while the old peer end was being resolved: the answer, confirming or closing, is dropped, the new end resolved afresh and the package addressed to it", async () => {
+    for (const reply of ["confirmed", "gone", "same keys"] as const) {
+      const a = await alice();
+      const bob = await webIdentity(BOB);
+      const next = await webIdentity(NEXT, reply === "same keys" ? 77 : 78);
+      const pinned = await webResolution(bob);
+      const { R, root, binding } = await bound(a, pinned);
+      const continued = await webResolution(next, NEXT_URL);
+      const evidence = await commitResolution(a.runtime, { resolution: continued, localKeyName: didKeyName(DID, "key-agreement"), peerPublicKey: keyAgreementKey(continued) });
+      await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+      const web = webFetch({
+        [BOB_URL]: async () => {
+          await continuedTo(a, R, root, binding, bob, next, evidence);
+          return reply === "gone" ? new Response("moved away", { status: 404 }) : json(bob.document);
+        },
+        [NEXT_URL]: () => json(next.document),
+      });
+      const result = await prepare(a.runtime, a.keys, MESSAGE, options({ fetch: web.fetch }));
+      expect(result.outcome).toBe("prepared");
+      if (result.outcome !== "prepared") return;
+      expect(web.calls).toEqual([BOB_URL, NEXT_URL]);
+      expect(result.prepared.data.recipientDid).toBe(NEXT);
+      expect(result.resolved?.data).toMatchObject({ did: NEXT, documentCid: continued.cid });
+      const fold = await scanVault(a.runtime.vault, a.keys);
+      expect(fold.set.of("delivery.failed")).toEqual([]);
+      expect(fold.set.of("peer.resolved").filter((event) => event.data.did === BOB)).toHaveLength(1);
+      expect(fold.relationships.relationships.get(R)?.peerChain.map((node) => node.did)).toEqual([BOB, NEXT]);
+      expect(fold.outbound.outbounds.get(MESSAGE)?.packages.get(result.packageId)?.membership).toEqual({ status: "verified" });
+      const { packed } = await envelopeOf(a, result);
+      const { plaintext, metadata } = await opened(a, packed, next.secrets, [next.document]);
+      expect(plaintext.to).toEqual([NEXT]);
+      expect(metadata.encrypted_to_kids).toEqual([`${NEXT}#agree`]);
+      await a.runtime.close();
+    }
+  });
+
+  it("one message is prepared by one caller at a time: a second call waits for the first and finds its package, asking the network nothing", async () => {
+    const a = await alice();
+    const bob = await webIdentity(BOB);
+    await bound(a, await webResolution(bob));
+    await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => (entered = resolve));
+    const paused = new Promise<void>((resolve) => (release = resolve));
+    const web = webFetch({
+      [BOB_URL]: async () => {
+        entered();
+        await paused;
+        return json(bob.document);
+      },
+    });
+    const first = prepare(a.runtime, a.keys, MESSAGE, options({ fetch: web.fetch }));
+    await started;
+    const second = prepare(a.runtime, a.keys, MESSAGE, options({ fetch: web.fetch }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(web.calls).toEqual([BOB_URL]);
+    release();
+    expect((await first).outcome).toBe("prepared");
+    expect(await second).toMatchObject({ outcome: "none", because: expect.stringContaining("awaits submission") });
+    expect(web.calls).toEqual([BOB_URL]);
+    await a.runtime.close();
+  });
+
+  it("a document that also authorizes a key on another curve: the key the sender can seal to is chosen whatever the order, on a birth and on a bound pair; a document with no such key fails the message and binds nothing", async () => {
+    const { publicKey } = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+    const jwk = await crypto.subtle.exportKey("jwk", publicKey);
+    const p256: JsonObject = { id: `${BOB}#p256`, type: "JsonWebKey2020", controller: BOB, publicKeyJwk: { kty: jwk.kty as string, crv: jwk.crv as string, x: jwk.x as string, y: jwk.y as string } };
+    const withP256 = (bob: WebIdentity, keyAgreement: string[]): WebIdentity => ({ ...bob, document: { ...bob.document, verificationMethod: [p256, ...(bob.document.verificationMethod as JsonObject[])], keyAgreement } });
+    for (const birth of [true, false]) {
+      const a = await alice();
+      const bob = withP256(await webIdentity(BOB), [`${BOB}#p256`, `${BOB}#agree`]);
+      const resolution = await webResolution(bob);
+      expect(authorizedKeys(resolution, "keyAgreement").size).toBe(2);
+      if (!birth) await bound(a, resolution);
+      await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+      const result = await prepare(a.runtime, a.keys, MESSAGE, serving(bob));
+      expect(result.outcome).toBe("prepared");
+      if (result.outcome !== "prepared") return;
+      expect(result.bound === null).toBe(!birth);
+      const x25519 = authorizedKeys(resolution, "keyAgreement").get(`${BOB}#agree` as DidUrl);
+      const fold = await scanVault(a.runtime.vault, a.keys);
+      expect(fold.set.resolve(result.prepared.data.peerResolutionEventId, "peer.resolved")).toMatchObject({ status: "present", event: { data: { peerPublicKey: x25519 } } });
+      expect(fold.outbound.outbounds.get(MESSAGE)?.packages.get(result.packageId)?.membership).toEqual({ status: "verified" });
+      const { packed } = await envelopeOf(a, result);
+      const { metadata } = await opened(a, packed, bob.secrets, [bob.document]);
+      expect(metadata.encrypted_to_kids).toEqual([`${BOB}#agree`]);
+      await a.runtime.close();
+    }
+    const a = await alice();
+    const bob = withP256(await webIdentity(BOB), [`${BOB}#p256`]);
+    await send(a.runtime, a.keys, { peerDid: BOB, sender: { didId: DID } }, HELLO, { messageId: MESSAGE });
+    expect(await prepare(a.runtime, a.keys, MESSAGE, serving(bob))).toMatchObject({ outcome: "failed", code: PEER_KEY_CHANGED });
+    const fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.set.of("relationship.bound")).toEqual([]);
+    expect(fold.set.of("peer.resolved")).toEqual([]);
+    expect(fold.outbound.outbounds.get(MESSAGE)?.outcome).toBe("failed");
+    await a.runtime.close();
+  });
 });
 
 describe("prepare to a numalgo-4 peer", () => {
@@ -461,6 +620,50 @@ describe("prepare to a numalgo-4 peer", () => {
     const fold = await scanVault(a.runtime.vault, a.keys);
     expect([...fold.outbound.outbounds.values()].map((outbound) => outbound.outcome)).toEqual(["prepared", "prepared", "prepared"]);
     expect(fold.set.of("peer.resolved")).toHaveLength(4);
+    await a.runtime.close();
+    await b.runtime.close();
+  });
+
+  it("the trace is written after the lock and never stops the mail: a trace that rejects loses its entry alone, and a trace that stalls holds no other writer", async () => {
+    const a = await alice();
+    const b = await bobVault();
+    const to = { peerDid: b.longFormDid, sender: { didId: DID } };
+    await send(a.runtime, a.keys, to, HELLO, { messageId: MESSAGE });
+    await send(a.runtime, a.keys, to, { ...HELLO, createdTime: 1_000, expiresTime: 2_000 }, { messageId: SECOND });
+    const rejecting = new AgentTrace({ ...a.runtime.local, trace: { ...a.runtime.local.trace, append: () => Promise.reject(new Error("trace full")) } });
+    expect((await prepare(a.runtime, a.keys, MESSAGE, options({ trace: rejecting }))).outcome).toBe("prepared");
+    expect(await prepare(a.runtime, a.keys, SECOND, options({ trace: rejecting, now: () => 2_000 * 1000 }))).toMatchObject({ outcome: "failed", code: EXPIRED });
+    let fold = await scanVault(a.runtime.vault, a.keys);
+    expect([MESSAGE, SECOND].map((messageId) => fold.outbound.outbounds.get(messageId)?.outcome)).toEqual(["prepared", "failed"]);
+
+    await send(a.runtime, a.keys, to, HELLO, { messageId: THIRD });
+    let entered!: () => void;
+    let release!: () => void;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const stalled = new Promise<void>((resolve) => (release = resolve));
+    const stalling = new AgentTrace({
+      ...a.runtime.local,
+      trace: {
+        ...a.runtime.local.trace,
+        append: async (type, data) => {
+          entered();
+          await stalled;
+          return a.runtime.local.trace.append(type, data);
+        },
+      },
+    });
+    const preparing = prepare(a.runtime, a.keys, THIRD, options({ trace: stalling }));
+    await inside;
+    const meanwhile = await send(a.runtime, a.keys, to, HELLO, { messageId: FOURTH });
+    expect(meanwhile.intent.data.messageId).toBe(FOURTH);
+    fold = await scanVault(a.runtime.vault, a.keys);
+    expect(fold.outbound.outbounds.get(THIRD)?.outcome).toBe("prepared");
+    release();
+    const result = await preparing;
+    expect(result.outcome).toBe("prepared");
+    if (result.outcome !== "prepared") return;
+    const seals = await stalling.read({ stream: "envelope" });
+    expect(seals.map((entry) => [entry.type, entry.data["messageId"]])).toEqual([["envelope.seal", THIRD]]);
     await a.runtime.close();
     await b.runtime.close();
   });

@@ -87,4 +87,4 @@ export {
   type ResolutionEvidence,
 } from "./evidence.js";
 export { selectTarget, send, type Content, type Selection, type SendOptions, type Sender, type Sent, type Target } from "./send.js";
-export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
+export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, outboundWorkKey, prepare, prepareAll, type PrepareOptions, type Prepared } from "./prepare.js";
