@@ -191,7 +191,6 @@ export function pairEvidence(fold: VaultFold, localDid: Did, peerDid: Did): Pair
   return { claimants: relationships.claimants(localDid, peerDid), contradicted, awaited };
 }
 
-/** Why a relationship does not hold the pair yet, as the fold puts it. */
 function standingOf(relationship: Relationship | undefined): string {
   const why = relationship === undefined ? [] : [...relationship.deferred, ...relationship.faults];
   return why.length === 0 ? "" : `: ${why.join("; ")}`;
@@ -199,40 +198,77 @@ function standingOf(relationship: Relationship | undefined): string {
 
 /**
  * The relationships that name both addresses of the pair in evidence
- * they retain, while their validated histories do not hold it: a
- * binding whose root local DID is this recipient and whose root peer is
- * this sender — by the resolution it pins, or, while that resolution is
- * not here, by the ID the two derive — a transition naming either
- * address at the end it moves, and the ID a birth at the pair would
- * take. Their evidence points at the pair before any chain reaches it,
- * so a birth beside them would claim what they claim.
+ * they retain, while their validated histories do not hold it: one
+ * naming the recipient at its local end and the sender at its peer end,
+ * and the one a birth at the pair would take the ID of. Their evidence
+ * points at the pair before any chain reaches it, so a birth beside
+ * them would claim what they claim.
  */
 function claiming(fold: VaultFold, localDid: Did, peerDid: Did): RelationshipId[] {
   const birth = birthOf(localDid, peerDid);
-  const locals = new Set<RelationshipId>();
-  const peers = new Set<RelationshipId>();
-  const naming = new Set<RelationshipId>();
-  for (const event of fold.set.of("relationship.bound")) {
-    const { relationshipId, localDidId, peerResolutionEventId } = event.data;
-    if (relationshipId === birth) naming.add(relationshipId);
-    const rootLocal = didOf(fold, localDidId);
-    if (rootLocal === localDid) locals.add(relationshipId);
-    const resolved = fold.set.resolve(peerResolutionEventId, "peer.resolved");
-    if (resolved.status === "present" ? resolved.event.data.did === peerDid : rootLocal !== null && birthOf(rootLocal, peerDid) === relationshipId) peers.add(relationshipId);
-  }
-  for (const edge of fold.set.of("relationship.localTransitioned")) if (didOf(fold, edge.data.toDidId) === localDid) locals.add(edge.data.relationshipId);
-  for (const edge of fold.set.of("relationship.peerTransitioned")) if (edge.data.toDid === peerDid) peers.add(edge.data.relationshipId);
-  for (const relationshipId of locals) if (peers.has(relationshipId)) naming.add(relationshipId);
   const holding = new Set(fold.relationships.claimants(localDid, peerDid));
-  return [...naming].filter((relationshipId) => !holding.has(relationshipId)).sort();
+  const naming: RelationshipId[] = [];
+  for (const [relationshipId, { locals, peers }] of namedAddresses(fold)) {
+    if (holding.has(relationshipId)) continue;
+    const namesPeer = peers.has(peerDid) || [...locals].some((local) => birthOf(local, peerDid) === relationshipId);
+    if (relationshipId === birth || (locals.has(localDid) && namesPeer)) naming.push(relationshipId);
+  }
+  return naming.sort();
+}
+
+/** The addresses one relationship's retained evidence names at each of its ends, wherever its validated histories reach. */
+interface NamedAddresses {
+  readonly locals: Set<Did>;
+  readonly peers: Set<Did>;
+}
+
+/**
+ * Each relationship's addresses as the evidence retained for it names
+ * them: the binding's root local DID and the peer DID of the resolution
+ * it pins, and both ends of every transition. A peer address is named
+ * by derivation too, in `claiming`, where a local address named here
+ * derives the relationship's own ID with it, which is the pair a
+ * binding not here would pin.
+ */
+function namedAddresses(fold: VaultFold): Map<RelationshipId, NamedAddresses> {
+  const named = new Map<RelationshipId, NamedAddresses>();
+  const ends = (relationshipId: RelationshipId): NamedAddresses => {
+    const known = named.get(relationshipId);
+    if (known !== undefined) return known;
+    const addresses: NamedAddresses = { locals: new Set(), peers: new Set() };
+    named.set(relationshipId, addresses);
+    return addresses;
+  };
+  const local = (addresses: NamedAddresses, didId: DidId): void => {
+    const did = didOf(fold, didId);
+    if (did !== null) addresses.locals.add(did);
+  };
+  for (const event of fold.set.of("relationship.bound")) {
+    const addresses = ends(event.data.relationshipId);
+    local(addresses, event.data.localDidId);
+    const resolved = fold.set.resolve(event.data.peerResolutionEventId, "peer.resolved");
+    if (resolved.status === "present") addresses.peers.add(resolved.event.data.did);
+  }
+  for (const edge of fold.set.of("relationship.localTransitioned")) {
+    const addresses = ends(edge.data.relationshipId);
+    local(addresses, edge.data.fromDidId);
+    local(addresses, edge.data.toDidId);
+  }
+  for (const edge of fold.set.of("relationship.peerTransitioned")) {
+    const addresses = ends(edge.data.relationshipId);
+    addresses.peers.add(edge.data.fromDid).add(edge.data.toDid);
+  }
+  return named;
 }
 
 /**
  * What the bindings under one relationship ID disagree on, with every
  * event deciding it here: two root local DIDs, two root peer DIDs or
- * documents, or a binding its own resolution refutes. Nothing later
- * makes such a relationship stand, since each of those references is
- * immutable, so no delivery is ever born at a pair it claims.
+ * documents, a binding its own resolution refutes, or one whose pinned
+ * snapshot is not the document it names. Nothing later makes such a
+ * relationship stand, since each of those references is immutable and a
+ * snapshot is checked against the one document its CID can name, so no
+ * delivery is ever born at a pair it claims.
  */
 function contradictingBindings(fold: VaultFold, relationshipId: RelationshipId): string | null {
   const localDidIds = new Set<DidId>();
@@ -245,6 +281,7 @@ function contradictingBindings(fold: VaultFold, relationshipId: RelationshipId):
     if (resolved.status === "mismatched") return `binding ${event.eventId} names ${resolved.event.type} as its peer resolution`;
     if (resolved.status === "missing") continue;
     if (bindingHolds(event.data, resolved.event.data, didOf(fold, event.data.localDidId)) === "contradicted") return `binding ${event.eventId} does not hold: its resolution, local DID and relationship ID disagree`;
+    if (fold.checks.resolutionChecks.get(resolved.event.eventId) === "invalid") return `binding ${event.eventId} pins the snapshot ${resolved.event.eventId}, which is not the document it names`;
     dids.add(resolved.event.data.did);
     documents.add(resolved.event.data.documentCid);
   }
