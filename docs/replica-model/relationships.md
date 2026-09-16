@@ -11,11 +11,6 @@ Multi-replica mediation and vault synchronization are deferred.
 This document uses **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**
 and **MAY** as described in BCP 14 when they appear in all capitals.
 
-There is no Estoc rendezvous wire protocol, connection request, accept or
-decline. Messages use ordinary DIDComm protocols. Invitation consumption is independent of public/private address allocation.
-Address-change evidence derives a channel-local `from_prior` link; contacts
-directly select channels under [channels.md](channels.md#contact-channels).
-
 <!-- reading-guide:start -->
 <a id="reading-guide"></a>
 
@@ -111,40 +106,29 @@ Every instruction to append an event in this document means
 
 ## 4. Invariants
 
-1. A channel preserves canonical local/peer roles; message identity uses canonical sender, recipient and wire ID.
-2. Authenticate before receipt; validate each operation's source and channel evidence before its effects.
-3. Receipt never requires a contact; invitation consumption is recorded separately after its own eligibility checks.
-4. A verified link has exact channel context and never globally aliases DIDs.
-5. Opposite-side rotations may form a verified join; competing same-side successors conflict.
-6. Missing evidence is pending, never an arrival-order election or permission fallback.
-7. Every outbound freezes its channel when intent commits; rotation affects new intents only.
-8. Every transport attempt has a prior committed attempt record and a live dispatch action.
-9. Import, reopen and replica change never automatically send old work.
-10. Manual retry preserves the attempted package; a new channel needs a new message ID.
-11. Contact membership grants no ACK, key, invitation or execution authority.
-12. Phase 1 has one active executor; peers address DIDs, never replica or contact IDs.
+Address policy follows [channel identity](channels.md#channel-identity),
+[continuity](channels.md#continuity), [operation eligibility](channels.md#operation-eligibility)
+and [dispatch authority](channels.md#fixed-outbound-channel). Allocation,
+disclosure and contact preferences do not alter those rules. Peers address DIDs;
+phase 1 has one active executor.
 
 <a id="10-symmetric-relationship-identity"></a>
 <a id="symmetric-relationship-identity"></a>
 
 ## 5. Channel pairs and contact identifiers
 
-Channels use [canonical local/peer DID pairs](channels.md#channel-identity).
-Contacts use UUIDv7 and directly select those pairs. A UI's derived continuity
-view may change when new evidence arrives, without changing contact selections
-or protocol identities.
+Channels use [canonical local/peer DID pairs](channels.md#channel-identity);
+contacts directly select those pairs.
 
 <a id="101-contact-ids"></a>
 <a id="contact-ids"></a>
 
 ### 5.1 Contact IDs
 
-Contacts use UUIDv7. Create or assign a contact only by explicit product policy.
-Creation selects one or more complete local/peer DID pairs and records their
-membership under [vault events](vault-events.md#contact-created). It may precede
-receipt or peer resolution. A discovered peer address must be paired with a
-chosen local DID before it becomes a contact selection. Neither that selection
-nor matching names or keys establishes channel authority.
+Contacts use UUIDv7 and are created or assigned only by explicit product policy.
+Creation records a non-empty set of complete channel pairs under
+[vault events](vault-events.md#contact-created), possibly before receipt or peer
+resolution. A discovered peer DID therefore needs a local-DID choice first.
 
 <a id="102-binding-and-contact-policy"></a>
 <a id="binding-and-contact-policy"></a>
@@ -152,39 +136,23 @@ nor matching names or keys establishes channel authority.
 ### 5.2 Operation and display policy
 
 Opposite first sends can select the same channel without role arbitration.
-Sending, preparation, automatic outputs, local rotation and
-received ACK/error attribution follow their own evidence and policy rules.
-Each operation retains its own verification snapshot across method-authorized
-document updates. Invitation consumption is a separate decision under
-[channels.md](channels.md#invitation-consumed).
-
-`contact.channelsSet` organizes display. It does not authorize processing, consume
-invitations, continue channels or authorize
-new sends. Deleting a contact is presentation state; a product action that also
-blocks communication must append concrete channel denials separately.
+Each operation retains its own verification evidence. Contact selections affect
+display and send choices under [the contact fold](vault-events.md#contact-fold),
+not protocol authority. Deletion that also blocks communication must append
+concrete channel denials separately.
 
 <a id="out-of-band-discovery"></a>
 
 ## 6. Out-of-band discovery
 
 OOB, QR, directory, file, NFC or manual exchange discloses an ordinary address.
-Reusable discovery SHOULD use a public-contact address. An OOB ID supplies
-`pthid`, never channel identity. A one-use OOB disclosure is consumed
-automatically from an eligible source; no additional user decision is required.
-Many-use OOB invitations and direct DID disclosures have no exclusive consumer.
-Direct disclosure includes sharing a DID through a profile page or directory
-without an OOB invitation.
-
-A one-use invitation is consumed only by `invitation.consumed` under
-[the invitation fold](vault-events.md#invitation-fold), independently of reply
-or display work. Its exact disclosure and proof-free source fix the consumer.
-The active runtime also completes missing consumption during recovery, using
-the retained receipt order and current eligibility rules in
-[channels.md](channels.md#invitation-consumed). Plain receipt alone records no
-consumer. Deletion, erasure and later conflicts do not reopen it. Different
-peer consumers conflict. A consumed invitation does not disable its disclosed
-DID; receipt and other operations retain their own evidence and policy rules.
-Many-use invitations have no consumption event or exclusive consumer.
+Reusable discovery SHOULD use a public-contact address. Record the disclosed
+content as an OOB invitation or direct DID under [did.disclosed](vault-events.md#did-disclosed),
+independently of its publication medium. An OOB ID supplies `pthid`, never
+channel identity. One-use invitations are consumed automatically under
+[channels.md](channels.md#invitation-consumed); many-use invitations and direct
+disclosures have no exclusive consumer. Availability follows
+[the invitation fold](vault-events.md#invitation-fold).
 
 <a id="address-lifecycle"></a>
 
@@ -206,23 +174,19 @@ start new application work under [channels.md](channels.md#continuity).
 
 ## 8. Ordinary sending and channel selection
 
-The send API selects one exact oriented channel before committing intent.
-An explicit address choice can start a new channel without a wire handshake.
-A contact selection must resolve to a concrete eligible channel; contact
-membership supplies no authentication authority. Verified successors may guide
-this new selection. A contact with no eligible selected channel or verified
-continuation supplies no send target. To add a new address, first select its
-complete local/peer pair. An existing intent's selection is immutable.
+Before intent commit, select one exact eligible channel explicitly or through
+[the contact's send choices](vault-events.md#contact-fold). Verified successors
+may guide this selection; an explicit address choice can start a new channel
+without a handshake. Existing intents keep their channels.
 
 <a id="ordinary-sending-requirements"></a>
 
 ### 8.1 Common requirements
 
 All messages follow DIDComm authentication, exact recipient-method checks and
-the ordinary content/header rules in [distributed-delivery.md](distributed-delivery.md). There is no
-initial-specific size, message-type, age or lifetime acceptance policy. Hard
-parser/resource limits and integrity checks remain. Missing `please_ack` or
-`response_requested == false` does not prevent durable receipt; each later operation follows its own policy.
+[ordinary content/header rules](distributed-delivery.md). The [receipt gate](#hard-pre-vault-gate)
+applies equally to first and later messages; ACK and Ping-response preferences
+do not prevent receipt.
 
 <a id="default-trust-ping"></a>
 
@@ -267,19 +231,9 @@ Content remains application content regardless of whether a rotation is carried.
 
 ### 8.5 Prepare and send
 
-1. Require a live initial dispatch action or an explicit manual action, and
-   recheck completion, expiry, denial, conflict and local lifecycle.
-2. For first preparation, resolve the fixed peer and retain its evidence.
-   Validate the committed intent and required source/proof evidence.
-3. Prepare only in the intent's fixed channel. Once attempted, reuse its exact
-   package; missing bytes wait rather than causing replacement encryption.
-4. Verify required recipient registration, commit `delivery.attempted`, then
-   make one transport call. Record `delivery.submitted` on acceptance.
-5. Failure or uncertain outcome leaves manual work. Opening, importing,
-   duplicate input and rotation do not dispatch it. Changing channel creates
-   a new user-authored message and wire ID.
-
-See [dispatch authority](channels.md#fixed-outbound-channel).
+Follow [the send procedure](distributed-delivery.md#send-an-ordinary-message)
+and [package preparation](distributed-delivery.md#preparing-a-package) within
+the committed channel, under [dispatch authority](channels.md#fixed-outbound-channel).
 
 <a id="uniform-receipt"></a>
 
@@ -301,14 +255,10 @@ cannot authenticate a carrier without predecessor material. Failed unpack
 supplies no authenticated observation or pickup ACK. Missing invitation
 decisions or continuity alone cannot defer independent authentication and receipt.
 
-After durable `message.in`, missing continuity evidence, invitation decisions
-or operation evidence becomes upper-layer recovery work. Each consumer waits
-only for its required evidence. Missing consumption evidence affects invitation
-availability, not application views, received ACK/error
-attribution, automatic output or preparation. These waits do not withhold
-pickup ACK. Recovery reads the saved evidence; it does not restart sender
-resolution for an already committed observation.
-Timeout, reconnect, a new wire ID and erased bodies select no invitation consumer.
+After durable `message.in`, each consumer waits only for its required evidence.
+These upper-layer waits do not withhold pickup ACK. Recovery uses saved sender
+evidence without restarting resolution; invitation recovery follows
+[its own rules](channels.md#invitation-consumed).
 
 Local wait state for an unopened delivery is runtime scheduling state. Retry
 when its actual cryptographic/local prerequisite changes; unrelated evidence
@@ -378,19 +328,11 @@ policy are checked after receipt when consuming an invitation or starting new wo
 
 ### 9.3 Integrity checks and durable receipt
 
-Commit the authenticated channel observation before deciding invitation consumption
-or new work. Each source-derived operation requires a complete source witness; a
-proof-bearing source also needs complete evidence for its derived peer link.
-Automatic intents retain their exact source, and local
-rotation retains its predecessor pair and nullable source under
-[operation eligibility](channels.md#operation-eligibility).
-
-Superseded senders, blocked channels, invalid proof and contradictory identity
-evidence grant no new automatic effects. A matching duplicate has no new response
-obligation and cannot trigger old output dispatch. Later normal rotation or
-blocking does not erase saved intents, results or authenticated ACK evidence.
-New work and dispatch still obey current policy; importing saved facts validates
-their retained evidence without reconstructing past local policy.
+Commit the authenticated observation before source-derived work. Validate each
+consumer under [operation eligibility](channels.md#operation-eligibility),
+including carried proof and current policy where required. Later rotation or
+blocking preserves earlier facts; duplicates follow
+[the duplicate receipt rules](distributed-delivery.md#duplicate-receipt-handling).
 
 <a id="5-did-profiles-and-resolution-evidence"></a>
 
@@ -768,29 +710,21 @@ successor, exact source observation and frozen proof. Reuse an existing matching
 do not branch merely because work was interrupted. Group membership is not a
 reason to rotate an unrelated channel.
 
-This policy creates a dedicated Empty notification intent for the selected
-successor, independent of any Ping reply or pure ACK. An existing response keeps
-its channel and does not suppress the notification. Reuse the decision's exact
-original source, successor and proof even if another input prompts completion.
-No recovery worker automatically dispatches a missing notification from
-historical input; manual completion may create or execute the saved work.
+Create or reuse the dedicated notification under
+[the built-in operation rules](distributed-delivery.md#built-in-independent-operations),
+preserving the decision's source, successor and proof. Existing replies neither
+move to the successor nor suppress the notification; historical work requires
+manual completion.
 
 <a id="automatic-response-selection"></a>
 
 ### 11.1 Independent automatic intents
 
-On eligible live input, local policy may independently create a pure ACK, a
-Trust Ping response and an Empty rotation notification. Each uses its own fixed
-tuple and intent under [delivery](distributed-delivery.md#built-in-independent-operations).
-Trust Ping responds only when `response_requested` is not false. Pure ACKs are
-standalone Empty messages; Ping replies and rotation notifications have empty
-`ack` arrays. Optional private allocation or notification failure does not block
-an otherwise eligible reply or ACK on an authorized channel.
-
-Empty, ping-response and Report Problem do not trigger another privacy
-notification. A generic pure ACK requests no ACK. Notification proof, successor,
-source and new intent are committed before transport; duplicate receipt and
-recovery never mint a new effect merely to send again.
+Eligible live input may independently produce an ACK, Ping response and rotation
+notification under [delivery](distributed-delivery.md#built-in-independent-operations).
+Optional private allocation or notification failure does not block an otherwise
+eligible reply or ACK. Empty, ping-response and Report Problem never trigger
+another privacy notification.
 
 <a id="proof-and-ordinary-message-headers"></a>
 
@@ -806,10 +740,8 @@ An attempted package remains byte-identical after confirmation.
 
 ### 11.3 Registration and submission
 
-Verify the new recipient registration before disclosing its address. Commit
-the exact package and then an attempt event before making the transport call.
-Acceptance records submission; failure/uncertainty leaves manual action.
-Replica change, missing ACK and notification loss never cause automatic replay.
+Verify the new recipient registration before disclosure, then follow
+[the send procedure](distributed-delivery.md#send-an-ordinary-message).
 
 <a id="confirmation-and-overlap"></a>
 
@@ -826,18 +758,12 @@ only when no other channel or disclosure still needs it.
 
 ## 12. Peer address changes
 
-Store the authenticated successor-channel observation first, even when its
-predecessor document or history is missing. Commit resolution evidence when
-available and fold the original proof into a peer edge at its exact predecessor
-pair. Check each operation's evidence and policy independently of invitation use.
-No link event is appended. Show [verification status](channels.md#verification-status)
-while evidence is pending or invalid. Opposite local/peer rotations use the explicitly
-verified join; neither a shared DID nor UI grouping supplies a missing edge.
-
-Superseded peer input is receivable but cannot create new application work.
-Existing receipts and decisions remain historical evidence. Competing successors and
-contradictory identity evidence conflict without selecting the earliest event.
-Links do not merge message identities, move old outputs or automatically send anything.
+Retain an independently authenticated successor receipt even when predecessor
+evidence is missing. Obtain its proof document under
+[predecessor resolution](#predecessor-resolution), then derive links, joins and
+supersession under [continuity](channels.md#continuity). Show the resulting
+[verification status](channels.md#verification-status). Superseded peer input
+remains receivable but cannot start new application work.
 
 <a id="remote-errors-and-integrity-failures"></a>
 
@@ -846,9 +772,8 @@ Links do not merge message identities, move old outputs or automatically send an
 A Report Problem is a display diagnostic beside a uniquely correlated outbound
 only when its carrier has a complete source witness, the same channel or a
 verified role-preserving successor path, and the required protocol thread
-correlation. Neither the carrier nor the outbound needs invitation use.
-Keep its body available for display. It does not prove submission failure,
-retract a link or authorize replay. A normal authenticated observation may
+correlation. Keep its body available for display. It does not prove submission
+failure, retract a link or authorize replay. A normal authenticated observation may
 separately prove exact-address knowledge.
 
 Missing source/verification evidence defers attribution; inconsistent evidence exposes
@@ -871,16 +796,10 @@ Inbound sender resolution uses its own per-delivery accounting and active-time
 rules above. Pickup, recipient reconciliation and sync may retry normally;
 they are not replay of a user message.
 
-Each message transport call requires a prior `delivery.attempted` and one live
-initial/manual dispatch action. There is no automatic transport retry after
-failure/uncertainty or recovery. Manual retry preserves the first attempted
-package, including fixed channel and IDs. Submitted, terminal, expired, erased
-or otherwise ineligible work cannot retry. Missing bytes must be recovered.
-
-A new explicit send uses a new message ID and may select a verified successor
-channel. The original remains submitted, failed or unconfirmed as evidenced;
-new sending never claims it was undelivered. Same content does not imply one
-operation. Business protocols needing idempotency must define their own
+Message retries and new sends follow [dispatch authority](channels.md#fixed-outbound-channel):
+a manual retry preserves the attempted package; selecting a successor channel
+requires a new message ID. Neither missing history nor a new send proves that
+the original was undelivered. Business idempotency requires a protocol-defined
 authenticated operation identity.
 
 <a id="phase-1-execution-and-deferred-replication"></a>

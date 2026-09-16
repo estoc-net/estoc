@@ -828,32 +828,24 @@ does not erase retained messages.
 }
 ```
 
-`as` is `oob` for an OOB invitation or `direct` for a DID shared without an
-OOB invitation. A profile page, directory, QR code or copied link can carry
-either form; classify the disclosed content. Audience and transport are
-independent of this classification.
-`uses` is `one` or `many`. `oobId` is REQUIRED when `as == "oob"` and null
-otherwise. `goal` is nullable.
-`direct` disclosures MUST use `uses == "many"`. A one-use OOB
-invitation is consumed automatically when an eligible source is available under
-[section 5.8](#invitation-fold); no separate user decision is required.
-The `uses` choice grants no reply, continuity or dispatch authority.
-`data.didId` references the local entity's `did.created.data.didId` under
-[section 3.5](#identifier-and-reference-vocabulary). Its DID spellings remain on that entity.
-A one-use OOB invitation may disclose any live communication DID; a matching
-`invitation.consumed` consumes it under [section 5.8](#invitation-fold).
-An `oobId` MUST identify one local disclosure. Publishing that invitation again
-reuses its committed disclosure; a new invitation receives a new `oobId`.
-Distinct imported OOB disclosures with the same non-null `oobId` are a
-disclosure conflict and supply no additional use. They never reopen a prior
-complete consumption.
+`as` is `oob` for an OOB invitation or `direct` for a DID shared without one,
+regardless of audience or publication medium. `uses` is `one` or `many`;
+`direct` MUST use `many`. `oobId` is REQUIRED for `oob` and null otherwise;
+`goal` is nullable. `didId` names a local DID entity under
+[section 3.5](#identifier-and-reference-vocabulary), which retains its spellings.
+Any live communication DID may be disclosed. One-use consumption follows
+[the invitation fold](#invitation-fold).
 
-This is the permanent record that an address was revealed. Before disclosure,
-a mediated `boundRouteId` MUST have currently verified recipient registration.
-Reusable/public disclosure SHOULD use an address allocated for discovery, and
-SHOULD NOT publish an address already allocated for private communication.
-These are privacy policies, not invitation-consumption or cryptographic role
-checks. First disclosure exposes the validated `did:peer:4` long form.
+An `oobId` MUST identify one local disclosure. Republishing an invitation reuses
+that disclosure; a new invitation receives a new `oobId`. Distinct imported OOB
+disclosures with the same non-null `oobId` conflict, supplying no additional use
+and never reopening complete consumption.
+
+This permanently records disclosure. A mediated `boundRouteId` MUST have current
+verified recipient registration before disclosure. Reusable/public disclosure
+SHOULD use a discovery address and SHOULD NOT expose an address allocated for
+private communication. These privacy policies grant no cryptographic authority.
+First disclosure exposes the validated `did:peer:4` long form.
 
 <a id="did-retired"></a>
 
@@ -998,23 +990,15 @@ Expose available, consumed by that peer, pending evidence, unavailable lifecycle
 or conflict as distinct states. Many-use invitations have no exclusive consumer
 and cannot be the target of `invitation.consumed`.
 
-Missing source/disclosure evidence that could establish another consumption
-leaves availability pending, including an earlier candidate that prevents
-automatic selection under channels.md. A complete same-peer consumption is idempotent;
-incompatible complete consumers or duplicate OOB disclosure IDs expose an
-unavailable conflict, with no event-order winner. Incomplete siblings cannot
-erase an already complete consumption. Validate positive consumption evidence
-before availability to avoid a circular fold. Later erasure, denial, retirement
-or conflict never makes a consumed invitation available again.
+Missing evidence for a possible consumption or earlier receipt candidate leaves
+availability pending. Incompatible complete consumers or duplicate OOB disclosure
+IDs make it conflicted and unavailable. Incomplete siblings cannot erase an
+established consumption, which never becomes available again.
 
-A complete consumption record establishes the consumer. A pure fold never
-assigns one from receipt order, contact membership, output intents or rotation.
-The active runtime automatically appends a missing consumption from the first
-eligible retained receipt under [channels.md](channels.md#invitation-consumed),
-including during recovery after reopen, restore or import. Existing consumption
-is preserved when earlier receipts arrive later. This local bookkeeping neither
-dispatches work nor disables receipt at the disclosed DID, and grants or
-withholds no other operation's authority.
+Validate positive evidence before aggregate availability under channels.md.
+Only a complete consumption record establishes the consumer; the active runtime
+appends missing records automatically, including on recovery. A pure fold never
+assigns a consumer or appends an event.
 
 <a id="12-relationships-and-address-changes"></a>
 <a id="relationships-and-address-changes"></a>
@@ -1042,10 +1026,8 @@ separately serialized under [delivery](distributed-delivery.md#send-an-ordinary-
 
 ### 6.2 Invitation consumption evidence
 
-`invitation.consumed` names the exact disclosure and source under
-[channels.md](channels.md#invitation-consumed). Its source determines the consumer
-without copied channel or key fields. Known missing references defer consumption;
-they never block independent receipt or operations whose own evidence is complete.
+The [consumption schema](channels.md#invitation-consumed) defines the exact
+disclosure/source references; [section 5.8](#invitation-fold) defines the view.
 
 <a id="123-relationshipcontactassigned"></a>
 <a id="relationship-contactassigned"></a>
@@ -1079,14 +1061,10 @@ selected set; an empty list clears it. Concurrent sets are not unioned. No set
 event means an empty selection. This event neither creates a contact nor
 restores a deleted contact; missing contact data affects only presentation.
 
-Selection requires no invitation use. Missing channel evidence leaves an
-unresolved display selection; the selected strings alone authorize no sending.
-One channel MAY be selected by several contacts; this creates overlapping
-views, not an identity conflict or a canonical contact for that channel.
-Changing one contact's set does not change another's. No ownership, permission,
-authentication evidence or execution identity transfers through membership.
-Derived related history follows [the channel view rules](channels.md#contact-channels)
-without rewriting this exact set. Membership may be edited offline.
+Selections may be edited offline; missing evidence leaves an unresolved display
+selection. One channel MAY be selected by several contacts, each with its own set.
+Membership grants no protocol authority. Derived related history follows
+[the channel view rules](channels.md#contact-channels) without rewriting the set.
 
 <a id="112-relationshippeertransitioned"></a>
 <a id="relationship-peertransitioned"></a>
@@ -1136,17 +1114,11 @@ channel context and verified proof.
 
 ### 6.5 Local continuity decisions
 
-Use `did.rotationSelected` under
-[channels.md](channels.md#did-rotationselected). Freeze successor, route, proof and any
-trigger before disclosure. The decision fixes its predecessor through
-`fromDidId` and canonical `peerDid`, including for a source-free manual rotation.
-Confirmation uses a complete source witness with the exact address and
-peer/context evidence, independently of invitation consumption and without depending
-on the rotation being selected.
-Rotation changes only newly created outbound intents. Existing queued/prepared
-messages keep their channel, even before any attempt. No package is retired or
-repacked merely to follow a successor. Explicit lifecycle/security denial may
-block a retry without relocating it.
+The [did.rotationSelected schema](channels.md#did-rotationselected) defines the
+fixed predecessor pair, successor, proof, nullable source and independent
+confirmation requirement. Commit it before disclosure under
+[the rotation procedure](#rotate-a-local-relationship-address). Rotation affects new
+intents only; existing packages follow [dispatch authority](channels.md#fixed-outbound-channel).
 
 <a id="144-relationship-fold-and-address-index"></a>
 <a id="relationship-fold-and-address-index"></a>
@@ -1161,20 +1133,14 @@ Missing references defer the affected projection; contradictory identities,
 proofs or same-end successors conflict. Message and execution identities remain
 fixed when graph history changes.
 
-Contact membership is a separate projection and is never read as a
-cryptographic prerequisite. A contact can show multiple disconnected channel chains.
-
 <a id="7-contacts"></a>
 
 <a id="contacts"></a>
 
 ## 7. Contacts and application views
 
-A contact organizes channels through local decisions identified by one
-`contactId`. It selects complete local/peer DID pairs directly under
-[section 6.3](#contact-channelsset), independently of their
-authority and continuity. There is no intermediate display-group entity.
-Contact IDs name local decisions; they do not merge protocol identities.
+A contact uses a `contactId` to organize [selected channels](#contact-channelsset),
+names and preferences independently of protocol authority.
 
 <a id="contact-ids"></a>
 
@@ -1206,13 +1172,10 @@ Direct channel selections use `contact.channelsSet` in
 
 `because` is `user` or `automatic`.
 
-The producer first selects one or more complete channels, then commits this
-event together with an initial non-empty `contact.channelsSet`. Channel
-selection may precede any receipt, outbound intent or peer resolution; it
-supplies no authentication or send authority. A later set may be empty under
-[section 6.3](#contact-channelsset). Imported creation without its membership
-has an empty selection until that membership is available; missing membership
-does not invalidate the creation or invent a send target.
+Commit this event together with an initial non-empty `contact.channelsSet`.
+Selection may precede receipt, outbound intent or peer resolution. Imported
+creation without its membership remains valid with an empty selection until
+that membership arrives; later sets may be empty under [section 6.3](#contact-channelsset).
 
 <a id="contact-petname"></a>
 
@@ -1270,13 +1233,9 @@ with the contact. `data.didId` is that entity's `did.created.data.didId` under
 [section 3.5](#identifier-and-reference-vocabulary). `because` is `channel`, `rendezvous`,
 `manual` or another documented policy value.
 
-This preference selects among eligible channels for a new send under
-[sections 9.2](#message-out) and [7.4](#contact-fold). It cannot change an existing
-intent's endpoints, roll back continuity or grant permission through a contact. A publicly disclosed local address may
-send normally; fresh private allocation is the default policy in
-[relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
-`contact.channelsSet` selects the displayed channels independently of these
-address preferences.
+This selects among eligible channels for a new send under [the contact fold](#contact-fold)
+without changing `contact.channelsSet`. Publicly disclosed addresses may send;
+private allocation follows [the address policy](relationships.md#early-private-address-policy-and-notifications).
 
 <a id="contact-merged"></a>
 
@@ -1293,12 +1252,10 @@ address preferences.
 }
 ```
 
-`contactId` and `fromContactId` name the two contacts. This is a display-only
-grouping hint between them. A UI MAY group
-those contact views, but every member retains its own contact ID, decisions
-and selected channel set. This event MUST NOT affect attribution, DID selection,
-continuity, message or execution identity, ACK scope, channel receipt, invitation
-consumption, deletion or erasure. It creates no protocol representative ID.
+This is a display-only grouping hint between `contactId` and `fromContactId`.
+A UI MAY group their views; each retains its ID, decisions and channel set.
+The hint MUST NOT affect attribution, DID selection, protocol identity or
+authority, invitation consumption, deletion or erasure.
 
 <a id="contact-deleted"></a>
 
@@ -1326,34 +1283,27 @@ This is a permanent tombstone for exactly the named contact ID.
 
 ### 7.3 Application message views
 
-Applications MAY derive display data from retained message history under a
-supported protocol and local display policy. The protocol defines its fields,
-interpretation and ordering; this schema defines no profile-specific events or
-projection fields. Derived data identifies its exact source and source channel.
-Inbound claims require a complete authenticated source witness and consistent
-logical-message intent under [operation eligibility](channels.md#operation-eligibility).
-Missing evidence defers attribution; conflicting evidence supplies no verified
-claim. Duplicate observations of one logical message do not create another
-application fact or advance it by cache-rebuild time.
+Applications MAY derive display data from retained messages under a supported
+protocol and local display policy. The protocol defines fields, interpretation
+and ordering. Every value retains its exact source and channel; inbound claims
+require a complete source witness and consistent logical intent under
+[operation eligibility](channels.md#operation-eligibility). Missing evidence
+defers attribution; conflicting evidence supports no verified claim. Duplicates
+and cache rebuilds neither create facts nor advance their ordering.
 
-For example, a peer name comes from that protocol's recognized name field,
-not arbitrary message text. It remains a peer claim, creates no contact,
-changes no `contact.petname` and grants no permission to share information.
-A view that a profile was submitted requires a protocol-recognized
-`message.out` and valid committed submission with its attempt/package evidence.
-Intent, attempt or peer ACK alone proves no submission. The derived view adds
-no proof that the peer received the message.
+A peer name must come from a protocol-recognized field and remains a peer claim.
+It creates no contact, changes no `contact.petname` and grants no sharing
+permission. To display a profile as submitted, require a protocol-recognized
+`message.out` and complete committed submission evidence; this proves no peer receipt.
 
-These views derive from retained sources; any cache must be rebuildable.
-Read content through
-[section 12.2](#reading-content); erasure removes cached values that require the
-erased bytes. An object retained by another message cannot restore an erased
-source. Retained metadata and delivery records still support facts they
-independently establish, and explicit contact petnames remain separate.
-Missing or erased evidence is not proof that information was never shared.
-Rebuilding or losing a view grants no send, retry or protocol-response action.
-Contact views may aggregate channel-labelled data without moving its source
-or transferring cryptographic authority or sharing permission.
+Caches must be rebuildable from retained sources. Read content through
+[section 12.2](#reading-content).
+Erasure invalidates values requiring the erased bytes, even if another message
+retains the same object. Retained metadata and delivery records still support
+their own facts; explicit petnames remain separate. Missing or erased evidence
+does not prove information was never shared. Aggregation retains source-channel
+attribution and grants no cryptographic authority or sharing permission.
+Rebuilding or losing a view grants no dispatch action.
 
 <a id="146-contact-fold"></a>
 <a id="contact-fold"></a>
@@ -1370,26 +1320,21 @@ conflicting authentication evidence remains visible in the source channel.
 
 `writeTo[]` is the concrete eligible channel choices shown for a new user send
 from the contact's selected channels and their verified continuations.
-Membership is not eligibility: each choice needs its exact pair, usable local
-key/route and current send policy. A derived continuation additionally needs
-its complete link evidence. An empty selected set gives an empty `writeTo[]`.
+Each choice needs its exact pair, usable local key/route, current send policy
+and, for a derived continuation, complete link evidence. An empty selection
+gives an empty `writeTo[]`.
 A newly discovered peer address first needs an explicit local-DID choice to
 form a complete channel. Add that pair to the contact's selection or send to
 it independently of a contact. Its fixed-channel intent may precede peer
 resolution; preparation still validates its own peer resolution.
 `contact.useDid` only expresses a local-address preference among eligible
-options. If it does not resolve to one channel, the caller must select a
-concrete eligible channel explicitly; matching contact names, peer DIDs or
-contact merges do not choose one. Selection happens before intent commit and
-never retargets a saved intent. Contact membership or a new derived successor
-does not supply an automatic send action.
+options. If it does not resolve to one channel, the caller must explicitly
+select an eligible channel before intent commit. Names, peer-DID matches and
+contact merges cannot resolve ambiguity or supply dispatch authority.
 
-A deleted contact is hidden by contact policy. Blocking/cleanup requires the
-separate explicit channel decisions in [section 13.6](#delete-a-contact).
-Regrouping never modifies those decisions. A supported same-DID key change or
-remote Report Problem is shown only with exact channel/message evidence;
-names, shared keys and wire-ID matches alone do not attribute it. A remote
-error changes neither submission state nor dispatch authority.
+Blocking and cleanup follow [contact deletion](#delete-a-contact), independently
+of regrouping. Displayed key changes require exact channel evidence; Report
+Problem attribution follows [the error rules](relationships.md#remote-errors-and-integrity-failures).
 
 <a id="stored-message-document"></a>
 
@@ -1563,32 +1508,18 @@ logical response.
 }
 ```
 
-`senderDidId` and `recipientDid` are REQUIRED and immutable.
-The sender names an existing eligible local DID; the recipient retains the selected
-peer DID spelling. Their canonical local/peer pair fixes the channel and direction.
-Select these addresses under the operation lock before intent commit. Every
-package must match them. Rotation changes selection for new
-intents only; even a never-attempted intent is not retargeted. See
-[fixed outbound channels](channels.md#fixed-outbound-channel).
+`senderDidId` and `recipientDid` are REQUIRED and immutable. Under the operation
+lock, select an eligible local DID entity and a peer DID before intent commit.
+Their canonical pair fixes the channel under [fixed outbound channels](channels.md#fixed-outbound-channel).
+`recipientDid` retains the exact supplied spelling, including a validated Peer
+long form for offline preparation; canonicalize it for channel/package comparison.
+Selection requires no resolver lookup; preparation retains its own peer evidence.
 
-The selected `recipientDid` retains the exact supplied spelling, including a
-validated Peer long form needed for offline first preparation. Canonicalize it
-for channel identity and package endpoint comparison. No resolver lookup is
-required to record this selection. Preparation retains its own exact peer
-evidence and validates the fixed-channel intent. An automatic intent requires its complete source witness,
-the permitted response path and operation-specific policy under
-[operation eligibility](channels.md#operation-eligibility).
-
-The UI may select a channel through a contact, but the contact ID is not stored
-as protocol identity. The two fixed address fields are portable intent
-metadata, excluded from the DIDComm intent
-hash but included in full event equality. They cannot be changed by rotation,
-manual retry, contact regrouping or a different replica.
-
-For automatic output, choose one channel authorized for replying to the exact
-source witness. A verified role-preserving successor path may permit a new
-response on a successor channel. Once that response intent exists, its channel
-is fixed; source duplicates cannot select another channel for the same effect.
+An automatic output selects the source's channel or a verified role-preserving
+successor under [operation eligibility](channels.md#operation-eligibility).
+A UI may select through a contact, but its ID is not protocol identity. The
+fixed address fields are excluded from the intent hash and included in full
+event equality.
 
 Requirements:
 
@@ -1607,16 +1538,13 @@ Requirements:
 - `intentHash` is computed under [distributed-delivery.md section 5](distributed-delivery.md#canonical-projections-and-hashes);
 - `executionId`, `effectType` and `effectKey` are all
   null for a locally initiated send and all non-null for an inbound-derived
-  protocol effect, including an explicitly requested completion of pending
-  response work. A local user or policy decision may initiate an ordinary
-  message without a carrier at a fixed channel; explicit user selection may
-  choose a new channel. It commits intent before network effects;
+  protocol effect, including explicit completion of pending response work;
 - `sourceEventId` is required and non-null for an inbound-derived effect,
   otherwise null. It names one exact already committed `message.in` forming a
   complete source witness. Its logical input derives `executionId`; its actual
   channel is the output channel or a verified role-preserving predecessor.
   Authentication and required proof evidence must be complete independently
-  of the intent. Invitation use is not required to create or validate the output;
+  of the intent;
 - `rotationEventId` is required and non-null exactly for a dedicated rotation
   notification. It names an already committed `did.rotationSelected`; sender,
   recipient and notification fields obey [the built-in operation rules](distributed-delivery.md#built-in-independent-operations).
@@ -1711,21 +1639,13 @@ Requirements:
 - `packageId` is a UUIDv7 and equals outer `forward.id`; and
 - every retry of this package uses identical envelope bytes.
 
-All packages for one `messageId` preserve its intent hash, oriented channel
-and immutable headers. Before any attempt, an original live send may prepare
-another package only within this fixed channel using eligible retained
-authentication evidence. It cannot select another DID at either end. Once any
-`delivery.attempted` exists, its exact package is frozen for every retry; no
-replacement encryption, key selection, proof or spelling change is permitted.
-Incomplete attempt/package references block new preparation. After submission
-or message-terminal failure, no preparation or retry is permitted.
-
-Lifecycle and security eligibility are checked again at dispatch. A failed check
-never moves this message to a successor. Historical package evidence remains
-valid when later policy prevents another submission.
-
-The package names no recipient replica. Rendezvous and pairwise
-channel messages follow the same package rules.
+Before any attempt, a live initial or manual action may prepare another package
+in the fixed channel using eligible evidence. Once attempted, that exact package is
+frozen for every retry under [dispatch authority](channels.md#fixed-outbound-channel).
+Incomplete attempt/package references block preparation; submission or
+message-terminal failure stops preparation and retry. Recheck lifecycle and
+security at dispatch without invalidating historical package evidence.
+Public and pairwise addresses use the same package rules and name no replica.
 
 <a id="message-packageretired"></a>
 
@@ -1884,7 +1804,6 @@ names this outbound wire ID. Its channel must be the
 outbound's fixed channel or a verified role-preserving successor under
 [channels.md](channels.md#continuity). Validate the outbound intent and exact
 prepared package independently; display membership never supplies that path.
-Neither the carrier nor the outbound needs invitation use for attribution.
 All redundant local-key, sender, wire-ID and message fields match this one
 complete witness. Do not assemble a witness from incomplete sibling rows.
 
@@ -1901,11 +1820,9 @@ that complete carrier's local key and derived authenticated peer key.
 ### 9.8 Outbound message and delivery fold
 
 For each message ID, require one consistent complete `message.out` intent.
-All prepared packages preserve its fixed oriented channel and intent hash.
-Before any attempt, eligible initial/manual preparation may replace a package
-within that channel. After an attempt, every attempt must name the same exact
-package. A missing referenced package/intent blocks preparation and dispatch;
-incompatible attempted packages conflict without choosing the first by time.
+Validate packages and attempts under sections 9.3 and 9.4.1. Missing exact
+references block preparation and dispatch; incompatible attempted packages
+conflict without an event-order winner.
 
 Derive these independent facts:
 
@@ -1923,7 +1840,7 @@ For an inbound-derived output, verify its `(executionId, effectType)` tuple
 against its exact complete source witness in the channel-local
 execution and the producing protocol's operation rules. Each tuple permits
 at most one compatible intent. ACK, Ping reply and rotation notification have
-distinct effect types and coexist for one execution.
+distinct effect types.
 A tuple-local output conflict stops that operation; an authenticated
 source-intent conflict stops all affected
 source-derived work. Notification selection conflicts are scoped to the exact
@@ -1931,10 +1848,8 @@ rotation decision. None of these conflicts reopens recorded submission.
 
 Portable eligibility requires valid evidence, retained bytes, an unexpired,
 unsubmitted, nonterminal, nonerased intent and permitted keys/routes/channel
-policy. It is necessary but never sufficient for dispatch: only a live initial
-or fresh manual action may append an attempt and make its one call. Current
-graph tips select new intents, not replacement endpoints for existing ones.
-No fold scans `queued` records into network work after open/import/restore.
+policy. Dispatch additionally requires a live initial or fresh manual action
+under [channels.md](channels.md#fixed-outbound-channel).
 
 Displayed outcome precedence is:
 
@@ -1956,7 +1871,7 @@ send creates a new ID without altering the old outcome.
 Receipt timing uses the earliest parsed RFC 3339 source-observation `at` among
 valid ACK witnesses. `late` is true exactly when acknowledged, an immutable
 expiry exists, and that instant is at or after expiry. It uses no current
-clock or ACK-lift timestamp. Neither ACK timing nor missing ACK changes
+clock or `delivery.acknowledged.at`. Neither ACK timing nor missing ACK changes
 submission state, envelope retention or dispatch authority.
 
 <a id="10-inbound-message-events"></a>
@@ -2042,10 +1957,6 @@ Requirements:
   from the local DID owning `localKeyName` and the authenticated canonical `did`.
   Validate the local DID against the actual plaintext recipient; missing exact
   DID/key evidence defers dependent projections. Anonymous input has no channel.
-  No consumption/link reference occurs in `message.in`;
-  consumers check [operation eligibility](channels.md#operation-eligibility)
-  directly after receipt and retain evidence in their concrete intents/results.
-
 - `presentedDid` is the exact DID spelling disclosed on the wire, including a
   Peer DID long form when first seen;
 - `did` is the canonical peer DID, using Peer DID numalgo-4 short form after
@@ -2129,17 +2040,10 @@ conflict. The generic event store remains payload-opaque. Its [section 5.3](even
 `ForkedAuthor` check detects unseen events under the current local author; it
 does not prove that every historical author is fork-free.
 
-The active runtime commits this event together with its retained objects,
-after its exact resolution evidence is durable. Pickup ACK follows channel
-receipt under [DD receive](distributed-delivery.md#receive-a-message), whether
-invitation state is known or pending. Safe hard pre-vault rejection remains
-the separate ACK-without-receipt path; failed authentication or unavailable
-cryptographic/local prerequisites cannot masquerade as a durable observation.
-
-Supersession, invitation and denial checks occur after
-receipt as required by each consumer. Refusing one operation retains the
-received facts and authorizes no other operation; an independent consumer
-checks its own source evidence and policy.
+Commit the observation with its objects after its exact resolution evidence.
+Pickup ACK follows [the receive procedure](distributed-delivery.md#receive-a-message),
+including its separate hard-rejection path. Subsequent consumers independently
+check [operation eligibility](channels.md#operation-eligibility).
 
 <a id="duplicate-transition-and-conflict-rules"></a>
 
@@ -2211,9 +2115,8 @@ consuming schema or fold. Incomplete evidence is not a proven mismatch merely
 because the candidate cannot yet enter the witness set.
 
 Subject to those checks, an existential claim requires at least one complete
-witness. If the consumer defines an aggregate, apply it to all qualifying
-witnesses, not only one selected for a lift. In particular, [section 9.8](#outbound-message-and-delivery-fold)
-aggregates ACK receipt time across duplicates and distinct ACK carriers.
+witness. Aggregates use all qualifying witnesses; [section 9.8](#outbound-message-and-delivery-fold)
+therefore computes ACK receipt time across duplicates and distinct carriers.
 
 <a id="147-inbound-message-and-execution-fold"></a>
 <a id="inbound-message-and-execution-fold"></a>
@@ -2257,12 +2160,8 @@ other external effects require the live initial/manual authority specified by
 
 ### 10.7 Operation evidence
 
-Check [operation eligibility](channels.md#operation-eligibility) for each operation.
-Automatic `message.out` intents retain their exact source;
-`did.rotationSelected` retains its predecessor pair, successor,
-proof and nullable source. ACK observations validate their complete source witness and target
-path. None of these consumers depends on invitation consumption.
-These records authorize no unrelated operation on the same input.
+[Operation eligibility](channels.md#operation-eligibility) defines the independent
+evidence and policy checks for intents, rotation decisions and observations.
 
 <a id="13-automatic-effects"></a>
 
@@ -2434,13 +2333,10 @@ list when no new objects are needed; `Vault.events` is read-only.
 7. Start recipient reconciliation, pickup and permitted synchronization. Enable
    new user sends and manual actions only after normal runtime/evidence checks.
 
-Open/import/restore MUST NOT dispatch historical outbounds, regenerate missing
-automatic replies for sending, or take over another replica's outbox. This
-includes ACKs, privacy notifications and protocol effects. A duplicate network
-delivery of an already retained input is historical work, not a new live trigger.
-An explicit user action may retry its frozen eligible package; missing bytes
-must first be recovered. The phase-1 single executor restriction remains.
-No exactly-once claim is made across loss of the authoritative history.
+Open/import/restore MUST NOT dispatch historical work under
+[dispatch authority](channels.md#fixed-outbound-channel). Duplicate delivery of
+retained input is historical work. Phase 1 still permits one executor and makes
+no exactly-once claim across loss of authoritative history.
 
 <a id="162-establish-mediation"></a>
 
@@ -2484,15 +2380,10 @@ reduce linkability, but route choice does not establish channel authority.
 
 ### 13.4 Disclose an address
 
-Create or select a live communication DID under [section 13.3](#create-a-communication-did). Reconcile its
-bound route and verify recipient registration, then commit `did.disclosed`
-and expose its long form by OOB, QR, file or another discovery transport.
-The disclosure freezes whether an OOB invitation is one-use or many-use before
-publication. One-use consumption is automatic under [section 5.8](#invitation-fold);
-many-use and other disclosure forms have no exclusive consumer.
-Public discovery SHOULD select an address allocated for that purpose and avoid
-exposing an address used privately. These are disclosure policies; the same DID
-identity and receipt rules apply to either choice.
+Create or select a live DID under [section 13.3](#create-a-communication-did),
+reconcile its bound route and verify recipient registration. Commit
+[did.disclosed](#did-disclosed), fixing its form and invitation use limit before
+exposing the long form through the chosen discovery transport.
 
 The address belongs to the vault, not the process displaying it. A runtime
 missing authoritative local key/route state leaves incoming delivery pending
@@ -2543,8 +2434,7 @@ Shared keys/routes are not retired merely because one display contact disappears
 2. Create a fresh local DID/eligible route and sign one frozen predecessor proof.
 3. Commit the successor, then `did.rotationSelected` with `fromDidId`, `peerDid`,
    `toDidId`, nullable `sourceEventId` and frozen `fromPrior`. Recheck lifecycle,
-   denial, supersession and conflict under the lock. Selection and notification
-   need no invitation use. Do not retire shared resources as part of this operation.
+   denial, supersession and conflict under the lock. Do not retire shared resources.
 4. Commit or reuse the dedicated Empty notification intent naming this rotation
    decision under [delivery](distributed-delivery.md#built-in-independent-operations).
    Verify recipient registration before disclosure and use the initial/manual

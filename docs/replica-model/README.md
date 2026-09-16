@@ -10,40 +10,28 @@ sections define requirements.
 ## Model overview
 
 A vault has one seed, immutable events and raw content-addressed objects.
-Channels are ordered local/peer DID pairs that retain authenticated communication.
-Each receipt, package and proof retains its own document evidence. Sending,
-automatic output, preparation, local rotation and received ACK/error
-attribution use their concrete evidence and applicable policy. A separate
-`invitation.consumed` records the peer using a one-use OOB disclosure; it does
-not authorize or prevent those operations. One-use consumption is automatic,
-including local recovery of an unfinished record; many-use invitations have no
-exclusive consumer.
-Method-authorized document updates preserve the channel. Directed links are
-derived from received proofs and local rotation decisions. Receipt can precede
-proof verification, with pending/invalid/conflict status visible in the UI.
-Contacts organize complete local/peer channel pairs with names and preferences,
-without cryptographic authority. Creation records an initial channel selection;
-a contact with no selected channels supplies no send target.
+[Channels](channels.md#model) are ordered local/peer DID pairs. Each receipt,
+package and proof retains its own verification evidence. Method-authorized
+document updates preserve the pair; received proofs and local rotation decisions
+derive directed links between pairs. Receipt may precede continuity verification,
+whose status remains visible.
 
-An outbound fixes its channel and direction at intent commit. Rotation selects
-new messages only. Every transport call follows a durable attempt and a live
-initial/manual action; reopen, restore and another replica never automatically
-send pending messages or old protocol effects. Manual retry uses the exact
-attempted package, while a new channel means a new message ID. Peer ACKs record
-receipt independently of submission. See [channels](channels.md#model) and
+Operations use their own evidence and policy. One-use OOB consumption is
+recorded automatically, including on recovery, and is independent of other
+operations; many-use invitations have no exclusive consumer. Contacts organize
+selected channels with local names and preferences. Applications derive display
+data from retained message history under their protocol rules.
+
+An outbound fixes its channel at intent commit; rotation selects new messages
+only. Every transport call requires a durable attempt and a live initial/manual
+action. Recovery exposes pending work for manual action. Manual retry uses the
+exact attempted package, while a new channel requires a new message ID. Peer
+ACKs record receipt independently of submission. See
 [delivery boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
-Each operation checks its source, endpoint and proof evidence and applicable policy.
-Automatic intents retain their exact source references. Applications derive
-display data from retained message history under their protocol rules.
-Local rotation decisions freeze the old local DID, peer DID, successor, proof
-and nullable trigger.
 ACK, Trust Ping reply and rotation notification use independent persisted
-intents identified by `(executionId, effectType)`, with at most one compatible
-intent per tuple. Each effect type is a stable operation URI. ACKs and rotation
-notifications are standalone Empty messages. A notification names its rotation
-decision and reuses the original source, successor and proof. Pending work is
-derived from retained intents and remains available for manual action.
+intents identified by `(executionId, effectType)`. Each stable operation URI
+permits at most one compatible intent per execution.
 
 | Layer | Documents | Responsibility |
 | --- | --- | --- |
