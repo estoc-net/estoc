@@ -243,7 +243,6 @@ The version-3 purposes and resulting namespace UUIDs are:
 | `inbound-message` | `4dc929eb-aa9c-5f2e-9d33-1fdf1848fde6` |
 | `message-execution` | `6511fc66-4d39-589e-b2c7-7185a807b6c6` |
 | `automatic-mid` | `8847bd57-5907-5bcd-9a71-d1e97cee3199` |
-| `channel` | `bab533fd-a809-5ec6-80bc-6eb81f7c17f9` |
 
 A deterministic entity rule then computes:
 
@@ -274,16 +273,16 @@ it does not imply that every identifier has the same encoding or scope.
 | One exact event | `EventId` | envelope `eventId` |
 | Typed event reference | `EventReference<T>` | payload fields ending in `EventId` and elements of `*EventIds`, including source, trigger, resolution, acceptance, rotation and attempt references |
 | Contact | `ContactId` | `contactId`, `fromContactId` |
-| Channel | `ChannelId` | `channelId` |
+| Local/peer DID pair | `Channel` | `channels` entries; `localDid` and `peerDid` in selectors |
 | Local DID entity | `DidId` | `didId`, `localDidId`, `senderDidId`, `fromDidId`, `toDidId` |
 | Route / mediation arrangement | `RouteId` / `MediationId` | `routeId`, `boundRouteId` / `mediationId` |
 | One prepared package | `PackageId` | `packageId`, `replacementPackageId` |
 | Scoped mediator delivery | `DeliveryId` | `deliveryId` |
-| Channel-and-sender-scoped automatic execution | `ExecutionId` | `executionId` |
+| Sender/recipient-scoped automatic execution | `ExecutionId` | `executionId` |
 | Exact content bytes | `Cid` | `bodyCid`, `attachmentCids`, `documentCid`, `envelopeCid`, `dropCids`; generic object APIs use `cid` |
 | Vault keystore name | `KeyName` | `localKeyName`, `me.keyName` |
 | Complete canonical public-key value | `PublicKey` | `peerPublicKey` |
-| DID string / verification-method DID URL | `Did` / `DidUrl` | `did`, `peerDid`, `presentedDid`, `longFormDid`, `fromDid`, `toDid` / `authenticationMethodIds`, `keyAgreementMethodIds` |
+| DID string / verification-method DID URL | `Did` / `DidUrl` | `did`, `localDid`, `peerDid`, `recipientDid`, `presentedDid`, `longFormDid`, `fromDid`, `toDid` / `authenticationMethodIds`, `keyAgreementMethodIds` |
 
 For every payload `*EventId`, `T` is the target event type fixed by the
 referencing schema. `sourceEventId` is `EventReference<"message.in">` in
@@ -301,7 +300,7 @@ value. Generic event-store APIs continue to use `EventId`.
 Use the same entity noun for creation and later references: `did.created.didId`
 and `did.disclosed.didId`, for example. Add a role prefix when needed, such as
 `senderDidId`. Payloads do not abbreviate a contact ID as `cid`, or hide an
-entity ID behind a bare `id`, `contact`, `channel` or `mediation` field.
+entity ID behind a bare `id`, `contact` or `mediation` field.
 `cid` and `*Cid` always mean content addresses; `*Did` always means a DID
 string, while `*DidId` means a local entity UUID. Arrays of references use the
 plural suffix, such as `attachmentCids` and `localDidIds`; collections of view
@@ -316,7 +315,7 @@ representation is below; other languages may use equivalent nominal types.
 type EntityId<Kind extends string> = string & { readonly __entity: Kind };
 type MessageId = EntityId<"message">;
 type ContactId = EntityId<"contact">;
-type ChannelId = EntityId<"channel">;
+type Channel = { localDid: Did; peerDid: Did };
 type DidId = EntityId<"did">;
 type RouteId = EntityId<"route">;
 type MediationId = EntityId<"mediation">;
@@ -334,9 +333,10 @@ type EffectKey = string & { readonly __effectKey: unique symbol };
 type EventReference<T extends string> = EventId & { readonly __eventType: T };
 ```
 
-These types serialize as the existing validated strings, without wrapper
-objects or type prefixes. Parsers and derivation functions produce them only
-after the owning format checks. A cast is not validation. An event-reference
+Identifiers serialize as validated strings without wrapper objects or type
+prefixes. `Channel` serializes as a record of two canonical DID strings. Parsers
+and derivation functions produce them only after the owning format checks.
+A cast is not validation. An event-reference
 type records its required target type; missing evidence still defers and
 incompatible evidence still conflicts under the referencing schema. It is
 never proof that the target is available or valid. `effectKey` is the existing
@@ -344,7 +344,7 @@ derived idempotency key, not a keystore name or a cryptographic public key.
 
 Message identity has three levels. `eventId` names one exact receipt or other
 event; repeated receipt may create several event IDs with one `messageId`.
-An inbound `messageId` names the exact channel/sender/wire-ID input; accepted
+An inbound `messageId` names the exact sender/recipient/wire-ID input; accepted
 key variants in that channel share one execution. Different channels never
 alias message or execution identities.
 An outbound `messageId` is also its plaintext `id`; no duplicate
@@ -365,7 +365,7 @@ map vault fields to those protocol fields explicitly.
 Namespace purpose strings, keystore paths, literal hash-transcript tags and
 message-content serialization are fixed separately from field spelling.
 Implementations MUST construct each specified derivation input, not serialize
-an arbitrary renamed payload or API object as its substitute. The channel-and-sender execution transcript is specified in
+an arbitrary renamed payload or API object as its substitute. The sender-and-recipient execution transcript is specified in
 [distributed-delivery.md](distributed-delivery.md#execution-id-and-immutable-transcript);
 contact IDs are never part of it. Event
 canonical bytes do use the current schema; any content hash of an event or
@@ -992,14 +992,16 @@ cryptographic use.
 The complete acceptance/consumption rule is owned by
 [channels.md](channels.md#admission). A live one-use OOB disclosure is available
 until a complete matching proof-free `channel.accepted` consumes it. The consumer
-is its exact channel ID. Receipt, contact membership and output intents alone
-do not consume another invitation. `admitChannel` permits automatic invitation
+is the canonical peer DID within that disclosure's fixed local DID. Receipt,
+contact membership and output intents alone do not consume another invitation.
+`admitChannel` permits automatic invitation
 acceptance; false still allows an explicit manual acceptance decision.
 
 Missing acceptance/source/disclosure evidence that could establish consumption
 leaves availability pending. Commit a consumer only after locked availability
-recheck. Same-channel reuse is idempotent; incompatible imported consumers are
-an unavailable conflict, with no event-order winner. Later erasure, denial,
+recheck. Reuse by the same canonical peer under that disclosure is idempotent;
+incompatible imported consumers are an unavailable conflict, with no event-order
+winner. Later erasure, denial,
 retirement or conflict never reopens a structurally valid consumption. Validate
 positive evidence before availability to avoid a circular fold.
 
@@ -1044,20 +1046,26 @@ Known missing references defer acceptance; they never block independent receipt.
   "roots": [],
   "data": {
     "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "channelIds": ["88a41cd6-a196-52a4-87df-7ce060e7d373"]
+    "channels": [
+      {
+        "localDid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
+        "peerDid": "did:web:bob.example"
+      }
+    ]
   }
 }
 ```
 
-The closed data contains exactly `contactId` (UUIDv7) and `channelIds` (an array
-of channel UUIDv5 IDs); `roots` is empty. The list is duplicate-free and sorted
-by UUID byte order. Latest canonical event per contact replaces its entire
+The closed data contains exactly `contactId` (UUIDv7) and `channels`, an array
+of closed `{localDid, peerDid}` selectors under [channel identity](channels.md#channel-identity);
+`roots` is empty. The list is duplicate-free and sorted by the canonical pair
+encoding specified there. Latest canonical event per contact replaces its entire
 selected set; an empty list clears it. Concurrent sets are not unioned. No set
 event means an empty selection. This event neither creates a contact nor
 restores a deleted contact; missing contact data affects only presentation.
 
 Selection requires no channel acceptance. Missing channel evidence leaves an
-unresolved display reference, not permission to infer an endpoint or send.
+unresolved display selection; the selected strings alone authorize no sending.
 One channel MAY be selected by several contacts; this creates overlapping
 views, not an identity conflict or a canonical contact for that channel.
 Changing one contact's set does not change another's. No ownership, permission,
@@ -1127,8 +1135,8 @@ block a retry without relocating it.
 
 ### 6.6 Channel and continuity projections
 
-Index exact DID pairs directly by channel ID. Derive accepted pairs, directed
-links, verified opposite-side joins, local-only supersession contexts and
+Index exact ordered pairs by their canonical local and peer DID strings.
+Derive accepted pairs, directed links, verified opposite-side joins, local-only supersession contexts and
 denials under [channels.md](channels.md#continuity). Edges and verification
 statuses are derived; each edge exposes its complete source witnesses.
 Missing references defer the affected projection; contradictory identities,
@@ -1335,7 +1343,6 @@ This is a permanent tombstone for exactly the named contact ID.
   "type": "profile.nameClaimed",
   "roots": [],
   "data": {
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "sourceEventId": "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1",
     "channelAcceptanceEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
     "name": "Alice L."
@@ -1343,10 +1350,11 @@ This is a permanent tombstone for exactly the named contact ID.
 }
 ```
 
-The closed data has exactly `channelId`, `sourceEventId`,
+The closed data has exactly `sourceEventId`,
 `channelAcceptanceEventId` and `name`; roots are empty. The source is one exact
 already committed `message.in` forming a complete channel witness with the
 referenced acceptance under [operation eligibility](channels.md#operation-eligibility).
+Derive the channel from that source and verify it matches the acceptance.
 A supported profile protocol must
 define its own fields and extraction; arbitrary Basic Message text is not a
 profile. Under the operation lock, lift only from readable, non-erased eligible
@@ -1366,14 +1374,14 @@ incompatible evidence conflicts. Later contact edits cannot move their source.
   "type": "profile.shared",
   "roots": [],
   "data": {
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "sourceEventId": "019b2a85-0912-7b2c-9425-4fd7fd0dd019"
   }
 }
 ```
 
-The source is one exact `message.out` in this fixed channel. Lift a supported
-profile disclosure from readable content only after a valid committed submission
+The closed data has exactly `sourceEventId`; roots are empty. The source is one
+exact `message.out`; its fixed sender and recipient determine the channel. Lift a
+supported profile disclosure from readable content only after a valid committed submission
 with its attempt/package evidence. An intent, attempt or peer ACK alone is
 insufficient. Existing lifts can validate their source linkage after erasure;
 they do not reconstruct missing content. Recovery of this local projection
@@ -1577,7 +1585,6 @@ logical response.
   "roots": ["bafkrei...body", "bafkrei...attachment"],
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "senderDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
     "recipientDid": "did:web:bob.example",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
@@ -1603,11 +1610,11 @@ logical response.
 }
 ```
 
-`channelId`, `senderDidId` and `recipientDid` are REQUIRED and immutable.
+`senderDidId` and `recipientDid` are REQUIRED and immutable.
 The sender names an existing eligible local DID; the recipient retains the selected
-peer DID spelling. Their unordered pair derives `channelId`, while their roles
-freeze direction. Select these addresses under the operation lock before intent
-commit. Every package must match them. Rotation changes selection for new
+peer DID spelling. Their canonical local/peer pair fixes the channel and direction.
+Select these addresses under the operation lock before intent commit. Every
+package must match them. Rotation changes selection for new
 intents only; even a never-attempted intent is not retargeted. See
 [fixed outbound channels](channels.md#fixed-outbound-channel).
 
@@ -1622,7 +1629,7 @@ authority and complete source evidence under
 [operation eligibility](channels.md#operation-eligibility).
 
 The UI may select a channel through a contact, but the contact ID is not stored
-as protocol identity. The three fixed address fields are portable intent
+as protocol identity. The two fixed address fields are portable intent
 metadata, excluded from the DIDComm intent
 hash but included in full event equality. They cannot be changed by rotation,
 manual retry, contact regrouping or a different replica.
@@ -1712,7 +1719,6 @@ is an intent conflict.
     "senderDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
     "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "recipientDid": "did:web:bob.example",
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "peerResolutionEventId": "019b2a72-0626-7a87-a310-941fe4c1ce77",
     "fromPrior": null,
     "intentHash": "hmqd2ObLCbE6Ru94DITHwte-8oYqrtNZgPxiv7WfXAA",
@@ -1738,10 +1744,8 @@ Requirements:
 - `intentHash` equals the intent value;
 - `plaintextHash` hashes the complete plaintext actually encrypted;
 - `recipientDid` is the package's exact application `to` DID;
-- `channelId` is required and derives from the canonical sender/recipient pair
-  under [channels.md](channels.md#channel-identity); it records this package's
-  fixed channel and must equal `message.out.channelId`; canonical recipient
-  and sender direction must also equal the intent;
+- the canonical sender and recipient must equal the intent's fixed endpoints
+  in the same roles under [channel identity](channels.md#channel-identity);
 - `peerResolutionEventId` names the exact `peer.resolved` evidence used to select
   the recipient key; its `peerPublicKey` supplies the package's derived peer key.
   Its `localKeyName` equals the package's local key and its canonical `did` matches
@@ -2024,7 +2028,7 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
     "bafkrei...attachment"
   ],
   "data": {
-    "messageId": "48f06965-e381-55ac-b4ad-e2c1f073d4b3",
+    "messageId": "336032bf-0c6e-5ce7-a3ed-a50bbf993055",
     "wireMessageId": "019b2a70-f225-721c-835f-67175be0667e",
     "receiptOrdinal": "42",
     "intentHash": "855qiA-zQ94SVOPYj2KnooWRNJAe1GB419LMTGLMwAs",
@@ -2032,7 +2036,6 @@ See [distributed-delivery.md section 9](distributed-delivery.md#observation-iden
     "localKeyName": "did/019b2a60-c68e-75bf-b6fb-ae1a41f8d715/key-agreement",
     "msgType": "https://didcomm.org/basicmessage/2.0/message",
     "peerResolutionEventId": "019b2a71-4c18-760a-9017-b3e265aa89d0",
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "presentedDid": "did:web:bob.example",
     "did": "did:web:bob.example",
     "thid": null,
@@ -2080,10 +2083,11 @@ Requirements:
   in the separate inbound commit; later resolutions cannot replace the
   reference. It is local
   evidence metadata, excluded from the message hashes;
-- `channelId` is REQUIRED and nullable. For authenticated input it equals
-  [the channel derivation](channels.md#channel-identity) over the actual local
-  recipient DID and the resolution's canonical sender DID; anonymous input
-  uses null. No acceptance/link reference occurs in `message.in`;
+- for authenticated input, derive the [channel pair](channels.md#channel-identity)
+  from the local DID owning `localKeyName` and the authenticated canonical `did`.
+  Validate the local DID against the actual plaintext recipient; missing exact
+  DID/key evidence defers dependent projections. Anonymous input has no channel.
+  No acceptance/link reference occurs in `message.in`;
   consumers check [operation eligibility](channels.md#operation-eligibility)
   directly after receipt and retain evidence in their concrete intents/results.
 
@@ -2185,7 +2189,7 @@ peer ACK, contact or handler effect.
 
 ### 10.3 Duplicate and conflict rules
 
-Group by `(channelId, canonical sender DID, wireMessageId)` and its deterministic
+Group by `(canonical sender DID, canonical recipient DID, wireMessageId)` and its deterministic
 message ID. Each complete observation authenticates independently with its own
 method-valid snapshot and matches its accepted DID pair. Equal intent hashes
 represent one logical input; differences conflict. Transport, author, ordinal,
@@ -2782,9 +2786,9 @@ derivation requires a new vault version.
 
 ### Inbound scope, execution and receipt (VE-15–VE-25)
 
-15. <a id="ve-15"></a> Authenticated key variants in one channel/sender/wire-ID input agree on one message identity; different channels never alias.
+15. <a id="ve-15"></a> Authenticated key variants in one sender/recipient/wire-ID input agree on one message identity; different channels never alias.
 
-16. <a id="ve-16"></a> Execution ID derives from channel, canonical sender and wire ID. Each new operation checks complete source/channel evidence and current policy; display membership supplies no authority.
+16. <a id="ve-16"></a> Execution ID derives from canonical sender, canonical recipient and wire ID. Each new operation checks complete source/channel evidence and current policy; display membership supplies no authority.
 
 17. <a id="ve-17"></a> Pending channel/link evidence defers processing. Later validation preserves this channel-local identity and grants no automatic recovery dispatch.
 
@@ -2828,7 +2832,7 @@ derivation requires a new vault version.
     rendezvous wrapper or wire contact ID.
 32. <a id="ve-32"></a> message.in records exact channel/authentication evidence. Concrete automatic intents and profile results directly reference source and channel acceptance; carried-proof eligibility derives from document associations and history.
 
-33. <a id="ve-33"></a> Opposite sends over the same canonical DID pair derive one channel with separate sender directions.
+33. <a id="ve-33"></a> Sending to a peer and receiving from it use the same local/peer pair within a vault. The other vault observes the reversed local/peer roles; message identity preserves sender/recipient direction.
 
 34. <a id="ve-34"></a> Display contact tombstones survive rediscovery; independent channel denials survive regrouping. Receipt in an unaccepted channel creates no replacement contact.
 
@@ -2916,8 +2920,8 @@ derivation requires a new vault version.
     suppresses every other package's preparation or submission. Workers
     serialize dispatch per message ID and commit acceptance before further dispatch.
 66. <a id="ve-66"></a> The inbound message ID vectors in [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) recompute to
-    `48f06965-e381-55ac-b4ad-e2c1f073d4b3` and
-    `8f5875a2-a9e5-59f6-978c-bcce5ee11dc8` from their published inputs.
+    `336032bf-0c6e-5ce7-a3ed-a50bbf993055` and
+    `fb01c09c-f8c5-5c62-b5b4-a8017500a2d8` from their published inputs.
 67. <a id="ve-67"></a> Attachment IDs obey DIDComm 2.1 URI-unreserved syntax independently of
     filename or DASL object identity.
 68. <a id="ve-68"></a> An otherwise retained unsubmitted package survives route unavailability
@@ -3012,7 +3016,7 @@ derivation requires a new vault version.
 
 102. <a id="ve-102"></a> Selecting recipient keys or assigning display contacts cannot prove inbound authentication. Anonymous/control/pending inputs retain evidence without application execution.
 
-103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
+103. <a id="ve-103"></a> message.out requires immutable senderDidId and recipientDid; their canonical endpoints determine its channel. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
 
 104. <a id="ve-104"></a> Every pair uses channel acceptance with exact decision evidence; ordinary user sending needs no first reply and retains its channel through document update, reply, submission, erasure and restore.
 
@@ -3020,7 +3024,7 @@ derivation requires a new vault version.
 
 106. <a id="ve-106"></a> Keys independently authorized by different valid Web revisions may authenticate the same channel input. Equal intent deduplicates and contradictory intent conflicts; another channel never merges execution.
 
-107. <a id="ve-107"></a> Channel vectors sort canonical DID pairs symmetrically; key encoding and display IDs cannot change them.
+107. <a id="ve-107"></a> Channel selectors preserve local/peer roles and compare canonical DID strings; key encoding and display IDs cannot change the pair.
 
 108. <a id="ve-108"></a> First-package preparation for each new non-numalgo-4 outbound performs
      fresh resolution. Retry and permitted repack use retained evidence;
@@ -3037,7 +3041,7 @@ derivation requires a new vault version.
 
 110. <a id="ve-110"></a> Retained old recipient keys can receive. No usable authorized sender means no automatic response intent; later recovery exposes manual work instead of sending or retargeting it.
 
-111. <a id="ve-111"></a> message.in/prepared derive peer keys from exact peerResolutionEventId. Channel/sender/wire-ID message identity does not use key bytes; missing non-null references defer and anonymous input alone has null sender evidence.
+111. <a id="ve-111"></a> message.in/prepared derive peer keys from exact peerResolutionEventId. Sender/recipient/wire-ID message identity does not use key bytes; missing non-null references defer and anonymous input alone has null sender evidence.
 
 <a id="local-rotation-and-relationship-histories-ve-112-ve-124"></a>
 
@@ -3098,7 +3102,7 @@ derivation requires a new vault version.
 
 132. <a id="ve-132"></a> Contacts aggregate explicitly selected channels and may display verified related history. Shared DIDs/keys do not transfer channel acceptance or profile-sharing authority; presentation never changes source channel labels.
 
-133. <a id="ve-133"></a> profile.nameClaimed contains exactly channelId, sourceEventId, channelAcceptanceEventId and name. Its exact complete source/channel witness supplies the name; incomplete/invalid evidence contributes none. Existing lifts survive body erasure and later denial, while new lifts require readable content and current permission.
+133. <a id="ve-133"></a> profile.nameClaimed contains exactly sourceEventId, channelAcceptanceEventId and name; its channel derives from the source. Its exact complete source/channel witness supplies the name; incomplete/invalid evidence contributes none. Existing lifts survive body erasure and later denial, while new lifts require readable content and current permission.
 
 134. <a id="ve-134"></a> profile.shared names an exact outbound in its fixed channel with valid attempt/submission evidence. Intent, attempt or ACK alone is insufficient, and later rotation cannot mark another channel as shared.
 
@@ -3128,7 +3132,7 @@ derivation requires a new vault version.
 
 141. <a id="ve-141"></a> A complete predecessor observation remains a valid confirmation when another observation later appears at a successor channel. Those messages have distinct identities; missing successor evidence cannot erase the predecessor witness.
 
-142. <a id="ve-142"></a> Conflicting authenticated intent within one channel/sender/wire-ID execution suppresses all new handler tuples without undoing submission or collecting disputed bytes. Different channels never merge into this conflict.
+142. <a id="ve-142"></a> Conflicting authenticated intent within one sender/recipient/wire-ID execution suppresses all new handler tuples without undoing submission or collecting disputed bytes. Different channels never merge into this conflict.
 
 ### Completion witnesses and address confirmation (VE-143–VE-144)
 
@@ -3138,7 +3142,7 @@ derivation requires a new vault version.
 
 ### Direct contact channel selections (VE-145–VE-149)
 
-145. <a id="ve-145"></a> contact.channelsSet contains exactly contactId and a sorted duplicate-free channelIds array with empty roots. Every import order selects the latest canonical whole set; a later empty set clears it and concurrent sets are not unioned.
+145. <a id="ve-145"></a> contact.channelsSet contains exactly contactId and a sorted duplicate-free channels array of canonical localDid/peerDid pairs with empty roots. Every import order selects the latest canonical whole set; a later empty set clears it and concurrent sets are not unioned.
 
 146. <a id="ve-146"></a> Two contacts may select the same channel without a conflict or canonical contact election. Editing one set does not change the other; merging their views preserves each contact's decisions and shows each logical message once.
 
@@ -3157,3 +3161,7 @@ derivation requires a new vault version.
 152. <a id="ve-152"></a> A dedicated notification requires rotationEventId. An inbound-triggered notification uses that decision's exact source and predecessor acceptance; a source-free manual notification has null effect/source fields and a UUIDv7 message ID. Different notification IDs for one decision conflict without affecting an independent ACK tuple.
 
 153. <a id="ve-153"></a> A saved intent, profile result or rotation decision supplies no generic permission for another operation on the source. New work checks current policy separately; ordinary later policy changes do not erase the saved record or submission.
+
+154. <a id="ve-154"></a> Profile claims derive their pair from the exact inbound source and matching acceptance; profile sharing derives it from the exact outbound source. Missing source endpoint evidence defers attribution. The same peer at another local DID receives no inferred name or sharing fact.
+
+155. <a id="ve-155"></a> contact.channelsSet sorts complete canonical localDid/peerDid tuples by their specified encoding. Duplicate pairs, equal endpoints, noncanonical spellings and extra selector fields are invalid; an empty set clears selection and missing documents grant no processing authority.

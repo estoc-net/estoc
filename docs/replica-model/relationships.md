@@ -34,7 +34,7 @@ directly select channels under [channels.md](channels.md#contact-channels).
 - [2. Dependencies](#dependencies)
 - [3. Terms](#terms)
 - [4. Invariants](#invariants)
-- [5. Channel and display identifiers](#symmetric-relationship-identity)
+- [5. Channel pairs and contact identifiers](#symmetric-relationship-identity)
 - [6. Out-of-band discovery](#out-of-band-discovery)
 - [7. Address lifecycle](#address-lifecycle)
 - [8. Ordinary sending and channel selection](#ordinary-sending-and-birth-selection)
@@ -97,7 +97,7 @@ Every instruction to append an event in this document means
 
 - **Communication address** — a supported canonical DID with retained keys
   and routing evidence; local DIDs are seed-derived numalgo-4 entities.
-- **Channel** — a fixed pair of distinct canonical DIDs with vault-local orientation.
+- **Channel** — a fixed ordered pair of distinct canonical local and peer DIDs.
 - **Acceptance** — a durable local decision to use a DID-pair channel, with exact evidence of that decision.
 - **Continuity link** — a fold-derived, verified replacement of one endpoint in one channel context.
 - **Contact** — local names, preferences and direct channel selections for display.
@@ -111,7 +111,7 @@ Every instruction to append an event in this document means
 
 ## 4. Invariants
 
-1. Channel identity is symmetric; message identity additionally includes sender direction.
+1. A channel preserves canonical local/peer roles; message identity uses canonical sender, recipient and wire ID.
 2. Authenticate before receipt; accept channel evidence before application effects.
 3. Receipt never requires a contact or silently accepts a channel.
 4. A verified link has exact channel context and never globally aliases DIDs.
@@ -127,10 +127,10 @@ Every instruction to append an event in this document means
 <a id="10-symmetric-relationship-identity"></a>
 <a id="symmetric-relationship-identity"></a>
 
-## 5. Channel and display identifiers
+## 5. Channel pairs and contact identifiers
 
-Fixed channel IDs use [the channel formula and vectors](channels.md#channel-identity).
-Contacts use UUIDv7 and directly select channel IDs. A UI's derived continuity
+Channels use [canonical local/peer DID pairs](channels.md#channel-identity).
+Contacts use UUIDv7 and directly select those pairs. A UI's derived continuity
 view may change when new evidence arrives, without changing contact selections
 or protocol identities.
 
@@ -908,13 +908,13 @@ roll back; explicit new communication is a new channel and new message.
 
 6. <a id="rz-6"></a> Validated Peer long/short spellings name one channel endpoint; shared keys, endpoints and labels do not alias distinct DIDs.
 
-7. <a id="rz-7"></a> Opposite first sends select one channel with distinct message directions; unsolicited receipt does not accept the channel or create a contact.
+7. <a id="rz-7"></a> Opposite first sends use one local/peer pair in each vault and distinct sender/recipient message directions; unsolicited receipt does not accept the channel or create a contact.
 
-8. <a id="rz-8"></a> Another independently authorized key, including in an updated Web document, preserves channel/sender/wire-ID identity without creating a contact.
+8. <a id="rz-8"></a> Another independently authorized key, including in an updated Web document, preserves sender/recipient/wire-ID identity without creating a contact.
 
 9. <a id="rz-9"></a> A live public channel can carry ordinary content before a reply or private allocation.
 
-10. <a id="rz-10"></a> Offline intent commits fixed channel/sender/recipient without DNS; first preparation resolves and accepts the exact peer evidence.
+10. <a id="rz-10"></a> Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves and accepts the exact peer evidence.
 
 11. <a id="rz-11"></a> Preparation reuses DID-pair acceptance and resolves current recipient evidence. Different valid imported Web revisions coexist without a winning revision or a union of authorized keys.
 

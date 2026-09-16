@@ -70,11 +70,11 @@ business-execution promise.
 
 ## 2. Terms
 
-- **Channel** — fixed canonical DID pair; each vault supplies its local/peer orientation.
+- **Channel** — fixed ordered pair of canonical local and peer DIDs within one vault.
 - **Contact** — local names, preferences and selected channel histories with no protocol authority.
 - **Full replica** — a writable vault incarnation; phase 1 still has one active executor.
 - **Outbound message ID** — one committed intent's entity ID and plaintext `id`.
-- **Inbound message ID** — derived from exact channel, authenticated sender and wire ID.
+- **Inbound message ID** — derived from canonical sender, canonical recipient and wire ID.
 - **Execution ID** — stable identity of one channel-local input; identity alone grants no work.
 - **Package ID** — exact encrypted inner envelope identity and Routing `forward.id`.
 - **Delivery ID** — mediator pickup identity, separate from message/package IDs.
@@ -100,8 +100,8 @@ All local communication addresses are vault-scoped. The active full runtime
 derives their private keys and receives their messages. Public/private
 allocation does not select a different acceptance, sender permission or receive
 path. A later server or replica does not own an address merely by executing
-the vault. The fixed channel is independent of local/peer orientation;
-each message still has a sender and recipient, and every rotation is directed.
+the vault. The channel preserves local/peer roles within that vault;
+each message has a sender and recipient, and every rotation is directed.
 
 Each local communication DID has one immutable `boundRouteId`, mediated or
 direct. Changing its keys or bound route creates a successor DID entity;
@@ -537,14 +537,15 @@ targets follow section 8.1. This tuple is only for a pure ACK; a rotation
 notification uses its own tuple under section 11. Freeze the selected output
 channel at intent commit.
 
-The executable fixture uses channel `88a41cd6-a196-52a4-87df-7ce060e7d373`,
+The executable fixture uses recipient
+`did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`,
 authenticated sender `did:web:bob.example` and wire ID
 `019b1b61-3444-7190-9db5-1cc9c215eb23`:
 
 ```text
-executionId = 07e2f712-1880-56c9-9ad6-914f5014b101
-effectKey = -KB2EWusNRJSTOTRKOhBSWSgl715YRd2L0UQ051TYJI
-outbound message ID = wire ID = 83f41bfc-7758-576d-bde2-9d0ec2ca97c2
+executionId = 460fb564-67a5-5f0f-9066-9cd18d7d6f73
+effectKey = XhcHMHXUDalcVRqsDxlmB4CWf22QU-7DNrGkrPpE4k0
+outbound message ID = wire ID = 533f0d8a-8105-587b-bf40-d17dda42c55b
 ```
 
 These values follow the channel execution transcript and effect-key
@@ -586,13 +587,13 @@ duplicate under this profile. A display link to old content changes nothing.
 
 ### Observation IDs and vectors
 
-For authenticated input, canonicalize the sender and actual local recipient,
-derive their channel, then compute:
+For authenticated input, canonicalize the authenticated sender and actual local
+recipient, then compute:
 
 ```text
 messageId = UUIDv5(
   estocNamespace("inbound-message"),
-  RFC8785(["v2", "authenticated", channelId, canonicalSenderDid, wireMessageId])
+  RFC8785(["v3", "authenticated", canonicalSenderDid, canonicalRecipientDid, wireMessageId])
 )
 ```
 
@@ -609,13 +610,13 @@ messageId = UUIDv5(
 )
 ```
 
-For channel `88a41cd6-a196-52a4-87df-7ce060e7d373` and sender
-`did:web:bob.example`, the naming vectors are:
+For recipient `did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`
+and sender `did:web:bob.example`, the naming vectors are:
 
 | wireMessageId | messageId | executionId |
 | --- | --- | --- |
-| `019b2a70-f225-721c-835f-67175be0667e` | `48f06965-e381-55ac-b4ad-e2c1f073d4b3` | `08b42540-d5dc-534f-876a-b9c80e20b18a` |
-| `019b1b61-3444-7190-9db5-1cc9c215eb23` | `8f5875a2-a9e5-59f6-978c-bcce5ee11dc8` | `07e2f712-1880-56c9-9ad6-914f5014b101` |
+| `019b2a70-f225-721c-835f-67175be0667e` | `336032bf-0c6e-5ce7-a3ed-a50bbf993055` | `57da12f5-2d30-56b9-839f-1ae6f0db8156` |
+| `019b1b61-3444-7190-9db5-1cc9c215eb23` | `fb01c09c-f8c5-5c62-b5b4-a8017500a2d8` | `460fb564-67a5-5f0f-9066-9cd18d7d6f73` |
 
 These are identifier fixtures, not authentication/proof fixtures.
 
@@ -638,10 +639,10 @@ together with it.
 
 Validate each source's actual channel against the accepted DID pair and its
 authentication against its own snapshot under [channels.md](channels.md#operation-eligibility). Equal intent in
-one channel/sender/wire-ID input shares one execution. Incompatible authenticated
+one sender/recipient/wire-ID input shares one execution. Incompatible authenticated
 intent conflicts; incomplete consistent siblings do not erase a complete witness.
 Another channel stays separate, even when a later verified link connects it.
-Identity depends only on the channel, sender and wire ID.
+Identity depends only on the canonical sender, recipient and wire ID.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
@@ -650,11 +651,13 @@ Identity depends only on the channel, sender and wire ID.
 ```text
 executionId = UUIDv5(
   estocNamespace("message-execution"),
-  RFC8785(["v3", {"channel": channelId, "sender": canonicalSenderDid}, wireMessageId])
+  RFC8785(["v4", {"sender": canonicalSenderDid, "recipient": canonicalRecipientDid}, wireMessageId])
 )
 ```
 
-Use the literal transcript members `channel` and `sender`. Namespace derivation
+Use the literal transcript members `sender` and `recipient`; RFC 8785 orders
+object members canonically. For inbound work, the peer is the sender and the
+local DID is the recipient. Namespace derivation
 is in [vault-events.md](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces).
 The event schema member names are not substitutes for these transcript tags.
 
@@ -687,7 +690,7 @@ An automatic DIDComm output is one effect identified by
 `(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
 derived execution ID of one complete, conflict-free logical carrier after the
 channel-local evidence and intent checks in [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
-Independently validated observations of that channel, sender and wire ID that
+Independently validated observations of those sender/recipient DIDs and wire ID that
 disagree on the intent constitute an execution conflict under that section.
 An unresolved or conflicting sibling observation cannot clear that
 disagreement merely by making its group ineligible. One complete group
@@ -910,7 +913,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     submission at the same committed boundary as other outbounds.
 18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 07e2f712-1880-56c9-9ad6-914f5014b101, effect -KB2EWusNRJSTOTRKOhBSWSgl715YRd2L0UQ051TYJI and wire ID 83f41bfc-7758-576d-bde2-9d0ec2ca97c2.
+19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect XhcHMHXUDalcVRqsDxlmB4CWf22QU-7DNrGkrPpE4k0 and wire ID 533f0d8a-8105-587b-bf40-d17dda42c55b.
 
 20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
@@ -924,7 +927,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Channel observations and conflicts (DD-23–DD-30)
 
-23. <a id="dd-23"></a> Authorized key variants within one channel/sender/wire-ID input converge; inconsistent authenticated intent conflicts.
+23. <a id="dd-23"></a> Authorized key variants within one sender/recipient/wire-ID input converge; inconsistent authenticated intent conflicts.
 
 24. <a id="dd-24"></a> Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
 
@@ -1019,7 +1022,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Binding, resolution and sender eligibility (DD-57–DD-62)
 
-57. <a id="dd-57"></a> Offline intent freezes actual channel/sender/recipient. Even a never-attempted message is not readdressed after rotation.
+57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a never-attempted message is not readdressed after rotation.
 
 58. <a id="dd-58"></a> A valid same-DID key/service update preserves channel acceptance. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
 
@@ -1050,7 +1053,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 63. <a id="dd-63"></a> A proof establishes an exact channel link. Later proof-free input uses that channel acceptance and retains channel-local identity.
 
-64. <a id="dd-64"></a> Opposite first sends derive one fixed channel with separate sender directions; public/private labels do not change the formula.
+64. <a id="dd-64"></a> Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
 65. <a id="dd-65"></a> ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
 
@@ -1066,7 +1069,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 70. <a id="dd-70"></a> Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
 
-71. <a id="dd-71"></a> Complete same-channel/sender/wire-ID witnesses with conflicting authenticated intents conflict the execution under every handler tuple; submission remains complete and different channels are never execution aliases.
+71. <a id="dd-71"></a> Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution under every handler tuple; submission remains complete and different channels are never execution aliases.
 
 ### Independent operation recovery (DD-72–DD-75)
 

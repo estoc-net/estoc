@@ -10,10 +10,10 @@ The capitalized requirement words have their BCP 14 meanings.
 
 ## 1. Model
 
-A **channel** is a fixed unordered pair of distinct canonical communication
-DIDs. The local vault supplies its orientation. Messages retain their actual
+A **channel** is the fixed ordered pair `(localDid, peerDid)` of distinct
+canonical communication DIDs, viewed from one vault. Messages retain their actual
 sender, recipient, authenticated keys and document snapshots. A DID's changed
-document does not change the channel ID. Each authentication or preparation
+document does not change the pair. Each authentication or preparation
 uses the document authorized by that DID method for that operation and retains
 its exact evidence. A snapshot records what was verified; it is not a permanent
 limit on the keys that the same DID may authorize later.
@@ -51,29 +51,38 @@ policy, independently of whether a contact is assigned.
 ## 2. Channel identity
 
 Validate and canonicalize both DIDs under
-[the DID profile](relationships.md#peer-did-numalgo-4-profile). Sort canonical
-UTF-8 bytes in unsigned byte order:
+[the DID profile](relationships.md#peer-did-numalgo-4-profile). A channel value
+has exactly these two DID strings:
 
-```text
-[lo, hi] = sortCanonicalDids([A, B])
-channelId = UUIDv5(estocNamespace("channel"), RFC8785(["v1", lo, hi]))
+```ts
+type Channel = { localDid: Did; peerDid: Did };
 ```
 
-The namespace is `bab533fd-a809-5ec6-80bc-6eb81f7c17f9`.
+Peer DID numalgo-4 uses its canonical short form. Other methods use their
+method-defined canonical spelling. Compare each role byte-for-byte; equal
+endpoints are invalid. `(A, B)` and `(B, A)` are different vault-local views.
+Receiving from B at A and sending from A to B use the same `(A, B)` channel.
+The notation `C(A, B)` throughout this profile means `{localDid: A, peerDid: B}`.
 
-| A | B | channelId |
-| --- | --- | --- |
-| `did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd` | `did:web:bob.example` | `88a41cd6-a196-52a4-87df-7ce060e7d373` |
-| `did:web:zoe.example` | `did:web:amy.example` | `8e0d9d52-628f-5440-ab58-2b6227341e85` |
+Receipts derive the pair from the local key's DID and authenticated sender.
+Outbound intents derive it from `senderDidId` and canonical `recipientDid`.
+Acceptance derives it from its local DID and exact peer resolution. Source-based
+facts use the pair of their referenced message. Missing exact endpoint evidence
+leaves that projection pending; contact membership, another observation or a
+shared key cannot supply it.
 
-Reversing the pair preserves the channel ID. Equal DIDs are invalid. These
-are naming fixtures, not live resolution fixtures. A channel needs no
-`channel.created`: an observation, outbound intent or acceptance can name it.
+Selectors such as contact membership and blocking store the two canonical DID
+strings directly. Canonicalize supplied long forms before storing a selector.
+Its syntax and distinctness can be checked offline; missing DID documents or
+local entities leave evidence unresolved and grant no authority.
+Compare selectors by both roles. Sort sets by unsigned UTF-8 byte order of
+`RFC8785([localDid, peerDid])`, with no duplicate pairs. This ordering sorts the
+set, not the two endpoints within a pair.
+
 Replacing either DID means another channel. Updating keys, service endpoints
 or other document contents under the same supported mutable DID does not.
-Document CIDs, selected keys and resolution event IDs never enter channel,
-inbound-message or execution identity. Sender direction remains part of
-message identity even though the channel is unordered.
+Document CIDs, selected keys and resolution event IDs remain verification
+evidence; message identities use the canonical sender and recipient DIDs.
 
 For `did:web`, document updates follow the method's HTTPS resolution rules;
 they require no `from_prior` and create no continuity link. For `did:peer:4`,
@@ -93,8 +102,8 @@ sending, disclosure and channel acceptance.
 
 Under the operation lock, recheck local prerequisites, commit/reuse the exact
 resolution document, then commit `message.in` with objects and receipt ordinal.
-`channelId` derives from the actual canonical sender and recipient and is null
-exactly for anonymous input. Preserve the original `fromPrior`, local key,
+Derive the channel from the actual local recipient and authenticated sender;
+anonymous input has no peer or channel. Preserve the original `fromPrior`, local key,
 resolution reference, hashes and source as immutable observations.
 
 Normal pickup ACK follows process-durable receipt. An unknown, blocked,
@@ -156,15 +165,13 @@ ordinal or message ID. That change alone grants no new automatic dispatch action
 `channel.accepted` records a local decision to use an exact DID-pair channel,
 with the evidence and policy basis for that decision. It does not fix a peer
 document revision for future traffic or identify a larger chain. The closed
-payload contains
-exactly the five fields in this example:
+payload contains exactly the four fields in this example:
 
 ```json
 {
   "type": "channel.accepted",
   "roots": [],
   "data": {
-    "channelId": "88a41cd6-a196-52a4-87df-7ce060e7d373",
     "localDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
     "peerResolutionEventId": "019b2a72-0626-7a87-a310-941fe4c1ce77",
     "sourceEventId": "019b2a71-4c18-760a-9017-b3e265aa89d1",
@@ -173,7 +180,7 @@ exactly the five fields in this example:
 }
 ```
 
-The local DID and canonical resolved peer derive the channel ID. Resolution
+The local DID and canonical resolved peer determine the channel pair. Resolution
 `localKeyName` must match this local DID. Retain the exact document, supported
 methods and selected key as historical evidence. Each later receipt or package
 references its own resolution; it need not use this document CID or key. An
@@ -271,8 +278,9 @@ stored as raw RFC 8785 canonical JSON under the same representation rules as
 [predecessor resolution](relationships.md#predecessor-resolution). This event
 records a resolution result, not a trusted Boolean verification result. It may
 retain a document that does not authorize the JWT key or fails to verify its
-signature; the fold computes that failure. It copies no channel IDs, sender
-keys, JWT, local endpoint, acceptance or link direction from the source.
+signature; the fold computes that failure. Its source reference supplies the
+sender, local endpoint and original JWT.
+Acceptance and link direction are derived from the complete evidence.
 
 For a complete authenticated carrier `M` addressed to local DID `A`, validate
 the original JWT's signature, `kid`, `iss`, `sub` and retained document under
@@ -334,8 +342,8 @@ confirmation needs no prior handler execution or reply.
 Commit the decision before successor acceptance or disclosure. Reuse its
 successor and frozen proof after interruption; no same-end branch before
 successor confirmation. The fold derives `C(A0,B) -> C(A1,B)` from this decision,
-without storing either derived channel ID. The peer DID is unchanged and later
-packages obtain their own resolution. A prepared message carrying this local
+with both pairs derived from the referenced evidence. The peer DID is unchanged;
+later packages obtain their own resolution. A prepared message carrying this local
 proof must match the selected decision; it cannot independently select another
 rotation. Recovery of the decision grants no dispatch action.
 
@@ -452,7 +460,7 @@ Body erasure preserves existing facts but prevents new content-derived work.
 
 ## 7. Identity, local policy and display
 
-The logical inbound identity is `(channelId, canonical sender DID, wire ID)`.
+The logical inbound identity is `(canonical sender DID, canonical recipient DID, wire ID)`.
 Key variants independently authorized by their own method-valid snapshots can
 agree on that one input, including across `did:web` document revisions; intent
 differences conflict. Another channel always has another logical input and
@@ -470,8 +478,21 @@ sync and mailbox fan-out do not grant another replica that role.
 
 ### 7.1 Blocking
 
-`channel.blocked` has `roots == []` and the closed payload
-`{ "channelId": "<uuid>", "includeSuccessors": true }`. The boolean is required.
+`channel.blocked` has `roots == []` and three required data fields:
+
+```json
+{
+  "type": "channel.blocked",
+  "roots": [],
+  "data": {
+    "localDid": "did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd",
+    "peerDid": "did:web:bob.example",
+    "includeSuccessors": true
+  }
+}
+```
+
+The DID pair obeys section 2's selector rules; `includeSuccessors` is Boolean.
 It is a permanent local denial decision for that channel; when true it also
 covers evidence-backed successors through directed links/joins. Missing
 required evidence defers inheritance and never authorizes effects from an
@@ -512,7 +533,7 @@ their source channel even when a contact displays facts from several chains.
 ## 8. Fixed outbound channel and dispatch authority
 
 One outbound message has one immutable oriented channel. This profile freezes
-`channelId`, `senderDidId` and `recipientDid` in `message.out`, before any
+`senderDidId` and `recipientDid` in `message.out`, before any
 preparation or transport call. Freezing at intent commit is deliberately earlier
 than the first possible submission: no recovery procedure needs to prove that
 an earlier call did not occur before selecting another channel.
@@ -571,12 +592,12 @@ must define an authenticated application operation ID and its own rules.
 
 ## 9. Required conformance cases
 
-1. <a id="ch-1"></a> Channel identity is symmetric, fixed by canonical DIDs and independent of keys, routes and contacts; direction remains part of message identity.
+1. <a id="ch-1"></a> A channel is an ordered local/peer canonical DID pair, independent of keys, routes and contacts. Local sending and peer receipt share that pair; reversing local/peer roles selects a different vault-local view.
 2. <a id="ch-2"></a> First authenticated receipt commits and pickup-ACKs without channel acceptance, continuity history or a contact.
 3. <a id="ch-3"></a> A valid retained proof with missing predecessor acceptance is pending-history; recovery derives its link without another receipt or a stored graph event.
 4. <a id="ch-4"></a> A recovered peer supersession refuses new old-peer input through its local-only context while preserving channel receipt and previous acceptance.
 5. <a id="ch-5"></a> Independent local/peer links at one accepted channel justify their exact diagonal join without synthetic observations; unrelated shared DIDs justify nothing.
-6. <a id="ch-6"></a> Same-channel/sender/wire-ID observations with equal intent and authorized keys share one execution. Another channel has another execution.
+6. <a id="ch-6"></a> Observations with the same sender/recipient/wire-ID triple, equal intent and authorized keys share one execution. Another channel has another execution.
 7. <a id="ch-7"></a> Contradictory authenticated intent with complete channel evidence suppresses new effects; previously submitted IDs and outcomes remain unchanged.
 8. <a id="ch-8"></a> Unknown policy, missing verification evidence and invalid continuity leave receipts intact and grant no effects.
 9. <a id="ch-9"></a> A retained channel denial applies independently of contact membership; deleting a contact alone grants or revokes no cryptographic authority.
@@ -597,7 +618,7 @@ must define an authenticated application operation ID and its own rules.
 24. <a id="ch-24"></a> Missing attempt history grants no automatic recovery sending; incomplete exact references remain pending.
 25. <a id="ch-25"></a> Renaming or merging contacts and changing their channel sets changes no message/execution ID, ACK authorization, verification evidence, denials or invitations.
 26. <a id="ch-26"></a> A successor-channel ACK needs a verified role-preserving path to the exact outbound; general connectivity or shared display membership is insufficient.
-27. <a id="ch-27"></a> Opposite directions in one channel using the same wire ID have different inbound/execution identities.
+27. <a id="ch-27"></a> Swapping sender and recipient with the same wire ID produces different inbound/execution identities; changing either endpoint also changes those identities.
 28. <a id="ch-28"></a> A cyclic acceptance/link dependency grants no authority; a complete independent channel remains usable.
 29. <a id="ch-29"></a> Learning a missing graph link after independent channel executions never merges or replays those executions.
 30. <a id="ch-30"></a> Same-DID service updates preserve channel and input identity; a redelivered wire ID with equal intent creates no second execution or automatic response.
@@ -616,3 +637,6 @@ must define an authenticated application operation ID and its own rules.
 43. <a id="ch-43"></a> An unassigned channel supports receipt, acceptance, sending and continuity without a contact. Contact creation is a separate product decision.
 44. <a id="ch-44"></a> Two channels sharing a peer DID but using different local DIDs can be selected independently for a contact. Selection does not globally associate that peer DID's channels.
 45. <a id="ch-45"></a> Newly verified continuity may extend a contact's derived history or eligible send choices without changing contact.channelsSet. Missing/conflicting evidence changes only the affected view or eligibility; no stable chain ID or automatic send is created.
+46. <a id="ch-46"></a> Contact and block selectors compare both canonical localDid and peerDid. The same peer at another local DID stays separate; successor blocking requires a verified directed path from the selected pair.
+47. <a id="ch-47"></a> One invitation fixes its local recipient. Consumption by the same canonical peer is idempotent across equivalent spelling and document revisions; another peer conflicts, while another disclosure at a different local DID has independent consumption.
+48. <a id="ch-48"></a> Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.

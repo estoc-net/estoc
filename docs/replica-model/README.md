@@ -10,8 +10,8 @@ sections define requirements.
 ## Model overview
 
 A vault has one seed, immutable events and raw content-addressed objects.
-Fixed DID-pair channels retain authenticated communication. Local acceptance
-authorizes the pair; each receipt, package and proof retains its own document
+Channels are ordered local/peer DID pairs that retain authenticated communication.
+Local acceptance authorizes the pair; each receipt, package and proof retains its own document
 evidence. Method-authorized document updates preserve the channel. Directed
 links are derived from received proofs and local rotation decisions. Receipt
 can precede proof verification, with pending/invalid/conflict status visible in the UI.
@@ -74,7 +74,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Commit durability | [ES](event-store.md#commit-and-durability-terminology) | [DD boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Storage ownership and recovery | [SQ](vault-sqlite.md#ownership-and-lifecycle) | [VE open](vault-events.md#open-the-writable-full-runtime) |
 | Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
-| Channel identity | [CH identity](channels.md#channel-identity) | [VE IDs](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces) |
+| Channel pair and selectors | [CH identity](channels.md#channel-identity) | [VE vocabulary](vault-events.md#identifier-and-reference-vocabulary), [contact selection](vault-events.md#contact-channelsset) |
 | Channel acceptance and operation evidence | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
 | Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
