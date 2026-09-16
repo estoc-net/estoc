@@ -702,6 +702,103 @@ describe("a pair something already claims", () => {
     await alice.runtime.close();
     await copy.runtime.close();
   });
+
+  it("an import that lost the binding and the first local transition keeps the pair the later transition names through the input that triggered it: the delivery at the address it adds waits, and the two events restored receive it in the same relationship", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const sealer = await peerSealer(carol);
+    const receiver = await receiving(alice);
+    const { successor, edge, R } = await rotatedLocally(alice, carol, receiver);
+    expect((await receiver.receive({ packed: await sealed(sealer, successor.longFormDid), source: DIRECT })).outcome).toBe("received");
+    const trigger = (await foldOf(alice)).set.of("message.in").at(-1)!;
+    const { minted: last } = await createDid(alice.runtime, alice.keys, await boundRouteOf(alice), STRANGER);
+    const proof = await signFromPrior(alice.keys, { didId: OTHER, longFormDid: successor.longFormDid }, last.longFormDid, IAT + 1);
+    const [later] = await alice.runtime.vault.commit([], [vaultDraft("relationship.localTransitioned", { relationshipId: R, fromDidId: OTHER, toDidId: STRANGER, fromPrior: proof, triggerEventId: trigger.eventId as EventReference<"message.in"> })]);
+    expect((await foldOf(alice)).relationships.transitions.get(later!.eventId)?.status).toBe("applied");
+    receiver.close();
+
+    const events = await everyEvent(alice.runtime);
+    const omitted = [events.find((event) => event.type === "relationship.bound")!.eventId, edge.eventId];
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => !omitted.includes(event.eventId)));
+    const copied = await receiving(copy);
+
+    expect(await copied.receive({ packed: await sealed(sealer, last.longFormDid), source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the pair ${last.did} / ${carol.did} awaits the claim of ${R}, which does not hold the pair yet: no binding`,
+    });
+    expect((await foldOf(copy)).set.of("relationship.bound")).toEqual([]);
+
+    await copy.runtime.ingest(events.filter((event) => omitted.includes(event.eventId)));
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "received" }]);
+    const fold = await foldOf(copy);
+    expect(fold.set.of("relationship.bound").map((event) => event.data.relationshipId)).toEqual([R]);
+    expect(fold.relationships.claimants(last.did, carol.did)).toEqual([R]);
+    const received = fold.set.of("message.in").find((event) => event.data.localKeyName === didKeyName(STRANGER, "key-agreement"))!;
+    expect(fold.relationships.observations.get(received.eventId)).toEqual({ status: "scoped", relationshipId: R });
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
+
+  it("an import that lost the binding and the local transition keeps the pair the peer transition names through the key it arrived at: a delivery from the superseded peer address waits, and the two events restored make it terminal where the relationship has moved on", async () => {
+    const alice = await directParty(1, ALICE_ENDPOINT, DID);
+    const carol = await directParty(3, CAROL_ENDPOINT, DID);
+    const sealer = await peerSealer(carol);
+    const receiver = await receiving(alice);
+    const { successor, edge, R } = await rotatedLocally(alice, carol, receiver);
+    const { minted: peerNext } = await createDid(carol.runtime, carol.keys, await boundRouteOf(carol), SUCCESSOR);
+    const proof = await signFromPrior(carol.keys, { didId: DID, longFormDid: carol.longFormDid }, peerNext.longFormDid, IAT + 1);
+    expect((await receiver.receive({ packed: await sealed(await peerSealer(carol, peerNext.longFormDid), successor.longFormDid, { from_prior: proof }), source: DIRECT })).outcome).toBe("received");
+    const carried = await foldOf(alice);
+    const binding = carried.set.of("relationship.bound")[0]!;
+    const carrier = carried.set.of("message.in").at(-1)!;
+    const resolved = carried.set.resolve(carrier.data.peerResolutionEventId!, "peer.resolved");
+    if (resolved.status !== "present") throw new Error("the carrier's resolution is here");
+    const [peerEdge] = await alice.runtime.vault.commit([], [
+      vaultDraft("relationship.peerTransitioned", {
+        relationshipId: R,
+        localKeyName: didKeyName(OTHER, "key-agreement"),
+        peerPublicKey: resolved.event.data.peerPublicKey,
+        fromDid: carol.did,
+        presentedFromDid: carol.longFormDid,
+        toDid: peerNext.did,
+        presentedToDid: peerNext.longFormDid,
+        fromPrior: proof,
+        priorResolutionEventId: binding.data.peerResolutionEventId,
+        peerResolutionEventId: carrier.data.peerResolutionEventId!,
+        messageId: carrier.data.messageId,
+      }),
+    ]);
+    expect((await foldOf(alice)).relationships.transitions.get(peerEdge!.eventId)?.status).toBe("applied");
+    const packed = await sealed(sealer, successor.longFormDid);
+    expect(await receiver.receive({ packed, source: DIRECT })).toMatchObject({ outcome: "terminal", reason: expect.stringContaining(`${carol.did} is a peer address ${R} has moved on from`) });
+    receiver.close();
+
+    const events = await everyEvent(alice.runtime);
+    const omitted = [binding.eventId, edge.eventId];
+    const copy = await freshVault(1, "copy");
+    await copy.runtime.ingest(events.filter((event) => !omitted.includes(event.eventId)));
+    const copied = await receiving(copy);
+
+    expect(await copied.receive({ packed, source: DIRECT })).toMatchObject({
+      outcome: "deferred",
+      wait: "relationship",
+      reason: `the pair ${successor.did} / ${carol.did} awaits the claim of ${R}, which does not hold the pair yet: no binding`,
+    });
+    const held = await foldOf(copy);
+    expect([held.set.of("relationship.bound").length, held.set.of("message.in").length]).toEqual([0, 2]);
+
+    await copy.runtime.ingest(events.filter((event) => omitted.includes(event.eventId)));
+    expect(await copied.evidenceChanged()).toMatchObject([{ outcome: "terminal", reason: expect.stringContaining(`${carol.did} is a peer address ${R} has moved on from`) }]);
+    const fold = await foldOf(copy);
+    expect([fold.set.of("relationship.bound").length, fold.set.of("message.in").length]).toEqual([1, 2]);
+    expect(fold.relationships.claimants(successor.did, carol.did)).toEqual([R]);
+    await alice.runtime.close();
+    await carol.runtime.close();
+    await copy.runtime.close();
+  });
 });
 
 describe("an invitation waiting for the evidence of who took it", () => {

@@ -216,7 +216,6 @@ function claiming(fold: VaultFold, localDid: Did, peerDid: Did): RelationshipId[
   return naming.sort();
 }
 
-/** The addresses one relationship's retained evidence names at each of its ends, wherever its validated histories reach. */
 interface NamedAddresses {
   readonly locals: Set<Did>;
   readonly peers: Set<Did>;
@@ -224,11 +223,14 @@ interface NamedAddresses {
 
 /**
  * Each relationship's addresses as the evidence retained for it names
- * them: the binding's root local DID and the peer DID of the resolution
- * it pins, and both ends of every transition. A peer address is named
- * by derivation too, in `claiming`, where a local address named here
- * derives the relationship's own ID with it, which is the pair a
- * binding not here would pin.
+ * them, whichever end the evidence was written for: the binding's root
+ * local DID and the peer DID of the resolution it pins; both ends of
+ * every transition, and with them the local key a peer transition
+ * arrived at and the peer an observation a local transition was
+ * triggered by came from. A peer address is named by derivation too, in
+ * `claiming`, where a local address named here derives the
+ * relationship's own ID with it, which is the pair a binding not here
+ * would pin.
  */
 function namedAddresses(fold: VaultFold): Map<RelationshipId, NamedAddresses> {
   const named = new Map<RelationshipId, NamedAddresses>();
@@ -253,10 +255,14 @@ function namedAddresses(fold: VaultFold): Map<RelationshipId, NamedAddresses> {
     const addresses = ends(edge.data.relationshipId);
     local(addresses, edge.data.fromDidId);
     local(addresses, edge.data.toDidId);
+    const trigger = edge.data.triggerEventId === null ? null : fold.set.resolve(edge.data.triggerEventId, "message.in");
+    if (trigger?.status === "present" && trigger.event.data.did !== null) addresses.peers.add(trigger.event.data.did);
   }
   for (const edge of fold.set.of("relationship.peerTransitioned")) {
     const addresses = ends(edge.data.relationshipId);
     addresses.peers.add(edge.data.fromDid).add(edge.data.toDid);
+    const arrivedAt = fold.routes.entityOfKey(edge.data.localKeyName);
+    if (arrivedAt !== null) local(addresses, arrivedAt);
   }
   return named;
 }
