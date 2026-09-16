@@ -7,7 +7,9 @@ import type { Held, JsonObject, SqliteDriver, VaultRuntime } from "@estoc/event-
 import { createSeedKeystore, deriveIdentity, importSeed, type SeedKey, type SeedKeystoreDocument } from "@estoc/keystore";
 import { scanVault, type Did, type DidId, type MediationId, type VaultEvent } from "@estoc/vault/v3";
 
-import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, type LinkOptions, type OpenedVault, type Timers } from "../../src/v3/index.js";
+import { BASIC_MESSAGE } from "../../src/protocol/basicmessage.js";
+import { PLAIN_TYP, packEncrypted, secretsResolverFor, type DIDResolver, type IMessage } from "../../src/protocol/didcomm.js";
+import { AgentTrace, Keyring, MediatorLink, configureRoute, createDid, createMediation, createVault, didcommDocumentOf, resolve, type LinkOptions, type OpenedVault, type Resolution, type Timers } from "../../src/v3/index.js";
 import { FakeMediator, MEDIATOR_HTTP } from "../fake-mediator.js";
 
 export const didcomm = { Message, FromPrior };
@@ -138,6 +140,37 @@ export function webFetch(routes: Record<string, (init?: RequestInit) => Response
 }
 
 export const json = (document: unknown, status = 200): Response => new Response(JSON.stringify(document), { status, headers: { "content-type": "application/did+json" } });
+
+/** Someone who seals: a DID, its secrets, and how the documents it seals against resolve. */
+export interface Sealer {
+  did: string;
+  secrets: Secret[];
+  resolver: DIDResolver;
+}
+
+export async function webResolution(identity: WebIdentity): Promise<Resolution> {
+  const outcome = await resolve(identity.did, () => null, { fetch: async () => json(identity.document) });
+  if (outcome.outcome !== "resolved") throw new Error(outcome.reason);
+  return outcome.resolution;
+}
+
+export async function webSealer(identity: WebIdentity): Promise<Sealer> {
+  const document = didcommDocumentOf(await webResolution(identity));
+  return { did: identity.did, secrets: identity.secrets, resolver: { resolve: async (did) => (did === identity.did ? document : resolveDIDCommDoc(did)) } };
+}
+
+/** A party sealing as one of its DIDs, by the spelling `did`: its first DID's long form unless another is named. */
+export async function peerSealer(holder: DirectParty, did: string = holder.longFormDid): Promise<Sealer> {
+  const ring = await Keyring.load(holder.keys, await scanVault(holder.runtime.vault, holder.keys));
+  return { did, secrets: ring.secrets(), resolver: { resolve: resolveDIDCommDoc } };
+}
+
+/** A basic message sealed to `to`: authcrypt from the sealer, anoncrypt without one. */
+export async function sealed(from: Sealer | null, to: string, extra: Partial<IMessage> = {}): Promise<string> {
+  const plain = { id: crypto.randomUUID(), typ: PLAIN_TYP, type: BASIC_MESSAGE, ...(from === null ? {} : { from: from.did }), to: [to], body: { content: "hello" }, ...extra } as IMessage;
+  const [packed] = await packEncrypted(didcomm, plain, to, from?.did ?? null, null, from?.resolver ?? { resolve: resolveDIDCommDoc }, secretsResolverFor(from?.secrets ?? []), { forward: false });
+  return packed;
+}
 
 export interface DirectParty extends Fresh {
   didId: DidId;

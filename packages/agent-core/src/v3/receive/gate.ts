@@ -10,7 +10,7 @@
  */
 
 import { base64urlToUtf8 } from "@estoc/did-peer";
-import { splitDidUrl, type Did, type DidId, type DidUrl, type KeyName, type PublicKey, type VaultFold } from "@estoc/vault/v3";
+import { bindingHolds, didKeyName, relationshipId as relationshipIdOf, splitDidUrl, type Cid, type Did, type DidId, type DidUrl, type KeyName, type PublicKey, type Relationship, type RelationshipId, type VaultFold } from "@estoc/vault/v3";
 
 import type { IMessage, UnpackMetadata } from "../../protocol/didcomm.js";
 import { authorizedKeys } from "../evidence.js";
@@ -135,20 +135,198 @@ function methodKey(resolution: Resolution, use: "authentication" | "keyAgreement
   return null;
 }
 
+/** What a held delivery waits on in the vault: the evidence that places an address pair, or the evidence of who took an invitation. */
+export type Dependency = { kind: "pair"; localDid: Did; peerDid: Did } | { kind: "invitation"; oobId: string };
+
 /**
- * What of the vault decides whether a delivery at this address pair can
- * select its relationship: the relationships whose histories hold the
- * pair, how they stand, and the claims that keep a proof-free delivery
- * there waiting. A wait for relationship evidence is retried when this
- * changes, and only then.
+ * What the vault says about one address pair, as a delivery at it is
+ * placed: the relationships whose histories hold it, what claims it
+ * from evidence that is all here and disagrees with itself, and what
+ * claims it while evidence may yet settle the claim. Everything the
+ * placement reads is read here, so that a wait for evidence watches
+ * the whole of what decided it.
  */
-export function pairEvidence(fold: VaultFold, localDid: Did, peerDid: Did): string {
+export interface PairEvidence {
+  /** the relationships whose validated histories hold the pair; more than one is a conflict for each */
+  readonly claimants: readonly RelationshipId[];
+  /** claims nothing can ever apply: no delivery is born at the pair */
+  readonly contradicted: readonly string[];
+  /** claims evidence may yet settle: a delivery waits among them rather than being born beside them */
+  readonly awaited: readonly string[];
+}
+
+/**
+ * Everything retained that claims the pair: a carrier or a transition
+ * the fold holds pending there, a relationship whose binding and
+ * transitions name both of its addresses, the ID a birth there would
+ * take, and an observation already recorded at it that is not scoped.
+ * A claim is contradicted only where the evidence deciding it is all
+ * here and disagrees with itself. A conflict a missing event explains —
+ * a transition whose local prefix is absent, an observation at a key
+ * the history does not reach yet — is waited on instead, since
+ * recovering that event settles it.
+ */
+export function pairEvidence(fold: VaultFold, localDid: Did, peerDid: Did): PairEvidence {
   const { relationships } = fold;
-  return JSON.stringify({
-    claimants: relationships.claimants(localDid, peerDid).map((relationshipId) => {
-      const relationship = relationships.relationships.get(relationshipId);
+  const contradicted: string[] = [];
+  const awaited: string[] = [];
+  const claimed = new Set<string>();
+  for (const claim of relationships.pendingAt(localDid, peerDid)) {
+    for (const eventId of claim.eventIds) claimed.add(eventId);
+    awaited.push(`the evidence of ${claim.eventIds.join(", ")}`);
+  }
+  for (const relationshipId of claiming(fold, localDid, peerDid)) {
+    const contradiction = contradictingBindings(fold, relationshipId);
+    if (contradiction !== null) contradicted.push(`the binding of ${relationshipId}, which does not stand: ${contradiction}`);
+    else awaited.push(`the claim of ${relationshipId}, which does not hold the pair yet${standingOf(relationships.relationships.get(relationshipId))}`);
+  }
+  const didId = fold.routes.entityOfDid(localDid);
+  const localKeyName = didId === null ? null : didKeyName(didId, "key-agreement");
+  for (const event of fold.set.of("message.in")) {
+    if (event.data.localKeyName !== localKeyName || event.data.did !== peerDid || claimed.has(event.eventId)) continue;
+    const scope = relationships.observations.get(event.eventId);
+    if (scope === undefined || scope.status === "scoped" || scope.status === "anonymous") continue;
+    awaited.push(`the standing of ${event.eventId} at the same pair, which ${scope.because}`);
+  }
+  return { claimants: relationships.claimants(localDid, peerDid), contradicted, awaited };
+}
+
+function standingOf(relationship: Relationship | undefined): string {
+  const why = relationship === undefined ? [] : [...relationship.deferred, ...relationship.faults];
+  return why.length === 0 ? "" : `: ${why.join("; ")}`;
+}
+
+/**
+ * The relationships that name both addresses of the pair in evidence
+ * they retain, while their validated histories do not hold it: one
+ * naming the recipient at its local end and the sender at its peer end,
+ * and the one a birth at the pair would take the ID of. Their evidence
+ * points at the pair before any chain reaches it, so a birth beside
+ * them would claim what they claim. Either end is named by derivation
+ * as well as outright: an address named at one end derives the
+ * relationship's own ID with the candidate at the other only for the
+ * two addresses it was born of, so that candidate is its root address
+ * there, named by the ID itself.
+ */
+function claiming(fold: VaultFold, localDid: Did, peerDid: Did): RelationshipId[] {
+  const birth = birthOf(localDid, peerDid);
+  const holding = new Set(fold.relationships.claimants(localDid, peerDid));
+  const naming: RelationshipId[] = [];
+  for (const [relationshipId, { locals, peers }] of namedAddresses(fold)) {
+    if (holding.has(relationshipId)) continue;
+    const namesPeer = peers.has(peerDid) || [...locals].some((local) => birthOf(local, peerDid) === relationshipId);
+    const namesLocal = locals.has(localDid) || [...peers].some((peer) => birthOf(localDid, peer) === relationshipId);
+    if (relationshipId === birth || (namesLocal && namesPeer)) naming.push(relationshipId);
+  }
+  return naming.sort();
+}
+
+interface NamedAddresses {
+  readonly locals: Set<Did>;
+  readonly peers: Set<Did>;
+}
+
+/**
+ * Each relationship's addresses as the evidence retained for it names
+ * them, whichever end the evidence was written for: the binding's root
+ * local DID and the peer DID of the resolution it pins; both ends of
+ * every transition, and with them the local key a peer transition
+ * arrived at and the peer an observation a local transition was
+ * triggered by came from. A peer address is named by derivation too, in
+ * `claiming`, where a local address named here derives the
+ * relationship's own ID with it, which is the pair a binding not here
+ * would pin.
+ */
+function namedAddresses(fold: VaultFold): Map<RelationshipId, NamedAddresses> {
+  const named = new Map<RelationshipId, NamedAddresses>();
+  const ends = (relationshipId: RelationshipId): NamedAddresses => {
+    const known = named.get(relationshipId);
+    if (known !== undefined) return known;
+    const addresses: NamedAddresses = { locals: new Set(), peers: new Set() };
+    named.set(relationshipId, addresses);
+    return addresses;
+  };
+  const local = (addresses: NamedAddresses, didId: DidId): void => {
+    const did = didOf(fold, didId);
+    if (did !== null) addresses.locals.add(did);
+  };
+  for (const event of fold.set.of("relationship.bound")) {
+    const addresses = ends(event.data.relationshipId);
+    local(addresses, event.data.localDidId);
+    const resolved = fold.set.resolve(event.data.peerResolutionEventId, "peer.resolved");
+    if (resolved.status === "present") addresses.peers.add(resolved.event.data.did);
+  }
+  for (const edge of fold.set.of("relationship.localTransitioned")) {
+    const addresses = ends(edge.data.relationshipId);
+    local(addresses, edge.data.fromDidId);
+    local(addresses, edge.data.toDidId);
+    const trigger = edge.data.triggerEventId === null ? null : fold.set.resolve(edge.data.triggerEventId, "message.in");
+    if (trigger?.status === "present" && trigger.event.data.did !== null) addresses.peers.add(trigger.event.data.did);
+  }
+  for (const edge of fold.set.of("relationship.peerTransitioned")) {
+    const addresses = ends(edge.data.relationshipId);
+    addresses.peers.add(edge.data.fromDid).add(edge.data.toDid);
+    const arrivedAt = fold.routes.entityOfKey(edge.data.localKeyName);
+    if (arrivedAt !== null) local(addresses, arrivedAt);
+  }
+  return named;
+}
+
+/**
+ * What the bindings under one relationship ID disagree on, with every
+ * event deciding it here: two root local DIDs, two root peer DIDs or
+ * documents, a binding its own resolution refutes, or one whose pinned
+ * snapshot is not the document it names. Nothing later makes such a
+ * relationship stand, since each of those references is immutable and a
+ * snapshot is checked against the one document its CID can name, so no
+ * delivery is ever born at a pair it claims.
+ */
+function contradictingBindings(fold: VaultFold, relationshipId: RelationshipId): string | null {
+  const localDidIds = new Set<DidId>();
+  const dids = new Set<Did>();
+  const documents = new Set<Cid>();
+  for (const event of fold.set.of("relationship.bound")) {
+    if (event.data.relationshipId !== relationshipId) continue;
+    localDidIds.add(event.data.localDidId);
+    const resolved = fold.set.resolve(event.data.peerResolutionEventId, "peer.resolved");
+    if (resolved.status === "mismatched") return `binding ${event.eventId} names ${resolved.event.type} as its peer resolution`;
+    if (resolved.status === "missing") continue;
+    if (bindingHolds(event.data, resolved.event.data, didOf(fold, event.data.localDidId)) === "contradicted") return `binding ${event.eventId} does not hold: its resolution, local DID and relationship ID disagree`;
+    if (fold.checks.resolutionChecks.get(resolved.event.eventId) === "invalid") return `binding ${event.eventId} pins the snapshot ${resolved.event.eventId}, which is not the document it names`;
+    dids.add(resolved.event.data.did);
+    documents.add(resolved.event.data.documentCid);
+  }
+  if (localDidIds.size > 1) return "bindings disagree on the root local DID";
+  if (dids.size > 1) return "bindings disagree on the root peer DID";
+  if (documents.size > 1) return "bindings disagree on the root peer document";
+  return null;
+}
+
+const didOf = (fold: VaultFold, didId: DidId): Did | null => fold.routes.dids.get(didId)?.created?.did ?? null;
+
+/** The ID a birth at the pair takes; null where the two addresses are one, which is no relationship. */
+function birthOf(localDid: Did, peerDid: Did): RelationshipId | null {
+  return localDid === peerDid ? null : relationshipIdOf(localDid, peerDid);
+}
+
+/** What a wait watches, as text: the delivery is retried when this changes, and only then. */
+export function evidenceOf(fold: VaultFold, dependencies: readonly Dependency[]): string {
+  return JSON.stringify(dependencies.map((dependency) => (dependency.kind === "pair" ? pairFingerprint(fold, dependency.localDid, dependency.peerDid) : invitationFingerprint(fold, dependency.oobId))));
+}
+
+function pairFingerprint(fold: VaultFold, localDid: Did, peerDid: Did): unknown {
+  const { claimants, contradicted, awaited } = pairEvidence(fold, localDid, peerDid);
+  return {
+    claimants: claimants.map((relationshipId) => {
+      const relationship = fold.relationships.relationships.get(relationshipId);
       return [relationshipId, relationship?.conflict ?? null, relationship?.faults ?? [], relationship?.deferred ?? [], relationship?.localChain.length ?? 0, relationship?.peerChain.length ?? 0];
     }),
-    pending: relationships.pendingAt(localDid, peerDid).map((claim) => [claim.because, claim.eventIds, claim.conflict]),
-  });
+    contradicted,
+    awaited,
+  };
+}
+
+function invitationFingerprint(fold: VaultFold, oobId: string): unknown {
+  const invitation = fold.invitations.invitations.get(oobId);
+  return invitation === undefined ? null : [invitation.consumers, invitation.pending, invitation.inconsistent, invitation.faults, invitation.available];
 }

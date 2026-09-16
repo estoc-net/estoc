@@ -20,7 +20,9 @@
  * (`outbox`); and every delivery that arrives put through the gate
  * before the vault — the recipients it names, the key it opens with,
  * the sender it proves resolved for it — terminal, held for what it
- * waits on, or handed to the receipt (`receive`). The protocols themselves —
+ * waits on, or handed to the receipt, which records it in the
+ * relationship its address pair or its proof's issuer finds, or a new
+ * one born at the pair (`receive`). The protocols themselves —
  * message types and shapes — are shared with the package root under
  * `protocol/`.
  */
@@ -98,7 +100,7 @@ export { EXPIRED, MAX_CONTENT_BYTES, PEER_KEY_CHANGED, outboundWorkKey, prepare,
 export { MAX_ENVELOPE_BYTES, SUBMIT_TIMEOUT_MS, submit, type SubmitOptions, type Submitted } from "./submit.js";
 export { Outbox, RETRY_POLICY, type Backoff, type OutboxOptions, type RetryPolicy, type Step, type Timers } from "./outbox.js";
 export { RESOLUTION_POLICY, ResolutionSequence, type ResolutionPolicy, type Retention } from "./receive/accounting.js";
-export { classifyRecipients, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
+export { classifyRecipients, evidenceOf, pairEvidence, sealingOf, senderProof, type AuthenticatedSender, type Dependency, type PairEvidence, type Recipients, type Sealing, type SenderProof } from "./receive/gate.js";
 export {
   ENDED_KEPT,
   MAX_HELD_BYTES,
@@ -114,3 +116,4 @@ export {
   type WaitKind,
   type Waiting,
 } from "./receive/receiver.js";
+export { receiptOf, recordReceipt, type ReceiptOptions } from "./receive/receipt.js";
