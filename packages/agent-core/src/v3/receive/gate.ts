@@ -232,10 +232,7 @@ interface NamedAddresses {
  * local DID and the peer DID of the resolution it pins; both ends of
  * every transition, and with them the local key a peer transition
  * arrived at and the peer an observation a local transition was
- * triggered by came from. A peer address is named by derivation too, in
- * `claiming`, where a local address named here derives the
- * relationship's own ID with it, which is the pair a binding not here
- * would pin.
+ * triggered by came from.
  */
 function namedAddresses(fold: VaultFold): Map<RelationshipId, NamedAddresses> {
   const named = new Map<RelationshipId, NamedAddresses>();
