@@ -521,8 +521,8 @@ authenticated sender `did:web:bob.example` and wire ID
 
 ```text
 executionId = 460fb564-67a5-5f0f-9066-9cd18d7d6f73
-effectKey = VVHM1QOwqJ-x5XmYTcnkmVIyTliwmxOiN-nV7jVtciM
-outbound message ID = wire ID = d23906f7-f831-5ba2-9a01-51ca727ee120
+effectKey = mo6V1ecaBZJHkRKXI9iPTwGGykSWcuLK_Fnf4uN9zKo
+outbound message ID = wire ID = 0b5fef0c-66fb-5563-bea6-c7d3fdec982c
 ```
 
 These values follow the channel execution transcript and effect-key
@@ -679,7 +679,7 @@ tuple or execution conflict.
 ```text
 effectKey = base64url(
   SHA-256(
-    UTF8("estoc/effect/4\0") ||
+    UTF8("estoc/effect/3\0") ||
     UTF8(executionId) || 0x00 ||
     UTF8(effectType)
   )
@@ -877,7 +877,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     submission at the same committed boundary as other outbounds.
 18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect VVHM1QOwqJ-x5XmYTcnkmVIyTliwmxOiN-nV7jVtciM and wire ID d23906f7-f831-5ba2-9a01-51ca727ee120.
+19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect mo6V1ecaBZJHkRKXI9iPTwGGykSWcuLK_Fnf4uN9zKo and wire ID 0b5fef0c-66fb-5563-bea6-c7d3fdec982c.
 
 20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
