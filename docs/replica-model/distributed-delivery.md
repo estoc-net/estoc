@@ -281,7 +281,7 @@ with a new ID. Rotation and contact preferences never retarget old work.
 6. For each consumer, validate exact source/proof evidence and its required
    target or protocol fields. Before new work, recheck supersession, denial
    and that operation's current policy. Commit the concrete intent or local
-   result with already committed references. Invitation consumption
+   result with already committed references. Automatic invitation consumption
    follows [channels.md](channels.md#invitation-consumed)
    independently of those consumers.
 7. Process valid explicit peer ACKs and local display/profile projections.
@@ -308,6 +308,9 @@ Missing bytes/references remain recovery work. Later validation does not append
 another receipt or grant automatic response/notification dispatch. The same
 uninterrupted initial receive operation may continue after a prerequisite wait;
 reopen, import and a separate evidence-recovery operation have no such action.
+The active runtime automatically completes missing invitation consumption from
+retained eligible sources under [channels.md](channels.md#invitation-consumed).
+That local record grants no protocol effect or dispatch action.
 
 Enumerate pending/unconfirmed messages for manual action. Reopen, restore,
 import, replica change and duplicate pickup do not dispatch old messages or
@@ -852,8 +855,10 @@ are owned by [vault events](vault-events.md) and [channels](channels.md).
   channel becomes unusable, a deliberate new send has a new wire ID.
 - After receipt but before pickup ACK, redelivery is another same-channel
   observation. Receipt commit still permits pickup ACK independently of policy.
-- After receipt/consumption but before a reply, recovery preserves local state
-  and pending work without automatically sending ACKs, replies or notifications.
+- After receipt but before consumption, recovery automatically completes that
+  local record when its retained source and current policy remain eligible.
+  Before a reply, recovery preserves local state and pending work without
+  automatically sending ACKs, replies or notifications.
 - After erasure, no new content-derived effect is reconstructed.
 - Mediator expiry/outage may lose an already submitted message. This best-effort
   profile does not automatically compensate through another replica or channel.

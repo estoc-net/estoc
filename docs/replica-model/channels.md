@@ -164,10 +164,10 @@ ordinal or message ID. That change alone grants no new automatic dispatch action
 
 ## 4. Invitation consumption
 
-`invitation.consumed` records the local decision to assign a one-use OOB
+`invitation.consumed` records the automatic assignment of a one-use OOB
 invitation to the peer authenticated by an exact receipt. It grants no channel,
 reply, profile, ACK or continuity authority. Its closed payload contains exactly
-these three fields; `roots` is empty:
+these two fields; `roots` is empty:
 
 ```json
 {
@@ -175,8 +175,7 @@ these three fields; `roots` is empty:
   "roots": [],
   "data": {
     "disclosureEventId": "019b2a61-84d8-734a-a996-963bb503e30f",
-    "sourceEventId": "019b2a71-4c18-760a-9017-b3e265aa89d1",
-    "trigger": "manual"
+    "sourceEventId": "019b2a71-4c18-760a-9017-b3e265aa89d1"
   }
 }
 ```
@@ -197,14 +196,21 @@ continuity does not rename or transfer a consumption to a successor peer.
 A source carrying `from_prior`, an anonymous source, an outbound intent or a
 matching `pthid` at another local DID cannot consume this invitation.
 
-`trigger` is `automatic` or `manual`. Automatic consumption requires
-`did.disclosed.autoConsume == true` and an eligible live, non-erased source.
-Manual consumption requires an explicit local user action and is permitted
-regardless of that flag. Both check current invitation policy, local DID and
-route lifecycle, denial, supersession and conflicts under the operation lock.
-Recheck availability and commit the event before presenting consumption as
-complete. Missing exact evidence defers the decision; invalid evidence grants
-no consumption. A consumption cannot establish its own source authentication.
+The active runtime MUST process one-use consumption automatically; no additional
+user decision is required. Under the operation lock, check current invitation
+policy, local DID and route lifecycle, denial, supersession, conflicts and
+availability.
+For a disclosure with no existing consumption, consider retained, non-erased,
+proof-free receipts matching its local recipient and `oobId` in ascending
+`receiptOrderKey` order under [vault events](vault-events.md#message-in).
+Use the first eligible receipt. A definitively invalid or currently refused
+candidate is ineligible; missing exact evidence or unresolved eligibility at
+an earlier candidate defers selection rather than permitting a later candidate
+to bypass it. A candidate affected by a receipt-integrity conflict leaves
+selection conflicted; another ordering or event ID cannot break that conflict.
+With an eligible source and an available disclosure, commit the event before
+presenting consumption as complete. A consumption cannot establish its own
+source authentication.
 
 Reuse an existing complete consumption for the same disclosure and canonical
 peer; another source or duplicate delivery by that peer creates no second take.
@@ -217,13 +223,19 @@ aggregate availability; otherwise a valid consumption would invalidate itself.
 
 Once complete consumption is established, later erasure, denial, retirement,
 conflict or contact deletion never reopens it. Retain the event and exact
-source/disclosure skeletons. Import validates the referenced evidence and
-`trigger`/`autoConsume` relationship, not the producer's past wall-clock policy.
-Reopen/import rebuilds the fold; it does not select a new consumer by ordering
-historical receipts. A pending decision requires an eligible live input or
-explicit manual action. Many-use invitations have no consumption event or
-exclusive consumer. Receipt, reply, rotation and display work alone consume
-nothing, and consumption never disables the disclosed DID or dispatches work.
+source/disclosure skeletons. Import validates the referenced evidence, not the
+producer's past policy or the receipt set visible when it made the assignment.
+Later receipt imports never replace an existing complete consumption.
+
+Reopen, restore, import and evidence recovery rebuild existing consumption
+first, then the active runtime MUST automatically complete any missing
+consumption from retained candidates under the same ordering and current
+eligibility checks. A pure fold never appends events. Missing evidence stays
+pending until repaired; erased input cannot start a new consumption. This
+local recovery needs no redelivery or user action and grants no automatic
+reply, notification or dispatch action. Many-use invitations have no
+consumption event or exclusive consumer. Receipt, reply, rotation and display
+work alone record no consumer, and consumption never disables the disclosed DID.
 
 <a id="continuity"></a>
 <a id="channel-linked"></a>
@@ -609,7 +621,7 @@ must define an authenticated application operation ID and its own rules.
 10. <a id="ch-10"></a> Crash after receipt, proof-resolution association, invitation consumption or a concrete intent/result preserves each committed fact; reopen rebuilds verification and pending-work views without dispatching old work.
 11. <a id="ch-11"></a> Competing one-use invite receipts can both be saved; only a complete invitation.consumed records a consumer. Crash, erasure, denial and retirement never reopen that consumption.
 12. <a id="ch-12"></a> Unpack without authenticated plaintext creates no observation; missing cryptographic material waits without pickup ACK.
-13. <a id="ch-13"></a> Automatic consumption requires autoConsume true and eligible live input; a manual trigger requires an explicit local action and can consume with either flag value. An automatic record with a false flag is invalid. Timeout, control type and matching pthid alone select no consumer.
+13. <a id="ch-13"></a> One-use consumption is automatic and needs no additional user decision. Select the first eligible non-erased receipt in receiptOrderKey order; an earlier candidate with missing evidence defers selection. Timeout, control type and matching pthid alone establish no consumption.
 14. <a id="ch-14"></a> A peer link applies only in its validated channel/local-continuation context and does not replace the peer in unrelated public-DID channels.
 15. <a id="ch-15"></a> Earlier source evidence, intents and results survive ordinary document updates and later extensions; contradictory identity evidence or same-end successors suppress new work without rewriting identity.
 16. <a id="ch-16"></a> Retained retired recipient keys can drain eligible routes; new sending, disclosure and invitation consumption obey retirement.
@@ -649,5 +661,5 @@ must define an authenticated application operation ID and its own rules.
 50. <a id="ch-50"></a> An invitation consumption with a missing exact disclosure or source remains pending even if another receipt could independently justify the same consumer. That wait cannot block complete links, joins, rotation notifications or another operation with complete evidence.
 51. <a id="ch-51"></a> Without consuming an invitation, a complete source in a supported profile protocol can supply a channel-scoped name claim when readable content and current profile policy permit. Missing source/proof evidence, denial or supersession still prevents a new lift; the claim neither creates a contact nor changes its petname.
 52. <a id="ch-52"></a> Without consuming an invitation, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry.
-53. <a id="ch-53"></a> Many-use and non-OOB disclosures have autoConsume false and cannot be consumed. Republishing an invitation reuses its disclosure; distinct imported OOB disclosures with the same non-null oobId conflict and cannot supply another use or reopen prior consumption.
-54. <a id="ch-54"></a> Consumption requires already committed disclosure and source references, not same-batch prerequisites. A crash before consumption commit selects no consumer; after commit, reopen preserves the consumer without sorting receipts into a replacement decision. Neither crash prefix dispatches a reply or disables the disclosed DID.
+53. <a id="ch-53"></a> Many-use and non-OOB disclosures cannot be consumed. Republishing an invitation reuses its disclosure; distinct imported OOB disclosures with the same non-null oobId conflict and cannot supply another use or reopen prior consumption.
+54. <a id="ch-54"></a> Consumption requires already committed disclosure and source references, not same-batch prerequisites. After a crash before consumption commit, recovery automatically records the first currently eligible retained source; after commit, recovery preserves that consumer even if an earlier receipt is imported. Erased or currently refused input starts no consumption. Neither crash prefix dispatches a reply or disables the disclosed DID.

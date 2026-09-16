@@ -828,7 +828,6 @@ does not erase retained messages.
     "didId": "019b2a54-05bd-74ef-b8ac-e8375cb776c2",
     "as": "oob",
     "uses": "many",
-    "autoConsume": false,
     "oobId": "019b2a57-a947-7502-8fee-4d80d949dbcb",
     "goal": "Write to Alice"
   }
@@ -837,13 +836,10 @@ does not erase retained messages.
 
 `as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
 is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
-`autoConsume` is a REQUIRED boolean. For a one-use OOB invitation it freezes
-the user's permission to record consumption on eligible live input without a
-second user decision. False requires an explicit manual consumption action.
-It MUST be false for `uses == "many"` and for `profile` or `direct` disclosure;
-those non-OOB forms MUST use `uses == "many"`. Creating a one-use OOB invitation
-requires an explicit choice of this permission. The flag grants no reply,
-profile, continuity or dispatch authority.
+`profile` and `direct` disclosures MUST use `uses == "many"`. A one-use OOB
+invitation is consumed automatically when an eligible source is available under
+[section 5.8](#invitation-fold); no separate user decision is required.
+The `uses` choice grants no reply, profile, continuity or dispatch authority.
 `data.didId` references the local entity's `did.created.data.didId` under
 [section 3.5](#identifier-and-reference-vocabulary). Its DID spellings remain on that entity.
 A one-use OOB invitation may disclose any live communication DID; a matching
@@ -1005,18 +1001,22 @@ or conflict as distinct states. Many-use invitations have no exclusive consumer
 and cannot be the target of `invitation.consumed`.
 
 Missing source/disclosure evidence that could establish another consumption
-leaves availability pending. A complete same-peer consumption is idempotent;
+leaves availability pending, including an earlier candidate that prevents
+automatic selection under channels.md. A complete same-peer consumption is idempotent;
 incompatible complete consumers or duplicate OOB disclosure IDs expose an
 unavailable conflict, with no event-order winner. Incomplete siblings cannot
 erase an already complete consumption. Validate positive consumption evidence
 before availability to avoid a circular fold. Later erasure, denial, retirement
 or conflict never makes a consumed invitation available again.
 
-A complete consumption record establishes the consumer. Rebuild does not
-infer one from receipt order, contact membership, output intents or rotation.
-`autoConsume` permits automatic consumption on eligible live input; false
-still permits an explicit manual action. This fold neither disables receipt
-at the disclosed DID nor grants or withholds any other operation's authority.
+A complete consumption record establishes the consumer. A pure fold never
+assigns one from receipt order, contact membership, output intents or rotation.
+The active runtime automatically appends a missing consumption from the first
+eligible retained receipt under [channels.md](channels.md#invitation-consumed),
+including during recovery after reopen, restore or import. Existing consumption
+is preserved when earlier receipts arrive later. This local bookkeeping neither
+dispatches work nor disables receipt at the disclosed DID, and grants or
+withholds no other operation's authority.
 
 <a id="12-relationships-and-address-changes"></a>
 <a id="relationships-and-address-changes"></a>
@@ -2489,6 +2489,9 @@ list when no new objects are needed; `Vault.events` is read-only.
 6. Rebuild eligible local profile/display projections and permanent erasure closure.
    This work may recover data or resolve a predecessor for a previously
    unverified proof, but grants no protocol dispatch or business effect.
+   Automatically complete missing invitation consumption from retained,
+   non-erased sources under [channels.md](channels.md#invitation-consumed),
+   rechecking current policy and lifecycle after rebuilding erasure and denials.
 7. Start recipient reconciliation, pickup and permitted synchronization. Enable
    new user sends and manual actions only after normal runtime/evidence checks.
 
@@ -2545,8 +2548,9 @@ reduce linkability, but route choice does not establish channel authority.
 Create or select a live communication DID under [section 13.3](#create-a-communication-did). Reconcile its
 bound route and verify recipient registration, then commit `did.disclosed`
 and expose its long form by OOB, QR, file or another discovery transport.
-A one-use OOB disclosure also freezes the user's `autoConsume` choice before
-publishing the invitation; many-use and other disclosure forms store false.
+The disclosure freezes whether an OOB invitation is one-use or many-use before
+publication. One-use consumption is automatic under [section 5.8](#invitation-fold);
+many-use and other disclosure forms have no exclusive consumer.
 Public discovery SHOULD select an address allocated for that purpose and avoid
 exposing an address used privately. These are disclosure policies; the same DID
 identity and receipt rules apply to either choice.
@@ -2845,7 +2849,7 @@ derivation requires a new vault version.
 28. <a id="ve-28"></a> Public discovery uses a chosen communication address under disclosure
     policy. Private allocation is not a different DID schema or receive path.
     Local Peer discovery needs no DNS.
-29. <a id="ve-29"></a> First and later inputs use common authentication/resource checks. Invitation consumption requires its own source, disclosure and trigger checks regardless of control type or wire age.
+29. <a id="ve-29"></a> First and later inputs use common authentication/resource checks. Automatic invitation consumption requires its own source, disclosure, ordering and current eligibility checks regardless of control type or wire age.
 
 30. <a id="ve-30"></a> Unknown application types and absent receipt requests do not prevent channel receipt. Automatic output and profile lifts need complete source evidence and operation-specific policy checks; received ACK/error observations need their exact attribution evidence. None requires invitation consumption.
 
@@ -2860,9 +2864,9 @@ derivation requires a new vault version.
 35. <a id="ve-35"></a> First channel receipt accepts absent or past wire expiry. Outbound expiry
     independently stops unsubmitted work at equality.
 
-36. <a id="ve-36"></a> Receipt survives crash before consumption/display work. Recovery rebuilds saved evidence without redelivery or automatic outgoing effects.
+36. <a id="ve-36"></a> Receipt survives crash before consumption/display work. Recovery rebuilds saved evidence and automatically completes missing eligible invitation consumption without redelivery, user action or automatic outgoing effects.
 
-37. <a id="ve-37"></a> invitation.consumed contains exactly disclosureEventId, sourceEventId and trigger, with empty roots. Both references are non-null and already committed; the exact proof-free source supplies the consumer and matches the disclosed local DID and oobId.
+37. <a id="ve-37"></a> invitation.consumed contains exactly disclosureEventId and sourceEventId, with empty roots. Both references are non-null and already committed; the exact proof-free source supplies the consumer and matches the disclosed local DID and oobId.
 
 <a id="address-changes-and-default-responses-ve-38-ve-49"></a>
 
@@ -2984,7 +2988,7 @@ derivation requires a new vault version.
     Only affected logical messages are excluded from newly frozen ACK targets.
 81. <a id="ve-81"></a> Every event-set permutation produces the same complete receipt ordering; older same-channel duplicates affect future selection only, never frozen ACK arrays.
 
-82. <a id="ve-82"></a> A one-use invitation with autoConsume false waits for an explicit manual consumption action. True permits a separate automatic decision on eligible live input. Receipt or matching pthid alone records no consumer.
+82. <a id="ve-82"></a> An available one-use invitation automatically records consumption for the first eligible retained receipt in receiptOrderKey order. Earlier pending evidence cannot be bypassed. Reopen/import may complete this local record but cannot replace a recorded consumer or dispatch output; receipt or matching pthid alone records no consumer.
 
 83. <a id="ve-83"></a> Same-consumer invitation reuse does not create another take. Imported
     incompatible consumers leave it unavailable; event order chooses no winner.

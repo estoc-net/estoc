@@ -15,8 +15,9 @@ Each receipt, package and proof retains its own document evidence. Sending,
 automatic output, preparation, local rotation, profile lifts and received ACK/error
 attribution use their concrete evidence and applicable policy. A separate
 `invitation.consumed` records the peer using a one-use OOB disclosure; it does
-not authorize or prevent those operations. Automatic consumption follows the
-disclosure's `autoConsume` choice; many-use invitations have no exclusive consumer.
+not authorize or prevent those operations. One-use consumption is automatic,
+including local recovery of an unfinished record; many-use invitations have no
+exclusive consumer.
 Method-authorized document updates preserve the channel. Directed links are
 derived from received proofs and local rotation decisions. Receipt can precede
 proof verification, with pending/invalid/conflict status visible in the UI.

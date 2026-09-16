@@ -113,7 +113,7 @@ Every instruction to append an event in this document means
 
 1. A channel preserves canonical local/peer roles; message identity uses canonical sender, recipient and wire ID.
 2. Authenticate before receipt; validate each operation's source and channel evidence before its effects.
-3. Receipt never requires a contact or silently consumes an invitation.
+3. Receipt never requires a contact; invitation consumption is recorded separately after its own eligibility checks.
 4. A verified link has exact channel context and never globally aliases DIDs.
 5. Opposite-side rotations may form a verified join; competing same-side successors conflict.
 6. Missing evidence is pending, never an arrival-order election or permission fallback.
@@ -166,16 +166,17 @@ blocks communication must append concrete channel denials separately.
 
 OOB, QR, directory, file, NFC or manual exchange discloses an ordinary address.
 Reusable discovery SHOULD use a public-contact address. An OOB ID supplies
-`pthid`, never channel identity. For a one-use OOB disclosure,
-`did.disclosed.autoConsume` permits automatic consumption on eligible live
-input. False requires explicit manual consumption; it does not gate other
-operations. Many-use and profile/direct disclosures store false.
+`pthid`, never channel identity. A one-use OOB disclosure is consumed
+automatically from an eligible source; no additional user decision is required.
+Many-use and profile/direct disclosures have no exclusive consumer.
 
 A one-use invitation is consumed only by `invitation.consumed` under
 [the invitation fold](vault-events.md#invitation-fold), independently of reply
-or display work. Its exact disclosure and proof-free source fix the consumer;
-its trigger records automatic or manual selection. Plain receipt does not
-consume it. Deletion, erasure and later conflicts do not reopen it. Different
+or display work. Its exact disclosure and proof-free source fix the consumer.
+The active runtime also completes missing consumption during recovery, using
+the retained receipt order and current eligibility rules in
+[channels.md](channels.md#invitation-consumed). Plain receipt alone records no
+consumer. Deletion, erasure and later conflicts do not reopen it. Different
 peer consumers conflict. A consumed invitation does not disable its disclosed
 DID; receipt and other operations retain their own evidence and policy rules.
 Many-use invitations have no consumption event or exclusive consumer.
