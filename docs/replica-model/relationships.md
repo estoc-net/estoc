@@ -1,4 +1,4 @@
-# Estoc channel address and display policy 1.0
+# Estoc channel address and contact policy 1.0
 
 <!-- suite-navigation:start -->
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
@@ -13,8 +13,8 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 
 There is no Estoc rendezvous wire protocol, connection request, accept or
 decline. Messages use ordinary DIDComm protocols. Channel acceptance is independent of public/private address allocation.
-Address-change evidence derives a channel-local `from_prior` link; relationships are
-display groups under [channels.md](channels.md#display-relationships).
+Address-change evidence derives a channel-local `from_prior` link; contacts
+directly select channels under [channels.md](channels.md#contact-channels).
 
 <!-- reading-guide:start -->
 <a id="reading-guide"></a>
@@ -57,14 +57,14 @@ display groups under [channels.md](channels.md#display-relationships).
 
 A fixed channel records communication between two DIDs. Verified links connect
 channels when one endpoint rotates. The original message stays in its actual
-channel and no cryptographic relationship root or stable graph-component ID
+channel and no cryptographic root or stable graph-component ID
 exists. [Channels](channels.md#model) owns that model.
 
 Public/rendezvous and pairwise describe disclosure and allocation policy, not
 different message schemas or receipt permissions. A shared DID can participate
 in several channels; a local continuity decision does not change all of them.
 Useful content may be the first message. Trust Ping is the no-content default.
-Display relationships and contacts organize history without protocol authority.
+Contacts organize channel histories without protocol authority.
 
 <a id="dependencies"></a>
 
@@ -101,7 +101,7 @@ Every instruction to append an event in this document means
 - **Channel** — a fixed pair of distinct canonical DIDs with vault-local orientation.
 - **Acceptance** — a durable local decision to use a DID-pair channel, with exact evidence of that decision.
 - **Continuity link** — a fold-derived, verified replacement of one endpoint in one channel context.
-- **Relationship** — a display group of channels or channel chains.
+- **Contact** — local names, preferences and direct channel selections for display.
 - **Application input** — accepted authenticated input other than control input,
   Empty, Trust Ping ping-response or Report Problem for privacy-trigger purposes.
 - **Rotation notification** — an ordinary new message disclosing a selected local rotation.
@@ -114,7 +114,7 @@ Every instruction to append an event in this document means
 
 1. Channel identity is symmetric; message identity additionally includes sender direction.
 2. Authenticate before receipt; accept channel evidence before application effects.
-3. Receipt never creates a display relationship or silently accepts a channel.
+3. Receipt never requires a contact or silently accepts a channel.
 4. A verified link has exact channel context and never globally aliases DIDs.
 5. Opposite-side rotations may form a verified join; competing same-side successors conflict.
 6. Missing evidence is pending, never an arrival-order election or permission fallback.
@@ -122,18 +122,18 @@ Every instruction to append an event in this document means
 8. Every transport attempt has a prior committed attempt record and a live dispatch action.
 9. Import, reopen and replica change never automatically send old work.
 10. Manual retry preserves the attempted package; a new channel needs a new message ID.
-11. Display grouping grants no ACK, key, invitation or execution authority.
-12. Phase 1 has one active executor; peers address DIDs, never replica or display-group IDs.
+11. Contact membership grants no ACK, key, invitation or execution authority.
+12. Phase 1 has one active executor; peers address DIDs, never replica or contact IDs.
 
 <a id="10-symmetric-relationship-identity"></a>
 <a id="symmetric-relationship-identity"></a>
 
 ## 5. Channel and display identifiers
 
-The former symmetric relationship-root derivation is retired. Fixed channel
-IDs use [the channel formula and vectors](channels.md#channel-identity).
-Explicit display relationships use UUIDv7; a UI's automatic grouping may change
-when new graph evidence arrives, without changing protocol identities.
+Fixed channel IDs use [the channel formula and vectors](channels.md#channel-identity).
+Contacts use UUIDv7 and directly select channel IDs. A UI's derived continuity
+view may change when new evidence arrives, without changing contact selections
+or protocol identities. No persistent group or chain ID is allocated.
 
 <a id="101-contact-ids"></a>
 <a id="contact-ids"></a>
@@ -156,8 +156,8 @@ Opposite first sends can select the same channel without role arbitration.
 The accepted pair remains usable across method-authorized document updates;
 each operation retains its own verification snapshot.
 
-`relationship.channelsSet` and `relationship.contactAssigned` organize display.
-They do not accept messages, consume invitations, continue channels or authorize
+`contact.channelsSet` organizes display. It does not accept messages, consume
+invitations, continue channels or authorize
 new sends. Deleting a contact is presentation state; a product action that also
 blocks communication must append concrete channel denials separately.
 
@@ -198,7 +198,7 @@ application acceptance under [channels.md](channels.md#continuity).
 
 The send API selects one exact oriented channel before committing intent.
 An explicit address choice can start a new channel without a wire handshake.
-A contact/group selection must resolve to a concrete eligible channel; display
+A contact selection must resolve to a concrete eligible channel; contact
 membership supplies no authentication authority. Verified successors may guide
 this new selection. An existing intent's selection is immutable.
 
@@ -238,7 +238,7 @@ disclosing a locally selected rotation. Receipt alone does not request an ACK.
 
 Any supported application protocol may be the first message, including Basic
 Message, with its normal body, thread and attachment semantics. No rendezvous
-wrapper, extra wire relationship field or preliminary handshake is required.
+wrapper, extra wire contact field or preliminary handshake is required.
 Content remains application content regardless of whether a rotation is carried.
 
 <a id="select-addresses-and-commit-intent"></a>
@@ -341,7 +341,7 @@ application state:
 
 An implementation MUST NOT use this gate for a local preference about message
 type, initial-specific size/lifetime limits, message age or expiry,
-display-group or recipient capacity, absence of current-message `please_ack`,
+contact or recipient capacity, absence of current-message `please_ack`,
 or Trust Ping `response_requested == false`. Ordinary parser/transport limits
 and concrete resource exhaustion still apply, without a separate bootstrap
 floor or ceiling.
@@ -350,7 +350,7 @@ A safely classified hard rejection received through Message Pickup:
 
 - MUST be pickup-ACKed;
 - MUST NOT append `message.in`;
-- MUST NOT create a contact, relationship or response effect; and
+- MUST NOT create a contact or response effect; and
 - MAY leave only a bounded local diagnostic.
 
 Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
@@ -829,7 +829,7 @@ not prove submission failure, retract a link or authorize replay. A normal
 authenticated observation may separately prove exact-address knowledge.
 
 Missing source/verification evidence defers attribution; inconsistent evidence exposes
-conflict. Do not assign an error to a display group by wire ID or name alone.
+conflict. Do not assign an error to a contact by wire ID or name alone.
 
 <a id="retry-replacement-and-address-rollover"></a>
 
@@ -867,7 +867,7 @@ authenticated operation identity.
 Phase 1 permits one active executor. Import/restore reconstructs state but
 grants no dispatch action for historical intents or automatic responses.
 Replicas may later synchronize receipts, proof evidence, local decisions and
-display groups, rebuilding links without
+contact selections, rebuilding links without
 automatically taking over another replica's pending outbox. Multi-executor
 automatic reactions require a separately specified coordination policy.
 
@@ -876,7 +876,7 @@ automatic reactions require a separately specified coordination policy.
 ## 16. Privacy, abuse, interoperability and security
 
 Public/pairwise labels are disclosure policy. Peers receive ordinary DIDComm
-messages and no display relationship or replica ID. Shared addresses can
+messages and no contact or replica ID. Shared addresses can
 correlate traffic; fresh pairwise addresses reduce that reuse.
 
 Continuity applies to exact channel contexts and role-preserving paths. It
@@ -898,14 +898,14 @@ roll back; explicit new communication is a new channel and new message.
 
 1. <a id="rz-1"></a> Peer-DID first disclosure validates its long form, canonical short form, fixed keys and bound route without DNS.
 2. <a id="rz-2"></a> Each external Web operation retains exact document bytes; a later network revision can authorize new operations but cannot replace historical proof evidence.
-3. <a id="rz-3"></a> No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire relationship ID.
+3. <a id="rz-3"></a> No emitted message uses an Estoc rendezvous request, accept or decline type, or a wire contact ID.
 4. <a id="rz-4"></a> Public/public, public/pairwise and pairwise/pairwise pairs use the same channel receipt and separate explicit admission rules.
 
-5. <a id="rz-5"></a> Run both channel naming fixtures in both directions; distinct canonical pairs differ. Display relationship IDs do not enter the derivation.
+5. <a id="rz-5"></a> Run both channel naming fixtures in both directions; distinct canonical pairs differ. Contact IDs do not enter the derivation.
 
 6. <a id="rz-6"></a> Validated Peer long/short spellings name one channel endpoint; shared keys, endpoints and labels do not alias distinct DIDs.
 
-7. <a id="rz-7"></a> Opposite first sends select one channel with distinct message directions; unsolicited receipt does not accept the channel or create a display group.
+7. <a id="rz-7"></a> Opposite first sends select one channel with distinct message directions; unsolicited receipt does not accept the channel or create a contact.
 
 8. <a id="rz-8"></a> Another independently authorized key, including in an updated Web document, preserves channel/sender/wire-ID identity without creating a contact.
 
@@ -947,7 +947,7 @@ roll back; explicit new communication is a new channel and new message.
 
 ### Peer continuation and integrity (RZ-26–RZ-35)
 
-26. <a id="rz-26"></a> Successor proof at different local addresses needs the corresponding complete channel evidence or a verified join; no global relationship lookup is required.
+26. <a id="rz-26"></a> Successor proof at different local addresses needs the corresponding complete channel evidence or a verified join; no contact lookup is required.
 
 27. <a id="rz-27"></a> Opposite-side links with one accepted base justify the exact diagonal channel in either import order without synthetic observations.
 
@@ -1000,9 +1000,9 @@ roll back; explicit new communication is a new channel and new message.
 
 48. <a id="rz-48"></a> Expiry and bounded prerequisite retries are independent of incoming age and rotation iat; transport retries require manual action.
 
-49. <a id="rz-49"></a> Contact/group assignment is independent of channel acceptance; control-only channels need no invented contact.
+49. <a id="rz-49"></a> Contact channel selection is independent of channel acceptance; control-only channels need no invented contact.
 
-50. <a id="rz-50"></a> Display regrouping changes no channel acceptance, verification evidence, continuation, message identity or ACK authorization.
+50. <a id="rz-50"></a> Contact membership changes no channel acceptance, verification evidence, continuation, message identity or ACK authorization.
 
 51. <a id="rz-51"></a> Deleting a contact changes display only; an explicit delete-and-block action writes channel denials without retiring shared resources.
 
@@ -1025,6 +1025,6 @@ roll back; explicit new communication is a new channel and new message.
 
 59. <a id="rz-59"></a> did:web:Bob.Example and did:web:bob.example remain distinct endpoints; returned document ID mismatch cannot be repaired by URL/DNS normalization.
 
-60. <a id="rz-60"></a> Profile facts retain their exact source channel. Display grouping can show several chains but transfers no authority or shared-profile permission.
+60. <a id="rz-60"></a> Profile facts retain their exact source channel. A contact can show several chains but transfers no authority or shared-profile permission.
 
 61. <a id="rz-61"></a> Authenticated did:web receipt commits and pickup-ACKs while continuity is incomplete. Recovery uses saved authentication; new network delivery uses its bounded fresh sequence.

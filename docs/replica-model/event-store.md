@@ -12,7 +12,7 @@ implementation. Capitalized requirement words have their BCP 14 meanings.
 [dasl-objects.md](dasl-objects.md) defines object identity;
 [vault-sqlite.md](vault-sqlite.md) owns storage, ownership and recovery procedures;
 [vault-events.md](vault-events.md) owns application payloads and folds.
-[Delivery](distributed-delivery.md) and [relationships](relationships.md) use
+[Delivery](distributed-delivery.md) and [channel address policy](relationships.md) use
 these primitives. [Replica mediation](replica-mediation.md) and
 [vault sync](vault-sync.md) are deferred extensions.
 
@@ -39,7 +39,7 @@ positions, options, caches and diagnostics do not travel with that state.
 SQLite's committed view determines what is accepted; private preparation is
 not acceptance. There is no folder interchange or generic portable-file API.
 
-The generic event store knows authors, not contacts, messages or relationships.
+The generic event store knows authors, not contacts, messages or channels.
 The vault requires the local append author to equal its current `replica_id`.
 A server-hosted full runtime has the same rules as an end-user runtime.
 

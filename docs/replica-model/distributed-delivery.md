@@ -51,7 +51,7 @@ appear in all capitals.
 
 An Estoc message begins as a durable intent in one fixed oriented channel.
 Phase 1 has one active executor. Channel receipt, local acceptance, directed
-continuity, display grouping and dispatch authority are separate facts.
+continuity, contact membership and dispatch authority are separate facts.
 
 Every actual message transport call follows a committed `delivery.attempted`.
 Only the live initial action or a new explicit manual retry may make that call.
@@ -71,7 +71,7 @@ business-execution promise.
 ## 2. Terms
 
 - **Channel** — fixed canonical DID pair; each vault supplies its local/peer orientation.
-- **Display relationship** — selected channel histories with no protocol authority.
+- **Contact** — local names, preferences and selected channel histories with no protocol authority.
 - **Full replica** — a writable vault incarnation; phase 1 still has one active executor.
 - **Outbound message ID** — one committed intent's entity ID and plaintext `id`.
 - **Inbound message ID** — derived from exact channel, authenticated sender and wire ID.
@@ -227,7 +227,7 @@ when a full vault runtime process-durably appends `message.out`.
 | Peer ACK | Complete accepted carrier and exact channel/path target | Receipt information only |
 
 Every dependency reference names an event committed before the dependent call.
-Object storage alone is not event commitment. Display grouping, a thread ID,
+Object storage alone is not event commitment. Contact membership, a thread ID,
 peer ACK or a missing submission event never supplies dispatch authority.
 
 <a id="send-an-ordinary-message"></a>
@@ -481,7 +481,7 @@ be recreated for a duplicate input or manual "send again" with a new ID.
 Before selecting any automatic reply, require a complete accepted carrier,
 non-erased eligible source and an authorized usable local sending channel.
 The channel can be the carrier's channel or its verified role-preserving
-successor. An unrelated display-group member is never a substitute. If no
+successor. An unrelated channel in the same contact is never a substitute. If no
 eligible sender exists, preserve the input for manual action; do not commit
 an incomplete response or automatically dispatch it after a later restore.
 
@@ -632,7 +632,7 @@ authentication against its own snapshot under [channels.md](channels.md#message-
 one channel/sender/wire-ID input shares one execution. Incompatible authenticated
 intent conflicts; incomplete consistent siblings do not erase valid acceptance.
 Another channel stays separate, even when a later verified link connects it.
-No graph root, minimum component ID or display relationship enters identity.
+No graph root, minimum component ID or contact enters identity.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
@@ -665,7 +665,7 @@ merge the ACK carrier and the acknowledged message into one execution.
 ## 10. First contact and address policy
 
 Useful content or Trust Ping can be the first ordinary DIDComm message.
-No Estoc handshake, display relationship ID or private-address requirement is
+No Estoc handshake, contact ID or private-address requirement is
 introduced. Channel acceptance follows explicit local policy or verified links.
 Optional early privacy rotation creates a new channel for new output, never
 rewrites an old message. See [the address policy](relationships.md).
@@ -769,7 +769,7 @@ channel.blocked            local channel/successor denial
 ```
 
 Continuity links and verification status are fold results, not events.
-Display relationship events are not delivery observations. Schemas and folds
+Contact events are not delivery observations. Schemas and folds
 are owned by [vault events](vault-events.md) and [channels](channels.md).
 
 <a id="failure-rules"></a>
@@ -827,7 +827,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 ### Intent and immutable packaging (DD-1–DD-12)
 
 1. <a id="dd-1"></a> `message.out` commits with all networking disabled.
-2. <a id="dd-2"></a> A peer addresses a communication DID, never a replica or display relationship ID.
+2. <a id="dd-2"></a> A peer addresses a communication DID, never a replica or contact ID.
 
 3. <a id="dd-3"></a> `pleaseAck == null` omits the wire header; an array is preserved exactly on
    the wire.
@@ -884,7 +884,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 25. <a id="dd-25"></a> Missing channel acceptance/link evidence defers that observation; later evidence grants only its channel-local execution and no recovery dispatch.
 
-26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; display regrouping cannot resolve them and ordinary document updates do not cause them.
+26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and ordinary document updates do not cause them.
 
 27. <a id="dd-27"></a> Accepted control input may process authorized ACKs without creating contacts or recursive privacy notifications; its type grants no admission.
 
@@ -933,7 +933,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 42. <a id="dd-42"></a> Conforming mediator operation persists and logs no application plaintext;
     any explicitly enabled bounded diagnostic mode is visibly outside the
     no-plaintext profile.
-43. <a id="dd-43"></a> ACK targets require exact same-channel or verified role-preserving successor authorization; shared display groups and wire IDs alone supply none.
+43. <a id="dd-43"></a> ACK targets require exact same-channel or verified role-preserving successor authorization; shared contacts and wire IDs alone supply none.
 
 44. <a id="dd-44"></a> ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
@@ -947,7 +947,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 47. <a id="dd-47"></a> Generic pure ACK copies carrier pthid and nullable creation time. An Empty
     rotation notification uses the same tuple with its policy-defined ACK
     request; one carrier cannot produce both variants.
-48. <a id="dd-48"></a> Reopen reconstructs channel-local execution IDs without a relationship root and grants no dispatch permission.
+48. <a id="dd-48"></a> Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
 
 49. <a id="dd-49"></a> An unsubmitted package survives route unavailability and GC with its exact
     envelope. Committed submission or terminal failure releases its contribution
@@ -1004,7 +1004,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A proof establishes an exact channel link, not a common relationship root. Later proof-free input uses that channel acceptance and retains channel-local identity.
+63. <a id="dd-63"></a> A proof establishes an exact channel link without a component root. Later proof-free input uses that channel acceptance and retains channel-local identity.
 
 64. <a id="dd-64"></a> Opposite first sends derive one fixed channel with separate sender directions; public/private labels do not change the formula.
 

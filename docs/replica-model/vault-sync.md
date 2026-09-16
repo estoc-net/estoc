@@ -69,7 +69,7 @@ DASL CIDs, message bodies, event types or contact data in plaintext.
 The protocol synchronizes:
 
 - the immutable vault configuration needed for bootstrap;
-- vault events, including channel, continuity, display-group and route state;
+- vault events, including channel, continuity, contact and route state;
 - extension-store events; and
 - content-addressed DASL objects referenced by those events, including exact
   resolved peer DID document snapshots.

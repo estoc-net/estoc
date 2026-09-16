@@ -21,7 +21,7 @@ authorizes the pair; each receipt, package and proof retains its own document
 evidence. Method-authorized document updates preserve the channel. Directed
 links are derived from received proofs and local rotation decisions. Receipt
 can precede proof verification, with pending/invalid/conflict status visible in the UI.
-Relationship/contact groups organize display without cryptographic authority.
+Contacts directly select channels for display without cryptographic authority.
 
 An outbound fixes its channel and direction at intent commit. Rotation selects
 new messages only. Every transport call follows a durable attempt and a live
@@ -36,11 +36,11 @@ receipt independently of submission. See [channels](channels.md#model) and
 | Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
 | Domain facts | [Vault events](vault-events.md) | Message, attempt, profile and local policy payloads/folds |
-| Communication authority | [Channels](channels.md), [Address/display policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, display groups |
+| Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, contact selections |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Receipt fan-out and encrypted data synchronization, without outbox takeover |
 
-Ordinary DIDComm messages need no Estoc wire handshake or display relationship ID.
+Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
 <a id="reading-paths"></a>
 
@@ -48,7 +48,7 @@ Ordinary DIDComm messages need no Estoc wire handshake or display relationship I
 
 | Task | Suggested path |
 | --- | --- |
-| Understand the system | [Vault model](vault-events.md#model) → [channels and continuity](channels.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
+| Understand the system | [Vault model](vault-events.md#model) → [channels and continuity](channels.md#model) → [address/contact policy](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
@@ -84,7 +84,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Complete witnesses | [VE witnesses](vault-events.md#complete-observation-witnesses) | [CH links](channels.md#channel-linked), [DD ACKs](distributed-delivery.md#applying-ack) |
 | Resolution, cryptographic gate and budgets | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [RM pickup](replica-mediation.md#messages-received) |
 | Invitations | [CH acceptance](channels.md#admission), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
-| Denial and display groups | [CH policy/display](channels.md#effects-and-recovery) | [VE contact deletion](vault-events.md#delete-a-contact), [profiles](vault-events.md#relationship-profile-fold) |
+| Denial and contact views | [CH policy/display](channels.md#effects-and-recovery) | [VE contact selection](vault-events.md#contact-channelsset), [deletion](vault-events.md#delete-a-contact), [profiles](vault-events.md#relationship-profile-fold) |
 | Submission/receipt state | [VE delivery fold](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration) |
 | Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery), [VS recovery](vault-sync.md#bootstrap-and-recovery) |
 
@@ -100,12 +100,12 @@ identity; RZ owns DID resolution and address/display policy.
 | VE | [Vault events](vault-events.md#required-conformance-cases) | Phase 1 |
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
 | CH | [Channels and continuity](channels.md#required-conformance-cases) | Phase 1 draft; implementation pending |
-| RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
+| RZ | [Channel address and contact policy](relationships.md#required-conformance-cases) | Phase 1 |
 | RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
 
 Named anchors support direct links independently of displayed section numbers.
-The relationship profile keeps its historical RZ prefix. Existing cases retain
+The address/contact profile keeps its historical RZ prefix. Existing cases retain
 their subjects; changed draft guarantees are recorded below rather than claimed
 to have passed because an older implementation passed earlier tests.
 
@@ -126,8 +126,8 @@ with their owner instead of repeating implementation requirements across files.
 
 This revision supersedes the earlier channel/relationship layering experiment.
 It removes cryptographic relationship roots, birth IDs, full relationship scope
-paths and cross-channel execution aliasing. Relationships are display groups;
-their IDs are UUIDv7 and never enter message/effect/ACK authority. Existing
+paths and cross-channel execution aliasing. Contacts directly select channels;
+their IDs never enter message/effect/ACK authority. Existing
 historical anchors remain locators, not permission to use retired payloads.
 
 Current facts are `channel.accepted`, `message.fromPriorResolved`,
@@ -136,9 +136,10 @@ Current facts are `channel.accepted`, `message.fromPriorResolved`,
 Message acceptance references only its source and channel acceptance; channel
 continuation/join bases reference original receipts and local decisions.
 Display membership uses
-`relationship.channelsSet`; `relationship.contactAssigned` is display-only.
+`contact.channelsSet`; no relationship entity or intermediate group ID remains.
 Disclosure permission is `admitChannel`. Profile facts name source channels.
-Old `relationship.bound`, both relationship transition events, `message.scoped`,
+Old `relationship.bound`, both relationship transition events,
+`relationship.channelsSet`, `relationship.contactAssigned`, `message.scoped`,
 root-derived allocation/contact IDs and relationship execution transcripts are
 retired. Their implementation/tests do not establish current conformance.
 
@@ -213,7 +214,9 @@ The deferred sync root maps its logical configuration into SQLite metadata.
 
 ### Earlier domain reordering
 
-`relationships.md` was previously named `rendezvous.md`; section numbers, named
+`relationships.md` retains its path for existing links and now specifies channel
+address and contact policy, with no relationship entity. It was previously
+named `rendezvous.md`; section numbers, named
 anchors and RZ cases were preserved. The following tables retain mappings for
 earlier reviews. These domain documents are not changed by the simplification.
 

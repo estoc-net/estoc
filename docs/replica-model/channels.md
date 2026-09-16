@@ -22,13 +22,14 @@ A **continuity link** is a derived replacement of exactly one endpoint in the
 context of one channel. The fold computes it from received proofs, resolution
 evidence and local rotation decisions; no link event is stored.
 Links form a directed graph. They do not create a global DID alias or require
-a common birth pair, chain root, relationship ID or component identifier.
+a common birth pair, chain root or component identifier.
 
-A **relationship** is a local display group containing selected channels or
-channel chains. Grouping, ungrouping, renaming and contact assignment change no
-message identity, permission, authentication evidence, ACK authorization or
-dispatch eligibility.
-The cryptographic graph exists independently of display groups.
+A **contact** records local names, preferences and direct channel selections.
+It may display several disconnected channel histories. Editing these selections,
+renaming or merging contact views changes no message identity, permission,
+authentication evidence, ACK authorization or dispatch eligibility.
+Channels and their continuity graph exist independently of contacts; an
+unassigned channel remains usable without creating a contact or another group.
 
 ```mermaid
 flowchart TD
@@ -37,14 +38,14 @@ flowchart TD
     B --> D[Validate local channel acceptance and continuity]
     D --> E[Accept this message in its actual channel]
     E --> F[Channel-local execution and permitted ACKs]
-    B --> G[Display groups]
+    B --> G[Channel and contact views]
     D --> G
 ```
 
 Receipt never needs channel acceptance, display assignment or complete
 continuity history. Anonymous input has no channel or application execution.
 Application processing requires accepted authentication evidence and local
-policy, independently of whether a relationship is displayed.
+policy, independently of whether a contact is assigned.
 
 <a id="channel-identity"></a>
 
@@ -87,7 +88,7 @@ because they share keys or services. See [DID resolution](relationships.md#did-r
 
 Perform exact recipient, route, cryptographic, syntax, resource and current
 sender checks under [the receive gate](relationships.md#hard-pre-vault-gate).
-Do not consult display groups or continuity membership. Retired local keys
+Do not consult contact membership or continuity membership. Retired local keys
 may drain an otherwise eligible retained route; retirement still blocks new
 sending, disclosure and channel acceptance.
 
@@ -359,8 +360,8 @@ flowchart LR
     C01 -. verified join .-> C11
 ```
 
-Only these evidence-backed joins are permitted. Sharing a DID, key, contact or
-display group cannot fill a missing side. Competing successors for the same
+Only these evidence-backed joins are permitted. Sharing a DID, key or contact
+cannot fill a missing side. Competing successors for the same
 endpoint/context, cycles and contradictory identity evidence are visible
 conflicts, not ordinary opposite-side rotation. No graph-wide stable component
 ID is needed.
@@ -373,7 +374,7 @@ peer-only replacements. A join transports the existing two replacements; it
 does not create another competing choice. Each derived link exposes its exact
 source witnesses; document updates neither split the context nor hide
 competing successors. These contexts are derived queries,
-never message identifiers or stored relationship roots.
+never message identifiers or stored component roots.
 
 Compute the least positive closure from complete direct acceptances, peer proof
 witnesses and local decisions, then dependent continuation/join acceptances.
@@ -402,16 +403,16 @@ edit an already attempted envelope or acknowledge any particular wire ID.
 For ACK authorization, a path preserves endpoint roles and uses verified
 forward replacements and the joins above. It relates a specific old channel
 to a specific successor channel. General undirected graph connectivity never
-authorizes ACKs, sending or protocol effects. An unrelated display-group member
-cannot acknowledge a message even when it chooses the same wire ID.
+authorizes ACKs, sending or protocol effects. An unrelated channel in the same
+contact cannot acknowledge a message even when it chooses the same wire ID.
 
 <a id="message-scoped"></a>
 <a id="message-accepted"></a>
 
 ## 6. Message acceptance
 
-`message.accepted` replaces relationship scope. It freezes acceptance of one
-actual observation in its already fixed channel; it does not assign that
+`message.accepted` freezes acceptance of one actual observation in its already
+fixed channel; it does not assign that
 observation to another identity. Its closed payload has these two fields:
 
 ```json
@@ -484,23 +485,29 @@ skeletons preserve identity and invitation consumption; erased input cannot
 start automatic acceptance or new effects on recovery.
 
 <a id="display-relationships"></a>
+<a id="contact-channels"></a>
 
-### 7.2 Display relationships
+### 7.2 Contacts and channel views
 
-`relationship.channelsSet` has `roots == []` and closed data
-`{ "relationshipId": "<uuidv7>", "channelIds": ["<uuidv5>"] }`.
-The list is duplicate-free and sorted by UUID byte order; an empty list is
-allowed. Latest canonical event per relationship selects the display set.
-`relationship.contactAssigned` assigns that display group to a contact under
-[the contact schema](vault-events.md#relationship-contactassigned).
-These are presentation decisions only. Automatic grouping may be rebuilt from
-verified graph components, but its changing identity is never a protocol key.
+`contact.channelsSet` directly selects a contact's channels under
+[the contact membership schema](vault-events.md#contact-channelsset).
+This is a presentation decision, independent of acceptance. It names exact
+channels, not peer DIDs: two channels using the same peer DID at different
+local addresses remain independently selectable. No intermediate group exists.
 
-Deleting a display group/contact cannot silently mutate channel authority.
+A UI MAY traverse verified continuity from the selected channels to display
+related history or offer successor channels for a new send. This traversal is
+a rebuildable view, not a membership update or a stable chain/component ID.
+Pending, invalid or conflicted evidence cannot silently establish continuity.
+The UI MUST distinguish selected channels from derived related history.
+Missing evidence may change the derived view without changing the saved selection.
+Unassigned channels may be browsed directly, including before acceptance.
+
+Deleting a contact cannot silently mutate channel authority.
 A product's explicit "delete and block" action separately appends denial
 decisions for the concrete selected channels and optional successors; later
-display regrouping cannot expand or remove them. Profile facts retain their
-source channel even when a group displays facts from several chains.
+contact membership changes cannot expand or remove them. Profile facts retain
+their source channel even when a contact displays facts from several chains.
 
 <a id="fixed-outbound-channel"></a>
 
@@ -566,15 +573,15 @@ must define an authenticated application operation ID and its own rules.
 
 ## 9. Required conformance cases
 
-1. <a id="ch-1"></a> Channel identity is symmetric, fixed by canonical DIDs and independent of keys, routes and display groups; direction remains part of message identity.
-2. <a id="ch-2"></a> First authenticated receipt commits and pickup-ACKs without channel acceptance, continuity history or a display relationship.
+1. <a id="ch-1"></a> Channel identity is symmetric, fixed by canonical DIDs and independent of keys, routes and contacts; direction remains part of message identity.
+2. <a id="ch-2"></a> First authenticated receipt commits and pickup-ACKs without channel acceptance, continuity history or a contact.
 3. <a id="ch-3"></a> A valid retained proof with missing predecessor acceptance is pending-history; recovery derives its link without another receipt or a stored graph event.
 4. <a id="ch-4"></a> A recovered peer supersession refuses new old-peer input through its local-only context while preserving channel receipt and previous acceptance.
 5. <a id="ch-5"></a> Independent local/peer links at one accepted channel justify their exact diagonal join without synthetic observations; unrelated shared DIDs justify nothing.
 6. <a id="ch-6"></a> Same-channel/sender/wire-ID observations with equal intent and authorized keys share one execution. Another channel has another execution.
 7. <a id="ch-7"></a> Contradictory accepted intent in one channel suppresses new effects; previously submitted IDs and outcomes remain unchanged.
 8. <a id="ch-8"></a> Unknown policy, missing verification evidence and invalid continuity leave receipts intact and grant no effects.
-9. <a id="ch-9"></a> A retained channel denial applies independently of display regrouping; deleting a contact alone grants or revokes no cryptographic authority.
+9. <a id="ch-9"></a> A retained channel denial applies independently of contact membership; deleting a contact alone grants or revokes no cryptographic authority.
 10. <a id="ch-10"></a> Crash after receipt, proof-resolution association, channel acceptance or message acceptance preserves each committed fact; reopen rebuilds verification state and graph without dispatching old work.
 11. <a id="ch-11"></a> Competing one-use invite receipts can both be saved; only eligible channel acceptance consumes the invitation. Crash and erasure never reopen it.
 12. <a id="ch-12"></a> Unpack without authenticated plaintext creates no observation; missing cryptographic material waits without pickup ACK.
@@ -590,7 +597,7 @@ must define an authenticated application operation ID and its own rules.
 22. <a id="ch-22"></a> Import, restore, replica change, duplicate pickup and missing ACK never dispatch an old intent or regenerate an automatic response for sending.
 23. <a id="ch-23"></a> Submitted or terminal messages cannot retry. Deliberate new sends get new IDs and do not establish that the original was undelivered.
 24. <a id="ch-24"></a> Missing attempt history grants no automatic recovery sending; incomplete exact references remain pending.
-25. <a id="ch-25"></a> Renaming, merging or splitting display groups changes no message/execution ID, ACK authorization, verification evidence, denials or invitations.
+25. <a id="ch-25"></a> Renaming or merging contacts and changing their channel sets changes no message/execution ID, ACK authorization, verification evidence, denials or invitations.
 26. <a id="ch-26"></a> A successor-channel ACK needs a verified role-preserving path to the exact outbound; general connectivity or shared display membership is insufficient.
 27. <a id="ch-27"></a> Opposite directions in one channel using the same wire ID have different inbound/execution identities.
 28. <a id="ch-28"></a> A cyclic acceptance/link dependency grants no authority; a complete independent channel remains usable.
@@ -608,3 +615,6 @@ must define an authenticated application operation ID and its own rules.
 40. <a id="ch-40"></a> Rebuilding from receipts, exact document associations and local decisions yields the same graph and verification statuses in any import order. No consumer references a link/status projection row as an event.
 41. <a id="ch-41"></a> A local rotation decision survives a crash before any outbound exists. Later preparation reuses its exact successor and JWT; merely preparing a package cannot select a competing rotation.
 42. <a id="ch-42"></a> One complete valid proof witness survives a later failed snapshot check or incomplete sibling. With no valid witness, missing required references remain pending; different incomplete rows cannot be combined into success.
+43. <a id="ch-43"></a> An unassigned channel supports receipt, acceptance, sending and continuity without a contact. Contact creation is a separate product decision.
+44. <a id="ch-44"></a> Two channels sharing a peer DID but using different local DIDs can be selected independently for a contact. Selection does not globally associate that peer DID's channels.
+45. <a id="ch-45"></a> Newly verified continuity may extend a contact's derived history or eligible send choices without changing contact.channelsSet. Missing/conflicting evidence changes only the affected view or eligibility; no stable chain ID or automatic send is created.

@@ -744,7 +744,7 @@ sender.
 ### 7.4 Recipient-role neutrality
 
 The mediator MUST NOT require a recipient to be classified as rendezvous,
-relationship, public, pairwise or server-owned. For routing purposes all
+public, pairwise or server-owned. For routing purposes all
 registered recipients have the same shape:
 
 ```text
@@ -1021,8 +1021,8 @@ operation, including:
 - arrival, delivery, acknowledgment and expiry times; and
 - transport metadata such as IP address and connection timing.
 
-The mediator MUST NOT be sent an explicit rendezvous role, relationship ID,
-contact ID, human-readable label or web-publication state. A replica ID MUST
+The mediator MUST NOT be sent an explicit rendezvous role, contact ID,
+human-readable label or web-publication state. A replica ID MUST
 NOT appear in a public DID document or in an innermost application `to`
 header as a delivery target.
 

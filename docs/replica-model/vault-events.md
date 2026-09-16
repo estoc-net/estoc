@@ -42,7 +42,7 @@ the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 | Identity and naming | [Identity, keys and identifier types](#identity-seed-and-key-names); [Identity label](#identity-label) | [Runtime author](#runtime-author-fold) | [Open runtime](#open-the-writable-full-runtime) |
 | Mediation, DIDs and routes | [Key evidence and resolved documents](#message-keys-and-peer-evidence); [Mediation, DID and route events](#mediation-communication-dids-and-routes) | [Mediation](#mediation-fold); [Routes, DIDs and keys](#route-did-and-key-fold) | [Establish mediation](#establish-mediation); [Create DID](#create-a-communication-did); [Disclose address](#disclose-an-address) |
 | Channels and continuity | [Acceptance and directed links](#relationships-and-address-changes) | [Channel and continuity projections](#relationship-fold-and-address-index) | [Channel and display policy](relationships.md#symmetric-relationship-identity); [Early privacy policy](relationships.md#early-private-address-policy-and-notifications); [Rotate local address](#rotate-a-local-relationship-address) |
-| Contacts and profiles | [Contact events](#contacts); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Channel profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](#delete-a-contact) |
+| Contacts and profiles | [Contact events](#contacts); [Channel selections](#contact-channelsset); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Channel profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](#delete-a-contact) |
 | Messages and delivery | [Stored content](#stored-message-document); [Outbound events](#outbound-message-events); [Inbound events and witnesses](#inbound-message-events) | [Inbound execution](#inbound-message-and-execution-fold); [Outbound delivery](#outbound-message-and-delivery-fold) | [Send](distributed-delivery.md#send-an-ordinary-message); [Receive](distributed-delivery.md#receive-a-message); [Recover receipt](distributed-delivery.md#receive-recovery) |
 | Invitations | [Disclosure](#disclosure) | [Invitation consumption](#invitation-fold) | [Discovery](relationships.md#out-of-band-discovery); [Receipt integrity](relationships.md#integrity-checks-and-durable-receipt) |
 | Erasure and retention | [Erasure and held roots](#erasure-and-collection) | [Held-root rules](#held-roots) | [Erase message](#erase-a-message) |
@@ -55,7 +55,7 @@ the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 - [3. Identity, seed and key names](#identity-seed-and-key-names)
 - [4. Message keys and peer evidence](#message-keys-and-peer-evidence)
 - [5. Mediation, communication DIDs and routes](#mediation-communication-dids-and-routes)
-- [6. Channels, continuity and display relationships](#relationships-and-address-changes)
+- [6. Channels, continuity and contact membership](#relationships-and-address-changes)
 - [7. Contacts and profiles](#contacts)
 - [8. Stored message document](#stored-message-document)
 - [9. Outbound messages and delivery](#outbound-message-events)
@@ -154,7 +154,7 @@ same identity exactly when their anchor DIDs are equal.
 
 On unlock, the runtime derives the `anchor` key from the seed and MUST verify
 the DID before using the vault. The anchor remains independent of rendezvous
-and relationship communication DIDs. Disclosing a rendezvous DID or running
+and pairwise communication DIDs. Disclosing a rendezvous DID or running
 the full runtime on a server does not replace the anchor.
 
 <a id="single-seed"></a>
@@ -273,7 +273,7 @@ it does not imply that every identifier has the same encoding or scope.
 | Received DIDComm plaintext ID | `WireMessageId` | `wireMessageId`, `ackWireMessageId` |
 | One exact event | `EventId` | envelope `eventId` |
 | Typed event reference | `EventReference<T>` | payload fields ending in `EventId` and elements of `*EventIds`, including source, trigger, resolution, acceptance, rotation and attempt references |
-| Contact / relationship | `ContactId` / `RelationshipId` | `contactId`, `fromContactId` / `relationshipId` |
+| Contact | `ContactId` | `contactId`, `fromContactId` |
 | Channel | `ChannelId` | `channelId` |
 | Local DID entity | `DidId` | `didId`, `localDidId`, `senderDidId`, `fromDidId`, `toDidId` |
 | Route / mediation arrangement | `RouteId` / `MediationId` | `routeId`, `boundRouteId` / `mediationId` |
@@ -298,7 +298,7 @@ value. Generic event-store APIs continue to use `EventId`.
 Use the same entity noun for creation and later references: `did.created.didId`
 and `did.disclosed.didId`, for example. Add a role prefix when needed, such as
 `senderDidId`. Payloads do not abbreviate a contact ID as `cid`, or hide an
-entity ID behind a bare `id`, `contact`, `relationship` or `mediation` field.
+entity ID behind a bare `id`, `contact`, `channel` or `mediation` field.
 `cid` and `*Cid` always mean content addresses; `*Did` always means a DID
 string, while `*DidId` means a local entity UUID. Arrays of references use the
 plural suffix, such as `attachmentCids` and `localDidIds`; collections of view
@@ -313,7 +313,6 @@ representation is below; other languages may use equivalent nominal types.
 type EntityId<Kind extends string> = string & { readonly __entity: Kind };
 type MessageId = EntityId<"message">;
 type ContactId = EntityId<"contact">;
-type RelationshipId = EntityId<"relationship">;
 type ChannelId = EntityId<"channel">;
 type DidId = EntityId<"did">;
 type RouteId = EntityId<"route">;
@@ -365,7 +364,7 @@ message-content serialization are fixed separately from field spelling.
 Implementations MUST construct each specified derivation input, not serialize
 an arbitrary renamed payload or API object as its substitute. The channel-and-sender execution transcript is specified in
 [distributed-delivery.md](distributed-delivery.md#execution-id-and-immutable-transcript);
-display relationship IDs are never part of it. Event
+contact IDs are never part of it. Event
 canonical bytes do use the current schema; any content hash of an event or
 container therefore follows those actual bytes.
 
@@ -416,7 +415,7 @@ package, directly or through its exact evidence references:
 
 Each event schema defines its required fields and nullability. The keys
 provide authentication, decryption and package evidence; they do not assign a
-display group or contact. Anonymous input and mediator traffic may retain key
+contact. Anonymous input and mediator traffic may retain key
 evidence without an application channel.
 
 The canonical public-key value follows the
@@ -478,7 +477,7 @@ mediation/
 ```
 
 These observations belong to the mediation fold, not application
-relationships or contact/profile projections.
+channels or contact/profile projections.
 
 <a id="11-peer-and-profile-observations"></a>
 
@@ -849,7 +848,7 @@ This is the permanent record that an address was revealed. Before disclosure,
 a mediated `boundRouteId` MUST have currently verified recipient registration.
 Reusable/public disclosure SHOULD use an address allocated for discovery, and
 SHOULD NOT publish an address already allocated for private communication.
-These are privacy policies, not relationship-formation or cryptographic role
+These are privacy policies, not channel-acceptance or cryptographic role
 checks. First disclosure exposes the validated `did:peer:4` long form.
 
 <a id="did-retired"></a>
@@ -990,7 +989,7 @@ cryptographic use.
 The complete acceptance/consumption rule is owned by
 [channels.md](channels.md#admission). A live one-use OOB disclosure is available
 until a complete matching proof-free `channel.accepted` consumes it. The consumer
-is its exact channel ID. Receipt, display grouping and message acceptance alone
+is its exact channel ID. Receipt, contact membership and message acceptance alone
 do not consume another invitation. `admitChannel` permits automatic invitation
 acceptance; false still allows an explicit manual acceptance decision.
 
@@ -1004,12 +1003,13 @@ positive evidence before availability to avoid a circular fold.
 <a id="12-relationships-and-address-changes"></a>
 <a id="relationships-and-address-changes"></a>
 
-## 6. Channels, continuity and display relationships
+## 6. Channels, continuity and contact membership
 
-Channel identity, acceptance, continuity links, local denial and display-group
-membership are defined in [channels.md](channels.md). The old `relationship.bound`,
+Channel identity, acceptance, continuity links, local denial and contact views
+are defined in [channels.md](channels.md). The old `relationship.bound`,
 `relationship.localTransitioned`, `relationship.peerTransitioned`,
-`message.scoped` and `channel.linked` payloads are retired in this unreleased draft. They are not
+`relationship.channelsSet`, `relationship.contactAssigned`, `message.scoped`
+and `channel.linked` payloads are retired in this unreleased draft. They are not
 alternative current authority. Historical anchors remain for navigation;
 development vaults require rebuilding or an explicit separate conversion.
 
@@ -1031,31 +1031,42 @@ separately serialized under [delivery](distributed-delivery.md#send-an-ordinary-
 ### 6.2 `channel.accepted`
 
 The closed schema and all local admission bases are in
-[channels.md](channels.md#channel-accepted). There is no relationship root ID,
+[channels.md](channels.md#channel-accepted). There is no component root ID,
 birth election or lookup that assigns one receipt to a different channel.
 Known missing references defer acceptance; they never block independent receipt.
 
 <a id="123-relationshipcontactassigned"></a>
 <a id="relationship-contactassigned"></a>
+<a id="contact-channelsset"></a>
 
-### 6.3 `relationship.contactAssigned`
+### 6.3 `contact.channelsSet`
 
 ```json
 {
-  "type": "relationship.contactAssigned",
+  "type": "contact.channelsSet",
   "roots": [],
   "data": {
-    "relationshipId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
-    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da"
+    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
+    "channelIds": ["88a41cd6-a196-52a4-87df-7ce060e7d373"]
   }
 }
 ```
 
-The exact two required IDs name a display relationship and contact. Latest
-canonical event per relationship selects its display assignment. The relationship
-membership comes from `relationship.channelsSet`, not from cryptographic roots.
-Assignment cannot grant channel permission, transfer authentication evidence, change an execution
-or revoke authority. Missing display evidence affects display only.
+The closed data contains exactly `contactId` (UUIDv7) and `channelIds` (an array
+of channel UUIDv5 IDs); `roots` is empty. The list is duplicate-free and sorted
+by UUID byte order. Latest canonical event per contact replaces its entire
+selected set; an empty list clears it. Concurrent sets are not unioned. No set
+event means an empty selection. This event neither creates a contact nor
+restores a deleted contact; missing contact data affects only presentation.
+
+Selection requires no channel acceptance. Missing channel evidence leaves an
+unresolved display reference, not permission to infer an endpoint or send.
+One channel MAY be selected by several contacts; this creates overlapping
+views, not an identity conflict or a canonical contact for that channel.
+Changing one contact's set does not change another's. No ownership, permission,
+authentication evidence or execution identity transfers through membership.
+Derived related history follows [the channel view rules](channels.md#contact-channels)
+without rewriting this exact set. Membership may be edited offline.
 
 <a id="112-relationshippeertransitioned"></a>
 <a id="relationship-peertransitioned"></a>
@@ -1127,8 +1138,8 @@ a stored link event. Missing references defer the affected projection; contradic
 proofs or same-end successors conflict. There is no stable component ID and
 no message/execution reassignment when graph history changes.
 
-Display relationship membership is a separate projection and is never read
-as a cryptographic prerequisite. It can show multiple disconnected channel chains.
+Contact membership is a separate projection and is never read as a
+cryptographic prerequisite. A contact can show multiple disconnected channel chains.
 
 <a id="7-contacts"></a>
 
@@ -1137,9 +1148,9 @@ as a cryptographic prerequisite. It can show multiple disconnected channel chain
 ## 7. Contacts and profiles
 
 A contact is a set of decisions identified by one `contactId`. It may hold an
-unverified discovery DID before a channel is accepted, and may have several
-display relationships assigned under [section 6.3](#relationship-contactassigned).
-Each group selects channels independently of their authority and continuity.
+unverified discovery DID before a channel is accepted, and selects channels
+directly under [section 6.3](#contact-channelsset), independently of their
+authority and continuity. There is no intermediate display-group entity.
 Contact IDs name local decisions; they do not merge protocol identities.
 
 <a id="contact-ids"></a>
@@ -1151,6 +1162,9 @@ See [relationships.md section 5.1](relationships.md#contact-ids).
 <a id="contact-event-schemas"></a>
 
 ### 7.2 Contact event schemas
+
+Direct channel selections use `contact.channelsSet` in
+[section 6.3](#contact-channelsset).
 
 <a id="contact-created"></a>
 
@@ -1215,22 +1229,23 @@ Latest per `(contactId, flag)` wins.
   "data": {
     "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
     "didId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "because": "relationship"
+    "because": "channel"
   }
 }
 ```
 
 This outbound preference associates one of our communication DID entities
 with the contact. `data.didId` is that entity's `did.created.data.didId` under
-[section 3.5](#identifier-and-reference-vocabulary). `because` is `relationship`, `rendezvous`,
+[section 3.5](#identifier-and-reference-vocabulary). `because` is `channel`, `rendezvous`,
 `manual` or another documented policy value.
 
 This preference selects among eligible channels for a new send under
 [sections 9.2](#message-out) and [7.6](#contact-fold). It cannot change an existing
 intent's endpoints, roll back continuity or grant permission through a contact. A publicly disclosed local address may
 send normally; fresh private allocation is the default policy in
-[relationships.md section 11](relationships.md#early-private-address-policy-and-notifications). `relationship.contactAssigned` supplies the
-relationship-to-contact decision independently of these address preferences.
+[relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
+`contact.channelsSet` selects the displayed channels independently of these
+address preferences.
 
 <a id="contact-peerdidadded"></a>
 
@@ -1292,8 +1307,8 @@ older rendezvous DID non-preferred without deleting the historical add event.
 
 `contactId` and `fromContactId` name the two contacts. This is a display-only
 grouping hint between them. A UI MAY group
-those contact views, but every member retains its own decisions and display
-group IDs. This event MUST NOT affect attribution, DID selection,
+those contact views, but every member retains its own contact ID, decisions
+and selected channel set. This event MUST NOT affect attribution, DID selection,
 continuity, message or execution identity, ACK scope, channel receipt, invitation
 consumption, deletion or erasure. It creates no protocol representative ID.
 
@@ -1337,7 +1352,7 @@ profile. Under the operation lock, lift only from readable, non-erased eligible
 content whose channel is not denied. Existing lifted values survive body
 erasure, hold no roots and remain
 peer claims rather than verified human names. Missing references defer them;
-incompatible evidence conflicts. Later display grouping cannot move their source.
+incompatible evidence conflicts. Later contact edits cannot move their source.
 
 <a id="114-profileshared"></a>
 <a id="profile-shared"></a>
@@ -1373,7 +1388,7 @@ conflict. Order sources by their minimum complete canonical source-event key
 `(at, eventId, author)`, never lift time. Keep `claimedName`, `nameConflict` and
 latest `shared` source key per channel; missing evidence contributes diagnostics.
 
-Display groups may aggregate these channel-labelled facts. They do not transfer
+Contact views may aggregate these channel-labelled facts. They do not transfer
 a profile-sharing decision or cryptographic trust to another channel. A missing
 readable eligible profile lift may be rebuilt locally; this creates no network
 dispatch permission and grants no ACK or continuity authority.
@@ -1383,17 +1398,25 @@ dispatch permission and grants no ACK or continuity authority.
 
 ### 7.6 Contact fold
 
-Fold display contacts independently: permanent deletion tombstone, latest
-petname/flags, explicit peer DID seeds minus their referenced removals, selected
-display relationships and their channel sets. Aggregate source-labelled profile
-facts and channel-local messages without merging their identities. Missing or
+Fold contacts independently: permanent deletion tombstone, latest
+petname/flags, explicit peer DID seeds minus their referenced removals, and the
+latest `contact.channelsSet`. A tombstone hides the contact even if later
+membership events exist; its channels remain independently available. Aggregate
+source-labelled profile facts and channel-local messages without merging their
+identities or counting a message twice within one combined view. Missing or
 conflicting authentication evidence remains visible in the source channel.
 
-`writeTo[]` is the concrete eligible channel choices shown for a new user send.
-Membership in a display group is not eligibility: each choice needs its own
-accepted pair/verified continuation and live local key/route. A deliberate new
-peer address may start an explicit outbound acceptance separately. `contact.useDid`
-only chooses among these eligible options. It never retargets a saved intent.
+`writeTo[]` is the concrete eligible channel choices shown for a new user send
+from the contact's selected channels and their verified continuations.
+Membership is not eligibility: each choice needs its own accepted pair/verified
+continuation and live local key/route. A deliberate new peer address, including
+an explicit discovery seed, may start an outbound acceptance separately.
+`contact.useDid` only expresses a local-address preference among eligible
+options. If it does not resolve to one channel, the caller must select a
+concrete eligible channel explicitly; matching contact names, peer DIDs or
+contact merges do not choose one. Selection happens before intent commit and
+never retargets a saved intent. Contact membership or a new derived successor
+does not supply an automatic send action.
 
 A deleted contact is hidden by contact policy. Blocking/cleanup requires the
 separate explicit channel decisions in [section 13.6](#delete-a-contact).
@@ -1592,9 +1615,9 @@ an explicit user-authored outbound may be
 the acceptance basis. Automatic output must already have independent channel
 authority and accepted source evidence.
 
-This schema has no `relationshipId` or `birth`. A display relationship can guide
-the UI's choice, but its ID is not stored as protocol identity. The three fixed
-address fields are portable intent metadata, excluded from the DIDComm intent
+The UI may select a channel through a contact, but the contact ID is not stored
+as protocol identity. The three fixed address fields are portable intent
+metadata, excluded from the DIDComm intent
 hash but included in full event equality. They cannot be changed by rotation,
 manual retry, contact regrouping or a different replica.
 
@@ -2165,7 +2188,7 @@ An ultimate ACK is an end-to-end application message. It is recorded as
 outbound. The accepted carrier must be in that outbound's channel or a verified
 role-preserving successor channel under [section 9.8](#outbound-message-and-delivery-fold).
 A conflict-free match may produce an idempotent `delivery.acknowledged`.
-A wire ID alone or shared display group grants no ACK authority. A threaded
+A wire ID alone or shared contact grants no ACK authority. A threaded
 or natural response without an explicit `ack` array does not create that
 delivery observation.
 
@@ -2405,7 +2428,7 @@ list when no new objects are needed; `Vault.events` is read-only.
    Discard only unpublished staging and reconstruct held roots before GC.
 3. Recover the vault-wide receipt ordinal high-water mark and integrity conflicts.
 4. Rebuild channel receipts, verification statuses, exact acceptances, derived links/joins, denials,
-   display groups, invitation consumers and accepted executions from saved evidence.
+   contact channel selections, invitation consumers and accepted executions from saved evidence.
 5. Enumerate incomplete references/content and pending/unconfirmed outbounds for
    local recovery and manual action. Reuse their exact intent, channel, proof,
    package and attempt records. Never infer "not sent" from missing history.
@@ -2505,7 +2528,7 @@ Append `contact.deleted` for the exact contact ID. This hides the display contac
 without changing channel acceptance, messages or transport. A product operation
 explicitly combining deletion, blocking or erasure additionally records concrete
 `channel.blocked` decisions and/or `message.erased` roots selected under the lock.
-Keep those decisions independent of future display grouping. Denial can include
+Keep those decisions independent of future contact membership. Denial can include
 verified successors; no shared DID or display name expands its scope.
 
 Late channel receipt may still be saved/pickup-ACKed. Existing channel denial
@@ -2530,7 +2553,7 @@ Reuse an existing complete decision after interruption; missing references defer
 Recovery does not dispatch a notification. An explicit new user send may do so
 with a new ID. Live automatic privacy policy follows
 [relationships.md](relationships.md#early-private-address-policy-and-notifications).
-Opposite-side rotation uses verified joins, never relationship-root lookup.
+Opposite-side rotation uses verified joins, never contact lookup.
 
 <a id="17-merge-synchronization-and-restore"></a>
 
@@ -2637,7 +2660,7 @@ author remain unchanged.
   an external peer or mediator may still involve a network resolver.
 - Private-address allocation SHOULD disclose its new DID only in encrypted
   interaction and avoid publishing it in reusable discovery. This is policy,
-  not a different relationship or authentication type.
+  not a different channel or authentication type.
 - A valid `from_prior` is channel-context evidence. It MUST NOT globally
   link or retire addresses used by unrelated channels.
 - The phase-1 mediator stores only encrypted inner DIDComm envelopes and
@@ -2647,7 +2670,7 @@ author remain unchanged.
   objects.
 - The mediator may observe its account DID, recipient DID and method,
   ciphertext size, arrival, pickup, ACK, expiry, IP and traffic timing. It is
-  not sent a contact ID or relationship ID.
+  not sent a contact ID.
 - A direct endpoint sees transport metadata and encrypted DIDComm envelopes;
   it is not an application-level runtime address.
 - Ultimate ACKs reveal durable-receipt timing to the peer.
@@ -2729,7 +2752,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 15. <a id="ve-15"></a> Authenticated key variants in one channel/sender/wire-ID input agree on one message identity; different channels never alias.
 
-16. <a id="ve-16"></a> Execution ID derives from channel, canonical sender and wire ID. Accepted evidence grants processing authority; a display group or graph root supplies none.
+16. <a id="ve-16"></a> Execution ID derives from channel, canonical sender and wire ID. Accepted evidence grants processing authority; a contact or graph root supplies none.
 
 17. <a id="ve-17"></a> Pending channel/link evidence defers processing. Later validation preserves this channel-local identity and grants no automatic recovery dispatch.
 
@@ -2748,7 +2771,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 23. <a id="ve-23"></a> Resolution and channel receipt commit before pickup ACK; missing or refused channel acceptance does not withhold it.
 
-24. <a id="ve-24"></a> Local/cryptographic prerequisites wait without pickup ACK; continuity waits after authenticated receipt. Retired exact keys may drain eligible routes independently of display groups.
+24. <a id="ve-24"></a> Local/cryptographic prerequisites wait without pickup ACK; continuity waits after authenticated receipt. Retired exact keys may drain eligible routes independently of contacts.
 
 25. <a id="ve-25"></a> Safely classified hard pre-vault rejection is pickup-ACKed before any
     `message.in` and leaves only bounded local diagnostics.
@@ -2770,10 +2793,10 @@ There is no migration requirement from an earlier event vocabulary.
 30. <a id="ve-30"></a> Unknown application types and absent receipt requests do not prevent channel receipt; processing still needs explicit acceptance.
 
 31. <a id="ve-31"></a> The first message uses its ordinary application protocol with no custom
-    rendezvous wrapper or wire relationship ID.
+    rendezvous wrapper or wire contact ID.
 32. <a id="ve-32"></a> message.in records exact channel/authentication evidence. message.accepted separately references only the source and channel acceptance; carried-proof eligibility derives from document associations and history.
 
-33. <a id="ve-33"></a> Opposite sends over the same canonical DID pair derive one channel with separate sender directions. No relationship birth or ID election occurs.
+33. <a id="ve-33"></a> Opposite sends over the same canonical DID pair derive one channel with separate sender directions. No birth or component-ID election occurs.
 
 34. <a id="ve-34"></a> Display contact tombstones survive rediscovery; independent channel denials survive regrouping. Unaccepted receipt creates no replacement contact.
 
@@ -2843,9 +2866,9 @@ There is no migration requirement from an earlier event vocabulary.
 58. <a id="ve-58"></a> Commit and collection share the operation lock; GC computes current held roots
     under that lock and cannot delete a retained object or overlap acceptance
     and append within a commit.
-59. <a id="ve-59"></a> Committed receipt/content survives immediate restart before pickup ACK even with no accepted channel or display group.
+59. <a id="ve-59"></a> Committed receipt/content survives immediate restart before pickup ACK even with no accepted channel or contact.
 
-60. <a id="ve-60"></a> ACK lookup validates the exact outbound fixed channel and a role-preserving path from its peer to the accepted carrier; shared group/wire ID alone is insufficient.
+60. <a id="ve-60"></a> ACK lookup validates the exact outbound fixed channel and a role-preserving path from its peer to the accepted carrier; shared contact/wire ID alone is insufficient.
 
 61. <a id="ve-61"></a> Every accepted inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
@@ -2908,7 +2931,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 83. <a id="ve-83"></a> Same-consumer invitation reuse does not create another take. Imported
     incompatible consumers leave it unavailable; event order chooses no winner.
-84. <a id="ve-84"></a> contact.merged and relationship.channelsSet change display only; channel acceptance, operation evidence, executions, ACK authorization, denials, invitation and erasure facts remain unchanged.
+84. <a id="ve-84"></a> contact.merged and contact.channelsSet change display only; channel acceptance, operation evidence, executions, ACK authorization, denials, invitation and erasure facts remain unchanged.
 
 85. <a id="ve-85"></a> Matching pthid alone, foreign recipients and continuation bases consume no invitation. A complete qualifying channel acceptance consumes its exact local disclosure.
 
@@ -2965,7 +2988,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 102. <a id="ve-102"></a> Selecting recipient keys or assigning display contacts cannot prove inbound authentication. Anonymous/control/pending inputs retain evidence without application execution.
 
-103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid and has no relationshipId/birth. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
+103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid, without contact or birth metadata. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
 
 104. <a id="ve-104"></a> Every pair uses channel acceptance with exact decision evidence; ordinary user sending needs no first reply and retains its channel through document update, reply, submission, erasure and restore.
 
@@ -2996,7 +3019,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Local rotation and channel history (VE-112–VE-124)
 
-112. <a id="ve-112"></a> A local rotation decision freezes exact successor, proof and nullable source. Its derived link changes one channel endpoint; successors use UUIDv7 without a relationship root or deterministic root allocation.
+112. <a id="ve-112"></a> A local rotation decision freezes exact successor, proof and nullable source. Its derived link changes one channel endpoint; successors use UUIDv7 without a component root or deterministic root allocation.
 
 113. <a id="ve-113"></a> A local link needs complete exact-address confirmation against the accepted peer context. The confirming observation need not depend on its own message acceptance.
 
@@ -3018,7 +3041,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 122. <a id="ve-122"></a> Opposite-side links from one accepted base justify their exact diagonal join in either import order; same-side competing successors remain conflicts.
 
-123. <a id="ve-123"></a> Display relationship/contact assignment is independent of channel acceptance, may be edited offline and grants no cryptographic authority.
+123. <a id="ve-123"></a> Direct contact channel selection is independent of channel acceptance, may be edited offline and grants no cryptographic authority.
 
 124. <a id="ve-124"></a> A local privacy rotation decision names the exact accepted source selected while live. Repeated evidence preserves it; its link derives without a new event and recovery never dispatches a missing notification.
 
@@ -3049,7 +3072,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Contact profiles (VE-132–VE-137)
 
-132. <a id="ve-132"></a> Display relationships aggregate explicitly selected channels. Shared DIDs/keys do not transfer channel acceptance or profile-sharing authority; grouping never changes source channel labels.
+132. <a id="ve-132"></a> Contacts aggregate explicitly selected channels and may display verified related history. Shared DIDs/keys do not transfer channel acceptance or profile-sharing authority; presentation never changes source channel labels.
 
 133. <a id="ve-133"></a> profile.nameClaimed names an exact accepted source observation and its channel. Incomplete/invalid source contributes no name; existing lifts survive body erasure and new lifts cannot read erased content.
 
@@ -3088,3 +3111,15 @@ There is no migration requirement from an earlier event vocabulary.
 143. <a id="ve-143"></a> A complete valid attempt/package/submission witness preserves completion despite unrelated incomplete packages or later effect conflict. Invalid/missing own intent, authentication or attempt evidence completes nothing.
 
 144. <a id="ve-144"></a> Proof-free new successor preparation requires complete exact-address confirmation in the valid channel context. Confirmation needs no self-dependent message acceptance; body erasure and waiting siblings erase no complete witness.
+
+### Direct contact channel selections (VE-145–VE-149)
+
+145. <a id="ve-145"></a> contact.channelsSet contains exactly contactId and a sorted duplicate-free channelIds array with empty roots. Every import order selects the latest canonical whole set; a later empty set clears it and concurrent sets are not unioned.
+
+146. <a id="ve-146"></a> Two contacts may select the same channel without a conflict or canonical contact election. Editing one set does not change the other; merging their views preserves each contact's decisions and shows each logical message once.
+
+147. <a id="ve-147"></a> A membership event neither creates a missing contact nor restores a tombstoned one. Contact deletion hides that contact even after later set events; channel receipt, acceptance, messages and explicit denials remain independently available.
+
+148. <a id="ve-148"></a> Selecting an unaccepted channel is valid presentation state. Missing channel evidence remains unresolved; membership cannot supply endpoints, authentication, acceptance or dispatch permission.
+
+149. <a id="ve-149"></a> A contact with multiple eligible channels requires a concrete channel choice before intent commit. A local-DID preference that still matches several options, overlapping contact views and contact merges do not choose one or retarget existing messages.
