@@ -52,7 +52,7 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
-| Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [acceptance](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
+| Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [source evidence](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Back up or recover | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [export](vault-sqlite.md#snapshot-and-export) → [restore/import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
 | Explore future replication | Phase-1 documents first, then [replica mediation](replica-mediation.md#reading-guide) and [vault sync](vault-sync.md#reading-guide) |
 
@@ -76,7 +76,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Channel acceptance and operation evidence | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
 | Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
-| Message acceptance | [CH](channels.md#message-accepted) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
+| Operation eligibility | [CH](channels.md#operation-eligibility) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
 | Fixed intent and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [attempt](vault-events.md#delivery-attempted), [DD send](distributed-delivery.md#send-an-ordinary-message) |
 | Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
 | Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |
@@ -131,10 +131,12 @@ their IDs never enter message/effect/ACK authority. Existing
 historical anchors remain locators, not permission to use retired payloads.
 
 Current facts are `channel.accepted`, `message.fromPriorResolved`,
-`did.rotationSelected`, `channel.blocked` and `message.accepted`.
+`did.rotationSelected` and `channel.blocked`.
 `channel.linked` is retired: links and verification states are projections.
-Message acceptance references only its source and channel acceptance; channel
-continuation/join bases reference original receipts and local decisions.
+`message.accepted` is retired: each operation checks its source/channel witness
+and policy. Concrete automatic intents and profile results retain exact source
+and channel-acceptance references; channel continuation/join bases reference
+original receipts and local decisions.
 Display membership uses
 `contact.channelsSet`; no relationship entity or intermediate group ID remains.
 Disclosure permission is `admitChannel`. Profile facts name source channels.
@@ -163,7 +165,14 @@ subjects with updated guarantees. In particular, cross-channel alias fixtures,
 automatic recovery sending and rotation-driven repacking expectations are
 retired. Invitation consumption now commits with explicit qualifying channel
 acceptance, rather than the retired root message scope. Confirmation witnesses
-still avoid a dependency on their own message acceptance.
+need no handler decision or output intent.
+
+ACK, Trust Ping reply and rotation notification are independent persisted
+intents with separate fixed effect tuples. ACK and rotation notification use
+standalone Empty messages; neither waits for a natural reply. A notification
+names its durable rotation decision and reuses its original source and proof.
+There is no generic per-message admission record or new persistent work queue.
+Pending intents remain available for manual action, with existing retry rules.
 
 This is a breaking revision of an unreleased v3 domain draft. It requires
 development-vault rebuilding or an explicitly implemented conversion; no

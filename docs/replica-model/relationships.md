@@ -102,9 +102,9 @@ Every instruction to append an event in this document means
 - **Acceptance** — a durable local decision to use a DID-pair channel, with exact evidence of that decision.
 - **Continuity link** — a fold-derived, verified replacement of one endpoint in one channel context.
 - **Contact** — local names, preferences and direct channel selections for display.
-- **Application input** — accepted authenticated input other than control input,
+- **Application input** — authenticated input other than control input,
   Empty, Trust Ping ping-response or Report Problem for privacy-trigger purposes.
-- **Rotation notification** — an ordinary new message disclosing a selected local rotation.
+- **Rotation notification** — a dedicated Empty intent disclosing a selected local rotation.
 - **Rotation confirmation** — complete authenticated input proving knowledge of
   the exact successor in its validated channel context; it is not a peer ACK.
 
@@ -156,7 +156,7 @@ Opposite first sends can select the same channel without role arbitration.
 The accepted pair remains usable across method-authorized document updates;
 each operation retains its own verification snapshot.
 
-`contact.channelsSet` organizes display. It does not accept messages, consume
+`contact.channelsSet` organizes display. It does not authorize processing, consume
 invitations, continue channels or authorize
 new sends. Deleting a contact is presentation state; a product action that also
 blocks communication must append concrete channel denials separately.
@@ -357,23 +357,24 @@ Direct transport has no pickup ACK. Malformed crypto, wrong recipient,
 a definitively unresolvable sender DID, exhaustion of
 [section 10.1](#did-resolution-requirements)'s sender-resolution budget and hard abuse/resource
 limits are examples of this gate. Supersession, invitation and channel
-policy are checked after receipt at acceptance.
+policy are checked after receipt when accepting a channel or starting new work.
 
 <a id="integrity-checks-and-durable-receipt"></a>
 
 ### 9.3 Integrity checks and durable receipt
 
-Commit the authenticated channel observation before deciding acceptance.
-`message.accepted` references the source and exact channel acceptance; a
-proof-bearing source must have complete evidence for its derived peer link. The complete
-schema and producer/import distinction are in
-[channels.md](channels.md#message-accepted).
+Commit the authenticated channel observation before deciding channel acceptance
+or new work. Each operation requires a complete source/channel witness; a
+proof-bearing source also needs complete evidence for its derived peer link.
+Concrete intents and results reference their exact source and channel acceptance
+as defined by [operation eligibility](channels.md#operation-eligibility).
 
 Superseded senders, blocked channels, invalid proof and contradictory identity
-evidence grant no new effects. A matching accepted duplicate has no new response
-obligation and cannot trigger old output dispatch. Later normal rotation
-does not retroactively invalidate an already accepted observation.
-Current authentication remains separate from historical permission.
+evidence grant no new automatic effects. A matching duplicate has no new response
+obligation and cannot trigger old output dispatch. Later normal rotation or
+blocking does not erase saved intents, results or authenticated ACK evidence.
+New work and dispatch still obey current policy; importing saved facts validates
+their retained evidence without reconstructing past local policy.
 
 <a id="5-did-profiles-and-resolution-evidence"></a>
 
@@ -743,7 +744,7 @@ transport preference nor choosing another service changes an existing DID.
 
 ## 11. Early private-address policy and notifications
 
-Public and private addresses use the same channel model. On newly accepted live
+Public and private addresses use the same channel model. On eligible live
 application input, local policy may prefer a fresh private local successor when
 the selected local DID was publicly disclosed or is shared with another peer.
 It records `did.rotationSelected` with a UUIDv7 successor,
@@ -751,21 +752,24 @@ exact source observation and frozen proof. Reuse an existing matching decision;
 do not branch merely because work was interrupted. Group membership is not a
 reason to rotate an unrelated channel.
 
-This policy can choose a successor for a new response intent, never modify an
-existing response's channel. If a response already exists, preserve it and use
-a later new input or explicit new send for any notification. No recovery worker
-automatically dispatches a missing notification from historical input.
+This policy creates a dedicated Empty notification intent for the selected
+successor, independent of any Ping reply or pure ACK. An existing response keeps
+its channel and does not suppress the notification. Reuse the decision's exact
+original source, successor and proof even if another input prompts completion.
+No recovery worker automatically dispatches a missing notification from
+historical input; manual completion may create or execute the saved work.
 
 <a id="automatic-response-selection"></a>
 
-### 11.1 Automatic response selection
+### 11.1 Independent automatic intents
 
-On eligible live input, choose the natural deterministic protocol response
-when available; otherwise use Empty for a selected rotation notification.
-Trust Ping uses ping-response only when `response_requested` is not false.
-One accepted channel input permits one frozen ACK-bearing selection. Use its
-channel execution ID and the protocol tuple from
-[delivery](distributed-delivery.md#automatic-effects).
+On eligible live input, local policy may independently create a pure ACK, a
+Trust Ping response and an Empty rotation notification. Each uses its own fixed
+tuple and intent under [delivery](distributed-delivery.md#built-in-independent-operations).
+Trust Ping responds only when `response_requested` is not false. Pure ACKs are
+standalone Empty messages; Ping replies and rotation notifications have empty
+`ack` arrays. Optional private allocation or notification failure does not block
+an otherwise eligible reply or ACK on an authorized channel.
 
 Empty, ping-response and Report Problem do not trigger another privacy
 notification. A generic pure ACK requests no ACK. Notification proof, successor,
@@ -808,7 +812,7 @@ only when no other channel or disclosure still needs it.
 Store the authenticated successor-channel observation first, even when its
 predecessor document or history is missing. Commit resolution evidence when
 available and fold the original proof into a peer edge in its accepted
-predecessor context; then accept the target channel and message as allowed.
+predecessor context; then accept the target channel and check each operation.
 No link event is appended. Show [verification status](channels.md#verification-status)
 while evidence is pending or invalid. Opposite local/peer rotations use the explicitly
 verified join; neither a shared DID nor UI grouping supplies a missing edge.
@@ -823,8 +827,9 @@ Links do not merge message identities, move old outputs or automatically send an
 ## 13. Remote errors and integrity failures
 
 A Report Problem is a display diagnostic beside a uniquely correlated outbound
-only when its accepted carrier has the same authorized channel or a verified
-role-preserving successor path. Keep its body available for display. It does
+only when its carrier has a complete channel witness and either the same
+authorized channel or a verified role-preserving successor path. Keep its body
+available for display. It does
 not prove submission failure, retract a link or authorize replay. A normal
 authenticated observation may separately prove exact-address knowledge.
 
@@ -933,9 +938,9 @@ roll back; explicit new communication is a new channel and new message.
 
 18. <a id="rz-18"></a> Normal Trust Ping selects ping-response; response_requested false is still received and may get an independent Empty rotation notification.
 19. <a id="rz-19"></a> Content-first Basic Message remains its own application message without a rendezvous wrapper.
-20. <a id="rz-20"></a> Control input may obtain explicit channel/message acceptance and process eligible ACKs, but creates no contact or recursive privacy notification.
+20. <a id="rz-20"></a> Control input may establish channel acceptance and supply authenticated ACK evidence, but creates no contact or recursive privacy notification.
 
-21. <a id="rz-21"></a> Generic pure ACK has no ACK request. A privacy notification and natural response share the execution's one ACK-bearing selection.
+21. <a id="rz-21"></a> Generic pure ACK has no ACK request. ACK, Ping reply and privacy notification use independent intents; the latter two have empty ack arrays.
 22. <a id="rz-22"></a> New successor messages carry frozen proof/long form until confirmation; attempted packages remain exact after confirmation.
 
 23. <a id="rz-23"></a> Input at the exact successor confirms rotation; input at a predecessor does not. Explicit ACK naming a message remains separate.
@@ -1015,7 +1020,7 @@ roll back; explicit new communication is a new channel and new message.
 
 ### Receipt recovery and evidence fixtures (RZ-55–RZ-61)
 
-55. <a id="rz-55"></a> Receipt precedes channel acceptance and message acceptance. Crash retains each committed prefix; acceptance may already consume an invitation, and no prefix dispatches automatically on reopen.
+55. <a id="rz-55"></a> Receipt precedes channel acceptance and concrete source-derived work. Crash retains each committed prefix; channel acceptance may already consume an invitation, and no prefix dispatches automatically on reopen.
 
 56. <a id="rz-56"></a> Confirmation in an unrelated channel does not permit short-form disclosure or proof omission; validated equivalent predecessor spellings verify against the exact retained method evidence.
 
