@@ -55,6 +55,13 @@ when, and only when, they appear in all capitals.
 
 ## 1. What it is for
 
+This deferred extension distributes receipt data; it does not authorize multiple
+automatic executors or cross-replica outbox takeover. Import/replay/fan-out cannot
+dispatch old ACKs, replies, notifications or pending messages. The active
+executor and live initial/manual action rules in
+[channels.md](channels.md#fixed-outbound-channel) still apply. A manual action
+cannot change an existing message's channel or attempted package.
+
 One Estoc vault may have several independently writable full replicas. Every
 full replica holds the same vault seed and can derive the same communication
 DIDs, recipient keys and mediation account keys. A sender still addresses
@@ -64,7 +71,7 @@ each replica acknowledges independently.
 
 Local recipients are ordinary seed-derived `did:peer:4` communication addresses.
 Public discovery and private pairwise allocation use the same storage, fan-out,
-pickup and relationship-binding semantics. The mediator receives no address-role
+pickup and channel-acceptance semantics. The mediator receives no address-role
 classification. Its method-neutral resolution also supports externally managed
 DIDs without making document publication a vault responsibility.
 
@@ -76,7 +83,7 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Relationship formation and address-rotation policy belong to [relationships.md](relationships.md).
+Channel acceptance and address-rotation policy belong to [relationships.md](relationships.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
 
@@ -92,7 +99,7 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the relationship/address-policy profile in [relationships.md](relationships.md); and
+- the channel/address-policy profile in [relationships.md](relationships.md); and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -113,7 +120,7 @@ advisory; successful `register` is the authoritative capability check.
   full replicas of the vault.
 - **Recipient DID** — any DID registered under the mediation account and
   accepted as `body.next` of a Routing 2.0 `forward` message. Local vault
-  recipients are Peer rendezvous or relationship DIDs; the mediator does not
+  recipients are Peer rendezvous or pairwise DIDs; the mediator does not
   assign semantics based on method or role, including for externally managed
   Web recipients.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
@@ -166,7 +173,7 @@ A conforming mediator MUST preserve all of the following:
    ultimate recipient durably received the application message.
 9. A sender addresses a recipient DID, never a replica ID. Replica fan-out is
    an internal mailbox operation.
-10. Rendezvous and pairwise relationship DIDs receive the same per-replica
+10. Rendezvous and pairwise DIDs receive the same per-replica
     delivery semantics; externally managed DID methods do not change them.
 
 <a id="replica-lifecycle"></a>
@@ -452,7 +459,8 @@ MUST treat the ID as terminal even when local runtime state is otherwise intact.
    stable reason, including `inactivity-policy` when applicable;
 6. register the new ID with retained replay on **every** required mediation
    account, and retire the old ID on remaining accounts; and
-7. resume pickup, sync and outbound work only under the fresh ID.
+7. resume pickup and sync under the fresh ID; pending outbounds require an
+   explicit manual action and preserve their fixed channels and attempted packages.
 
 A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
@@ -534,7 +542,7 @@ The mediation account remains the one `recipient` in Coordinate Mediation
 3.0. All full replicas derive and use that account key. Recipient DIDs are
 registered once per mediation arrangement, not once per replica.
 
-Registration is method-neutral. Local vault rendezvous and relationship DIDs
+Registration is method-neutral. Local vault rendezvous and pairwise DIDs
 register their canonical Peer short forms. An externally managed `did:web`
 recipient may also be registered when its control proof and constrained
 resolution validate. The recipient-control proof is verified against an
@@ -911,9 +919,9 @@ This profile's accounting key includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
 Authenticated channel receipt is sufficient for normal pickup acknowledgment.
-Relationship admission, continuity/scope recovery, business handlers, rendering,
+Channel acceptance, continuity recovery, business handlers, rendering,
 replica synchronization and read state are not prerequisites. Unknown or
-refused R scope retains the receipt and authorizes no ultimate ACK/effect.
+refused channel acceptance retains the receipt and authorizes no ultimate ACK/effect.
 
 <a id="live-delivery"></a>
 
@@ -992,7 +1000,7 @@ leave partial state. In particular it MUST NOT store one mailbox message while
 creating deliveries for only some active replicas.
 
 Public rendezvous DIDs amplify unauthenticated initiator traffic into
-recipient storage, user prompts and potential relationship registrations.
+recipient storage, user prompts and potential channel acceptances.
 Operators SHOULD support per-account and per-recipient rate limits in addition
 to hard storage caps. An authenticated administration or discovery response
 MAY expose current usage, but anonymous routing behavior SHOULD remain
@@ -1143,11 +1151,11 @@ A conforming implementation demonstrates at least these cases:
 23. <a id="rm-23"></a> Recipient-key triage defers an exact known local key-agreement method
     with recoverable missing prerequisites. Foreign DIDs, nonexistent or
     wrong-purpose methods and terminal routes use the pre-vault ACK path.
-    Retained retired exact keys can receive on eligible routes without R lookup.
+    Retained retired exact keys can receive on eligible routes without continuity lookup.
     Unavailable sender resolution withholds ACK only within the bounded shared
     sequence; definitive resolution failure or budget exhaustion is terminal.
     Unopened local/cryptographic waits suspend active accounting without
     resetting it, under [relationships.md](relationships.md#shared-accounting-and-lost-wait-state).
-    Once channel receipt commits, missing relationship evidence cannot withhold
-    pickup ACK; scope/effects recover from saved evidence without another pickup
+    Once channel receipt commits, missing channel/continuity evidence cannot withhold
+    pickup ACK; acceptance/effect state recovers from saved evidence without another pickup
     or resolution sequence. A new network delivery authenticates afresh.

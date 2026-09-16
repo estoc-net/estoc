@@ -525,7 +525,10 @@ revive an erased relation.
 ### 11.4 Restore and bootstrap
 
 [SQ §12](vault-sqlite.md#restore-and-import) defines verified restore into an unused
-destination with fresh local IDs and reconstructed retention/unfinished work.
+destination with fresh local IDs and reconstructed retention/pending state.
+Domain dispatch authority is separate: restoring events never automatically
+sends historical messages or effects under
+[channels.md](channels.md#fixed-outbound-channel).
 An exact move may preserve IDs only with a permanently stopped source; a stale
 runtime recovery copy refreshes them. Deferred seed-and-locator sync bootstrap
 creates a fresh runtime and wrapper, never copies source local control.

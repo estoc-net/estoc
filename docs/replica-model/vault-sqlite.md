@@ -458,7 +458,11 @@ wrapper and preserving every event ID, author, canonical byte and held
 object. Rebuilding copies validated logical values without copying source free
 pages or adopting source SQL. Assign fresh replica/generation IDs and local
 positions. Keep it unready until integrity/completeness checks pass; publish readiness in one transaction.
-Open then reconstructs retention and unfinished work before enabling workers.
+Open reconstructs retention and pending state before enabling workers. Domain
+recovery grants no dispatch action: restored messages and historical automatic
+effects require explicit manual action under
+[the dispatch contract](channels.md#fixed-outbound-channel). Pickup and local
+projection recovery may proceed normally.
 A failed construction is not an empty vault and cannot silently mint another seed.
 
 Recovery from a damaged runtime restores only the snapshot's history. Salvaging
@@ -615,7 +619,8 @@ physical-version guarantees are recorded in the suite's section history.
     before interpreting payloads.
     Portable inspection rejects views, triggers or other forbidden schema before
     querying application data, including when only reading metadata.
-34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
+34. <a id="sq-34"></a> Restore unlocks the real wrapper and reconstructs state with fresh IDs;
+    pending message dispatch remains manual.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
     bytes nor sound accepted target bytes, aborts without semantic writes. Check

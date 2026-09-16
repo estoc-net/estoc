@@ -15,29 +15,29 @@ revision changes specifications, not the implementation's completion status.
 
 ## Model overview
 
-A vault has one seed and immutable events. Folds derive current state; raw
-content-addressed objects hold retained bytes. A fixed address-pair channel
-records authenticated communication independently of relationship admission.
-A relationship admits a root channel and preserves its identity while verified
-address transitions justify additional channels. Unknown membership remains
-unassigned; it is not a new relationship birth. Sending records intent before
-network effects; committed submission ends sending work and peer acknowledgment
-records receipt. See the [vault model](vault-events.md#model),
-[channel/admission model](channels.md#model),
-[relationship policy](relationships.md#what-it-is-for) and
-[commit boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
+A vault has one seed, immutable events and raw content-addressed objects.
+Fixed DID-pair channels retain authenticated communication. Local acceptance
+pins exact peer evidence; directed links record one endpoint replacement.
+Relationship/contact groups organize display without cryptographic authority.
+
+An outbound fixes its channel and direction at intent commit. Rotation selects
+new messages only. Every transport call follows a durable attempt and a live
+initial/manual action; reopen, restore and another replica never automatically
+send pending messages or old protocol effects. Manual retry uses the exact
+attempted package, while a new channel means a new message ID. Peer ACKs record
+receipt independently of submission. See [channels](channels.md#model) and
+[delivery boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
 | Layer | Documents | Responsibility |
 | --- | --- | --- |
-| Storage semantics | [Event store](event-store.md), [DASL objects](dasl-objects.md) | API, event identity/order, raw CID/bytes and retention |
-| Persistence | [SQLite vault](vault-sqlite.md) | Schema, ownership, transactions, maintenance and portable recovery |
-| Application state | [Vault events](vault-events.md) | Payloads, evidence validation, folds and held roots |
-| Communication and authority | [Channels](channels.md), [Relationships](relationships.md) | Fixed channel evidence, explicit admission, scoped continuity and address policy |
-| Runtime protocols | [Delivery](distributed-delivery.md) | Send/receive/ACK procedures and effect ordering |
-| Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Future per-replica pickup and encrypted synchronization |
+| Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
+| Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
+| Domain facts | [Vault events](vault-events.md) | Message, attempt, profile and local policy payloads/folds |
+| Communication authority | [Channels](channels.md), [Address/display policy](relationships.md) | Fixed channels, exact acceptance pins, directed continuity, display groups |
+| Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
+| Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Receipt fan-out and encrypted data synchronization, without outbox takeover |
 
-The relationship profile defines no Estoc rendezvous wire handshake.
-Public/rendezvous addresses are a discovery concept in that profile.
+Ordinary DIDComm messages need no Estoc wire handshake or display relationship ID.
 
 <a id="reading-paths"></a>
 
@@ -45,11 +45,11 @@ Public/rendezvous addresses are a discovery concept in that profile.
 
 | Task | Suggested path |
 | --- | --- |
-| Understand the system | [Vault model](vault-events.md#model) → [channels and admission](channels.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
+| Understand the system | [Vault model](vault-events.md#model) → [channels and continuity](channels.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
-| Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [scope](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
+| Implement receiving | [Receive](distributed-delivery.md#receive-a-message) → [resolution](relationships.md#did-resolution-requirements) → [receipt gates](relationships.md#uniform-receipt) → [evidence](vault-events.md#receipt-and-relationship-evidence) → [acceptance](distributed-delivery.md#address-chains-and-observation-membership) → [inbound fold](vault-events.md#inbound-message-and-execution-fold) |
 | Back up or recover | [Recovery material](vault-sqlite.md#recovery-material-and-product-requirement) → [export](vault-sqlite.md#snapshot-and-export) → [restore/import](vault-sqlite.md#restore-and-import) → [unfinished receive work](distributed-delivery.md#receive-recovery) |
 | Explore future replication | Phase-1 documents first, then [replica mediation](replica-mediation.md#reading-guide) and [vault sync](vault-sync.md#reading-guide) |
 
@@ -57,40 +57,32 @@ Public/rendezvous addresses are a discovery concept in that profile.
 
 ## Rule ownership
 
-Change the defining section, not a second copy of its rules. ES describes what
-a caller observes; DO defines object identity and retention; SQ alone owns
-SQLite procedures. Channels owns channel identity, the admission boundary and `message.scoped`;
-VE owns the other domain payloads. DD owns operation ordering, and RZ owns
-address/relationship policy. A domain revision updates these owners together.
+Change the defining section and align its consumers. ES owns event envelopes,
+DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
+acceptance/link/denial/display-membership events and dispatch authority. VE owns
+the remaining domain payloads/folds; DD owns runtime ordering and message/effect
+identity; RZ owns DID resolution and address/display policy.
 
-| Rule | Definition | Connected sections |
+| Rule | Definition | Consumers |
 | --- | --- | --- |
-| Event envelope, IDs and canonical order | [ES §§3–4](event-store.md#the-event) | [VE identifiers](vault-events.md#identifier-and-reference-vocabulary) |
-| Process-durable success and commit API | [ES §2.1](event-store.md#commit-and-durability-terminology), [ES §10](event-store.md#vault-interface) | [DD boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
-| SQLite ownership, transactions and maintenance | [SQ §§6–9](vault-sqlite.md#objects-and-streams) | [VE operation-lock scope](vault-events.md#receipt-and-relationship-evidence) |
-| Raw CID identity and object API | [DO §§3–6](dasl-objects.md#accepted-dasl-cids) | [SQ object rows](vault-sqlite.md#objects-and-streams) |
-| Export, validation, restore and import | [SQ §§10–12](vault-sqlite.md#snapshot-and-export) | [ES interchange](event-store.md#interchange) |
-| Metadata, wrapper and local control | [SQ §4](vault-sqlite.md#identity-and-keystore), [SQ §7](vault-sqlite.md#local-state-and-projections) | [ES typed API](event-store.md#metadata-and-keystore), [VE open](vault-events.md#open-the-writable-full-runtime) |
-| Vault-event fields, typed references and folds | [VE](vault-events.md#reading-guide) | [DD procedures](distributed-delivery.md#reading-guide), [RZ policy](relationships.md#reading-guide) |
-| Stored message and attachment normalization | [VE §8](vault-events.md#stored-message-document) | [DD hash projections](distributed-delivery.md#canonical-projections-and-hashes) |
-| Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
-| Inbound observation IDs, execution scope and IDs | [DD §9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE inbound fold](vault-events.md#inbound-message-and-execution-fold) |
-| Channel identity and explicit admission | [CH §§2–4](channels.md#channel-identity) | [VE receipt](vault-events.md#receipt-and-relationship-evidence), [RZ admission](relationships.md#binding-and-contact-policy) |
-| Frozen observation scope | [CH §6](channels.md#message-scoped) | [DD logical identity](distributed-delivery.md#address-chains-and-observation-membership), [VE fold](vault-events.md#inbound-message-and-execution-fold) |
-| Relationship ID and default allocation IDs | [RZ §5](relationships.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
-| Binding evidence, incomplete claims and channel membership | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [CH admission](channels.md#admission), [DD scope](distributed-delivery.md#address-chains-and-observation-membership) |
-| Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ privacy policy](relationships.md#early-private-address-policy-and-notifications), [RZ peer changes](relationships.md#peer-address-changes) |
-| Resolution freshness, failures and bounded retry | [RZ §10.1](relationships.md#did-resolution-requirements) | [RZ wait state](relationships.md#deferred-delivery), [DD receive](distributed-delivery.md#receive-a-message), [VE evidence](vault-events.md#message-in), [RM pickup ACK](replica-mediation.md#messages-received) |
-| Pre-authentication waits and post-receipt recovery | [RZ §9.1](relationships.md#deferred-delivery), [CH §7](channels.md#effects-and-recovery) | [RZ accounting](relationships.md#shared-accounting-and-lost-wait-state), [VE channel evidence](vault-events.md#receipt-and-relationship-evidence) |
-| Transport retry interval, backoff and accounting | [RZ §14](relationships.md#retry-replacement-and-address-rollover) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD failures](distributed-delivery.md#failure-rules) |
-| Pickup ACK commit and terminal classification | [DD §4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table), [DD §4.3](distributed-delivery.md#receive-a-message), [RZ gates](relationships.md#hard-pre-vault-gate) | [VE receipt](vault-events.md#message-in), [RM scope](replica-mediation.md#messages-received) |
-| Peer ACK target selection and freezing | [DD §8.1](distributed-delivery.md#freezing-an-ack-target-set), [VE receipt order](vault-events.md#message-in) | [RZ responses](relationships.md#automatic-response-selection), [VE outbound fold](vault-events.md#outbound-message-and-delivery-fold) |
-| Receipt gates and default contact/address policy | [RZ §9](relationships.md#uniform-receipt), [RZ §5.2](relationships.md#binding-and-contact-policy), [RZ §11](relationships.md#early-private-address-policy-and-notifications) | [DD receive](distributed-delivery.md#receive-a-message), [VE contacts](vault-events.md#contact-fold) |
-| Send, receive and ACK procedure ordering | [DD §4.2](distributed-delivery.md#send-an-ordinary-message), [DD §8](distributed-delivery.md#durable-end-to-end-acknowledgment), [DD §4.3](distributed-delivery.md#receive-a-message) | [VE schemas/folds](vault-events.md#reading-guide) |
-| Complete observation witness matching | [VE §10.5](vault-events.md#complete-observation-witnesses) | [VE peer transition](vault-events.md#relationship-peertransitioned), [VE ACK aggregation](vault-events.md#outbound-message-and-delivery-fold) |
-| Submission completion, ACK timing and work eligibility | [VE §9.8](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD applying ACK](distributed-delivery.md#applying-ack) |
-| Prepared-envelope retention and erasure | [VE §12.3](vault-events.md#held-roots) | [DO collection](dasl-objects.md#collection), [VE erase](vault-events.md#erase-a-message) |
-| Local open, erase, delete and rotate procedures | [VE §13](vault-events.md#procedures) | [ES Vault](event-store.md#vault-interface), [DD procedures](distributed-delivery.md#reading-guide) |
+| Event envelope and ordering | [ES](event-store.md#the-event) | [VE vocabulary](vault-events.md#identifier-and-reference-vocabulary) |
+| Commit durability | [ES](event-store.md#commit-and-durability-terminology) | [DD boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
+| Storage ownership and recovery | [SQ](vault-sqlite.md#ownership-and-lifecycle) | [VE open](vault-events.md#open-the-writable-full-runtime) |
+| Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
+| Channel identity | [CH identity](channels.md#channel-identity) | [VE IDs](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces) |
+| Exact channel acceptance/pins | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
+| Directed links, joins and confirmation | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
+| Message acceptance | [CH](channels.md#message-accepted) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
+| Fixed intent and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [attempt](vault-events.md#delivery-attempted), [DD send](distributed-delivery.md#send-an-ordinary-message) |
+| Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
+| Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |
+| ACK selection and authorization | [DD ACKs](distributed-delivery.md#durable-end-to-end-acknowledgment) | [VE ACK witness](vault-events.md#delivery-acknowledged) |
+| Complete witnesses | [VE witnesses](vault-events.md#complete-observation-witnesses) | [CH links](channels.md#channel-linked), [DD ACKs](distributed-delivery.md#applying-ack) |
+| Resolution, cryptographic gate and budgets | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [RM pickup](replica-mediation.md#messages-received) |
+| Invitations | [CH acceptance](channels.md#admission), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
+| Denial and display groups | [CH policy/display](channels.md#effects-and-recovery) | [VE contact deletion](vault-events.md#delete-a-contact), [profiles](vault-events.md#relationship-profile-fold) |
+| Submission/receipt state | [VE delivery fold](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration) |
+| Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery), [VS recovery](vault-sync.md#bootstrap-and-recovery) |
 
 <a id="conformance-and-references"></a>
 
@@ -103,7 +95,7 @@ address/relationship policy. A domain revision updates these owners together.
 | SQ | [SQLite vault](vault-sqlite.md#required-conformance-cases) | Phase 1 |
 | VE | [Vault events](vault-events.md#required-conformance-cases) | Phase 1 |
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
-| CH | [Channels and admission](channels.md#required-conformance-cases) | Phase 1 draft; implementation pending |
+| CH | [Channels and continuity](channels.md#required-conformance-cases) | Phase 1 draft; implementation pending |
 | RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
 | RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
@@ -126,38 +118,49 @@ with their owner instead of repeating implementation requirements across files.
 
 ## Section history
 
-### Channel receipt and relationship admission
+### Channel core, fixed messages and manual dispatch
 
-This unreleased draft separates fixed-address channel receipt from relationship
-authority. It adds `ChannelId`, `message.in.channelId`,
-`message.prepared.channelId`, root-binding `channelId`/`sourceEventId`, and the
-separate `message.scoped` event with exact historical paths. Disclosure adds
-the explicit `admitRelationship` permission. Receipt drops its
-binding/transition references. These are payload-schema changes, not a claim
-of compatibility with previously implemented v3 domain events; rebuilding or
-explicitly translating development vaults needs a separate implementation task.
-Storage envelopes, SQLite layout and raw CID rules are unchanged.
+This revision supersedes the earlier channel/relationship layering experiment.
+It removes cryptographic relationship roots, birth IDs, full relationship scope
+paths and cross-channel execution aliasing. Relationships are display groups;
+their IDs are UUIDv7 and never enter message/effect/ACK authority. Existing
+historical anchors remain locators, not permission to use retired payloads.
 
-Normal pickup ACK now follows authenticated channel receipt. Relationship
-membership, superseded-sender policy, invitation consumption and application
-scope are later decisions. Unknown input remains unassigned; explicit user
-action or an authorized invitation establishes a root. The existing symmetric
-R/execution derivations apply after admission. No automatic relationship merge
-or new wire handshake is introduced.
+Current channel facts are `channel.accepted`, `channel.linked`,
+`channel.blocked` and `message.accepted`. Display membership uses
+`relationship.channelsSet`; `relationship.contactAssigned` is display-only.
+Disclosure permission is `admitChannel`. Profile facts name source channels.
+Old `relationship.bound`, both relationship transition events, `message.scoped`,
+root-derived allocation/contact IDs and relationship execution transcripts are
+retired. Their implementation/tests do not establish current conformance.
 
-CH-1–CH-18 specify the new boundary. Existing VE/DD/RZ/RM case IDs retain their
-subjects with updated expectations: the former no-receipt/no-pickup-ACK
-relationship waits and implicit birth assertions are intentionally retired.
-Historical named anchors remain available, including the receipt/integrity
-headings whose ownership now points to channels. Earlier implementation test
-results do not establish conformance to these changed domain guarantees.
+`message.out` now fixes `channelId`, `senderDidId` and `recipientDid` at intent
+commit, intentionally earlier than the first possible transport call. It has
+no relationship/birth metadata. Every call requires a committed
+`delivery.attempted`; `delivery.submitted` references that attempt. All manual
+retries after an attempt use the exact same package. Unknown outcomes remain
+unconfirmed, and import/restore/reopen does not dispatch pending work. A new
+channel requires a new explicit send and ID. Automatic pickup, resolution and
+sync recovery are separate from replay of user/protocol messages.
 
-VE-140/141 and DD-70 retain their incomplete/duplicate witness subjects.
-Unscoped consistent siblings no longer suspend accepted input, and missing
-membership alone no longer contradicts a complete confirming witness. Frozen
-scope paths require their exact referenced edges to validate; an incomplete
-equal edge no longer borrows validation from another edge after scope commit.
+Authenticated inbound IDs use `["v2", "authenticated", channelId, senderDid, wireId]`;
+execution IDs use `["v3", {"channel": channelId, "sender": senderDid}, wireId]`.
+Opposite directions stay distinct. The effect hash/automatic-ID algorithms are
+unchanged, but their inputs and published vectors change. Graph discovery never
+merges executions. Successor ACKs still require an exact role-preserving path.
 
+CH-1–CH-29 specify the core contract. Existing VE/DD/RZ cases retain their
+subjects with updated guarantees. In particular, cross-channel alias fixtures,
+automatic recovery sending and rotation-driven repacking expectations are
+retired. Invitation consumption now commits with explicit qualifying channel
+acceptance, rather than the retired root message scope. Confirmation witnesses
+still avoid a dependency on their own message acceptance.
+
+This is a breaking revision of an unreleased v3 domain draft. It requires
+development-vault rebuilding or an explicitly implemented conversion; no
+migration or implementation conformance is claimed. Event envelopes, raw CID
+rules and SQLite tables are unchanged. Storage recovery restores data and local
+projections while domain dispatch remains subject to explicit live actions.
 
 ### SQLite phase-1 simplification
 

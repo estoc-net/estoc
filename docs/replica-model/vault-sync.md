@@ -69,7 +69,7 @@ DASL CIDs, message bodies, event types or contact data in plaintext.
 The protocol synchronizes:
 
 - the immutable vault configuration needed for bootstrap;
-- vault events, including rendezvous, relationship and route state;
+- vault events, including channel, continuity, display-group and route state;
 - extension-store events; and
 - content-addressed DASL objects referenced by those events, including exact
   resolved peer DID document snapshots.
@@ -1355,6 +1355,14 @@ across replicas is forbidden because arrival order differs.
 <a id="bootstrap-and-recovery"></a>
 
 ## 14. Bootstrap and recovery
+
+Recovered domain events are historical data, not a dispatch queue. Bootstrap,
+import and replica change do not send pending outbounds or regenerate old
+automatic replies/ACKs/notifications for sending. Show pending work for manual
+action under [the dispatch contract](channels.md#fixed-outbound-channel),
+preserving each intent's fixed channel and exact attempted package. Missing
+success/attempt evidence in a snapshot never proves that a call did not occur.
+This does not stop automatic retry of sync transfers or mailbox pickup.
 
 A new local replica needs:
 
