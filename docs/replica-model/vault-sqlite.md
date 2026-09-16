@@ -489,7 +489,7 @@ For every root in `requiredRoots`, require verified source bytes or
 [sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort
 before publication. Compute both folds before checking bytes. A reference the
 union fold does not hold requires no bytes, including an erased reference or
-an envelope released by submission, retirement or terminal failure.
+an envelope released by submission or termination.
 Conflicting evidence may make newly accepted source events retain roots their
 source released, or make existing target events retain roots absent from
 `heldRoots(targetBeforeImport)`. Both cases are subject to this requirement.
@@ -631,8 +631,8 @@ read and maintenance strategies.
     the target. Swap source and target and require the same rejection, now with
     the newly accepted source package retaining `E`.
     A source reference the union fold does not hold requires no bytes, including
-    erased references and envelopes released by submission, retirement or
-    terminal failure. An otherwise-valid import succeeds when an unrelated root
+    erased references and envelopes released by submission or termination.
+    An otherwise-valid import succeeds when an unrelated root
     was already held by the target and remains held in the union, no newly
     accepted event retains it, and its bytes are absent or known damaged with
     no source bytes available; that root remains absent or damaged.

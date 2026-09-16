@@ -32,7 +32,7 @@ appear in all capitals.
 - [4. Vault-first procedures and commit boundaries](#vault-first-procedures-and-commit-boundaries)
 - [5. Canonical projections and hashes](#canonical-projections-and-hashes)
 - [6. Preparing a package](#preparing-a-package)
-- [7. Submission completion and expiration](#submission-completion-and-expiration)
+- [7. Submission completion and termination](#submission-completion-and-expiration)
 - [8. Durable end-to-end acknowledgment](#durable-end-to-end-acknowledgment)
 - [9. Observation identity, logical aliasing and execution identity](#observation-identity-logical-aliasing-and-execution-identity)
 - [10. First contact and address policy](#first-contact-and-address-policy)
@@ -228,7 +228,7 @@ fixed channel. Missing prerequisites may wait locally before the first call.
 A manual action can resume an eligible pending intent. The action serializes
 this message's work and performs these steps:
 
-1. Recheck completion, expiry, denial, conflict, retained keys/routes and bytes.
+1. Recheck completion, termination, expiry, denial, conflict, retained keys/routes and bytes.
 2. Reuse the committed package; missing references or bytes defer and conflicting
    preparations prevent sending. Prepare and commit one package in the intent's
    fixed channel only when neither a preparation nor an unresolved package
@@ -427,12 +427,12 @@ the exact normalized envelope and `message.prepared` before transport.
 Commit only when no preparation exists; otherwise reuse the saved package.
 That commit freezes its plaintext, ciphertext, proof, spelling, package ID and
 envelope CID for the initial call and every retry. Missing evidence or bytes
-defer sending. Later confirmation, rotation, resolution or package retirement
-cannot replace it; changing the package requires a new message ID.
+defer sending. Later confirmation, rotation, resolution or termination cannot
+replace it; changing the package requires a new message ID.
 
 <a id="submission-completion-and-expiration"></a>
 
-## 7. Submission completion and expiration
+## 7. Submission completion and termination
 
 Any valid committed submission completes the message and prevents further
 preparation or retry, regardless of ACK policy. Missing submission does not prove
@@ -441,6 +441,9 @@ nondelivery; pending work follows [the delivery fold](vault-events.md#outbound-m
 Expiry stops new work at equality and records message-terminal failure when
 observed before preparation/dispatch. It does not overwrite an already recorded
 submission. Later ACK evidence can report receipt without reopening anything.
+Explicit cancellation commits message-scoped `delivery.failed` with code
+`cancelled` under [the termination rules](vault-events.md#delivery-failed),
+stopping pending work without claiming nondelivery.
 Erasure, security denial, key/route retirement and missing exact bytes separately
 govern manual retry. Ordinary address rotation selects new messages only.
 
@@ -766,9 +769,8 @@ dispatch profile, not authority for automatic replay.
 ```text
 message.out                fixed channel and immutable intent
 message.prepared           exact selected envelope
-message.packageRetired     package no longer eligible
 delivery.submitted         observed transport acceptance of the fixed package
-delivery.failed            terminal package/message failure
+delivery.failed            terminal failure or message cancellation
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
 message.fromPriorResolved  exact issuer-document association for a received proof
@@ -792,7 +794,7 @@ are owned by [vault events](vault-events.md) and [channels](channels.md).
   acceptance but before submission commit leave the same portable prepared state.
   Recovery requires manual action and preserves the package. Retry may deliver
   duplicate bytes; channel-local dedup applies.
-- After submission commit, no retry is allowed.
+- After submission or termination commits, no retry is allowed.
 - After rotation, old intents/packages remain in their fixed channels. If that
   channel becomes unusable, a deliberate new send has a new wire ID.
 - After receipt but before pickup ACK, redelivery is another same-channel
@@ -853,7 +855,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
    rejected.
 9. <a id="dd-9"></a> Repeated identical preparation payloads reuse one package; a different package ID, envelope or evidence reference for the same message conflicts, even when its intent hash agrees.
 10. <a id="dd-10"></a> Retrying one package uses identical plaintext, ciphertext and package ID.
-11. <a id="dd-11"></a> Rotation cannot change an existing message's channel or committed package. Retirement or terminal failure of an unsent package permits no replacement; changing the package requires a new message ID.
+11. <a id="dd-11"></a> Rotation cannot change an existing message's channel or committed package. Cancellation or terminal failure permits no replacement, even before its first send; changing the package requires a new message ID.
 
 12. <a id="dd-12"></a> Body, type, thread, attachment, timing, ACK policy or additional-header
     changes under one wire ID produce an intent conflict.
@@ -904,7 +906,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
 30. <a id="dd-30"></a> Expiry stops unsubmitted work permanently. Receipt `late` follows
-    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
+    [vault-events.md section 9.7](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
     submitted and expired messages, without changing submission outcome or
     restarting work. Already-submitted messages acquire no new expired failure.
 
@@ -950,7 +952,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
 45. <a id="dd-45"></a> Submitted completion survives restart, loss of local state, clock rollback,
-    package retirement and envelope collection. Later duplicate input cannot
+    later termination and envelope collection. Later duplicate input cannot
     reopen submission or require the collected envelope.
 46. <a id="dd-46"></a> A complete submission witness completes the message even if import later
     adds a competing preparation. The conflict remains visible; another package,
@@ -959,7 +961,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 48. <a id="dd-48"></a> Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
 
 49. <a id="dd-49"></a> An unsubmitted package survives route unavailability and GC with its exact
-    envelope. Committed submission or terminal failure releases its contribution
+    envelope. Committed submission, terminal failure or cancellation releases its contribution
     under the retention fold; route recovery cannot reopen submitted work.
 
 <a id="recovery-and-automatic-effects-dd-50-dd-56"></a>

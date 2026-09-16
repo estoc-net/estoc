@@ -1655,36 +1655,13 @@ Initial sends and manual retries use this package unchanged under
 [dispatch authority](channels.md#fixed-outbound-channel). An uncertain commit
 must be resolved before dispatch or further preparation. A package records no
 transport invocation; call counts and retry diagnostics are local trace.
-Submission or message-terminal failure stops preparation and retry. Recheck
+Submission or message-scoped termination stops preparation and retry. Recheck
 lifecycle and security at dispatch without invalidating historical evidence.
 Public and pairwise addresses use the same package rules and name no replica.
 
-<a id="message-packageretired"></a>
-
-### 9.4 `message.packageRetired`
-
-```json
-{
-  "type": "message.packageRetired",
-  "roots": [],
-  "data": {
-    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "because": "cancelled"
-  }
-}
-```
-
-The closed data has exactly `messageId`, `packageId` and `because`; `roots` is
-empty. `packageId` names a committed preparation for this message. Retirement
-permanently stops submission, including manual retry, and permits no replacement.
-Further sending requires a new message ID. Retirement does not declare message failure
-or undo a recorded submission. Envelope retention follows
-[section 12.3](#held-roots).
-
 <a id="delivery-submitted"></a>
 
-### 9.5 `delivery.submitted`
+### 9.4 `delivery.submitted`
 
 ```json
 {
@@ -1704,16 +1681,17 @@ The closed data contains exactly `messageId` and `packageId`; `roots` is empty.
 `packageId` MUST identify the already committed valid `message.prepared` for
 this exact `messageId`. Append this event after observing transport acceptance.
 Its successful commit completes the logical outbound under
-[section 9.8](#outbound-message-and-delivery-fold).
+[section 9.7](#outbound-message-and-delivery-fold).
 If acceptance happened but this observation did not commit, the outcome remains
 unconfirmed and requires explicit manual retry; recovery never resubmits it.
 
 Transport, endpoint and response status are local trace data. They are not
 fields of this portable event and do not participate in the delivery fold.
 
+<a id="message-packageretired"></a>
 <a id="delivery-failed"></a>
 
-### 9.6 `delivery.failed`
+### 9.5 `delivery.failed`
 
 ```json
 {
@@ -1728,7 +1706,8 @@ fields of this portable event and do not participate in the delivery fold.
 }
 ```
 
-This event records only a terminal failure. `scope` is `package` or `message`.
+This event records terminal failure or explicit cancellation. `scope` is
+`package` or `message`.
 `packageId` is REQUIRED for package scope and null when no package exists.
 
 - package scope makes that package terminal. It cannot be replaced or retried;
@@ -1736,8 +1715,16 @@ This event records only a terminal failure. `scope` is `package` or `message`.
 - message scope stops all preparation and submission for the intent, including
   manual retry.
 - `code == "expired"` MUST be message-scoped.
+- `code == "cancelled"` MUST be message-scoped.
 - `code == "peer-key-changed"` is message-scoped with `packageId == null`;
   [relationships.md section 10.1](relationships.md#did-resolution-requirements) defines this failure before package preparation.
+
+An explicit cancel action serializes with dispatch for the message, rechecks
+submission under the operation lock and appends `code == "cancelled"` only
+while unsubmitted. It may cancel before preparation or after an outcome-unknown
+call; `packageId` is null before preparation and otherwise names the fixed
+package. Cancellation preserves message content and does not prove nondelivery.
+An independently complete submission still takes precedence after import.
 
 Retryable failures, the `resolve`/`prepare`/`submit` phase and retry diagnostics
 belong only to local trace and retry policy. They MUST NOT append
@@ -1752,7 +1739,7 @@ Sensitive strings remain in local trace; `code` is a stable non-secret value.
 
 <a id="delivery-acknowledged"></a>
 
-### 9.7 `delivery.acknowledged`
+### 9.6 `delivery.acknowledged`
 
 ```json
 {
@@ -1787,7 +1774,7 @@ that complete carrier's local key and derived authenticated peer key.
 <a id="148-outbound-message-and-delivery-fold"></a>
 <a id="outbound-message-and-delivery-fold"></a>
 
-### 9.8 Outbound message and delivery fold
+### 9.7 Outbound message and delivery fold
 
 For each message ID, require one consistent complete `message.out` intent.
 Validate preparations under section 9.3. One consistent package is allowed;
@@ -1796,15 +1783,15 @@ references block dispatch and cannot justify another package.
 
 Derive these independent facts:
 
-- `packages[]`: individually valid preparations, including retired skeletons
+- `packages[]`: individually valid preparations, including retained skeletons
   and imported competing candidates; dispatch requires one consistent package;
 - `submitted`: a complete valid `delivery.submitted` names the exact matching
   intent and package. Validate its own evidence before aggregate eligibility;
-  later erasure, retirement, policy or a competing package cannot remove this
+  later erasure, termination, policy or a competing package cannot remove this
   historical fact. An incomplete unrelated row cannot erase it;
-- `ackWitnesses`: all complete source witnesses satisfying section 9.7;
+- `ackWitnesses`: all complete source witnesses satisfying section 9.6;
 - `acknowledged`: at least one such witness exists; and
-- terminal package/message failures and permanent erasures under their schemas.
+- package/message terminations and permanent erasures under their schemas.
 
 For an inbound-derived output, verify its `(executionId, effectType)` tuple
 against its exact complete source witness in the channel-local
@@ -1826,14 +1813,15 @@ Displayed outcome precedence is:
 ```text
 conflict
 submitted
-expired-or-terminal-failure
+terminal
 prepared
 queued
 ```
 
-`queued` and `prepared` describe retained intent/package state, not whether a
-transport call occurred. Missing submission, including in a partial snapshot,
-does not prove nondelivery. Restored pending records require manual action;
+`terminal` covers expiry, explicit cancellation and terminal failure; its code
+supplies the reason. `queued` and `prepared` describe retained intent/package
+state, not whether a transport call occurred. Missing submission, including in
+a partial snapshot, does not prove nondelivery. Restored pending records require manual action;
 the UI may show that requirement separately. A submitted/terminal record
 cannot retry; a deliberate new send creates a new ID without altering the old outcome.
 
@@ -2049,7 +2037,7 @@ In phase 1 it acknowledges one account-scoped delivery and follows durable
 An ultimate ACK is an end-to-end application message. It is recorded as
 `message.in`; each wire ID in its validated `ack` array selects an exact local
 outbound. The complete source witness must be in that outbound's channel or a verified
-role-preserving successor channel under [section 9.8](#outbound-message-and-delivery-fold).
+role-preserving successor channel under [section 9.7](#outbound-message-and-delivery-fold).
 A conflict-free match may produce an idempotent `delivery.acknowledged`.
 A wire ID alone or shared contact grants no ACK authority. A threaded
 or natural response without an explicit `ack` array does not create that
@@ -2067,7 +2055,7 @@ MUST NOT combine a field from one candidate with a field from another. The
 result is the set of all complete matches, independent of enumeration order.
 
 The consumer defines the candidate set and its required comparisons and
-validation. `ackMessageId` in [section 9.7](#delivery-acknowledged) restricts
+validation. `ackMessageId` in [section 9.6](#delivery-acknowledged) restricts
 candidates to that observation message ID's group. Any complete matching
 duplicate can witness that claim. In contrast, `sourceEventId` in a
 `message.fromPriorResolved`, `did.rotationSelected`, `message.out` or `invitation.consumed`
@@ -2084,7 +2072,7 @@ consuming schema or fold. Incomplete evidence is not a proven mismatch merely
 because the candidate cannot yet enter the witness set.
 
 Subject to those checks, an existential claim requires at least one complete
-witness. Aggregates use all qualifying witnesses; [section 9.8](#outbound-message-and-delivery-fold)
+witness. Aggregates use all qualifying witnesses; [section 9.7](#outbound-message-and-delivery-fold)
 therefore computes ACK receipt time across duplicates and distinct carriers.
 
 <a id="147-inbound-message-and-execution-fold"></a>
@@ -2214,16 +2202,15 @@ For a consistent outbound `M` and valid package `P`, define:
 retainEnvelopeForMessage(M, P) =
     !erased(M, P.envelopeCid)
     and !submitted(M)
-    and !retired(P)
-    and !packageTerminalFailure(P)
-    and !messageTerminalFailure(M)
+    and !packageTerminal(P)
+    and !messageTerminal(M)
 ```
 
-Terminal failure means valid committed `delivery.failed` at the
-specified scope; a committed expired failure is message-terminal. Sampling wall
+Terminal means valid committed `delivery.failed` at the specified scope,
+including message-scoped expiry or cancellation. Sampling wall
 time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
 until that durable termination is committed. `submitted(M)` is defined by
-[section 9.8](#outbound-message-and-delivery-fold) and remains true after envelope collection or package retirement.
+[section 9.7](#outbound-message-and-delivery-fold) and remains true after envelope collection or termination.
 It releases this message's envelope contribution, including competing imported
 packages. Missing evidence for another package or operation of `M`, and an
 execution conflict of an automatic `M`, do not withdraw it or require these bytes again. An ACK
@@ -2235,7 +2222,7 @@ scheduling conditions do not release an unsubmitted, non-terminal package.
 There is no separate response-replay retention contribution or closure event.
 After submission, even a duplicate inbound request cannot require these bytes
 again or authorize a replacement package. The message's body/attachments and
-its event skeletons keep their separate retention rules; completing submission
+its event skeletons keep their separate retention rules; submission or termination
 does not erase conversation content or receipt/scope evidence.
 
 `erased(M, root)` names the permanent message/root relation, not global deletion
@@ -2597,7 +2584,7 @@ derivation requires a new vault version.
 
 13. <a id="ve-13"></a> A deterministic response acknowledges an outbound only when authenticated
     explicit `ack` names its wire ID.
-14. <a id="ve-14"></a> Expiry irreversibly ends unsubmitted work. [Section 9.8](#outbound-message-and-delivery-fold) derives `late`
+14. <a id="ve-14"></a> Expiry irreversibly ends unsubmitted work. [Section 9.7](#outbound-message-and-delivery-fold) derives `late`
     from the earliest valid ACK carrier observation `at`, for both submitted
     and expired unsubmitted messages. An observation before expiry is on time;
     equality or later is late. Null expiry is never late. Restart, fold time,
@@ -2740,7 +2727,7 @@ derivation requires a new vault version.
 63. <a id="ve-63"></a> Within-channel authorized variants share one execution; another channel stays separate after graph discovery. Regrouping and retirement never rewrite existing IDs.
 
 64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of local caches,
-    clock rollback, package retirement, content erasure and envelope collection.
+    clock rollback, later termination, content erasure and envelope collection.
     Retained event skeletons prevent resubmission or replacement of that message ID.
 65. <a id="ve-65"></a> A complete `delivery.submitted` completes its entire message ID and
     suppresses further preparation or submission, including with an imported competing package. Workers
@@ -2752,10 +2739,11 @@ derivation requires a new vault version.
     filename or DASL object identity.
 68. <a id="ve-68"></a> An otherwise retained unsubmitted package survives route unavailability
     and GC with its exact bytes. Route recovery cannot reopen a submitted message ID.
-69. <a id="ve-69"></a> Retiring an unsubmitted package releases its delivery retention contribution
-    without completing the message ID or permitting replacement, even before its first send.
-    Retirement data has exactly messageId, packageId and because with empty roots;
-    retiring a submitted package preserves its submission evidence.
+69. <a id="ve-69"></a> Explicit cancellation commits message-scoped delivery.failed with code cancelled,
+    before or after preparation. It serializes with dispatch and records no cancellation
+    once submission is complete. The committed cancellation stops preparation/retry,
+    releases envelope retention, preserves message content and does not prove nondelivery.
+    A complete submission imported later takes precedence; cancellation never permits a replacement package.
 70. <a id="ve-70"></a> Shared envelope bytes remain held by another non-erased message even after
     one message/root relation is erased.
 71. <a id="ve-71"></a> Each new duplicate observation receives a fresh ordinal; exact re-ingest

@@ -524,7 +524,7 @@ automatic effect IDs and frozen ACK arrays are never rewritten to follow it.
 
 Before transport, commit `message.prepared` to freeze one package for the
 message. Every call uses that package's exact bytes and ID, including the first
-call and manual retries. Later key updates, confirmation or retirement cannot
+call and manual retries. Later key updates, confirmation or termination cannot
 replace it. Missing package bytes/evidence defer sending; conflicting prepared
 packages suppress it without an event-order winner. An uncertain preparation
 commit must be resolved before dispatch or further preparation.
