@@ -1,6 +1,6 @@
 # Estoc version 3 specification suite
 
-Status: **draft**. Phase 1 has one active writable full vault runtime, six
+Status: **draft**. Phase 1 has one active writable full vault runtime, seven
 specifications and two deferred extensions. SQLite is the sole persistent vault
 and portable interchange format. This guide is informative; linked specification
 sections define requirements.
@@ -16,11 +16,15 @@ revision changes specifications, not the implementation's completion status.
 ## Model overview
 
 A vault has one seed and immutable events. Folds derive current state; raw
-content-addressed objects hold retained bytes. A relationship keeps its original
-address-pair identity while either end rotates. Sending records intent before
+content-addressed objects hold retained bytes. A fixed address-pair channel
+records authenticated communication independently of relationship admission.
+A relationship admits a root channel and preserves its identity while verified
+address transitions justify additional channels. Unknown membership remains
+unassigned; it is not a new relationship birth. Sending records intent before
 network effects; committed submission ends sending work and peer acknowledgment
 records receipt. See the [vault model](vault-events.md#model),
-[relationship model](relationships.md#what-it-is-for) and
+[channel/admission model](channels.md#model),
+[relationship policy](relationships.md#what-it-is-for) and
 [commit boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
 | Layer | Documents | Responsibility |
@@ -28,7 +32,8 @@ records receipt. See the [vault model](vault-events.md#model),
 | Storage semantics | [Event store](event-store.md), [DASL objects](dasl-objects.md) | API, event identity/order, raw CID/bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, ownership, transactions, maintenance and portable recovery |
 | Application state | [Vault events](vault-events.md) | Payloads, evidence validation, folds and held roots |
-| Runtime protocols | [Delivery](distributed-delivery.md), [Relationships](relationships.md) | Send/receive/ACK procedures and address policy |
+| Communication and authority | [Channels](channels.md), [Relationships](relationships.md) | Fixed channel evidence, explicit admission, scoped continuity and address policy |
+| Runtime protocols | [Delivery](distributed-delivery.md) | Send/receive/ACK procedures and effect ordering |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Future per-replica pickup and encrypted synchronization |
 
 The relationship profile defines no Estoc rendezvous wire handshake.
@@ -40,7 +45,7 @@ Public/rendezvous addresses are a discovery concept in that profile.
 
 | Task | Suggested path |
 | --- | --- |
-| Understand the system | [Vault model](vault-events.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
+| Understand the system | [Vault model](vault-events.md#model) → [channels and admission](channels.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
 | Implement sending | [Send](distributed-delivery.md#send-an-ordinary-message) → [address selection](relationships.md#ordinary-sending-and-birth-selection) → [package preparation](distributed-delivery.md#preparing-a-package) → [delivery fold](vault-events.md#outbound-message-and-delivery-fold) |
@@ -54,7 +59,9 @@ Public/rendezvous addresses are a discovery concept in that profile.
 
 Change the defining section, not a second copy of its rules. ES describes what
 a caller observes; DO defines object identity and retention; SQ alone owns
-SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
+SQLite procedures. Channels owns channel identity, the admission boundary and `message.scoped`;
+VE owns the other domain payloads. DD owns operation ordering, and RZ owns
+address/relationship policy. A domain revision updates these owners together.
 
 | Rule | Definition | Connected sections |
 | --- | --- | --- |
@@ -68,11 +75,13 @@ SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
 | Stored message and attachment normalization | [VE §8](vault-events.md#stored-message-document) | [DD hash projections](distributed-delivery.md#canonical-projections-and-hashes) |
 | Logical content, intent and plaintext hashes | [DD §5](distributed-delivery.md#canonical-projections-and-hashes) | [VE outbound events](vault-events.md#outbound-message-events) |
 | Inbound observation IDs, execution scope and IDs | [DD §9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE inbound fold](vault-events.md#inbound-message-and-execution-fold) |
+| Channel identity and explicit admission | [CH §§2–4](channels.md#channel-identity) | [VE receipt](vault-events.md#receipt-and-relationship-evidence), [RZ admission](relationships.md#binding-and-contact-policy) |
+| Frozen observation scope | [CH §6](channels.md#message-scoped) | [DD logical identity](distributed-delivery.md#address-chains-and-observation-membership), [VE fold](vault-events.md#inbound-message-and-execution-fold) |
 | Relationship ID and default allocation IDs | [RZ §5](relationships.md#symmetric-relationship-identity) | [VE binding schema](vault-events.md#relationship-bound) |
-| Binding evidence, pending-pair claims and address index | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [RZ deferred delivery](relationships.md#deferred-delivery), [DD scope](distributed-delivery.md#address-chains-and-observation-membership) |
+| Binding evidence, incomplete claims and channel membership | [VE §6.1](vault-events.md#receipt-and-relationship-evidence), [VE §6.6](vault-events.md#relationship-fold-and-address-index) | [CH admission](channels.md#admission), [DD scope](distributed-delivery.md#address-chains-and-observation-membership) |
 | Peer and local transition evidence | [VE §6.4](vault-events.md#relationship-peertransitioned), [VE §6.5](vault-events.md#relationship-localtransitioned) | [RZ privacy policy](relationships.md#early-private-address-policy-and-notifications), [RZ peer changes](relationships.md#peer-address-changes) |
 | Resolution freshness, failures and bounded retry | [RZ §10.1](relationships.md#did-resolution-requirements) | [RZ wait state](relationships.md#deferred-delivery), [DD receive](distributed-delivery.md#receive-a-message), [VE evidence](vault-events.md#message-in), [RM pickup ACK](replica-mediation.md#messages-received) |
-| Relationship-evidence wait and retry triggers | [RZ §9.1](relationships.md#deferred-delivery), [RZ accounting](relationships.md#shared-accounting-and-lost-wait-state) | [VE pending-pair evidence](vault-events.md#receipt-and-relationship-evidence) |
+| Pre-authentication waits and post-receipt recovery | [RZ §9.1](relationships.md#deferred-delivery), [CH §7](channels.md#effects-and-recovery) | [RZ accounting](relationships.md#shared-accounting-and-lost-wait-state), [VE channel evidence](vault-events.md#receipt-and-relationship-evidence) |
 | Transport retry interval, backoff and accounting | [RZ §14](relationships.md#retry-replacement-and-address-rollover) | [DD completion](distributed-delivery.md#submission-completion-and-expiration), [DD failures](distributed-delivery.md#failure-rules) |
 | Pickup ACK commit and terminal classification | [DD §4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table), [DD §4.3](distributed-delivery.md#receive-a-message), [RZ gates](relationships.md#hard-pre-vault-gate) | [VE receipt](vault-events.md#message-in), [RM scope](replica-mediation.md#messages-received) |
 | Peer ACK target selection and freezing | [DD §8.1](distributed-delivery.md#freezing-an-ack-target-set), [VE receipt order](vault-events.md#message-in) | [RZ responses](relationships.md#automatic-response-selection), [VE outbound fold](vault-events.md#outbound-message-and-delivery-fold) |
@@ -94,6 +103,7 @@ SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
 | SQ | [SQLite vault](vault-sqlite.md#required-conformance-cases) | Phase 1 |
 | VE | [Vault events](vault-events.md#required-conformance-cases) | Phase 1 |
 | DD | [Distributed delivery](distributed-delivery.md#required-conformance-cases) | Phase 1 |
+| CH | [Channels and admission](channels.md#required-conformance-cases) | Phase 1 draft; implementation pending |
 | RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
 | RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
@@ -115,6 +125,39 @@ with their owner instead of repeating implementation requirements across files.
 <a id="section-history"></a>
 
 ## Section history
+
+### Channel receipt and relationship admission
+
+This unreleased draft separates fixed-address channel receipt from relationship
+authority. It adds `ChannelId`, `message.in.channelId`,
+`message.prepared.channelId`, root-binding `channelId`/`sourceEventId`, and the
+separate `message.scoped` event with exact historical paths. Disclosure adds
+the explicit `admitRelationship` permission. Receipt drops its
+binding/transition references. These are payload-schema changes, not a claim
+of compatibility with previously implemented v3 domain events; rebuilding or
+explicitly translating development vaults needs a separate implementation task.
+Storage envelopes, SQLite layout and raw CID rules are unchanged.
+
+Normal pickup ACK now follows authenticated channel receipt. Relationship
+membership, superseded-sender policy, invitation consumption and application
+scope are later decisions. Unknown input remains unassigned; explicit user
+action or an authorized invitation establishes a root. The existing symmetric
+R/execution derivations apply after admission. No automatic relationship merge
+or new wire handshake is introduced.
+
+CH-1–CH-18 specify the new boundary. Existing VE/DD/RZ/RM case IDs retain their
+subjects with updated expectations: the former no-receipt/no-pickup-ACK
+relationship waits and implicit birth assertions are intentionally retired.
+Historical named anchors remain available, including the receipt/integrity
+headings whose ownership now points to channels. Earlier implementation test
+results do not establish conformance to these changed domain guarantees.
+
+VE-140/141 and DD-70 retain their incomplete/duplicate witness subjects.
+Unscoped consistent siblings no longer suspend accepted input, and missing
+membership alone no longer contradicts a complete confirming witness. Frozen
+scope paths require their exact referenced edges to validate; an incomplete
+equal edge no longer borrows validation from another edge after scope commit.
+
 
 ### SQLite phase-1 simplification
 

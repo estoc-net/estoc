@@ -882,10 +882,10 @@ A client may acknowledge a delivery through exactly one of two terminal
 paths, using [distributed-delivery.md section 4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
 commit boundaries:
 
-1. **normal acceptance** — follow [section 4.3](distributed-delivery.md#receive-a-message)'s
+1. **durable channel receipt** — follow [section 4.3](distributed-delivery.md#receive-a-message)'s
    authentication and dependent object/evidence/inbound commits before pickup ACK; or
 2. **terminal pre-vault rejection** — safely classify the delivery under a
-   profile such as [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt),
+   [relationships.md section 9.2](relationships.md#hard-pre-vault-gate),
    then pickup-ACK without `message.in`, ultimate peer ACK, contact, application
    effect or portable message content; only a bounded local diagnostic may remain.
 
@@ -899,8 +899,8 @@ recipient, apply that profile's
 retained chain membership cannot bypass current authentication.
 
 A delivery awaiting recoverable decryption, local DID/route/sync state,
-required sender resolution, or pre-receipt relationship evidence under
-[vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)
+required sender resolution, or cryptographic material needed to open the
+envelope under [channels.md](channels.md#receipt)
 MUST NOT be acknowledged while it remains deferred under
 [relationships.md section 9.1](relationships.md#deferred-delivery). A delivery that is otherwise
 not safely classifiable MUST NOT be acknowledged either. That profile's
@@ -910,8 +910,10 @@ govern redelivery, evidence-change retries and loss of local wait state.
 This profile's accounting key includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
-Business handlers, rendering, replica synchronization and read state are
-not prerequisites for pickup acknowledgment.
+Authenticated channel receipt is sufficient for normal pickup acknowledgment.
+Relationship admission, continuity/scope recovery, business handlers, rendering,
+replica synchronization and read state are not prerequisites. Unknown or
+refused R scope retains the receipt and authorizes no ultimate ACK/effect.
 
 <a id="live-delivery"></a>
 
@@ -1138,24 +1140,14 @@ A conforming implementation demonstrates at least these cases:
     replay.
 22. <a id="rm-22"></a> A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.
-23. <a id="rm-23"></a> Recipient-key triage defers only an exact known local key-agreement method
-    with a recoverable missing prerequisite. After local key recovery is
-    authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
-    and unbound retired DIDs use the terminal pre-vault ACK path and do not
-    remain pending. A retired historical local address with a valid non-terminal
-    bound route still receives eligible input; unavailable required sender
-    resolution instead defers only within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget.
-    Definitive DNS/not-found, invalid-document, unsupported-method and
-    SSRF-forbidden results, or sender-resolution budget exhaustion, use the
-    terminal pre-vault ACK path under that section. Repeated delivery of the
-    same replica-scoped ID shares one active sequence; missing recoverable
-    local state cannot take that budget's terminal path.
-    Known pending membership or missing relationship evidence preventing
-    receipt under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
-    using [relationships.md section 9.1](relationships.md#deferred-delivery)'s evidence-change retry rule. This wait
-    consumes no sender-resolution budget and has no client retention cap.
-    While local wait state is retained, redelivery alone does not resolve
-    again; relevant evidence changes start one fresh shared bounded sequence
-    when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Mediator expiry does not clear the pair
-    claim.
+23. <a id="rm-23"></a> Recipient-key triage defers an exact known local key-agreement method
+    with recoverable missing prerequisites. Foreign DIDs, nonexistent or
+    wrong-purpose methods and terminal routes use the pre-vault ACK path.
+    Retained retired exact keys can receive on eligible routes without R lookup.
+    Unavailable sender resolution withholds ACK only within the bounded shared
+    sequence; definitive resolution failure or budget exhaustion is terminal.
+    Unopened local/cryptographic waits suspend active accounting without
+    resetting it, under [relationships.md](relationships.md#shared-accounting-and-lost-wait-state).
+    Once channel receipt commits, missing relationship evidence cannot withhold
+    pickup ACK; scope/effects recover from saved evidence without another pickup
+    or resolution sequence. A new network delivery authenticates afresh.
