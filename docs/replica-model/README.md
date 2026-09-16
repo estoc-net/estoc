@@ -19,7 +19,8 @@ A vault has one seed, immutable events and raw content-addressed objects.
 Fixed DID-pair channels retain authenticated communication. Local acceptance
 authorizes the pair; each receipt, package and proof retains its own document
 evidence. Method-authorized document updates preserve the channel. Directed
-links record replacement of a DID.
+links are derived from received proofs and local rotation decisions. Receipt
+can precede proof verification, with pending/invalid/conflict status visible in the UI.
 Relationship/contact groups organize display without cryptographic authority.
 
 An outbound fixes its channel and direction at intent commit. Rotation selects
@@ -61,7 +62,7 @@ Ordinary DIDComm messages need no Estoc wire handshake or display relationship I
 
 Change the defining section and align its consumers. ES owns event envelopes,
 DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
-acceptance/link/denial/display-membership events and dispatch authority. VE owns
+acceptance/proof/rotation/denial/display events, the continuity fold and dispatch authority. VE owns
 the remaining domain payloads/folds; DD owns runtime ordering and message/effect
 identity; RZ owns DID resolution and address/display policy.
 
@@ -73,7 +74,8 @@ identity; RZ owns DID resolution and address/display policy.
 | Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
 | Channel identity | [CH identity](channels.md#channel-identity) | [VE IDs](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces) |
 | Channel acceptance and operation evidence | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
-| Directed links, joins and confirmation | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
+| Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
+| Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
 | Message acceptance | [CH](channels.md#message-accepted) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
 | Fixed intent and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [attempt](vault-events.md#delivery-attempted), [DD send](distributed-delivery.md#send-an-ordinary-message) |
 | Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
@@ -128,8 +130,12 @@ paths and cross-channel execution aliasing. Relationships are display groups;
 their IDs are UUIDv7 and never enter message/effect/ACK authority. Existing
 historical anchors remain locators, not permission to use retired payloads.
 
-Current channel facts are `channel.accepted`, `channel.linked`,
-`channel.blocked` and `message.accepted`. Display membership uses
+Current facts are `channel.accepted`, `message.fromPriorResolved`,
+`did.rotationSelected`, `channel.blocked` and `message.accepted`.
+`channel.linked` is retired: links and verification states are projections.
+Message acceptance references only its source and channel acceptance; channel
+continuation/join bases reference original receipts and local decisions.
+Display membership uses
 `relationship.channelsSet`; `relationship.contactAssigned` is display-only.
 Disclosure permission is `admitChannel`. Profile facts name source channels.
 Old `relationship.bound`, both relationship transition events, `message.scoped`,

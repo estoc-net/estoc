@@ -13,7 +13,7 @@ and **MAY** as described in BCP 14 when they appear in all capitals.
 
 There is no Estoc rendezvous wire protocol, connection request, accept or
 decline. Messages use ordinary DIDComm protocols. Channel acceptance is independent of public/private address allocation.
-An address change records a channel-local `from_prior` link; relationships are
+Address-change evidence derives a channel-local `from_prior` link; relationships are
 display groups under [channels.md](channels.md#display-relationships).
 
 <!-- reading-guide:start -->
@@ -100,11 +100,11 @@ Every instruction to append an event in this document means
   and routing evidence; local DIDs are seed-derived numalgo-4 entities.
 - **Channel** — a fixed pair of distinct canonical DIDs with vault-local orientation.
 - **Acceptance** — a durable local decision to use a DID-pair channel, with exact evidence of that decision.
-- **Continuity link** — verified replacement of one endpoint in one channel context.
+- **Continuity link** — a fold-derived, verified replacement of one endpoint in one channel context.
 - **Relationship** — a display group of channels or channel chains.
 - **Application input** — accepted authenticated input other than control input,
   Empty, Trust Ping ping-response or Report Problem for privacy-trigger purposes.
-- **Rotation notification** — an ordinary new message disclosing a committed link.
+- **Rotation notification** — an ordinary new message disclosing a selected local rotation.
 - **Rotation confirmation** — complete authenticated input proving knowledge of
   the exact successor in its validated channel context; it is not a peer ACK.
 
@@ -365,7 +365,7 @@ policy are checked after receipt at acceptance.
 
 Commit the authenticated channel observation before deciding acceptance.
 `message.accepted` references the source and exact channel acceptance; a
-proof-bearing source also references its verified peer link. The complete
+proof-bearing source must have complete evidence for its derived peer link. The complete
 schema and producer/import distinction are in
 [channels.md](channels.md#message-accepted).
 
@@ -624,37 +624,44 @@ evidence already committed. Recovery or import of an already committed
 observation verifies its retained evidence without a new
 network resolution; a later revocation does not invalidate historical receipt
 or acceptance. As with recipient freshness, this is a producer ordering rule, not
-an event-time or fold-clock test. An already recorded `channel.linked` verifies
-with its exact predecessor snapshot independently of current sender authentication.
+an event-time or fold-clock test. Retained `message.fromPriorResolved` evidence
+lets the fold reverify the original JWT and derive its link without resolving
+the predecessor again, independently of current sender authentication.
 
 <a id="predecessor-resolution"></a>
 
 #### Predecessor resolution for DID replacement
 
-First reuse an already complete link for the exact DID pair and compact proof,
-if one exists in the required channel context. Each new carrier still passes
-current-sender authentication; a repeated proof needs no new predecessor lookup.
+First reuse a complete proof witness for the exact carrier context and compact
+JWT under [the continuity fold](channels.md#continuity), if one exists. Each
+new carrier still passes current-sender authentication. An accepted predecessor
+is needed for channel inheritance, not for checking or saving the proof.
 
-To establish a new peer link, resolve the prior DID for this verification.
+Otherwise resolve the prior DID for this verification.
 A `did:peer:4` predecessor uses its validated immutable document. A `did:web`
 predecessor requires fresh method resolution, allowing online conditional
-revalidation but no stale/offline fallback. Retain this as `peer.resolved`,
-then commit the link with its exact `predecessorResolutionEventId` after
-checking the JWT's authentication method and original signature. The resolution
-may differ from the initial channel acceptance or any earlier message.
-If interrupted before link commit, repeat mutable-DID resolution on resume.
+revalidation but no stale/offline fallback. With the already committed carrier
+ID, commit the canonical document object and `message.fromPriorResolved` naming
+its CID. The fold then checks the JWT's authentication method and original
+signature. A method-valid document may be saved even when that proof fails;
+the event never asserts verification success. The resolution may differ from
+initial channel acceptance or any earlier message. If interrupted before the
+association commits, repeat mutable-DID resolution on resume; after commit,
+use that exact evidence and compute the result without another network fetch.
 Use the same resolver security and bounded call timeouts; this lookup has no
 authority to dispatch protocol output or undo durable receipt/pickup ACK.
 
 Unavailable predecessor resolution leaves the saved carrier's proof pending;
 a definitive invalid DID, document, claim or unauthorized signing key cannot
-establish the link. Never search older revisions to bypass a definitive
-current authorization failure. A valid old proof whose key has since been
-removed can therefore establish no new link; an already committed link keeps
-its original historical evidence. This is a producer freshness rule, not a
-portable timestamp ordering rule. Import validates exact saved references
-without network resolution. Missing referenced bytes defer recovery and cannot
-be replaced by a newer document, even if it authorizes the same key.
+establish continuity. Failed resolution without a method-valid document creates
+no successful-resolution event; show its diagnostic beside pending verification.
+Never search unassociated older revisions to bypass a current authorization
+failure. A proof with no retained valid witness whose signing key has been
+removed cannot newly verify; an existing witness remains historical evidence,
+even when its predecessor channel history arrives later. This is a producer
+freshness rule, not a portable timestamp ordering rule. Import validates saved
+associations without network resolution. Missing exact bytes defer recovery;
+a newer document cannot replace them, even if it authorizes the same key.
 
 <a id="key-changes-without-did-continuation"></a>
 
@@ -739,8 +746,8 @@ transport preference nor choosing another service changes an existing DID.
 Public and private addresses use the same channel model. On newly accepted live
 application input, local policy may prefer a fresh private local successor when
 the selected local DID was publicly disclosed or is shared with another peer.
-It records an ordinary `channel.linked` local edge, with a UUIDv7 successor,
-exact source observation and frozen proof. Reuse an existing matching edge;
+It records `did.rotationSelected` with a UUIDv7 successor,
+exact source observation and frozen proof. Reuse an existing matching decision;
 do not branch merely because work was interrupted. Group membership is not a
 reason to rotate an unrelated channel.
 
@@ -798,10 +805,12 @@ only when no other channel or disclosure still needs it.
 
 ## 12. Peer address changes
 
-Store the authenticated successor-channel observation first. Validate a
-`channel.linked` peer edge with exact predecessor acceptance and verification
-evidence, then accept the target channel and message as allowed. An unknown predecessor
-leaves retained proof pending. Opposite local/peer rotations use the explicitly
+Store the authenticated successor-channel observation first, even when its
+predecessor document or history is missing. Commit resolution evidence when
+available and fold the original proof into a peer edge in its accepted
+predecessor context; then accept the target channel and message as allowed.
+No link event is appended. Show [verification status](channels.md#verification-status)
+while evidence is pending or invalid. Opposite local/peer rotations use the explicitly
 verified join; neither a shared DID nor UI grouping supplies a missing edge.
 
 Superseded peer input is receivable but cannot create new application work.
@@ -857,7 +866,8 @@ authenticated operation identity.
 
 Phase 1 permits one active executor. Import/restore reconstructs state but
 grants no dispatch action for historical intents or automatic responses.
-Replicas may later synchronize receipts, links and display groups without
+Replicas may later synchronize receipts, proof evidence, local decisions and
+display groups, rebuilding links without
 automatically taking over another replica's pending outbox. Multi-executor
 automatic reactions require a separately specified coordination policy.
 
@@ -917,7 +927,7 @@ roll back; explicit new communication is a new channel and new message.
 
 15. <a id="rz-15"></a> Early privacy uses a normal local channel link, fresh UUIDv7 successor and frozen trigger/proof.
 
-16. <a id="rz-16"></a> A committed successor/link survives crash with exact route, keys, JWT, iat and source; it does not automatically dispatch a notification on reopen.
+16. <a id="rz-16"></a> A committed successor/local rotation decision survives crash with exact route, keys, JWT, iat and source; its link rebuilds and no notification dispatches automatically on reopen.
 
 17. <a id="rz-17"></a> Missing optional private allocation does not prevent channel acceptance or an ordinary public-address reply.
 
@@ -947,7 +957,7 @@ roll back; explicit new communication is a new channel and new message.
 
 30. <a id="rz-30"></a> Competing same-side successors, authorization cycles and contradictory identity evidence expose conflict without arrival-order winners; document revisions do not split that context.
 
-31. <a id="rz-31"></a> Missing acceptance/link references defer authority while authenticated receipt still commits and pickup-ACKs.
+31. <a id="rz-31"></a> Missing acceptance/proof references defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof from missing history.
 
 32. <a id="rz-32"></a> A newly authorized same-DID key can authenticate input eligible for normal acceptance and ACKs. A removed key cannot authenticate new delivery merely because an earlier snapshot authorized it.
 

@@ -105,7 +105,8 @@ each message still has a sender and recipient, and every rotation is directed.
 
 Each local communication DID has one immutable `boundRouteId`, mediated or
 direct. Changing its keys or bound route creates a successor DID entity;
-[channel links](channels.md#channel-linked) record local continuation in an exact channel context.
+[local rotation decisions](channels.md#did-rotationselected) select continuation
+in an exact channel context; their links are derived.
 An external recipient's resolved document may offer transport choices; choosing
 among authorized routes does not change the application recipient. A direct
 endpoint MUST NOT expose a replica ID as the peer-visible recipient.
@@ -221,7 +222,8 @@ when a full vault runtime process-durably appends `message.out`.
 | Transport invocation | Prior `delivery.attempted` plus its still-live local action | Exactly one call may occur; the event itself is not replayable work |
 | Submission completion | `delivery.submitted` referencing that attempt/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
-| Application acceptance | `channel.accepted`, needed links and `message.accepted` | Channel-local processing may be authorized |
+| Proof resolution | Exact carrier plus `message.fromPriorResolved` and its document | Fold can compute proof result and continuity status |
+| Application acceptance | `channel.accepted`, derived continuity and `message.accepted` | Channel-local processing may be authorized |
 | Peer ACK | Complete accepted carrier and exact channel/path target | Receipt information only |
 
 Every dependency reference names an event committed before the dependent call.
@@ -271,8 +273,11 @@ with a new ID. Rotation and contact preferences never retarget old work.
 3. Under the lock, commit/reuse exact resolution evidence, then commit content
    and `message.in` with fixed channel and fresh receipt ordinal.
 4. Pickup-ACK process-durable receipt independently of channel policy/history.
-5. Resolve explicit channel acceptance or verify exact continuity links/joins.
-   Missing evidence stays pending; receipt never grants an implicit acceptance.
+5. If `from_prior` is present, reuse a complete proof witness or obtain its
+   predecessor document and commit `message.fromPriorResolved`. Fold proof
+   status and continuity from those facts, then resolve channel acceptance.
+   Missing evidence stays pending and visible; receipt grants no implicit
+   acceptance. A missing predecessor channel does not prevent saving proof evidence.
 6. Recheck channel acceptance, exact source authentication, proof, supersession
    and denial; commit/reuse `message.accepted` with already committed references.
 7. Process eligible explicit peer ACKs and local display/profile projections.
@@ -288,12 +293,16 @@ special admission authority and no recursive privacy-response trigger.
 
 ### 4.4 Recovery
 
-Rebuild receipts, exact acceptance/link evidence, invitations, denials, profile
+Rebuild receipts, exact acceptance/proof evidence, local rotation decisions,
+invitations, denials, profile
 and display projections from retained facts. Saved authenticated input does not
-need current sender re-resolution. Existing links use their retained proof
-snapshots; establishing a previously unverified link follows the separate
+need current sender re-resolution. Links and UI verification states derive
+from retained proof snapshots; obtaining missing proof evidence follows the separate
 [predecessor resolution rule](relationships.md#predecessor-resolution).
-Missing bytes/references remain recovery work.
+Missing bytes/references remain recovery work. Later validation does not append
+another receipt or grant automatic response/notification dispatch. The same
+uninterrupted initial receive operation may continue after a prerequisite wait;
+reopen, import and a separate evidence-recovery operation have no such action.
 
 Enumerate pending/unconfirmed messages for manual action. Reopen, restore,
 import, replica change and duplicate pickup do not dispatch old messages or
@@ -609,10 +618,10 @@ These are identifier fixtures, not authentication/proof fixtures.
 
 A deterministic ID supplies no authority by itself. Before processing ACKs or
 committing an automatic output, require an exact complete `message.accepted`
-with its channel acceptance, source authentication and carried-proof link
-already committed. Anonymous and mediator-control input have no application
-execution. A batch cannot authorize
-its own response by proposing source/acceptance/link events together with it.
+with its channel acceptance, source authentication and required proof evidence
+already committed. Any link is computed by the fold. Anonymous and
+mediator-control input have no application execution. A batch cannot authorize
+its own response by proposing source/acceptance/proof evidence together with it.
 
 <a id="address-chains-and-observation-membership"></a>
 
@@ -723,8 +732,9 @@ from recovery. An explicit manual completion uses this same source execution,
 tuple and selection procedure, with manual dispatch authority. Every new intent
 commits through `Vault.commit` before effects.
 Derivation, lookup and commit are one locked operation.
-Receipt, valid `message.accepted`, channel acceptance and required links MUST already
-be committed before this operation. A batch cannot authorize its own response
+Receipt, valid `message.accepted`, channel acceptance and required proof evidence
+MUST already be committed and yield valid derived continuity before this
+operation. A batch cannot authorize its own response
 scope; section 9 permits no prospective-scope exception.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
@@ -751,12 +761,14 @@ delivery.submitted         exact attempt observed transport acceptance
 delivery.failed            terminal package/message failure
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
+message.fromPriorResolved  exact issuer-document association for a received proof
+did.rotationSelected       local successor and frozen proof selected before sending
 channel.accepted           local DID-pair acceptance with decision evidence
-channel.linked             one evidence-backed endpoint change
 message.accepted           permission for this actual source observation
 channel.blocked            local channel/successor denial
 ```
 
+Continuity links and verification status are fold results, not events.
 Display relationship events are not delivery observations. Schemas and folds
 are owned by [vault events](vault-events.md) and [channels](channels.md).
 
@@ -955,7 +967,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 54. <a id="dd-54"></a> Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
 
-55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/acceptance/link evidence in the same call; prerequisites commit first.
+55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/acceptance/proof evidence in the same call; prerequisites commit first and links are derived.
 
 56. <a id="dd-56"></a> Serialize each message dispatch, commit its attempt before transport and its observed acceptance afterward. A crash consumes that live invocation and recovery cannot replay it.
 

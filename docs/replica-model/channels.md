@@ -18,8 +18,9 @@ uses the document authorized by that DID method for that operation and retains
 its exact evidence. A snapshot records what was verified; it is not a permanent
 limit on the keys that the same DID may authorize later.
 
-A **continuity link** records replacement of exactly one endpoint in the
-context of one channel, with the proof and exact evidence used to validate it.
+A **continuity link** is a derived replacement of exactly one endpoint in the
+context of one channel. The fold computes it from received proofs, resolution
+evidence and local rotation decisions; no link event is stored.
 Links form a directed graph. They do not create a global DID alias or require
 a common birth pair, chain root, relationship ID or component identifier.
 
@@ -119,6 +120,35 @@ This uses the rotation primitive in
 [DIDComm Messaging 2.1](https://identity.foundation/didcomm-messaging/spec/v2.1/#did-rotation).
 The channel graph and local policy below are this application's design.
 
+<a id="verification-status"></a>
+
+### 3.2 Verification status and display
+
+Receipt and continuity verification are separate visible facts. A saved
+authenticated message MAY be displayed before continuity completes, with an
+explicit status beside the message. Do not present a pending sender as the
+verified continuation of an earlier peer or silently group it on that basis.
+The UI MUST distinguish these derived states:
+
+| State | Meaning |
+| --- | --- |
+| `not-present` | No `from_prior`; ordinary channel policy still applies |
+| `pending-proof` | A proof is present but its required verification document/evidence is unavailable |
+| `pending-history` | The proof verifies, but the predecessor channel acceptance or its dependencies are missing |
+| `verified` | Both proof and channel context validate; the link is derivable |
+| `invalid` | The carried claims or complete verification evidence fail validation |
+| `conflict` | Complete evidence establishes competing successors or contradictory channel authority |
+
+Rebuild these states from retained evidence. Missing imported references remain
+pending, not invalid. Resolver failures may add a bounded diagnostic; a failed
+fetch without a document is not proof of a bad signature. Channel denial and
+application-processing status are shown separately. If an imported receipt's
+own sender evidence is missing, show that pending authentication separately;
+do not claim its sender has already been verified. Pending/invalid/conflicted
+continuity grants no peer ACK, handler effect or inherited channel permission.
+Later evidence may update the display and graph without another pickup, receipt
+ordinal or message ID. That change alone grants no new automatic dispatch action.
+
 <a id="admission"></a>
 <a id="channel-accepted"></a>
 
@@ -169,18 +199,26 @@ type ChannelAcceptanceBasis =
   | { kind: "manual" }
   | { kind: "outbound"; messageId: MessageId }
   | { kind: "invitation"; disclosureEventId: EventReference<"did.disclosed"> }
-  | { kind: "continuation"; linkEventId: EventReference<"channel.linked"> }
+  | { kind: "peer-continuation";
+      predecessorAcceptanceEventId: EventReference<"channel.accepted"> }
+  | { kind: "local-continuation";
+      rotationEventId: EventReference<"did.rotationSelected"> }
   | { kind: "join";
-      localLinkEventId: EventReference<"channel.linked">;
-      peerLinkEventId: EventReference<"channel.linked"> };
+      rotationEventId: EventReference<"did.rotationSelected">;
+      peerSourceEventId: EventReference<"message.in"> };
 ```
 
 Manual acceptance is an explicit local decision. Outbound acceptance must name
 an explicit user-authored intent at exactly this fixed channel; an automatic
 reply cannot use itself as its admission authority. Invitation acceptance
 requires an exact source receipt, live disclosed recipient, matching `pthid`,
-available use and `did.disclosed.admitChannel == true`. Continuation and join
-inherit only the authority established by their verified links below.
+available use and `did.disclosed.admitChannel == true`. A `peer-continuation`
+uses the acceptance's non-null `sourceEventId` as the proof carrier and its
+explicit predecessor acceptance. A `local-continuation` uses the selected
+rotation. A `join` uses that rotation and the exact opposite-side carrier.
+Each must derive the target pair under the rules below; missing or cyclic
+evidence grants no inherited permission. All event references in the basis
+name already committed events; none names a projection row.
 
 An unknown channel remains unaccepted until one of these bases exists. Missing
 lookup, restart, timeout, control-message type or display similarity grants
@@ -201,72 +239,113 @@ later conflicts and contact deletion never release a committed consumption.
 <a id="continuity"></a>
 <a id="channel-linked"></a>
 
-## 5. Directed continuity evidence
+## 5. Derived continuity
 
-`channel.linked` records one DID replacement. Its closed payload has the
-eight fields below. `side` is `peer` or `local` in this vault's orientation:
+`channel.linked` is retired. The graph is a rebuildable projection, with no
+portable link ID or link commit step. Folding reads retained inputs only;
+network resolution and event appends belong to producer/recovery operations.
+Its inputs are the following facts.
+
+<a id="message-frompriorresolved"></a>
+
+### Peer proof evidence
+
+`message.fromPriorResolved` associates one received proof with the exact
+predecessor document obtained for its verification. Its closed data has only
+these two fields; `roots` contains exactly `documentCid`:
 
 ```json
 {
-  "type": "channel.linked",
+  "type": "message.fromPriorResolved",
+  "roots": ["bafkrei...predecessor-document"],
+  "data": {
+    "sourceEventId": "019b2a81-4c18-760a-9017-b3e265aa89d1",
+    "documentCid": "bafkrei...predecessor-document"
+  }
+}
+```
+
+The exact source is an already committed authenticated `message.in` with a
+non-null original `fromPrior`. The document is the method-valid issuer document,
+stored as raw RFC 8785 canonical JSON under the same representation rules as
+[resolution evidence](vault-events.md#peer-resolved). Obtain it under
+[predecessor resolution](relationships.md#predecessor-resolution). This event
+records a resolution result, not a trusted Boolean verification result. It may
+retain a document that does not authorize the JWT key or fails to verify its
+signature; the fold computes that failure. It copies no channel IDs, sender
+keys, JWT, local endpoint, acceptance or link direction from the source.
+
+For a complete authenticated carrier `M` addressed to local DID `A`, validate
+the original JWT's signature, `kid`, `iss`, `sub` and retained document under
+[the proof checks](vault-events.md#relationship-peertransitioned). Its `sub`
+must match the carrier's authenticated sender. Then derive:
+
+```text
+B0 = canonicalDid(fromPrior.iss)
+B1 = canonicalDid(M.from)
+peer link = C(A, B0) -> C(A, B1)
+```
+
+`A`, `B0` and `B1` must form two valid distinct channel pairs, with `B0 != B1`.
+Channel context requires a complete acceptance of `C(A,B0)` oriented to `A`.
+Proof verification itself needs no predecessor acceptance or `message.accepted`;
+their absence cannot stop saving the resolution evidence. A valid proof with
+missing predecessor acceptance is `pending-history`, not an authorized link.
+
+A complete proof witness can serve another independently authenticated carrier
+with the same compact JWT, canonical sender and canonical local recipient.
+Each witness uses one exact source/document association; fields cannot be
+assembled from different incomplete rows. Retained valid witnesses remain
+valid after method updates; a later failed check or missing sibling does not
+erase them. Without a valid witness, missing known dependencies mean pending;
+otherwise complete failed checks mean invalid. Intrinsically invalid claims
+cannot be repaired by another document. Arbitrary historical documents with
+no such source association grant no proof authority.
+
+<a id="did-rotationselected"></a>
+
+### Local rotation decisions
+
+A local rotation may be selected before any message exists. Preserve that
+decision as `did.rotationSelected`, with `roots == []` and four closed fields:
+
+```json
+{
+  "type": "did.rotationSelected",
   "roots": [],
   "data": {
     "fromAcceptanceEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
-    "predecessorResolutionEventId": "019b4d12-22d3-7fd0-82fb-f33864a75dd5",
-    "channelId": "<successor-channel-uuid>",
-    "localDidId": "019b2a60-c68e-75bf-b6fb-ae1a41f8d715",
-    "peerResolutionEventId": "019b2a82-0626-7a87-a310-941fe4c1ce77",
-    "side": "peer",
-    "sourceEventId": "019b2a81-4c18-760a-9017-b3e265aa89d1",
+    "toDidId": "019b4d12-22d3-7fd0-82fb-f33864a75dd5",
+    "sourceEventId": null,
     "fromPrior": "<compact-jwt>"
   }
 }
 ```
 
-The from-acceptance fixes the old channel and local policy basis. The new local
-DID and peer resolution fix the successor channel. Exactly the indicated DID
-changes. The original JWT and retained predecessor snapshot must authorize
-`iss -> sub`; authentication of the new endpoint must agree with that `sub`.
-JWT time is checked for syntax/meaning, never used to elect a winning branch.
+The acceptance fixes the oriented old pair `C(A0,B)`. `toDidId` names an
+already committed eligible local DID `A1`, distinct from both old endpoints;
+its document and route come from `did.created`. The original JWT is signed by
+the retained local `A0` authentication method, with exact `iss`/`sub` spellings
+for `A0`/`A1`. `sourceEventId` is null for manual rotation or names the accepted
+predecessor-channel input selected by the live privacy policy. The producer
+rechecks local lifecycle, denial and conflicts, and requires exact-address
+confirmation of `A0` by a complete authenticated channel observation. That
+confirmation need not depend on its own message acceptance.
 
-For `peer`, the local endpoint is unchanged and `sourceEventId` is required
-non-null: one complete authenticated receipt in the successor channel with
-exactly this successor resolution and proof. `predecessorResolutionEventId`
-is non-null and names the exact committed `peer.resolved` used to verify the
-JWT; its canonical DID must equal the old peer and its local key must match
-the unchanged local endpoint. Its selected peer key must match the JWT `kid`
-and be authorized for authentication in that document. Its document may differ
-from the acceptance's initial evidence. Select it under
-[predecessor verification](relationships.md#predecessor-resolution).
-The receipt does not need its own `message.accepted` first. Missing predecessor
-acceptance or verification evidence leaves the retained receipt's proof pending.
-
-For `local`, the peer DID remains identical; its resolution may re-express a
-validated snapshot with the new local key or record a method-authorized update.
-`predecessorResolutionEventId` is null: the old local DID's retained immutable
-document supplies its authentication method. `fromPrior` is signed by
-the retained predecessor authentication key. `sourceEventId` is null for a
-manual rotation or names the accepted predecessor-channel input selected by a
-local privacy policy. The new local DID, route, proof and link are committed
-before disclosure. The predecessor must have exact-address confirmation from
-a complete independently authenticated observation in the accepted channel.
-That witness need not depend on its own message acceptance. Keep one frozen
-proof until confirmation of the successor; no same-end branch before it.
-
-The target's `channel.accepted` may then use `basis.kind == "continuation"`,
-matching this link's exact target DID pair, with independently valid resolution
-evidence for that pair. Every referenced event must already be committed.
-Import derives only positive valid links and acceptances; missing
-references defer, invalid proofs or immutable mismatches conflict. Cyclic
-authorization references grant no acceptance. Independent channel receipt
-continues while any link is incomplete.
+Commit the decision before successor acceptance or disclosure. Reuse its
+successor and frozen proof after interruption; no same-end branch before
+successor confirmation. The fold derives `C(A0,B) -> C(A1,B)` from this decision,
+without storing either derived channel ID. The peer DID is unchanged and later
+packages obtain their own resolution. A prepared message carrying this local
+proof must match the selected decision; it cannot independently select another
+rotation. Recovery of the decision grants no dispatch action.
 
 ### 5.1 Both endpoints can rotate
 
-With an accepted `C(A0,B0)`, a local link to `C(A1,B0)` and a peer link to
-`C(A0,B1)` can justify `C(A1,B1)`. A `join` acceptance references those two
-links. They must share the same oriented predecessor DID pair with complete
-acceptance evidence, change opposite ends and have consistent complete proofs.
+With an accepted `C(A0,B0)`, a local decision deriving `C(A1,B0)` and a peer
+carrier deriving `C(A0,B1)` can justify `C(A1,B1)`. A `join` acceptance references
+the decision and carrier, not graph rows. They must share the same oriented
+predecessor DID pair with complete acceptance and proof evidence.
 Its local DID is the local link's successor; its peer DID is the peer link's
 successor. The join retains valid peer resolution evidence under the joined
 local key; document revisions need not match across links. This is a derived
@@ -291,10 +370,18 @@ local-only replacements while retaining the same canonical peer DID. Compare
 competing peer successors across that context, even when they cite different equivalent
 acceptance events. For local replacements, apply the symmetric rule through
 peer-only replacements. A join transports the existing two replacements; it
-does not create another competing choice. Each link retains its own exact
-verification evidence; document updates neither split the context nor hide
+does not create another competing choice. Each derived link exposes its exact
+source witnesses; document updates neither split the context nor hide
 competing successors. These contexts are derived queries,
 never message identifiers or stored relationship roots.
+
+Compute the least positive closure from complete direct acceptances, peer proof
+witnesses and local decisions, then dependent continuation/join acceptances.
+Pure reference cycles with no independent basis grant nothing. Fold the full
+available evidence before checking current conflicts or authorizing new work;
+enumeration order and intermediate graph rows cannot authorize dispatch. A
+missing exact reference in an acceptance basis remains pending even when a
+different source derives an equivalent edge.
 
 ### 5.2 Supersession, confirmation and authorization
 
@@ -325,7 +412,7 @@ cannot acknowledge a message even when it chooses the same wire ID.
 
 `message.accepted` replaces relationship scope. It freezes acceptance of one
 actual observation in its already fixed channel; it does not assign that
-observation to another identity. Its closed payload has these three fields:
+observation to another identity. Its closed payload has these two fields:
 
 ```json
 {
@@ -333,8 +420,7 @@ observation to another identity. Its closed payload has these three fields:
   "roots": [],
   "data": {
     "sourceEventId": "019b2a71-4c18-760a-9017-b3e265aa89d1",
-    "channelAcceptanceEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5",
-    "proofLinkEventId": null
+    "channelAcceptanceEventId": "019b4d11-22d3-7fd0-82fb-f33864a75dd5"
   }
 }
 ```
@@ -343,11 +429,12 @@ The exact source must be a complete authenticated `message.in`. Its channel,
 local key and canonical peer DID must agree with the acceptance's oriented
 pair. Its authenticated method must be authorized by its own exact resolution
 document, which may be a later revision than the acceptance's evidence.
-`proofLinkEventId` is null for proof-free input; otherwise it names a
-validated peer link into this channel with exactly the carried proof and endpoint
-pair. The link retains the exact predecessor verification snapshot. An equivalent
-complete carrier can witness that link even when its successor document revision
-differs; the accepting observation must independently pass all its own checks.
+For proof-bearing input, derive the peer link from this source's original JWT,
+a complete proof witness and accepted predecessor context. Proof-free input
+needs no continuity witness. The acceptance references no link or status row;
+the fold independently checks these prerequisites. Equivalent complete proof
+carriers may supply the witness under section 5, but cannot supply this source's
+sender authentication or replace its immutable claims.
 
 Under the operation lock, producers recheck blocking, supersession, invitation
 consumption and current policy, then reuse or append acceptance. All referenced
@@ -481,14 +568,14 @@ must define an authenticated application operation ID and its own rules.
 
 1. <a id="ch-1"></a> Channel identity is symmetric, fixed by canonical DIDs and independent of keys, routes and display groups; direction remains part of message identity.
 2. <a id="ch-2"></a> First authenticated receipt commits and pickup-ACKs without channel acceptance, continuity history or a display relationship.
-3. <a id="ch-3"></a> Missing predecessor acceptance leaves retained continuation proof pending; history recovery validates the local link without inventing a relationship root.
+3. <a id="ch-3"></a> A valid retained proof with missing predecessor acceptance is pending-history; recovery derives its link without another receipt or a stored graph event.
 4. <a id="ch-4"></a> A recovered peer supersession refuses new old-peer input through its local-only context while preserving channel receipt and previous acceptance.
 5. <a id="ch-5"></a> Independent local/peer links at one accepted channel justify their exact diagonal join without synthetic observations; unrelated shared DIDs justify nothing.
 6. <a id="ch-6"></a> Same-channel/sender/wire-ID observations with equal intent and authorized keys share one execution. Another channel has another execution.
 7. <a id="ch-7"></a> Contradictory accepted intent in one channel suppresses new effects; previously submitted IDs and outcomes remain unchanged.
 8. <a id="ch-8"></a> Unknown policy, missing verification evidence and invalid continuity leave receipts intact and grant no effects.
 9. <a id="ch-9"></a> A retained channel denial applies independently of display regrouping; deleting a contact alone grants or revokes no cryptographic authority.
-10. <a id="ch-10"></a> Crash after receipt, channel acceptance or message acceptance preserves each committed fact; reopen rebuilds projections without dispatching old work.
+10. <a id="ch-10"></a> Crash after receipt, proof-resolution association, channel acceptance or message acceptance preserves each committed fact; reopen rebuilds verification state and graph without dispatching old work.
 11. <a id="ch-11"></a> Competing one-use invite receipts can both be saved; only eligible channel acceptance consumes the invitation. Crash and erasure never reopen it.
 12. <a id="ch-12"></a> Unpack without authenticated plaintext creates no observation; missing cryptographic material waits without pickup ACK.
 13. <a id="ch-13"></a> Unknown channel, timeout and control types grant no acceptance; explicit manual/outbound decisions or authorized invitation/continuation bases can.
@@ -511,6 +598,13 @@ must define an authenticated application operation ID and its own rules.
 30. <a id="ch-30"></a> Same-DID service updates preserve channel and input identity; a redelivered wire ID with equal intent creates no second execution or automatic response.
 31. <a id="ch-31"></a> A method-authorized same-DID key update permits new receipt and new-message preparation without another channel acceptance or from_prior. Historical snapshots remain unchanged.
 32. <a id="ch-32"></a> A key absent from the currently resolved sender document cannot authenticate new delivery; previously committed receipt still validates with its own snapshot on import.
-33. <a id="ch-33"></a> After a Web key update, a new peer-DID replacement proof can use the new authorized authentication key and an exact predecessorResolutionEventId distinct from the initial channel acceptance's resolution. A removed signing key cannot establish a new link via old snapshots; an existing complete link still validates offline with its recorded evidence.
+33. <a id="ch-33"></a> After a Web key update, a received replacement proof can use a new authorized authentication key through its exact message.fromPriorResolved document association. Unassociated old snapshots cannot bypass removal; a retained valid witness still verifies offline even if predecessor acceptance arrives later.
 34. <a id="ch-34"></a> Repeated identical proof with an updated successor document remains the same DID replacement; each carrier authenticates independently and no document CID elects a competing link.
 35. <a id="ch-35"></a> Document updates across local-only links do not split peer supersession/conflict context or break an otherwise complete join and cross-channel ACK path.
+36. <a id="ch-36"></a> Independently authenticated receipt without a predecessor document commits and pickup-ACKs; UI shows pending-proof and no verified peer continuity or application effect.
+37. <a id="ch-37"></a> Saving a method-valid proof document needs no predecessor channel acceptance. A valid signature with missing channel history shows pending-history; complete context derives the link without another proof lookup.
+38. <a id="ch-38"></a> A malformed carried claim or complete failed signature check shows invalid while preserving authenticated receipt; a failed fetch without a usable document remains pending with a resolution diagnostic.
+39. <a id="ch-39"></a> Importing missing proof/history updates verification status, links and eligible ACK projections without a new receipt ordinal, input identity or automatic reply/notification dispatch.
+40. <a id="ch-40"></a> Rebuilding from receipts, exact document associations and local decisions yields the same graph and verification statuses in any import order. No consumer references a link/status projection row as an event.
+41. <a id="ch-41"></a> A local rotation decision survives a crash before any outbound exists. Later preparation reuses its exact successor and JWT; merely preparing a package cannot select a competing rotation.
+42. <a id="ch-42"></a> One complete valid proof witness survives a later failed snapshot check or incomplete sibling. With no valid witness, missing required references remain pending; different incomplete rows cannot be combined into success.
