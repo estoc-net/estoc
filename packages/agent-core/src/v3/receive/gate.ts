@@ -202,7 +202,11 @@ function standingOf(relationship: Relationship | undefined): string {
  * naming the recipient at its local end and the sender at its peer end,
  * and the one a birth at the pair would take the ID of. Their evidence
  * points at the pair before any chain reaches it, so a birth beside
- * them would claim what they claim.
+ * them would claim what they claim. Either end is named by derivation
+ * as well as outright: an address named at one end derives the
+ * relationship's own ID with the candidate at the other only for the
+ * two addresses it was born of, so that candidate is its root address
+ * there, named by the ID itself.
  */
 function claiming(fold: VaultFold, localDid: Did, peerDid: Did): RelationshipId[] {
   const birth = birthOf(localDid, peerDid);
@@ -211,7 +215,8 @@ function claiming(fold: VaultFold, localDid: Did, peerDid: Did): RelationshipId[
   for (const [relationshipId, { locals, peers }] of namedAddresses(fold)) {
     if (holding.has(relationshipId)) continue;
     const namesPeer = peers.has(peerDid) || [...locals].some((local) => birthOf(local, peerDid) === relationshipId);
-    if (relationshipId === birth || (locals.has(localDid) && namesPeer)) naming.push(relationshipId);
+    const namesLocal = locals.has(localDid) || [...peers].some((peer) => birthOf(localDid, peer) === relationshipId);
+    if (relationshipId === birth || (namesLocal && namesPeer)) naming.push(relationshipId);
   }
   return naming.sort();
 }
