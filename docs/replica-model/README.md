@@ -28,10 +28,11 @@ receipt independently of submission. See [channels](channels.md#model) and
 Each operation checks its source/channel evidence and applicable policy.
 Automatic intents and profile results retain their exact source references.
 ACK, Trust Ping reply and rotation notification use independent persisted
-intents with fixed effect tuples. ACKs and rotation notifications are standalone
-Empty messages. A notification names its rotation decision and reuses the
-original source, successor and proof. Pending work is derived from retained
-intents and remains available for manual action.
+intents identified by `(executionId, effectType)`, with at most one compatible
+intent per tuple. Each effect type is a stable operation URI. ACKs and rotation
+notifications are standalone Empty messages. A notification names its rotation
+decision and reuses the original source, successor and proof. Pending work is
+derived from retained intents and remains available for manual action.
 
 | Layer | Documents | Responsibility |
 | --- | --- | --- |

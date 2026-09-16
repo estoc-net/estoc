@@ -1599,9 +1599,7 @@ logical response.
     "attachmentCids": ["bafkrei...attachment"],
     "intentHash": "<base64url-sha256>",
     "executionId": null,
-    "handlerId": null,
-    "effectKind": null,
-    "ordinal": null,
+    "effectType": null,
     "effectKey": null,
     "sourceEventId": null,
     "sourceChannelAcceptanceEventId": null,
@@ -1654,7 +1652,7 @@ Requirements:
   payload roots from that document; link-only descriptors add no entry;
 - `roots` is the distinct ordered set of `bodyCid` followed by `attachmentCids`;
 - `intentHash` is computed under [distributed-delivery.md section 5](distributed-delivery.md#canonical-projections-and-hashes);
-- `executionId`, `handlerId`, `effectKind`, `ordinal` and `effectKey` are all
+- `executionId`, `effectType` and `effectKey` are all
   null for a locally initiated send and all non-null for an inbound-derived
   protocol effect, including an explicitly requested completion of pending
   response work. A local user or policy decision may initiate an ordinary
@@ -1671,21 +1669,21 @@ Requirements:
   recipient and notification fields obey [the built-in operation rules](distributed-delivery.md#built-in-independent-operations).
   If that decision has a trigger, the intent's source references equal the
   decision's `sourceEventId` and `fromAcceptanceEventId`, and its effect tuple
-  uses that source. Without a trigger, both source references and all five
+  uses that source. Without a trigger, both source references and all three
   effect fields are null; the locally initiated intent still names the rotation.
   An ordinary message carrying the selected proof is not a notification and
   keeps `rotationEventId == null`;
 - a locally initiated send has `ack == []`; honoring an inbound ACK request uses
   the deterministic response algorithm;
-- `handlerId` and `effectKind` obey [distributed-delivery.md section 11](distributed-delivery.md#automatic-effects);
-  `ordinal` stores its `decimalOrdinal` as a canonical non-negative decimal
-  integer string (`"0"` for zero, otherwise digits without a leading zero);
-- an automatic intent stores the complete producing tuple. Validation checks
+- `effectType` is the protocol-defined operation URI under
+  [distributed-delivery.md section 11](distributed-delivery.md#automatic-effects);
+  distinct operations may share a DIDComm `msgType` but have distinct effect types;
+- an automatic intent stores the complete `(executionId, effectType)` tuple. Validation checks
   its execution ID against the carrier group, its tuple and intent against the
   producing protocol, recomputes its key under [distributed-delivery.md section 11](distributed-delivery.md#automatic-effects), and requires its `messageId` to equal the [section-9.1](#ids) derivation;
-- the five automatic-effect fields and three source/rotation references are portable metadata excluded from
+- the three automatic-effect fields and three source/rotation references are portable metadata excluded from
   the wire and intent hash; they still participate in full event equality;
-- `thid`, `pthid`, `expiresTime` and all five automatic-effect
+- `thid`, `pthid`, `expiresTime` and all three automatic-effect
   fields are present with null when unused; and
 - appending this event requires no network, resolver, mediator or socket.
 
@@ -1966,9 +1964,11 @@ Derive these independent facts:
 - `acknowledged`: at least one such witness exists; and
 - terminal package/message failures and permanent erasures under their schemas.
 
-For an inbound-derived output, verify its tuple against its exact complete
-source/channel references in the channel-local execution. Each tuple permits
-one consistent intent. ACK, Ping reply and rotation notification tuples coexist.
+For an inbound-derived output, verify its `(executionId, effectType)` tuple
+against its exact complete source/channel references in the channel-local
+execution and the producing protocol's operation rules. Each tuple permits
+at most one compatible intent. ACK, Ping reply and rotation notification have
+distinct effect types and coexist for one execution.
 A tuple-local output conflict stops that operation; an authenticated
 source-intent conflict stops all affected
 source-derived work. Notification selection conflicts are scoped to the exact
@@ -2989,17 +2989,18 @@ derivation requires a new vault version.
 
 91. <a id="ve-91"></a> Erasure preserves exact channel acceptances, proof-document associations, source JWTs and local decisions. Independent evidence roots retain issuer documents; missing bytes defer instead of selecting replacements.
 
-92. <a id="ve-92"></a> Two automatic intents for the same execution, handler, kind and ordinal
+92. <a id="ve-92"></a> Two automatic intents for the same `(executionId, effectType)`
     have one effect key and message ID. Different intent hashes conflict after any
     permutation of their union; both variants and their packages remain history,
     with preparation and submission suppressed.
 93. <a id="ve-93"></a> Equal effect keys and intent hashes with different fixed channels, sender or recipient fields conflict; exact duplicate intents count once.
 
 94. <a id="ve-94"></a> An automatic intent whose execution ID disagrees with its unique carrier
-    group's derived ID, whose key disagrees with that ID or protocol tuple, or
+    group's derived ID, whose effect type or intent violates the producing
+    protocol's operation rules, whose key disagrees with its tuple, or
     whose message ID disagrees with its key is invalid and cannot execute.
-95. <a id="ve-95"></a> Every inbound-derived message.out retains all five effect fields and exact sourceEventId/sourceChannelAcceptanceEventId references. Reopen validates the complete source witness and recomputes the key; missing tuple or evidence cannot authorize work. Locally initiated sends have those seven fields null and ack == [].
-96. <a id="ve-96"></a> Pure ACK, Ping reply and rotation notification have distinct fixed tuples and may coexist for one input in every import order. Conflicting intents for one tuple suppress that operation without suppressing the others; a source intent conflict suppresses all source-derived operations.
+95. <a id="ve-95"></a> Every inbound-derived message.out retains executionId, effectType, effectKey and exact sourceEventId/sourceChannelAcceptanceEventId references. Reopen validates the complete source witness and recomputes the key; missing tuple or evidence cannot authorize work. Locally initiated sends have these five fields null and ack == [].
+96. <a id="ve-96"></a> Pure ACK, Ping reply and rotation notification have distinct fixed effect types and may coexist for one input in every import order, including the two outputs with the same Empty message type. Conflicting intents for one `(executionId, effectType)` suppress that operation without suppressing the others; a source intent conflict suppresses all source-derived operations.
 97. <a id="ve-97"></a> A supported no-response error is shown only with exact accepted channel/path and protocol thread correlation. It does not change submission or authorize replay; erasing its body removes that diagnostic.
 
 98. <a id="ve-98"></a> Supported public DIDs can establish explicit channel acceptance without Peer-specific spellings; private allocation remains optional policy.
@@ -3132,7 +3133,7 @@ derivation requires a new vault version.
 
 141. <a id="ve-141"></a> A complete predecessor observation remains a valid confirmation when another observation later appears at a successor channel. Those messages have distinct identities; missing successor evidence cannot erase the predecessor witness.
 
-142. <a id="ve-142"></a> Conflicting authenticated intent within one sender/recipient/wire-ID execution suppresses all new handler tuples without undoing submission or collecting disputed bytes. Different channels never merge into this conflict.
+142. <a id="ve-142"></a> Conflicting authenticated intent within one sender/recipient/wire-ID execution suppresses new intents for every effect type without undoing submission or collecting disputed bytes. Different channels never merge into this conflict.
 
 ### Completion witnesses and address confirmation (VE-143–VE-144)
 

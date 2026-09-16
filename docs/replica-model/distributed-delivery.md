@@ -516,7 +516,7 @@ wait for, attach it to, or consume the tuple of a natural reply or rotation
 notification. Those outputs may coexist with this intent. Built-in Ping replies
 and rotation notifications have `ack == []`; another application protocol may
 define its own explicit ACKs subject to the same target checks. There is no
-cross-handler limit of one ACK-bearing output. Control input may supply ACK
+execution-wide limit of one ACK-bearing output. Control input may supply ACK
 observations but cannot trigger recursive privacy notifications. Never request
 an ACK for a pure ACK, or answer a pure ACK with another pure ACK. Every output
 follows normal attempt/submission boundaries; duplicates grant no resend action.
@@ -526,15 +526,13 @@ follows normal attempt/submission boundaries; duplicates grant no resend action.
 ### 8.2 Deterministic pure ACK
 
 ```text
-handlerId  = https://estoc.dev/distributed-delivery/1.0#pure-ack
-effectKind = pure-ack
-ordinal    = 0
+effectType = https://estoc.dev/distributed-delivery/1.0#pure-ack
 ```
 
 Copy the carrier's normalized nullable creation time; expiry is null. Body is
 `{}`, attachments empty, `pleaseAck` null and `headers` empty. Threads and ACK
-targets follow section 8.1. This tuple is only for a pure ACK; a rotation
-notification uses its own tuple under section 11. Freeze the selected output
+targets follow section 8.1. This effect type is only for a pure ACK; a rotation
+notification uses its own effect type under section 11. Freeze the selected output
 channel at intent commit.
 
 The executable fixture uses recipient
@@ -544,8 +542,8 @@ authenticated sender `did:web:bob.example` and wire ID
 
 ```text
 executionId = 460fb564-67a5-5f0f-9066-9cd18d7d6f73
-effectKey = XhcHMHXUDalcVRqsDxlmB4CWf22QU-7DNrGkrPpE4k0
-outbound message ID = wire ID = 533f0d8a-8105-587b-bf40-d17dda42c55b
+effectKey = VVHM1QOwqJ-x5XmYTcnkmVIyTliwmxOiN-nV7jVtciM
+outbound message ID = wire ID = d23906f7-f831-5ba2-9a01-51ca727ee120
 ```
 
 These values follow the channel execution transcript and effect-key
@@ -687,40 +685,44 @@ rewrites an old message. See [the address policy](relationships.md).
 ## 11. Automatic effects
 
 An automatic DIDComm output is one effect identified by
-`(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
+`(executionId, effectType)`. `executionId` MUST equal the
 derived execution ID of one complete, conflict-free logical carrier after the
 channel-local evidence and intent checks in [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
 Independently validated observations of those sender/recipient DIDs and wire ID that
 disagree on the intent constitute an execution conflict under that section.
 An unresolved or conflicting sibling observation cannot clear that
 disagreement merely by making its group ineligible. One complete group
-cannot authorize automatic work while the execution conflict exists. Each protocol
-MUST define its handler ID, effect kind, stable non-negative integer ordinal
-and output intent rules. Distinct operations have independent tuples and may
-each produce an output for the same source execution.
-Handler IDs and kinds are non-empty strings without
-U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
-leading zeros.
-Retries MUST NOT change the tuple to create another effect or evade a
-conflict. Selecting a different handler, effect kind or ordinal cannot
-bypass a conflict of the carrier's execution ID.
+cannot authorize automatic work while the execution conflict exists.
+
+Each protocol MUST assign a fixed `effectType` URI to each operation and define
+its output intent rules. The URI MUST include a scheme and MUST NOT contain
+U+0000. Its exact UTF-8 spelling identifies the operation; implementations MUST
+NOT normalize or dereference it to derive the key. The identifier is shared
+across implementations and MUST remain unchanged when handlers are renamed,
+split or refactored. Distinct operations MUST use different effect types, even
+when they produce the same DIDComm message type. An effect type need not itself
+be a DIDComm message type URI.
+
+For one `executionId`, each `effectType` permits at most one compatible output
+intent. Distinct effect types have independent tuples and may each produce an
+output for the same source execution. Retries MUST reuse the same tuple and
+MUST NOT select another effect type to create another output or evade a
+conflict. Selecting a different effect type cannot bypass a conflict of the
+carrier's execution ID.
 
 ```text
 effectKey = base64url(
   SHA-256(
-    UTF8("estoc/effect/3\0") ||
+    UTF8("estoc/effect/4\0") ||
     UTF8(executionId) || 0x00 ||
-    UTF8(handlerId) || 0x00 ||
-    UTF8(effectKind) || 0x00 ||
-    UTF8(decimalOrdinal)
+    UTF8(effectType)
   )
 )
 ```
 
 The key is unpadded base64url. It determines the outbound message ID and wire ID under
 [vault-events.md section 9.1](vault-events.md#ids). The effect's content is its `message.out` intent.
-That event retains the complete producing tuple under its [section-9.2](vault-events.md#message-out) schema;
-the stored `ordinal` is exactly `decimalOrdinal`, not a runtime-only counter.
+That event retains both members of the producing tuple under its [section-9.2](vault-events.md#message-out) schema.
 One key permits only one compatible intent under that document's [section 9.8](vault-events.md#outbound-message-and-delivery-fold);
 payload validation MUST verify the execution ID against that carrier group,
 the stored tuple and output intent against the producing protocol, the key
@@ -765,11 +767,15 @@ claiming stronger behavior.
 
 ### Built-in independent operations
 
-| Operation | `handlerId` | `effectKind` | `ordinal` |
-| --- | --- | --- | --- |
-| Requested receipt ACK | `https://estoc.dev/distributed-delivery/1.0#pure-ack` | `pure-ack` | `"0"` |
-| Trust Ping reply | `https://didcomm.org/trust-ping/2.0` | `ping-response` | `"0"` |
-| Inbound-triggered rotation notification | `https://estoc.dev/distributed-delivery/1.0#rotation-notification` | `rotation-notification` | `"0"` |
+| Operation | `effectType` |
+| --- | --- |
+| Requested receipt ACK | `https://estoc.dev/distributed-delivery/1.0#pure-ack` |
+| Trust Ping reply | `https://didcomm.org/trust-ping/2.0/ping-response` |
+| Inbound-triggered rotation notification | `https://estoc.dev/distributed-delivery/1.0#rotation-notification` |
+
+Pure ACK and rotation notification both use DIDComm type
+`https://didcomm.org/empty/1.0/empty`. Their distinct effect types keep both
+operations independent for one execution.
 
 A Ping reply requires `response_requested != false` and current protocol/policy
 eligibility. It uses type `https://didcomm.org/trust-ping/2.0/ping-response`,
@@ -913,7 +919,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     submission at the same committed boundary as other outbounds.
 18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect XhcHMHXUDalcVRqsDxlmB4CWf22QU-7DNrGkrPpE4k0 and wire ID 533f0d8a-8105-587b-bf40-d17dda42c55b.
+19. <a id="dd-19"></a> The channel pure-ACK fixture derives execution 460fb564-67a5-5f0f-9066-9cd18d7d6f73, effect VVHM1QOwqJ-x5XmYTcnkmVIyTliwmxOiN-nV7jVtciM and wire ID d23906f7-f831-5ba2-9a01-51ca727ee120.
 
 20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
@@ -1008,7 +1014,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 51. <a id="dd-51"></a> Outcome-unknown calls remain unconfirmed after crash; manual retry preserves wire ID, package, channel and expiry.
 
-52. <a id="dd-52"></a> Saved automatic tuples/intents remain immutable across restore; historical input creates no new dispatch action or replacement response channel.
+52. <a id="dd-52"></a> Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
 
 53. <a id="dd-53"></a> Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
 
@@ -1069,11 +1075,11 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 70. <a id="dd-70"></a> Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
 
-71. <a id="dd-71"></a> Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution under every handler tuple; submission remains complete and different channels are never execution aliases.
+71. <a id="dd-71"></a> Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
 
 ### Independent operation recovery (DD-72–DD-75)
 
-72. <a id="dd-72"></a> One Ping requesting ACK may produce three separate intents: pure ACK, Ping reply and rotation notification. Handler order changes none of their tuples; a saved Ping reply does not occupy either other operation's slot.
+72. <a id="dd-72"></a> One Ping requesting ACK may produce three separate intents with distinct effect types: pure ACK, Ping reply and rotation notification. Each type permits at most one compatible intent for that execution. Handler order changes none of their keys; a saved Ping reply does not occupy either other operation's slot, and the two Empty outputs remain independent.
 
 73. <a id="dd-73"></a> Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
 
