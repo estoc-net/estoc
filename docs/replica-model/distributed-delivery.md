@@ -224,7 +224,7 @@ when a full vault runtime process-durably appends `message.out`.
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
 | Proof resolution | Exact carrier plus `message.fromPriorResolved` and its document | Fold can compute proof result and continuity status |
 | New source-derived work | Complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
-| Peer ACK | Complete channel witness and exact channel/path target | Receipt information only |
+| Peer ACK | Complete source witness and exact channel/path target | Receipt information only |
 
 Every dependency reference names an event committed before the dependent call.
 Object storage alone is not event commitment. Contact membership, a thread ID,
@@ -278,10 +278,12 @@ with a new ID. Rotation and contact preferences never retarget old work.
    predecessor document and commit `message.fromPriorResolved`. Fold proof
    status and continuity from those facts. Missing evidence stays pending and
    visible; no prior channel acceptance is needed to derive a valid link.
-6. For each consumer, validate exact source/proof evidence and any additional
-   acceptance evidence required by that consumer. Before new
-   work, recheck supersession, denial and that operation's current policy.
-   Commit the concrete intent or local result with already committed references.
+6. For each consumer, validate exact source/proof evidence and its required
+   target or protocol fields. Before new work, recheck supersession, denial
+   and that operation's current policy. Commit the concrete intent or local
+   result with already committed references. Acceptance and its invitation
+   consumption consequences follow [channels.md](channels.md#admission)
+   independently of those consumers.
 7. Process valid explicit peer ACKs and local display/profile projections.
    The sole active executor may independently create an eager ACK, a Ping reply
    and a rotation notification when their individual policies permit. Each
@@ -557,12 +559,13 @@ algorithm below.
 
 ### 8.3 Applying `ack`
 
-Require an explicit wire ID and one complete channel witness. Find the exact
+Require an explicit wire ID and one complete source witness. Find the exact
 outbound intent/package, then verify that the carrier's channel is the same
 or an authorized role-preserving successor of its fixed channel. The carrier's
 sender must be the original peer or its verified replacement and its recipient
 the original local endpoint or its verified local successor. Undirected graph
 connectivity, group membership, threads and ordinary responses are insufficient.
+No channel acceptance is required for the carrier or the outbound.
 
 All redundant witness fields must come from one complete source row. Missing
 path/authentication/package references defer the acknowledgment. The carrier's
@@ -948,7 +951,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and ordinary document updates do not cause them.
 
-27. <a id="dd-27"></a> Control input with a complete channel witness may supply authorized ACK evidence without creating contacts or recursive privacy notifications; its type grants no admission.
+27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence without channel acceptance. It creates no contacts or recursive privacy notifications, and its type grants no admission.
 
 28. <a id="dd-28"></a> Invalid carried proof prevents acceptance/link/ACK effects; independent authentication can still retain receipt and failed unpack creates none.
 
@@ -1064,7 +1067,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A complete proof witness establishes an exact channel link without acceptance. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own acceptance requirements.
+63. <a id="dd-63"></a> A complete proof witness establishes an exact channel link without acceptance. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
 
 64. <a id="dd-64"></a> Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 

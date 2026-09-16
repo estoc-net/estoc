@@ -44,9 +44,9 @@ flowchart TD
 Receipt never needs channel acceptance, display assignment or complete
 continuity history. Anonymous input has no channel or application execution.
 Each operation checks its own evidence and local policy. Sending, automatic
-output, package preparation and local rotation need no channel acceptance.
-Profile lifts and received ACK/error observations require acceptance under
-section 6, independently of whether a contact is assigned.
+output, package preparation, local rotation, profile lifts and received
+ACK/error observations need no channel acceptance. Acceptance governs
+invitation consumption and its own inheritance under section 4.
 
 <a id="channel-identity"></a>
 
@@ -453,19 +453,13 @@ computed from those inputs whenever the operation is considered.
 
 A **complete source witness** is one authenticated `message.in` with a valid
 local recipient/key mapping, canonical sender and its own exact resolution
-document. Its actual DID pair fixes its channel. A carried proof also requires
+document. It requires no channel acceptance. Its actual DID pair fixes its
+channel. A carried proof also requires
 its valid derived peer link under section 5. Proof-free input
 needs no continuity witness. Equivalent proof carriers may supply a complete
 proof witness, but cannot supply this source's sender authentication or replace
 its immutable claims. Missing exact references defer the affected consumer;
 incompatible authentication, intent or continuity evidence conflicts.
-
-A **complete channel witness** additionally matches the source's actual
-channel, local key and canonical peer to a complete `channel.accepted`.
-The source's resolution may be a later valid revision than that acceptance's
-snapshot. Profile lifts and received ACK/error observations require this
-additional acceptance evidence. Automatic outputs, preparation, continuity
-and local rotation do not.
 
 Before creating a new automatic intent, the producer checks its complete
 source witness under the operation lock, current denial, supersession, local
@@ -476,25 +470,27 @@ follows the user-send rules. The committed intent or rotation decision records
 that concrete local choice; it supplies no permission for another operation.
 Automatic intents retain their exact source; rotation decisions retain their
 fixed predecessor pair, successor, proof and nullable source. A profile lift
-retains its exact source and channel acceptance and checks current profile
-policy. All referenced events must be committed first. No intent can supply
+retains its exact source and checks current profile policy.
+All referenced events must be committed first. No intent can supply
 its own source authentication or continuity proof.
 
 Import/rebuild validates each saved action's evidence references and protocol
 rules, not the producer's past wall-clock policy. Missing acceptance cannot
-invalidate an automatic intent, package or rotation decision whose own
-required evidence is complete. Ordinary later rotation or blocking does not
-erase an earlier intent, local result or recorded submission. Current denial,
-supersession, expiry and conflicts still govern
+invalidate an intent, package, rotation decision, profile result or ACK/error
+attribution whose own required evidence is complete. Ordinary later rotation
+or blocking does not erase an earlier intent, local result or recorded
+submission. Current denial, supersession, expiry and conflicts still govern
 new work and dispatch; retaining history is not permission to execute it.
 Incomplete consistent siblings do not erase a complete witness. Different
 incomplete rows cannot be assembled into one witness.
 
 Received ACKs and Report Problem correlation are observations, not commands.
-They require a complete channel witness and the exact target/path checks, but
-no handler decision. Current blocking or supersession does not erase evidence
-that the peer acknowledged an old message; invalid/conflicting evidence still
-prevents attribution. A new profile lift remains a policy-controlled operation.
+They require a complete source witness and the exact target/path checks,
+including protocol thread correlation for Report Problem, but no channel
+acceptance or handler decision. Current blocking or supersession does not
+erase evidence that the peer acknowledged an old message; invalid/conflicting
+evidence still prevents attribution. A new profile lift remains a
+policy-controlled operation.
 Body erasure preserves existing facts but prevents new content-derived work.
 
 <a id="effects-and-recovery"></a>
@@ -684,3 +680,5 @@ must define an authenticated application operation ID and its own rules.
 48. <a id="ch-48"></a> Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.
 49. <a id="ch-49"></a> With no channel acceptance events, a complete live source may produce a policy-permitted automatic intent, its valid fixed-channel package and a local rotation with independent exact-address confirmation. Import validates their own source, endpoints and proof; it neither requires acceptance nor dispatches them.
 50. <a id="ch-50"></a> Local-continuation and join acceptance bases name an exact complete predecessor acceptance separately from the rotation. A missing predecessor keeps that acceptance pending while complete links, joins, rotation notifications and other acceptance-independent operations remain valid.
+51. <a id="ch-51"></a> With no channel acceptance, a complete source in a supported profile protocol can supply a channel-scoped name claim when readable content and current profile policy permit. Missing source/proof evidence, denial or supersession still prevents a new lift; the claim neither creates a contact nor changes its petname.
+52. <a id="ch-52"></a> With no channel acceptance, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry.

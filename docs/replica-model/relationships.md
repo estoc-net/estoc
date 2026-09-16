@@ -151,11 +151,11 @@ that decision nor matching names or keys establishes channel authority.
 `channel.accepted` records a DID pair, decision-time evidence and its manual, outbound,
 invitation or verified-link basis under [channels.md](channels.md#admission).
 Opposite first sends can select the same channel without role arbitration.
-Acceptance supports invitation consumption, profile lifts and received
-ACK/error attribution. Sending, preparation, automatic outputs and local
-rotation follow their own evidence and policy rules without requiring it.
-Each operation retains its own verification snapshot across method-authorized
-document updates.
+Acceptance governs invitation consumption and its own inheritance. Sending,
+preparation, automatic outputs, local rotation, profile lifts and received
+ACK/error attribution follow their own evidence and policy rules without
+requiring it. Each operation retains its own verification snapshot across
+method-authorized document updates.
 
 `contact.channelsSet` organizes display. It does not authorize processing, consume
 invitations, continue channels or authorize
@@ -294,10 +294,11 @@ acceptance or continuity by itself is not a pre-receipt wait.
 
 After durable `message.in`, missing continuity evidence, invitation decisions
 or operation evidence becomes upper-layer recovery work. Each consumer waits
-only for its required evidence; missing channel acceptance defers profile
-lifts and received ACK/error attribution, not automatic output or preparation.
-These waits do not withhold pickup ACK. Recovery reads the saved evidence;
-it does not restart sender resolution for an already committed observation.
+only for its required evidence. Missing channel acceptance affects its own
+projection and invitation consumption, not profile lifts, received ACK/error
+attribution, automatic output or preparation. These waits do not withhold
+pickup ACK. Recovery reads the saved evidence; it does not restart sender
+resolution for an already committed observation.
 Timeout, reconnect, a new wire ID and erased bodies grant no channel acceptance.
 
 Local wait state for an unopened delivery is runtime scheduling state. Retry
@@ -371,9 +372,9 @@ policy are checked after receipt when accepting a channel or starting new work.
 Commit the authenticated channel observation before deciding channel acceptance
 or new work. Each source-derived operation requires a complete source witness; a
 proof-bearing source also needs complete evidence for its derived peer link.
-Automatic intents retain their exact source, and local rotation retains its
-predecessor pair and nullable source. Profile lifts additionally retain channel
-acceptance as defined by [operation eligibility](channels.md#operation-eligibility).
+Automatic intents and profile lifts retain their exact source, and local
+rotation retains its predecessor pair and nullable source. None requires
+channel acceptance under [operation eligibility](channels.md#operation-eligibility).
 
 Superseded senders, blocked channels, invalid proof and contradictory identity
 evidence grant no new automatic effects. A matching duplicate has no new response
@@ -823,8 +824,8 @@ Store the authenticated successor-channel observation first, even when its
 predecessor document or history is missing. Commit resolution evidence when
 available and fold the original proof into a peer edge at its exact predecessor
 pair. Check each operation's evidence and policy; deriving the edge and
-creating a permitted automatic output require no channel acceptance. Consumers
-that require acceptance resolve it separately under [channels.md](channels.md#admission).
+creating a permitted automatic output require no channel acceptance.
+Continuation acceptance is a separate decision under [channels.md](channels.md#admission).
 No link event is appended. Show [verification status](channels.md#verification-status)
 while evidence is pending or invalid. Opposite local/peer rotations use the explicitly
 verified join; neither a shared DID nor UI grouping supplies a missing edge.
@@ -839,11 +840,12 @@ Links do not merge message identities, move old outputs or automatically send an
 ## 13. Remote errors and integrity failures
 
 A Report Problem is a display diagnostic beside a uniquely correlated outbound
-only when its carrier has a complete channel witness and either the same
-authorized channel or a verified role-preserving successor path. Keep its body
-available for display. It does
-not prove submission failure, retract a link or authorize replay. A normal
-authenticated observation may separately prove exact-address knowledge.
+only when its carrier has a complete source witness, the same channel or a
+verified role-preserving successor path, and the required protocol thread
+correlation. Neither the carrier nor the outbound needs channel acceptance.
+Keep its body available for display. It does not prove submission failure,
+retract a link or authorize replay. A normal authenticated observation may
+separately prove exact-address knowledge.
 
 Missing source/verification evidence defers attribution; inconsistent evidence exposes
 conflict. Do not assign an error to a contact by wire ID or name alone.
@@ -950,7 +952,7 @@ roll back; explicit new communication is a new channel and new message.
 
 18. <a id="rz-18"></a> Normal Trust Ping selects ping-response; response_requested false is still received and may get an independent Empty rotation notification.
 19. <a id="rz-19"></a> Content-first Basic Message remains its own application message without a rendezvous wrapper.
-20. <a id="rz-20"></a> Control input may establish channel acceptance and supply authenticated ACK evidence, but creates no contact or recursive privacy notification.
+20. <a id="rz-20"></a> A complete control source may supply authenticated ACK evidence without channel acceptance, but creates no contact or recursive privacy notification. Acceptance remains a separate decision.
 
 21. <a id="rz-21"></a> Generic pure ACK has no ACK request. ACK, Ping reply and privacy notification use independent intents; the latter two have empty ack arrays.
 22. <a id="rz-22"></a> New successor messages carry frozen proof/long form until confirmation; attempted packages remain exact after confirmation.
@@ -1042,6 +1044,6 @@ roll back; explicit new communication is a new channel and new message.
 
 59. <a id="rz-59"></a> did:web:Bob.Example and did:web:bob.example remain distinct endpoints; returned document ID mismatch cannot be repaired by URL/DNS normalization.
 
-60. <a id="rz-60"></a> Profile facts retain their exact source channel. A contact can show several chains but transfers no authority or shared-profile permission.
+60. <a id="rz-60"></a> Profile facts retain their exact source channel without acceptance. A permitted peer name claim creates no contact and changes no petname; a contact can show several chains but transfers no authority or shared-profile permission.
 
 61. <a id="rz-61"></a> Authenticated did:web receipt commits and pickup-ACKs while continuity is incomplete. Recovery uses saved authentication; new network delivery uses its bounded fresh sequence.
