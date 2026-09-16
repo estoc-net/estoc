@@ -293,8 +293,7 @@ referencing schema. `sourceEventId` is `EventReference<"message.in">` in
 `fromDidId` and `toDidId` in `did.rotationSelected` name local DID entities;
 `rotationEventId` in
 `message.out` names `did.rotationSelected`.
-`triggerEventId` is `EventReference<"message.in">`, and `addEventId` is
-`EventReference<"contact.peerDidAdded">`. The referencing schema also owns
+`triggerEventId` is `EventReference<"message.in">`. The referencing schema also owns
 presence and nullability; a nullable reference has the same typed non-null
 value. Generic event-store APIs continue to use `EventId`.
 
@@ -1055,6 +1054,8 @@ they never block independent receipt or operations whose own evidence is complet
 
 <a id="123-relationshipcontactassigned"></a>
 <a id="relationship-contactassigned"></a>
+<a id="contact-peerdidadded"></a>
+<a id="contact-peerdidremoved"></a>
 <a id="contact-channelsset"></a>
 
 ### 6.3 `contact.channelsSet`
@@ -1174,9 +1175,9 @@ cryptographic prerequisite. A contact can show multiple disconnected channel cha
 
 ## 7. Contacts and profiles
 
-A contact is a set of decisions identified by one `contactId`. It may hold an
-unverified discovery DID before any receipt or peer resolution, and selects channels
-directly under [section 6.3](#contact-channelsset), independently of their
+A contact organizes channels through local decisions identified by one
+`contactId`. It selects complete local/peer DID pairs directly under
+[section 6.3](#contact-channelsset), independently of their
 authority and continuity. There is no intermediate display-group entity.
 Contact IDs name local decisions; they do not merge protocol identities.
 
@@ -1209,6 +1210,14 @@ Direct channel selections use `contact.channelsSet` in
 ```
 
 `because` is `user` or `automatic`.
+
+The producer first selects one or more complete channels, then commits this
+event together with an initial non-empty `contact.channelsSet`. Channel
+selection may precede any receipt, outbound intent or peer resolution; it
+supplies no authentication or send authority. A later set may be empty under
+[section 6.3](#contact-channelsset). Imported creation without its membership
+has an empty selection until that membership is available; missing membership
+does not invalidate the creation or invent a send target.
 
 <a id="contact-petname"></a>
 
@@ -1273,49 +1282,6 @@ send normally; fresh private allocation is the default policy in
 [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
 `contact.channelsSet` selects the displayed channels independently of these
 address preferences.
-
-<a id="contact-peerdidadded"></a>
-
-#### `contact.peerDidAdded`
-
-```json
-{
-  "type": "contact.peerDidAdded",
-  "roots": [],
-  "data": {
-    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "did": "did:peer:4zQm...rendezvous-short:z...rendezvous-input-document",
-    "because": "oob"
-  }
-}
-```
-
-This records a peer DID selected as an outbound target before or independently
-of peer resolution. `because` is `oob`, `user`, `rendezvous`,
-`resolved` or another documented source.
-
-The event is a routing/contact decision, not proof that the peer controls the
-DID. `peer.resolved` or a verified received proof supplies
-cryptographic evidence later; display assignment supplies none.
-
-<a id="contact-peerdidremoved"></a>
-
-#### `contact.peerDidRemoved`
-
-```json
-{
-  "type": "contact.peerDidRemoved",
-  "roots": [],
-  "data": {
-    "contactId": "019b2a63-48bf-7214-961d-4c3f97cb95da",
-    "addEventId": "019b2a64-86fa-7f28-a63a-5d70ce1d829a"
-  }
-}
-```
-
-`addEventId` is the `eventId` of one `contact.peerDidAdded`. Explicit references make
-removal independent of wall-clock ordering. A scoped transition may make an
-older rendezvous DID non-preferred without deleting the historical add event.
 
 <a id="contact-merged"></a>
 
@@ -1429,7 +1395,7 @@ dispatch permission and grants no ACK or continuity authority.
 ### 7.6 Contact fold
 
 Fold contacts independently: permanent deletion tombstone, latest
-petname/flags, explicit peer DID seeds minus their referenced removals, and the
+petname/flags, latest local-DID preference under `contact.useDid`, and the
 latest `contact.channelsSet`. A tombstone hides the contact even if later
 membership events exist; its channels remain independently available. Aggregate
 source-labelled profile facts and channel-local messages without merging their
@@ -1440,9 +1406,11 @@ conflicting authentication evidence remains visible in the source channel.
 from the contact's selected channels and their verified continuations.
 Membership is not eligibility: each choice needs its exact pair, usable local
 key/route and current send policy. A derived continuation additionally needs
-its complete link evidence. A deliberate new peer address, including an
-explicit discovery seed, can start a fixed-channel intent before peer resolution;
-preparation still validates its own peer resolution.
+its complete link evidence. An empty selected set gives an empty `writeTo[]`.
+A newly discovered peer address first needs an explicit local-DID choice to
+form a complete channel. Add that pair to the contact's selection or send to
+it independently of a contact. Its fixed-channel intent may precede peer
+resolution; preparation still validates its own peer resolution.
 `contact.useDid` only expresses a local-address preference among eligible
 options. If it does not resolve to one channel, the caller must select a
 concrete eligible channel explicitly; matching contact names, peer DIDs or
@@ -3181,9 +3149,9 @@ derivation requires a new vault version.
 
 147. <a id="ve-147"></a> A membership event neither creates a missing contact nor restores a tombstoned one. Contact deletion hides that contact even after later set events; channel receipt, messages, invitation consumption and explicit denials remain independently available.
 
-148. <a id="ve-148"></a> Selecting a channel before any receipt or preparation is valid presentation state. Missing channel evidence remains unresolved; membership cannot supply endpoints, authentication or dispatch permission.
+148. <a id="ve-148"></a> Contact creation records an initial non-empty contact.channelsSet of complete local/peer pairs in the same commit. Selection before receipt, intent, preparation or peer resolution is valid presentation state. Imported creation without its set and a later cleared set supply no contact send target; missing evidence grants no authentication or dispatch permission.
 
-149. <a id="ve-149"></a> A contact with multiple eligible channels requires a concrete channel choice before intent commit. A local-DID preference that still matches several options, overlapping contact views and contact merges do not choose one or retarget existing messages.
+149. <a id="ve-149"></a> A contact with multiple eligible channels requires a concrete channel choice before intent commit. A contact with no eligible selected channel or verified continuation supplies no send target. A local-DID preference that still matches several options, overlapping contact views and contact merges do not choose one or retarget existing messages; adding a discovered address first requires a complete channel pair.
 
 ### Concrete operation evidence (VE-150–VE-153)
 

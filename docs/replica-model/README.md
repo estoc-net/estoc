@@ -21,7 +21,9 @@ exclusive consumer.
 Method-authorized document updates preserve the channel. Directed links are
 derived from received proofs and local rotation decisions. Receipt can precede
 proof verification, with pending/invalid/conflict status visible in the UI.
-Contacts directly select channels for display without cryptographic authority.
+Contacts organize complete local/peer channel pairs with names and preferences,
+without cryptographic authority. Creation records an initial channel selection;
+a contact with no selected channels supplies no send target.
 
 An outbound fixes its channel and direction at intent commit. Rotation selects
 new messages only. Every transport call follows a durable attempt and a live

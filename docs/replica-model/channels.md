@@ -23,10 +23,12 @@ context of one channel. The fold computes it from received proofs, resolution
 evidence and local rotation decisions; no link event is stored.
 Links form a directed graph whose authority is scoped to each channel context.
 
-A **contact** records local names, preferences and direct channel selections.
-It may display several disconnected channel histories. Editing these selections,
-renaming or merging contact views changes no message identity, permission,
-authentication evidence, ACK authorization or dispatch eligibility.
+A **contact** organizes selected channels with local names and preferences.
+Creation selects one or more complete local/peer DID pairs; it may precede
+receipt or peer resolution. It may display several disconnected channel
+histories. Editing these selections, renaming or merging contact views changes
+no message identity, permission, authentication evidence, ACK authorization or
+dispatch eligibility.
 Channels and their continuity graph exist independently of contacts; an
 unassigned channel remains usable without creating a contact or another group.
 
@@ -529,7 +531,9 @@ start automatic consumption or new effects on recovery.
 [the contact membership schema](vault-events.md#contact-channelsset).
 This is a presentation decision, independent of invitation use. It names exact
 channels, not peer DIDs: two channels using the same peer DID at different
-local addresses remain independently selectable. No intermediate group exists.
+local addresses remain independently selectable. Contact creation records an
+initial non-empty channel set under [the creation schema](vault-events.md#contact-created).
+Clearing that set leaves no contact-based send choice. No intermediate group exists.
 
 A UI MAY traverse verified continuity from the selected channels to display
 related history or offer successor channels for a new send. This traversal is

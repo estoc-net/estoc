@@ -139,9 +139,12 @@ or protocol identities.
 
 ### 5.1 Contact IDs
 
-Contacts use UUIDv7. Create or assign a contact only by explicit product policy;
-it may retain an unverified discovery DID before peer resolution. Neither
-that decision nor matching names or keys establishes channel authority.
+Contacts use UUIDv7. Create or assign a contact only by explicit product policy.
+Creation selects one or more complete local/peer DID pairs and records their
+membership under [vault events](vault-events.md#contact-created). It may precede
+receipt or peer resolution. A discovered peer address must be paired with a
+chosen local DID before it becomes a contact selection. Neither that selection
+nor matching names or keys establishes channel authority.
 
 <a id="102-binding-and-contact-policy"></a>
 <a id="binding-and-contact-policy"></a>
@@ -207,7 +210,9 @@ The send API selects one exact oriented channel before committing intent.
 An explicit address choice can start a new channel without a wire handshake.
 A contact selection must resolve to a concrete eligible channel; contact
 membership supplies no authentication authority. Verified successors may guide
-this new selection. An existing intent's selection is immutable.
+this new selection. A contact with no eligible selected channel or verified
+continuation supplies no send target. To add a new address, first select its
+complete local/peer pair. An existing intent's selection is immutable.
 
 <a id="ordinary-sending-requirements"></a>
 
