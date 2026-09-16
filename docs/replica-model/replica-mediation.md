@@ -921,7 +921,9 @@ and idempotency remain as defined above.
 Authenticated channel receipt is sufficient for normal pickup acknowledgment.
 Channel acceptance, continuity recovery, business handlers, rendering,
 replica synchronization and read state are not prerequisites. Unknown or
-refused channel acceptance retains the receipt and authorizes no ultimate ACK/effect.
+refused channel acceptance retains the receipt. Each later operation applies
+its own evidence and policy requirements under [channels.md](channels.md#operation-eligibility);
+pickup acknowledgment itself authorizes no ultimate ACK or effect.
 
 <a id="live-delivery"></a>
 

@@ -151,8 +151,11 @@ that decision nor matching names or keys establishes channel authority.
 `channel.accepted` records a DID pair, decision-time evidence and its manual, outbound,
 invitation or verified-link basis under [channels.md](channels.md#admission).
 Opposite first sends can select the same channel without role arbitration.
-The accepted pair remains usable across method-authorized document updates;
-each operation retains its own verification snapshot.
+Acceptance supports invitation consumption, profile lifts and received
+ACK/error attribution. Sending, preparation, automatic outputs and local
+rotation follow their own evidence and policy rules without requiring it.
+Each operation retains its own verification snapshot across method-authorized
+document updates.
 
 `contact.channelsSet` organizes display. It does not authorize processing, consume
 invitations, continue channels or authorize
@@ -167,7 +170,8 @@ OOB, QR, directory, file, NFC or manual exchange discloses an ordinary address.
 Reusable discovery SHOULD use a public-contact address. An OOB ID supplies
 `pthid`, never channel identity. `did.disclosed.admitChannel` records whether
 that local invitation permits automatic channel acceptance. False requires
-manual acceptance. Profile/direct disclosure cannot grant this permission.
+manual acceptance but does not gate independently permitted output or rotation.
+Profile/direct disclosure cannot grant this permission.
 
 A one-use invitation is consumed by matching durable channel acceptance under
 [the invitation fold](vault-events.md#invitation-fold), independently of reply
@@ -187,8 +191,8 @@ Rotation is a channel link, not global address retirement. Keep old and new
 recipient routes through exact-successor confirmation. It changes selection
 for newly created intents only. An existing fixed-channel message never moves
 to the successor; explicit key/route retirement can make its retry impossible.
-New old-peer inputs received after verified supersession are saved but refused
-application acceptance under [channels.md](channels.md#continuity).
+New old-peer inputs received after verified supersession are saved but cannot
+start new application work under [channels.md](channels.md#continuity).
 
 <a id="ordinary-sending-and-birth-selection"></a>
 
@@ -244,8 +248,8 @@ Content remains application content regardless of whether a rotation is carried.
 ### 8.4 Select addresses and commit intent
 
 1. Select a live local DID and canonical peer DID, validating supplied Peer long forms.
-2. Derive their fixed channel and direction. Reuse a complete channel acceptance
-   when present; each later preparation still resolves its own peer evidence.
+2. Derive their fixed channel and direction, then check local send policy.
+   No channel acceptance is required; each preparation resolves its own peer evidence.
 3. Commit content and `message.out` with this channel, sender and recipient.
    This offline action does no DNS, mediator or socket work.
 
@@ -255,8 +259,9 @@ Content remains application content regardless of whether a rotation is carried.
 
 1. Require a live initial dispatch action or an explicit manual action, and
    recheck completion, expiry, denial, conflict and local lifecycle.
-2. For first preparation, resolve the fixed peer and retain its evidence. An
-   explicit user send may establish channel acceptance with `basis: outbound`.
+2. For first preparation, resolve the fixed peer and retain its evidence.
+   Validate the committed intent and required source/proof evidence; preparation
+   does not establish or require channel acceptance.
 3. Prepare only in the intent's fixed channel. Once attempted, reuse its exact
    package; missing bytes wait rather than causing replacement encryption.
 4. Verify required recipient registration, commit `delivery.attempted`, then
@@ -287,9 +292,11 @@ cannot authenticate a carrier without predecessor material. Failed unpack
 supplies no authenticated observation or pickup ACK. Missing channel
 acceptance or continuity by itself is not a pre-receipt wait.
 
-After durable `message.in`, missing channel acceptance, continuity evidence, invitation
-decisions or scope evidence becomes upper-layer recovery work. It withholds
-effects and ultimate ACKs, not pickup ACK. Recovery reads the saved evidence;
+After durable `message.in`, missing continuity evidence, invitation decisions
+or operation evidence becomes upper-layer recovery work. Each consumer waits
+only for its required evidence; missing channel acceptance defers profile
+lifts and received ACK/error attribution, not automatic output or preparation.
+These waits do not withhold pickup ACK. Recovery reads the saved evidence;
 it does not restart sender resolution for an already committed observation.
 Timeout, reconnect, a new wire ID and erased bodies grant no channel acceptance.
 
@@ -362,10 +369,11 @@ policy are checked after receipt when accepting a channel or starting new work.
 ### 9.3 Integrity checks and durable receipt
 
 Commit the authenticated channel observation before deciding channel acceptance
-or new work. Each operation requires a complete source/channel witness; a
+or new work. Each source-derived operation requires a complete source witness; a
 proof-bearing source also needs complete evidence for its derived peer link.
-Concrete intents and results reference their exact source and channel acceptance
-as defined by [operation eligibility](channels.md#operation-eligibility).
+Automatic intents retain their exact source, and local rotation retains its
+predecessor pair and nullable source. Profile lifts additionally retain channel
+acceptance as defined by [operation eligibility](channels.md#operation-eligibility).
 
 Superseded senders, blocked channels, invalid proof and contradictory identity
 evidence grant no new automatic effects. A matching duplicate has no new response
@@ -438,7 +446,7 @@ budget under section 9.1. Numalgo-4 first-disclosure requirements apply only
 when that method is used. A same-DID authenticated
 reply from a key authorized by its current method-resolved document needs no
 `from_prior`; a different DID requires verified continuation evidence to join
-the accepted channel context.
+the exact channel context.
 
 <a id="recipient-resolution-freshness"></a>
 
@@ -633,8 +641,10 @@ the predecessor again, independently of current sender authentication.
 
 First reuse a complete proof witness for the exact carrier context and compact
 JWT under [the continuity fold](channels.md#continuity), if one exists. Each
-new carrier still passes current-sender authentication. An accepted predecessor
-is needed for channel inheritance, not for checking or saving the proof.
+new carrier still passes current-sender authentication. Deriving a link requires
+its exact endpoints and complete proof evidence, without predecessor acceptance.
+An operation that inherits channel acceptance additionally checks its explicit
+predecessor acceptance under [channels.md](channels.md#admission).
 
 Otherwise resolve the prior DID for this verification.
 A `did:peer:4` predecessor uses its validated immutable document. A `did:web`
@@ -713,7 +723,7 @@ match. This fixes the comparison used by the
 without changing how it derives the fetch URL.
 
 First disclosure of any local address uses its long form, whether in OOB or
-plaintext `from`. Within each accepted channel context, a sender MUST use its long
+plaintext `from`. Within each exact channel context, a sender MUST use its long
 form until a complete authenticated observation confirms knowledge of that exact
 address under [channels.md](channels.md#continuity). A successor also includes
 its frozen proof until confirmed. Confirmation in an unrelated channel does not
@@ -745,8 +755,9 @@ transport preference nor choosing another service changes an existing DID.
 Public and private addresses use the same channel model. On eligible live
 application input, local policy may prefer a fresh private local successor when
 the selected local DID was publicly disclosed or is shared with another peer.
-It records `did.rotationSelected` with a UUIDv7 successor,
-exact source observation and frozen proof. Reuse an existing matching decision;
+It records `did.rotationSelected` with the fixed `fromDidId`/`peerDid`, a UUIDv7
+successor, exact source observation and frozen proof. No channel acceptance is
+required. Reuse an existing matching decision;
 do not branch merely because work was interrupted. Group membership is not a
 reason to rotate an unrelated channel.
 
@@ -797,9 +808,10 @@ Replica change, missing ACK and notification loss never cause automatic replay.
 
 ### 11.4 Confirmation and overlap
 
-Use the exact-address, accepted-peer and local-only/join context checks in
+Use the exact-address, authenticated-peer and local-only/join context checks in
 [channels.md](channels.md#continuity). Input at a predecessor confirms no
-successor. A peer ACK names a message and is independent of address knowledge.
+successor. Confirmation requires no channel acceptance. A peer ACK names a
+message and is independent of address knowledge.
 Retain both recipient routes through confirmation; retire a shared resource
 only when no other channel or disclosure still needs it.
 
@@ -809,8 +821,10 @@ only when no other channel or disclosure still needs it.
 
 Store the authenticated successor-channel observation first, even when its
 predecessor document or history is missing. Commit resolution evidence when
-available and fold the original proof into a peer edge in its accepted
-predecessor context; then accept the target channel and check each operation.
+available and fold the original proof into a peer edge at its exact predecessor
+pair. Check each operation's evidence and policy; deriving the edge and
+creating a permitted automatic output require no channel acceptance. Consumers
+that require acceptance resolve it separately under [channels.md](channels.md#admission).
 No link event is appended. Show [verification status](channels.md#verification-status)
 while evidence is pending or invalid. Opposite local/peer rotations use the explicitly
 verified join; neither a shared DID nor UI grouping supplies a missing edge.
@@ -916,7 +930,7 @@ roll back; explicit new communication is a new channel and new message.
 
 10. <a id="rz-10"></a> Offline intent commits its fixed sender/recipient pair without DNS; first preparation resolves and accepts the exact peer evidence.
 
-11. <a id="rz-11"></a> Preparation reuses DID-pair acceptance and resolves current recipient evidence. Different valid imported Web revisions coexist without a winning revision or a union of authorized keys.
+11. <a id="rz-11"></a> Preparation validates the fixed-channel intent and current recipient evidence without channel acceptance. Different valid imported Web revisions coexist without a winning revision or a union of authorized keys.
 
 12. <a id="rz-12"></a> One local DID with two different peer DIDs has two independent channels without exclusive local-DID ownership.
 
@@ -950,9 +964,9 @@ roll back; explicit new communication is a new channel and new message.
 
 ### Peer continuation and integrity (RZ-26–RZ-35)
 
-26. <a id="rz-26"></a> Successor proof at different local addresses needs the corresponding complete channel evidence or a verified join; no contact lookup is required.
+26. <a id="rz-26"></a> Successor proof at different local addresses needs the corresponding complete source/endpoint evidence or a verified join; no contact lookup is required.
 
-27. <a id="rz-27"></a> Opposite-side links with one accepted base justify the exact diagonal channel in either import order without synthetic observations.
+27. <a id="rz-27"></a> Complete opposite-side links with one exact predecessor pair justify the diagonal channel in either import order without acceptance or synthetic observations.
 
 28. <a id="rz-28"></a> Forged proof, wrong sub, unrelated channel context, unauthorized signing key or mismatched predecessor resolution cannot authorize a link.
 
@@ -960,7 +974,7 @@ roll back; explicit new communication is a new channel and new message.
 
 30. <a id="rz-30"></a> Competing same-side successors, authorization cycles and contradictory identity evidence expose conflict without arrival-order winners; document revisions do not split that context.
 
-31. <a id="rz-31"></a> Missing acceptance/proof references defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof from missing history.
+31. <a id="rz-31"></a> Missing required source/endpoint/proof records defer derived continuity while authenticated receipt still commits and pickup-ACKs; UI distinguishes missing proof from missing history. Acceptance state is separate and cannot defer an otherwise complete link.
 
 32. <a id="rz-32"></a> A newly authorized same-DID key can authenticate input eligible for normal acceptance and ACKs. A removed key cannot authenticate new delivery merely because an earlier snapshot authorized it.
 
