@@ -152,7 +152,7 @@ nor matching names or keys establishes channel authority.
 ### 5.2 Operation and display policy
 
 Opposite first sends can select the same channel without role arbitration.
-Sending, preparation, automatic outputs, local rotation, profile lifts and
+Sending, preparation, automatic outputs, local rotation and
 received ACK/error attribution follow their own evidence and policy rules.
 Each operation retains its own verification snapshot across method-authorized
 document updates. Invitation consumption is a separate decision under
@@ -304,7 +304,7 @@ decisions or continuity alone cannot defer independent authentication and receip
 After durable `message.in`, missing continuity evidence, invitation decisions
 or operation evidence becomes upper-layer recovery work. Each consumer waits
 only for its required evidence. Missing consumption evidence affects invitation
-availability, not profile lifts, received ACK/error
+availability, not application views, received ACK/error
 attribution, automatic output or preparation. These waits do not withhold
 pickup ACK. Recovery reads the saved evidence; it does not restart sender
 resolution for an already committed observation.
@@ -381,7 +381,7 @@ policy are checked after receipt when consuming an invitation or starting new wo
 Commit the authenticated channel observation before deciding invitation consumption
 or new work. Each source-derived operation requires a complete source witness; a
 proof-bearing source also needs complete evidence for its derived peer link.
-Automatic intents and profile lifts retain their exact source, and local
+Automatic intents retain their exact source, and local
 rotation retains its predecessor pair and nullable source under
 [operation eligibility](channels.md#operation-eligibility).
 
@@ -1048,6 +1048,6 @@ roll back; explicit new communication is a new channel and new message.
 
 59. <a id="rz-59"></a> did:web:Bob.Example and did:web:bob.example remain distinct endpoints; returned document ID mismatch cannot be repaired by URL/DNS normalization.
 
-60. <a id="rz-60"></a> Profile facts retain their exact source channel. A permitted peer name claim creates no contact and changes no petname; a contact can show several chains but transfers no authority or shared-profile permission.
+60. <a id="rz-60"></a> Protocol-derived display data retains its exact source channel. A displayed peer name creates no contact and changes no petname; a contact can show several chains but transfers no authority or permission to share information. Body-dependent values disappear when their sources are erased; contact petnames remain independent.
 
 61. <a id="rz-61"></a> Authenticated did:web receipt commits and pickup-ACKs while continuity is incomplete. Recovery uses saved authentication; new network delivery uses its bounded fresh sequence.

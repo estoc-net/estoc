@@ -46,7 +46,7 @@ flowchart TD
 Receipt never needs invitation consumption, display assignment or complete
 continuity history. Anonymous input has no channel or application execution.
 Each operation checks its own evidence and local policy. Sending, automatic
-output, package preparation, local rotation, profile lifts and received
+output, package preparation, local rotation and received
 ACK/error observations are independent of invitation consumption under section 4.
 
 <a id="channel-identity"></a>
@@ -110,8 +110,8 @@ resolution reference, hashes and source as immutable observations.
 
 Normal pickup ACK follows process-durable receipt. An unknown, blocked,
 superseded or incomplete channel can still retain an authenticated observation.
-Receipt grants no peer ACK, protocol effect, invitation consumption or profile
-lift. Hard cryptographic/wrong-recipient/resource rejection keeps the terminal
+Receipt grants no peer ACK, protocol effect or invitation consumption.
+Hard cryptographic/wrong-recipient/resource rejection keeps the terminal
 pre-vault ACK path. Failure to durably save an otherwise receivable input
 withholds pickup ACK.
 
@@ -168,7 +168,7 @@ ordinal or message ID. That change alone grants no new automatic dispatch action
 
 `invitation.consumed` records the automatic assignment of a one-use OOB
 invitation to the peer authenticated by an exact receipt. It grants no channel,
-reply, profile, ACK or continuity authority. Its closed payload contains exactly
+reply, ACK or continuity authority. Its closed payload contains exactly
 these two fields; `roots` is empty:
 
 ```json
@@ -450,14 +450,13 @@ including its exact source when present. A user send without an inbound source
 follows the user-send rules. The committed intent or rotation decision records
 that concrete local choice; it supplies no permission for another operation.
 Automatic intents retain their exact source; rotation decisions retain their
-fixed predecessor pair, successor, proof and nullable source. A profile lift
-retains its exact source and checks current profile policy.
+fixed predecessor pair, successor, proof and nullable source.
 All referenced events must be committed first. No intent can supply
 its own source authentication or continuity proof.
 
 Import/rebuild validates each saved action's evidence references and protocol
 rules, not the producer's past wall-clock policy. Invitation availability cannot
-invalidate an intent, package, rotation decision, profile result or ACK/error
+invalidate an intent, package, rotation decision or ACK/error
 attribution whose own required evidence is complete. Ordinary later rotation
 or blocking does not erase an earlier intent, local result or recorded
 submission. Current denial, supersession, expiry and conflicts still govern
@@ -470,9 +469,10 @@ They require a complete source witness and the exact target/path checks,
 including protocol thread correlation for Report Problem, but no handler
 decision. Current blocking or supersession does not
 erase evidence that the peer acknowledged an old message; invalid/conflicting
-evidence still prevents attribution. A new profile lift remains a
-policy-controlled operation.
-Body erasure preserves existing facts but prevents new content-derived work.
+evidence still prevents attribution.
+Body erasure preserves committed event facts but prevents new content-derived
+work and invalidates display data that requires the erased bytes under
+[application views](vault-events.md#application-message-views).
 
 <a id="effects-and-recovery"></a>
 
@@ -546,8 +546,8 @@ Unassigned channels may be browsed directly.
 Deleting a contact cannot silently mutate channel authority.
 A product's explicit "delete and block" action separately appends denial
 decisions for the concrete selected channels and optional successors; later
-contact membership changes cannot expand or remove them. Profile facts retain
-their source channel even when a contact displays facts from several chains.
+contact membership changes cannot expand or remove them. Application views
+retain their source channels even when a contact displays data from several chains.
 
 <a id="fixed-outbound-channel"></a>
 
@@ -663,7 +663,7 @@ must define an authenticated application operation ID and its own rules.
 48. <a id="ch-48"></a> Missing exact local-DID or peer-resolution evidence leaves a source-derived pair pending. Another event, contact selector or shared key cannot substitute for that evidence; restoring it derives the same pair without changing saved message identities.
 49. <a id="ch-49"></a> Without consuming an invitation, a complete live source may produce a policy-permitted automatic intent, its valid fixed-channel package and a local rotation with independent exact-address confirmation. Import validates their own source, endpoints and proof and never dispatches them.
 50. <a id="ch-50"></a> An invitation consumption with a missing exact disclosure or source remains pending even if another receipt could independently justify the same consumer. That wait cannot block complete links, joins, rotation notifications or another operation with complete evidence.
-51. <a id="ch-51"></a> Without consuming an invitation, a complete source in a supported profile protocol can supply a channel-scoped name claim when readable content and current profile policy permit. Missing source/proof evidence, denial or supersession still prevents a new lift; the claim neither creates a contact nor changes its petname.
+51. <a id="ch-51"></a> Without consuming an invitation, an application may derive channel-scoped display data from a complete source and readable non-erased content under its protocol and display policy. Missing authentication or required proof prevents a verified claim; derived data creates no contact, changes no petname and grants no dispatch action.
 52. <a id="ch-52"></a> Without consuming an invitation, a complete authenticated ACK or Report Problem carrier can be attributed to its exact outbound through a valid same-channel or role-preserving successor path and the required ID/thread match. An unrelated peer knowing the ID cannot supply attribution. These observations neither establish submission nor authorize retry.
 53. <a id="ch-53"></a> Many-use and non-OOB disclosures cannot be consumed. Republishing an invitation reuses its disclosure; distinct imported OOB disclosures with the same non-null oobId conflict and cannot supply another use or reopen prior consumption.
 54. <a id="ch-54"></a> Consumption requires already committed disclosure and source references, not same-batch prerequisites. After a crash before consumption commit, recovery automatically records the first currently eligible retained source; after commit, recovery preserves that consumer even if an earlier receipt is imported. Erased or currently refused input starts no consumption. Neither crash prefix dispatches a reply or disables the disclosed DID.

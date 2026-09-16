@@ -12,7 +12,7 @@ sections define requirements.
 A vault has one seed, immutable events and raw content-addressed objects.
 Channels are ordered local/peer DID pairs that retain authenticated communication.
 Each receipt, package and proof retains its own document evidence. Sending,
-automatic output, preparation, local rotation, profile lifts and received ACK/error
+automatic output, preparation, local rotation and received ACK/error
 attribution use their concrete evidence and applicable policy. A separate
 `invitation.consumed` records the peer using a one-use OOB disclosure; it does
 not authorize or prevent those operations. One-use consumption is automatic,
@@ -34,7 +34,8 @@ receipt independently of submission. See [channels](channels.md#model) and
 [delivery boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
 Each operation checks its source, endpoint and proof evidence and applicable policy.
-Automatic intents and profile results retain their exact source references.
+Automatic intents retain their exact source references. Applications derive
+display data from retained message history under their protocol rules.
 Local rotation decisions freeze the old local DID, peer DID, successor, proof
 and nullable trigger.
 ACK, Trust Ping reply and rotation notification use independent persisted
@@ -48,7 +49,7 @@ derived from retained intents and remains available for manual action.
 | --- | --- | --- |
 | Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
-| Domain facts | [Vault events](vault-events.md) | Message, attempt, profile and local policy payloads/folds |
+| Domain facts | [Vault events](vault-events.md) | Message, attempt, contact and local policy payloads/folds |
 | Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, contact selections |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Receipt fan-out and encrypted data synchronization, without outbox takeover |
@@ -96,7 +97,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Complete witnesses | [VE witnesses](vault-events.md#complete-observation-witnesses) | [CH links](channels.md#channel-linked), [DD ACKs](distributed-delivery.md#applying-ack) |
 | Resolution, cryptographic gate and budgets | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [RM pickup](replica-mediation.md#messages-received) |
 | Invitations | [CH consumption](channels.md#invitation-consumed), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
-| Denial and contact views | [CH policy/display](channels.md#effects-and-recovery) | [VE contact selection](vault-events.md#contact-channelsset), [deletion](vault-events.md#delete-a-contact), [profiles](vault-events.md#relationship-profile-fold) |
+| Denial and contact views | [CH policy/display](channels.md#effects-and-recovery) | [VE contact selection](vault-events.md#contact-channelsset), [deletion](vault-events.md#delete-a-contact), [application views](vault-events.md#application-message-views) |
 | Submission/receipt state | [VE delivery fold](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration) |
 | Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery), [VS recovery](vault-sync.md#bootstrap-and-recovery) |
 

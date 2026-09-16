@@ -42,7 +42,7 @@ the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 | Identity and naming | [Identity, keys and identifier types](#identity-seed-and-key-names); [Identity label](#identity-label) | [Runtime author](#runtime-author-fold) | [Open runtime](#open-the-writable-full-runtime) |
 | Mediation, DIDs and routes | [Key evidence and resolved documents](#message-keys-and-peer-evidence); [Mediation, DID and route events](#mediation-communication-dids-and-routes) | [Mediation](#mediation-fold); [Routes, DIDs and keys](#route-did-and-key-fold) | [Establish mediation](#establish-mediation); [Create DID](#create-a-communication-did); [Disclose address](#disclose-an-address) |
 | Channels and continuity | [Source evidence and directed links](#relationships-and-address-changes) | [Channel and continuity projections](#relationship-fold-and-address-index) | [Channel and display policy](relationships.md#symmetric-relationship-identity); [Early privacy policy](relationships.md#early-private-address-policy-and-notifications); [Rotate local address](#rotate-a-local-relationship-address) |
-| Contacts and profiles | [Contact events](#contacts); [Channel selections](#contact-channelsset); [Name claims](#profile-nameclaimed); [Sharing observations](#profile-shared) | [Channel profiles](#relationship-profile-fold); [Contacts](#contact-fold) | [Delete contact](#delete-a-contact) |
+| Contacts and application views | [Contact events](#contacts); [Channel selections](#contact-channelsset) | [Application views](#application-message-views); [Contacts](#contact-fold) | [Delete contact](#delete-a-contact) |
 | Messages and delivery | [Stored content](#stored-message-document); [Outbound events](#outbound-message-events); [Inbound events and witnesses](#inbound-message-events) | [Inbound execution](#inbound-message-and-execution-fold); [Outbound delivery](#outbound-message-and-delivery-fold) | [Send](distributed-delivery.md#send-an-ordinary-message); [Receive](distributed-delivery.md#receive-a-message); [Recover receipt](distributed-delivery.md#receive-recovery) |
 | Invitations | [Disclosure](#disclosure) | [Invitation consumption](#invitation-fold) | [Discovery](relationships.md#out-of-band-discovery); [Receipt integrity](relationships.md#integrity-checks-and-durable-receipt) |
 | Erasure and retention | [Erasure and held roots](#erasure-and-collection) | [Held-root rules](#held-roots) | [Erase message](#erase-a-message) |
@@ -56,7 +56,7 @@ the [suite guide](README.md#rule-ownership). The table is a navigation aid.
 - [4. Message keys and peer evidence](#message-keys-and-peer-evidence)
 - [5. Mediation, communication DIDs and routes](#mediation-communication-dids-and-routes)
 - [6. Channels, continuity and contact membership](#relationships-and-address-changes)
-- [7. Contacts and profiles](#contacts)
+- [7. Contacts and application views](#contacts)
 - [8. Stored message document](#stored-message-document)
 - [9. Outbound messages and delivery](#outbound-message-events)
 - [10. Inbound messages and execution](#inbound-message-events)
@@ -108,7 +108,7 @@ authors, but that behavior is not required by phase 1.
    submission begins.
 2. **Observations carry their evidence boundary.** A peer observation carries
    the local and peer keys directly or through retained evidence references.
-   Lifted profile facts reference their source messages. A mediator observation
+   Application views retain their source attribution. A mediator observation
    names the mediation arrangement that produced it.
 3. **Portable folds have no current-runtime parameter.** Event `author` is
    provenance, not ownership of communication state.
@@ -286,9 +286,8 @@ it does not imply that every identifier has the same encoding or scope.
 
 For every payload `*EventId`, `T` is the target event type fixed by the
 referencing schema. `sourceEventId` is `EventReference<"message.in">` in
-`profile.nameClaimed`, `invitation.consumed`, `message.fromPriorResolved`,
-`did.rotationSelected` and `message.out`, and
-`EventReference<"message.out">` in `profile.shared`;
+`invitation.consumed`, `message.fromPriorResolved`, `did.rotationSelected`
+and `message.out`;
 `disclosureEventId` in `invitation.consumed` names `did.disclosed`;
 `fromDidId` and `toDidId` in `did.rotationSelected` name local DID entities;
 `rotationEventId` in
@@ -457,8 +456,6 @@ invalid reference is deferred or conflicted, never treated as anonymous.
 In this document and the delivery profile, a message or package's `peerPublicKey`
 always means this derived value. `peer.resolved` and ACK observations retain
 their explicit keys. Continuity links derive from exact proof evidence and local decisions.
-Profile observations instead
-reference their source message under [sections 7.3](#profile-nameclaimed)–[7.4](#profile-shared).
 
 `message.in.presentedDid` preserves the wire spelling, and
 `peer.resolved.presentedDid` preserves the spelling used for resolution.
@@ -481,7 +478,7 @@ mediation/
 ```
 
 These observations belong to the mediation fold, not application
-channels or contact/profile projections.
+channels or contact/application views.
 
 <a id="11-peer-and-profile-observations"></a>
 
@@ -494,10 +491,8 @@ channels or contact/profile projections.
 ### 4.3 Resolution observations
 
 Resolution observations retain exact cryptographic evidence. Peer continuity
-links follow the same rule in [section 6.4](#relationship-peertransitioned);
-profile observations name one channel and their source message in
-[sections 7.3](#profile-nameclaimed)–[7.4](#profile-shared). These facts remain
-distinct from contact assignments and local DID entities.
+links follow the same rule in [section 6.4](#relationship-peertransitioned).
+These facts remain distinct from contact assignments and local DID entities.
 
 <a id="111-peerresolved"></a>
 
@@ -842,7 +837,7 @@ otherwise. `goal` is nullable.
 `direct` disclosures MUST use `uses == "many"`. A one-use OOB
 invitation is consumed automatically when an eligible source is available under
 [section 5.8](#invitation-fold); no separate user decision is required.
-The `uses` choice grants no reply, profile, continuity or dispatch authority.
+The `uses` choice grants no reply, continuity or dispatch authority.
 `data.didId` references the local entity's `did.created.data.didId` under
 [section 3.5](#identifier-and-reference-vocabulary). Its DID spellings remain on that entity.
 A one-use OOB invitation may disclose any live communication DID; a matching
@@ -1173,7 +1168,7 @@ cryptographic prerequisite. A contact can show multiple disconnected channel cha
 
 <a id="contacts"></a>
 
-## 7. Contacts and profiles
+## 7. Contacts and application views
 
 A contact organizes channels through local decisions identified by one
 `contactId`. It selects complete local/peer DID pairs directly under
@@ -1276,7 +1271,7 @@ with the contact. `data.didId` is that entity's `did.created.data.didId` under
 `manual` or another documented policy value.
 
 This preference selects among eligible channels for a new send under
-[sections 9.2](#message-out) and [7.6](#contact-fold). It cannot change an existing
+[sections 9.2](#message-out) and [7.4](#contact-fold). It cannot change an existing
 intent's endpoints, roll back continuity or grant permission through a contact. A publicly disclosed local address may
 send normally; fresh private allocation is the default policy in
 [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
@@ -1323,82 +1318,53 @@ This is a permanent tombstone for exactly the named contact ID.
 
 <a id="113-profilenameclaimed"></a>
 <a id="profile-nameclaimed"></a>
-
-### 7.3 `profile.nameClaimed`
-
-```json
-{
-  "type": "profile.nameClaimed",
-  "roots": [],
-  "data": {
-    "sourceEventId": "019b2a84-44ef-7d16-8d04-2b9a5c2a06b1",
-    "name": "Alice L."
-  }
-}
-```
-
-The closed data has exactly `sourceEventId` and `name`; roots are empty. The
-source is one exact already committed `message.in` forming a complete source
-witness under [operation eligibility](channels.md#operation-eligibility).
-Its actual DID pair determines the claim's channel. A supported profile protocol must define its
-own fields and extraction; arbitrary Basic Message text is not a profile.
-Under the operation lock, lift only from readable, non-erased eligible
-content whose channel is not denied or superseded and whose current profile
-policy permits the lift. Existing lifted values survive ordinary policy
-changes and body erasure, hold no roots and remain peer claims rather than
-verified human names. A claim does not create a contact, change its petname or
-authorize sharing a local profile. Missing references defer claims;
-incompatible evidence conflicts. Later contact edits cannot move their source.
-
 <a id="114-profileshared"></a>
 <a id="profile-shared"></a>
-
-### 7.4 `profile.shared`
-
-```json
-{
-  "type": "profile.shared",
-  "roots": [],
-  "data": {
-    "sourceEventId": "019b2a85-0912-7b2c-9425-4fd7fd0dd019"
-  }
-}
-```
-
-The closed data has exactly `sourceEventId`; roots are empty. The source is one
-exact `message.out`; its fixed sender and recipient determine the channel. Lift a
-supported profile disclosure from readable content only after a valid committed submission
-with its attempt/package evidence. An intent, attempt or peer ACK alone is
-insufficient. Existing lifts can validate their source linkage after erasure;
-they do not reconstruct missing content. Recovery of this local projection
-never prepares or dispatches a message.
-
 <a id="145-relationship-profile-fold"></a>
 <a id="relationship-profile-fold"></a>
+<a id="application-message-views"></a>
 
-### 7.5 Channel profile fold
+### 7.3 Application message views
 
-Group profile facts by exact source channel. Deduplicate each type by logical
-source message; equal names count once and different names for one source
-conflict. Order sources by their minimum complete canonical source-event key
-`(at, eventId, author)`, never lift time. Keep `claimedName`, `nameConflict` and
-latest `shared` source key per channel; missing evidence contributes diagnostics.
+Applications MAY derive display data from retained message history under a
+supported protocol and local display policy. The protocol defines its fields,
+interpretation and ordering; this schema defines no profile-specific events or
+projection fields. Derived data identifies its exact source and source channel.
+Inbound claims require a complete authenticated source witness and consistent
+logical-message intent under [operation eligibility](channels.md#operation-eligibility).
+Missing evidence defers attribution; conflicting evidence supplies no verified
+claim. Duplicate observations of one logical message do not create another
+application fact or advance it by cache-rebuild time.
 
-Contact views may aggregate these channel-labelled facts. They do not transfer
-a profile-sharing decision or cryptographic trust to another channel. A missing
-readable eligible profile lift may be rebuilt locally; this creates no network
-dispatch permission and grants no ACK or continuity authority.
+For example, a peer name comes from that protocol's recognized name field,
+not arbitrary message text. It remains a peer claim, creates no contact,
+changes no `contact.petname` and grants no permission to share information.
+A view that a profile was submitted requires a protocol-recognized
+`message.out` and valid committed submission with its attempt/package evidence.
+Intent, attempt or peer ACK alone proves no submission. The derived view adds
+no proof that the peer received the message.
+
+These views derive from retained sources; any cache must be rebuildable.
+Read content through
+[section 12.2](#reading-content); erasure removes cached values that require the
+erased bytes. An object retained by another message cannot restore an erased
+source. Retained metadata and delivery records still support facts they
+independently establish, and explicit contact petnames remain separate.
+Missing or erased evidence is not proof that information was never shared.
+Rebuilding or losing a view grants no send, retry or protocol-response action.
+Contact views may aggregate channel-labelled data without moving its source
+or transferring cryptographic authority or sharing permission.
 
 <a id="146-contact-fold"></a>
 <a id="contact-fold"></a>
 
-### 7.6 Contact fold
+### 7.4 Contact fold
 
 Fold contacts independently: permanent deletion tombstone, latest
 petname/flags, latest local-DID preference under `contact.useDid`, and the
 latest `contact.channelsSet`. A tombstone hides the contact even if later
 membership events exist; its channels remain independently available. Aggregate
-source-labelled profile facts and channel-local messages without merging their
+source-labelled application data and channel-local messages without merging their
 identities or counting a message twice within one combined view. Missing or
 conflicting authentication evidence remains visible in the source channel.
 
@@ -2231,7 +2197,7 @@ The consumer defines the candidate set and its required comparisons and
 validation. `ackMessageId` in [section 9.7](#delivery-acknowledged) restricts
 candidates to that observation message ID's group. Any complete matching
 duplicate can witness that claim. In contrast, `sourceEventId` in a
-`message.fromPriorResolved`, `did.rotationSelected`, `message.out` or `profile.nameClaimed`
+`message.fromPriorResolved`, `did.rotationSelected`, `message.out` or `invitation.consumed`
 names one exact observation and cannot replace it with a duplicate. That source
 must supply its own complete sender authentication and immutable claims.
 The continuity fold may reuse a complete proof witness only under its explicit
@@ -2292,8 +2258,8 @@ other external effects require the live initial/manual authority specified by
 ### 10.7 Operation evidence
 
 Check [operation eligibility](channels.md#operation-eligibility) for each operation.
-Automatic `message.out` intents and `profile.nameClaimed` results retain their
-exact source; `did.rotationSelected` retains its predecessor pair, successor,
+Automatic `message.out` intents retain their exact source;
+`did.rotationSelected` retains its predecessor pair, successor,
 proof and nullable source. ACK observations validate their complete source witness and target
 path. None of these consumers depends on invitation consumption.
 These records authorize no unrelated operation on the same input.
@@ -2458,7 +2424,8 @@ list when no new objects are needed; `Vault.events` is read-only.
 5. Enumerate incomplete references/content and pending/unconfirmed outbounds for
    local recovery and manual action. Reuse their exact intent, channel, proof,
    package and attempt records. Never infer "not sent" from missing history.
-6. Rebuild eligible local profile/display projections and permanent erasure closure.
+6. Rebuild permanent erasure closure, then application display views from their
+   remaining source evidence under [section 7.3](#application-message-views).
    This work may recover data or resolve a predecessor for a previously
    unverified proof, but grants no protocol dispatch or business effect.
    Automatically complete missing invitation consumption from retained,
@@ -2826,11 +2793,11 @@ derivation requires a new vault version.
     `as: "oob"` with its `oobId`.
 29. <a id="ve-29"></a> First and later inputs use common authentication/resource checks. Automatic invitation consumption requires its own source, disclosure, ordering and current eligibility checks regardless of control type or wire age.
 
-30. <a id="ve-30"></a> Unknown application types and absent receipt requests do not prevent channel receipt. Automatic output and profile lifts need complete source evidence and operation-specific policy checks; received ACK/error observations need their exact attribution evidence. None requires invitation consumption.
+30. <a id="ve-30"></a> Unknown application types and absent receipt requests do not prevent channel receipt. Automatic output needs complete source evidence and operation-specific policy checks; received ACK/error observations and application views use their own attribution evidence. None requires invitation consumption.
 
 31. <a id="ve-31"></a> The first message uses its ordinary application protocol with no custom
     rendezvous wrapper or wire contact ID.
-32. <a id="ve-32"></a> message.in records exact channel/authentication evidence. Automatic intents and profile results directly reference their source. Carried-proof eligibility derives from exact document associations and endpoints independently of invitation use.
+32. <a id="ve-32"></a> message.in records exact channel/authentication evidence. Automatic intents directly reference their source; application views derive from retained messages in their fixed channels. Carried-proof eligibility derives from exact document associations and endpoints independently of invitation use.
 
 33. <a id="ve-33"></a> Sending to a peer and receiving from it use the same local/peer pair within a vault. The other vault observes the reversed local/peer roles; message identity preserves sender/recipient direction.
 
@@ -2909,7 +2876,7 @@ derivation requires a new vault version.
 61. <a id="ve-61"></a> Every committed inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
     linear history, and cross-author ties have deterministic recovery order.
-62. <a id="ve-62"></a> Invitation consumption is an independent local decision and grants no preparation, automatic output, rotation, profile or ACK/error authority. Erasure retains its exact source/disclosure evidence without freezing later peer keys.
+62. <a id="ve-62"></a> Invitation consumption is an independent local decision and grants no preparation, automatic output, rotation or ACK/error authority. Erasure retains its exact source/disclosure evidence without freezing later peer keys.
 
 63. <a id="ve-63"></a> Within-channel authorized variants share one execution; another channel stays separate after graph discovery. Regrouping and retirement never rewrite existing IDs.
 
@@ -3099,19 +3066,19 @@ derivation requires a new vault version.
 
 <a id="contact-profiles-ve-132-ve-137"></a>
 
-### Contact profiles (VE-132–VE-137)
+### Application message views (VE-132–VE-137)
 
-132. <a id="ve-132"></a> Contacts aggregate explicitly selected channels and may display verified related history. Shared DIDs/keys do not transfer invitation consumption or profile-sharing authority; presentation never changes source channel labels.
+132. <a id="ve-132"></a> Contacts aggregate explicitly selected channels and may display verified related history. Shared DIDs/keys do not transfer invitation consumption or permission to share information; presentation never changes source channel labels.
 
-133. <a id="ve-133"></a> profile.nameClaimed contains exactly sourceEventId and name; its channel derives from the source. Its exact complete source witness supplies the name; incomplete/invalid evidence contributes none. Existing lifts survive body erasure and later denial, while new lifts require readable content and current profile permission. The claim creates no contact and changes no petname.
+133. <a id="ve-133"></a> A displayed peer name requires a supported protocol's recognized name field, readable non-erased content, a complete authenticated source witness and applicable display policy. It is a peer claim derived from the source channel, creates no contact and changes no petname; this schema records no independent name-claim event.
 
-134. <a id="ve-134"></a> profile.shared names an exact outbound in its fixed channel with valid attempt/submission evidence. Intent, attempt or ACK alone is insufficient, and later rotation cannot mark another channel as shared.
+134. <a id="ve-134"></a> A view that a profile was submitted uses a protocol-recognized outbound and valid attempt/package/submission evidence in its fixed channel. Intent, attempt or ACK alone is insufficient; the view proves no peer receipt, and later rotation cannot mark another channel as shared.
 
-135. <a id="ve-135"></a> Profile ordering follows minimum complete canonical source keys; same-channel duplicates and import order never advance an old claim by lift time. Different names for one logical source conflict.
+135. <a id="ve-135"></a> A supported protocol defines display interpretation and ordering from source evidence. Same-channel duplicates represent one logical source, and cache rebuild time never advances a claim; conflicting authenticated intent supplies no verified application fact.
 
-136. <a id="ve-136"></a> Per-channel profile projections expose claimedName, nameConflict and latest shared source key. Display aggregation retains each source channel and grants no send authority.
+136. <a id="ve-136"></a> Applications derive their own display fields from retained messages; the core defines no profile-specific projection fields. Contact aggregation retains each source channel and grants no send or sharing authority.
 
-137. <a id="ve-137"></a> Readable eligible missing profile lifts can rebuild locally after reopen, with outbound submission checked. Erased/denied input supplies no new lift; no recovery lift dispatches a message.
+137. <a id="ve-137"></a> Erasure invalidates cached values that require the erased bytes even if another message retains the same CID. Metadata and delivery history support only their own facts; contact petnames remain separate. Missing or erased source data is not proof that a profile was never shared, and rebuilding or losing a view never dispatches a message.
 
 <a id="complete-witnesses-and-receipt-timing-ve-138-ve-139"></a>
 
@@ -3161,8 +3128,8 @@ derivation requires a new vault version.
 
 152. <a id="ve-152"></a> A dedicated notification requires rotationEventId and uses that decision's successor and peerDid. An inbound-triggered notification uses its exact source in the fromDidId/peerDid pair; a source-free manual notification has null effect/source fields and a UUIDv7 message ID. Different notification IDs for one decision conflict without affecting an independent ACK tuple.
 
-153. <a id="ve-153"></a> A saved intent, profile result or rotation decision supplies no generic permission for another operation on the source. New work checks current policy separately; ordinary later policy changes do not erase the saved record or submission.
+153. <a id="ve-153"></a> A saved intent or rotation decision supplies no generic permission for another operation on the source. New work checks current policy separately; ordinary later policy changes do not erase the saved record or submission.
 
-154. <a id="ve-154"></a> Profile claims derive their pair from the exact authenticated inbound source; profile sharing derives it from the exact outbound source. Missing source endpoint evidence defers attribution. The same peer at another local DID receives no inferred name or sharing fact.
+154. <a id="ve-154"></a> Application views attribute received claims to their exact authenticated inbound channel and submitted information to its exact outbound channel. Missing source endpoint evidence defers attribution. The same peer at another local DID receives no inferred name or sharing fact.
 
 155. <a id="ve-155"></a> contact.channelsSet sorts complete canonical localDid/peerDid tuples by their specified encoding. Duplicate pairs, equal endpoints, noncanonical spellings and extra selector fields are invalid; an empty set clears selection and missing documents grant no processing authority.

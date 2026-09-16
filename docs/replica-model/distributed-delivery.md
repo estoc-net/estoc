@@ -284,7 +284,7 @@ with a new ID. Rotation and contact preferences never retarget old work.
    result with already committed references. Automatic invitation consumption
    follows [channels.md](channels.md#invitation-consumed)
    independently of those consumers.
-7. Process valid explicit peer ACKs and local display/profile projections.
+7. Process valid explicit peer ACKs and local display views of retained messages.
    The sole active executor may independently create an eager ACK, a Ping reply
    and a rotation notification when their individual policies permit. Each
    output commits its fixed-channel intent before dispatch.
@@ -299,9 +299,8 @@ special invitation-consumption authority and no recursive privacy-response trigg
 ### 4.4 Recovery
 
 Rebuild receipts, exact source/proof evidence, local rotation decisions,
-invitations, denials, profile
-and display projections from retained facts. Saved authenticated input does not
-need current sender re-resolution. Links and UI verification states derive
+invitations, denials and display views from retained facts. Saved authenticated
+input does not need current sender re-resolution. Links and UI verification states derive
 from retained proof snapshots; obtaining missing proof evidence follows the separate
 [predecessor resolution rule](relationships.md#predecessor-resolution).
 Missing bytes/references remain recovery work. Later validation does not append
