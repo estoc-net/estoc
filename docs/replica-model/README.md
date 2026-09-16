@@ -11,6 +11,24 @@ The implemented version-2 vault is documented separately in
 predates this SQLite draft and does not establish SQLite conformance. This
 revision changes specifications, not the implementation's completion status.
 
+<a id="channel-graph-candidate"></a>
+
+## Candidate: channel-first domain model
+
+[Channel graph and derived continuity scopes](channel-graph.md) proposes removing
+relationship as a first-class aggregate: authenticated observations define
+channels, contacts group them locally, and immutable origin/continuation evidence
+folds into stable protocol scopes. Receipt and scope admission are separate
+commits; contact operations cannot create protocol continuity.
+
+This is an **experimental spec-only alternative**, not an implicit amendment to
+the phase-1 schemas below. The baseline remains the implementation reference.
+Review the [model](channel-graph.md#model), [receipt boundary](channel-graph.md#receipt)
+and [owner-by-owner integration map](channel-graph.md#integration) together before
+adoption. The new [CG cases](channel-graph.md#conformance) and
+[executable model examples](channel-graph.test.mjs) do not establish implementation
+conformance or replace existing VE/DD/RZ cases.
+
 <a id="model-overview"></a>
 
 ## Model overview
@@ -40,6 +58,7 @@ Public/rendezvous addresses are a discovery concept in that profile.
 
 | Task | Suggested path |
 | --- | --- |
+| Review the channel-first candidate | [Model](channel-graph.md#model) → [identities](channel-graph.md#identifiers) → [evidence](channel-graph.md#evidence) → [integration map](channel-graph.md#integration) |
 | Understand the system | [Vault model](vault-events.md#model) → [relationships](relationships.md#what-it-is-for) → [commit/ACK boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table) |
 | Implement storage | [DASL identity](dasl-objects.md#reading-guide) → [EventStore/Vault](event-store.md#reading-guide) → [SQLite](vault-sqlite.md#reading-guide) |
 | Implement application state | [Identifier vocabulary](vault-events.md#identifier-and-reference-vocabulary) → [schemas/folds](vault-events.md#reading-guide) → [procedures](vault-events.md#procedures) |
@@ -55,6 +74,8 @@ Public/rendezvous addresses are a discovery concept in that profile.
 Change the defining section, not a second copy of its rules. ES describes what
 a caller observes; DO defines object identity and retention; SQ alone owns
 SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
+This table owns the baseline; the [channel-first candidate map](channel-graph.md#integration)
+is separate and grants no ambient override of these rules.
 
 | Rule | Definition | Connected sections |
 | --- | --- | --- |
@@ -97,6 +118,7 @@ SQLite procedures. Domain schemas, folds and wire protocols are unchanged.
 | RZ | [Relationships and addresses](relationships.md#required-conformance-cases) | Phase 1 |
 | RM | [Replica mediation](replica-mediation.md#required-conformance-cases) | Deferred |
 | VS | [Vault sync](vault-sync.md#required-conformance-cases) | Deferred |
+| CG | [Channel graph](channel-graph.md#conformance) | Candidate only; not activated |
 
 Named anchors support direct links independently of displayed section numbers.
 The relationship profile keeps its historical RZ prefix. Existing cases retain
@@ -115,6 +137,15 @@ with their owner instead of repeating implementation requirements across files.
 <a id="section-history"></a>
 
 ## Section history
+
+### Channel-first candidate (not activated)
+
+The channel graph candidate adds a separate proposed domain model, new CG case
+identities and dependency-free identifier/evidence-fold examples. Existing
+specifications, named anchors, execution IDs and implementation status are not
+changed. Adoption requires coordinated owner edits, domain-profile validation,
+an explicit migration decision and full integration conformance; a relationship
+field rename is insufficient.
 
 ### SQLite phase-1 simplification
 
