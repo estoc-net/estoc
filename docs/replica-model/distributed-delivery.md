@@ -217,7 +217,7 @@ when a full vault runtime process-durably appends `message.out`.
 | Boundary | Durable prerequisite | Meaning |
 | --- | --- | --- |
 | Offline send intent | Content and `message.out` with fixed channel/direction | A selected new message, not authority for recovery dispatch |
-| Package preparation | Exact accepted pin, retained resolution and `message.prepared` | Recoverable immutable bytes |
+| Package preparation | Accepted DID pair, operation resolution and `message.prepared` | Recoverable immutable bytes |
 | Transport invocation | Prior `delivery.attempted` plus its still-live local action | Exactly one call may occur; the event itself is not replayable work |
 | Submission completion | `delivery.submitted` referencing that attempt/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
@@ -273,8 +273,8 @@ with a new ID. Rotation and contact preferences never retarget old work.
 4. Pickup-ACK process-durable receipt independently of channel policy/history.
 5. Resolve explicit channel acceptance or verify exact continuity links/joins.
    Missing evidence stays pending; receipt never grants an implicit acceptance.
-6. Recheck channel pin, proof, supersession and denial; commit/reuse
-   `message.accepted` with already committed references.
+6. Recheck channel acceptance, exact source authentication, proof, supersession
+   and denial; commit/reuse `message.accepted` with already committed references.
 7. Process eligible explicit peer ACKs and local display/profile projections.
    Only newly accepted live input in the sole active executor may select a
    new automatic output; commit its fixed-channel intent before dispatch.
@@ -290,7 +290,10 @@ special admission authority and no recursive privacy-response trigger.
 
 Rebuild receipts, exact acceptance/link evidence, invitations, denials, profile
 and display projections from retained facts. Saved authenticated input does not
-need current re-resolution. Missing bytes/references remain recovery work.
+need current sender re-resolution. Existing links use their retained proof
+snapshots; establishing a previously unverified link follows the separate
+[predecessor resolution rule](relationships.md#predecessor-resolution).
+Missing bytes/references remain recovery work.
 
 Enumerate pending/unconfirmed messages for manual action. Reopen, restore,
 import, replica change and duplicate pickup do not dispatch old messages or
@@ -417,8 +420,10 @@ evidence changes under an expressly permitted rule.
 Use `message.out.senderDidId`, the canonical selected recipient and its derived
 fixed channel. Resolve first-package freshness under
 [the address profile](relationships.md#recipient-resolution-freshness); select
-only keys authorized by the exact accepted pin. An explicit user-authored
-outbound may establish that acceptance. Automatic output cannot authorize itself.
+keys authorized by that operation's document in the accepted DID pair. A
+method-authorized update may change keys or service without changing the channel
+or its acceptance. An explicit user-authored outbound may establish that
+acceptance. Automatic output cannot authorize itself.
 
 Construct the complete plaintext from immutable intent: conditional nullable
 timestamps/threads, exact `pleaseAck`, frozen `ack`, supported headers, body and
@@ -482,8 +487,9 @@ If `pleaseAck` is null/empty there is no explicit ACK obligation. Otherwise
 expand `""` to the carrier's wire ID, ignore later duplicate requests for
 selection and preserve the original stored wire array. A named target must
 have complete accepted source evidence from the same peer direction in this
-channel or an authorized predecessor channel. Validate the exact path, pin and
-requesting peer; no vault-global wire-ID match or display group grants a target.
+channel or an authorized predecessor channel. Validate the exact path,
+authentication and requesting peer; no vault-global wire-ID match or display
+group grants a target.
 If multiple otherwise eligible channel inputs with that wire ID are ambiguous,
 omit it. The current carrier can identify itself by its exact source.
 
@@ -540,8 +546,11 @@ the original local endpoint or its verified local successor. Undirected graph
 connectivity, group membership, threads and ordinary responses are insufficient.
 
 All redundant witness fields must come from one complete source row. Missing
-path/pin/package references defer the acknowledgment. The observation records
-peer receipt only, not transport acceptance or permission to send again.
+path/authentication/package references defer the acknowledgment. The carrier's
+key need not equal the old package's recipient key: a same-DID document update
+is authorized by the carrier's own current authentication evidence. The
+observation records peer receipt only, not transport acceptance or permission
+to send again.
 
 <a id="duplicate-receipt-handling"></a>
 
@@ -572,7 +581,8 @@ messageId = UUIDv5(
 ```
 
 Keys and source event IDs remain exact authentication evidence. Different
-authorized keys under one accepted pin can represent the same channel input.
+authorized keys under different method-valid snapshots can represent the same
+channel input; document updates create no new deduplication scope.
 Opposite sender directions cannot collide merely by choosing the same wire ID.
 For truly anonymous input, retain the independent observation-only derivation:
 
@@ -599,16 +609,17 @@ These are identifier fixtures, not authentication/proof fixtures.
 
 A deterministic ID supplies no authority by itself. Before processing ACKs or
 committing an automatic output, require an exact complete `message.accepted`
-with its channel pin and carried-proof link already committed. Anonymous and
-mediator-control input have no application execution. A batch cannot authorize
+with its channel acceptance, source authentication and carried-proof link
+already committed. Anonymous and mediator-control input have no application
+execution. A batch cannot authorize
 its own response by proposing source/acceptance/link events together with it.
 
 <a id="address-chains-and-observation-membership"></a>
 
 ### Accepted observations
 
-Validate each source's actual channel and exact authentication against its
-accepted pin under [channels.md](channels.md#message-accepted). Equal intent in
+Validate each source's actual channel against the accepted DID pair and its
+authentication against its own snapshot under [channels.md](channels.md#message-accepted). Equal intent in
 one channel/sender/wire-ID input shares one execution. Incompatible authenticated
 intent conflicts; incomplete consistent siblings do not erase valid acceptance.
 Another channel stays separate, even when a later verified link connects it.
@@ -740,7 +751,7 @@ delivery.submitted         exact attempt observed transport acceptance
 delivery.failed            terminal package/message failure
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
-channel.accepted           local acceptance with exact peer pin
+channel.accepted           local DID-pair acceptance with decision evidence
 channel.linked             one evidence-backed endpoint change
 message.accepted           permission for this actual source observation
 channel.blocked            local channel/successor denial
@@ -861,7 +872,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 25. <a id="dd-25"></a> Missing channel acceptance/link evidence defers that observation; later evidence grants only its channel-local execution and no recovery dispatch.
 
-26. <a id="dd-26"></a> Incompatible channel pins or authenticated intent suppress new effects; display regrouping cannot resolve them.
+26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; display regrouping cannot resolve them and ordinary document updates do not cause them.
 
 27. <a id="dd-27"></a> Accepted control input may process authorized ACKs without creating contacts or recursive privacy notifications; its type grants no admission.
 
@@ -886,7 +897,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 34. <a id="dd-34"></a> `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
     `kid` has the exact `iss` DID portion. Predecessor method authorization uses
     [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
-    pinned document, without requiring byte equality with presentedDid.
+    exact predecessor verification document, without requiring byte equality with presentedDid.
 35. <a id="dd-35"></a> New unconfirmed successor packages include frozen proof/long form; attempted packages never change after confirmation.
 
 36. <a id="dd-36"></a> Direct and mediated traffic use the same channel receipt/acceptance folds; only mediated traffic has pickup ACK.
@@ -934,7 +945,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-50. <a id="dd-50"></a> Recovery exposes incomplete acceptance/proof and pending response work from retained data, without automatic network effects or redelivery dependence.
+50. <a id="dd-50"></a> Recovery exposes incomplete acceptance/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
 
 51. <a id="dd-51"></a> Outcome-unknown calls remain unconfirmed after crash; manual retry preserves wire ID, package, channel and expiry.
 
@@ -954,9 +965,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 57. <a id="dd-57"></a> Offline intent freezes actual channel/sender/recipient. Even a never-attempted message is not readdressed after rotation.
 
-58. <a id="dd-58"></a> Current resolution cannot replace a channel pin. Unpinned same-DID input retains diagnostics without ACK/effect authority; display assignment changes nothing.
+58. <a id="dd-58"></a> A valid same-DID key/service update preserves channel acceptance. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
 
-59. <a id="dd-59"></a> Authorized keys from one accepted pin share channel-local input identity; an unpinned key does not enlarge authority.
+59. <a id="dd-59"></a> Independently authorized keys across document revisions share channel-local input identity; an unauthorized key contributes no acceptance or authenticated intent conflict.
 
 60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
     before first preparation. Transient unavailability leaves it retryable;
@@ -993,7 +1004,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 68. <a id="dd-68"></a> Receipt precedes channel/message acceptance. Matching channel acceptance consumes its invitation; all crash prefixes reopen without automatic replies.
 
-69. <a id="dd-69"></a> Missing predecessor pins keep continuity pending after authenticated receipt. Saved authentication is reusable; failed unpack still withholds receipt/ACK.
+69. <a id="dd-69"></a> Missing predecessor acceptance or verification snapshots keep continuity pending after authenticated receipt. Saved authentication is reusable; failed unpack still withholds receipt/ACK.
 
 ### Group waits and transition validity (DD-70–DD-71)
 

@@ -432,8 +432,11 @@ Every deterministic ID or authorization check that uses a peer key uses this
 exact string.
 
 For an inbound observation it is the key that authenticated the message; for
-an outbound package or resolution it is the selected recipient key. Selection
-alone is not evidence of authenticated inbound traffic or remote receipt.
+an outbound package it is the selected recipient key. A resolution records
+the key used by its consumer: a key-agreement key for receipt/preparation, or
+the JWT authentication key for predecessor verification. Each consumer checks
+the method's authorization for that purpose. Selection alone is not evidence
+of authenticated inbound traffic or remote receipt.
 
 The executable key fixture used by this specification is X25519, public-key
 codec `0xec` (unsigned-varint bytes `ec01`), with these 32 raw public-key bytes:
@@ -457,7 +460,7 @@ reference their source message under [sections 7.3](#profile-nameclaimed)–[7.4
 `message.in.presentedDid` preserves the wire spelling, and
 `peer.resolved.presentedDid` preserves the spelling used for resolution.
 First-disclosure validation and recovery use this retained evidence. Channel
-acceptances pin authorized keys under [section 6.6](#relationship-fold-and-address-index);
+acceptances authorize DID pairs under [section 6.6](#relationship-fold-and-address-index);
 a verified link may justify a new channel without changing earlier message IDs.
 Equal key values under different DIDs do not supply channel authority or a
 contact assignment. An observation awaiting channel acceptance keeps its key
@@ -522,7 +525,9 @@ distinct from contact assignments and local DID entities.
 ```
 
 This event is durable resolution evidence for one authenticated or selected
-peer key.
+peer key. `localKeyName` identifies the local communication key/context; a
+predecessor JWT signature is verified with the selected peer key, not that
+local key.
 
 - `presentedDid` is the exact DID string supplied for resolution, preserved
   across any resolver-internal URL or DNS normalization.
@@ -531,19 +536,22 @@ peer key.
   the short form; first disclosure keeps the long form in `presentedDid`.
 - `documentCid` names the raw DASL object containing exact RFC 8785 canonical
   resolved DID document JSON. Its CID commits to those bytes.
-- the authenticated `peerPublicKey` must be present under the named DID and exact
+- the selected or authenticated `peerPublicKey` must be present under the named DID and exact
   document;
 - `authenticationMethodIds` and `keyAgreementMethodIds` enumerate all methods authorized
   for those purposes in the exact retained document, with references resolved
   against that document's `id`. They do not prove every listed key controlled the
-  observed message; the key-agreement methods are historical chain evidence
-  only when this snapshot is pinned by a channel acceptance or verified link
-  under [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity); and
+  observed message. Each consuming message, acceptance or link references its
+  own exact evidence; method lists from different revisions MUST NOT be unioned
+  into a channel-wide authorization set; and
 - `service` is the selected DIDComm service URI or null.
 
-`channel.accepted` pins this event as its peer-document snapshot, on either
-send or receive. A later `from_prior` is verified
-against this exact event and object, not an unrelated current web document.
+`channel.accepted` references the evidence of its initial decision. Later
+receipts and packages may reference other method-authorized revisions under
+the same canonical DID without another acceptance. A peer `channel.linked`
+separately records its `predecessorResolutionEventId` for JWT verification and
+its `peerResolutionEventId` for the successor carrier. Those exact objects
+remain historical evidence; a later revision cannot replace any reference.
 If the event or object is temporarily missing, processing is deferred until
 verified recovery material is available; absence is not proof that the
 transition is invalid. Phase 1 does not depend on deferred vault sync.
@@ -570,11 +578,13 @@ Later short-form lookup or receipt MUST reuse or reproduce those same document
 bytes and CID from `L`, even though `presentedDid` may now be `S`. New resolution
 events may record another presented spelling, selected key or local `localKeyName`;
 they do not produce a second document for the same numalgo-4 DID. Import
-validates this representation against `L`; it never repairs a pin by rewriting
+validates this representation against `L`; it never repairs evidence by rewriting
 the retained bytes or CID. Method-ID comparison follows [section 6.4](#relationship-peertransitioned).
 
-Equivalent duplicate observations are harmless. Same presented/canonical DID
-and document CID with incompatible contents is an integrity conflict.
+Equivalent duplicate observations are harmless. Different valid Web document
+revisions for the same DID may coexist and need no portable ordering. Same
+document CID with incompatible contents is an integrity conflict; a different
+document under one immutable Peer DID is invalid method evidence.
 
 <a id="mediation-communication-dids-and-routes"></a>
 
@@ -1009,8 +1019,8 @@ development vaults require rebuilding or an explicit separate conversion.
 ### 6.1 Receipt and channel evidence
 
 Channel receipt commits independently. Under one vault operation lock,
-acceptance operations recheck exact pins, local lifecycle, denial, invitation
-availability and equivalent committed evidence. Every event reference must
+acceptance operations recheck exact DID pairs and evidence, local lifecycle,
+denial, invitation availability and equivalent committed evidence. Every event reference must
 name an already committed event; use returned IDs, not an assumed same-batch
 ID. Release the vault lock before network calls. Per-message dispatch is
 separately serialized under [delivery](distributed-delivery.md#send-an-ordinary-message).
@@ -1044,7 +1054,7 @@ Known missing references defer acceptance; they never block independent receipt.
 The exact two required IDs name a display relationship and contact. Latest
 canonical event per relationship selects its display assignment. The relationship
 membership comes from `relationship.channelsSet`, not from cryptographic roots.
-Assignment cannot grant channel permission, transfer a pin, change an execution
+Assignment cannot grant channel permission, transfer authentication evidence, change an execution
 or revoke authority. Missing display evidence affects display only.
 
 <a id="112-relationshippeertransitioned"></a>
@@ -1054,11 +1064,13 @@ or revoke authority. Missing display evidence affects display only.
 
 Use `channel.linked` with `side == "peer"` under
 [channels.md](channels.md#channel-linked). It references one complete successor
-receipt and the exact predecessor-channel acceptance. The carrier does not need
+receipt, exact predecessor-channel acceptance and predecessor resolution used
+for verification. The carrier does not need
 message acceptance to prove continuity. Retain pending proof in the channel
 receipt when the predecessor is missing; do not invent a display relationship.
 
-The proof's `iss` canonicalizes to the predecessor pin's peer DID; `sub` equals
+The proof's `iss` canonicalizes to the predecessor channel's peer DID and the
+link's predecessor resolution DID; `sub` equals
 the carrier's exact plaintext `from` and authcrypt sender spelling and
 canonicalizes to the successor DID. The two canonical DIDs must differ.
 `iat` is an integer Epoch-Seconds value: it has no message-age acceptance window
@@ -1070,20 +1082,23 @@ encoding APIs to verify the original JWT; decoding alone proves nothing.
 For predecessor comparison, validate any Peer long form and derive its short
 form under [the DID profile](relationships.md#peer-did-numalgo-4-profile).
 Other supported methods use that profile's canonicalization, including its
-exact-string fallback. The pin's `presentedDid` need not equal `iss` if these
-validated canonical forms agree. To compare `kid` with the pinned document's
+exact-string fallback. The predecessor resolution's `presentedDid` need not equal
+`iss` if these validated canonical forms agree. To compare `kid` with that document's
 authentication methods, resolve relative method references against its `id`,
 then canonicalize only the DID portions of the two DID URLs. All remaining
 components, including the fragment, match byte-for-byte. This comparison
 rewrites neither the JWT signing input nor the retained document or CID.
 
-A newer network document cannot replace the historical pin unless its exact
-canonical bytes have the pinned CID. Missing material defers verification;
-an invalid signature, claim, method or long form conflicts. Repeated evidence
-for the same predecessor and successor reuses equivalent complete pins. The
-same compact proof with a different successor document CID is a conflict,
-never permission to enlarge the successor's key set. Current resolutions,
-shared keys and display assignment cannot replace this evidence.
+New link production follows [predecessor resolution](relationships.md#predecessor-resolution).
+Recovery of an existing link uses only its exact referenced document; network
+retrieval can fill missing bytes only when their canonical CID matches.
+Missing material defers verification; an invalid signature, claim, method or
+long form grants no link. Repeated evidence for the same predecessor and
+successor is the same DID replacement even when method-authorized predecessor
+or successor document revisions differ. Verify each complete link's own
+references; different revisions alone are not conflicting successors. Shared
+keys, current resolution alone and display assignment cannot replace the
+channel context and verified proof.
 
 <a id="124-relationshiplocaltransitioned"></a>
 <a id="relationship-localtransitioned"></a>
@@ -1104,10 +1119,10 @@ block a retry without relocating it.
 
 ### 6.6 Channel and continuity projections
 
-Index exact DID pairs directly by channel ID. Derive accepted pins, directed
+Index exact DID pairs directly by channel ID. Derive accepted pairs, directed
 links, verified opposite-side joins, local-only supersession contexts and
 denials under [channels.md](channels.md#continuity). Every edge retains its exact
-evidence. Missing references defer the affected projection; contradictory pins,
+evidence. Missing references defer the affected projection; contradictory identities,
 proofs or same-end successors conflict. There is no stable component ID and
 no message/execution reassignment when graph history changes.
 
@@ -1375,7 +1390,7 @@ conflicting authentication evidence remains visible in the source channel.
 
 `writeTo[]` is the concrete eligible channel choices shown for a new user send.
 Membership in a display group is not eligibility: each choice needs its own
-accepted pin/verified continuation and live local key/route. A deliberate new
+accepted pair/verified continuation and live local key/route. A deliberate new
 peer address may start an explicit outbound acceptance separately. `contact.useDid`
 only chooses among these eligible options. It never retargets a saved intent.
 
@@ -1570,8 +1585,9 @@ intents only; even a never-attempted intent is not retargeted. See
 The selected `recipientDid` retains the exact supplied spelling, including a
 validated Peer long form needed for offline first preparation. Canonicalize it
 for channel identity and package endpoint comparison. No resolver lookup is
-required to record this selection. Before preparation, exact peer evidence is
-accepted under `channel.accepted`; an explicit user-authored outbound may be
+required to record this selection. Before preparation, the DID pair is accepted
+under `channel.accepted` and preparation retains its own exact peer evidence;
+an explicit user-authored outbound may be
 the acceptance basis. Automatic output must already have independent channel
 authority and accepted source evidence.
 
@@ -2116,9 +2132,10 @@ peer ACK, contact or handler effect.
 ### 10.3 Duplicate and conflict rules
 
 Group by `(channelId, canonical sender DID, wireMessageId)` and its deterministic
-message ID. Each accepted observation authenticates independently and matches
-its channel pin. Equal intent hashes represent one logical input; differences
-conflict. Transport, author, ordinal, authorized key and exact plaintext may
+message ID. Each accepted observation authenticates independently with its own
+method-valid snapshot and matches its accepted DID pair. Equal intent hashes
+represent one logical input; differences conflict. Transport, author, ordinal,
+authorized key and exact plaintext may
 differ without creating a new logical input in this same channel. Missing
 acceptance for a consistent sibling neither supplies another execution nor
 withdraws an existing complete decision. Contradictory authenticated evidence
@@ -2199,10 +2216,12 @@ required for eligible processing. A complete witness's fields come from that
 one row, with its exact references; incomplete siblings cannot fill its gaps.
 Preserve current denial/conflict status separately from historical acceptance.
 
-Intent conflict requires independently complete authentication, accepted-pin
+Intent conflict requires independently complete authentication, accepted-pair
 membership and carried-proof evidence for the disagreeing observations.
-Receipt alone, an unpinned key or a still-missing reference cannot establish
-that conflict or invalidate an already complete accepted observation. Retain
+Keys authorized by different valid Web revisions can therefore still produce
+an intent conflict in one logical input. Receipt alone, an unauthorized key or
+a still-missing reference cannot establish that conflict or invalidate an
+already complete accepted observation. Retain
 those rows with their own pending/refused diagnostics.
 
 Control input, Empty, ping-response and Report Problem remain durable eligible
@@ -2386,7 +2405,8 @@ list when no new objects are needed; `Vault.events` is read-only.
    local recovery and manual action. Reuse their exact intent, channel, proof,
    package and attempt records. Never infer "not sent" from missing history.
 6. Rebuild eligible local profile/display projections and permanent erasure closure.
-   This work may recover data but grants no network or other external effect.
+   This work may recover data or resolve a predecessor for a previously
+   unverified proof, but grants no protocol dispatch or business effect.
 7. Start recipient reconciliation, pickup and permitted synchronization. Enable
    new user sends and manual actions only after normal runtime/evidence checks.
 
@@ -2708,7 +2728,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 17. <a id="ve-17"></a> Pending channel/link evidence defers processing. Later validation preserves this channel-local identity and grants no automatic recovery dispatch.
 
-18. <a id="ve-18"></a> Incompatible channel pins or authenticated intents conflict; another recipient DID produces another channel and execution identity.
+18. <a id="ve-18"></a> Contradictory channel identities or authenticated intents conflict; another recipient DID produces another channel and execution identity. Document revisions alone do neither.
 
 19. <a id="ve-19"></a> Intent conflicts suppress disputed automatic effects and ACK
     processing.
@@ -2757,7 +2777,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 36. <a id="ve-36"></a> Receipt survives crash before acceptance/display work. Recovery rebuilds saved evidence without redelivery or automatic outgoing effects.
 
-37. <a id="ve-37"></a> channel.accepted stores exact channel/local DID/peer pin, nullable source and explicit basis. Equivalent pins deduplicate; incompatible pins conflict.
+37. <a id="ve-37"></a> channel.accepted stores exact channel/local DID/decision-time resolution, nullable source and explicit basis. Same-pair decisions may retain different valid document revisions; each source/basis validates independently.
 
 <a id="address-changes-and-default-responses-ve-38-ve-49"></a>
 
@@ -2766,10 +2786,10 @@ There is no migration requirement from an earlier event vocabulary.
 38. <a id="ve-38"></a> Local `from_prior.iss` uses the predecessor's long form and its protected
     `kid` has that exact DID portion. Peer verification matches validated
     predecessor spellings and method IDs under [section 6.4](#relationship-peertransitioned), without changing
-    the pinned snapshot or JWT bytes.
+    the referenced snapshot or JWT bytes.
 39. <a id="ve-39"></a> `from_prior.sub` equals plaintext `from` byte-for-byte; before confirmation
     both use the successor's Peer-DID long form.
-40. <a id="ve-40"></a> Proof verifies against the exact predecessor acceptance pin and valid JWT fields; iat and current resolver results never elect another predecessor snapshot.
+40. <a id="ve-40"></a> Proof verifies against the link's exact predecessorResolutionEventId and valid JWT fields. The DID matches predecessor acceptance; iat never selects a snapshot and recovery cannot substitute current resolver bytes.
 
 41. <a id="ve-41"></a> Successor/link and exact package commit before disclosure, and an attempt commits before transport invocation.
 
@@ -2825,7 +2845,7 @@ There is no migration requirement from an earlier event vocabulary.
 61. <a id="ve-61"></a> Every accepted inbound carries a durable phase-1 receipt ordinal. ACK arrays
     use `firstReceiptKey`; clock rollback does not reverse receipt order in a
     linear history, and cross-author ties have deterministic recovery order.
-62. <a id="ve-62"></a> Channel acceptance follows explicit inbound/outbound/invitation policy or verified links. It precedes dependent preparation/message processing and retains exact pins through erasure.
+62. <a id="ve-62"></a> Channel acceptance follows explicit inbound/outbound/invitation policy or verified links. It precedes dependent preparation/message processing and retains exact decision evidence through erasure without freezing later keys.
 
 63. <a id="ve-63"></a> Within-channel authorized variants share one execution; another channel stays separate after graph discovery. Regrouping and retirement never rewrite existing IDs.
 
@@ -2883,7 +2903,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 83. <a id="ve-83"></a> Same-consumer invitation reuse does not create another take. Imported
     incompatible consumers leave it unavailable; event order chooses no winner.
-84. <a id="ve-84"></a> contact.merged and relationship.channelsSet change display only; channel pins, executions, ACK authorization, denials, invitation and erasure facts remain unchanged.
+84. <a id="ve-84"></a> contact.merged and relationship.channelsSet change display only; channel acceptance, operation evidence, executions, ACK authorization, denials, invitation and erasure facts remain unchanged.
 
 85. <a id="ve-85"></a> Matching pthid alone, foreign recipients and continuation bases consume no invitation. A complete qualifying channel acceptance consumes its exact local disclosure.
 
@@ -2901,7 +2921,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Transition evidence and automatic intent (VE-90–VE-100)
 
-90. <a id="ve-90"></a> channel.linked names the exact prior acceptance, changed side, target pair/pin and proof; a peer link requires its complete successor receipt.
+90. <a id="ve-90"></a> channel.linked names exact prior acceptance, changed side, target pair/resolution and proof. A peer link requires its complete successor receipt and non-null predecessorResolutionEventId; a local link requires null and uses the retained local document.
 
 91. <a id="ve-91"></a> Erasure preserves exact channel acceptances, document references, link JWTs and sources. Missing evidence defers instead of selecting replacement material.
 
@@ -2942,11 +2962,11 @@ There is no migration requirement from an earlier event vocabulary.
 
 103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid and has no relationshipId/birth. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
 
-104. <a id="ve-104"></a> Every pair uses channel acceptance with exact pins; ordinary user sending needs no first reply and retains its channel through reply, submission, erasure and restore.
+104. <a id="ve-104"></a> Every pair uses channel acceptance with exact decision evidence; ordinary user sending needs no first reply and retains its channel through document update, reply, submission, erasure and restore.
 
-105. <a id="ve-105"></a> Successful same-DID resolution without an accepted usable key fails that outbound without replacing its pin. Authenticated unpinned input retains a diagnostic and no ACK/effect permission.
+105. <a id="ve-105"></a> Successful same-DID resolution with a newly authorized usable key permits preparation and receipt under existing channel acceptance. Definitive resolution failure retains the scoped failure path; revoked keys cannot authenticate new delivery.
 
-106. <a id="ve-106"></a> Keys authorized by one accepted peer snapshot may authenticate the same channel input. A fresh incompatible document grants no new key; another channel never merges execution.
+106. <a id="ve-106"></a> Keys independently authorized by different valid Web revisions may authenticate the same channel input. Equal intent deduplicates and contradictory intent conflicts; another channel never merges execution.
 
 107. <a id="ve-107"></a> Channel vectors sort canonical DID pairs symmetrically; key encoding and display IDs cannot change them.
 
@@ -2979,17 +2999,17 @@ There is no migration requirement from an earlier event vocabulary.
 
 115. <a id="ve-115"></a> Local rotation changes new intent selection only. Queued, prepared, attempted and submitted messages keep their oriented channel; a new-channel send needs a new ID.
 
-116. <a id="ve-116"></a> Equivalent links are idempotent; same-side branches, dependency cycles and incompatible pins conflict. Missing predecessor acceptance defers only affected work.
+116. <a id="ve-116"></a> Equivalent DID replacements are idempotent across valid document revisions; same-side branches, dependency cycles and contradictory identity evidence conflict. Missing predecessor acceptance defers only affected work.
 
 117. <a id="ve-117"></a> Verified role-preserving paths can authorize successor ACKs for fixed old outbounds; they do not merge source executions and display membership supplies no path.
 
 118. <a id="ve-118"></a> A shared DID can belong to unrelated channels. Only evidence-backed opposite-side joins justify new channel combinations; no global Cartesian-product or component identity is assumed.
 
-119. <a id="ve-119"></a> A peer carrier authorizes its exact channel link or verified join context. Proof-free input uses an accepted pin in its actual channel without full root-history paths.
+119. <a id="ve-119"></a> A peer carrier authorizes its exact channel link or verified join context. Proof-free input uses its own authentication evidence and accepted pair without full root-history paths.
 
 120. <a id="ve-120"></a> A complete receipt can witness a peer link before its own message acceptance. Restoring the missing predecessor allows local validation without inventing a new global identity.
 
-121. <a id="ve-121"></a> message.accepted contains exact source, channelAcceptanceEventId and nullable proofLinkEventId. Missing references defer; incompatible pins/intent conflict without moving effects or reopening invitations.
+121. <a id="ve-121"></a> message.accepted contains exact source, channelAcceptanceEventId and nullable proofLinkEventId. The source's valid snapshot may differ from acceptance and link snapshots; missing exact references defer and contradictory identity/intent conflicts without moving effects or reopening invitations.
 
 122. <a id="ve-122"></a> Opposite-side links from one accepted base justify their exact diagonal join in either import order; same-side competing successors remain conflicts.
 
@@ -3005,9 +3025,9 @@ There is no migration requirement from an earlier event vocabulary.
 
 126. <a id="ve-126"></a> Peer supersession refuses new old-peer work through its verified local-only context. Previously accepted input remains; unrelated public-DID channels are unaffected.
 
-127. <a id="ve-127"></a> Resolution and receipt commit in dependent steps before acceptance. Acceptance/pin/invitation decisions serialize under the lock; crash prefixes never authorize automatic recovery dispatch.
+127. <a id="ve-127"></a> Resolution and receipt commit in dependent steps before acceptance. Acceptance/evidence/invitation decisions serialize under the lock; crash prefixes never authorize automatic recovery dispatch.
 
-128. <a id="ve-128"></a> Confirmation in an unrelated channel does not permit short-form disclosure. Exact predecessor pin and validated DID spelling equivalence govern JWT method comparison.
+128. <a id="ve-128"></a> Confirmation in an unrelated channel does not permit short-form disclosure. Exact predecessor verification evidence and validated DID spelling equivalence govern JWT method comparison.
 
 129. <a id="ve-129"></a> Incomplete continuity does not block authenticated receipt/pickup ACK. Recovered predecessor evidence validates local links; invalid paths grant no acceptance and failed unpack remains pre-receipt.
 
@@ -3024,7 +3044,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Contact profiles (VE-132–VE-137)
 
-132. <a id="ve-132"></a> Display relationships aggregate explicitly selected channels. Shared DIDs/keys do not transfer pins or profile-sharing authority; grouping never changes source channel labels.
+132. <a id="ve-132"></a> Display relationships aggregate explicitly selected channels. Shared DIDs/keys do not transfer channel acceptance or profile-sharing authority; grouping never changes source channel labels.
 
 133. <a id="ve-133"></a> profile.nameClaimed names an exact accepted source observation and its channel. Incomplete/invalid source contributes no name; existing lifts survive body erasure and new lifts cannot read erased content.
 
@@ -3060,6 +3080,6 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Completion witnesses and address confirmation (VE-143–VE-144)
 
-143. <a id="ve-143"></a> A complete valid attempt/package/submission witness preserves completion despite unrelated incomplete packages or later effect conflict. Invalid/missing own intent, pin or attempt evidence completes nothing.
+143. <a id="ve-143"></a> A complete valid attempt/package/submission witness preserves completion despite unrelated incomplete packages or later effect conflict. Invalid/missing own intent, authentication or attempt evidence completes nothing.
 
 144. <a id="ve-144"></a> Proof-free new successor preparation requires complete exact-address confirmation in the valid channel context. Confirmation needs no self-dependent message acceptance; body erasure and waiting siblings erase no complete witness.

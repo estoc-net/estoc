@@ -17,7 +17,9 @@ revision changes specifications, not the implementation's completion status.
 
 A vault has one seed, immutable events and raw content-addressed objects.
 Fixed DID-pair channels retain authenticated communication. Local acceptance
-pins exact peer evidence; directed links record one endpoint replacement.
+authorizes the pair; each receipt, package and proof retains its own document
+evidence. Method-authorized document updates preserve the channel. Directed
+links record replacement of a DID.
 Relationship/contact groups organize display without cryptographic authority.
 
 An outbound fixes its channel and direction at intent commit. Rotation selects
@@ -33,7 +35,7 @@ receipt independently of submission. See [channels](channels.md#model) and
 | Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
 | Domain facts | [Vault events](vault-events.md) | Message, attempt, profile and local policy payloads/folds |
-| Communication authority | [Channels](channels.md), [Address/display policy](relationships.md) | Fixed channels, exact acceptance pins, directed continuity, display groups |
+| Communication authority | [Channels](channels.md), [Address/display policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, display groups |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Receipt fan-out and encrypted data synchronization, without outbox takeover |
 
@@ -70,7 +72,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Storage ownership and recovery | [SQ](vault-sqlite.md#ownership-and-lifecycle) | [VE open](vault-events.md#open-the-writable-full-runtime) |
 | Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
 | Channel identity | [CH identity](channels.md#channel-identity) | [VE IDs](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces) |
-| Exact channel acceptance/pins | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
+| Channel acceptance and operation evidence | [CH acceptance](channels.md#channel-accepted) | [VE evidence](vault-events.md#receipt-and-relationship-evidence) |
 | Directed links, joins and confirmation | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
 | Message acceptance | [CH](channels.md#message-accepted) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
 | Fixed intent and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [attempt](vault-events.md#delivery-attempted), [DD send](distributed-delivery.md#send-an-ordinary-message) |
