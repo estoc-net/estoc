@@ -60,7 +60,7 @@ automatic executors or cross-replica outbox takeover. Import/replay/fan-out cann
 dispatch old ACKs, replies, notifications or pending messages. The active
 executor and live initial/manual action rules in
 [channels.md](channels.md#fixed-outbound-channel) still apply. A manual action
-cannot change an existing message's channel or attempted package.
+cannot change an existing message's channel or committed package.
 
 One Estoc vault may have several independently writable full replicas. Every
 full replica holds the same vault seed and can derive the same communication
@@ -460,7 +460,7 @@ MUST treat the ID as terminal even when local runtime state is otherwise intact.
 6. register the new ID with retained replay on **every** required mediation
    account, and retire the old ID on remaining accounts; and
 7. resume pickup and sync under the fresh ID; pending outbounds require an
-   explicit manual action and preserve their fixed channels and attempted packages.
+   explicit manual action and preserve their fixed channels and committed packages.
 
 A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity

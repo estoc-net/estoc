@@ -385,7 +385,7 @@ peer or a verified role-preserving successor in the same local-only/paired-link
 context. An observation addressed to a predecessor confirms no successor.
 No handler execution or reply prerequisite is imposed on
 that witness. Confirmation permits future newly prepared messages to omit the
-frozen proof; it does not edit an already attempted envelope or acknowledge
+frozen proof; it does not edit a committed package or acknowledge
 any particular wire ID.
 
 For ACK authorization, a path preserves endpoint roles and uses verified
@@ -517,18 +517,17 @@ transport. This immutable channel avoids relying on recovery to prove that an
 earlier call did not occur.
 
 Rotation selects addresses for new messages only and MUST NOT move an existing
-intent, including an unattempted or automatic one, to another channel.
+intent, including an unprepared or automatic one, to another channel.
 If that channel can no longer send, retain the original outcome and require an
 explicit new send with a new wire ID to use a successor channel. Message IDs,
 automatic effect IDs and frozen ACK arrays are never rewritten to follow it.
 
-Before each transport invocation, commit `delivery.attempted` naming the exact
-already committed package. This event means that the call **may have happened**;
-it is not proof of transport acceptance. Its returned event ID must be known
-before invoking the transport. An uncertain commit authorizes no call. All
-attempts for one message use that first attempted package's exact bytes and
-package ID. A missing referenced package is a recovery dependency, not permission
-to prepare another one. Conflicting attempted packages suppress further sending.
+Before transport, commit `message.prepared` to freeze one package for the
+message. Every call uses that package's exact bytes and ID, including the first
+call and manual retries. Later key updates, confirmation or retirement cannot
+replace it. Missing package bytes/evidence defer sending; conflicting prepared
+packages suppress it without an event-order winner. An uncertain preparation
+commit must be resolved before dispatch or further preparation.
 
 An initial send may run only from the live local user action or eligible
 live input that created its intent. Resolving, preparing and registering before
@@ -544,8 +543,8 @@ message cannot retry. A deliberate new send, including a send over a new
 channel, creates a new message ID. Any local UI link to the old message is
 informative and cannot alias execution or imply that the first send failed.
 
-Recovery exposes pending messages for manual action, even when the snapshot
-contains no attempt event: incomplete history cannot prove nondelivery.
+Recovery exposes pending messages for manual action. A prepared package does
+not prove a call occurred, and missing submission does not prove nondelivery.
 Rebuilding receipt-derived views grants no dispatch action. Phase 1 permits one
 active executor; mailbox fan-out does not authorize other replicas to respond.
 
@@ -583,12 +582,12 @@ must define an authenticated application operation ID and its own rules.
 16. <a id="ch-16"></a> Retained retired recipient keys can drain eligible routes; new sending, disclosure and invitation consumption obey retirement.
 17. <a id="ch-17"></a> An incomplete consistent sibling cannot create another same-channel execution or erase a complete witness. Cross-channel observations never merge executions.
 18. <a id="ch-18"></a> Recovery uses retained authentication evidence without fresh resolution of a saved receipt; new network deliveries authenticate afresh.
-19. <a id="ch-19"></a> Intent freezes its oriented channel; local or peer rotation changes only new intents, including when the old intent has never been attempted.
-20. <a id="ch-20"></a> Commit attempt before transport. Crashes immediately before call and after transport acceptance both reopen without automatic submission.
-21. <a id="ch-21"></a> Manual retry uses the first attempted package exactly; missing bytes defer, and changing channel requires a new ID.
+19. <a id="ch-19"></a> Intent freezes its oriented channel; local or peer rotation changes only new intents, including when the old intent has no package yet.
+20. <a id="ch-20"></a> Commit the fixed package before transport. Crashes immediately before the call and after transport acceptance both reopen without automatic submission or proof of whether the call occurred.
+21. <a id="ch-21"></a> Initial send and manual retry use the committed package exactly, even if it has never been sent. Missing bytes defer; changing package or channel requires a new message ID.
 22. <a id="ch-22"></a> Import, restore, replica change, duplicate pickup and missing ACK never dispatch an old intent or regenerate an automatic response for sending.
 23. <a id="ch-23"></a> Submitted or terminal messages cannot retry. Deliberate new sends get new IDs and do not establish that the original was undelivered.
-24. <a id="ch-24"></a> Missing attempt history grants no automatic recovery sending; incomplete exact references remain pending.
+24. <a id="ch-24"></a> Missing submission grants no automatic recovery sending; incomplete exact references remain pending, and conflicting prepared packages prevent sending without selecting an event-order winner.
 25. <a id="ch-25"></a> Renaming or merging contacts and changing their channel sets changes no message/execution ID, ACK authorization, verification evidence, denials or invitations.
 26. <a id="ch-26"></a> A successor-channel ACK needs a verified role-preserving path to the exact outbound; general connectivity or shared display membership is insufficient.
 27. <a id="ch-27"></a> Swapping sender and recipient with the same wire ID produces different inbound/execution identities; changing either endpoint also changes those identities.

@@ -1360,8 +1360,8 @@ Recovered domain events are historical data, not a dispatch queue. Bootstrap,
 import and replica change do not send pending outbounds or regenerate old
 automatic replies/ACKs/notifications for sending. Show pending work for manual
 action under [the dispatch contract](channels.md#fixed-outbound-channel),
-preserving each intent's fixed channel and exact attempted package. Missing
-success/attempt evidence in a snapshot never proves that a call did not occur.
+preserving each intent's fixed channel and committed package. Missing submission
+in a snapshot never proves that a call did not occur.
 This does not stop automatic retry of sync transfers or mailbox pickup.
 
 A new local replica needs:

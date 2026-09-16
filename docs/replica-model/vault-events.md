@@ -271,12 +271,12 @@ it does not imply that every identifier has the same encoding or scope.
 | Vault message entity or inbound observation group | `MessageId` | `messageId`, `ackMessageId` |
 | Received DIDComm plaintext ID | `WireMessageId` | `wireMessageId`, `ackWireMessageId` |
 | One exact event | `EventId` | envelope `eventId` |
-| Typed event reference | `EventReference<T>` | payload fields ending in `EventId` and elements of `*EventIds`, including source, trigger, resolution, disclosure, rotation and attempt references |
+| Typed event reference | `EventReference<T>` | payload fields ending in `EventId` and elements of `*EventIds`, including source, trigger, resolution, disclosure and rotation references |
 | Contact | `ContactId` | `contactId`, `fromContactId` |
 | Local/peer DID pair | `Channel` | `channels` entries; `localDid` and `peerDid` in selectors |
 | Local DID entity | `DidId` | `didId`, `senderDidId`, `fromDidId`, `toDidId` |
 | Route / mediation arrangement | `RouteId` / `MediationId` | `routeId`, `boundRouteId` / `mediationId` |
-| One prepared package | `PackageId` | `packageId`, `replacementPackageId` |
+| One prepared package | `PackageId` | `packageId` |
 | Scoped mediator delivery | `DeliveryId` | `deliveryId` |
 | Sender/recipient-scoped automatic execution | `ExecutionId` | `executionId` |
 | Exact content bytes | `Cid` | `bodyCid`, `attachmentCids`, `documentCid`, `envelopeCid`, `dropCids`; generic object APIs use `cid` |
@@ -877,7 +877,7 @@ deliveries. An invitation on a retired local DID cannot acquire a new consumer.
 Retain key/document evidence and usable mediation needed by retained channels.
 Channel denials and sender/route eligibility govern new work. Retained
 confirmation may justify an explicitly requested recovery rotation without reviving
-the old route. Retirement never erases committed message or attempt evidence;
+the old route. Retirement never erases committed message or delivery evidence;
 display contact deletion alone is not a transport or authorization operation.
 
 <a id="142-mediation-fold"></a>
@@ -1459,7 +1459,7 @@ Canonical projections and message hashes are defined by [distributed-delivery.md
   2.0 `forward.id`.
 - mediator `deliveryId` is not stored by outbound events.
 
-A user send mints one UUIDv7 `messageId`. Every package uses it as plaintext `id`.
+A user send mints one UUIDv7 `messageId`. Its package uses it as plaintext `id`.
 Outbound events do not store a second `wireMessageId`. Inbound observations keep
 their scoped message ID and the received wire ID under [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity); the equality applies only to locally authored outbound messages.
 
@@ -1472,9 +1472,9 @@ messageId = UUIDv5(
 )
 ```
 
-The resulting `messageId` is also the response's wire ID. Manual retry preserves this ID and its fixed channel. Pre-attempt preparation
-also preserves it. Equivalent automatic effects therefore identify one
-logical response.
+The resulting `messageId` is also the response's wire ID. Preparation and manual
+retry preserve this ID and its fixed channel. Equivalent automatic effects
+therefore identify one logical response.
 
 <a id="message-out"></a>
 
@@ -1630,7 +1630,7 @@ Requirements:
   the recipient key; its `peerPublicKey` supplies the package's derived peer key.
   Its `localKeyName` equals the package's local key and its canonical `did` matches
   `recipientDid`. It is non-null for every phase-1 package, including a
-  retained numalgo-4 resolution. First-package freshness and
+  retained numalgo-4 resolution. Recipient-resolution freshness and
   snapshot reuse follow [relationships.md section 10.1](relationships.md#did-resolution-requirements);
 - `fromPrior` is the exact compact JWT included in the package or null;
 - the envelope object contains `UTF8(RFC8785(parsedEncryptedEnvelope))` under
@@ -1639,12 +1639,24 @@ Requirements:
 - `packageId` is a UUIDv7 and equals outer `forward.id`; and
 - every retry of this package uses identical envelope bytes.
 
-Before any attempt, a live initial or manual action may prepare another package
-in the fixed channel using eligible evidence. Once attempted, that exact package is
-frozen for every retry under [dispatch authority](channels.md#fixed-outbound-channel).
-Incomplete attempt/package references block preparation; submission or
-message-terminal failure stops preparation and retry. Recheck lifecycle and
-security at dispatch without invalidating historical package evidence.
+<a id="delivery-attempted"></a>
+
+Committing this event freezes the package for its `messageId`, even before any
+transport call. Further `message.prepared` records for that message MUST have
+identical payloads and roots, including `packageId` and exact evidence references.
+Under the operation lock, reuse an existing preparation and reject a different
+one before append. Imported incompatible preparations expose a conflict;
+no event order selects a winner. Missing exact evidence or envelope bytes
+defers sending and cannot justify another preparation.
+A retained package reference whose preparation is missing remains pending;
+it is not evidence that no package was selected.
+
+Initial sends and manual retries use this package unchanged under
+[dispatch authority](channels.md#fixed-outbound-channel). An uncertain commit
+must be resolved before dispatch or further preparation. A package records no
+transport invocation; call counts and retry diagnostics are local trace.
+Submission or message-terminal failure stops preparation and retry. Recheck
+lifecycle and security at dispatch without invalidating historical evidence.
 Public and pairwise addresses use the same package rules and name no replica.
 
 <a id="message-packageretired"></a>
@@ -1658,56 +1670,17 @@ Public and pairwise addresses use the same package rules and name no replica.
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
     "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "because": "repacked",
-    "replacementPackageId": "019b2a75-11bd-7ae2-8e41-279d84c2528a"
+    "because": "cancelled"
   }
 }
 ```
 
-`replacementPackageId` is nullable. Retirement permanently stops submission
-of this package, including manual retry. A replacement is permitted only
-before any attempt and within the same fixed channel. An attempted package
-cannot be replaced; retiring it leaves the original outcome intact and any
-further send requires a new message. Retirement does not itself terminate
-the logical message. Its envelope contribution is determined only by
-[section 12.3](#held-roots)'s retention predicate. Historical submission and
-channel evidence remain valid; retirement cannot undo a completed submission.
-
-<a id="delivery-attempted"></a>
-
-### 9.4.1 `delivery.attempted`
-
-```json
-{
-  "type": "delivery.attempted",
-  "roots": [],
-  "data": {
-    "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "trigger": "initial"
-  }
-}
-```
-
-The closed payload has exactly these three fields. `trigger` is `initial` or
-`manual`. The exact intent and package must already be committed and valid.
-All attempts for this message name the same package. `initial` is permitted
-only by the live local action that created the intent, before any attempt;
-`manual` records a fresh explicit retry action. Event import is not that action.
-The trigger records local provenance, not remote proof of a user's identity.
-
-Commit this event under the message's serialized dispatch operation, rechecking
-eligibility under the vault operation lock. Release the vault lock before the
-network call. Only the still-live invocation receiving its returned event ID
-may use that event for one call. Scanning/replaying an event never supplies this
-local dispatch authority. A crash immediately after commit consumes that live
-invocation even if no packet left the process. Every further call needs a new
-manual event. An uncertain append authorizes no transport call.
-
-This is portable evidence that submission may have been attempted, not a
-submission success. Missing package/intent references make it incomplete and
-block sending; conflicting packages for one message expose a conflict without
-selecting the earliest event. It has no independent held roots.
+The closed data has exactly `messageId`, `packageId` and `because`; `roots` is
+empty. `packageId` names a committed preparation for this message. Retirement
+permanently stops submission, including manual retry, and permits no replacement.
+Further sending requires a new message ID. Retirement does not declare message failure
+or undo a recorded submission. Envelope retention follows
+[section 12.3](#held-roots).
 
 <a id="delivery-submitted"></a>
 
@@ -1719,20 +1692,19 @@ selecting the earliest event. It has no independent held roots.
   "roots": [],
   "data": {
     "messageId": "019b2a70-e2c8-7fb4-b63f-1aca32152062",
-    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c",
-    "attemptEventId": "019b2a74-148d-7d68-9eb2-f4e135817924"
+    "packageId": "019b2a73-4ce0-79ba-ad4a-f9fc4f45d37c"
   }
 }
 ```
 
-This says only that one transport endpoint accepted the attempt. It does not
+This says only that one transport endpoint accepted the package. It does not
 mean route existence, mediator retention, pickup or ultimate durable receipt.
 
-`packageId` MUST identify a valid `message.prepared` for this exact `messageId`.
-A local runtime appends this event after observing transport acceptance. Its
-successful commit completes submission for the entire logical outbound under
-[section 9.8](#outbound-message-and-delivery-fold). `attemptEventId` is required
-and names the already committed `delivery.attempted` for this message/package.
+The closed data contains exactly `messageId` and `packageId`; `roots` is empty.
+`packageId` MUST identify the already committed valid `message.prepared` for
+this exact `messageId`. Append this event after observing transport acceptance.
+Its successful commit completes the logical outbound under
+[section 9.8](#outbound-message-and-delivery-fold).
 If acceptance happened but this observation did not commit, the outcome remains
 unconfirmed and requires explicit manual retry; recovery never resubmits it.
 
@@ -1759,10 +1731,8 @@ fields of this portable event and do not participate in the delivery fold.
 This event records only a terminal failure. `scope` is `package` or `message`.
 `packageId` is REQUIRED for package scope and null when no package exists.
 
-- package scope makes that package terminal. Another package for the same
-  message is permitted only before any attempt and in the same fixed channel.
-  A terminal attempted package cannot be replaced or retried; further sending
-  requires a new message ID.
+- package scope makes that package terminal. It cannot be replaced or retried;
+  further sending requires a new message ID.
 - message scope stops all preparation and submission for the intent, including
   manual retry.
 - `code == "expired"` MUST be message-scoped.
@@ -1820,18 +1790,18 @@ that complete carrier's local key and derived authenticated peer key.
 ### 9.8 Outbound message and delivery fold
 
 For each message ID, require one consistent complete `message.out` intent.
-Validate packages and attempts under sections 9.3 and 9.4.1. Missing exact
-references block preparation and dispatch; incompatible attempted packages
-conflict without an event-order winner.
+Validate preparations under section 9.3. One consistent package is allowed;
+incompatible preparations conflict without an event-order winner. Missing exact
+references block dispatch and cannot justify another package.
 
 Derive these independent facts:
 
-- `packages[]`: valid exact packages, including retained retired skeletons;
-- `attempted`: valid `delivery.attempted` evidence exists; this means a call may
-  have happened even when the producer crashed before invoking transport;
+- `packages[]`: individually valid preparations, including retired skeletons
+  and imported competing candidates; dispatch requires one consistent package;
 - `submitted`: a complete valid `delivery.submitted` names the exact matching
-  attempt, intent and package. Later erasure, retirement or policy cannot remove
-  this historical fact. An incomplete unrelated row cannot erase it;
+  intent and package. Validate its own evidence before aggregate eligibility;
+  later erasure, retirement, policy or a competing package cannot remove this
+  historical fact. An incomplete unrelated row cannot erase it;
 - `ackWitnesses`: all complete source witnesses satisfying section 9.7;
 - `acknowledged`: at least one such witness exists; and
 - terminal package/message failures and permanent erasures under their schemas.
@@ -1857,16 +1827,15 @@ Displayed outcome precedence is:
 conflict
 submitted
 expired-or-terminal-failure
-attempted-unconfirmed
 prepared
 queued
 ```
 
-`attempted-unconfirmed` does not claim failure or nondelivery. With an old or
-partial snapshot, even `queued`/`prepared` can have unknown external history;
-all restored pending records require manual action. UI may separately show
-that requirement. A submitted/terminal record cannot retry; a deliberate new
-send creates a new ID without altering the old outcome.
+`queued` and `prepared` describe retained intent/package state, not whether a
+transport call occurred. Missing submission, including in a partial snapshot,
+does not prove nondelivery. Restored pending records require manual action;
+the UI may show that requirement separately. A submitted/terminal record
+cannot retry; a deliberate new send creates a new ID without altering the old outcome.
 
 Receipt timing uses the earliest parsed RFC 3339 source-observation `at` among
 valid ACK witnesses. `late` is true exactly when acknowledged, an immutable
@@ -2255,9 +2224,9 @@ specified scope; a committed expired failure is message-terminal. Sampling wall
 time beyond expiry blocks unsubmitted work but MUST NOT release its envelope
 until that durable termination is committed. `submitted(M)` is defined by
 [section 9.8](#outbound-message-and-delivery-fold) and remains true after envelope collection or package retirement.
-It releases this message's envelope contribution for every package. Missing
-evidence for another package or operation of `M`, and an execution conflict
-of an automatic `M`, do not withdraw it or require these bytes again. An ACK
+It releases this message's envelope contribution, including competing imported
+packages. Missing evidence for another package or operation of `M`, and an
+execution conflict of an automatic `M`, do not withdraw it or require these bytes again. An ACK
 does not affect retention, including when an outcome-unknown transport attempt
 has no `delivery.submitted`.
 
@@ -2322,7 +2291,7 @@ list when no new objects are needed; `Vault.events` is read-only.
    contact channel selections, invitation consumers and source/intent/result projections from saved evidence.
 5. Enumerate incomplete references/content and pending/unconfirmed outbounds for
    local recovery and manual action. Reuse their exact intent, channel, proof,
-   package and attempt records. Never infer "not sent" from missing history.
+   package and submission records. Never infer "not sent" from missing history.
 6. Rebuild permanent erasure closure, then application display views from their
    remaining source evidence under [section 7.3](#application-message-views).
    This work may recover data or resolve a predecessor for a previously
@@ -2620,11 +2589,11 @@ derivation requires a new vault version.
 9. <a id="ve-9"></a> Intent hash covers application ID/type/thread/body/ordered attachments and
    immutable control headers; plaintext hash covers one exact DIDComm
    plaintext.
-10. <a id="ve-10"></a> Pre-attempt preparations may differ only within one fixed oriented channel. Every attempted retry uses the first attempted package exactly.
+10. <a id="ve-10"></a> A committed preparation fixes one package for the message, including before its first transport call. Identical preparation payloads are idempotent; different package IDs or payloads conflict. Local producers reject a second package, imported conflicts select no winner, and all retries preserve the fixed package.
 
 11. <a id="ve-11"></a> Retrying one package preserves identical plaintext, envelope and package
     ID.
-12. <a id="ve-12"></a> Transport acceptance produces delivery.submitted with its exact prior attempt reference, never ultimate acknowledgment.
+12. <a id="ve-12"></a> Transport acceptance produces delivery.submitted with exactly messageId and packageId and empty roots. The referenced intent/package must already be committed and valid; submission never implies ultimate acknowledgment.
 
 13. <a id="ve-13"></a> A deterministic response acknowledges an outbound only when authenticated
     explicit `ack` names its wire ID.
@@ -2712,7 +2681,7 @@ derivation requires a new vault version.
     both use the successor's Peer-DID long form.
 40. <a id="ve-40"></a> Proof verifies against its exact message.fromPriorResolved document CID and original JWT. Link derivation uses its exact source and endpoint evidence; iat never selects a snapshot and recovery cannot substitute current resolver bytes.
 
-41. <a id="ve-41"></a> Successor/local decision and exact package commit before disclosure, and an attempt commits before transport invocation. Links themselves have no commit boundary.
+41. <a id="ve-41"></a> Successor/local decision and exact package commit before disclosure. Each transport call requires current eligibility and a live initial/manual action; an uncertain preparation commit permits neither dispatch nor a replacement package until resolved. Links themselves have no commit boundary.
 
 42. <a id="ve-42"></a> Trust Ping is the default no-content initial message; an application
     message may be first without wrapping.
@@ -2720,7 +2689,7 @@ derivation requires a new vault version.
 
 44. <a id="ve-44"></a> A new user message may select an eligible public/private successor channel; existing messages and frozen proof time do not change.
 
-45. <a id="ve-45"></a> New unconfirmed successor packages carry their frozen proof/long form. An attempted package never changes after confirmation.
+45. <a id="ve-45"></a> New unconfirmed successor packages carry their frozen proof/long form. A committed package never changes after confirmation, even if it has never been sent.
 
 46. <a id="ve-46"></a> Invalid upper-layer evidence refuses dependent decisions/effects while retaining independently authenticated receipt; failed unpack creates no message.in.
 
@@ -2773,8 +2742,8 @@ derivation requires a new vault version.
 64. <a id="ve-64"></a> Committed submission remains complete after restart, loss of local caches,
     clock rollback, package retirement, content erasure and envelope collection.
     Retained event skeletons prevent resubmission or replacement of that message ID.
-65. <a id="ve-65"></a> One package's committed `delivery.submitted` completes its entire message ID and
-    suppresses every other package's preparation or submission. Workers
+65. <a id="ve-65"></a> A complete `delivery.submitted` completes its entire message ID and
+    suppresses further preparation or submission, including with an imported competing package. Workers
     serialize dispatch per message ID and commit acceptance before further dispatch.
 66. <a id="ve-66"></a> The inbound message ID vectors in [distributed-delivery.md section 9](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) recompute to
     `336032bf-0c6e-5ce7-a3ed-a50bbf993055` and
@@ -2784,8 +2753,9 @@ derivation requires a new vault version.
 68. <a id="ve-68"></a> An otherwise retained unsubmitted package survives route unavailability
     and GC with its exact bytes. Route recovery cannot reopen a submitted message ID.
 69. <a id="ve-69"></a> Retiring an unsubmitted package releases its delivery retention contribution
-    without completing the message ID. Retiring a submitted package does not undo the
-    message ID's committed submission evidence.
+    without completing the message ID or permitting replacement, even before its first send.
+    Retirement data has exactly messageId, packageId and because with empty roots;
+    retiring a submitted package preserves its submission evidence.
 70. <a id="ve-70"></a> Shared envelope bytes remain held by another non-erased message even after
     one message/root relation is erased.
 71. <a id="ve-71"></a> Each new duplicate observation receives a fresh ordinal; exact re-ingest
@@ -2828,10 +2798,10 @@ derivation requires a new vault version.
 
 85. <a id="ve-85"></a> Matching pthid alone, foreign recipients and proof-bearing continuation sources consume no invitation. A qualifying invitation.consumed names its exact one-use OOB disclosure and source; many-use and non-OOB disclosures cannot be consumed.
 
-86. <a id="ve-86"></a> Attempt evidence is portable and committed before transport. Reopen/import of queued, prepared or attempted-unconfirmed work grants no send. A manual retry uses exact bytes and cannot infer prior nondelivery.
+86. <a id="ve-86"></a> Prepared state records a fixed package, not a transport invocation. Reopen/import of queued or prepared work grants no send; calls and retry diagnostics remain local. Manual retry uses exact bytes, and missing submission cannot establish prior nondelivery.
 
 87. <a id="ve-87"></a> A user send or deterministic response uses its outbound message ID as plaintext
-    `id`; every package and retry preserves it. Inbound observation message IDs remain
+    `id`; its package and every retry preserve it. Inbound observation message IDs remain
     scoped derivations and are not replaced with the received wire ID.
 88. <a id="ve-88"></a> A successor freezes its own route at DID creation. Crash before commit may
     choose again; afterward recovery reuses that exact document and route.
@@ -2884,8 +2854,8 @@ derivation requires a new vault version.
 
 107. <a id="ve-107"></a> Channel selectors preserve local/peer roles and compare canonical DID strings; key encoding and display IDs cannot change the pair.
 
-108. <a id="ve-108"></a> First-package preparation for each new non-numalgo-4 outbound performs
-     fresh resolution. Retry and permitted repack use retained evidence;
+108. <a id="ve-108"></a> Preparation for each new non-numalgo-4 outbound performs
+     fresh resolution. Retry preserves the committed package and its evidence;
      neither an old snapshot nor a local TTL bypasses the new-message ID rule.
      Every new non-numalgo-4 inbound observation also requires current sender
      authentication under [relationships.md section 10.1](relationships.md#did-resolution-requirements); a chain member absent
@@ -2909,9 +2879,9 @@ derivation requires a new vault version.
 
 113. <a id="ve-113"></a> A local link needs complete exact-address confirmation against the authenticated peer context. The confirming observation needs no handler decision or output intent and cannot rely on the decision or its descendants to establish its context.
 
-114. <a id="ve-114"></a> New successor preparation uses frozen proof until exact confirmation. Attempted packages remain unchanged; overlapping recipient routes stay until no retained channel/disclosure needs them.
+114. <a id="ve-114"></a> New successor preparation uses frozen proof until exact confirmation. Committed packages remain unchanged; overlapping recipient routes stay until no retained channel/disclosure needs them.
 
-115. <a id="ve-115"></a> Local rotation changes new intent selection only. Queued, prepared, attempted and submitted messages keep their oriented channel; a new-channel send needs a new ID.
+115. <a id="ve-115"></a> Local rotation changes new intent selection only. Queued, prepared and submitted messages keep their oriented channel; a new-channel send needs a new ID.
 
 116. <a id="ve-116"></a> Equivalent DID replacements are idempotent across valid document revisions; same-side branches, dependency cycles and contradictory identity evidence conflict. Invitation state cannot defer complete links, automatic output or preparation.
 
@@ -2962,7 +2932,7 @@ derivation requires a new vault version.
 
 133. <a id="ve-133"></a> A displayed peer name requires a supported protocol's recognized name field, readable non-erased content, a complete authenticated source witness and applicable display policy. It is a peer claim derived from the source channel, creates no contact and changes no petname; this schema records no independent name-claim event.
 
-134. <a id="ve-134"></a> A view that a profile was submitted uses a protocol-recognized outbound and valid attempt/package/submission evidence in its fixed channel. Intent, attempt or ACK alone is insufficient; the view proves no peer receipt, and later rotation cannot mark another channel as shared.
+134. <a id="ve-134"></a> A view that a profile was submitted uses a protocol-recognized outbound and valid package/submission evidence in its fixed channel. Intent, preparation or ACK alone is insufficient; the view proves no peer receipt, and later rotation cannot mark another channel as shared.
 
 135. <a id="ve-135"></a> A supported protocol defines display interpretation and ordering from source evidence. Same-channel duplicates represent one logical source, and cache rebuild time never advances a claim; conflicting authenticated intent supplies no verified application fact.
 
@@ -2994,7 +2964,7 @@ derivation requires a new vault version.
 
 ### Completion witnesses and address confirmation (VE-143–VE-144)
 
-143. <a id="ve-143"></a> A complete valid attempt/package/submission witness preserves completion despite unrelated incomplete packages or later effect conflict. Invalid/missing own intent, authentication or attempt evidence completes nothing.
+143. <a id="ve-143"></a> A complete valid intent/package/submission witness preserves completion despite unrelated incomplete or competing packages and later effect conflict. Invalid/missing own intent, package or authentication evidence completes nothing.
 
 144. <a id="ve-144"></a> Proof-free new successor preparation requires complete exact-address confirmation in the valid channel context. Confirmation needs no handler decision; body erasure and waiting siblings erase no complete witness.
 

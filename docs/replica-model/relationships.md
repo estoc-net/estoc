@@ -407,21 +407,20 @@ the exact channel context.
 This section owns recipient-resolution freshness. A `did:peer:4` recipient
 uses its retained, validated long-form document and needs no fresh resolution.
 For every other supported DID method, the preparer MUST resolve after the
-new outbound intent commits and commit that fresh `peer.resolved` before its
-first package. Do this for each new message ID, including later sends in the same channel;
+new outbound intent commits and commit that fresh `peer.resolved` before the
+package. Do this for each new message ID, including later sends in the same channel;
 an earlier outbound's snapshot, a local TTL or a resolver's stale/offline cache
 cannot satisfy the requirement. An online conditional revalidation that
 confirms the same document is sufficient and produces a new resolution event.
-If no first package committed before interruption, repeat resolution on resume.
+If no package committed before interruption, repeat resolution on resume.
 Unavailable resolution keeps the outbound retryable; it is not evidence of a
 key change. Freshness is a producer ordering rule, not a clock comparison in
 the portable fold.
 
-Once a package exists, retry does not re-resolve and uses its exact bytes.
-Any pre-attempt re-preparation stays in the same fixed channel and uses its
-retained snapshot. After an attempt, only the exact package may be retried;
-neither another channel nor a new encryption replaces it.
-First-package resolution uses the failure classification below, including
+Once a package commits, initial sending and retry use its exact bytes and
+retained snapshot without re-resolution. Changing the package requires a new
+message ID, even if the committed package has never been sent.
+Recipient resolution uses the failure classification below, including
 the outbound `peer-key-changed` result. A fresh resolution remains evidence for
 current preparation, never authority to add a continuity link.
 
@@ -472,7 +471,7 @@ categories include the corresponding
 the resolver API's spelling. For inbound sender authentication they are
 terminal section-9.2 failures: pickup-ACK when mediated and create no
 `message.in`. Only unavailable answers defer, within the inbound budget below.
-For first-package recipient resolution, definitive failure records
+For recipient resolution before preparation, definitive failure records
 message-scoped terminal
 `delivery.failed(code="peer-key-changed", packageId=null)` without preparation
 or evidence purporting successful resolution, including for a first send;
@@ -481,7 +480,7 @@ the separate recovery rule and is not a definitive new-resolution result.
 Other completed unsuccessful resolution results are definitive for that
 attempt; a policy refusal MUST NOT be disguised as transient unavailability.
 
-The `peer-key-changed` code also covers definitive first-package resolution
+The `peer-key-changed` code also covers definitive recipient-resolution
 failure when no earlier peer key exists. User-facing text MUST NOT describe
 every such result as an observed key replacement; use the bounded local
 resolution diagnostic, or a neutral peer-resolution failure label when that
@@ -632,7 +631,7 @@ updates, not `from_prior` transitions; [DIDComm rotation](https://identity.found
 handles replacement of the DID itself. Successful resolution with a newly
 authorized usable key is not a `peer-key-changed` failure.
 
-For a new message's first package, use currently authorized keys and service
+For a new message's package, use currently authorized keys and service
 from its fresh resolution. For new incoming delivery, authenticate with its
 current sender document. Neither operation requires equality with another
 message's document CID or selected key. Keep the same channel, invitation
@@ -641,9 +640,9 @@ Normal denial, supersession and carried-proof checks still apply.
 
 Retain every referenced snapshot without choosing one channel-wide current
 revision, merging their authorized keys or rewriting old evidence. Importing
-different valid Web revisions is not an integrity conflict by itself. Prepared
-packages keep their retained evidence and attempted packages remain byte-for-byte
-fixed. A service or key update supplies no retry or automatic dispatch authority.
+different valid Web revisions is not an integrity conflict by itself. Committed
+packages keep their retained evidence and remain byte-for-byte fixed. A service
+or key update supplies no retry or automatic dispatch authority.
 Local and remote `did:peer:4` documents remain immutable under their canonical
 DID; this rule does not allow replacing their encoded keys or route in place.
 
@@ -734,7 +733,7 @@ A newly prepared successor-channel message carries the frozen proof and long
 form until exact-successor confirmation. Its `from` equals `from_prior.sub` in
 the validated wire spelling. The predecessor authentication method signs the
 JWT with fixed rotation `iat`; a message timestamp cannot regenerate it.
-An attempted package remains byte-identical after confirmation.
+A committed package remains byte-identical after confirmation.
 
 <a id="registration-and-submission"></a>
 
@@ -797,7 +796,7 @@ rules above. Pickup, recipient reconciliation and sync may retry normally;
 they are not replay of a user message.
 
 Message retries and new sends follow [dispatch authority](channels.md#fixed-outbound-channel):
-a manual retry preserves the attempted package; selecting a successor channel
+a manual retry preserves the committed package; selecting a successor channel
 requires a new message ID. Neither missing history nor a new send proves that
 the original was undelivered. Business idempotency requires a protocol-defined
 authenticated operation identity.
@@ -878,7 +877,7 @@ roll back; explicit new communication is a new channel and new message.
 20. <a id="rz-20"></a> A complete control source may supply authenticated ACK evidence, but creates no contact or recursive privacy notification. Invitation consumption remains a separate decision.
 
 21. <a id="rz-21"></a> Generic pure ACK has no ACK request. ACK, Ping reply and privacy notification use independent intents; the latter two have empty ack arrays.
-22. <a id="rz-22"></a> New successor messages carry frozen proof/long form until confirmation; attempted packages remain exact after confirmation.
+22. <a id="rz-22"></a> New successor messages carry frozen proof/long form until confirmation; committed packages remain exact after confirmation, including before their first send.
 
 23. <a id="rz-23"></a> Input at the exact successor confirms rotation; input at a predecessor does not. Explicit ACK naming a message remains separate.
 24. <a id="rz-24"></a> A local link needs exact predecessor confirmation; no second same-side link is authorized before its predecessor is known by the peer.
@@ -928,7 +927,7 @@ roll back; explicit new communication is a new channel and new message.
 41. <a id="rz-41"></a> Per-delivery sender-resolution retries count before calls, schedule without redelivery, share accounting and stop at their finite budget or active-time retention bound. At a sequence's first attempt, a future known absolute deadline caps active time by its remaining interval, including after local-state reset; an advertised duration also caps active time. A past or unknown deadline supplies no absolute-deadline cap. Unknown retention still requires a finite budget.
 42. <a id="rz-42"></a> Budget exhaustion pickup-ACKs terminal input without message.in. Locked-vault, local recovery and other non-resolution deferrals consume neither attempts nor active time, including when they interrupt a sequence. A wait that crosses an absolute deadline does not itself exhaust the retained sequence on resumption; its previously consumed attempts and active time remain counted. A permitted retry after loss of accounting, or a redelivery after loss of local wait state whether or not accounting survived, instead starts a fresh finite sequence under [section 10.1](#did-resolution-requirements) when the sender method requires resolution. Neither path permits terminal ACK solely because the wait crossed the deadline.
 43. <a id="rz-43"></a> A successful current resolution within budget permits normal durable receipt. Imported receipts use retained evidence without fresh network requests.
-44. <a id="rz-44"></a> First-package recipient resolution is fresh when required; an attempted package never replaces its snapshot or channel.
+44. <a id="rz-44"></a> Recipient resolution is fresh before package commitment when required; a committed package never replaces its snapshot or channel, even if it has never been sent.
 
 45. <a id="rz-45"></a> Resolution failure before any prior evidence uses neutral diagnostics, not an unsupported claim that a key was replaced. A successful authorized key update is not a failure.
 
@@ -936,7 +935,7 @@ roll back; explicit new communication is a new channel and new message.
 
 ### Completion, contact policy and phase boundary (RZ-46–RZ-54)
 
-46. <a id="rz-46"></a> Queued, prepared and attempted messages retain their fixed channel after either endpoint rotates; a successor send has a new ID.
+46. <a id="rz-46"></a> Queued, prepared and submitted messages retain their fixed channel after either endpoint rotates; a successor send has a new ID.
 
 47. <a id="rz-47"></a> Submission stops further preparation and retry; missing ACK and duplicate receipt never reopen it.
 

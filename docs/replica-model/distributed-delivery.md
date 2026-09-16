@@ -52,11 +52,11 @@ appear in all capitals.
 An Estoc message begins as a durable intent in one fixed oriented channel.
 Phase 1 has one active executor.
 
-Every actual message transport call follows a committed `delivery.attempted`.
+Every message transport call uses its committed `message.prepared` package.
 Only the live initial action or a new explicit manual retry may make that call.
 Transport acceptance commits `delivery.submitted`, permanently completing that
 outbound. A failed/unknown call, missing ACK, process reopen or another replica
-does not automatically retry it. A manual retry preserves the exact attempted
+does not automatically retry it. A manual retry preserves the exact committed
 package; selecting another channel means a new message ID.
 
 This profile defines intent/package identity, channel-local deduplication,
@@ -75,7 +75,7 @@ It makes no cross-channel or cross-replica exactly-once business-execution promi
 - **Execution ID** — stable identity of one channel-local input; identity alone grants no work.
 - **Package ID** — exact encrypted inner envelope identity and Routing `forward.id`.
 - **Delivery ID** — mediator pickup identity, separate from message/package IDs.
-- **Attempted** — committed evidence that a transport call may have happened.
+- **Prepared** — one committed, fixed package; it records no transport invocation.
 - **Submitted** — recorded transport acceptance; it is not ultimate receipt.
 - **Acknowledged** — accepted explicit peer `ack` naming the exact authorized outbound.
 - **Semantic/intent/plaintext hashes** — the projections in section 5; addressing
@@ -200,9 +200,9 @@ when a full vault runtime process-durably appends `message.out`.
 | Boundary | Durable prerequisite | Meaning |
 | --- | --- | --- |
 | Offline send intent | Content and `message.out` with fixed channel/direction | A selected new message, not authority for recovery dispatch |
-| Package preparation | Valid fixed-channel intent, operation resolution and `message.prepared` | Recoverable immutable bytes |
-| Transport invocation | Prior `delivery.attempted` plus its still-live local action | Exactly one call may occur; the event itself is not replayable work |
-| Submission completion | `delivery.submitted` referencing that attempt/package | Stop preparation and sending for this message ID |
+| Package preparation | Valid fixed-channel intent, operation resolution and `message.prepared` | One fixed package for this message |
+| Transport invocation | Committed package plus a live initial/manual action | One call using the fixed package; no invocation event is stored |
+| Submission completion | `delivery.submitted` naming that message/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
 | Proof resolution | Exact carrier plus `message.fromPriorResolved` and its document | Fold can compute proof result and continuity status |
 | New source-derived work | Complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
@@ -229,19 +229,21 @@ A manual action can resume an eligible pending intent. The action serializes
 this message's work and performs these steps:
 
 1. Recheck completion, expiry, denial, conflict, retained keys/routes and bytes.
-2. If already attempted, select that exact package; missing references or bytes
-   defer. Otherwise prepare within the intent's fixed channel and commit it.
+2. Reuse the committed package; missing references or bytes defer and conflicting
+   preparations prevent sending. Prepare and commit one package in the intent's
+   fixed channel only when neither a preparation nor an unresolved package
+   reference exists.
 3. Verify local recipient registration before disclosure when needed.
-4. Under the vault lock recheck eligibility and commit `delivery.attempted`.
-5. After successful commit returns its event ID, release the vault lock and
-   invoke transport once using the exact envelope and package ID.
-6. Record transport acceptance as `delivery.submitted` referencing that attempt,
+4. Under the vault lock, recheck package commitment, eligibility and the live
+   action. Release the lock, consume that action's one invocation locally and
+   call transport with the exact envelope and package ID.
+5. Record transport acceptance as `delivery.submitted` naming the message/package,
    or terminal failure where proven. Failure/uncertainty grants no next call.
 
 Keep per-message dispatch serialized across this procedure, without holding
-the vault lock across network I/O. A commit with uncertain outcome grants no
-transport call. A crash after attempt commit consumes the live invocation;
-reopen cannot replay it. Further calls follow
+the vault lock across network I/O. Resolve an uncertain preparation commit
+before dispatch or another preparation. A crash loses the live action, whether
+or not transport was called; reopen cannot replay it. Further calls follow
 [manual dispatch rules](channels.md#fixed-outbound-channel).
 
 <a id="receive-a-message"></a>
@@ -286,7 +288,7 @@ The active runtime automatically completes missing
 
 Expose pending/unconfirmed messages for manual action under
 [dispatch authority](channels.md#fixed-outbound-channel), preserving message,
-execution, attempt and submission identities. The same uninterrupted initial
+execution, package and submission identities. The same uninterrupted initial
 receive operation may continue after a prerequisite wait; reopen, import and
 separate evidence recovery have no such action. Erased input starts no new
 effects. Fresh unrelated live input remains independent.
@@ -398,16 +400,15 @@ for the complete innermost DIDComm plaintext actually encrypted by one
 package or received in one observation. It includes `from`, `to`, `from_prior`
 and every present header.
 
-All packages for one outbound `messageId` agree on the intent hash. They may have
-different plaintext hashes only when package-level addressing or security
-evidence changes under an expressly permitted rule.
+An outbound `messageId` has one fixed package. Its intent hash matches the
+intent; its plaintext hash preserves the exact prepared addressing and proof.
 
 <a id="preparing-a-package"></a>
 
 ## 6. Preparing a package
 
 Use `message.out.senderDidId`, the canonical selected recipient and its derived
-fixed channel. Resolve first-package freshness under
+fixed channel. Resolve the peer under
 [the address profile](relationships.md#recipient-resolution-freshness); select
 keys authorized by that operation's document for the intent's fixed DID pair.
 A method-authorized update may change keys or service without changing the
@@ -423,11 +424,11 @@ Reject forbidden `return_route`, duplicate JSON members and invalid I-JSON.
 Canonicalize with RFC 8785, encrypt through maintained DIDComm APIs, then commit
 the exact normalized envelope and `message.prepared` before transport.
 
-Pre-attempt preparation may replace a package only inside this fixed channel
-with retained valid evidence. Once any attempt references a package, every
-manual retry uses its exact plaintext, ciphertext, proof, spelling, package ID
-and envelope CID. Missing evidence blocks replacement; later confirmation,
-rotation or resolution cannot rewrite it.
+Commit only when no preparation exists; otherwise reuse the saved package.
+That commit freezes its plaintext, ciphertext, proof, spelling, package ID and
+envelope CID for the initial call and every retry. Missing evidence or bytes
+defer sending. Later confirmation, rotation, resolution or package retirement
+cannot replace it; changing the package requires a new message ID.
 
 <a id="submission-completion-and-expiration"></a>
 
@@ -496,7 +497,7 @@ define its own explicit ACKs subject to the same target checks. There is no
 execution-wide limit of one ACK-bearing output. Control input may supply ACK
 observations but cannot trigger recursive privacy notifications. Never request
 an ACK for a pure ACK, or answer a pure ACK with another pure ACK. Every output
-follows normal attempt/submission boundaries.
+follows normal preparation/submission boundaries.
 
 <a id="deterministic-pure-ack"></a>
 
@@ -766,8 +767,7 @@ dispatch profile, not authority for automatic replay.
 message.out                fixed channel and immutable intent
 message.prepared           exact selected envelope
 message.packageRetired     package no longer eligible
-delivery.attempted         one live action may have invoked transport
-delivery.submitted         exact attempt observed transport acceptance
+delivery.submitted         observed transport acceptance of the fixed package
 delivery.failed            terminal package/message failure
 delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
@@ -786,13 +786,13 @@ are owned by [vault events](vault-events.md) and [channels](channels.md).
 ## 13. Failure rules
 
 - Before intent commit, no message exists. A failed/uncertain commit grants no send.
-- After intent/preparation but before any attempt, reopen still requires manual
-  action; absence of an attempt in an old snapshot does not prove nondelivery.
-- After attempt commit but before transport, crash leaves an unconfirmed attempt
-  and no live permission to invoke it. It may never have left the process.
-- After acceptance but before submission commit, crash also leaves unconfirmed
-  history. Manual retry may deliver duplicate bytes; channel-local dedup applies.
-- After submission commit, no retry or replacement preparation is allowed.
+- After intent commit but before preparation, reopen requires manual action;
+  an incomplete snapshot cannot prove nondelivery.
+- After preparation commit, a crash before transport and a crash after transport
+  acceptance but before submission commit leave the same portable prepared state.
+  Recovery requires manual action and preserves the package. Retry may deliver
+  duplicate bytes; channel-local dedup applies.
+- After submission commit, no retry is allowed.
 - After rotation, old intents/packages remain in their fixed channels. If that
   channel becomes unusable, a deliberate new send has a new wire ID.
 - After receipt but before pickup ACK, redelivery is another same-channel
@@ -851,9 +851,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
    and every supported additional header.
 8. <a id="dd-8"></a> `return_route` in vault application headers or innermost plaintext is
    rejected.
-9. <a id="dd-9"></a> Two valid preparations of one intent agree on the intent hash.
+9. <a id="dd-9"></a> Repeated identical preparation payloads reuse one package; a different package ID, envelope or evidence reference for the same message conflicts, even when its intent hash agrees.
 10. <a id="dd-10"></a> Retrying one package uses identical plaintext, ciphertext and package ID.
-11. <a id="dd-11"></a> Rotation cannot change any existing message channel. Pre-attempt replacement stays in that channel; after an attempt every retry uses the exact package.
+11. <a id="dd-11"></a> Rotation cannot change an existing message's channel or committed package. Retirement or terminal failure of an unsent package permits no replacement; changing the package requires a new message ID.
 
 12. <a id="dd-12"></a> Body, type, thread, attachment, timing, ACK policy or additional-header
     changes under one wire ID produce an intent conflict.
@@ -862,7 +862,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Submission and acknowledgment (DD-13–DD-22)
 
-13. <a id="dd-13"></a> Transport acceptance records submitted with the exact prior attempt reference, never ultimate acknowledgment.
+13. <a id="dd-13"></a> Transport acceptance records submitted for the exact committed message/package pair, never ultimate acknowledgment.
 
 14. <a id="dd-14"></a> Every outbound stops all preparation/submission after committed
     `delivery.submitted`, including when its `pleaseAck` requests the current
@@ -880,7 +880,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
-21. <a id="dd-21"></a> A valid ACK before submitted adds receipt information only; manual action is still required for another exact-package attempt.
+21. <a id="dd-21"></a> A valid ACK before submitted adds receipt information only; another transport call still requires manual action and the exact package.
 
 22. <a id="dd-22"></a> Duplicate input reuses its frozen response state but never dispatches it; submitted/collected responses cannot be recreated.
 
@@ -921,11 +921,11 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     `kid` has the exact `iss` DID portion. Predecessor method authorization uses
     [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
     exact predecessor verification document, without requiring byte equality with presentedDid.
-35. <a id="dd-35"></a> New unconfirmed successor packages include frozen proof/long form; attempted packages never change after confirmation.
+35. <a id="dd-35"></a> New unconfirmed successor packages include frozen proof/long form; committed packages never change after confirmation.
 
 36. <a id="dd-36"></a> Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.
 
-37. <a id="dd-37"></a> Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact attempted package.
+37. <a id="dd-37"></a> Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact committed package.
 
 38. <a id="dd-38"></a> Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
@@ -952,9 +952,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 45. <a id="dd-45"></a> Submitted completion survives restart, loss of local state, clock rollback,
     package retirement and envelope collection. Later duplicate input cannot
     reopen submission or require the collected envelope.
-46. <a id="dd-46"></a> If one of several valid packages for a message ID is submitted, every package of
-    that message ID stops work; selecting another package, route or handler cannot
-    bypass completion.
+46. <a id="dd-46"></a> A complete submission witness completes the message even if import later
+    adds a competing preparation. The conflict remains visible; another package,
+    route or handler cannot bypass completion.
 47. <a id="dd-47"></a> Generic pure ACK copies carrier pthid and nullable creation time. An Empty rotation notification uses a distinct fixed tuple, empty ack array and its own ACK request; one input may produce both intents.
 48. <a id="dd-48"></a> Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
 
@@ -968,7 +968,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 50. <a id="dd-50"></a> Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
 
-51. <a id="dd-51"></a> Outcome-unknown calls remain unconfirmed after crash; manual retry preserves wire ID, package, channel and expiry.
+51. <a id="dd-51"></a> A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
 
 52. <a id="dd-52"></a> Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
 
@@ -978,13 +978,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. Invitation consumption is independent of the response.
 
-56. <a id="dd-56"></a> Serialize each message dispatch, commit its attempt before transport and its observed acceptance afterward. A crash consumes that live invocation and recovery cannot replay it.
+56. <a id="dd-56"></a> Serialize each message dispatch, require its committed package and consume one live initial/manual action per transport call. Record observed acceptance afterward. Scanning saved events or restarting supplies no action, and one action cannot invoke transport twice.
 
 <a id="binding-resolution-and-sender-eligibility-dd-57-dd-62"></a>
 
 ### Binding, resolution and sender eligibility (DD-57–DD-62)
 
-57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a never-attempted message is not readdressed after rotation.
+57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a message with no prepared package is not readdressed after rotation.
 
 58. <a id="dd-58"></a> A valid same-DID key/service update preserves the channel. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
 
@@ -993,8 +993,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
     before first preparation. Transient unavailability leaves it retryable;
     definitive resolution failure is terminal under [relationships.md section 10.1](relationships.md#did-resolution-requirements). An unchanged online-revalidated document still creates new evidence.
-    Attempted packages retry manually with exact bytes; pre-attempt preparation
-    remains in the fixed channel using retained snapshots. Whenever
+    Committed packages retry manually with exact bytes and retained snapshots. Whenever
     an inbound delivery enters or resumes authentication, including duplicates,
     it uses current sender resolution; unavailability defers without pickup ACK
     only within that section's per-delivery budget. Definitive DNS failures
@@ -1019,7 +1018,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 65. <a id="dd-65"></a> ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
 
-66. <a id="dd-66"></a> Opposite-side links justify their evidence-backed join. Existing queued, attempted and submitted messages all keep their original channels.
+66. <a id="dd-66"></a> Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
 
 67. <a id="dd-67"></a> Superseded peer input remains receivable but creates no new automatic work. Existing intents and results remain historical and duplicates never dispatch old effects.
 
@@ -1041,4 +1040,4 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 74. <a id="dd-74"></a> Crash after a rotation decision but before notification intent leaves manual work. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
 
-75. <a id="dd-75"></a> Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; saved attempted packages never change afterward.
+75. <a id="dd-75"></a> Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.

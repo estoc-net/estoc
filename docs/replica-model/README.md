@@ -23,10 +23,10 @@ selected channels with local names and preferences. Applications derive display
 data from retained message history under their protocol rules.
 
 An outbound fixes its channel at intent commit; rotation selects new messages
-only. Every transport call requires a durable attempt and a live initial/manual
-action. Recovery exposes pending work for manual action. Manual retry uses the
-exact attempted package, while a new channel requires a new message ID. Peer
-ACKs record receipt independently of submission. See
+only. Preparation commits one fixed package. Every transport call requires that
+package and a live initial/manual action. Recovery exposes pending work for manual
+action. Retry preserves the package; a different package or channel requires a
+new message ID. Peer ACKs record receipt independently of submission. See
 [delivery boundaries](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table).
 
 ACK, Trust Ping reply and rotation notification use independent persisted
@@ -37,7 +37,7 @@ permits at most one compatible intent per execution.
 | --- | --- | --- |
 | Storage | [Event store](event-store.md), [DASL objects](dasl-objects.md) | Event API, identity/order, object bytes and retention |
 | Persistence | [SQLite vault](vault-sqlite.md) | Schema, exclusive ownership, transactions and portable recovery |
-| Domain facts | [Vault events](vault-events.md) | Message, attempt, contact and local policy payloads/folds |
+| Domain facts | [Vault events](vault-events.md) | Message, delivery, contact and local policy payloads/folds |
 | Communication authority | [Channels](channels.md), [Address/contact policy](relationships.md) | Fixed DID pairs, operation evidence, directed continuity, contact selections |
 | Runtime | [Delivery](distributed-delivery.md) | Channel-local identity, ACK paths, fixed packaging and live dispatch actions |
 | Deferred extensions | [Replica mediation](replica-mediation.md), [Vault sync](vault-sync.md) | Receipt fan-out and encrypted data synchronization, without outbox takeover |
@@ -78,7 +78,7 @@ identity; RZ owns DID resolution and address/display policy.
 | Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
 | Operation eligibility | [CH](channels.md#operation-eligibility) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
-| Fixed intent and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [attempt](vault-events.md#delivery-attempted), [DD send](distributed-delivery.md#send-an-ordinary-message) |
+| Fixed intent/package and manual dispatch | [CH](channels.md#fixed-outbound-channel) | [VE intent](vault-events.md#message-out), [package](vault-events.md#message-prepared), [DD send](distributed-delivery.md#send-an-ordinary-message) |
 | Inbound/execution IDs | [DD identity](distributed-delivery.md#observation-identity-logical-aliasing-and-execution-identity) | [VE execution](vault-events.md#inbound-message-and-execution-fold) |
 | Content/intent/plaintext normalization | [DD hashes](distributed-delivery.md#canonical-projections-and-hashes), [VE stored content](vault-events.md#stored-message-document) | [VE package](vault-events.md#message-prepared) |
 | ACK selection and authorization | [DD ACKs](distributed-delivery.md#durable-end-to-end-acknowledgment) | [VE ACK witness](vault-events.md#delivery-acknowledged) |
