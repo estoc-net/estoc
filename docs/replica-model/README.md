@@ -13,8 +13,10 @@ A vault has one seed, immutable events and raw content-addressed objects.
 Channels are ordered local/peer DID pairs that retain authenticated communication.
 Each receipt, package and proof retains its own document evidence. Sending,
 automatic output, preparation, local rotation, profile lifts and received ACK/error
-attribution use their concrete evidence and applicable policy without channel
-acceptance. Acceptance governs invitation consumption and its own inheritance.
+attribution use their concrete evidence and applicable policy. A separate
+`invitation.consumed` records the peer using a one-use OOB disclosure; it does
+not authorize or prevent those operations. Automatic consumption follows the
+disclosure's `autoConsume` choice; many-use invitations have no exclusive consumer.
 Method-authorized document updates preserve the channel. Directed links are
 derived from received proofs and local rotation decisions. Receipt can precede
 proof verification, with pending/invalid/conflict status visible in the UI.
@@ -70,7 +72,7 @@ Ordinary DIDComm messages need no Estoc wire handshake or contact ID.
 
 Change the defining section and align its consumers. ES owns event envelopes,
 DO owns raw objects/retention APIs and SQ owns SQLite lifecycle. CH owns channels,
-acceptance/proof/rotation/denial/display events, the continuity fold and dispatch authority. VE owns
+invitation/proof/rotation/denial/display events, the continuity fold and dispatch authority. VE owns
 the remaining domain payloads/folds; DD owns runtime ordering and message/effect
 identity; RZ owns DID resolution and address/display policy.
 
@@ -81,7 +83,6 @@ identity; RZ owns DID resolution and address/display policy.
 | Storage ownership and recovery | [SQ](vault-sqlite.md#ownership-and-lifecycle) | [VE open](vault-events.md#open-the-writable-full-runtime) |
 | Object identity and held roots | [DO](dasl-objects.md#accepted-dasl-cids), [VE retention](vault-events.md#held-roots) | [SQ objects](vault-sqlite.md#objects-and-streams) |
 | Channel pair and selectors | [CH identity](channels.md#channel-identity) | [VE vocabulary](vault-events.md#identifier-and-reference-vocabulary), [contact selection](vault-events.md#contact-channelsset) |
-| Channel acceptance | [CH acceptance](channels.md#channel-accepted) | [VE invitation fold](vault-events.md#invitation-fold) |
 | Proof evidence, derived links and joins | [CH continuity](channels.md#continuity) | [RZ rotation](relationships.md#peer-address-changes) |
 | Receipt verification status | [CH status](channels.md#verification-status) | [DD recovery](distributed-delivery.md#receive-recovery) |
 | Operation eligibility | [CH](channels.md#operation-eligibility) | [VE input fold](vault-events.md#inbound-message-and-execution-fold) |
@@ -91,7 +92,7 @@ identity; RZ owns DID resolution and address/display policy.
 | ACK selection and authorization | [DD ACKs](distributed-delivery.md#durable-end-to-end-acknowledgment) | [VE ACK witness](vault-events.md#delivery-acknowledged) |
 | Complete witnesses | [VE witnesses](vault-events.md#complete-observation-witnesses) | [CH links](channels.md#channel-linked), [DD ACKs](distributed-delivery.md#applying-ack) |
 | Resolution, cryptographic gate and budgets | [RZ resolution](relationships.md#did-resolution-requirements), [gate](relationships.md#hard-pre-vault-gate) | [CH receipt](channels.md#receipt), [RM pickup](replica-mediation.md#messages-received) |
-| Invitations | [CH acceptance](channels.md#admission), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
+| Invitations | [CH consumption](channels.md#invitation-consumed), [VE invitation fold](vault-events.md#invitation-fold) | [VE disclosure](vault-events.md#did-disclosed) |
 | Denial and contact views | [CH policy/display](channels.md#effects-and-recovery) | [VE contact selection](vault-events.md#contact-channelsset), [deletion](vault-events.md#delete-a-contact), [profiles](vault-events.md#relationship-profile-fold) |
 | Submission/receipt state | [VE delivery fold](vault-events.md#outbound-message-and-delivery-fold) | [DD completion](distributed-delivery.md#submission-completion-and-expiration) |
 | Restore and import | [SQ interchange](vault-sqlite.md#restore-and-import) | [DD recovery](distributed-delivery.md#receive-recovery), [VS recovery](vault-sync.md#bootstrap-and-recovery) |

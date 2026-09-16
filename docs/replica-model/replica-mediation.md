@@ -71,7 +71,7 @@ each replica acknowledges independently.
 
 Local recipients are ordinary seed-derived `did:peer:4` communication addresses.
 Public discovery and private pairwise allocation use the same storage, fan-out,
-pickup and channel-acceptance semantics. The mediator receives no address-role
+pickup and channel-receipt semantics. The mediator receives no address-role
 classification. Its method-neutral resolution also supports externally managed
 DIDs without making document publication a vault responsibility.
 
@@ -83,7 +83,7 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Channel acceptance and address-rotation policy belong to [relationships.md](relationships.md).
+Invitation and address-rotation policy belong to [relationships.md](relationships.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
 
@@ -919,9 +919,9 @@ This profile's accounting key includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
 Authenticated channel receipt is sufficient for normal pickup acknowledgment.
-Channel acceptance, continuity recovery, business handlers, rendering,
-replica synchronization and read state are not prerequisites. Unknown or
-refused channel acceptance retains the receipt. Each later operation applies
+Invitation consumption, continuity recovery, business handlers, rendering,
+replica synchronization and read state are not prerequisites. A refused
+invitation decision retains the receipt. Each later operation applies
 its own evidence and policy requirements under [channels.md](channels.md#operation-eligibility);
 pickup acknowledgment itself authorizes no ultimate ACK or effect.
 
@@ -1002,7 +1002,7 @@ leave partial state. In particular it MUST NOT store one mailbox message while
 creating deliveries for only some active replicas.
 
 Public rendezvous DIDs amplify unauthenticated initiator traffic into
-recipient storage, user prompts and potential channel acceptances.
+recipient storage, user prompts and potential application work.
 Operators SHOULD support per-account and per-recipient rate limits in addition
 to hard storage caps. An authenticated administration or discovery response
 MAY expose current usage, but anonymous routing behavior SHOULD remain
@@ -1159,5 +1159,5 @@ A conforming implementation demonstrates at least these cases:
     Unopened local/cryptographic waits suspend active accounting without
     resetting it, under [relationships.md](relationships.md#shared-accounting-and-lost-wait-state).
     Once channel receipt commits, missing channel/continuity evidence cannot withhold
-    pickup ACK; acceptance/effect state recovers from saved evidence without another pickup
+    pickup ACK; invitation/effect state recovers from saved evidence without another pickup
     or resolution sequence. A new network delivery authenticates afresh.

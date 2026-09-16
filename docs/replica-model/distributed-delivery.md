@@ -50,7 +50,7 @@ appear in all capitals.
 ## 1. What it is for
 
 An Estoc message begins as a durable intent in one fixed oriented channel.
-Phase 1 has one active executor. Channel receipt, local acceptance, directed
+Phase 1 has one active executor. Channel receipt, invitation consumption, directed
 continuity, contact membership and dispatch authority are separate facts.
 
 Every actual message transport call follows a committed `delivery.attempted`.
@@ -98,7 +98,7 @@ or learns a replica ID.
 
 All local communication addresses are vault-scoped. The active full runtime
 derives their private keys and receives their messages. Public/private
-allocation does not select a different acceptance, sender permission or receive
+allocation does not select a different sender permission or receive
 path. A later server or replica does not own an address merely by executing
 the vault. The channel preserves local/peer roles within that vault;
 each message has a sender and recipient, and every rotation is directed.
@@ -239,7 +239,7 @@ one concrete sender and recipient, derive their channel and commit `message.out`
 with objects. This call does no network work. An explicit user send may select
 a new channel; an automatic output requires a complete source witness, its
 operation's policy checks and a same-channel or verified role-preserving
-successor response channel. Neither requires channel acceptance.
+successor response channel. Neither depends on invitation use.
 
 The original live initial action may then resolve/register and prepare the
 fixed channel. Missing prerequisites may wait locally before the first call.
@@ -277,12 +277,12 @@ with a new ID. Rotation and contact preferences never retarget old work.
 5. If `from_prior` is present, reuse a complete proof witness or obtain its
    predecessor document and commit `message.fromPriorResolved`. Fold proof
    status and continuity from those facts. Missing evidence stays pending and
-   visible; no prior channel acceptance is needed to derive a valid link.
+   visible; the exact source and proof suffice to derive a valid link.
 6. For each consumer, validate exact source/proof evidence and its required
    target or protocol fields. Before new work, recheck supersession, denial
    and that operation's current policy. Commit the concrete intent or local
-   result with already committed references. Acceptance and its invitation
-   consumption consequences follow [channels.md](channels.md#admission)
+   result with already committed references. Invitation consumption
+   follows [channels.md](channels.md#invitation-consumed)
    independently of those consumers.
 7. Process valid explicit peer ACKs and local display/profile projections.
    The sole active executor may independently create an eager ACK, a Ping reply
@@ -292,13 +292,13 @@ with a new ID. Rotation and contact preferences never retarget old work.
 
 Hard terminal rejection may pickup-ACK without `message.in` under the gate;
 failed durable receipt withholds normal pickup ACK. Control types have no
-special admission authority and no recursive privacy-response trigger.
+special invitation-consumption authority and no recursive privacy-response trigger.
 
 <a id="receive-recovery"></a>
 
 ### 4.4 Recovery
 
-Rebuild receipts, exact acceptance/proof evidence, local rotation decisions,
+Rebuild receipts, exact source/proof evidence, local rotation decisions,
 invitations, denials, profile
 and display projections from retained facts. Saved authenticated input does not
 need current sender re-resolution. Links and UI verification states derive
@@ -437,8 +437,8 @@ fixed channel. Resolve first-package freshness under
 keys authorized by that operation's document for the intent's fixed DID pair.
 A method-authorized update may change keys or service without changing the
 channel. Preparation validates the intent and its required source/proof
-evidence, then the local key and exact peer resolution. It requires no channel
-acceptance. Current policy and live initial/manual authority still gate
+evidence, then the local key and exact peer resolution.
+Current policy and live initial/manual authority still gate
 preparation and dispatch; a package supplies neither its own source evidence
 nor a fresh dispatch action.
 
@@ -565,7 +565,7 @@ or an authorized role-preserving successor of its fixed channel. The carrier's
 sender must be the original peer or its verified replacement and its recipient
 the original local endpoint or its verified local successor. Undirected graph
 connectivity, group membership, threads and ordinary responses are insufficient.
-No channel acceptance is required for the carrier or the outbound.
+Invitation use is not required for the carrier or the outbound.
 
 All redundant witness fields must come from one complete source row. Missing
 path/authentication/package references defer the acknowledgment. The carrier's
@@ -684,7 +684,7 @@ into one execution.
 
 Useful content or Trust Ping can be the first ordinary DIDComm message.
 No Estoc handshake, contact ID or private-address requirement is
-introduced. Channel acceptance follows explicit local policy or verified links.
+introduced. Each operation follows its own source evidence and local policy.
 Optional early privacy rotation creates a new channel for new output, never
 rewrites an old message. See [the address policy](relationships.md).
 
@@ -758,8 +758,7 @@ explicit manual completion using the same tuples. Every new intent commits
 through `Vault.commit` before network effects. The pending-work view derives
 from retained intents. Having an intent alone grants no dispatch action.
 Derivation, lookup and commit are one locked operation;
-all source/endpoint/proof dependencies must already be committed. Channel
-acceptance is not a prerequisite for the intent or its package.
+all source/endpoint/proof dependencies must already be committed.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
 carriers never grant a dispatch action under section 8.4.
@@ -829,7 +828,7 @@ delivery.acknowledged      exact authorized peer receipt observation
 message.in                 independent authenticated channel receipt
 message.fromPriorResolved  exact issuer-document association for a received proof
 did.rotationSelected       local successor and frozen proof selected before sending
-channel.accepted           local DID-pair acceptance with decision evidence
+invitation.consumed        exact one-use disclosure and source-backed consumer
 channel.blocked            local channel/successor denial
 ```
 
@@ -853,7 +852,7 @@ are owned by [vault events](vault-events.md) and [channels](channels.md).
   channel becomes unusable, a deliberate new send has a new wire ID.
 - After receipt but before pickup ACK, redelivery is another same-channel
   observation. Receipt commit still permits pickup ACK independently of policy.
-- After receipt/acceptance but before a reply, recovery preserves local state
+- After receipt/consumption but before a reply, recovery preserves local state
   and pending work without automatically sending ACKs, replies or notifications.
 - After erasure, no new content-derived effect is reconstructed.
 - Mediator expiry/outage may lose an already submitted message. This best-effort
@@ -947,13 +946,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 24. <a id="dd-24"></a> Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
 
-25. <a id="dd-25"></a> Missing source authentication, endpoint or required link evidence defers the affected automatic operation; missing acceptance alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
+25. <a id="dd-25"></a> Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
 
 26. <a id="dd-26"></a> Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and ordinary document updates do not cause them.
 
-27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence without channel acceptance. It creates no contacts or recursive privacy notifications, and its type grants no admission.
+27. <a id="dd-27"></a> Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
 
-28. <a id="dd-28"></a> Invalid carried proof prevents acceptance/link/ACK effects; independent authentication can still retain receipt and failed unpack creates none.
+28. <a id="dd-28"></a> Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independent authentication can still retain receipt and failed unpack creates none.
 
 29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
@@ -977,13 +976,13 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     exact predecessor verification document, without requiring byte equality with presentedDid.
 35. <a id="dd-35"></a> New unconfirmed successor packages include frozen proof/long form; attempted packages never change after confirmation.
 
-36. <a id="dd-36"></a> Direct and mediated traffic use the same channel receipt/acceptance folds; only mediated traffic has pickup ACK.
+36. <a id="dd-36"></a> Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.
 
 37. <a id="dd-37"></a> Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact attempted package.
 
 38. <a id="dd-38"></a> Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
-39. <a id="dd-39"></a> Preparation requires a valid fixed-channel intent and exact local-key/peer-resolution evidence without acceptance. Complete source and required carried-proof evidence precede dependent automatic intents; each operation checks its own current policy.
+39. <a id="dd-39"></a> Preparation requires a valid fixed-channel intent and exact local-key/peer-resolution evidence. Complete source and required carried-proof evidence precede dependent automatic intents; each operation checks its own current policy.
 
 <a id="normalization-ack-and-retention-regressions-dd-40-dd-49"></a>
 
@@ -1020,7 +1019,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-50. <a id="dd-50"></a> Recovery exposes incomplete acceptance/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
+50. <a id="dd-50"></a> Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. A new proof verification may resolve its predecessor; existing receipt/link verification uses saved evidence.
 
 51. <a id="dd-51"></a> Outcome-unknown calls remain unconfirmed after crash; manual retry preserves wire ID, package, channel and expiry.
 
@@ -1030,7 +1029,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 54. <a id="dd-54"></a> Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
 
-55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. No acceptance event is required for the response.
+55. <a id="dd-55"></a> A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. Invitation consumption is independent of the response.
 
 56. <a id="dd-56"></a> Serialize each message dispatch, commit its attempt before transport and its observed acceptance afterward. A crash consumes that live invocation and recovery cannot replay it.
 
@@ -1040,9 +1039,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 57. <a id="dd-57"></a> Offline intent freezes the actual sender/recipient pair. Even a never-attempted message is not readdressed after rotation.
 
-58. <a id="dd-58"></a> A valid same-DID key/service update preserves channel acceptance. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
+58. <a id="dd-58"></a> A valid same-DID key/service update preserves the channel. An ACK carrier can authenticate with the new key and acknowledge an old-key package; exact historical package evidence is unchanged.
 
-59. <a id="dd-59"></a> Independently authorized keys across document revisions share channel-local input identity; an unauthorized key contributes no acceptance or authenticated intent conflict.
+59. <a id="dd-59"></a> Independently authorized keys across document revisions share channel-local input identity; an unauthorized key supplies neither source authority nor an authenticated intent conflict.
 
 60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
     before first preparation. Transient unavailability leaves it retryable;
@@ -1055,7 +1054,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
     and exhausted retries take the terminal pre-vault ACK path; redelivery
     cannot reset the active sequence. Recoverable local prerequisite waits
     consume no budget. Unopened cryptographic waits use that section's
-    suspension and fresh-sequence rule. Post-receipt channel acceptance recovery
+    suspension and fresh-sequence rule. Post-receipt operation recovery
     consumes no sender-resolution attempts.
     Reusing matching evidence requires a fresh document check. Recovery of
     committed input uses its retained snapshot without another network lookup.
@@ -1067,7 +1066,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A complete proof witness establishes an exact channel link without acceptance. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
+63. <a id="dd-63"></a> A complete proof witness establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
 
 64. <a id="dd-64"></a> Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
 
@@ -1077,9 +1076,9 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 67. <a id="dd-67"></a> Superseded peer input remains receivable but creates no new automatic work. Existing intents and results remain historical and duplicates never dispatch old effects.
 
-68. <a id="dd-68"></a> Receipt precedes channel acceptance and concrete source-derived work. Matching channel acceptance consumes its invitation; all crash prefixes reopen without automatic replies.
+68. <a id="dd-68"></a> Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
 
-69. <a id="dd-69"></a> Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt; missing acceptance does not. Saved authentication is reusable; failed unpack still withholds receipt/pickup ACK.
+69. <a id="dd-69"></a> Missing required verification snapshots or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt; invitation state does not. Saved authentication is reusable; failed unpack still withholds receipt/pickup ACK.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
