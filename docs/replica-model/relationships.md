@@ -168,7 +168,9 @@ OOB, QR, directory, file, NFC or manual exchange discloses an ordinary address.
 Reusable discovery SHOULD use a public-contact address. An OOB ID supplies
 `pthid`, never channel identity. A one-use OOB disclosure is consumed
 automatically from an eligible source; no additional user decision is required.
-Many-use and profile/direct disclosures have no exclusive consumer.
+Many-use OOB invitations and direct DID disclosures have no exclusive consumer.
+Direct disclosure includes sharing a DID through a profile page or directory
+without an OOB invitation.
 
 A one-use invitation is consumed only by `invitation.consumed` under
 [the invitation fold](vault-events.md#invitation-fold), independently of reply

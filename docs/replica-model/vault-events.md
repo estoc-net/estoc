@@ -834,9 +834,13 @@ does not erase retained messages.
 }
 ```
 
-`as` is `oob`, `profile` or `direct`; `uses` is `one` or `many`. `oobId`
-is REQUIRED when `as == "oob"` and null otherwise. `goal` is nullable.
-`profile` and `direct` disclosures MUST use `uses == "many"`. A one-use OOB
+`as` is `oob` for an OOB invitation or `direct` for a DID shared without an
+OOB invitation. A profile page, directory, QR code or copied link can carry
+either form; classify the disclosed content. Audience and transport are
+independent of this classification.
+`uses` is `one` or `many`. `oobId` is REQUIRED when `as == "oob"` and null
+otherwise. `goal` is nullable.
+`direct` disclosures MUST use `uses == "many"`. A one-use OOB
 invitation is consumed automatically when an eligible source is available under
 [section 5.8](#invitation-fold); no separate user decision is required.
 The `uses` choice grants no reply, profile, continuity or dispatch authority.
@@ -2848,7 +2852,10 @@ derivation requires a new vault version.
     plaintext `from`, protected `skid` and decoded `apu`.
 28. <a id="ve-28"></a> Public discovery uses a chosen communication address under disclosure
     policy. Private allocation is not a different DID schema or receive path.
-    Local Peer discovery needs no DNS.
+    Local Peer discovery needs no DNS. Sharing a bare DID through a profile page,
+    directory or address exchange records `as: "direct"`, `uses: "many"` and
+    `oobId: null`; sharing an OOB invitation through those surfaces records
+    `as: "oob"` with its `oobId`.
 29. <a id="ve-29"></a> First and later inputs use common authentication/resource checks. Automatic invitation consumption requires its own source, disclosure, ordering and current eligibility checks regardless of control type or wire age.
 
 30. <a id="ve-30"></a> Unknown application types and absent receipt requests do not prevent channel receipt. Automatic output and profile lifts need complete source evidence and operation-specific policy checks; received ACK/error observations need their exact attribution evidence. None requires invitation consumption.
