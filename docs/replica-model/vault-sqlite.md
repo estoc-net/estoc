@@ -5,8 +5,7 @@
 <!-- suite-navigation:end -->
 
 Status: **draft, phase 1**. SQLite is the sole persistent vault and portable
-backup format. This replaces the unreleased folder draft, not the existing
-implementation. No folder reader, conversion or dual writing is required.
+backup format.
 
 The capitalized requirement words in this document have their BCP 14 meanings.
 [event-store.md](event-store.md) owns the API and event semantics;
@@ -59,9 +58,8 @@ PRAGMA user_version = 1;
 
 `user_version` identifies the SQLite schema; `vault_meta.vault_version = 3`
 identifies event, object, key and fold semantics. Reject unsupported versions
-before application writes or payload interpretation. This unreleased draft
-requires no migration from earlier drafts. Published schema changes require a
-new schema version; semantic changes follow [ES §14](event-store.md#versioning).
+before application writes or payload interpretation. Published schema changes
+require a new schema version; semantic changes follow [ES §14](event-store.md#versioning).
 Each published schema revision must separately define the portable source
 versions accepted for restore and import; runtime migration support alone does
 not imply portable compatibility.
@@ -229,8 +227,7 @@ because local rejection diagnostics are not exported.
 One `objects` row and its ordered chunks represent the exact resource under a
 raw CID. Chunks are contiguous from zero, 1 MiB each except a final nonempty
 chunk of at most 1 MiB. Empty objects have size zero and no chunks. Chunk lengths
-sum to `size`; concatenation hashes to the CID. There are no physical-version
-IDs, acceptance clocks or separately addressed chunks. Historical event roots
+sum to `size`; concatenation hashes to the CID. Historical event roots
 have no foreign key to objects: erased references can outlive collected bytes.
 
 <a id="staging-and-acceptance"></a>
@@ -539,16 +536,15 @@ Seed-and-locator bootstrap builds a fresh runtime and seed wrapper.
 
 ## 14. Required conformance cases
 
-Test observable correctness, not a particular broker, cache or stream-latch
-implementation. Case IDs retain their subjects; superseded concurrency and
-physical-version guarantees are recorded in the suite's section history.
+Test observable correctness across the implementation's supported ownership,
+read and maintenance strategies.
 
 <a id="schema-and-identity"></a>
 
 ### Schema and identity (SQ-1–SQ-9)
 
 1. <a id="sq-1"></a> Native/browser drivers exchange identical portable logical values.
-2. <a id="sq-2"></a> Unsupported versions, folder inputs and extra portable schema fail.
+2. <a id="sq-2"></a> Unsupported versions, non-SQLite inputs and extra portable schema fail.
 3. <a id="sq-3"></a> Create refuses existing destinations; open never implicitly creates.
 4. <a id="sq-4"></a> Wrong seed/anchor fails before application data writes or identity use;
     a completed schema migration is the only permitted earlier application write.

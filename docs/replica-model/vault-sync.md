@@ -6,7 +6,7 @@
 
 Status: **deferred draft** — future encrypted synchronization of an Estoc
 vault through an untrusted sync store using immutable objects between explicit
-account resets. It is not required or implemented by Estoc phase 1.
+account resets. It is outside Estoc phase 1.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they

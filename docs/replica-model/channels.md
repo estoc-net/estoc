@@ -21,8 +21,7 @@ limit on the keys that the same DID may authorize later.
 A **continuity link** is a derived replacement of exactly one endpoint in the
 context of one channel. The fold computes it from received proofs, resolution
 evidence and local rotation decisions; no link event is stored.
-Links form a directed graph. They do not create a global DID alias or require
-a common birth pair, chain root or component identifier.
+Links form a directed graph whose authority is scoped to each channel context.
 
 A **contact** records local names, preferences and direct channel selections.
 It may display several disconnected channel histories. Editing these selections,
@@ -113,7 +112,6 @@ until verified. Use maintained DIDComm/JOSE verification APIs and the exact
 predecessor document. Never strip the proof, fabricate unpack success or treat
 decoding as verification. If unpack cannot authenticate plaintext without
 missing predecessor material, wait unopened without `message.in` or pickup ACK.
-The draft does not assert that the current adapter supports independent unpack.
 
 A successful independent authentication may retain pending or invalid
 continuity evidence. Invalid proof authorizes no operation based on that proof.
@@ -242,9 +240,9 @@ later conflicts and contact deletion never release a committed consumption.
 
 ## 5. Derived continuity
 
-`channel.linked` is retired. The graph is a rebuildable projection, with no
-portable link ID or link commit step. Folding reads retained inputs only;
-network resolution and event appends belong to producer/recovery operations.
+The graph is a rebuildable projection of retained evidence. Folding reads
+retained inputs only; network resolution and event appends belong to
+producer/recovery operations.
 Its inputs are the following facts.
 
 <a id="message-frompriorresolved"></a>
@@ -363,8 +361,7 @@ flowchart LR
 Only these evidence-backed joins are permitted. Sharing a DID, key or contact
 cannot fill a missing side. Competing successors for the same
 endpoint/context, cycles and contradictory identity evidence are visible
-conflicts, not ordinary opposite-side rotation. No graph-wide stable component
-ID is needed.
+conflicts, not ordinary opposite-side rotation.
 
 For peer replacements, one context includes channels connected by validated
 local-only replacements while retaining the same canonical peer DID. Compare
@@ -373,8 +370,8 @@ acceptance events. For local replacements, apply the symmetric rule through
 peer-only replacements. A join transports the existing two replacements; it
 does not create another competing choice. Each derived link exposes its exact
 source witnesses; document updates neither split the context nor hide
-competing successors. These contexts are derived queries,
-never message identifiers or stored component roots.
+competing successors. These contexts are derived queries; message identifiers
+remain fixed by their actual channel and sender.
 
 Compute the least positive closure from complete direct acceptances, peer proof
 witnesses and local decisions, then dependent continuation/join acceptances.
@@ -412,9 +409,9 @@ contact cannot acknowledge a message even when it chooses the same wire ID.
 
 ## 6. Operation eligibility
 
-`message.accepted` is retired. There is no per-message admission event or
-persisted eligibility Boolean. Each consumer checks the facts required for its
-own operation, then records only its concrete intent, local decision or result.
+Each consumer checks the evidence and current policy required for its operation,
+then records its concrete intent, local decision or result. Eligibility is
+computed from those inputs whenever the operation is considered.
 
 A **complete channel witness** is one authenticated `message.in` whose actual
 channel, local key and canonical peer agree with a complete `channel.accepted`.
@@ -433,7 +430,7 @@ policy. It also checks for an existing equivalent intent/result. For a user
 send without an inbound source, apply the user-send rules instead. Concrete
 automatic intents and profile results reference their exact source and channel
 acceptance directly under [vault events](vault-events.md#message-out); local
-rotation already retains its source and predecessor acceptance. All referenced
+rotation retains its source and predecessor acceptance. All referenced
 events must be committed first. No intent can supply its own source authority.
 
 Import/rebuild validates each saved action's positive evidence references and
@@ -464,8 +461,7 @@ Neither later graph discovery nor grouping merges executions. The ID formulas
 and within-channel vectors are in [delivery](distributed-delivery.md#observation-ids-and-vectors).
 
 ACK, Ping reply and rotation notification are independent concrete intents
-with distinct deterministic tuples. There is no one-response election across
-handlers. Each tuple still permits only one immutable intent.
+with distinct deterministic tuples. Each tuple permits one immutable intent.
 Historical or imported input never supplies a fresh dispatch action. Only the
 single active executor may react automatically to eligible live input;
 sync and mailbox fan-out do not grant another replica that role.

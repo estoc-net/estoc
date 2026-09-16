@@ -4,7 +4,7 @@
 [Suite guide](README.md) · Phase 1 · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
-Status: **draft, phase 1** — clean-break event vocabulary and fold rules for
+Status: **draft, phase 1** — event vocabulary and fold rules for
 one single-seed vault executed by exactly one active writable full runtime.
 The event author is named `replica_id` so later replication can be added
 without changing the event envelope, but multi-writer execution,
@@ -1009,12 +1009,7 @@ positive evidence before availability to avoid a circular fold.
 ## 6. Channels, continuity and contact membership
 
 Channel identity, acceptance, continuity links, local denial and contact views
-are defined in [channels.md](channels.md). The old `relationship.bound`,
-`relationship.localTransitioned`, `relationship.peerTransitioned`,
-`relationship.channelsSet`, `relationship.contactAssigned`, `message.scoped`, `message.accepted`
-and `channel.linked` payloads are retired in this unreleased draft. They are not
-alternative current authority. Historical anchors remain for navigation;
-development vaults require rebuilding or an explicit separate conversion.
+are defined in [channels.md](channels.md).
 
 <a id="121-receipt-and-relationship-evidence"></a>
 <a id="receipt-and-relationship-evidence"></a>
@@ -1034,8 +1029,7 @@ separately serialized under [delivery](distributed-delivery.md#send-an-ordinary-
 ### 6.2 `channel.accepted`
 
 The closed schema and all local admission bases are in
-[channels.md](channels.md#channel-accepted). There is no component root ID,
-birth election or lookup that assigns one receipt to a different channel.
+[channels.md](channels.md#channel-accepted). Each receipt keeps its actual channel.
 Known missing references defer acceptance; they never block independent receipt.
 
 <a id="123-relationshipcontactassigned"></a>
@@ -1136,10 +1130,10 @@ block a retry without relocating it.
 Index exact DID pairs directly by channel ID. Derive accepted pairs, directed
 links, verified opposite-side joins, local-only supersession contexts and
 denials under [channels.md](channels.md#continuity). Edges and verification
-statuses are derived; each edge exposes its complete source witnesses, never
-a stored link event. Missing references defer the affected projection; contradictory identities,
-proofs or same-end successors conflict. There is no stable component ID and
-no message/execution reassignment when graph history changes.
+statuses are derived; each edge exposes its complete source witnesses.
+Missing references defer the affected projection; contradictory identities,
+proofs or same-end successors conflict. Message and execution identities remain
+fixed when graph history changes.
 
 Contact membership is a separate projection and is never read as a
 cryptographic prerequisite. A contact can show multiple disconnected channel chains.
@@ -1664,7 +1658,7 @@ Requirements:
   already committed `message.in` and `channel.accepted` events forming the
   source's complete channel witness. Its logical input derives `executionId`;
   its actual channel may precede the separately authorized output channel.
-  Retain these references in the concrete intent, not in a generic admission event;
+  Retain these references in the concrete intent;
 - `rotationEventId` is required and non-null exactly for a dedicated rotation
   notification. It names an already committed `did.rotationSelected`; sender,
   recipient and notification fields obey [the built-in operation rules](distributed-delivery.md#built-in-independent-operations).
@@ -1970,9 +1964,9 @@ Derive these independent facts:
 
 For an inbound-derived output, verify its tuple against its exact complete
 source/channel references in the channel-local execution. Each tuple permits
-one consistent intent. ACK, Ping reply and rotation notification tuples coexist;
-there is no shared ACK-bearing selection. A tuple-local output conflict stops
-that operation; an authenticated source-intent conflict stops all affected
+one consistent intent. ACK, Ping reply and rotation notification tuples coexist.
+A tuple-local output conflict stops that operation; an authenticated
+source-intent conflict stops all affected
 source-derived work. Notification selection conflicts are scoped to the exact
 rotation decision. None of these conflicts reopens recorded submission.
 
@@ -2273,8 +2267,8 @@ wire ID under [delivery](distributed-delivery.md#execution-id-and-immutable-tran
 An anonymous or mediator-control observation has no application execution.
 
 Each consumer derives pending/refused/eligible status from its exact evidence
-and operation rules; there is no common persisted accepted flag. At least one
-complete channel witness and no conflicting authenticated intent is required.
+and operation rules. At least one complete channel witness and no conflicting
+authenticated intent is required.
 A stored exact source reference cannot borrow another row's fields. New work
 also checks current denial, supersession and policy. Read-only ACK/error
 observations follow [operation eligibility](channels.md#operation-eligibility).
@@ -2303,10 +2297,9 @@ other external effects require the live initial/manual authority specified by
 
 ### 10.7 Operation evidence
 
-`message.accepted` and `message.scoped` are retired. Check
-[operation eligibility](channels.md#operation-eligibility) directly. Automatic
-`message.out` intents and `profile.nameClaimed` results name exact source/channel
-evidence; `did.rotationSelected` retains its existing source and predecessor
+Check [operation eligibility](channels.md#operation-eligibility) for each operation.
+Automatic `message.out` intents and `profile.nameClaimed` results name exact source/channel
+evidence; `did.rotationSelected` retains its source and predecessor
 acceptance. ACK observations validate their complete carrier and target path.
 These records authorize no unrelated operation on the same input.
 
@@ -2732,12 +2725,8 @@ to this document.
 
 Compatible additions within version 3 may introduce a new event type or
 an explicitly optional payload field whose absence has a fixed meaning.
-After release, changing the meaning of an existing field, fold, deterministic ID,
-erasure rule or key derivation requires a new vault version. This unreleased
-channel-core draft intentionally replaces prior v3 domain payloads/ID transcripts;
-it does not claim that earlier development vaults can be read without conversion.
-
-There is no migration requirement from an earlier event vocabulary.
+Changing a published field meaning, fold, deterministic ID, erasure rule or key
+derivation requires a new vault version.
 
 <a id="20-required-conformance-cases"></a>
 
@@ -2795,7 +2784,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 15. <a id="ve-15"></a> Authenticated key variants in one channel/sender/wire-ID input agree on one message identity; different channels never alias.
 
-16. <a id="ve-16"></a> Execution ID derives from channel, canonical sender and wire ID. Each new operation checks complete source/channel evidence and current policy; a contact or graph root supplies no authority.
+16. <a id="ve-16"></a> Execution ID derives from channel, canonical sender and wire ID. Each new operation checks complete source/channel evidence and current policy; display membership supplies no authority.
 
 17. <a id="ve-17"></a> Pending channel/link evidence defers processing. Later validation preserves this channel-local identity and grants no automatic recovery dispatch.
 
@@ -2839,7 +2828,7 @@ There is no migration requirement from an earlier event vocabulary.
     rendezvous wrapper or wire contact ID.
 32. <a id="ve-32"></a> message.in records exact channel/authentication evidence. Concrete automatic intents and profile results directly reference source and channel acceptance; carried-proof eligibility derives from document associations and history.
 
-33. <a id="ve-33"></a> Opposite sends over the same canonical DID pair derive one channel with separate sender directions. No birth or component-ID election occurs.
+33. <a id="ve-33"></a> Opposite sends over the same canonical DID pair derive one channel with separate sender directions.
 
 34. <a id="ve-34"></a> Display contact tombstones survive rediscovery; independent channel denials survive regrouping. Receipt in an unaccepted channel creates no replacement contact.
 
@@ -3023,7 +3012,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 102. <a id="ve-102"></a> Selecting recipient keys or assigning display contacts cannot prove inbound authentication. Anonymous/control/pending inputs retain evidence without application execution.
 
-103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid, without contact or birth metadata. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
+103. <a id="ve-103"></a> message.out requires immutable channelId, senderDidId and recipientDid. Different endpoint values conflict even if intentHash agrees; rotation never retargets it.
 
 104. <a id="ve-104"></a> Every pair uses channel acceptance with exact decision evidence; ordinary user sending needs no first reply and retains its channel through document update, reply, submission, erasure and restore.
 
@@ -3054,7 +3043,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 ### Local rotation and channel history (VE-112–VE-124)
 
-112. <a id="ve-112"></a> A local rotation decision freezes exact successor, proof and nullable source. Its derived link changes one channel endpoint; successors use UUIDv7 without a component root or deterministic root allocation.
+112. <a id="ve-112"></a> A local rotation decision freezes exact successor, proof and nullable source. Its derived link changes one channel endpoint; successors use UUIDv7.
 
 113. <a id="ve-113"></a> A local link needs complete exact-address confirmation against the accepted peer context. The confirming observation needs no handler decision or output intent.
 
@@ -3068,11 +3057,11 @@ There is no migration requirement from an earlier event vocabulary.
 
 118. <a id="ve-118"></a> A shared DID can belong to unrelated channels. Only evidence-backed opposite-side joins justify new channel combinations; no global Cartesian-product or component identity is assumed.
 
-119. <a id="ve-119"></a> A peer carrier authorizes its exact channel link or verified join context. Proof-free input uses its own authentication evidence and accepted pair without full root-history paths.
+119. <a id="ve-119"></a> A peer carrier authorizes its exact channel link or verified join context. Proof-free input uses its own authentication evidence and accepted pair.
 
 120. <a id="ve-120"></a> A complete receipt can witness a peer link before any handler runs. Restoring the missing predecessor allows local validation without inventing a new global identity.
 
-121. <a id="ve-121"></a> No message.accepted payload or persisted per-message eligibility flag exists. Concrete operation references must form a complete witness; missing exact references defer and contradictory identity/intent conflicts without moving effects or reopening invitations.
+121. <a id="ve-121"></a> Operation eligibility is computed from current policy and evidence. Concrete operation references must form a complete witness; missing exact references defer and contradictory identity/intent conflicts without moving effects or reopening invitations.
 
 122. <a id="ve-122"></a> Opposite-side links from one accepted base justify their exact diagonal join in either import order; same-side competing successors remain conflicts.
 
@@ -3163,7 +3152,7 @@ There is no migration requirement from an earlier event vocabulary.
 
 150. <a id="ve-150"></a> An automatic intent's missing exact source or channel-acceptance reference defers that intent even if another duplicate could independently authorize equivalent work. Importing the missing evidence completes its witness; lookup never replaces saved references.
 
-151. <a id="ve-151"></a> With no handler output or admission event, a complete ACK carrier can acknowledge its exact outbound through a valid channel path. Later blocking or peer supersession preserves that evidence while current policy can refuse new outgoing work.
+151. <a id="ve-151"></a> A complete ACK carrier acknowledges its exact outbound through a valid channel path independently of handler execution. Later blocking or peer supersession preserves that evidence while current policy can refuse new outgoing work.
 
 152. <a id="ve-152"></a> A dedicated notification requires rotationEventId. An inbound-triggered notification uses that decision's exact source and predecessor acceptance; a source-free manual notification has null effect/source fields and a UUIDv7 message ID. Different notification IDs for one decision conflict without affecting an independent ACK tuple.
 

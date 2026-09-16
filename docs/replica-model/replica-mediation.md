@@ -6,7 +6,7 @@
 
 Status: **deferred draft** — future multi-replica extension for DIDComm
 Messaging 2.1, Routing 2.0, Coordinate Mediation 3.0 and Message Pickup 3.0.
-It is not required or implemented by Estoc phase 1, which uses one active full
+It is outside Estoc phase 1, which uses one active full
 runtime and ordinary account-scoped Message Pickup.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
@@ -17,8 +17,8 @@ when, and only when, they appear in all capitals.
 > **Phase-1 boundary.** A mediation account that has not explicitly enabled
 > this extension behaves as an ordinary Coordinate Mediation / Message Pickup
 > account and carries no `replica_id`. Once this extension is enabled for an
-> account, its replica-scoped rules are a clean break and account-global pickup
-> MUST NOT be mixed with them.
+> account, pickup follows its replica-scoped rules. Account-global pickup
+> MUST NOT be mixed with replica-scoped pickup.
 
 <!-- reading-guide:start -->
 <a id="reading-guide"></a>
@@ -436,8 +436,8 @@ https://estoc.dev/replica-mediation/1.0/retired
 }
 ```
 
-`reason` is the retained reason when known and null when a legacy/operator
-retirement did not preserve one.
+`reason` is the retained reason when known and null when the retirement record
+contains no reason.
 
 <a id="client-re-incarnation-after-terminal-retirement"></a>
 

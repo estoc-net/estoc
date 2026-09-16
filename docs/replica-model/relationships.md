@@ -56,9 +56,8 @@ directly select channels under [channels.md](channels.md#contact-channels).
 ## 1. What it is for
 
 A fixed channel records communication between two DIDs. Verified links connect
-channels when one endpoint rotates. The original message stays in its actual
-channel and no cryptographic root or stable graph-component ID
-exists. [Channels](channels.md#model) owns that model.
+channels when one endpoint rotates. Each message stays in its actual channel.
+[Channels](channels.md#model) owns that model.
 
 Public/rendezvous and pairwise describe disclosure and allocation policy, not
 different message schemas or receipt permissions. A shared DID can participate
@@ -133,7 +132,7 @@ Every instruction to append an event in this document means
 Fixed channel IDs use [the channel formula and vectors](channels.md#channel-identity).
 Contacts use UUIDv7 and directly select channel IDs. A UI's derived continuity
 view may change when new evidence arrives, without changing contact selections
-or protocol identities. No persistent group or chain ID is allocated.
+or protocol identities.
 
 <a id="101-contact-ids"></a>
 <a id="contact-ids"></a>
@@ -143,7 +142,6 @@ or protocol identities. No persistent group or chain ID is allocated.
 Contacts use UUIDv7. Create or assign a contact only by explicit product policy;
 it may retain an unverified discovery DID before channel acceptance. Neither
 that decision nor matching names or keys establishes channel authority.
-No root-derived automatic contact or private-DID identifier is required.
 
 <a id="102-binding-and-contact-policy"></a>
 <a id="binding-and-contact-policy"></a>

@@ -223,7 +223,7 @@ when a full vault runtime process-durably appends `message.out`.
 | Submission completion | `delivery.submitted` referencing that attempt/package | Stop preparation and sending for this message ID |
 | Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
 | Proof resolution | Exact carrier plus `message.fromPriorResolved` and its document | Fold can compute proof result and continuity status |
-| New source-derived work | Complete source/channel/proof evidence, current policy and the concrete intent/result | No separate per-message admission commit |
+| New source-derived work | Complete source/channel/proof evidence, current policy and the concrete intent/result | Only the specific eligible operation may proceed |
 | Peer ACK | Complete channel witness and exact channel/path target | Receipt information only |
 
 Every dependency reference names an event committed before the dependent call.
@@ -280,8 +280,7 @@ with a new ID. Rotation and contact preferences never retarget old work.
    acceptance. A missing predecessor channel does not prevent saving proof evidence.
 6. For each consumer, validate exact source/channel/proof evidence. Before new
    work, recheck supersession, denial and that operation's current policy.
-   Commit the concrete intent or local result with already committed references;
-   there is no per-message admission event.
+   Commit the concrete intent or local result with already committed references.
 7. Process valid explicit peer ACKs and local display/profile projections.
    The sole active executor may independently create an eager ACK, a Ping reply
    and a rotation notification when their individual policies permit. Each
@@ -548,8 +547,8 @@ effectKey = -KB2EWusNRJSTOTRKOhBSWSgl715YRd2L0UQ051TYJI
 outbound message ID = wire ID = 83f41bfc-7758-576d-bde2-9d0ec2ca97c2
 ```
 
-These values follow the channel execution transcript and unchanged effect-key
-algorithm below. They replace the retired relationship-root fixtures.
+These values follow the channel execution transcript and effect-key
+algorithm below.
 
 <a id="applying-ack"></a>
 
@@ -642,7 +641,7 @@ authentication against its own snapshot under [channels.md](channels.md#operatio
 one channel/sender/wire-ID input shares one execution. Incompatible authenticated
 intent conflicts; incomplete consistent siblings do not erase a complete witness.
 Another channel stays separate, even when a later verified link connects it.
-No graph root, minimum component ID or contact enters identity.
+Identity depends only on the channel, sender and wire ID.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
@@ -666,9 +665,9 @@ The event schema member names are not substitutes for these transcript tags.
 Changing either endpoint produces another channel and another inbound/execution
 ID. The old observation and its effects remain unchanged. Retrying an existing
 outbound does not make this change; only a new send can select the new channel.
-The earlier cross-address alias fixture is retired. ACK authorization may still
-follow verified successor paths for an exact old message; that path does not
-merge the ACK carrier and the acknowledged message into one execution.
+ACK authorization may follow verified successor paths for an exact outbound
+message; that path does not merge the ACK carrier and the acknowledged message
+into one execution.
 
 <a id="first-contact-and-address-policy"></a>
 
@@ -694,8 +693,8 @@ An unresolved or conflicting sibling observation cannot clear that
 disagreement merely by making its group ineligible. One complete group
 cannot authorize automatic work while the execution conflict exists. Each protocol
 MUST define its handler ID, effect kind, stable non-negative integer ordinal
-and output intent rules. Distinct operations have independent tuples; none
-claims a shared reply slot or blocks another merely by producing an ACK.
+and output intent rules. Distinct operations have independent tuples and may
+each produce an output for the same source execution.
 Handler IDs and kinds are non-empty strings without
 U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
 leading zeros.
@@ -730,7 +729,7 @@ sender. Derive its tuple and look up its message ID before freezing targets,
 timing, channel or other fields. Reuse an existing non-conflicted intent; do not
 regenerate it after submission, source erasure, another observation or a changed
 clock. Source and channel evidence references are retained directly in the
-[intent](vault-events.md#message-out), with no separate message admission commit.
+[intent](vault-events.md#message-out).
 Missing evidence or sender leaves that operation pending without blocking
 another independently eligible operation.
 
@@ -738,14 +737,14 @@ ACKs and rotation notifications are eager standalone Empty messages. A Ping
 response or another natural protocol response does not carry either operation
 on its behalf. Each may be selected and committed independently from the same
 source. Arrival, dependency completion or handler order does not merge their
-tuples. This draft uses separate messages, without a combined-output optimization.
+tuples.
 
 Only eligible live input may automatically create an initial inbound-derived
 intent. Historical input can expose individual unfinished operations for
 explicit manual completion using the same tuples. Every new intent commits
-through `Vault.commit` before network effects. Existing intents form a pending
-work view; no separate persistent queue is required. Having an intent alone
-grants no dispatch action. Derivation, lookup and commit are one locked operation;
+through `Vault.commit` before network effects. The pending-work view derives
+from retained intents. Having an intent alone grants no dispatch action.
+Derivation, lookup and commit are one locked operation;
 all source/channel/proof dependencies must already be committed.
 A conflicting local intent is rejected before append; imported conflicts remain
 history and suppress work under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
@@ -965,7 +964,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 38. <a id="dd-38"></a> Phase 1 works with one active full runtime and ordinary account-scoped
     Message Pickup; replica fan-out is not required.
-39. <a id="dd-39"></a> Exact channel acceptance precedes preparation; complete source/channel and carried-proof evidence precedes dependent automatic intents. No per-message admission event is required.
+39. <a id="dd-39"></a> Exact channel acceptance precedes preparation; complete source/channel and carried-proof evidence precedes dependent automatic intents. Each operation checks its own evidence and policy.
 
 <a id="normalization-ack-and-retention-regressions-dd-40-dd-49"></a>
 
@@ -1049,7 +1048,7 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A proof establishes an exact channel link without a component root. Later proof-free input uses that channel acceptance and retains channel-local identity.
+63. <a id="dd-63"></a> A proof establishes an exact channel link. Later proof-free input uses that channel acceptance and retains channel-local identity.
 
 64. <a id="dd-64"></a> Opposite first sends derive one fixed channel with separate sender directions; public/private labels do not change the formula.
 

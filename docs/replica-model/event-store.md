@@ -37,7 +37,7 @@ Portable vault state consists of immutable events, retained content-addressed
 objects, immutable identity metadata and an encrypted seed wrapper. Local IDs,
 positions, options, caches and diagnostics do not travel with that state.
 SQLite's committed view determines what is accepted; private preparation is
-not acceptance. There is no folder interchange or generic portable-file API.
+not acceptance.
 
 The generic event store knows authors, not contacts, messages or channels.
 The vault requires the local append author to equal its current `replica_id`.
@@ -396,12 +396,10 @@ interface KeystoreAccess {
 
 Metadata is immutable. The unlocked host owns privileged rewrap and verifies
 that the replacement opens to the same seed/anchor. Read returns a detached
-value, not identity authority. `seedJwe` is the existing keystore package's
-compact JWE string, not a new JSON JWE object. Exact bytes and recovery/import
-policy are defined only in [SQ §4](vault-sqlite.md#identity-and-keystore).
+value, not identity authority. `seedJwe` is a compact JWE string. Exact bytes
+and recovery/import policy are defined only in [SQ §4](vault-sqlite.md#identity-and-keystore).
 
-There is no generic FileStore or mutable portable-table API. New authoritative
-application state uses versioned events and referenced objects.
+Authoritative application state uses versioned events and referenced objects.
 
 <a id="local-state"></a>
 
@@ -558,10 +556,9 @@ browser support.
 ## 14. Versioning
 
 Vault version 3 covers envelope, object profile, key derivation and domain folds.
-SQLite schema versioning is separate. These unreleased drafts supersede older
-draft layouts without read aliases or migration obligations. For published
-versions, compatible additions are new event types, optional payload fields
-with a fixed absent meaning, or negotiated capabilities. Changing existing
+SQLite schema versioning is separate. For published versions, compatible
+additions are new event types, optional payload fields with a fixed absent
+meaning, or negotiated capabilities. Changing existing
 meaning, envelope/ID/CID formats, derivation or required folds needs a new vault
 version. Changing portable schema needs a new SQLite schema version.
 
@@ -569,8 +566,7 @@ version. Changing portable schema needs a new SQLite schema version.
 
 ## 15. Required conformance cases
 
-Cases retain their subjects; the suite history records relaxed reader guarantees.
-Storage procedures are tested under SQ rather than redefined here.
+Storage procedures are tested under [SQLite conformance](vault-sqlite.md#required-conformance-cases).
 
 <a id="commit-validation-and-event-identity-es-1-es-7"></a>
 
