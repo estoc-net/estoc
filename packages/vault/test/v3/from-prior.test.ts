@@ -177,8 +177,14 @@ describe("fromPriorClaims", () => {
     expect(() => fromPriorClaims(withHeader({ alg: "EdDSA", kid: "key-1" }))).toThrow(/kid is a DID URL/);
     expect(() => fromPriorClaims(withHeader({ alg: "EdDSA" }))).toThrow(/kid is a DID URL/);
     expect(() => fromPriorClaims(`${encode([])}.${payload}.${signature}`)).toThrow(/protected header is a JSON object/);
-    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, crit: ["kid"] })}.${payload}.${signature}`)).toThrow(/names no critical header/);
-    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true })}.${payload}.${signature}`)).toThrow(/encodes its payload/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, crit: ["kid"] })}.${payload}.${signature}`)).toThrow(/crit names b64 and no other extension/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true, crit: ["b64", "kid"] })}.${payload}.${signature}`)).toThrow(/crit names b64 and no other extension/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true, crit: [] })}.${payload}.${signature}`)).toThrow(/crit names b64 and no other extension/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true, crit: "b64" })}.${payload}.${signature}`)).toThrow(/crit names b64 and no other extension/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: true })}.${payload}.${signature}`)).toThrow(/b64 is critical when spelled out/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, crit: ["b64"] })}.${payload}.${signature}`)).toThrow(/b64 is critical when spelled out/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: "true", crit: ["b64"] })}.${payload}.${signature}`)).toThrow(/encodes its payload/);
+    expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid, b64: false })}.${payload}.${signature}`)).toThrow(/encodes its payload/);
     const signed = async (payload: JsonObject) => resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, payload);
     expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid })}.${encode({ ...claims, iat: 1.5 })}.${signature}`)).toThrow(/iat is an integer/);
     expect(() => fromPriorClaims(`${encode({ alg: "EdDSA", kid })}.${encode({ ...claims, iat: "1" })}.${signature}`)).toThrow(/iat is an integer/);
@@ -212,6 +218,20 @@ describe("fromPriorClaims", () => {
     expect(() => carriedClaims(unencoded, successor.longFormDid)).toThrow(/encodes its payload/);
     await expect(verifyFromPrior(unencoded, document)).rejects.toThrow(/encodes its payload/);
     await expect(verifyLocalProof(unencoded, keys, predecessor, successor.longFormDid)).rejects.toThrow(/encodes its payload/);
+  });
+
+  it("accepts a header that spells out the encoded payload as its one critical extension, on every path", async () => {
+    const { keys, predecessor, successor, document } = await setup();
+    const kid = `${predecessor.longFormDid}${AUTHENTICATION_METHOD}`;
+    const claims = { iss: predecessor.longFormDid, sub: successor.longFormDid, iat: IAT };
+    const spelledOut = await resign(keys, PREDECESSOR, { alg: "EdDSA", typ: "JWT", kid, b64: true, crit: ["b64"] }, claims);
+    expect(decodeProtectedHeader(spelledOut)).toEqual({ alg: "EdDSA", typ: "JWT", kid, b64: true, crit: ["b64"] });
+    expect(fromPriorClaims(spelledOut)).toEqual({ ...claims, kid });
+    expect(carriedClaims(spelledOut, successor.longFormDid)).toEqual({ ...claims, kid, predecessorDid: predecessor.did, successorDid: successor.did });
+    await expect(verifyFromPrior(spelledOut, document)).resolves.toMatchObject({ ...claims, kid, methodId: kid });
+    await expect(verifyLocalProof(spelledOut, keys, predecessor, successor.longFormDid)).resolves.toMatchObject({ ...claims, kid });
+    const [header, payload] = segments(spelledOut);
+    await expect(verifyFromPrior(`${header}.${payload}.${segments(await resign(keys, PREDECESSOR, { alg: "EdDSA", kid }, claims))[2]}`, document)).rejects.toThrow(InvalidFromPrior);
   });
 });
 

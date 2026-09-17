@@ -102,11 +102,18 @@ function claimsOf(payload: JsonObject, kid: DidUrl): FromPriorClaims {
   return { iss: iss as Did, sub: sub as Did, iat: iat as number, kid };
 }
 
-/** The key ID of a protected header that a JWT may carry: no unencoded payload, no critical extension. */
+/**
+ * RFC 7797 lets a JWS leave its payload unencoded and requires the `b64`
+ * option, when spelled out, to be critical; a JWT may only spell out the
+ * encoded default, and no other extension is understood here.
+ */
 function protectedKid(header: JsonObject): DidUrl {
   if (header["alg"] !== FROM_PRIOR_ALG) throw new InvalidFromPrior(`alg is ${FROM_PRIOR_ALG}`);
   if (header["typ"] !== undefined && header["typ"] !== "JWT") throw new InvalidFromPrior("typ is JWT");
-  if (header["b64"] !== undefined || header["crit"] !== undefined) throw new InvalidFromPrior("a JWT encodes its payload and names no critical header");
+  const { b64, crit } = header;
+  if (b64 !== undefined && b64 !== true) throw new InvalidFromPrior("a JWT encodes its payload");
+  if (crit !== undefined && (!Array.isArray(crit) || crit.length === 0 || !crit.every((name) => name === "b64"))) throw new InvalidFromPrior("crit names b64 and no other extension");
+  if ((b64 === undefined) !== (crit === undefined)) throw new InvalidFromPrior("b64 is critical when spelled out");
   if (!isDidUrl(header["kid"])) throw new InvalidFromPrior("kid is a DID URL");
   return header["kid"] as DidUrl;
 }
