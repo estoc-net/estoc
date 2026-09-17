@@ -16,6 +16,7 @@ import {
   foldVault,
   foldVaultChecked,
   methodPublicKey,
+  sameChannel,
   type Channel,
   type ChannelEvidence,
   type ContinuityLink,
@@ -28,7 +29,7 @@ import {
   type VaultFold,
   type WireMessageId,
 } from "../../../src/v3/index.js";
-import { expectOrderFree, type Scene } from "./helpers.js";
+import { MEDIATED, ROUTE, createdDid, expectOrderFree, type Scene } from "./helpers.js";
 import { IAT, asPeer, blocked, channel, noObjects, peerDid, proof, receipt, resolved, rotation, vaults, type Local, type Peer } from "./scene.js";
 
 const fold = (scene: Scene, keys: Keys, readObject: ReadObject = noObjects) => foldVaultChecked(scene.set(), keys, readObject);
@@ -321,6 +322,44 @@ describe("conflicts", () => {
     expect(c.status(claimed.eventId)).toEqual({ status: "conflict", because: "its context is in conflict: identity" });
     expectSameOverEveryOrder(identity.scene, vault.checks);
   });
+
+  it("ahead of a channel leave it no default head: a fork or a cycle beyond a replacement never hands the default back to the channel the replacement left", async () => {
+    const forked = await vaults();
+    {
+      const { scene, keys, peerKeys, a0, b0, b1, b2, b3 } = forked;
+      const first = await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 1);
+      await receiptCarryingProof(scene, peerKeys, a0, b1, b2, 2);
+      expect((await fold(scene, keys)).continuity.head(channel(a0, b0))).toEqual(channel(a0, b2));
+      await receiptCarryingProof(scene, peerKeys, a0, b1, b3, 3);
+      const vault = await fold(scene, keys);
+      const c = vault.continuity;
+      expect(c.conflicts).toEqual([{ kind: "competing-peer-successors", context: [channel(a0, b1)], successors: [channel(a0, b2), channel(a0, b3)].sort(compareChannels) }]);
+      expect(c.conflicted(channel(a0, b0))).toBe(false);
+      expect(c.superseded(channel(a0, b0))).toBe(true);
+      expect(c.status(first.eventId)).toEqual({ status: "conflict", because: "its context is in conflict: competing-peer-successors" });
+      expect(c.head(channel(a0, b0))).toBeNull();
+      expect(c.ackPath(channel(a0, b0), channel(a0, b2))).toBe(false);
+      expectSameOverEveryOrder(scene, vault.checks);
+    }
+    const cyclic = await vaults();
+    {
+      const { scene, keys, peerKeys, a0, b0, b1, b2, b3 } = cyclic;
+      const first = await receiptCarryingProof(scene, peerKeys, a0, b0, b1, 1);
+      await receiptCarryingProof(scene, peerKeys, a0, b1, b2, 2);
+      await receiptCarryingProof(scene, peerKeys, a0, b2, b3, 3);
+      expect((await fold(scene, keys)).continuity.head(channel(a0, b0))).toEqual(channel(a0, b3));
+      await receiptCarryingProof(scene, peerKeys, a0, b3, b2, 4);
+      const vault = await fold(scene, keys);
+      const c = vault.continuity;
+      expect(c.conflicts).toEqual([{ kind: "cycle", channels: [channel(a0, b2), channel(a0, b3)].sort(compareChannels) }]);
+      expect(c.status(first.eventId)).toEqual({ status: "verified" });
+      expect(c.links.find((l) => sameChannel(l.to, channel(a0, b1)))!.verified).toBe(true);
+      expect(c.ackPath(channel(a0, b0), channel(a0, b1))).toBe(true);
+      expect(c.head(channel(a0, b0))).toBeNull();
+      expect(c.head(channel(a0, b1))).toBeNull();
+      expectSameOverEveryOrder(scene, vault.checks);
+    }
+  });
 });
 
 describe("authority behind a conflict", () => {
@@ -348,7 +387,7 @@ describe("authority behind a conflict", () => {
     );
     expect(c.conflicted(channel(a0, b3))).toBe(false);
     expect(c.ackPath(channel(a0, b3), channel(a1, b3))).toBe(false);
-    expect(c.head(channel(a0, b3))).toEqual(channel(a0, b3));
+    expect(c.head(channel(a0, b3))).toBeNull();
     expect(c.head(channel(a0, b1))).toBeNull();
     expectSameOverEveryOrder(scene, vault.checks, [channel(a1, b3)]);
 
@@ -391,8 +430,8 @@ describe("authority behind a conflict", () => {
     );
     expect(c.ackPath(channel(a0, b3), channel(a1, b4))).toBe(false);
     expect(c.ackPath(channel(a0, b3), channel(a0, b4))).toBe(true);
-    expect(c.head(channel(a0, b3))).toEqual(channel(a0, b4));
-    expect(c.head(channel(a0, b4))).toEqual(channel(a0, b4));
+    expect(c.head(channel(a0, b3))).toBeNull();
+    expect(c.head(channel(a0, b4))).toBeNull();
     expectSameOverEveryOrder(scene, vault.checks, [channel(a1, b3), channel(a1, b4)]);
 
     const manual = await rotation(scene, keys, { from: a0, peer: b3, to: a1 });
@@ -406,6 +445,65 @@ describe("authority behind a conflict", () => {
     expect(c.ackPath(channel(a0, b3), channel(a1, b4))).toBe(true);
     expect(c.head(channel(a0, b3))).toEqual(channel(a1, b4));
     expectSameOverEveryOrder(scene, vault.checks, [channel(a1, b3), channel(a1, b4)]);
+  });
+
+  it("derives no join through a conflicted channel: what a masked intermediate would transport reaches no descendant, while an independent decision still supports the same descendant", async () => {
+    const { scene, keys, peerKeys, a0, a1, a2, b2, b3 } = await vaults();
+    const a3 = await createdDid(scene, keys, "019b6a10-12c0-7410-89ab-38e54b097c22" as DidId, ROUTE, MEDIATED);
+    const b4 = await peerDid(peerKeys, "019b7000-0000-7000-8000-000000000b04" as DidId);
+    const localSource = proofFreeReceipt(scene, a2, b2, 1);
+    const forkSource = proofFreeReceipt(scene, a3, b3, 2);
+    const good = await rotation(scene, keys, { from: a2, peer: b2, to: a1, source: localSource });
+    const forkOne = await rotation(scene, keys, { from: a3, peer: b3, to: a1, source: forkSource });
+    const first = await receiptCarryingProof(scene, peerKeys, a2, b2, b3, 3);
+    const next = await receiptCarryingProof(scene, peerKeys, a2, b3, b4, 4);
+    let vault = await fold(scene, keys);
+    let c = vault.continuity;
+    expect(c.conflicts).toEqual([]);
+    expect(c.head(channel(a2, b2))).toEqual(channel(a1, b4));
+    expect(c.head(channel(a2, b4))).toEqual(channel(a1, b4));
+
+    const forkTwo = await rotation(scene, keys, { from: a3, peer: b3, to: a0, source: forkSource });
+    vault = await fold(scene, keys);
+    c = vault.continuity;
+    expect(c.conflicts).toEqual([{ kind: "competing-local-successors", context: [channel(a3, b3)], successors: [channel(a0, b3), channel(a1, b3)].sort(compareChannels) }]);
+    for (const event of [good, first, next]) expect(c.status(event.eventId)).toEqual({ status: "verified" });
+    for (const event of [forkOne, forkTwo]) expect(c.status(event.eventId)).toEqual({ status: "conflict", because: "its context is in conflict: competing-local-successors" });
+    expect(c.links).toEqual(
+      sortedLinks([
+        link(channel(a3, b3), channel(a1, b3), "local", [], [forkOne], false),
+        link(channel(a3, b3), channel(a0, b3), "local", [], [forkTwo], false),
+        link(channel(a2, b2), channel(a1, b2), "local", [], [good]),
+        link(channel(a2, b2), channel(a2, b3), "peer", [first], []),
+        link(channel(a2, b3), channel(a2, b4), "peer", [next], []),
+        link(channel(a2, b3), channel(a1, b3), "local", [first], [good], false),
+        link(channel(a1, b2), channel(a1, b3), "peer", [first], [good], false),
+        link(channel(a2, b4), channel(a1, b4), "local", [first, next], [good], false),
+        link(channel(a1, b3), channel(a1, b4), "peer", [first, next], [good], false),
+      ])
+    );
+    expect(c.conflicted(channel(a2, b4)) || c.conflicted(channel(a1, b4))).toBe(false);
+    expect(c.ackPath(channel(a2, b3), channel(a1, b3))).toBe(false);
+    expect(c.ackPath(channel(a2, b4), channel(a1, b4))).toBe(false);
+    expect(c.head(channel(a2, b4))).toBeNull();
+    expect(c.head(channel(a2, b2))).toBeNull();
+    expectSameOverEveryOrder(scene, vault.checks, [channel(a1, b4)]);
+
+    const control = await vaults();
+    const a3Again = await createdDid(control.scene, control.keys, a3.didId, ROUTE, MEDIATED);
+    const controlSource = proofFreeReceipt(control.scene, a3Again, b3, 1);
+    await rotation(control.scene, control.keys, { from: a3Again, peer: b3, to: a1, source: controlSource });
+    await rotation(control.scene, control.keys, { from: a3Again, peer: b3, to: a0, source: controlSource });
+    const onward = await receiptCarryingProof(control.scene, control.peerKeys, a2, b3, b4, 2);
+    const independent = await rotation(control.scene, control.keys, { from: a2, peer: b4, to: a1, source: onward });
+    vault = await fold(control.scene, control.keys);
+    c = vault.continuity;
+    expect(c.conflicts).toHaveLength(1);
+    expect(c.status(independent.eventId)).toEqual({ status: "verified" });
+    expect(c.ackPath(channel(a2, b4), channel(a1, b4))).toBe(true);
+    expect(c.head(channel(a2, b3))).toEqual(channel(a1, b4));
+    expect(c.head(channel(a2, b4))).toEqual(channel(a1, b4));
+    expectSameOverEveryOrder(control.scene, vault.checks);
   });
 });
 

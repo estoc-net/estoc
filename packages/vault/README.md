@@ -131,13 +131,15 @@ and joins a local and a peer replacement leaving one pair into the
 pair of both successors, transporting each to the other's successor;
 then, over the whole graph, finds the conflicts, competing successors
 of one endpoint in one context, cycles and a join that would pair a
-DID with itself; then takes the same closure again over the evidence
-no conflict reaches — a masked carrier confirms no decision, a masked
-decision joins nothing — as what grants authority, each link saying
-whether it is `verified`; then answers: each carrier's and decision's six-state
-`status`, what each source `witness`es, whether a channel is
-`conflicted` or `superseded` in its local-only context, its default
-`head`, whether a local DID is `confirmed` toward a peer, the
+DID with itself; then takes the same closure again, admitting no edge
+that touches a conflicted channel, a join's included, over the carriers
+and decisions that are complete witnesses — a masked carrier confirms
+no decision, a join transports nothing through a conflict — as what
+grants authority, each link saying whether it is `verified`; then
+answers: each carrier's and decision's six-state `status`, what each
+source `witness`es, whether a channel is `conflicted` or `superseded`
+in its local-only context, its default `head`, none while a replacement
+ahead of it is not granted, whether a local DID is `confirmed` toward a peer, the
 role-preserving `ackPath` from an outbound to a carrier, the denials
 that cover a channel and the decisions already made in its peer-only
 context; a conflict masks authority and removes no edge), the whole fold

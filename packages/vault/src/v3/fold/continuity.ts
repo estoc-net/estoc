@@ -15,14 +15,16 @@
  * the whole graph, the contexts and their conflicts: competing
  * successors of one endpoint in one context, cycles, a join that would
  * pair a DID with itself. Only then what grants authority: the same
- * closure again over the evidence a conflict leaves untouched — the
- * carriers whose link no conflict reaches, the decisions whose source
- * is such a carrier and whose predecessor such carriers confirm along
- * such links — so that a masked carrier confirms no decision and a
- * masked decision transports nothing through a join. The positive
- * graph keeps every branch for display; the authority graph answers
- * heads, ACK paths and confirmations. Nothing here appends an event
- * or reads arrival order.
+ * closure again, admitting no edge that touches a conflicted channel
+ * — neither a carrier's, nor a decision's, nor one a join derives —
+ * over the carriers that are complete witnesses and the decisions
+ * whose source, when they name one, is a complete witness and whose
+ * predecessor complete witnesses confirm along the edges so admitted;
+ * so a masked carrier confirms no decision, and a join transports a
+ * replacement only through channels no conflict reaches. The positive
+ * graph keeps every branch for display and says which replacements
+ * exist; the authority graph says which of them count. Nothing here
+ * appends an event or reads arrival order.
  */
 
 import { channelKey, channelOf, compareChannels, sameChannel } from "../ids.js";
@@ -85,7 +87,7 @@ export interface Continuity {
   conflicted(channel: Channel): boolean;
   /** has the peer replaced its DID anywhere in the channel's local-only context: no new work from the old peer */
   superseded(channel: Channel): boolean;
-  /** the unique channel forward replacements lead to, itself when none; null through a conflict or with no unique end */
+  /** the unique channel forward replacements lead to, itself when none; null when any replacement ahead is not one authority grants, or no end is unique */
   head(channel: Channel): Channel | null;
   /** has the peer, or a verified successor of it, written to exactly this local DID */
   confirmed(localDid: Did, peerDid: Did): boolean;
@@ -99,23 +101,24 @@ export interface Continuity {
 
 export function foldContinuity(set: VaultEventSet, evidence: ChannelEvidence): Continuity {
   const positives = writersByLocalDid(evidence, (id) => evidence.positive(id));
-  const { graph, waiting } = closure(evidence.peerLinks, evidence.localLinks, (graph, link) => graph.confirmedBy(positives.get(link.from.localDid) ?? NO_PEERS, link.from, () => false));
+  const { graph, waiting } = closure(evidence.peerLinks, evidence.localLinks, EVERY_CHANNEL, (graph, link) => graph.confirmedBy(positives.get(link.from.localDid) ?? NO_PEERS, link.from));
   return new ContinuityFold(set, evidence, graph, waiting);
 }
 
 const NO_PEERS: ReadonlySet<Did> = new Set();
+const EVERY_CHANNEL = () => true;
 
 /**
  * The least graph over the peer links and the candidate local links
- * `confirms` admits: a candidate is judged against the graph built
- * without it and every candidate still waiting, so nothing it derives
- * can confirm it, and the graph is rebuilt until no candidate is
- * admitted any more.
+ * `confirms` admits, with no edge touching a channel `admits` refuses:
+ * a candidate is judged against the graph built without it and every
+ * candidate still waiting, so nothing it derives can confirm it, and
+ * the graph is rebuilt until no candidate is admitted any more.
  */
-function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[], confirms: (graph: Graph, link: LocalLink) => boolean): { graph: Graph; waiting: Map<EventId, LocalLink> } {
+function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[], admits: (channel: Channel) => boolean, confirms: (graph: Graph, link: LocalLink) => boolean): { graph: Graph; waiting: Map<EventId, LocalLink> } {
   const admitted: LocalLink[] = [];
   const waiting = new Map(candidates.map((link) => [link.decision, link]));
-  let graph = buildGraph(peerLinks, admitted);
+  let graph = buildGraph(peerLinks, admitted, admits);
   for (;;) {
     const confirmed = [...waiting.values()].filter((link) => confirms(graph, link));
     if (confirmed.length === 0) return { graph, waiting };
@@ -123,7 +126,7 @@ function closure(peerLinks: readonly PeerLink[], candidates: readonly LocalLink[
       admitted.push(link);
       waiting.delete(link.decision);
     }
-    graph = buildGraph(peerLinks, admitted);
+    graph = buildGraph(peerLinks, admitted, admits);
   }
 }
 
@@ -147,7 +150,11 @@ class Graph {
   private readonly out = new Map<string, Map<string, Edge>>();
   private readonly queue: Edge[] = [];
 
+  constructor(private readonly admits: (channel: Channel) => boolean) {}
+
+  /** Adds the edge unless an endpoint is refused; a join's edges pass through here as well. */
   add(from: Channel, to: Channel, replaces: Replaced, carriers: Iterable<EventId>, decisions: Iterable<EventId>): void {
+    if (!this.admits(from) || !this.admits(to)) return;
     const fromKey = this.vertex(from);
     const toKey = this.vertex(to);
     let edges = this.out.get(fromKey);
@@ -208,14 +215,9 @@ class Graph {
     for (const edges of this.out.values()) yield* edges.values();
   }
 
-  /**
-   * The channels forward replacements of the given kinds reach from
-   * `start`, `start` included; a channel `skip` names is neither
-   * entered nor left.
-   */
-  reach(start: Channel, replaces: Replaced | "any", skip: (channel: Channel) => boolean): Map<string, Channel> {
+  /** The channels forward replacements of the given kinds reach from `start`, `start` included. */
+  reach(start: Channel, replaces: Replaced | "any"): Map<string, Channel> {
     const reached = new Map<string, Channel>();
-    if (skip(start)) return reached;
     const frontier = [start];
     reached.set(channelKey(start), start);
     while (frontier.length > 0) {
@@ -223,7 +225,7 @@ class Graph {
       for (const edge of this.from(channel)) {
         if (replaces !== "any" && edge.replaces !== replaces) continue;
         const key = channelKey(edge.to);
-        if (reached.has(key) || skip(edge.to)) continue;
+        if (reached.has(key)) continue;
         reached.set(key, edge.to);
         frontier.push(edge.to);
       }
@@ -231,9 +233,9 @@ class Graph {
     return reached;
   }
 
-  /** Is the peer of `channel`, or a peer that verifiably replaced it at this local DID, among `writers`, the peers that wrote to exactly this local DID? */
-  confirmedBy(writers: ReadonlySet<Did>, channel: Channel, skip: (channel: Channel) => boolean): boolean {
-    for (const reached of this.reach(channel, "peer", skip).values()) if (writers.has(reached.peerDid)) return true;
+  /** Is the peer of `channel`, or a peer that replaced it at this local DID along this graph, among `writers`, the peers that wrote to exactly this local DID? */
+  confirmedBy(writers: ReadonlySet<Did>, channel: Channel): boolean {
+    for (const reached of this.reach(channel, "peer").values()) if (writers.has(reached.peerDid)) return true;
     return false;
   }
 
@@ -244,8 +246,8 @@ class Graph {
   }
 }
 
-function buildGraph(peerLinks: readonly PeerLink[], localLinks: readonly LocalLink[]): Graph {
-  const graph = new Graph();
+function buildGraph(peerLinks: readonly PeerLink[], localLinks: readonly LocalLink[], admits: (channel: Channel) => boolean): Graph {
+  const graph = new Graph(admits);
   for (const link of peerLinks) graph.add(link.from, link.to, "peer", [link.carrier], []);
   for (const link of localLinks) graph.add(link.from, link.to, "local", [], [link.decision]);
   graph.close();
@@ -315,18 +317,14 @@ class ContinuityFold implements Continuity {
     this.writers = writersByLocalDid(evidence, (id) => this.witness(id).status === "complete");
     this.authority = closure(
       evidence.peerLinks.filter((link) => this.witness(link.carrier).status === "complete"),
-      evidence.localLinks.filter((link) => !unconfirmed.has(link.decision) && this.unmasked(link)),
-      (authority, link) => authority.confirmedBy(this.writers.get(link.from.localDid) ?? NO_PEERS, link.from, (channel) => this.conflicted(channel))
+      evidence.localLinks.filter((link) => !unconfirmed.has(link.decision) && this.localLinkStatus(link).status === "verified"),
+      (channel) => !this.conflicted(channel),
+      (authority, link) => authority.confirmedBy(this.writers.get(link.from.localDid) ?? NO_PEERS, link.from)
     ).graph;
     this.links = [...graph.edges()]
       .map((edge) => ({ from: edge.from, to: edge.to, replaces: edge.replaces, carriers: [...edge.carriers].sort(), decisions: [...edge.decisions].sort(), verified: this.authority.has(edge.from, edge.to) }))
       .sort((a, b) => compareChannels(a.from, b.from) || compareChannels(a.to, b.to));
     this.denials = set.of("channel.blocked");
-  }
-
-  /** Does no conflict reach the link's own pairs or its source? */
-  private unmasked(link: LocalLink): boolean {
-    return this.localLinkStatus(link).status === "verified";
   }
 
   status(eventId: EventId): Status {
@@ -391,23 +389,30 @@ class ContinuityFold implements Continuity {
     return this.superseding.has(this.local.root(channelKey(channel)));
   }
 
+  /**
+   * Every replacement the positive evidence shows ahead of the channel
+   * must be one authority grants: a replacement it does not grant has
+   * no usable end, and the channel it left is no default in its place.
+   */
   head(channel: Channel): Channel | null {
+    if (this.conflicted(channel)) return null;
     const ends: Channel[] = [];
-    for (const reached of this.authority.reach(channel, "any", () => false).values()) {
-      if (this.conflicted(reached)) return null;
-      if (!this.authority.hasOutgoingReplacement(reached)) ends.push(reached);
+    for (const reached of this.graph.reach(channel, "any").values()) {
+      if (!this.graph.hasOutgoingReplacement(reached)) ends.push(reached);
+      for (const edge of this.graph.from(reached)) if (!this.authority.has(edge.from, edge.to)) return null;
     }
     return ends.length === 1 ? ends[0]! : null;
   }
 
   confirmed(localDid: Did, peerDid: Did): boolean {
-    if (localDid === peerDid) return false;
-    return this.authority.confirmedBy(this.writers.get(localDid) ?? NO_PEERS, channelOf(localDid, peerDid), (channel) => this.conflicted(channel));
+    const channel = channelOf(localDid, peerDid);
+    if (localDid === peerDid || this.conflicted(channel)) return false;
+    return this.authority.confirmedBy(this.writers.get(localDid) ?? NO_PEERS, channel);
   }
 
   ackPath(outbound: Channel, carrier: Channel): boolean {
     if (sameChannel(outbound, carrier)) return true;
-    return this.authority.reach(outbound, "any", (c) => this.conflicted(c)).has(channelKey(carrier));
+    return this.authority.reach(outbound, "any").has(channelKey(carrier));
   }
 
   blocked(channel: Channel): readonly VaultEvent<"channel.blocked">[] {
@@ -417,7 +422,7 @@ class ContinuityFold implements Continuity {
       if (sameChannel(pair, channel)) return true;
       if (!denial.data.includeSuccessors) return false;
       let covered = this.covered.get(denial.eventId);
-      if (covered === undefined) this.covered.set(denial.eventId, (covered = this.graph.reach(pair, "any", () => false)));
+      if (covered === undefined) this.covered.set(denial.eventId, (covered = this.graph.reach(pair, "any")));
       return covered.has(key);
     });
   }
