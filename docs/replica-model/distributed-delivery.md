@@ -5,8 +5,7 @@
 <!-- suite-navigation:end -->
 
 Status: **draft, phase 1** — phase-1 delivery profile for one active full vault
-runtime. The identifiers and folds are future-safe for replication, but
-`replica-mediation/1.0` and multi-writer execution are deferred.
+runtime.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
 **SHOULD**, **SHOULD NOT**, and **MAY** as described in BCP 14 when they
@@ -32,9 +31,9 @@ appear in all capitals.
 - [4. Vault-first procedures and commit boundaries](#vault-first-procedures-and-commit-boundaries)
 - [5. Canonical projections and hashes](#canonical-projections-and-hashes)
 - [6. Preparing a package](#preparing-a-package)
-- [7. Submission completion and expiration](#submission-completion-and-expiration)
+- [7. Submission completion and termination](#submission-completion-and-expiration)
 - [8. Durable end-to-end acknowledgment](#durable-end-to-end-acknowledgment)
-- [9. Observation identity, logical aliasing and execution identity](#observation-identity-logical-aliasing-and-execution-identity)
+- [9. Channel-local message and execution identity](#observation-identity-logical-aliasing-and-execution-identity)
 - [10. First contact and address policy](#first-contact-and-address-policy)
 - [11. Automatic effects](#automatic-effects)
 - [12. Required vault observations](#required-vault-observations)
@@ -49,93 +48,37 @@ appear in all capitals.
 
 ## 1. What it is for
 
-An Estoc message begins as a durable vault decision. Resolution, address
-selection, encryption, mediation and retry are effects that happen later in a
-full vault runtime. Phase 1 has exactly one active full runtime. Stable logical,
-package and wire identifiers are nevertheless defined so a later replicated
-runtime can converge without changing peer-visible messages.
+An Estoc message begins as a durable intent in one fixed oriented channel.
+Phase 1 has one active executor.
 
-Every outbound completes submission when `delivery.submitted` is durably
-committed for any of its packages. Before that boundary, eligible work may be
-retried or recovered after a crash. After it, no package for that logical
-outbound is prepared or submitted again. Peer ACKs record receipt information;
-they do not select the submission completion boundary.
+Every message transport call uses its committed `message.prepared` package.
+Only the live initial action or a new explicit manual retry may make that call.
+Transport acceptance commits `delivery.submitted`, permanently completing that
+outbound. A failed/unknown call, missing ACK, process reopen or another replica
+does not automatically retry it. A manual retry preserves the exact committed
+package; selecting another channel means a new message ID.
 
-This profile defines:
-
-- the separation of communication addresses, symmetric relationships and
-  runtime replicas;
-- IDs and hashes for logical content, immutable intent, exact DIDComm
-  plaintext, encrypted packages and mediator deliveries;
-- which DIDComm headers are frozen at intent time;
-- package preparation and valid repackaging;
-- submission and expiry states, with independent peer-receipt information;
-- end-to-end durable receipt observations with DIDComm `please_ack` and `ack`;
-- duplicate and conflict handling across process restarts and future replicas;
-- ordinary first-contact delivery and optional early address rotation; and
-- idempotency requirements for automatic handlers.
-
-It does not define the DASL object profile ([dasl-objects.md](dasl-objects.md)), mailbox
-fan-out (`replica-mediation/1.0`), the relationship and address policy profile
-([relationships.md](relationships.md)) or event/object replication (`vault-sync/1.0`).
+This profile defines intent/package identity, channel-local deduplication,
+explicit ACK authorization, process-durable receipt and effect ordering.
+It makes no cross-channel or cross-replica exactly-once business-execution promise.
 
 <a id="terms"></a>
 
 ## 2. Terms
 
-- **Full replica** — an independently writable vault incarnation holding the
-  seed and appending vault events. It may run locally or on a server.
-- **Communication address** — a supported DID used to send and receive.
-  Local addresses are seed-derived Peer DIDs. Public/rendezvous disclosure and
-  pairwise allocation are policies with identical core relationship semantics.
-- **Relationship** — the stable symmetric birth-address identity with two
-  independently changeable ends under [vault-events.md section 6](vault-events.md#relationships-and-address-changes); its local
-  and peer histories determine message scope under section 9.
-- **Outbound message ID (`messageId`)** — the vault entity ID of one outbound
-  logical message, also used as its innermost DIDComm plaintext `id`.
-- **Inbound observation message ID** — a deterministic ID for one authenticated
-  `(peer key, wire ID)` observation before verified aliasing.
-- **Logical execution ID** — a durable, immutable identity used by automatic
-  effects after one or more inbound observation message IDs are recognized as the same
-  logical input. It never changes merely because a later alias is learned.
-- **Wire ID** — the innermost DIDComm plaintext `id`, stable across retries and
-  permitted repackaging.
-- **Semantic projection** — application meaning: `id`, `type`, `thid`,
-  `pthid`, body and ordered logical attachments.
-- **Intent projection** — semantic projection plus immutable message-level
-  control headers recorded by `message.out`.
-- **Intent hash** — SHA-256 of the canonical intent projection.
-- **Plaintext hash** — SHA-256 of one exact complete innermost DIDComm
-  plaintext, including package addressing and security headers.
-- **Package ID** — Routing 2.0 `forward.id` for one exact encrypted inner
-  envelope.
-- **Delivery ID** — a mediator-generated opaque attachment ID used by Message
-  Pickup. In the phase-1 single-replica profile it belongs to the mediation
-  account queue; the deferred replica profile scopes it to a replica.
-- **Submitted** — a transport endpoint accepted one package attempt and the
-  vault committed `delivery.submitted`; this completes the logical outbound's
-  submission work.
-- **Acknowledged** — the ultimate peer sent an authenticated explicit `ack`
-  naming the wire ID after durable receipt.
-- **Receipt request** — the exact `message.out.pleaseAck` array names the
-  messages whose explicit ACK is requested. It is independent of local
-  submission completion.
-
-```text
-one outbound message (messageId = wire ID, intent hash)
-    ├── package P1
-    │     exact plaintext hash H1
-    │     exact encrypted envelope E1
-    │       ├── mediator delivery D1 to replica A
-    │       └── mediator delivery D2 to replica B
-    └── package P2 after a permitted address/key transition
-          exact plaintext hash H2
-          exact encrypted envelope E2
-            ├── mediator delivery D3 to replica A
-            └── mediator delivery D4 to replica B
-```
-
-`H1` and `H2` may differ while intent hashes remain equal.
+- **Channel** — fixed ordered pair of canonical local and peer DIDs within one vault.
+- **Contact** — local names, preferences and selected channel histories with no protocol authority.
+- **Full replica** — a writable vault incarnation; phase 1 still has one active executor.
+- **Outbound message ID** — one committed intent's entity ID and plaintext `id`.
+- **Inbound message ID** — derived from canonical sender, canonical recipient and wire ID.
+- **Execution ID** — stable identity of one channel-local input; identity alone grants no work.
+- **Package ID** — exact encrypted inner envelope identity and Routing `forward.id`.
+- **Delivery ID** — mediator pickup identity, separate from message/package IDs.
+- **Prepared** — one committed, fixed package; it records no transport invocation.
+- **Submitted** — recorded transport acceptance; it is not ultimate receipt.
+- **Acknowledged** — accepted explicit peer `ack` naming the exact authorized outbound.
+- **Semantic/intent/plaintext hashes** — the projections in section 5; addressing
+  is package evidence but the intent's channel is independently immutable.
 
 <a id="addressing-layers"></a>
 
@@ -146,32 +89,30 @@ or learns a replica ID.
 
 All local communication addresses are vault-scoped. The active full runtime
 derives their private keys and receives their messages. Public/private
-allocation does not select a different binding, sender permission or receive
+allocation does not select a different sender permission or receive
 path. A later server or replica does not own an address merely by executing
-the vault. The symmetric relationship is independent of local/peer orientation;
-each message still has a sender and recipient, and every rotation is directed.
+the vault. The channel preserves local/peer roles within that vault;
+each message has a sender and recipient, and every rotation is directed.
 
 Each local communication DID has one immutable `boundRouteId`, mediated or
 direct. Changing its keys or bound route creates a successor DID entity;
-[vault-events.md section 6.5](vault-events.md#relationship-localtransitioned) records a relationship's local continuation.
+[local rotation decisions](channels.md#did-rotationselected) select continuation
+in an exact channel context; their links are derived.
 An external recipient's resolved document may offer transport choices; choosing
 among authorized routes does not change the application recipient. A direct
 endpoint MUST NOT expose a replica ID as the peer-visible recipient.
 
 The phase-1 mediator uses ordinary account-scoped Message Pickup with one
-active pickup client. The deferred `replica-mediation/1.0` extension may later
-fan out an already encrypted package without changing the innermost recipient.
+active pickup client.
 
-A valid `from_prior` replaces one endpoint only inside its named relationship.
-Other relationships using the same address retain their own current ends.
+A valid `from_prior` justifies one endpoint replacement in its exact channel context.
+Unrelated channels using that address retain their own endpoint decisions.
 
 <a id="phase-1-mediator-envelope-and-storage-profile"></a>
 
 ### 3.1 Phase-1 mediator envelope and storage profile
 
-The no-plaintext mediator boundary is a phase-1 requirement and is independent
-of replica fan-out. Before storing a Routing 2.0 `forward`, the mediator MUST
-require:
+Before storing a Routing 2.0 `forward`, the mediator MUST require:
 
 1. an outer DIDComm encrypted message addressed to the mediator;
 2. a valid `body.next` that maps to the mediation account itself or a recipient
@@ -210,7 +151,10 @@ The mediator applies one recipient profile to all communication DIDs.
 Public/private allocation is not sent to it. HTTP or
 mediator acceptance means only `submitted`; ultimate acknowledgment still
 requires an authenticated application plaintext whose explicit `ack` names the
-wire ID.
+wire ID. HTTP errors, including 400 and 413, timeouts, disconnects and remote
+Problem Reports supply only local failure diagnostics. They MUST NOT append
+`delivery.failed`. An unsuccessful or uncertain call leaves manual work and
+grants no automatic retry.
 
 The mediator MUST bound normalized envelope size, retained ciphertext bytes,
 retained message count, registered recipients, recipient-update rate, pickup
@@ -231,19 +175,9 @@ Every instruction to append an event in this document means
 `Vault.events` exposes reads only.
 
 A full vault runtime MUST be able to commit a send while DNS, DID resolution
-and every mediator are unavailable. Before required network work it records:
-
-- `messageId`, also used as the wire ID;
-- one immutable target relationship and nullable birth-address selection
-  under [vault-events.md section 9.2](vault-events.md#message-out);
-- message type, thread and parent-thread IDs;
-- body and ordered normalized attachments;
-- immutable `createdTime`, which is an Epoch-Seconds integer or null;
-- immutable `expiresTime`, which is an Epoch-Seconds integer or null;
-- immutable `pleaseAck`, represented as null or an ordered array;
-- immutable `ack`, represented as an ordered array;
-- immutable supported additional top-level headers; and
-- the user or deterministic automatic-effect decision to send.
+and every mediator are unavailable. Before network work, commit the content and
+[message.out](vault-events.md#message-out), freezing its ID, channel, headers
+and user or automatic-effect decision.
 
 `createdTime == null` means the DIDComm `created_time` header is absent. A
 preparer MUST NOT invent it. A user-authored message normally freezes commit
@@ -257,152 +191,114 @@ seed may stage a command offline, but the command becomes authoritative only
 when a full vault runtime process-durably appends `message.out`.
 
 <a id="cross-layer-commit-and-acknowledgment-table"></a>
+<a id="91-receive-a-message"></a>
+<a id="92-receive-recovery"></a>
 
-### 4.1 Cross-layer commit and acknowledgment table
+### 4.1 Commit and acknowledgment boundaries
 
-The following table is normative. "Committed" means process-durable success.
-
-| Step | Required committed evidence | Permitted next action |
+| Boundary | Durable prerequisite | Meaning |
 | --- | --- | --- |
-| Vault commit | Verified supplied objects, repairs, the complete referencing event batch and local positions published in one transaction under the operation lock | Resolve the commit and allow actions authorized by the committed events |
-| Outbound intent | `message.out` and every rooted object | Resolve, register, prepare or submit |
-| Prepared package | `message.prepared` and its exact envelope; every application outbound also requires its common binding under [vault-events.md section 6.2](vault-events.md#relationship-bound) | Submit that exact package |
-| Submission completion | Valid `delivery.submitted` for any package of the outbound | Stop all further preparation/submission for that message ID; apply envelope retention under [vault-events.md section 12.3](vault-events.md#held-roots) |
-| Normal inbound | Objects, `message.in` and required resolution/binding evidence | Pickup-ACK, effect or peer ACK |
-| Terminal pre-vault rejection | Safe terminal classification and bounded diagnostic, if any | Pickup-ACK only |
-| Stable execution scope | Previously committed receipt and binding evidence, plus any required transition, under section 9 | Apply peer-scoped ACKs or derive and separately commit an eligible automatic intent |
-| Ultimate peer ACK | Validated `ack` plus `delivery.acknowledged` | Record receipt information independently of submission work |
+| Offline send intent | Content and `message.out` with fixed channel/direction | A selected new message, not authority for recovery dispatch |
+| Package preparation | Valid fixed-channel intent, operation resolution and `message.prepared` | One fixed package for this message |
+| Transport invocation | Committed package plus a live initial/manual action | One call using the fixed package; no invocation event is stored |
+| Submission completion | `delivery.submitted` naming that message/package | Stop preparation and sending for this message ID |
+| Channel receipt | Current authentication, exact resolution, objects and `message.in` | Normal pickup ACK may follow |
+| Proof verification | Exact authenticated carrier with its original JWT and derivable or retained immutable issuer material | Fold computes proof result and continuity status without another event |
+| New source-derived work | Complete source/proof evidence, current policy and any additional evidence required by that consumer | Only the specific eligible operation may proceed |
+| Peer ACK | Complete source witness and exact channel/path target | Receipt information only |
 
-The terminal pre-vault path creates no `message.in`, peer ACK, contact or
-handler effect. An ACK never substitutes for a missing `delivery.submitted`
-event or retains a completed outbound's envelope for a later duplicate.
-
-Prepared object bytes are not committed evidence. Object acceptance, repairs and
-event append share the single `Vault.commit` transaction defined by
-[event-store.md section 10](event-store.md#vault-interface).
+Every dependency reference names an event committed before the dependent call.
+Object storage alone is not event commitment. Contact membership, a thread ID,
+peer ACK or a missing submission event never supplies dispatch authority.
 
 <a id="send-an-ordinary-message"></a>
 
 ### 4.2 Send an ordinary message
 
-The synchronous full-vault send operation:
+Under the operation lock, normalize content, freeze immutable headers, choose
+one concrete sender and recipient, derive their channel and commit `message.out`
+with objects. This call does no network work. An explicit user send may select
+a new channel; an automatic output requires a complete source witness, its
+operation's policy checks and a same-channel or verified role-preserving
+successor response channel.
 
-1. prepares attachment objects;
-2. prepares the stored message document;
-3. selects durable nullable `createdTime`, optional `expiresTime`, exact
-   `pleaseAck` value (null or array), exact ordered `ack` and complete `headers`;
-4. computes the intent hash;
-5. selects one existing relationship or freezes the symmetric birth addresses
-   under [vault-events.md section 9.2](vault-events.md#message-out), validates offline local eligibility and
-   any contact assignment, and records the immutable target R. Neither a public
-   sender nor absence of a first reply prevents this operation;
+The original live initial action may then resolve/register and prepare the
+fixed channel. Missing prerequisites may wait locally before the first call.
+A manual action can resume an eligible pending intent. The action serializes
+this message's work and performs these steps:
 
-6. commits those objects with `message.out` through `Vault.commit`; and
-7. returns `messageId`.
+1. Recheck completion, termination, expiry, denial, conflict, retained keys/routes and bytes.
+2. Reuse the committed package; missing references or bytes defer and conflicting
+   preparations prevent sending. Prepare and commit one package in the intent's
+   fixed channel only when neither a preparation nor an unresolved package
+   reference exists.
+3. Verify local recipient registration before disclosure when needed.
+4. Under the vault lock, recheck package commitment, eligibility and the live
+   action. Release the lock, consume that action's one invocation locally and
+   call transport with the exact envelope and package ID.
+5. Record transport acceptance as `delivery.submitted` naming the message/package.
+   Other transport outcomes stay in local trace and MUST NOT produce
+   `delivery.failed`. Failure/uncertainty grants no next call;
+   explicit cancellation and expiry follow [termination](vault-events.md#delivery-failed).
 
-It performs no network operation. When `createdTime` is null, preparation
-omits `created_time`. Every outbound uses the same submission completion rule
-in [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold), regardless of its `pleaseAck` or `ack` arrays.
-
-The active phase-1 runtime may later:
-
-1. stop when submitted, terminally failed, expired or conflicted under
-   [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold);
-2. fold the intent's target R and any birth metadata;
-3. resolve under [relationships.md section 10.1](relationships.md#did-resolution-requirements) and commit/reuse the common root
-   binding before preparation. Select that R's current sender and peer end,
-   checking portable lifecycle, assignment and pinned/verified key evidence;
-
-4. attach our frozen relationship-scoped `fromPrior` while our own DID rotation
-   remains unconfirmed;
-5. construct complete plaintext by copying every intent-time header;
-6. compute plaintext hash, encrypt, and use `Vault.commit` for the exact
-   envelope and `message.prepared`;
-7. submit directly or through Routing 2.0 with `packageId == forward.id`;
-8. append `delivery.submitted` on acceptance or `delivery.failed` on terminal
-   failure; record retryable failures only in local trace; and
-9. schedule another attempt only while submission work remains eligible.
-
-Within the active runtime, prepare/submit work for one logical message ID MUST be
-serialized. Before each transport call, recheck its committed completion and
-eligibility state; after acceptance, commit `delivery.submitted` before
-dispatching further work for that message ID. This per-message scheduling boundary
-does not hold the vault operation lock across network calls. If the process exits
-before the submission event commits, reopen may submit the same exact package
-again under section 13. No durable pre-call attempt reservation is required.
-
-A new package may change address/security evidence only while the outbound is
-unsubmitted, under validated repack rules and with the same intent hash.
-Receiving may join equal wire IDs across a verified peer-key transition in one
-relationship.
-
-<a id="91-receive-a-message"></a>
+Keep per-message dispatch serialized across this procedure, without holding
+the vault lock across network I/O. Resolve an uncertain preparation commit
+before dispatch or another preparation. A crash loses the live action, whether
+or not transport was called; reopen cannot replay it. Further calls follow
+[manual dispatch rules](channels.md#fixed-outbound-channel).
 
 <a id="receive-a-message"></a>
 
 ### 4.3 Receive a message
 
-1. Before authoritative key/route recovery, retain delivery pending without
-   pickup ACK. Apply [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate)'s
-   exact-recipient and lifecycle gate at every communication address. Enter or
-   resume authentication only as permitted by its [local wait state](relationships.md#deferred-delivery)
-   and [rules for loss of wait state](relationships.md#shared-accounting-and-lost-wait-state).
-2. Authenticate/decrypt, validate syntax and exact DID/key/long-form consistency,
-   and apply [sender resolution and its bounded retries](relationships.md#did-resolution-requirements).
-   Safely terminal delivery is pickup-ACKed without portable application input;
-   recoverable prerequisites defer.
-3. Under the [operation lock and pair-lookup rules](vault-events.md#receipt-and-relationship-evidence),
-   select the unique binding and transition evidence or a genuinely new live
-   root pair, and apply that section's pre-receipt checks to every carried
-   proof. Apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s
-   superseded-sender and invitation/relationship-integrity checks. Required
-   pre-receipt evidence deferral, including a carrier whose pre-receipt checks
-   lack evidence, follows [section 9.1](relationships.md#deferred-delivery),
-   with no `message.in` or pickup ACK. Known pending membership, missing
-   relationship evidence and conflicting membership, as defined in
-   [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence),
-   prevent a new-birth fallback. A previously unknown proof-free pair with no
-   such claim can form a birth under that section's step 4.
-4. Commit/reuse exact `peer.resolved` and its document first. When a new binding
-   is needed, commit it separately and obtain its returned `eventId`; only then
-   commit `message.in` referencing that binding, with retained content, hashes
-   and its fresh receipt ordinal. Hold the operation lock across these dependent
-   commits and recheck recipient eligibility. Crash after binding but before
-   receipt leaves reusable evidence, no invitation consumption and no receipt
-   ACK; redelivery repeats authentication and reuses the binding.
-   If event damage blocks the receive commits, keep the delivery pending without
-   pickup ACK until recovery under [vault-sqlite.md section 12.1](vault-sqlite.md#restore).
-5. Only after durable receipt, ACK the mediator delivery. A crash before this
-   point leaves it pending or causes idempotent redelivery.
-6. Validate every carried transition against the carrier's committed evidence
-   and complete observation witness under
-   [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned),
-   then commit/reuse it before scope/ACK/effects. A committed carrier without
-   its transition, as a crash before this commit leaves, stays deferred without
-   a new-birth fallback and is validated again from its retained evidence.
-7. Derive per-observation scope and message ID-group consistency under section 9,
-   then process explicit ACKs through section 8.3's exact outbound membership.
-8. Apply contact and early-privacy policy only to eligible application input
-   under [relationships.md sections 5.2](relationships.md#binding-and-contact-policy) and [11](relationships.md#early-private-address-policy-and-notifications). Binding already exists; a contact
-   or local successor is not required to assign protocol identity.
-9. Check the local-sender gate, reuse any chosen protocol/notification effect,
-   freeze eligible ACK targets, and commit at most one ACK-bearing response
-   before sending. Control input uses ordinary control/ACK rules without a
-   recursive privacy notification or contact creation.
-10. On a duplicate or recovery, reuse existing intents. Resume only eligible
-    unsubmitted work. A submitted response never gets another package or send.
+1. Resolve exact local recipient/key/route eligibility and authenticate the
+   current sender under [the gate](relationships.md#hard-pre-vault-gate).
+   The [phase-1 adapter](channels.md#carried-proof-and-library-boundary) preserves
+   any string-valued `from_prior` without verifying it. Missing local receive
+   material may require unopened wait; missing predecessor material cannot.
+2. Validate normalized wire fields, supported content and resource limits.
+3. Under the lock, commit/reuse exact resolution evidence, then commit content
+   and `message.in` with fixed channel and fresh receipt ordinal.
+4. Pickup-ACK process-durable receipt independently of channel policy/history.
+5. If `from_prior` is present, derive its immutable issuer document and verify
+   this carrier's original JWT under [predecessor resolution](relationships.md#predecessor-resolution).
+   Fold proof status and continuity without appending an event,
+   showing missing evidence as pending.
+6. For each consumer, validate exact source/proof evidence and its required
+   target or protocol fields. Before new work, recheck supersession, denial
+   and that operation's current policy. Commit the concrete intent or local
+   result with already committed references. Automatic invitation consumption
+   follows [channels.md](channels.md#invitation-consumed)
+   independently of those consumers.
+7. Process valid explicit peer ACKs and local display views of retained messages.
+   The sole active executor may independently create an eager ACK, a Ping reply
+   and a rotation notification when their individual policies permit. Each
+   output commits its fixed-channel intent before dispatch.
+8. A retained duplicate creates no new response obligation or dispatch action.
 
-<a id="92-receive-recovery"></a>
+Hard terminal rejection may pickup-ACK without `message.in` under the gate;
+failed durable receipt withholds normal pickup ACK. Control types never trigger
+recursive privacy notifications.
 
 <a id="receive-recovery"></a>
 
-### 4.4 Receive recovery
+### 4.4 Recovery
 
-Recovery enumerates retained input, binding references, peer transitions,
-local policy triggers and unfinished effects. It requires no mediator redelivery
-or runtime-local queue. Partial imports retain missing-reference deferral;
-conflicting evidence suppresses affected work in every import order. Neither
-recovery nor a later rotation may derive a new R from a successor address.
+Rebuild receipt-derived state from retained evidence without current-sender
+re-resolution or another receipt event. Recover missing bytes/references and
+recompute proofs from retained JWTs and immutable issuer material under
+[predecessor resolution](relationships.md#predecessor-resolution).
+The active runtime automatically completes missing
+[invitation consumption](channels.md#invitation-consumed).
+
+Expose pending/unconfirmed messages for manual action under
+[dispatch authority](channels.md#fixed-outbound-channel), preserving message,
+execution, package and submission identities. The same uninterrupted initial
+receive operation may continue after a local receive prerequisite wait.
+Post-receipt missing predecessor material instead ends automatic eligibility
+for that carrier under [the proof rule](relationships.md#predecessor-resolution).
+Reopen, import and separate evidence recovery have no such action. Erased input
+starts no new content-derived effects. Fresh unrelated live input remains independent.
 
 <a id="canonical-projections-and-hashes"></a>
 
@@ -511,85 +407,59 @@ for the complete innermost DIDComm plaintext actually encrypted by one
 package or received in one observation. It includes `from`, `to`, `from_prior`
 and every present header.
 
-All packages for one outbound `messageId` agree on the intent hash. They may have
-different plaintext hashes only when package-level addressing or security
-evidence changes under an expressly permitted rule.
+An outbound `messageId` has one fixed package. Its intent hash matches the
+intent; its plaintext hash preserves the exact prepared addressing and proof.
 
 <a id="preparing-a-package"></a>
 
 ## 6. Preparing a package
 
-A preparer folds the target and selects:
+Use `message.out.senderDidId`, the canonical selected recipient and its derived
+fixed channel. Resolve the peer under
+[the address profile](relationships.md#recipient-resolution-freshness); select
+keys authorized by that operation's document for the intent's fixed DID pair.
+The immutable peer document fixes its authorized keys and service. Validate the
+intent's source/proof evidence, local key and exact peer resolution under [the package schema](vault-events.md#message-prepared).
+Preparation and dispatch require current policy and a live initial/manual action.
 
-- one live sender DID entity and its fixed key-agreement method, using the
-  relationship's current local end under [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned);
-- one current peer DID and authenticated peer key;
-- exact `peer.resolved` evidence, fresh for the first package of each new
-  non-numalgo-4 message ID under [relationships.md section 10.1](relationships.md#did-resolution-requirements);
-- one recipient route authorized by that evidence; and
-- any required relationship-scoped `from_prior`.
+Construct the complete plaintext from immutable intent: conditional nullable
+timestamps/threads, exact `pleaseAck`, frozen `ack`, supported headers, body and
+ordered attachments. `from`/`to`, exact key methods and any frozen proof follow
+that fixed channel's evidence. The wire ID equals the outbound message ID.
+Reject forbidden `return_route`, duplicate JSON members and invalid I-JSON.
+Canonicalize with RFC 8785, encrypt through maintained DIDComm APIs, then commit
+the exact normalized envelope and `message.prepared` before transport.
 
-It then constructs the complete innermost plaintext from durable intent.
-Version 3 emits:
-
-- `typ`, `id`, `type`, `from`, `to` and `body`;
-- `created_time`, `expires_time`, `thid` and `pthid` only when non-null;
-- `please_ack` whenever `pleaseAck` is not null, including `[]`;
-- `ack` when non-empty;
-- `from_prior` when required;
-- `attachments` when non-empty; and
-- every `headers` entry at the plaintext top level.
-
-`message.out.headers` MUST obey the reserved-name rule in section 5.2. An
-implementation that cannot preserve a supported additional header MUST reject
-preparation rather than dropping it.
-
-The plaintext `id` is the committed `message.out.messageId`. The preparer
-RFC-8785-canonicalizes the plaintext, computes `plaintextHash`,
-encrypts, parses the encrypted-message JSON with duplicate-member and I-JSON
-validation, and uses `Vault.commit` to accept
-`UTF8(RFC8785(parsedEncryptedEnvelope))` as one raw DASL object with
-`message.prepared`. Submission uses those exact stored bytes.
-
-Retrying an unsubmitted package reuses identical plaintext, normalized
-ciphertext bytes and package ID. While the logical outbound remains
-unsubmitted, a new package for it may change `from`, `to`,
-selected keys, peer resolution or `from_prior` only under a valid DID-entity
-selection or verified relationship-scoped transition for the same logical target.
-A local DID's keys and bound route never change in place; an external
-recipient's transport choice remains constrained by its resolution evidence.
-Every changed plaintext or encryption result requires a new package ID and
-plaintext hash. Birth metadata preserves root identity while packages follow
-validated changes of either end in the same R.
+Commit only when no preparation exists; otherwise reuse the saved package.
+That commit freezes its plaintext, ciphertext, proof, spelling, package ID and
+envelope CID for the initial call and every retry. Missing evidence or bytes
+defer sending. Later confirmation, rotation, resolution or termination cannot
+replace it; changing the package requires a new message ID.
 
 <a id="submission-completion-and-expiration"></a>
 
-## 7. Submission completion and expiration
+## 7. Submission completion and termination
 
-[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) defines submission completion and
-work eligibility for every trigger, including timers, reopen and duplicate
-responses. A worker checks that fold before preparation or submission; after
-any valid `delivery.submitted` commits for that outbound, it MUST NOT prepare,
-repackage or submit that logical message ID again. A deliberate later send creates a new
-`message.out` and wire ID.
+Any valid committed submission completes the message and prevents further
+preparation or retry, regardless of ACK policy. Missing submission does not prove
+nondelivery; pending work follows [the delivery fold](vault-events.md#outbound-message-and-delivery-fold).
 
-Before completion, an expired message receives a message-scoped terminal
-`delivery.failed(code="expired")` and no new submission. Reaching expiry after
-submission does not create a new delivery failure. An ACK can still supply
-receipt information, including the late indicator defined from committed
-carrier observations in [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold), without changing
-submission state or work eligibility.
+Expiry stops new work at equality and records message-terminal failure when
+observed before preparation/dispatch. It does not overwrite an already recorded
+submission. Later ACK evidence can report receipt without reopening anything.
+Explicit cancellation commits message-scoped `delivery.failed` with code
+`cancelled` under [the termination rules](vault-events.md#delivery-failed),
+stopping pending work without claiming nondelivery.
+Valid expiry or cancellation terminates the entire intent without depending
+on preparation evidence. Complete submission still takes precedence.
+Erasure, security denial, key/route retirement and missing exact bytes separately
+govern manual retry. Ordinary address rotation selects new messages only.
 
-Eligible unsubmitted work may use local timers, backoff and recovery. Protocols
-may impose tighter limits; [relationships.md section 14](relationships.md#retry-replacement-and-address-rollover) defines ordinary retry
-defaults. Route recovery or a changed clock never reopens a submitted or
-terminally failed outbound.
-
-Envelope collection uses [vault-events.md section 12.3](vault-events.md#held-roots)'s retention predicate,
-independently of scheduling eligibility. Committed submission releases this outbound's
-envelope contribution; ACK and duplicate-response replay add no retention.
-That definition also governs unavailable routes, retryable resolution failures
-and the separate lifetimes of content, skeletons and independent references.
+Prepared-envelope retention is owned solely by
+[vault-events.md](vault-events.md#held-roots). A paused/unconfirmed eligible
+package remains retained for possible manual action; waiting is not deletion.
+ACKs have no independent retention contribution. A submitted envelope need not
+be recreated for a duplicate input or manual "send again" with a new ID.
 
 <a id="durable-end-to-end-acknowledgment"></a>
 
@@ -599,177 +469,126 @@ and the separate lifetimes of content, skeletons and independent references.
 
 ### 8.1 Freezing an ACK target set
 
-Before selecting or committing any new deterministic reply intent, including
-a natural protocol response with no ACK targets, the writer MUST check for a
-usable local sender in the input's unique relationship scope. Its current local
-DID must pass portable identity/route checks under [vault-events.md sections 6.5](vault-events.md#relationship-localtransitioned) and [7.6](vault-events.md#contact-fold); any contact assignment must be conflict-free and not deleted.
-An unassigned control relationship needs no contact. These are portable checks,
-not requirements for online resolution or observed registration before intent.
-No other R or historical local end may substitute for an unavailable sender.
+Before creating an ACK intent, require an eligible complete source witness
+and choose its exact sender/recipient under
+[the built-in operation rule](#built-in-independent-operations). An unrelated
+channel in the same contact is never a substitute. If no eligible sender exists,
+preserve the input for manual action; do not commit an incomplete response or
+automatically dispatch it after a later restore. An ACK uses retained receipt
+and header evidence, so body erasure alone does not disqualify its source or
+targets. It does not restore any permission for content-derived work.
 
-If there is no usable sender, receive and scope the input normally but commit
-no reply intent and freeze no ACK targets. Required response/ACK work remains
-unfinished, rediscovered from committed input under [vault-events.md section 13.1](vault-events.md#open-the-writable-full-runtime) when a usable sender exists, including after a local successor is created.
-Current tombstones, integrity and erasure rules still apply. Already committed
-intents are reused; later rotation or retirement uses that document's [section 6.5](vault-events.md#relationship-localtransitioned) repack/blocking rules without minting a replacement effect.
+Under the operation lock, look up the pure-ACK tuple for this execution before
+choosing timing or targets. Reuse its fixed intent without sending it on
+duplicate/recovery. Eligible live input and current ACK policy may create that
+intent immediately, independently of any natural reply or rotation notification.
+Explicit manual completion of pending ACK work follows the same checks under
+[the dispatch contract](channels.md#fixed-outbound-channel).
 
-Binding and required input/proof evidence must already be committed. An early
-privacy transition and its notification follow [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications);
-they do not create scope or bypass the local-sender gate. Recheck eligibility
-under the same operation lock as response selection and intent commit.
+Whether to honor `pleaseAck` is local policy, not a durable reply obligation.
+If it is null/empty this profile creates no requested-ACK work. Otherwise
+expand `""` to the carrier's wire ID, ignore later duplicate requests for
+selection and preserve the original stored wire array. A named target must
+have complete source-witness evidence from the same peer direction in this
+channel or a verified role-preserving predecessor channel. Validate the exact path,
+authentication and requesting peer; no vault-global wire-ID match or display
+group grants a target.
+If multiple otherwise eligible channel inputs with that wire ID are ambiguous,
+omit it. The current carrier can identify itself by its exact source.
 
-For one received carrier message `X`, a conforming receiver performs this
-algorithm after normal inbound commit, only when no response intent already
-exists under section 11 and the sender gate above passes:
+Sort eligible targets by their minimum complete receipt key, then freeze their
+wire IDs in one output. Unknown, conflicted or unauthorized targets are
+omitted and later discovery cannot change the saved array. Generic replies use
+`thid = carrier.thid ?? carrier.wireMessageId`, copy nullable `pthid`, and follow
+the producing protocol's response rules. No-response errors still do not reply.
 
-1. If `X.pleaseAck == null`, create no ACK obligation.
-2. Expand `""` to `X.wireMessageId`; retain the first occurrence of every target and
-   ignore later duplicates.
-3. Derive `X.logicalPeerScope` under section 9.
-   Look up each requested wire ID only as `(X.logicalPeerScope, wireMessageId)`. The
-   current `X.wireMessageId` is known by virtue of X's own derived scope. An older
-   target is eligible only when it is conflict-free and derives to the exact
-   same scope. A verified key transition may widen lookup only inside one
-   relationship scope; unrelated relationships, unknown senders,
-   conflicted targets and ambiguous scope attribution are omitted.
-4. Sort eligible targets ascending by [vault-events.md section 10.2](vault-events.md#message-in)'s
-   `firstReceiptKey`, omitting targets affected by its receipt-integrity conflict.
-   Use that complete-key order, never decimal-string, canonical-event or
-   `ChangeToken` order.
-5. Freeze that exact ordered array as `message.out.ack` in one deterministic
-   natural response or one deterministic pure ACK associated with X's logical
-   execution ID.
-
-A requested target unknown or outside X's peer scope at step 3 is omitted.
-Its later arrival does not mutate the frozen response or create a second ACK
-effect for X; the sender may request it again in another message. If
-no target remains, the receiver creates no ACK-only effect. DIDComm message IDs
-are sender-scoped; wire-ID equality elsewhere in the vault is never sufficient
-evidence for an ACK target.
-
-The [first-receipt definition](vault-events.md#message-in) governs ordering after history union;
-import never rewrites a frozen response or grants a new multi-writer
-execution guarantee.
-
-Before proposing the response it MUST have authenticated and validated X,
-accepted every retained object and process-durably appended `message.in`.
-Any additional non-conflicted relationship or key evidence needed for the
-response MUST already be committed before deriving the response execution ID,
-freezing ACK targets or committing its intent under section 9.
-
-The response thread follows X, not each older target:
-
-```text
-thid  = X.thid, or X.wireMessageId when X.thid is null
-pthid = X.pthid
-```
-
-Remote Report Problem correlation in [relationships.md section 13](relationships.md#remote-errors-and-integrity-failures) instead
-uses its child-thread `pthid` rule; this profile selects no local rejection effect.
-
-A natural response may carry the frozen `ack` array. If no deterministic
-natural response is available, use `https://didcomm.org/empty/1.0/empty`.
-Pure ACKs contain no `please_ack` and follow the same submission completion
-rule as every outbound; they are control observations under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold). Control input creates no contact or early-privacy notification.
-Its permitted receipt ACK uses the same scope and sender gates at every local
-address. No-response protocol errors retain their no-response rule.
+Send the ACK as its own Empty message once its prerequisites are ready. Do not
+wait for, attach it to, or consume the tuple of a natural reply or rotation
+notification. Those outputs may coexist with this intent. Built-in Ping replies
+and rotation notifications have `ack == []`; another application protocol may
+define its own explicit ACKs subject to the same target checks. There is no
+execution-wide limit of one ACK-bearing output. Control input may supply ACK
+observations but cannot trigger recursive privacy notifications. Never request
+an ACK for a pure ACK, or answer a pure ACK with another pure ACK. Every output
+follows normal preparation/submission boundaries.
 
 <a id="deterministic-pure-ack"></a>
 
 ### 8.2 Deterministic pure ACK
 
-For a pure ACK:
-
 ```text
-handlerId  = https://estoc.dev/distributed-delivery/1.0#pure-ack
-effectKind = pure-ack
-ordinal    = 0
+effectType = https://estoc.dev/distributed-delivery/1.0#pure-ack
 ```
 
-The output's `ack`, `thid` and `pthid` follow section 8.1. `createdTime` copies
-the carrier's normalized value, including null; `expiresTime` is null. A null
-`createdTime` omits the wire header. Body and attachments are empty;
-`pleaseAck` is null; `headers` is `{}`.
+Copy the carrier's normalized nullable creation time; expiry is null. Body is
+`{}`, attachments empty, `pleaseAck` null and `headers` empty. Threads and ACK
+targets follow section 8.1.
 
-This is the **generic pure-ACK profile**. An Empty rotation notification uses
-the same producing tuple but freezes `pleaseAck == [""]` under [relationships.md section 11.1](relationships.md#automatic-response-selection). Package preparation independently chooses the current local
-proof. One carrier cannot create both variants: the notification consumes its
-ACK response selection. Control input cannot trigger a privacy notification;
-the generic ACK variant cannot request another ACK.
-
-The executable vector uses execution scope
-`{"relationshipId":"35807a1e-3b8a-52f5-9580-29cd5265882e"}`, carrier wire ID
-`019b1b61-3444-7190-9db5-1cc9c215eb23` and the tuple above.
-
-The generic execution/effect derivation in sections 9 and 11 produces:
+The executable fixture uses recipient
+`did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`,
+authenticated sender `did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP` and wire ID
+`019b1b61-3444-7190-9db5-1cc9c215eb23`:
 
 ```text
-executionId      = cf135b1f-1d7a-51eb-88ae-42447d426abe
-effectKey        = MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU
-outbound message ID = wire ID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
+executionId = ccee59f0-8c79-5011-8822-dbb14de9cf7d
+effectKey = Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20
+outbound message ID = wire ID = 3543ac01-4ac6-5c14-b160-4f8f4e2e6811
 ```
+
+These values follow the channel execution transcript and effect-key
+algorithm below.
 
 <a id="applying-ack"></a>
 
 ### 8.3 Applying `ack`
 
-An authenticated plaintext acknowledges an outbound only when its explicit
-`ack` array names that outbound wire ID, the candidate outbound belongs to the
-same validated logical peer scope as the ACK-bearing carrier, and every
-package-level addressing, transition and protocol-specific proof gate has
-passed. Apply [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s outbound
-membership and [section 10.5](vault-events.md#complete-observation-witnesses)'s complete-witness checks.
-Lookup is `(carrier.logicalPeerScope, acknowledgedWireId)`, never a
-vault-global wire-ID search. Threading, a natural response, transport acceptance,
-`please_ack` presence or a mediator receipt is insufficient without the
-explicit value.
+Require an explicit wire ID and one complete source witness. Find the exact
+outbound intent/package, then verify that the carrier's channel is the same
+or an authorized role-preserving successor of its fixed channel. The carrier's
+sender must be the original peer or its verified replacement and its recipient
+the original local endpoint or its verified local successor. Undirected graph
+connectivity, group membership, threads and ordinary responses are insufficient.
 
-A valid ACK adds receipt information only. It neither creates a missing
-`delivery.submitted` nor changes submission eligibility or envelope retention.
-Duplicate ACKs are harmless. Acknowledged means durable receipt by the peer
-vault, not read, displayed or accepted by a business workflow.
+All redundant witness fields must come from one complete source row. Missing
+path/authentication/package references defer the acknowledgment. The carrier's
+key need not equal the old package's recipient key: validate it against the
+carrier's own immutable DID document and any required successor path. The
+observation records peer receipt only, not transport acceptance or permission
+to send again.
 
 <a id="duplicate-receipt-handling"></a>
 
 ### 8.4 Duplicate receipt handling
 
-When a conflict-free carrier is delivered again, the receiver looks up its
-existing deterministic response under section 11. If that outbound has a
-committed `delivery.submitted`, the duplicate causes no further submission,
-even when exact bytes are still present. If it remains unsubmitted, only its
-existing eligible work may resume under section 7.
-
-A duplicate MUST NOT mint a new effect, outbound message, wire ID, package or
-`from_prior`, or change frozen ACK targets, merely to obtain another send.
-Collected or erased response bytes are not recreated for a submitted response.
-If a request was not honored because no eligible target remained or the
-input failed integrity, redelivery creates no new response obligation.
-Required ACK work left unfinished by a crash still follows [vault-events.md section 13.1](vault-events.md#open-the-writable-full-runtime)'s recovery rules, subject to the same submitted boundary.
+An authenticated duplicate in the same channel reuses its logical input/execution.
+It creates no new effect, output ID, package, proof or dispatch action. A pending
+response remains available for explicit manual retry; a submitted response
+never sends again. Another channel has another input identity and is not a
+duplicate under this profile. A display link to old content changes nothing.
 
 <a id="observation-identity-logical-aliasing-and-execution-identity"></a>
 
-## 9. Observation identity, logical aliasing and execution identity
+## 9. Channel-local message and execution identity
 
 <a id="observation-ids-and-vectors"></a>
 
-#### Observation IDs and vectors
+### Observation IDs and vectors
 
-`peerPublicKey` below is derived from the observation's referenced
-`peer.resolved(peerResolutionEventId).peerPublicKey` under [vault-events.md section 4.1](vault-events.md#key-evidence);
-it is not duplicated in `message.in` or `message.prepared`. The same derivation
-supplies all message/package peer-key comparisons in this document. A missing
-non-null reference defers, never falls back to null.
-
-For an authenticated or signed innermost message:
+For authenticated input, canonicalize the authenticated sender and actual local
+recipient, then compute:
 
 ```text
 messageId = UUIDv5(
   estocNamespace("inbound-message"),
-  RFC8785(["v1", "authenticated", peerPublicKey, wireMessageId])
+  RFC8785(["v3", "authenticated", canonicalSenderDid, canonicalRecipientDid, wireMessageId])
 )
 ```
 
-For a truly anonymous message:
+Keys and source event IDs remain exact authentication evidence. Different
+authorized keys in the same immutable DID document can represent the same
+channel input; selected key differences create no new deduplication scope.
+Opposite sender directions cannot collide merely by choosing the same wire ID.
+For truly anonymous input, retain the independent observation-only derivation:
 
 ```text
 messageId = UUIDv5(
@@ -778,344 +597,241 @@ messageId = UUIDv5(
 )
 ```
 
-This value identifies an observation namespace. The authenticated form omits
-`localKeyName`, so a valid repack to another accepted local DID/key can converge
-under one message ID.
+For recipient `did:peer:4zQmd8CpeFPci817KDsbSAKWcXAE2mjvCQSasRewvbSF54Bd`
+and sender `did:peer:4zQmaszWy5nSWq5GjKaGPuRCuFfwBqML1SAQNxPJdpAxx3fP`, the naming vectors are:
 
-The published authenticated vectors are executable:
+| wireMessageId | messageId | executionId |
+| --- | --- | --- |
+| `019b2a70-f225-721c-835f-67175be0667e` | `d2192dcf-cc5c-5f7d-b4f1-46972b7b04de` | `a03249b8-5e3e-5d10-a2e7-46844b38f5ae` |
+| `019b1b61-3444-7190-9db5-1cc9c215eb23` | `9cfaed56-2cb3-5a84-bc56-f8e882784ac8` | `ccee59f0-8c79-5011-8822-dbb14de9cf7d` |
 
-```text
-peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireMessageId = 019b2a70-f225-721c-835f-67175be0667e
-messageId     = 369d7a43-8dce-5b86-b073-e390d457f357
-
-peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireMessageId = 019b1b61-3444-7190-9db5-1cc9c215eb23
-messageId     = a8b9afd5-60fe-5f49-a669-bd998e760e7e
-```
-
-These vectors intentionally use wire IDs different from the outbound examples
-in [vault-events.md section 9](vault-events.md#outbound-message-events). Equal wire IDs chosen independently by different senders are not by
-themselves a protocol violation; sender/relationship scope is part of logical
-identity and ACK lookup.
-
-A verified relationship-scoped transition may cause observations with different
-authenticated `peerPublicKey` values and therefore different message IDs to represent one
-logical message. [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold) defines that second-stage merge. The original
-observation message IDs remain stored for audit and conflict detection.
-
-These values are **observation identities**. Equal intent hashes under one message ID
-form one observation group; differences are intent conflicts.
+These are identifier fixtures, not authentication/proof fixtures.
 
 <a id="execution-scope-and-commit-prerequisites"></a>
 
-#### Execution scope and commit prerequisites
+### Execution prerequisites
 
-Automatic execution uses a stable **execution scope**, not an observation message ID.
-Its unique derived value is the carrier's **logical peer scope**
-(`logicalPeerScope`) for ACK lookup, duplicate handling and automatic execution.
-The phase-1 application execution scope is:
-
-```json
-{ "relationshipId": "<relationship ID>" }
-```
-
-Every authenticated application address pair uses this same scope. Anonymous
-input and mediator control traffic have no application execution scope; no
-provisional key-based scope executes before relationship evidence is ready.
-
-A `Vault.commit` validator derives automatic-intent scope and ACK targets from
-the event set committed before that call. Receipt/binding/transition proposed
-in the same batch cannot authorize a response. Commit those prerequisites
-first, then derive and commit the effect; recovery resumes from that prefix.
+Automatic work requires [operation eligibility](channels.md#operation-eligibility)
+and [dispatch authority](channels.md#fixed-outbound-channel), independently of
+ID derivation. Source/endpoint/proof dependencies must already be committed.
+Anonymous and mediator-control input have no application execution.
 
 <a id="address-chains-and-observation-membership"></a>
 
-#### Address chains and observation membership
+### Source observations
 
-`peerChain(R)` contains canonical DID/key authorizations from exactly:
-
-- the peer document referenced by `relationship.bound.peerResolutionEventId`; and
-- every valid `relationship.peerTransitioned.peerResolutionEventId` for that R's rooted
-  peer chain.
-
-Each node includes all key-agreement methods authorized by its exact document,
-not only the selected encryption key. Resolve those methods to section [4.1](vault-events.md#key-evidence) of [vault-events.md](vault-events.md)'s canonical key values. The resolution's `keyAgreementMethodIds`
-must match the document; missing bytes defer and a fresh document may recover
-them only when its canonical raw CID is identical. Different selected keys
-within one document can scope the same R. Equal keys under unrelated canonical
-DIDs do not imply continuation. A current resolver result cannot extend the
-historical set; current sender authentication remains a separate receive gate.
-
-The local history starts with `relationship.bound.localDidId` and extends through
-`relationship.localTransitioned`. `relationshipRecipientKeyNames(R)` includes that
-whole rooted history. For a new delivery, first apply [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt)'s producer-time superseded-sender check under the operation lock. The rows
-below validate immutable evidence of committed observations; they neither
-admit new traffic from a superseded peer node nor re-evaluate earlier receipts
-against a later rotation. Each valid committed observation must satisfy one
-of these rows:
-
-| Observation | Immutable evidence and authorization | Scope |
-| --- | --- | --- |
-| Proof-free root sender | `relationshipBindingEventId` names a valid bound R; actual local key is in its rooted local history; sender DID/key is authorized by its pinned root peer document; `peerTransitionEventId == null` | R |
-| Proof-free peer successor | Same binding/local history check; `peerTransitionEventId` names the valid R edge, or an edge equal to an applied one under [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned), whose `toDid` and exact successor document authorize the observed DID/key | R |
-| Carried `fromPrior` | A valid `relationship.peerTransitioned` for that exact carrier/proof identifies R and authorizes its new sender; actual recipient belongs to R's local history; any non-null carrier binding reference agrees | R |
-
-These rows do not inspect public/private policy or message type. Lookup hints
-alone authorize none of them. A newly authenticated root pair first commits a
-common binding under [relationships.md section 9.3](relationships.md#integrity-checks-and-durable-receipt), then follows the first row.
-A recognized DID with an unpinned key retains its binding/edge references but
-has no scope and follows that document's same-DID diagnostic. Missing proof or
-binding evidence defers, never falls back to a fresh birth or key-based scope.
-
-All applicable evidence must identify one unique R. The pair index under
-[vault-events.md section 6.6](vault-events.md#relationship-fold-and-address-index) catches competing birth/continuation claims.
-For each message ID group, every valid observation must derive the same R: different
-Rs conflict, any unresolved observation defers the group, and neither permits
-per-observation effects. Retain previous committed receipts/effects without
-reassigning their identities when a later conflict appears.
-
-Scope is judged one observation at a time against the validated histories of
-R as folded from every committed event. An observation waits while a
-reference it names, or the node its local key or its sender belongs to, is
-not yet validated; it contradicts when what it names is present and disagrees
-with its row. Its local key is outside R when neither a node of
-`localChain(R)` nor any committed `relationship.localTransitioned` of R names
-that key's DID as a successor; a key that only an unapplied edge names waits.
-A waiting observation defers its group's execution and ACK processing. It
-does not defer the transitions or predecessor confirmations that complete
-observations of the same group supply, nor those observations' own scope. A
-contradicting observation conflicts the group and everything the group
-witnesses or confirms.
+Validate each source with its own recipient/key mapping and immutable
+authentication document under [operation eligibility](channels.md#operation-eligibility).
+Equal intent within one sender/recipient/wire-ID input shares one execution;
+disagreement follows [the conflict rules](vault-events.md#duplicate-transition-and-conflict-rules).
+Continuity links never merge inputs from different channels.
 
 <a id="execution-id-and-immutable-transcript"></a>
 
-#### Execution ID and immutable transcript
+### Execution ID
 
 ```text
 executionId = UUIDv5(
   estocNamespace("message-execution"),
-  RFC8785(["v2", {"relationship": R}, wireMessageId])
+  RFC8785(["v4", {"sender": canonicalSenderDid, "recipient": canonicalRecipientDid}, wireMessageId])
 )
 ```
 
-Here `R` is the scope's `relationshipId`. The transcript member name
-`"relationship"` is a fixed derivation tag, independent of the payload and
-runtime field name. Build that exact object for hashing; serializing
-`logicalPeerScope` with its `relationshipId` member would produce a different,
-invalid execution ID. Namespace purposes follow [vault-events.md section 3.4](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces).
-
-Rotation preserves R, execution identity and ACK namespace. Historical input
-verifies its saved references during import; producer current-address and
-authentication checks for a new delivery do not retrospectively rewrite it.
-Current local sender eligibility and contact lifecycle separately govern new
-outbound effects. Threads, ACK targets, contact merges and public address
-labels do not supply relationship identity.
+Use the literal transcript members `sender` and `recipient`; RFC 8785 orders
+object members canonically. For inbound work, the peer is the sender and the
+local DID is the recipient. Namespace derivation
+is in [vault-events.md](vault-events.md#entity-ids-and-reproducible-uuidv5-namespaces).
+The event schema member names are not substitutes for these transcript tags.
 
 <a id="local-rotation-scope-vector"></a>
 
-##### Local-rotation scope vector
+### Rotation and message identity
 
-Using the existing relationship, key and carrier fixture above, let two
-validated local transitions extend P0 to P1 and then P1 to P2, each with the
-predecessor-confirmation evidence required by [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned):
-
-```text
-R             = 35807a1e-3b8a-52f5-9580-29cd5265882e
-P0            = 019b2a60-c68e-75bf-b6fb-ae1a41f8d715
-P1            = 019b6a10-12c0-7410-89ab-38e54b097c21
-P2            = 019b6a20-12c0-7420-89ab-38e54b097c22
-peerPublicKey = z6LScHJqLmLd8zBAmcTY7BuyNvvYBEd44A6K8nVg2DSVCcis
-wireMessageId = 019b1b61-3444-7190-9db5-1cc9c215eb23
-
-for localKeyName = did/<P0|P1|P2>/key-agreement:
-  messageId = a8b9afd5-60fe-5f49-a669-bd998e760e7e
-  executionScope = {"relationshipId":"35807a1e-3b8a-52f5-9580-29cd5265882e"}
-  executionId = cf135b1f-1d7a-51eb-88ae-42447d426abe
-  pure-ack effectKey = MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU
-  pure-ack outbound message ID = 7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5
-```
-
-Each observation references resolution evidence with its own `localKeyName` and this
-same authenticated peer key/DID pair in `peerChain(R)`. Equal-intent deliveries
-at P0, P1 and P2 therefore share one execution, even after P0 retires. An
-explicit ACK at P2 may acknowledge an outbound whose historical valid package
-sent from P0, and an ACK at eligible P0 may acknowledge a package from P2, under
-[vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s membership rules. A DID outside this chain
-supplies no such membership. These are executable identity and scope fixtures,
-not JWT or numalgo-4 document test vectors; the DID entity IDs stand for
-validated local documents and transition proofs.
+Changing either endpoint produces another channel and another inbound/execution
+ID. The old observation and its effects remain unchanged. Retrying an existing
+outbound does not make this change; only a new send can select the new channel.
+ACK authorization may follow verified successor paths for an exact outbound
+message; that path does not merge the ACK carrier and the acknowledged message
+into one execution.
 
 <a id="first-contact-and-address-policy"></a>
 
 ## 10. First contact and address policy
 
-First contact uses the ordinary sender and receiver procedures. Trust Ping is
-the no-content default; useful application content may be sent immediately.
-No Estoc wire handshake, initial-specific acceptance limits or qualifying
-first-reply gate exists. Offline `birth` metadata fixes only the original
-address pair and R; it does not pin later package addresses.
-
-After binding, the optional early-privacy policy may create a local successor
-and send an ordinary notification with `from_prior`. Both initial and later
-rotations use [vault-events.md section 6.5](vault-events.md#relationship-localtransitioned). Either peer may keep a public
-address. Messages, ACKs, notification effects, repacks and submission completion
-all use the same R throughout. The detailed policy and idempotent trigger
-recovery are in [relationships.md section 11](relationships.md#early-private-address-policy-and-notifications).
+Useful content or Trust Ping can be the first ordinary DIDComm message.
+Address selection and optional early privacy rotation follow
+[the address policy](relationships.md).
 
 <a id="automatic-effects"></a>
 
 ## 11. Automatic effects
 
-An automatic DIDComm output is one effect identified by
-`(executionId, handlerId, effectKind, ordinal)`. `executionId` MUST equal the
-derived execution ID of one complete, conflict-free logical carrier after the
-observation-group and cross-key checks in [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold).
-Independently validated observations of that relationship and wire ID that
-disagree on the intent constitute an execution conflict under that section.
-An unresolved or conflicting sibling observation cannot clear that
-disagreement merely by making its group ineligible. One complete group
-cannot authorize automatic work while the execution conflict exists. Each protocol
-MUST define its handler ID, effect kind, stable non-negative integer ordinal
-and output intent rules. Its outputs MUST obey [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s
-limit of one logical outbound carrying a non-empty `ack` per execution, across
-all producing tuples. Handler IDs and kinds are non-empty strings without
-U+0000; `decimalOrdinal` is `0` for zero, otherwise decimal digits without
-leading zeros.
-Retries MUST NOT change the tuple to create another effect or evade a
-conflict. Selecting a different handler, effect kind or ordinal cannot
-bypass a conflict of the carrier's execution ID.
+An automatic DIDComm output is identified by `(executionId, effectType)`.
+`executionId` MUST derive from a complete, conflict-free logical carrier under
+[the input fold](vault-events.md#inbound-message-and-execution-fold).
+An authenticated intent conflict suppresses all automatic work for that execution;
+making a disagreeing group ineligible cannot clear the conflict.
+
+Each protocol MUST assign a fixed `effectType` URI to each operation and define
+its output intent rules. The URI MUST include a scheme and MUST NOT contain
+U+0000. Its exact UTF-8 spelling identifies the operation; implementations MUST
+NOT normalize or dereference it to derive the key. The identifier is shared
+across implementations and MUST remain unchanged when handlers are renamed,
+split or refactored. Distinct operations MUST use different effect types, even
+when they produce the same DIDComm message type. An effect type need not itself
+be a DIDComm message type URI.
+
+Each tuple permits at most one compatible output intent; different effect types
+may independently produce outputs for the same execution. Retries MUST reuse
+the tuple and MUST NOT change effect type to create another output or evade a
+tuple or execution conflict.
 
 ```text
 effectKey = base64url(
   SHA-256(
     UTF8("estoc/effect/3\0") ||
     UTF8(executionId) || 0x00 ||
-    UTF8(handlerId) || 0x00 ||
-    UTF8(effectKind) || 0x00 ||
-    UTF8(decimalOrdinal)
+    UTF8(effectType)
   )
 )
 ```
 
-The key is unpadded base64url. It determines the outbound message ID and wire ID under
-[vault-events.md section 9.1](vault-events.md#ids). The effect's content is its `message.out` intent.
-That event retains the complete producing tuple under its [section-9.2](vault-events.md#message-out) schema;
-the stored `ordinal` is exactly `decimalOrdinal`, not a runtime-only counter.
-One key permits only one compatible intent under that document's [section 9.8](vault-events.md#outbound-message-and-delivery-fold);
-payload validation MUST verify the execution ID against that carrier group,
-the stored tuple and output intent against the producing protocol, the key
-against that tuple, and the message ID against the key.
+The unpadded base64url key determines the outbound message and wire ID under
+[vault events](vault-events.md#ids). The [message.out schema](vault-events.md#message-out)
+stores the tuple and intent and defines their validation; conflicts follow
+[the delivery fold](vault-events.md#outbound-message-and-delivery-fold).
 
-Under the operation lock in [event-store.md section 10](event-store.md#vault-interface), the runtime MUST derive
-the carrier's execution ID and check for an already-selected ACK-bearing
-response under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold) before selecting an ACK response
-handler or tuple. If one exists, reuse it; a new handler or tuple cannot consume
-the carrier's ACK obligation again. Competing imported selections suppress
-response work under that fold.
-For a new DIDComm reply, apply section 8.1's local-sender gate before selection;
-missing a sender leaves unfinished work without committing intent.
-For each eligible effect, look up its derived message ID before freezing ACK targets,
-timing or other intent fields.
-It reuses an existing non-conflicted intent; it MUST NOT regenerate one after
-content erasure, submission, a later observation or a changed clock. If no
-intent exists, it commits the intent through `Vault.commit` before effects.
-Derivation, lookup and commit are one locked operation.
-Receipt, common bindings and required transitions MUST already
-be committed before this operation. A batch cannot authorize its own response
-scope; section 9 permits no prospective-scope exception.
-A conflicting local intent is rejected before append; imported conflicts remain
-history and suppress work under [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold). Duplicate
-carriers may resume only unsubmitted response work under section 8.4.
+Under the operation lock in [event-store.md section 9](event-store.md#vault-interface),
+check the specific operation's source, current policy and usable authorized
+sender. Derive its tuple and look up its message ID before freezing targets,
+timing, channel or other fields. Reuse an existing non-conflicted intent; do not
+regenerate it after submission, source erasure, another observation or a changed
+clock. The exact source and any rotation decision are retained directly in the
+[intent](vault-events.md#message-out).
+Missing evidence or sender leaves that operation pending without blocking
+another independently eligible operation.
+
+ACKs and rotation notifications are eager standalone Empty messages, independent
+of natural protocol responses. Arrival, dependency completion and handler order
+never merge their tuples.
+
+Derivation, lookup and `Vault.commit` form one locked operation with already
+committed dependencies. Reject a conflicting local intent before append;
+retain imported conflicts and suppress their work. Only eligible live input
+may automatically create an initial intent. Historical unfinished work requires
+explicit manual completion with the same tuples under
+[dispatch authority](channels.md#fixed-outbound-channel).
 
 Other external effects MUST commit their protocol-defined portable intent
 before execution and use that protocol's idempotency or explicit at-least-once
 contract. The message fold does not validate those payloads.
 
-Phase 1 has one active writer but still makes no process-level exactly-once
-claim. A future multi-writer profile must coordinate automatic execution before
-claiming stronger behavior.
+One active writer does not provide process-level exactly-once execution.
+
+<a id="built-in-independent-operations"></a>
+
+### Built-in independent operations
+
+| Operation | `effectType` |
+| --- | --- |
+| Requested receipt ACK | `https://estoc.dev/distributed-delivery/1.0#pure-ack` |
+| Trust Ping reply | `https://didcomm.org/trust-ping/2.0/ping-response` |
+| Inbound-triggered rotation notification | `https://estoc.dev/distributed-delivery/1.0#rotation-notification` |
+
+Pure ACK and rotation notification both use DIDComm type
+`https://didcomm.org/empty/1.0/empty`. Their distinct effect types keep both
+operations independent for one execution.
+
+Before selecting addresses for a built-in ACK or Ping reply, reuse an existing
+intent for its tuple. For a new intent, use the carrier's actual channel when
+its local DID remains eligible for sending there. Otherwise use the unique
+non-conflicted verified local-only successor head that retains the carrier's
+canonical peer DID, if eligible; otherwise create no automatic intent.
+`recipientDid` is the source's canonical `did`, never its `presentedDid` spelling.
+Temporary network unavailability or pending recipient registration delays
+dispatch without changing the selected channel. This is a producer selection
+rule; import validates the saved intent's evidence, not the producer's then-visible
+lifecycle state. A later rotation or retirement never reselects a committed intent.
+
+A Ping reply requires `response_requested != false` and current protocol/policy
+eligibility. It uses type `https://didcomm.org/trust-ping/2.0/ping-response`,
+`thid = source.wireMessageId`, source `pthid`, `createdTime` and `expiresTime`,
+empty body/attachments/headers, `ack == []` and `pleaseAck == null`. An expired
+Ping cannot start a new reply. It is independent of an ACK requested by that Ping.
+
+A rotation notification names the exact `rotationEventId` in its intent. It
+uses the decision's trigger source for its execution, not a later input that
+discovers unfinished notification work. Its type is `https://didcomm.org/empty/1.0/empty`,
+body/attachments/headers are empty, `ack == []`, `pleaseAck == [""]`, expiry is
+null, and source `pthid`, nullable creation time and `thid ?? wireMessageId` are
+retained. Its sender is the decision's successor DID and recipient is the
+decision's fixed `peerDid`. Its source, when present, belongs to the decision's
+`fromDidId`/`peerDid` channel. Packaging carries that decision's
+frozen proof until exact-successor confirmation. Notification submission alone
+is not confirmation; other successor messages still carry the proof until confirmed.
+
+A manual rotation with no trigger source uses a locally initiated UUIDv7
+notification intent, null thread/parent-thread/creation time, and the same
+Empty/ACK-request/expiry rules. Under the operation lock, reuse an existing
+notification for that rotation decision before allocating its message ID.
+Different selected notification IDs for one rotation decision conflict for
+notification work; neither new triggers nor retries may create another selection.
+Its source/effect fields are null, while `rotationEventId` remains present.
+In either case, notification recovery reuses the rotation; it never allocates
+another successor. A missing notification is manual work only while its source,
+when present, remains eligible under [channels.md](channels.md#operation-eligibility).
+Supersession of that source's peer prevents creating the intent. An existing
+intent may still be manually dispatched under the ordinary restrictions;
+recovery itself grants no automatic replay.
 
 <a id="required-vault-observations"></a>
 
 ## 12. Required vault observations
 
-Exact schemas are in [vault-events.md](vault-events.md):
-
 ```text
-message.out                       durable intent and immutable headers
-message.prepared                  exact plaintext and encrypted package
-message.packageRetired            package no longer submitted
-delivery.submitted                transport accepted a package
-delivery.failed                   terminal package or message failure
-delivery.acknowledged             ultimate peer ACK named the wire ID
-message.in                        durable inbound observation
-relationship.peerTransitioned     peer DID continuation in one named relationship
-relationship.bound                symmetric birth addresses and pinned peer document
-relationship.contactAssigned      independent local contact assignment
-relationship.localTransitioned    frozen successor and proof for our end
+message.out                fixed channel and immutable intent
+message.prepared           exact selected envelope
+delivery.submitted         observed transport acceptance of the fixed package
+delivery.failed            terminal failure or message cancellation
+delivery.acknowledged      exact authorized peer receipt observation
+message.in                 independent authenticated channel receipt
+did.rotationSelected       local successor and frozen proof selected before sending
+invitation.consumed        exact one-use disclosure and source-backed consumer
+channel.blocked            local channel/successor denial
 ```
 
-One valid committed `delivery.submitted` completes the entire outbound's
-submission work, regardless of either ACK array. `delivery.acknowledged`
-records a separate receipt observation and cannot create or reopen submission
-work. Missing submission evidence leaves eligible work recoverable even when
-an earlier transport call may already have succeeded.
-
-A recommended inbound observation records both hashes and durable headers:
-
-```json
-{
-  "messageId": "<deterministic inbound message id>",
-  "wireMessageId": "<innermost message id>",
-  "receiptOrdinal": "42",
-  "intentHash": "<base64url sha-256>",
-  "plaintextHash": "<base64url sha-256>",
-  "createdTime": null,
-  "expiresTime": null,
-  "pleaseAck": [""],
-  "ack": [],
-  "localKeyName": "did/019b.../key-agreement",
-  "peerResolutionEventId": "<exact-peer.resolved-eventId>",
-  "relationshipBindingEventId": "<exact-relationship.bound-eventId>",
-  "peerTransitionEventId": null,
-  "receivedVia": {
-    "mediationId": "019b...",
-    "deliveryId": "019b..."
-  }
-}
-```
+Continuity links and verification status are fold results, not events.
+Contact events are not delivery observations. Schemas and folds
+are owned by [vault events](vault-events.md) and [channels](channels.md).
 
 <a id="failure-rules"></a>
 
 ## 13. Failure rules
 
-- Before intent commit, no vault message exists.
-- After intent commit but before preparation, the active full runtime may
-  prepare later; a future replicated profile may allow any full replica to do
-  so.
-- After package storage but before submission observation, the exact package
-  may be submitted again.
-- After mediator acceptance but before `delivery.submitted`, retry reuses the
-  exact package idempotently. Missing submission evidence does not prove that
-  no attempt occurred; [relationships.md section 14](relationships.md#retry-replacement-and-address-rollover)
-  governs local attempt accounting and its permitted reset after restart/restore.
-- After `delivery.submitted` commits, restart, duplicate receipt and missing
-  ACK never cause another submission or replacement package for that message ID.
-- At expiry before prepare or retry of an unsubmitted outbound, a
-  message-scoped terminal failure is recorded and no package is submitted.
-- After inbound commit but before pickup ACK, redelivery converges as another
-  observation.
-- After pickup ACK but before ultimate ACK intent/submission, writable-open
-  recovery MUST rediscover unfinished work from committed inbound history,
-  reuse frozen intents and relationship evidence, and resume eligible
-  deterministic work.
-  Neither mediator redelivery nor a local queue is a recovery prerequisite.
-- Loss or unavailability of the recipient runtime beyond mediator retention
-  may lose an in-flight package after submission completed. The sender does
-  not compensate by resending a submitted outbound. This profile provides
-  best-effort delivery after recorded transport acceptance, independently of
-  any later peer receipt observation.
+- Before intent commit, no message exists. A failed/uncertain commit grants no send.
+- After intent commit but before preparation, reopen requires manual action;
+  an incomplete snapshot cannot prove nondelivery.
+- After preparation commit, a crash before transport and a crash after transport
+  acceptance but before submission commit leave the same portable prepared state.
+  Recovery requires manual action and preserves the package. Retry may deliver
+  duplicate bytes; channel-local dedup applies.
+- After submission or termination commits, no retry is allowed.
+- After rotation, old intents/packages remain in their fixed channels. If that
+  channel becomes unusable, a deliberate new send has a new wire ID.
+- After receipt but before pickup ACK, redelivery is another same-channel
+  observation. Receipt commit still permits pickup ACK independently of policy.
+- After receipt but before consumption, recovery automatically completes that
+  local record when its retained source and current policy remain eligible.
+  Before a reply, recovery preserves local state and pending work without
+  automatically sending ACKs, replies or notifications.
+- After erasure, no new content-derived effect is reconstructed.
+- Mediator expiry/outage may lose an already submitted message. This best-effort
+  profile does not automatically compensate through another replica or channel.
+
+No failure window changes a message's channel or proves nondelivery merely by
+lacking a success record. Manual new sending may produce another visible or
+business operation if the first one arrived; protocol-level idempotency is
+independent of this transport profile.
 
 <a id="privacy"></a>
 
@@ -1124,16 +840,14 @@ A recommended inbound observation records both hashes and durable headers:
 Wire IDs, message types and content are visible only inside end-to-end
 encrypted application messages. Package IDs and recipient routing DIDs are
 visible to the mediator. Delivery IDs are visible to the recipient mediator.
-A future replica-mediation profile
-would additionally expose opaque replica IDs to that mediator.
 
 A disclosed rendezvous DID is intentionally correlatable within its audience.
-Relationship DIDs SHOULD be disclosed only in encrypted messages and use
+Pairwise DIDs SHOULD be disclosed only in encrypted messages and use
 Peer DID long form on first disclosure.
 
-Pure ACKs reveal durable receipt timing to the ultimate peer, not which
-replica received first. Implementations SHOULD NOT encode contact names,
-replica labels, event IDs or content in peer- or mediator-visible IDs.
+Pure ACKs reveal durable receipt timing to the ultimate peer. Implementations
+SHOULD NOT encode contact names, replica labels, event IDs or content in peer-
+or mediator-visible IDs.
 
 <a id="required-conformance-cases"></a>
 
@@ -1144,77 +858,74 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### Intent and immutable packaging (DD-1–DD-12)
 
-1. <a id="dd-1"></a> `message.out` commits with all networking disabled.
-2. <a id="dd-2"></a> A peer addresses a rendezvous or relationship DID, never a replica ID.
-3. <a id="dd-3"></a> `pleaseAck == null` omits the wire header; an array is preserved exactly on
+- <a id="dd-1"></a> **DD-1.** `message.out` commits with all networking disabled.
+- <a id="dd-2"></a> **DD-2.** A peer addresses a communication DID, never a replica or contact ID.
+
+- <a id="dd-3"></a> **DD-3.** `pleaseAck == null` omits the wire header; an array is preserved exactly on
    the wire.
-4. <a id="dd-4"></a> `pleaseAck == []` requests no explicit acknowledgment.
-5. <a id="dd-5"></a> `pleaseAck` containing `""` or the current wire ID requests its receipt;
+- <a id="dd-4"></a> **DD-4.** `pleaseAck == []` requests no explicit acknowledgment.
+- <a id="dd-5"></a> **DD-5.** `pleaseAck` containing `""` or the current wire ID requests its receipt;
    an array naming only older IDs does not. Neither changes submission work.
-6. <a id="dd-6"></a> A receiver accepts the standard empty-string sentinel and current-message
+- <a id="dd-6"></a> **DD-6.** A receiver accepts the standard empty-string sentinel and current-message
    ID form and expands them to the current wire ID for processing.
-7. <a id="dd-7"></a> Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
+- <a id="dd-7"></a> **DD-7.** Intent freezes `createdTime`, `expiresTime`, exact `pleaseAck`, exact `ack`
    and every supported additional header.
-8. <a id="dd-8"></a> `return_route` in vault application headers or innermost plaintext is
+- <a id="dd-8"></a> **DD-8.** `return_route` in vault application headers or innermost plaintext is
    rejected.
-9. <a id="dd-9"></a> Two valid preparations of one intent agree on the intent hash.
-10. <a id="dd-10"></a> Retrying one package uses identical plaintext, ciphertext and package ID.
-11. <a id="dd-11"></a> A permitted address/key transition creates a new package/plaintext hash
-    while preserving wire ID and intent hash.
-12. <a id="dd-12"></a> Body, type, thread, attachment, timing, ACK policy or additional-header
+- <a id="dd-9"></a> **DD-9.** Repeated identical preparation payloads reuse one package; a different package ID, envelope or evidence reference for the same message conflicts, even when its intent hash agrees.
+- <a id="dd-10"></a> **DD-10.** Retrying one package uses identical plaintext, ciphertext and package ID.
+- <a id="dd-11"></a> **DD-11.** Rotation cannot change an existing message's channel or committed package. Cancellation or terminal failure permits no replacement, even before its first send; changing the package requires a new message ID.
+
+- <a id="dd-12"></a> **DD-12.** Body, type, thread, attachment, timing, ACK policy or additional-header
     changes under one wire ID produce an intent conflict.
 
 <a id="submission-and-acknowledgment-dd-13-dd-22"></a>
 
 ### Submission and acknowledgment (DD-13–DD-22)
 
-13. <a id="dd-13"></a> HTTP or mediator acceptance records submitted, never acknowledged.
-14. <a id="dd-14"></a> Every outbound stops all preparation/submission after committed
+- <a id="dd-13"></a> **DD-13.** Transport acceptance records submitted for the exact committed message/package pair, never ultimate acknowledgment.
+
+- <a id="dd-14"></a> **DD-14.** Every outbound stops all preparation/submission after committed
     `delivery.submitted`, including when its `pleaseAck` requests the current
     wire ID and no ACK arrives. A later transport failure or expiry does not
     replace the submitted outcome.
-15. <a id="dd-15"></a> A deterministic response acknowledges a message only when explicit `ack`
+- <a id="dd-15"></a> **DD-15.** A deterministic response acknowledges a message only when explicit `ack`
     names its wire ID.
-16. <a id="dd-16"></a> ACK is emitted only after durable inbound commit.
-17. <a id="dd-17"></a> Pure ACK uses `pleaseAck == null`, creates no ACK loop and completes
+- <a id="dd-16"></a> **DD-16.** ACK is emitted only after durable inbound commit.
+- <a id="dd-17"></a> **DD-17.** Pure ACK uses `pleaseAck == null`, creates no ACK loop and completes
     submission at the same committed boundary as other outbounds.
-18. <a id="dd-18"></a> A pure ACK whose carrier omitted `created_time` commits
+- <a id="dd-18"></a> **DD-18.** A pure ACK whose carrier omitted `created_time` commits
     `createdTime == null` and omits the wire header on every preparation.
-19. <a id="dd-19"></a> The fixed pure-ACK vector derives execution ID
-    `cf135b1f-1d7a-51eb-88ae-42447d426abe`, effect key
-    `MzoucVz8FGCDtGEE2FTwgiwSg6elFih1OQT91MzmpSU`, and one outbound/wire ID
-    `7b53df5f-594d-50f4-adc3-3f7fbd0fe6c5`.
-20. <a id="dd-20"></a> One carrier that requests current and older known IDs freezes one ordered
+- <a id="dd-19"></a> **DD-19.** The channel pure-ACK fixture derives execution ccee59f0-8c79-5011-8822-dbb14de9cf7d, effect Vyjgpd9idT4bb9ejAEdwT5J8dX-kL6FfSniCkFZDB20 and wire ID 3543ac01-4ac6-5c14-b160-4f8f4e2e6811.
+
+- <a id="dd-20"></a> **DD-20.** One carrier that requests current and older known IDs freezes one ordered
     deduplicated ACK target set; unknown targets arriving later do not mutate
     the response effect.
-21. <a id="dd-21"></a> A valid ACK received before `delivery.submitted` adds receipt information
-    without completing submission or releasing its envelope. Eligible pending
-    submission remains recoverable with its exact package.
-22. <a id="dd-22"></a> A duplicate carrier reuses its frozen response. Before submitted it may
-    resume eligible work; after submitted it causes no send, even when the
-    exact response bytes remain. Collected bytes do not cause a replacement.
+- <a id="dd-21"></a> **DD-21.** A valid ACK before submitted adds receipt information only; another transport call still requires manual action and the exact package.
+
+- <a id="dd-22"></a> **DD-22.** Duplicate input reuses its frozen response state but never dispatches it; submitted/collected responses cannot be recreated.
 
 <a id="scope-aliases-and-conflicts-dd-23-dd-30"></a>
+<a id="scope-observations-and-conflicts-dd-23-dd-30"></a>
 
-### Scope, aliases and conflicts (DD-23–DD-30)
+### Channel observations and conflicts (DD-23–DD-30)
 
-23. <a id="dd-23"></a> Valid address variants converge; invalid variants conflict.
-24. <a id="dd-24"></a> Equal wire IDs under transition-verified peer keys merge only through the
-    same stable relationship execution scope; unrelated key reuse does not.
-25. <a id="dd-25"></a> A repackaged observation that arrives before transition evidence remains
-    effect-deferred. After verification it derives the same relationship/wire-ID
-    execution identity and cannot execute once per peer key.
-26. <a id="dd-26"></a> Multiple relationship matches or incompatible derivation rows for one
-    observation suppress ACK processing and new effects as an execution-scope
-    conflict, even when each source is individually valid.
-27. <a id="dd-27"></a> Control observations follow [vault-events section 10.6](vault-events.md#inbound-message-and-execution-fold) at every address.
-    Binding and scoped ACK processing remain possible without contact creation
-    or a recursive privacy notification.
-28. <a id="dd-28"></a> Invalid `from_prior` prevents ACK processing and transition.
-29. <a id="dd-29"></a> Duplicate explicit ACKs are harmless and affect only peer receipt
+- <a id="dd-23"></a> **DD-23.** Authorized key variants within one sender/recipient/wire-ID input converge; inconsistent authenticated intent conflicts.
+
+- <a id="dd-24"></a> **DD-24.** Equal wire IDs in different channels do not merge, even through verified links. Same-channel authorized variants share one execution.
+
+- <a id="dd-25"></a> **DD-25.** Missing source authentication, endpoint or required link evidence defers the affected automatic operation; invitation state alone does not. Later evidence validates only its channel-local execution and grants no recovery dispatch.
+
+- <a id="dd-26"></a> **DD-26.** Contradictory channel identity evidence or authenticated intent suppress new effects; contact edits cannot resolve them and equivalent long/short DID spellings do not cause them.
+
+- <a id="dd-27"></a> **DD-27.** Control input with a complete source witness may supply authorized ACK evidence. It creates no contacts or recursive privacy notifications, and its type alone consumes no invitation.
+
+- <a id="dd-28"></a> **DD-28.** Invalid carried proof prevents link/ACK effects and cannot supply a proof-free invitation source; independently authenticated receipt is retained. Failed envelope authentication creates no receipt and follows the gate's wait or terminal rules.
+
+- <a id="dd-29"></a> **DD-29.** Duplicate explicit ACKs are harmless and affect only peer receipt
     information, never submission completion or envelope retention.
-30. <a id="dd-30"></a> Expiry stops unsubmitted work permanently. Receipt `late` follows
-    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
+- <a id="dd-30"></a> **DD-30.** Expiry stops unsubmitted work permanently. Receipt `late` follows
+    [vault-events.md section 9.7](vault-events.md#outbound-message-and-delivery-fold)'s committed observation-time rule for both
     submitted and expired messages, without changing submission outcome or
     restarting work. Already-submitted messages acquire no new expired failure.
 
@@ -1222,190 +933,120 @@ replica labels, event IDs or content in peer- or mediator-visible IDs.
 
 ### First contact, rotation and transport (DD-31–DD-39)
 
-31. <a id="dd-31"></a> The default initial rendezvous message may be Trust Ping; a received
+- <a id="dd-31"></a> **DD-31.** The default initial rendezvous message may be Trust Ping; a received
     application message may be first without a custom wrapper.
-32. <a id="dd-32"></a> No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
-33. <a id="dd-33"></a> Every unconfirmed local successor uses the same long-form sender and
+- <a id="dd-32"></a> **DD-32.** No emitted message uses an `https://estoc.dev/rendezvous/1.0/*` type.
+- <a id="dd-33"></a> **DD-33.** Every unconfirmed local successor uses the same long-form sender and
     frozen from_prior rules, including the first public-to-private rotation.
-34. <a id="dd-34"></a> `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
+- <a id="dd-34"></a> **DD-34.** `from_prior.sub` equals plaintext `from` byte-for-byte; the protected JWT
     `kid` has the exact `iss` DID portion. Predecessor method authorization uses
     [vault-events.md section 6.4](vault-events.md#relationship-peertransitioned)'s validated spelling comparison against the
-    pinned document, without requiring byte equality with presentedDid.
-35. <a id="dd-35"></a> Until exact-successor confirmation, every new package from that end
-    carries its proof and long form. The root has no initial-handoff proof
-    variant.
-36. <a id="dd-36"></a> Direct and mediated delivery enter the same inbound fold.
-37. <a id="dd-37"></a> Crash before `delivery.submitted` commits may recover by resending the
-    same package; crash after its commit never resends that message ID. Committed
-    intent and accepted inbound data survive each section-13 boundary.
-38. <a id="dd-38"></a> Phase 1 works with one active full runtime and ordinary account-scoped
-    Message Pickup; replica fan-out is not required.
-39. <a id="dd-39"></a> A common pinned binding precedes first preparation on a send path and
-    scopes first receipt on a receive path. Ordinary public-address replies
-    need no rotation; carried proofs still validate before effects.
+    exact predecessor verification document, without requiring byte equality with presentedDid.
+- <a id="dd-35"></a> **DD-35.** New unconfirmed successor packages include frozen proof/long form; committed packages never change after confirmation.
+
+- <a id="dd-36"></a> **DD-36.** Direct and mediated traffic use the same channel receipt and operation folds; only mediated traffic has pickup ACK.
+
+- <a id="dd-37"></a> **DD-37.** Crashes before/after a transport call or before submission commit reopen without automatic sending; manual retry preserves the exact committed package.
+
+- <a id="dd-38"></a> **DD-38.** Phase 1 works with one active full runtime and ordinary account-scoped
+    Message Pickup.
+- <a id="dd-39"></a> **DD-39.** Preparation requires a valid fixed-channel intent and exact local-key/peer-resolution evidence. Complete source and required carried-proof evidence precede dependent automatic intents; each operation checks its own current policy.
 
 <a id="normalization-ack-and-retention-regressions-dd-40-dd-49"></a>
 
 ### Normalization, ACK and retention regressions (DD-40–DD-49)
 
-40. <a id="dd-40"></a> A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
+- <a id="dd-40"></a> **DD-40.** A reader preserves duplicate `please_ack` or `ack` wire targets exactly,
     expands the current-message sentinel only for processing, and ignores
     later duplicate targets without changing the stored array.
-41. <a id="dd-41"></a> Two implementations normalize every accepted attachment carrier, missing
+- <a id="dd-41"></a> **DD-41.** Two implementations normalize every accepted attachment carrier, missing
     value, null, empty string and closed metadata field to the same semantic
     projection used by `intentHash`.
-42. <a id="dd-42"></a> Conforming mediator operation persists and logs no application plaintext;
+- <a id="dd-42"></a> **DD-42.** Conforming mediator operation persists and logs no application plaintext;
     any explicitly enabled bounded diagnostic mode is visibly outside the
     no-plaintext profile.
-43. <a id="dd-43"></a> ACK target lookup is scoped by `(carrier.logicalPeerScope, wireMessageId)`;
-    another relationship reusing the same wire ID is never acknowledged.
-44. <a id="dd-44"></a> ACK target order uses the minimum complete receipt key, not canonical event
+- <a id="dd-43"></a> **DD-43.** ACK targets require exact same-channel or verified role-preserving successor authorization; shared contacts and wire IDs alone supply none.
+
+- <a id="dd-44"></a> **DD-44.** ACK target order uses the minimum complete receipt key, not canonical event
     order or EventStore change order; a clock rollback between two receives
     does not reverse their ACK order in a linear history.
-45. <a id="dd-45"></a> Submitted completion survives restart, loss of local state, clock rollback,
-    package retirement and envelope collection. Later duplicate input cannot
+- <a id="dd-45"></a> **DD-45.** Submitted completion survives restart, loss of local state, clock rollback,
+    later termination and envelope collection. Later duplicate input cannot
     reopen submission or require the collected envelope.
-46. <a id="dd-46"></a> If one of several valid packages for a message ID is submitted, every package of
-    that message ID stops work; selecting another package, route or handler cannot
-    bypass completion.
-47. <a id="dd-47"></a> Generic pure ACK copies carrier pthid and nullable creation time. An Empty
-    rotation notification uses the same tuple with its policy-defined ACK
-    request; one carrier cannot produce both variants.
-48. <a id="dd-48"></a> After a common binding and restart, direct replies and verified rotations
-    reconstruct the same relationship execution ID with no handoff event.
-49. <a id="dd-49"></a> An unsubmitted package survives route unavailability and GC with its exact
-    envelope. Committed submission or terminal failure releases its contribution
+- <a id="dd-46"></a> **DD-46.** A complete submission witness completes the message even if import later
+    adds a competing preparation. The conflict remains visible; another package,
+    route or handler cannot bypass completion.
+- <a id="dd-47"></a> **DD-47.** Generic pure ACK copies carrier pthid and nullable creation time. An Empty rotation notification uses a distinct fixed tuple, empty ack array and its own ACK request; one input may produce both intents.
+- <a id="dd-48"></a> **DD-48.** Reopen reconstructs channel-local execution IDs independently of contacts and grants no dispatch permission.
+
+- <a id="dd-49"></a> **DD-49.** An unsubmitted package survives route unavailability and GC with its exact
+    envelope. Committed submission, terminal failure or cancellation releases its contribution
     under the retention fold; route recovery cannot reopen submitted work.
 
 <a id="recovery-and-automatic-effects-dd-50-dd-56"></a>
 
 ### Recovery and automatic effects (DD-50–DD-56)
 
-50. <a id="dd-50"></a> Recovery completes queued birth/binding work without inbound traffic and
-    finds pickup-ACKed unfinished effects without redelivery.
-51. <a id="dd-51"></a> A crash after an outcome-unknown transport call can reset the local retry
-    budget, but never changes the wire ID, exact retry package or frozen expiry.
-52. <a id="dd-52"></a> Retry, restore and later aliases reuse the same effect key and frozen
-    intent before computing new ACK targets or timing. Concurrent local workers
-    cannot commit different intents for that key, or change the ordinal to
-    evade the conflict.
-53. <a id="dd-53"></a> Protocol errors, pure ACKs and ordinary content use one R scope and retain
-    their normal response rules. A different DID cannot join that R without
-    verified continuation.
-54. <a id="dd-54"></a> Equal-intent observations at root and successor local addresses execute
-    once only if their saved evidence validates the same R. Missing references
-    defer; mismatches conflict without choosing an observation by arrival
-    order.
-55. <a id="dd-55"></a> A batch containing new scope-bearing input, binding or transition and its
-    dependent response is rejected. Commit prerequisites first; recovery uses
-    that prefix without provisional scope.
-56. <a id="dd-56"></a> Two workers handling one outbound serialize prepare/submit work. Observed
-    acceptance commits before another dispatch, and no later dispatch starts
-    after the submitted event. A crash before that commit still permits
-    recovery with the same package rather than consuming a pre-call reservation.
+- <a id="dd-50"></a> **DD-50.** Recovery exposes incomplete source/proof and pending response work from retained data, without dispatching protocol output or requiring redelivery. Proof verification uses the immutable issuer document derived from its long-form issuer or a matching retained peer.resolved document for a short-form issuer; receipt authentication still uses its exact saved references. Neither verification nor a cache rebuild appends an event.
+
+- <a id="dd-51"></a> **DD-51.** A crash before transport and a crash after acceptance but before submission commit expose the same prepared state. Neither proves delivery or nondelivery; manual retry preserves wire ID, package, channel and expiry.
+
+- <a id="dd-52"></a> **DD-52.** Saved `(executionId, effectType)` tuples and intents remain immutable across restore and handler refactoring; neither changes their effect keys or message IDs. Historical input creates no new dispatch action or replacement response channel.
+
+- <a id="dd-53"></a> **DD-53.** Ordinary content, errors and pure ACKs use channel-local identity and their protocol-specific response rules; continuity authorizes exact paths only.
+
+- <a id="dd-54"></a> **DD-54.** Equal-intent observations at different local DIDs have different channels and execution IDs; later links never merge or replay them.
+
+- <a id="dd-55"></a> **DD-55.** A batch cannot authorize its response by proposing new source/endpoint/proof evidence in the same call; prerequisites commit first and links are derived. Invitation consumption is independent of the response.
+
+- <a id="dd-56"></a> **DD-56.** Serialize each message dispatch, require its committed package and consume one live initial/manual action per transport call. Record observed acceptance afterward. Scanning saved events or restarting supplies no action, and one action cannot invoke transport twice.
 
 <a id="binding-resolution-and-sender-eligibility-dd-57-dd-62"></a>
 
 ### Binding, resolution and sender eligibility (DD-57–DD-62)
 
-57. <a id="dd-57"></a> An offline birth freezes symmetric R and birth addresses. Public addresses
-    can send before a first reply. All later packages use current endpoints in
-    that same R; birth metadata never blocks a valid repack.
-58. <a id="dd-58"></a> A freshly resolved same-DID new key does not extend `peerChain(R)`. Outbound
-    preparation follows [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s message-scoped failure;
-    an inbound at the local relationship DID without continuation proof has
-    no scope and processes no ACK/effect. The contact diagnostic cannot make
-    the observation executable, even when that R has a contact assignment.
-59. <a id="dd-59"></a> All key-agreement keys of the same pinned document can authenticate in one
-    R. Equal-intent wire variants merge once; fresh unpinned keys cannot
-    enlarge membership or change birth identity.
-60. <a id="dd-60"></a> A new non-numalgo-4 message ID resolves and commits current recipient evidence
-    before first preparation. Transient unavailability leaves it retryable;
-    definitive resolution failure is terminal under [relationships.md section 10.1](relationships.md#did-resolution-requirements). An unchanged online-revalidated document still creates new evidence.
-    Existing packages retry or repack using retained snapshots only. Whenever
-    an inbound delivery enters or resumes authentication, including duplicates,
-    it uses current sender resolution; unavailability defers without pickup ACK
-    only within that section's per-delivery budget. Definitive DNS failures
-    and exhausted retries take the terminal pre-vault ACK path; redelivery
-    cannot reset the active sequence. Recoverable local prerequisite waits
-    consume no budget. Relationship-evidence waits and their evidence-change
-    retries use that section's suspension and fresh-sequence rule.
-    Reusing matching evidence requires a fresh document check. Recovery of
-    committed input uses its retained snapshot without another network lookup.
-61. <a id="dd-61"></a> Section 8.1's sender gate precedes selection and commit of a deterministic
-    reply, including a natural response without ACK targets. A retired local
-    end without a usable successor leaves durable input and unfinished work,
-    with no reply intent or frozen ACK selection. Recovery after a valid local
-    transition sends from that relationship's current end, reusing any already
-    committed response instead of creating another effect.
-62. <a id="dd-62"></a> Section 9's local-rotation vector preserves message ID, execution ID, effect key
-    and automatic outbound message ID across local recipient keys. Historical local
-    membership also permits ACKs across predecessor/successor packages under
-    [vault-events.md section 9.8](vault-events.md#outbound-message-and-delivery-fold); a shared contact alone does not.
+- <a id="dd-57"></a> **DD-57.** Offline intent freezes the actual sender/recipient pair. Even a message with no prepared package is not readdressed after rotation.
+
+- <a id="dd-61"></a> **DD-61.** A reply needs a usable authorized channel before intent commit. Missing sender leaves manual work; later recovery never dispatches it or retargets an existing response.
+
+- <a id="dd-62"></a> **DD-62.** Different local recipient DIDs produce different message/execution IDs. A verified role-preserving successor path may authorize an ACK for an old outbound without merging executions.
 
 <a id="rotation-membership-and-receipt-recovery-dd-63-dd-69"></a>
 
 ### Rotation membership and receipt recovery (DD-63–DD-69)
 
-63. <a id="dd-63"></a> A proof at the original address or any local successor extends the common
-    binding. Later proof-free input freezes generic binding/transition
-    references. Partial imports defer; equal-intent variants retain one
-    execution and response selection.
-64. <a id="dd-64"></a> Opposite first sends with the same two canonical DIDs produce one R.
-    Public/public, public/private and private/private pairs use the same
-    formula and scope rules.
-65. <a id="dd-65"></a> ACK membership uses the immutable outbound R plus verified binding/package
-    evidence. Changing contact preferences or endpoint direction never
-    reassigns an outbound.
-66. <a id="dd-66"></a> Local and remote rotations commute across the two ends. Unsubmitted birth
-    and ordinary intents repack while preserving their wire/execution IDs;
-    submitted ones stay complete.
-67. <a id="dd-67"></a> After a peer edge commits, a new message ID from the superseded node is terminal
-    before message.in, with pickup ACK only. A matching committed observation
-    message ID in R creates no new response obligation; ordinary unfinished work
-    remains recoverable. Later transitions and import order cannot retroactively
-    remove scope from previously committed input.
-68. <a id="dd-68"></a> A new inbound binding commits before the message.in draft can reference
-    its returned eventId. Crash at that boundary leaves no receipt, invitation
-    consumption or pickup ACK; reauthentication reuses the binding, including
-    when the incoming message is a pure ACK control observation. The enclosing
-    receive operation holds the shared operation lock across lookup and these
-    commits, excluding a competing outbound binding until it releases the lock.
-69. <a id="dd-69"></a> An unknown-iss carrier waits before receipt, unopened when its DIDComm
-    implementation needs the predecessor document to open it, and gets no
-    message.in or pickup ACK; no new birth or provisional scope bypasses that
-    carrier's deferral, and unrelated local pairs are unaffected. A committed
-    carrier without its transition keeps its exact local/sender pair pending
-    for later proof-free input until the validated transition commits; that
-    waiting delivery also gets no message.in or pickup ACK. Evidence changes
-    relevant to the pair, or supplying the document an unopened carrier waits
-    for, trigger retry with a fresh bounded sender-resolution sequence when
-    needed. While local wait state is retained, mere
-    redelivery does not retry; loss of that state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Time in the evidence wait consumes neither
-    resolver attempts nor its local retention stop. No local retention timeout
-    clears the pending claim. After the sender has received valid confirmation
-    and the receiver is restored to history lacking the original relationship
-    or its continuation, an uncommitted carrier leaves no such claim: a later
-    valid proof-free package follows ordinary pair lookup and may form a new
-    birth, and later incompatible recovery conflicts without reassigning
-    committed receipts.
+- <a id="dd-63"></a> **DD-63.** An authenticated carrier with its own verified JWT establishes an exact channel link. Later proof-free input authenticates its own exact DID pair and retains channel-local identity; each consumer applies its own evidence and policy requirements.
+
+- <a id="dd-64"></a> **DD-64.** Opposite first sends use the same two canonical DIDs with reversed sender/recipient roles; public/private labels do not change the formula.
+
+- <a id="dd-65"></a> **DD-65.** ACK authorization uses the outbound fixed oriented channel and exact package/path evidence; display preferences never reassign it.
+
+- <a id="dd-66"></a> **DD-66.** Opposite-side links justify their evidence-backed join. Existing queued, prepared and submitted messages all keep their original channels.
+
+- <a id="dd-67"></a> **DD-67.** Superseded peer input remains receivable but creates no new automatic work. Existing intents and results remain historical and duplicates never dispatch old effects.
+
+- <a id="dd-68"></a> **DD-68.** Receipt precedes invitation.consumed and other concrete source-derived work. Only a complete consumption assigns an invitation consumer; all crash prefixes reopen without automatic replies.
+
+- <a id="dd-69"></a> **DD-69.** Missing required immutable issuer material or endpoint/rotation evidence keeps the affected continuity path pending after authenticated receipt and pickup ACK; invitation state does not. Saved authentication is reusable for its original receipt. Failed envelope authentication creates no receipt; recoverable local prerequisites wait and definitive rejection follows the terminal pickup-ACK path.
 
 ### Group waits and transition validity (DD-70–DD-71)
 
-70. <a id="dd-70"></a> A waiting observation of a message ID group suspends that group's
-    execution and ACK processing; a transition or predecessor confirmation
-    that a complete observation of the same group supplies applies
-    regardless. Only a contradiction propagates from the group to the
-    transition, and it propagates to every edge the group witnesses or
-    confirms.
-71. <a id="dd-71"></a> Two complete logical carrier groups deriving one execution ID with
-    different intent hashes are an execution conflict under section 11: no
-    automatic effect of that execution is prepared, repacked or submitted
-    under any handler ID, effect kind or ordinal; committed observations and
-    effects keep their identifiers; a submitted response is not reopened and
-    no envelope is collected on that account. Groups that agree on the
-    intent are one logical carrier under [vault-events.md section 10.6](vault-events.md#inbound-message-and-execution-fold)
-    and share the execution. The conflict is proven by the disagreeing
-    observations' own validated rows: a later duplicate that leaves one of
-    their groups waiting or contradicting does not clear it, while an alias
-    whose row is not validated proves no disagreement.
+- <a id="dd-70"></a> **DD-70.** Incomplete consistent same-channel siblings do not erase a complete witness. A complete observation may witness continuity/confirmation without any handler decision or output intent.
+
+- <a id="dd-71"></a> **DD-71.** Complete witnesses for the same sender/recipient/wire-ID triple with conflicting authenticated intents conflict the execution for every effect type; submission remains complete and different channels are never execution aliases.
+
+### Independent operation recovery (DD-72–DD-75)
+
+- <a id="dd-72"></a> **DD-72.** One Ping requesting ACK may produce three separate intents with distinct effect types: pure ACK, Ping reply and rotation notification. Each type permits at most one compatible intent for that execution. Handler order changes none of their keys; a saved Ping reply does not occupy either other operation's slot, and the two Empty outputs remain independent.
+
+- <a id="dd-73"></a> **DD-73.** Missing optional successor registration or notification preparation does not block an eligible ACK or Ping reply on an authorized usable channel. Their committed channels remain fixed when notification work later completes.
+
+- <a id="dd-74"></a> **DD-74.** Crash after a rotation decision but before notification intent leaves manual work only while the source remains eligible. Supersession of the trigger's peer prevents creating the missing intent; an already committed intent may still be manually dispatched under ordinary restrictions. A source-free manual decision remains subject to send restrictions without a source-peer check. Completion reuses the original trigger, successor and proof; a later input cannot change the notification tuple or allocate another successor.
+
+- <a id="dd-75"></a> **DD-75.** Notification submission does not confirm successor knowledge. Other new successor messages still carry the same proof until exact-address confirmation; committed packages never change afterward.
+
+### Built-in response address selection (DD-76–DD-77)
+
+- <a id="dd-76"></a> **DD-76.** With an eligible carrier local DID, an ACK or Ping reply uses the carrier channel even when a privacy successor already exists. A no-longer-eligible local DID selects only its unique eligible verified local-only successor head; ambiguous or unusable successors create no automatic intent. All equivalent long/short source spellings produce the canonical recipientDid. Handler order, pending registration and temporary network outage do not choose different addresses; existing intents are reused after lifecycle changes.
+
+- <a id="dd-77"></a> **DD-77.** Body erasure leaves complete retained receipt/header evidence eligible for ACK source and target selection. It cannot justify a new Ping reply whose response_requested field is unavailable. Manual completion still requires an explicit action and current policy; erasure or recovery alone dispatches neither output.

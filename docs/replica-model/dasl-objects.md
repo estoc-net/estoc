@@ -26,8 +26,7 @@ DASL objects. Capitalized requirement words have their BCP 14 meanings.
 
 This profile owns CID identity, the object API, verification and retention
 semantics. [event-store.md](event-store.md) owns atomic vault commits;
-[vault-sqlite.md](vault-sqlite.md) owns persistence and maintenance. Deferred
-[vault-sync.md](vault-sync.md) encrypts and transfers these exact bytes.
+[vault-sqlite.md](vault-sqlite.md) owns persistence and maintenance.
 This is not an IPFS node, discovery service, automatic graph traversal or public
 retrieval protocol. The normative CID dependency is
 [DASL Content IDs](https://dasl.ing/cid.html).
@@ -52,6 +51,8 @@ the exact input; reject trailing binary bytes. Reject CIDv0, noncanonical base32
 DRISL/`dag-cbor`, `dag-pb`/UnixFS and BDASL/BLAKE3. A valid identifier still does
 not accept bytes whose digest differs. `Cid` means this validated nominal type,
 not an arbitrary string.
+
+Accepting additional portable codecs requires a vault-format version change.
 
 <a id="object-identity"></a>
 
@@ -129,7 +130,7 @@ checks bytes. `size` is an exact nonnegative safe integer in this API. Equivalen
 language-specific stream types are permitted.
 
 This is an internal backend interface. Full-vault callers have no standalone
-put or collect: [ES §10](event-store.md#vault-interface) exposes reads and commit.
+put or collect: [ES §9](event-store.md#vault-interface) exposes reads and commit.
 Preparation is private. Accepting a full commit's objects and events uses one
 transaction, not independently committed primitive calls. Standalone primitive
 tests obey [ES §2.1](event-store.md#commit-and-durability-terminology): success is
@@ -226,9 +227,9 @@ retention from recovered committed events before running.
 
 ### 8.2 Missing and damaged objects
 
-The semantic layer distinguishes policy erasure from unavailable/corrupt bytes
-and explicitly partial sync views. An object whose bytes do not match its CID
-is damaged, not another valid version. Report damage and fail affected reads
+The semantic layer distinguishes policy erasure from unavailable/corrupt bytes.
+An object whose bytes do not match its CID is damaged, not another valid version.
+Report damage and fail affected reads
 under [section 6.3](#read-operations) while the damaged object remains stored.
 Verified repair restores normal results. SQLite maintenance procedures, not an
 additional portable quarantine or version format, are defined in SQ.
@@ -284,29 +285,19 @@ contain exactly held objects, with no local control or temporary data. Chunk
 numbers are storage offsets, not separate content identities. This section adds
 no physical-version, read-latch or publication protocol.
 
-<a id="deferred-encodings-and-transports"></a>
-
-## 11. Deferred encodings and transports
-
-DRISL, typed CBOR, MASL and CAR are deferred, not core requirements. New portable
-codecs require a vault-format version change; recognizing an encoding does not
-authorize accepting it. Raw bytes remain opaque and do not enable traversal.
-RASL publication is separate: private content cannot become public merely from
-having a CID. BDASL/BLAKE3 stays outside version 3.
-
 <a id="security-and-resource-limits"></a>
 
-## 12. Security and resource limits
+## 11. Security and resource limits
 
 Content addressing checks integrity, not authorization, confidentiality,
 provenance or safety. Do not execute raw content or fetch its embedded links.
 Hash exact accepted bytes locally, rather than trusting a CID column, server
-claim, HTTP digest or sync descriptor. Bound object/read sizes and temporary
+claim or HTTP digest. Bound object/read sizes and temporary
 space and report exceeded limits explicitly.
 
 <a id="required-conformance-cases"></a>
 
-## 13. Required conformance cases
+## 12. Required conformance cases
 
 <a id="object-identity-verification-and-streaming-do-1-do-7"></a>
 

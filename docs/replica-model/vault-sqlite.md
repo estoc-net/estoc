@@ -5,8 +5,7 @@
 <!-- suite-navigation:end -->
 
 Status: **draft, phase 1**. SQLite is the sole persistent vault and portable
-backup format. This replaces the unreleased folder draft, not the existing
-implementation. No folder reader, conversion or dual writing is required.
+backup format.
 
 The capitalized requirement words in this document have their BCP 14 meanings.
 [event-store.md](event-store.md) owns the API and event semantics;
@@ -44,7 +43,7 @@ seed wrapper, not message history or attachments. Applications MUST explain
 this boundary. A full runtime, including a hosted one, MUST offer complete
 portable export and documented recovery independent of the running service.
 A thin client's cache is not a full backup. Plaintext database files are not
-mediator messages or the deferred sync protocol's wire format.
+mediator messages.
 
 <a id="format-and-versions"></a>
 
@@ -59,9 +58,8 @@ PRAGMA user_version = 1;
 
 `user_version` identifies the SQLite schema; `vault_meta.vault_version = 3`
 identifies event, object, key and fold semantics. Reject unsupported versions
-before application writes or payload interpretation. This unreleased draft
-requires no migration from earlier drafts. Published schema changes require a
-new schema version; semantic changes follow [ES §14](event-store.md#versioning).
+before application writes or payload interpretation. Published schema changes
+require a new schema version; semantic changes follow [ES §12](event-store.md#versioning).
 Each published schema revision must separately define the portable source
 versions accepted for restore and import; runtime migration support alone does
 not imply portable compatibility.
@@ -165,7 +163,6 @@ or a complete snapshot plus a separately retained credential that unlocks that
 snapshot's seed wrapper. Verification unlocks that material in isolation and
 derives the exact anchor. Seed-only recovery restores identity, not history;
 phase-1 history recovery needs a snapshot. Onboarding exposes recovery status.
-A sync store is not a seed backup.
 
 When event damage stops runtime writes, the application MUST explain the stopped
 state and the need to restore a validated snapshot into a new runtime. Only the
@@ -214,9 +211,9 @@ the vault, local generation and complete delta frontier. Their encoding and the
 query/pagination strategy are implementation details. Reject malformed,
 wrong-vault/generation and future tokens. An empty filtered delta still advances
 the frontier; a consumer checkpoints only after consuming the complete result.
-Positions/tokens never travel in portable state or become sync cursors.
+Positions/tokens never travel in portable state.
 
-Portable inspection exposes [ES §10](event-store.md#vault-interface)'s read-only
+Portable inspection exposes [ES §9](event-store.md#vault-interface)'s read-only
 `Vault` and scans the immutable event set in canonical order without local
 control tables. It has no change frontier; `changes` is rejected under
 [ES §5.5](event-store.md#changes). Its `conflicting()` result is always empty
@@ -229,8 +226,7 @@ because local rejection diagnostics are not exported.
 One `objects` row and its ordered chunks represent the exact resource under a
 raw CID. Chunks are contiguous from zero, 1 MiB each except a final nonempty
 chunk of at most 1 MiB. Empty objects have size zero and no chunks. Chunk lengths
-sum to `size`; concatenation hashes to the CID. There are no physical-version
-IDs, acceptance clocks or separately addressed chunks. Historical event roots
+sum to `size`; concatenation hashes to the CID. Historical event roots
 have no foreign key to objects: erased references can outlive collected bytes.
 
 <a id="staging-and-acceptance"></a>
@@ -458,11 +454,38 @@ wrapper and preserving every event ID, author, canonical byte and held
 object. Rebuilding copies validated logical values without copying source free
 pages or adopting source SQL. Assign fresh replica/generation IDs and local
 positions. Keep it unready until integrity/completeness checks pass; publish readiness in one transaction.
-Open then reconstructs retention and unfinished work before enabling workers.
+Open reconstructs retention and pending state before enabling workers. Domain
+recovery grants no dispatch action: restored messages and historical automatic
+effects require explicit manual action under
+[the dispatch contract](channels.md#fixed-outbound-channel). Pickup and local
+projection recovery may proceed normally.
 A failed construction is not an empty vault and cannot silently mint another seed.
 
 Recovery from a damaged runtime restores only the snapshot's history. Salvaging
 history absent from that snapshot is outside the phase-1 contract.
+
+Before enabling new user sends or manual dispatch after restore, the product
+MUST explain that local DIDs, peer addresses and continuity learned after the
+snapshot may be missing. The seed alone cannot recover those missing local
+addresses. Messages for unknown local recipients or from
+unknown short-form senders can therefore be discarded under
+[the receive gate](relationships.md#hard-pre-vault-gate), even if those addresses
+were previously confirmed. Expose that gate's bounded visible diagnostics and
+the registration/state mismatch diagnostic under
+[recipient reconciliation](vault-events.md#route-did-and-key-fold). Pickup,
+recipient reconciliation and local projection recovery need not wait for this
+explanation to be presented or acknowledged.
+
+Recovery may require importing a newer complete snapshot or establishing an
+independent channel from a fresh local DID. Waiting or contacting an old address
+is not a guaranteed repair: old-address input, including queued traffic, can
+trigger a rotation that competes with a successor the peer already verified.
+Phase 1 retains the resulting visible fork without a branch-selection or
+conflict-resolution operation. Its affected context has no default send head
+and grants no authority through conflicted continuity. Establishing another
+channel leaves that fork intact. Recovering sender material alone does not
+restore missing continuity history or discarded messages under
+[vault restore](vault-events.md#restore).
 
 <a id="import"></a>
 
@@ -488,7 +511,7 @@ For every root in `requiredRoots`, require verified source bytes or
 [sound accepted target bytes](dasl-objects.md#read-operations); otherwise abort
 before publication. Compute both folds before checking bytes. A reference the
 union fold does not hold requires no bytes, including an erased reference or
-an envelope released by submission, retirement or terminal failure.
+an envelope released by submission or termination.
 Conflicting evidence may make newly accepted source events retain roots their
 source released, or make existing target events retain roots absent from
 `heldRoots(targetBeforeImport)`. Both cases are subject to this requirement.
@@ -509,8 +532,7 @@ positions, and updates/invalidates any caches. No visible sub-batches. Preflight
 failure changes no accepted state; crash recovery yields the complete old or
 new union. Preserve target metadata, wrapper and local IDs. Repeated import is
 idempotent and cannot revive an erased relation just because the source has old
-bytes. Partial sync ingestion is a separate facility, not a complete portable
-import.
+bytes.
 
 <a id="exact-local-move"></a>
 
@@ -522,29 +544,19 @@ Destination ownership excludes old handles. A stale recovery copy restored after
 later source writes must refresh both IDs and invalidate checkpoints. Portable
 restore always uses fresh IDs; two writable clones are not an exact move.
 
-<a id="transfer-and-deferred-synchronization"></a>
-
-## 13. Deferred synchronization
-
-Phase 1 uses portable export/import/restore or an exact move. Deferred
-`vault-sync/1.0` exchanges encrypted immutable configuration, events and whole
-DASL objects, not SQLite pages, chunks, positions, local state or `seedJwe`.
-Seed-and-locator bootstrap builds a fresh runtime and seed wrapper.
-
 <a id="required-conformance-cases"></a>
 
-## 14. Required conformance cases
+## 13. Required conformance cases
 
-Test observable correctness, not a particular broker, cache or stream-latch
-implementation. Case IDs retain their subjects; superseded concurrency and
-physical-version guarantees are recorded in the suite's section history.
+Test observable correctness across the implementation's supported ownership,
+read and maintenance strategies.
 
 <a id="schema-and-identity"></a>
 
 ### Schema and identity (SQ-1–SQ-9)
 
 1. <a id="sq-1"></a> Native/browser drivers exchange identical portable logical values.
-2. <a id="sq-2"></a> Unsupported versions, folder inputs and extra portable schema fail.
+2. <a id="sq-2"></a> Unsupported versions, non-SQLite inputs and extra portable schema fail.
 3. <a id="sq-3"></a> Create refuses existing destinations; open never implicitly creates.
 4. <a id="sq-4"></a> Wrong seed/anchor fails before application data writes or identity use;
     a completed schema migration is the only permitted earlier application write.
@@ -615,7 +627,20 @@ physical-version guarantees are recorded in the suite's section history.
     before interpreting payloads.
     Portable inspection rejects views, triggers or other forbidden schema before
     querying application data, including when only reading metadata.
-34. <a id="sq-34"></a> Restore unlocks the real keystore wrapper and resumes work with fresh IDs.
+34. <a id="sq-34"></a> Restore unlocks the real wrapper and reconstructs state with fresh IDs;
+    pending message dispatch remains manual. Before enabling new user sends or
+    manual dispatch, explain missing local DIDs, unknown-short-form senders,
+    missing continuity and visible forks caused by competing post-restore
+    rotations, including those triggered by queued input. The seed alone does
+    not recover lost local addresses. An affected fork has no default send head
+    or authority through conflicted continuity; phase 1 has no branch-resolution
+    operation. Explain the possible need to establish an independent channel
+    from a fresh local DID, which leaves the old fork intact. Pickup,
+    reconciliation and local projection recovery do not wait for this explanation.
+    Discarded deliveries with unknown recipient mappings or unknown short-form
+    senders have bounded visible diagnostics without authenticated peer attribution;
+    unknown mediator recipient registrations likewise expose a bounded visible
+    registration/state-mismatch diagnostic and are reconciled normally.
 35. <a id="sq-35"></a> Import preserves target wrapper/IDs, reports conflicts and is idempotent.
 36. <a id="sq-36"></a> A fork, or any `requiredRoots` member with neither verified source
     bytes nor sound accepted target bytes, aborts without semantic writes. Check
@@ -630,8 +655,8 @@ physical-version guarantees are recorded in the suite's section history.
     the target. Swap source and target and require the same rejection, now with
     the newly accepted source package retaining `E`.
     A source reference the union fold does not hold requires no bytes, including
-    erased references and envelopes released by submission, retirement or
-    terminal failure. An otherwise-valid import succeeds when an unrelated root
+    erased references and envelopes released by submission or termination.
+    An otherwise-valid import succeeds when an unrelated root
     was already held by the target and remains held in the union, no newly
     accepted event retains it, and its bytes are absent or known damaged with
     no source bytes available; that root remains absent or damaged.

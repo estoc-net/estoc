@@ -1,12 +1,16 @@
 # replica-mediation/1.0
 
+> Deferred design notes only; the [phase-1 contract](../README.md) takes
+> precedence. These candidates require redesign and integration before any
+> implementation; they reserve no current schema, code or API.
+
 <!-- suite-navigation:start -->
-[Suite guide](README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
+[Suite guide](../README.md) · Deferred extension · [Read by task](#reading-guide) · [Conformance cases](#required-conformance-cases)
 <!-- suite-navigation:end -->
 
 Status: **deferred draft** — future multi-replica extension for DIDComm
 Messaging 2.1, Routing 2.0, Coordinate Mediation 3.0 and Message Pickup 3.0.
-It is not required or implemented by Estoc phase 1, which uses one active full
+It is outside Estoc phase 1, which uses one active full
 runtime and ordinary account-scoped Message Pickup.
 
 This document uses the key words **MUST**, **MUST NOT**, **REQUIRED**,
@@ -17,8 +21,8 @@ when, and only when, they appear in all capitals.
 > **Phase-1 boundary.** A mediation account that has not explicitly enabled
 > this extension behaves as an ordinary Coordinate Mediation / Message Pickup
 > account and carries no `replica_id`. Once this extension is enabled for an
-> account, its replica-scoped rules are a clean break and account-global pickup
-> MUST NOT be mixed with them.
+> account, pickup follows its replica-scoped rules. Account-global pickup
+> MUST NOT be mixed with replica-scoped pickup.
 
 <!-- reading-guide:start -->
 <a id="reading-guide"></a>
@@ -55,6 +59,13 @@ when, and only when, they appear in all capitals.
 
 ## 1. What it is for
 
+This deferred extension distributes receipt data; it does not authorize multiple
+automatic executors or cross-replica outbox takeover. Import/replay/fan-out cannot
+dispatch old ACKs, replies, notifications or pending messages. The active
+executor and live initial/manual action rules in
+[channels.md](../channels.md#fixed-outbound-channel) still apply. A manual action
+cannot change an existing message's channel or committed package.
+
 One Estoc vault may have several independently writable full replicas. Every
 full replica holds the same vault seed and can derive the same communication
 DIDs, recipient keys and mediation account keys. A sender still addresses
@@ -64,7 +75,7 @@ each replica acknowledges independently.
 
 Local recipients are ordinary seed-derived `did:peer:4` communication addresses.
 Public discovery and private pairwise allocation use the same storage, fan-out,
-pickup and relationship-binding semantics. The mediator receives no address-role
+pickup and channel-receipt semantics. The mediator receives no address-role
 classification. Its method-neutral resolution also supports externally managed
 DIDs without making document publication a vault responsibility.
 
@@ -76,7 +87,7 @@ The protocol adds two things to ordinary DIDComm mediation:
 The mediator stores one encrypted inner DIDComm envelope, creates one delivery
 per active replica, and never treats one replica's acknowledgment as another's.
 This protocol does not synchronize the vault event set; that is `vault-sync/1.0`.
-Relationship formation and address-rotation policy belong to [relationships.md](relationships.md).
+Invitation and address-rotation policy belong to [relationships.md](../relationships.md).
 It does not make one full replica less trusted than another or make a lost
 copy of the shared seed revocable.
 
@@ -92,7 +103,7 @@ A conforming implementation uses:
   (`https://didcomm.org/coordinate-mediation/3.0`);
 - Message Pickup 3.0 (`https://didcomm.org/messagepickup/3.0`);
 - Problem Report 2.0 (`https://didcomm.org/report-problem/2.0`);
-- the relationship/address-policy profile in [relationships.md](relationships.md); and
+- the channel/address-policy profile in [relationships.md](../relationships.md); and
 - this protocol family:
   `https://estoc.dev/replica-mediation/1.0`.
 
@@ -113,7 +124,7 @@ advisory; successful `register` is the authoritative capability check.
   full replicas of the vault.
 - **Recipient DID** — any DID registered under the mediation account and
   accepted as `body.next` of a Routing 2.0 `forward` message. Local vault
-  recipients are Peer rendezvous or relationship DIDs; the mediator does not
+  recipients are Peer rendezvous or pairwise DIDs; the mediator does not
   assign semantics based on method or role, including for externally managed
   Web recipients.
 - **Replica ID** — a lowercase canonical UUIDv7 naming one writable local
@@ -166,7 +177,7 @@ A conforming mediator MUST preserve all of the following:
    ultimate recipient durably received the application message.
 9. A sender addresses a recipient DID, never a replica ID. Replica fan-out is
    an internal mailbox operation.
-10. Rendezvous and pairwise relationship DIDs receive the same per-replica
+10. Rendezvous and pairwise DIDs receive the same per-replica
     delivery semantics; externally managed DID methods do not change them.
 
 <a id="replica-lifecycle"></a>
@@ -429,8 +440,8 @@ https://estoc.dev/replica-mediation/1.0/retired
 }
 ```
 
-`reason` is the retained reason when known and null when a legacy/operator
-retirement did not preserve one.
+`reason` is the retained reason when known and null when the retirement record
+contains no reason.
 
 <a id="client-re-incarnation-after-terminal-retirement"></a>
 
@@ -452,13 +463,14 @@ MUST treat the ID as terminal even when local runtime state is otherwise intact.
    stable reason, including `inactivity-policy` when applicable;
 6. register the new ID with retained replay on **every** required mediation
    account, and retire the old ID on remaining accounts; and
-7. resume pickup, sync and outbound work only under the fresh ID.
+7. resume pickup and sync under the fresh ID; pending outbounds require an
+   explicit manual action and preserve their fixed channels and committed packages.
 
 A terminal response from one required mediator rotates the local replica ID
 for all mediators. A runtime MUST NOT split event authorship and ACK identity
 by keeping the old ID on another arrangement.
 
-Local restore and exact-move rules are defined by [vault-sqlite.md section 12](vault-sqlite.md#restore-and-import).
+Local restore and exact-move rules are defined by [vault-sqlite.md section 12](../vault-sqlite.md#restore-and-import).
 
 <a id="portable-replica-events"></a>
 
@@ -534,8 +546,9 @@ The mediation account remains the one `recipient` in Coordinate Mediation
 3.0. All full replicas derive and use that account key. Recipient DIDs are
 registered once per mediation arrangement, not once per replica.
 
-Registration is method-neutral. Local vault rendezvous and relationship DIDs
-register their canonical Peer short forms. An externally managed `did:web`
+Registration is method-neutral. Local vault rendezvous and pairwise DIDs
+register their canonical Peer short forms. Web application recipients additionally
+require the [deferred mutable-channel profile](did-web-channels.md). An externally managed `did:web`
 recipient may also be registered when its control proof and constrained
 resolution validate. The recipient-control proof is verified against an
 authentication method of the exact recipient DID.
@@ -736,7 +749,7 @@ sender.
 ### 7.4 Recipient-role neutrality
 
 The mediator MUST NOT require a recipient to be classified as rendezvous,
-relationship, public, pairwise or server-owned. For routing purposes all
+public, pairwise or server-owned. For routing purposes all
 registered recipients have the same shape:
 
 ```text
@@ -879,39 +892,38 @@ belonging to another replica have no effect. Processing the same list
 again is idempotent.
 
 A client may acknowledge a delivery through exactly one of two terminal
-paths, using [distributed-delivery.md section 4.1](distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
+paths, using [distributed-delivery.md section 4.1](../distributed-delivery.md#cross-layer-commit-and-acknowledgment-table)'s
 commit boundaries:
 
-1. **normal acceptance** — follow [section 4.3](distributed-delivery.md#receive-a-message)'s
+1. **durable channel receipt** — follow [section 4.3](../distributed-delivery.md#receive-a-message)'s
    authentication and dependent object/evidence/inbound commits before pickup ACK; or
 2. **terminal pre-vault rejection** — safely classify the delivery under a
-   profile such as [relationships.md sections 9.2](relationships.md#hard-pre-vault-gate)–[9.3](relationships.md#integrity-checks-and-durable-receipt),
+   [relationships.md section 9.2](../relationships.md#hard-pre-vault-gate),
    then pickup-ACK without `message.in`, ultimate peer ACK, contact, application
    effect or portable message content; only a bounded local diagnostic may remain.
 
-Recipient classification follows [relationships.md sections 9.1](relationships.md#deferred-delivery)–[9.2](relationships.md#hard-pre-vault-gate),
+Recipient classification follows [relationships.md sections 9.1](../relationships.md#deferred-delivery)–[9.2](../relationships.md#hard-pre-vault-gate),
 including eligible retired historical addresses. For an otherwise eligible
-recipient, apply that profile's
-[sender authentication](relationships.md#sender-authentication-freshness),
-[failure classification](relationships.md#resolution-failure-classification),
-[bounded resolution](relationships.md#inbound-sender-resolution-budget) and
-[exhaustion](relationships.md#exhaustion-and-non-resolution-deferral) rules;
-retained chain membership cannot bypass current authentication.
+recipient, apply that profile's local
+[sender authentication](../relationships.md#sender-authentication-freshness). A future
+Web channel additionally needs the [mutable-channel extension](did-web-channels.md),
+including its failure classification and bounded sender-resolution accounting;
+retained chain membership cannot bypass authentication.
 
 A delivery awaiting recoverable decryption, local DID/route/sync state,
-required sender resolution, or pre-receipt relationship evidence under
-[vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence)
+or other local receive prerequisites under [channels.md](../channels.md#receipt)
 MUST NOT be acknowledged while it remains deferred under
-[relationships.md section 9.1](relationships.md#deferred-delivery). A delivery that is otherwise
+[relationships.md section 9.1](../relationships.md#deferred-delivery). A delivery that is otherwise
 not safely classifiable MUST NOT be acknowledged either. That profile's
-[wait definition](relationships.md#deferred-delivery) and
-[resolution-accounting rules](relationships.md#shared-accounting-and-lost-wait-state)
-govern redelivery, evidence-change retries and loss of local wait state.
-This profile's accounting key includes the named replica; its pickup ACK scope
+[wait definition](../relationships.md#deferred-delivery) and
+[evidence-change rules](../relationships.md#evidence-change-retries) govern redelivery,
+evidence recovery and loss of local wait state. When the deferred mutable-channel
+profile requires network accounting, its key additionally includes the named replica; its pickup ACK scope
 and idempotency remain as defined above.
 
-Business handlers, rendering, replica synchronization and read state are
-not prerequisites for pickup acknowledgment.
+Authenticated channel receipt suffices for normal pickup acknowledgment;
+later processing is independent under [operation eligibility](../channels.md#operation-eligibility).
+Pickup acknowledgment itself authorizes no ultimate ACK or effect.
 
 <a id="live-delivery"></a>
 
@@ -958,7 +970,7 @@ At or after `expires_at`, the mediator MAY delete the message and every
 associated delivery. An inactive but unretired replica MUST NOT prevent
 expiry.
 
-Under [distributed-delivery.md section 7](distributed-delivery.md#submission-completion-and-expiration), the sender's durable outbox stops
+Under [distributed-delivery.md section 7](../distributed-delivery.md#submission-completion-and-expiration), the sender's durable outbox stops
 submission when `delivery.submitted` commits, independently of the ultimate
 recipient's ACK. Mediator expiry can therefore discard an already submitted
 message before the recipient receives it; it does not trigger sender retry.
@@ -990,7 +1002,7 @@ leave partial state. In particular it MUST NOT store one mailbox message while
 creating deliveries for only some active replicas.
 
 Public rendezvous DIDs amplify unauthenticated initiator traffic into
-recipient storage, user prompts and potential relationship registrations.
+recipient storage, user prompts and potential application work.
 Operators SHOULD support per-account and per-recipient rate limits in addition
 to hard storage caps. An authenticated administration or discovery response
 MAY expose current usage, but anonymous routing behavior SHOULD remain
@@ -1011,8 +1023,8 @@ operation, including:
 - arrival, delivery, acknowledgment and expiry times; and
 - transport metadata such as IP address and connection timing.
 
-The mediator MUST NOT be sent an explicit rendezvous role, relationship ID,
-contact ID, human-readable label or web-publication state. A replica ID MUST
+The mediator MUST NOT be sent an explicit rendezvous role, contact ID,
+human-readable label or web-publication state. A replica ID MUST
 NOT appear in a public DID document or in an innermost application `to`
 header as a delivery target.
 
@@ -1090,8 +1102,8 @@ A conforming implementation demonstrates at least these cases:
 4. <a id="rm-4"></a> Crash before durable normal acceptance produces no pickup ACK; crash after
    commit may redeliver and converges logically.
 5. <a id="rm-5"></a> A safely classified terminal pre-vault rejection may be pickup-ACKed without
-   `message.in`, while recoverable local prerequisites and sender-resolution
-   unavailability within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget remain pending.
+   `message.in`, while recoverable local receive prerequisites remain pending.
+   Future Web channels additionally use the [deferred resolution budget](did-web-channels.md#inbound-sender-resolution-budget).
 6. <a id="rm-6"></a> Repeating one `forward.id` with identical normalized bytes stores no second
    message; different bytes never overwrite the first.
 7. <a id="rm-7"></a> `recipient_did` actually filters status and delivery.
@@ -1138,24 +1150,13 @@ A conforming implementation demonstrates at least these cases:
     replay.
 22. <a id="rm-22"></a> A restore lists replicas and explicitly retires selected stale IDs rather
     than silently reusing or evicting one.
-23. <a id="rm-23"></a> Recipient-key triage defers only an exact known local key-agreement method
-    with a recoverable missing prerequisite. After local key recovery is
-    authoritative, foreign DIDs, nonexistent or wrong-purpose local fragments
-    and unbound retired DIDs use the terminal pre-vault ACK path and do not
-    remain pending. A retired historical local address with a valid non-terminal
-    bound route still receives eligible input; unavailable required sender
-    resolution instead defers only within [relationships.md section 10.1](relationships.md#did-resolution-requirements)'s budget.
-    Definitive DNS/not-found, invalid-document, unsupported-method and
-    SSRF-forbidden results, or sender-resolution budget exhaustion, use the
-    terminal pre-vault ACK path under that section. Repeated delivery of the
-    same replica-scoped ID shares one active sequence; missing recoverable
-    local state cannot take that budget's terminal path.
-    Known pending membership or missing relationship evidence preventing
-    receipt under [vault-events.md section 6.1](vault-events.md#receipt-and-relationship-evidence) also withholds pickup ACK,
-    using [relationships.md section 9.1](relationships.md#deferred-delivery)'s evidence-change retry rule. This wait
-    consumes no sender-resolution budget and has no client retention cap.
-    While local wait state is retained, redelivery alone does not resolve
-    again; relevant evidence changes start one fresh shared bounded sequence
-    when resolution is required, excluding waiting time from its local
-    retention stop. Loss of local wait state follows [relationships.md section 10.1](relationships.md#shared-accounting-and-lost-wait-state)'s receive/authentication rule. Mediator expiry does not clear the pair
-    claim.
+23. <a id="rm-23"></a> Recipient-key triage defers an exact known local key-agreement method
+    with recoverable missing prerequisites. Foreign DIDs, nonexistent or
+    wrong-purpose methods and terminal routes use the pre-vault ACK path.
+    Retained retired exact keys can receive on eligible routes without continuity lookup.
+    Channel sender authentication is local for numalgo 4. Future Web channels
+    use the [deferred budget](did-web-channels.md#shared-accounting-and-lost-wait-state);
+    local receive prerequisite waits suspend that accounting without resetting it.
+    Once channel receipt commits, missing channel/continuity evidence cannot withhold
+    pickup ACK; invitation/effect state recovers from saved evidence without another pickup
+    or resolution sequence. A new network delivery authenticates afresh.

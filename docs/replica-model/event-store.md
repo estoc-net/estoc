@@ -5,16 +5,15 @@
 <!-- suite-navigation:end -->
 
 Status: **draft, phase 1**. SQLite is the sole persistent vault and interchange
-format for one active writable runtime. Network replica synchronization is
-deferred. This specification defines observable store semantics, not SQLite's
-implementation. Capitalized requirement words have their BCP 14 meanings.
+format for one active writable runtime. This specification defines observable
+store semantics, not SQLite's implementation. Capitalized requirement words
+have their BCP 14 meanings.
 
 [dasl-objects.md](dasl-objects.md) defines object identity;
 [vault-sqlite.md](vault-sqlite.md) owns storage, ownership and recovery procedures;
 [vault-events.md](vault-events.md) owns application payloads and folds.
-[Delivery](distributed-delivery.md) and [relationships](relationships.md) use
-these primitives. [Replica mediation](replica-mediation.md) and
-[vault sync](vault-sync.md) are deferred extensions.
+[Delivery](distributed-delivery.md) and [channel address policy](relationships.md) use
+these primitives.
 
 <!-- reading-guide:start -->
 <a id="reading-guide"></a>
@@ -37,9 +36,9 @@ Portable vault state consists of immutable events, retained content-addressed
 objects, immutable identity metadata and an encrypted seed wrapper. Local IDs,
 positions, options, caches and diagnostics do not travel with that state.
 SQLite's committed view determines what is accepted; private preparation is
-not acceptance. There is no folder interchange or generic portable-file API.
+not acceptance.
 
-The generic event store knows authors, not contacts, messages or relationships.
+The generic event store knows authors, not contacts, messages or channels.
 The vault requires the local append author to equal its current `replica_id`.
 A server-hosted full runtime has the same rules as an end-user runtime.
 
@@ -56,7 +55,7 @@ Only explicit event roots retain objects. Local objects and references commit
 atomically. Collection removes only unheld objects, never events or identity
 metadata, and shares the operation lock with commits. Losing caches cannot lose
 a committed decision or message body. Portable interchange preserves the values
-below; local change tokens are not synchronization cursors.
+below; local change tokens never travel with portable state.
 
 <a id="commit-and-durability-terminology"></a>
 
@@ -396,12 +395,10 @@ interface KeystoreAccess {
 
 Metadata is immutable. The unlocked host owns privileged rewrap and verifies
 that the replacement opens to the same seed/anchor. Read returns a detached
-value, not identity authority. `seedJwe` is the existing keystore package's
-compact JWE string, not a new JSON JWE object. Exact bytes and recovery/import
-policy are defined only in [SQ §4](vault-sqlite.md#identity-and-keystore).
+value, not identity authority. `seedJwe` is a compact JWE string. Exact bytes
+and recovery/import policy are defined only in [SQ §4](vault-sqlite.md#identity-and-keystore).
 
-There is no generic FileStore or mutable portable-table API. New authoritative
-application state uses versioned events and referenced objects.
+Authoritative application state uses versioned events and referenced objects.
 
 <a id="local-state"></a>
 
@@ -412,15 +409,9 @@ identity/control, options and the wrapper; explicit identity reset changes both
 IDs without changing history. Missing control is damage, not implicit creation.
 [SQ §7](vault-sqlite.md#local-state-and-projections) owns the lifecycle rules.
 
-<a id="deferred-extension-stores"></a>
-
-## 9. Deferred extension stores
-
-Phase 1 defines no extension-store API, lifecycle or portable layout.
-
 <a id="vault-interface"></a>
 
-## 10. Vault interface
+## 9. Vault interface
 
 ```ts
 type CommitObject = { cid: Cid; source: ByteSource };
@@ -466,11 +457,11 @@ commit, carries existing IDs and can deduplicate retries.
 
 <a id="interchange"></a>
 
-## 11. Interchange
+## 10. Interchange
 
 <a id="sqlite-round-trip"></a>
 
-### 11.1 SQLite round trip
+### 10.1 SQLite round trip
 
 Portable interchange preserves every canonical event byte and historical author,
 every currently held object's CID/bytes, immutable metadata and the seed wrapper
@@ -480,7 +471,7 @@ not identity.
 
 <a id="export"></a>
 
-### 11.2 Export
+### 10.2 Export
 
 [SQ §10](vault-sqlite.md#snapshot-and-export) defines fresh portable construction
 from a consistent event/wrapper/held-root cut. Missing held bytes fails complete
@@ -490,7 +481,7 @@ it outside that lock, in that order. Success still requires completed output.
 
 <a id="import-into-an-existing-vault"></a>
 
-### 11.3 Import into an existing vault
+### 10.3 Import into an existing vault
 
 [SQ §§11–12](vault-sqlite.md#portable-source-validation) define stable-source
 validation and atomic same-anchor union. Validate source-only properties before
@@ -516,33 +507,25 @@ rehash them.
 One transaction publishes staged objects and repairs with all new events.
 Preserve target identity, wrapper and local control. A failed preflight changes
 no accepted state; crash recovery leaves the complete old or new union. Valid
-conflicting semantic facts remain facts. An incomplete source or partial sync
-ingestion is not a successful complete import, and old source bytes do not
-revive an erased relation.
+conflicting semantic facts remain facts. An incomplete source is not a
+successful complete import, and old source bytes do not revive an erased relation.
 
 <a id="restore-and-bootstrap"></a>
 
-### 11.4 Restore and bootstrap
+### 10.4 Restore
 
 [SQ §12](vault-sqlite.md#restore-and-import) defines verified restore into an unused
-destination with fresh local IDs and reconstructed retention/unfinished work.
+destination with fresh local IDs and reconstructed retention/pending state.
+Domain dispatch authority is separate: restoring events never automatically
+sends historical messages or effects under
+[channels.md](channels.md#fixed-outbound-channel).
 An exact move may preserve IDs only with a permanently stopped source; a stale
-runtime recovery copy refreshes them. Deferred seed-and-locator sync bootstrap
-creates a fresh runtime and wrapper, never copies source local control.
-
-<a id="synchronization-boundary"></a>
-
-## 12. Synchronization boundary
-
-Phase 1 does not require replica mediation or vault sync. Deferred sync moves
-immutable events and whole DASL objects through its encrypted protocol, not
-SQLite pages or local tokens. Full reconciliation cannot depend on `changes()`,
-server push, one replica staying online or a mutable local queue. Missing
-required objects are incomplete local data, never erasure.
+runtime recovery copy refreshes them. Missing required objects are incomplete
+local data, never erasure.
 
 <a id="backend-obligations"></a>
 
-## 13. Backend obligations
+## 11. Backend obligations
 
 SQLite is the only persistent backend; memory stores are semantic test references.
 [SQ](vault-sqlite.md#commit-and-recovery) owns driver/durability, ownership, limits
@@ -552,22 +535,20 @@ browser support.
 
 <a id="versioning"></a>
 
-## 14. Versioning
+## 12. Versioning
 
 Vault version 3 covers envelope, object profile, key derivation and domain folds.
-SQLite schema versioning is separate. These unreleased drafts supersede older
-draft layouts without read aliases or migration obligations. For published
-versions, compatible additions are new event types, optional payload fields
-with a fixed absent meaning, or negotiated capabilities. Changing existing
+SQLite schema versioning is separate. For published versions, compatible
+additions are new event types, optional payload fields with a fixed absent
+meaning, or negotiated capabilities. Changing existing
 meaning, envelope/ID/CID formats, derivation or required folds needs a new vault
 version. Changing portable schema needs a new SQLite schema version.
 
 <a id="required-conformance-cases"></a>
 
-## 15. Required conformance cases
+## 13. Required conformance cases
 
-Cases retain their subjects; the suite history records relaxed reader guarantees.
-Storage procedures are tested under SQ rather than redefined here.
+Storage procedures are tested under [SQLite conformance](vault-sqlite.md#required-conformance-cases).
 
 <a id="commit-validation-and-event-identity-es-1-es-7"></a>
 
