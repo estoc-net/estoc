@@ -67,7 +67,7 @@ export {
   mediationKeyName,
 } from "./ids.js";
 
-export { canonicalPublicKey, parsePublicKey, decodePublicKey, type KeyType, type DecodedPublicKey, type Jwk } from "./public-key.js";
+export { canonicalPublicKey, parsePublicKey, decodePublicKey, agreementKey, type KeyType, type DecodedPublicKey, type Jwk } from "./public-key.js";
 
 export {
   type StoredAttachmentData,
@@ -163,6 +163,28 @@ export {
   requiredReceivingSet,
 } from "./fold/routes.js";
 export { type EvidenceCheck, type ReadObject, resolvedDocumentOf, verifyResolutions } from "./fold/evidence.js";
+export {
+  type Standing,
+  type Source,
+  type ReceiptKey,
+  type ReceiptIntegrity,
+  type PeerLink,
+  type Proof,
+  type Carrier,
+  type LocalLink,
+  type DecisionStatus,
+  type Decision,
+  type ChannelEvidence,
+  type ChannelChecks,
+  foldChannelEvidence,
+  foldSources,
+  receiptOrderKey,
+  compareReceiptKeys,
+  foldReceipts,
+  foldCarriers,
+  foldDecisions,
+  verifyProofs,
+} from "./fold/channels.js";
 export { type Erasures, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
 export { type VaultChecks, type VaultFold, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
 export { type Committed, vaultRetention, vaultHeldRoots, collectGarbage, eraseDrafts, erasureClosure, eraseMessage, closeErasures } from "./procedures.js";

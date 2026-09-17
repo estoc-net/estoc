@@ -1,7 +1,7 @@
 import { base58, base64urlnopad } from "@scure/base";
 import { describe, expect, it } from "vitest";
 
-import { InvalidPublicKey, canonicalPublicKey, decodePublicKey, parsePublicKey, type PublicKey } from "../../src/v3/index.js";
+import { InvalidPublicKey, agreementKey, canonicalPublicKey, decodePublicKey, parsePublicKey, type PublicKey } from "../../src/v3/index.js";
 
 const hex = (s: string) => Uint8Array.from(s.match(/../g) as string[], (b) => parseInt(b, 16));
 const multibase = (prefix: string, bytes: Uint8Array) => "z" + base58.encode(Uint8Array.from([...hex(prefix), ...bytes]));
@@ -141,5 +141,32 @@ describe("parsePublicKey", () => {
     expect(parsePublicKey(X25519_CANONICAL)).toBe(X25519_CANONICAL);
     expect(() => parsePublicKey(multibase("8024", Uint8Array.from([0x04, ...P256_X, ...P256_Y])))).toThrow(InvalidPublicKey);
     expect(() => parsePublicKey("did:key:" + X25519_CANONICAL)).toThrow(InvalidPublicKey);
+  });
+});
+
+describe("agreementKey", () => {
+  it("takes an X25519 key and a point on each NIST curve, and refuses a signing key and a secp256k1 point", () => {
+    expect(agreementKey(X25519_CANONICAL as PublicKey)).toEqual({ type: "X25519", bytes: X25519_RAW });
+    for (const curve of CURVES) {
+      const key = canonicalPublicKey({ kty: "EC", crv: curve.crv, x: b64(hex(curve.g.x)), y: b64(hex(curve.g.y)) });
+      if (curve.crv === "secp256k1") expect(() => agreementKey(key)).toThrow(/is a secp256k1 key, which agrees no keys$/);
+      else expect(agreementKey(key)).toEqual({ type: curve.crv, bytes: compressed(curve.g) });
+    }
+    expect(() => agreementKey(multibase("ed01", X25519_RAW) as PublicKey)).toThrow(/is a Ed25519 key, which agrees no keys$/);
+  });
+
+  it("refuses every low-order X25519 point: zero, one, the two of order eight and minus one", () => {
+    const lowOrder = [
+      "00".repeat(32),
+      "01" + "00".repeat(31),
+      "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+      "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+      "ec" + "ff".repeat(30) + "7f",
+    ];
+    for (const u of lowOrder) {
+      const key = canonicalPublicKey({ kty: "OKP", crv: "X25519", x: b64(hex(u)) });
+      expect(() => agreementKey(key), u).toThrow(/is a low-order X25519 point, which agrees no keys$/);
+    }
+    expect(agreementKey(canonicalPublicKey({ kty: "OKP", crv: "X25519", x: b64(hex("02" + "00".repeat(31))) })).type).toBe("X25519");
   });
 });

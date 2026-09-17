@@ -106,12 +106,13 @@ export function shuffled<T>(items: readonly T[], seed: number): T[] {
   return out;
 }
 
-/** A fold result as comparable JSON: maps and sets by sorted entries, functions dropped. */
+/** A fold result as comparable JSON: maps and sets by sorted entries, functions dropped, a bigint as its digits. */
 export function snapshot(value: unknown): string {
   return JSON.stringify(value, (_, v: unknown) => {
     if (v instanceof Map) return Object.fromEntries([...v.entries()].sort(([a], [b]) => (String(a) < String(b) ? -1 : 1)));
     if (v instanceof Set) return [...v].sort();
     if (typeof v === "function") return undefined;
+    if (typeof v === "bigint") return `${v}n`;
     if (v instanceof Uint8Array) return Array.from(v);
     return v;
   });

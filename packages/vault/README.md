@@ -25,7 +25,10 @@ set of channels is kept in, the reserved keystore names) and the canonical publi
 (`public-key.ts`: the did:key encoding of the complete type-tagged key
 as base58btc multibase, from a JWK or from its base58btc multibase form,
 Ed25519 and X25519 raw, the Weierstrass curves as compressed points that
-`@noble/curves` has verified lie on the curve; `@scure/base` does the
+`@noble/curves` has verified lie on the curve; `agreementKey` is the key
+as one that agrees keys, of a type DIDComm v2 runs ECDH over and, for
+X25519, not a low-order point, which `@noble/curves` refuses as every
+shared secret with it is zero; `@scure/base` does the
 base58btc and base64url, `multiformats` the multicodec prefix), the event
 schemas (`schema.ts`: `readVaultEvent` / `readVaultDraft` / `vaultDraft`
 accept an event of one of the 28 version-3 types — the closed member set
@@ -95,7 +98,30 @@ whether a resolution's snapshot is its document's, is
 `verifyResolutions` (`fold/evidence.ts`, `resolvedDocumentOf` reading
 the document a resolution names); until the seed has confirmed an
 entity it is pending, never live, and until a snapshot has been checked
-what rests on it is deferred, never applied), the whole fold
+what rests on it is deferred, never applied), the raw channel
+evidence (`fold/channels.ts`: `foldSources`, each `message.in` with the
+local entity its key belongs to, the channel its actual endpoints form
+and its standing — complete, incomplete while evidence is missing or
+the seed has not yet confirmed the local entity, conflict when evidence
+contradicts it, the entity is in conflict or the peer key selected
+agrees no keys or is on another curve than the entity's own
+key-agreement key, each contradiction looked for as soon as what it
+needs is here and always reported over an absence; `foldReceipts`, the receipt
+ordinals' high-water mark and the messages one author's reused ordinal
+affects; `foldCarriers`, each source that brought a `from_prior`,
+its proof invalid on the carrier's own evidence, pending while the
+issuer's document is not here, or verified, and the peer link a
+complete carrier's verified proof derives; `foldDecisions`, each
+`did.rotationSelected` checked against its own fields and source into a
+local-link candidate, pending while evidence may still arrive, in
+conflict when its source can never be positive — anonymous, from
+another peer or at another key than the predecessor's, its
+authentication contradicted, its proof refused — each refusal made on
+the fields it needs, not held for the entities' creations; `foldChannelEvidence` runs the three and says
+which sources are `positive`, the ones the continuity graph may be
+built from; the signatures are `verifyProofs` beside the fold, each
+carried or frozen proof against the issuer's document its long form
+derives or a verified resolution retains), the whole fold
 (`fold/vault.ts`: `foldVault` runs every fold over one set, each fed
 the ones it reads, and adds the retention edge by edge and the roots
 it holds; `checkVault` computes every verdict beside it in one motion,
@@ -108,10 +134,10 @@ and import, and `collectGarbage` is one pass; `eraseMessage` erases a
 message over every root its events and packages still name, in one
 commit, and `closeErasures` appends the equivalent erases a later
 observation or package made an erased message owed, `eraseDrafts` /
-`erasureClosure` being the decisions). The channel model's folds —
-channel evidence, continuity, invitations, contacts, inbound
-executions, outbound delivery, the views and the procedures over them
-— are being rebuilt on this base.
+`erasureClosure` being the decisions). The channel model's remaining
+folds — continuity, invitations, contacts, inbound executions, outbound
+delivery, the views and the procedures over them — are being rebuilt
+on this base.
 Every published
 identifier and public-key vector of those documents is a test in
 `test/v3/`, and the DIDs and signature a fixed seed derives are pinned
