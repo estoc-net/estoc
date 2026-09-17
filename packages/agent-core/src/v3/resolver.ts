@@ -621,8 +621,8 @@ export async function resolve(presented: string, known: KnownLongForms, options:
 
 /**
  * Every numalgo-4 long form the fold has in evidence, by short form:
- * what a peer disclosed, what was resolved, what a transition named
- * under either spelling, and this vault's own entities and mediation
+ * what a peer presented and was resolved under, what an intent was
+ * addressed to, and this vault's own entities and mediation
  * identities. A short form presented later resolves through it. A
  * spelling is validated when looked up — its hash, its document, the
  * short form it derives — so that an invalid one in evidence never
@@ -639,11 +639,7 @@ export function knownLongForms(fold: VaultFold): KnownLongForms {
   };
   for (const event of fold.set.of("peer.resolved")) note(event.data.presentedDid);
   for (const event of fold.set.of("message.in")) note(event.data.presentedDid);
-  for (const event of fold.set.of("message.out")) note(event.data.birth?.peerDid);
-  for (const event of fold.set.of("relationship.peerTransitioned")) {
-    note(event.data.presentedFromDid);
-    note(event.data.presentedToDid);
-  }
+  for (const event of fold.set.of("message.out")) note(event.data.recipientDid);
   for (const event of fold.set.of("did.created")) note(event.data.longFormDid);
   for (const event of fold.set.of("mediation.created")) {
     note(event.data.me.did);

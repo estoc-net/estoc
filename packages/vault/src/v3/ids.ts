@@ -1,41 +1,22 @@
 /**
  * The deterministic identifiers: the reproducible UUIDv5 namespaces and
- * every entity ID a rule derives rather than mints — a relationship and
- * its default contact and early private DID, an inbound observation, an
- * execution, an automatic effect's key and message — plus the reserved
- * keystore names. Each derivation hashes exactly the transcript its rule
- * specifies, never a payload or an API object standing in for it.
+ * every entity ID a rule derives rather than mints — an inbound
+ * observation, an execution, an automatic effect's key and message —
+ * the channel a local and a peer DID form and the order channels are
+ * kept in, plus the reserved keystore names. Each derivation hashes
+ * exactly the transcript its rule specifies, never a payload or an API
+ * object standing in for it.
  */
 
-import { canonicalize, forbiddenIn, type JsonValue } from "@estoc/event-store/v3";
+import { canonicalText, canonicalize, forbiddenIn, type JsonValue } from "@estoc/event-store/v3";
 import { sha256 } from "@noble/hashes/sha2";
 import { base64urlnopad } from "@scure/base";
 import { v5 as uuidv5 } from "uuid";
 
 import { InvalidIdentifier } from "./errors.js";
-import type {
-  ContactId,
-  DecimalOrdinal,
-  Did,
-  DidId,
-  EffectKey,
-  ExecutionId,
-  KeyName,
-  MediationId,
-  MessageId,
-  PublicKey,
-  RelationshipId,
-  WireMessageId,
-} from "./types.js";
+import type { Channel, Did, DidId, EffectKey, ExecutionId, KeyName, MediationId, MessageId, WireMessageId } from "./types.js";
 
-export const NAMESPACE_PURPOSES = [
-  "inbound-message",
-  "message-execution",
-  "automatic-mid",
-  "relationship",
-  "relationship-local-did",
-  "relationship-contact",
-] as const;
+export const NAMESPACE_PURPOSES = ["inbound-message", "message-execution", "automatic-mid"] as const;
 
 export type NamespacePurpose = (typeof NAMESPACE_PURPOSES)[number];
 
@@ -77,102 +58,73 @@ export function compareUtf8(a: string, b: string): number {
 }
 
 /**
- * The relationship born of two distinct canonical birth DIDs, the same
- * from either end. The caller canonicalizes: a numalgo-4 short form for
- * a validated long form, the exact presented string for a method with
- * no canonical form.
+ * The channel between one of our DIDs and a peer's, an ordered pair:
+ * receiving from the peer at the local DID and sending from it to the
+ * peer are the same channel, the reverse pair is another vault's view.
+ * The caller canonicalizes both spellings; equal endpoints are no
+ * channel.
  */
-export function relationshipId(a: Did, b: Did): RelationshipId {
-  nonEmpty(a, "birth DID");
-  nonEmpty(b, "birth DID");
-  if (a === b) throw new InvalidIdentifier("a relationship needs two distinct birth DIDs");
-  const [lo, hi] = compareUtf8(a, b) < 0 ? [a, b] : [b, a];
-  return derive("relationship", ["v1", lo, hi]) as RelationshipId;
+export function channelOf(localDid: Did, peerDid: Did): Channel {
+  nonEmpty(localDid, "local DID");
+  nonEmpty(peerDid, "peer DID");
+  if (localDid === peerDid) throw new InvalidIdentifier("a channel needs two distinct DIDs");
+  return { localDid, peerDid };
 }
 
-/** The contact a relationship gets when nothing else assigned it one. */
-export function contactIdOf(relationship: RelationshipId): ContactId {
-  return derive("relationship-contact", ["v1", nonEmpty(relationship, "relationship ID")]) as ContactId;
+/** The canonical text a channel sorts and indexes by: `RFC8785([localDid, peerDid])`. */
+export function channelKey(channel: Channel): string {
+  return canonicalText([channel.localDid, channel.peerDid]);
 }
 
-/** This end's default private successor address in a relationship. */
-export function earlyPrivateDidId(relationship: RelationshipId, localBirthDid: Did): DidId {
-  return derive("relationship-local-did", [
-    "v1",
-    nonEmpty(relationship, "relationship ID"),
-    nonEmpty(localBirthDid, "local birth DID"),
-  ]) as DidId;
+export function sameChannel(a: Channel, b: Channel): boolean {
+  return a.localDid === b.localDid && a.peerDid === b.peerDid;
+}
+
+/** The order of a set of channels: unsigned UTF-8 byte order of their keys. It sorts a set, not the two ends of a pair. */
+export function compareChannels(a: Channel, b: Channel): number {
+  return compareUtf8(channelKey(a), channelKey(b));
 }
 
 /**
- * The observation group of an inbound message: by the peer key that
- * authenticated it, so a repack to another local key converges; by the
- * local key that decrypted it when the sender is anonymous.
+ * The observation group of an authenticated inbound message: by the
+ * canonical sender and recipient DIDs and the wire ID, so that the same
+ * input under another authorized key of the sender's document
+ * converges, and the reverse direction under the same wire ID does not.
  */
-export function inboundMessageId(sender: PublicKey | { localKeyName: KeyName }, wireMessageId: WireMessageId): MessageId {
-  nonEmpty(wireMessageId, "wire message ID");
-  const transcript =
-    typeof sender === "string"
-      ? ["v1", "authenticated", nonEmpty(sender, "peer public key"), wireMessageId]
-      : ["v1", "anonymous", nonEmpty(sender.localKeyName, "local key name"), wireMessageId];
-  return derive("inbound-message", transcript) as MessageId;
+export function inboundMessageId(sender: Did, recipient: Did, wireMessageId: WireMessageId): MessageId {
+  return derive("inbound-message", ["v3", "authenticated", nonEmpty(sender, "sender DID"), nonEmpty(recipient, "recipient DID"), nonEmpty(wireMessageId, "wire message ID")]) as MessageId;
+}
+
+/** The observation group of an anonymous inbound message: by the local key that decrypted it and the wire ID. */
+export function anonymousMessageId(localKeyName: KeyName, wireMessageId: WireMessageId): MessageId {
+  return derive("inbound-message", ["v1", "anonymous", nonEmpty(localKeyName, "local key name"), nonEmpty(wireMessageId, "wire message ID")]) as MessageId;
 }
 
 /**
- * The execution of one carrier in one relationship. The transcript's
- * member is the literal `relationship`, a fixed tag: hashing the runtime
- * scope object with its `relationshipId` member gives another value.
+ * The execution of one carrier in one channel: the peer is the sender,
+ * the local DID the recipient. The transcript's members are the literal
+ * tags `sender` and `recipient`, which RFC 8785 orders; the payload's
+ * member names are no substitute.
  */
-export function executionId(relationship: RelationshipId, wireMessageId: WireMessageId): ExecutionId {
-  return derive("message-execution", [
-    "v2",
-    { relationship: nonEmpty(relationship, "relationship ID") },
-    nonEmpty(wireMessageId, "wire message ID"),
-  ]) as ExecutionId;
-}
-
-const DECIMAL_ORDINAL = /^(0|[1-9][0-9]*)$/;
-
-export function decimalOrdinal(ordinal: number): DecimalOrdinal {
-  if (!Number.isSafeInteger(ordinal) || ordinal < 0) throw new InvalidIdentifier(`not a non-negative integer ordinal: ${ordinal}`);
-  return String(ordinal) as DecimalOrdinal;
-}
-
-export function parseDecimalOrdinal(text: string): DecimalOrdinal {
-  if (!DECIMAL_ORDINAL.test(text)) throw new InvalidIdentifier(`not a canonical decimal ordinal: ${JSON.stringify(text)}`);
-  return text as DecimalOrdinal;
-}
-
-/** What identifies one automatic effect, as `message.out` stores it. */
-export interface EffectTuple {
-  readonly executionId: ExecutionId;
-  readonly handlerId: string;
-  readonly effectKind: string;
-  readonly ordinal: DecimalOrdinal;
+export function executionId(sender: Did, recipient: Did, wireMessageId: WireMessageId): ExecutionId {
+  return derive("message-execution", ["v4", { sender: nonEmpty(sender, "sender DID"), recipient: nonEmpty(recipient, "recipient DID") }, nonEmpty(wireMessageId, "wire message ID")]) as ExecutionId;
 }
 
 const EFFECT_TAG = "estoc/effect/3\0";
-
-function effectMember(value: string, what: string): string {
-  if (value.length === 0 || value.includes("\0")) throw new InvalidIdentifier(`${what} must be non-empty without U+0000`);
-  const fault = forbiddenIn(value);
-  if (fault !== null) throw new InvalidIdentifier(`${what}: ${fault}`);
-  return value;
-}
+const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 /**
- * The idempotency key of an effect: SHA-256 over its tagged, NUL-separated
- * tuple. The handler ID and kind must be text an event can carry — an
- * unpaired surrogate would encode as U+FFFD and make distinct inputs one
- * key — so they are refused here, before the event layer would refuse them.
+ * The idempotency key of an effect: SHA-256 over its tagged,
+ * NUL-separated tuple. The effect type is the operation's URI, spelled
+ * exactly; it must be text an event can carry — an unpaired surrogate
+ * would encode as U+FFFD and make distinct inputs one key — so it is
+ * refused here, before the event layer would refuse it.
  */
-export function effectKey(tuple: EffectTuple): EffectKey {
-  const transcript = [
-    EFFECT_TAG + nonEmpty(tuple.executionId, "execution ID"),
-    effectMember(tuple.handlerId, "handler ID"),
-    effectMember(tuple.effectKind, "effect kind"),
-    parseDecimalOrdinal(tuple.ordinal),
-  ].join("\0");
+export function effectKey(executionId: ExecutionId, effectType: string): EffectKey {
+  if (!URI_SCHEME.test(effectType) || effectType.includes("\0")) throw new InvalidIdentifier("an effect type is a URI with a scheme and no U+0000");
+  const fault = forbiddenIn(effectType);
+  if (fault !== null) throw new InvalidIdentifier(`effect type: ${fault}`);
+  const transcript = `${EFFECT_TAG}${nonEmpty(executionId, "execution ID")}\0${effectType}`;
   return base64urlnopad.encode(sha256(encoder.encode(transcript))) as EffectKey;
 }
 

@@ -45,14 +45,14 @@ describe("VaultEventSet", () => {
 
   it("resolves a typed reference to the event of that type, to nothing, or to an event of another type", () => {
     const scene = new Scene();
-    const add = scene.add("contact.peerDidAdded", { contactId: CONTACT, did: "did:web:bob.example" as never, because: "oob" });
+    const named = scene.add("contact.petname", { contactId: CONTACT, name: "bob" });
     const other = scene.add("contact.created", { contactId: CONTACT, because: "user" });
     const foreign = scene.foreign("extension.installed");
     const set = scene.set();
-    expect(set.resolve(add.eventId as EventReference<"contact.peerDidAdded">, "contact.peerDidAdded")).toEqual({ status: "present", event: add });
-    expect(set.resolve(other.eventId as EventReference<"contact.peerDidAdded">, "contact.peerDidAdded")).toEqual({ status: "mismatched", event: other });
-    expect(set.resolve(foreign.eventId as EventReference<"contact.peerDidAdded">, "contact.peerDidAdded")).toEqual({ status: "mismatched", event: foreign });
-    expect(set.resolve("019b2a99-0000-7000-8000-000000000000" as EventReference<"contact.peerDidAdded">, "contact.peerDidAdded")).toEqual({ status: "missing" });
+    expect(set.resolve(named.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "present", event: named });
+    expect(set.resolve(other.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: other });
+    expect(set.resolve(foreign.eventId as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "mismatched", event: foreign });
+    expect(set.resolve("019b2a99-0000-7000-8000-000000000000" as EventReference<"contact.petname">, "contact.petname")).toEqual({ status: "missing" });
   });
 
   it("collects authors over read and kept events alike", async () => {

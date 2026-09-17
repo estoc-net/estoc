@@ -64,11 +64,3 @@ export class Locked extends Error {
     this.name = "Locked";
   }
 }
-
-/** A contact ID no contact event and no assignment names. */
-export class UnknownContact extends Error {
-  constructor(readonly contactId: string) {
-    super(`no contact ${contactId}`);
-    this.name = "UnknownContact";
-  }
-}

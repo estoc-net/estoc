@@ -9,11 +9,11 @@
 export type {
   AdditionalHeaders,
   AuthorId,
-  Birth,
+  Channel,
   Cid,
   ContactId,
   ContactOrigin,
-  DecimalOrdinal,
+  DeliveryFailureCode,
   DeliveryId,
   Did,
   DidId,
@@ -26,7 +26,6 @@ export type {
   EventId,
   EventReference,
   ExecutionId,
-  FailureScope,
   KeyName,
   MediationId,
   MessageHash,
@@ -37,7 +36,6 @@ export type {
   PublicKey,
   ReceiptOrdinal,
   ReceivedVia,
-  RelationshipId,
   ReplicaId,
   RouteId,
   RouteKind,
@@ -47,21 +45,20 @@ export type {
   WireMessageId,
 } from "./types.js";
 
-export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked, UnknownContact } from "./errors.js";
+export { IdentityMismatch, InvalidDidDocument, InvalidFromPrior, InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey, Locked } from "./errors.js";
 
 export {
   NAMESPACE_PURPOSES,
   type NamespacePurpose,
   estocNamespace,
   compareUtf8,
-  relationshipId,
-  contactIdOf,
-  earlyPrivateDidId,
+  channelOf,
+  channelKey,
+  sameChannel,
+  compareChannels,
   inboundMessageId,
+  anonymousMessageId,
   executionId,
-  decimalOrdinal,
-  parseDecimalOrdinal,
-  type EffectTuple,
   effectKey,
   automaticMessageId,
   ANCHOR_KEY_NAME,
@@ -165,83 +162,7 @@ export {
   foldWithSeed,
   requiredReceivingSet,
 } from "./fold/routes.js";
-export {
-  type EvidenceCheck,
-  type LocalNode,
-  type PeerNode,
-  type TransitionStatus,
-  type Relationship,
-  type PendingClaim,
-  type RelationshipFold,
-  type RelationshipFoldOptions,
-  type ObservationScope,
-  type ObservationGroup,
-  type ReadObject,
-  foldRelationships,
-  bindingHolds,
-  verifyResolutions,
-  verifyTransitions,
-  foldRelationshipsVerified,
-} from "./fold/relationships.js";
-export { type Consumability, type Invitation, type InvitationFold, foldInvitations } from "./fold/invitations.js";
-export {
-  type PeerDidSeed,
-  type ContactDecisions,
-  type RelationshipStanding,
-  type AssignedRelationship,
-  type ThreadEntry,
-  type Diagnostic,
-  type ContactView,
-  type ProblemReport,
-  type ContactViewInputs,
-  type ContactViewOptions,
-  foldContacts,
-  foldContactViews,
-  foldDiagnostics,
-  readProblemReports,
-} from "./fold/contacts.js";
-export {
-  type ReceiptKey,
-  type MessageKind,
-  type InboundIntent,
-  type Observation,
-  type ExecutionStatus,
-  type Execution,
-  type AnonymousMessage,
-  type ReceiptConflict,
-  type InboundFold,
-  PROBLEM_REPORT,
-  EMPTY_DOCUMENT_CID,
-  compareOrdinals,
-  compareReceiptKeys,
-  foldInbound,
-  ackTargets,
-} from "./fold/inbound.js";
-export { type Membership, type Package, type Outcome, type Work, type Outbound, type OutboundFold, type OutboundFoldOptions, foldOutbound } from "./fold/outbound.js";
-export { type Erasures, type ReadState, foldErasures, erased, retainEnvelope, retainedRoots, heldRoots, readState } from "./fold/held.js";
-export { type NameClaim, type Share, type Profile, foldProfiles, profileOf } from "./fold/profile.js";
+export { type EvidenceCheck, type ReadObject, resolvedDocumentOf, verifyResolutions } from "./fold/evidence.js";
+export { type Erasures, type ReadState, foldErasures, erased, retainedRoots, heldRoots, readState } from "./fold/held.js";
 export { type VaultChecks, type VaultFold, type ScanOptions, MAX_READ_BYTES, foldVault, objectReader, checkVault, foldVaultChecked, scanVault } from "./fold/vault.js";
-export {
-  type Committed,
-  type Deletion,
-  type Deleted,
-  type ResponseEffect,
-  type ResponseWork,
-  type UnfinishedWork,
-  type WorkOptions,
-  EMPTY_RESPONSE,
-  PING_RESPONSE,
-  vaultRetention,
-  vaultHeldRoots,
-  collectGarbage,
-  logicalMessageIds,
-  eraseDrafts,
-  erasureClosure,
-  eraseMessage,
-  closeErasures,
-  deletionOf,
-  deleteContact,
-  sweepDeleted,
-  senderGate,
-  unfinishedWork,
-} from "./procedures.js";
+export { type Committed, vaultRetention, vaultHeldRoots, collectGarbage, eraseDrafts, erasureClosure, eraseMessage, closeErasures } from "./procedures.js";

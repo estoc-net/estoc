@@ -1,12 +1,9 @@
 /**
  * What the vault must keep: every root an accepted event retains,
- * except what a message's erasure released from that message's events
- * and a prepared envelope whose message is closed. Erasure is the one
- * explicit release; submission and termination are the others, read
- * from the outbound fold, and submission counts once the message
- * stands and the package it names belongs, since contested or missing
- * evidence releases nothing — and then for good, whatever another
- * package of the message still waits for.
+ * except what a message's erasure released from that message's events.
+ * Erasure is the one release; a prepared envelope is held until its
+ * message erases it, since nothing else here yet says the package is
+ * done with.
  * An event of a type this version does not name, or one whose payload
  * does not read, holds every root it names, and so does every event
  * that is not a message's: a peer document stays as long as the
@@ -18,7 +15,6 @@
 import type { Retained } from "@estoc/event-store/v3";
 
 import type { Cid, EventId, MessageId } from "../types.js";
-import type { Outbound, OutboundFold, Package } from "./outbound.js";
 import type { VaultEventSet } from "./set.js";
 
 /** The roots each message's erasures released, by message ID. */
@@ -39,37 +35,19 @@ export function erased(erasures: Erasures, messageId: MessageId, root: Cid): boo
 }
 
 /**
- * Whether a package's envelope is still held for its message: not
- * erased from it, the message neither submitted nor failed, the
- * package neither retired nor failed. Nothing else releases it, an
- * acknowledgment or an unreachable route included.
- */
-export function retainEnvelope(outbound: Outbound, pkg: Package, erasures: Erasures): boolean {
-  return !erased(erasures, outbound.messageId, pkg.data.envelopeCid) && !outbound.submitted && pkg.retired === null && pkg.failed === null && outbound.failed === null;
-}
-
-/**
  * The retention the event set holds, edge by edge: each accepted event
- * with each root of its that it still retains. A `message.out` or
- * `message.in` retains what its message's erasures did not release;
- * a `message.prepared` its envelope while the package it records is
- * still open, or, for a package the outbound fold does not know as
- * one, until erased; every other event every root it names. In event
- * order, then by root.
+ * with each root of its that it still retains. A message's event — a
+ * `message.out`, a `message.in`, a `message.prepared` — retains what its
+ * message's erasures did not release; every other event every root it
+ * names. In event order, then by root.
  */
-export function retainedRoots(set: VaultEventSet, outbound: OutboundFold, erasures: Erasures = foldErasures(set)): Retained[] {
+export function retainedRoots(set: VaultEventSet, erasures: Erasures = foldErasures(set)): Retained[] {
   const retained: Retained[] = [];
   const retain = (eventId: EventId, root: Cid) => retained.push({ eventId, root });
   for (const event of set.unapplied()) for (const root of event.roots) retain(event.eventId, root);
   for (const event of set.applied()) {
-    if (event.type === "message.out" || event.type === "message.in") {
+    if (event.type === "message.out" || event.type === "message.in" || event.type === "message.prepared") {
       for (const root of event.roots) if (!erased(erasures, event.data.messageId, root)) retain(event.eventId, root);
-    } else if (event.type === "message.prepared") {
-      const { messageId, packageId, envelopeCid } = event.data;
-      const message = outbound.outbounds.get(messageId);
-      const pkg = message?.packages.get(packageId);
-      const held = message !== undefined && pkg !== undefined && pkg.eventIds.includes(event.eventId as Package["eventIds"][number]) ? retainEnvelope(message, pkg, erasures) : !erased(erasures, messageId, envelopeCid);
-      if (held) retain(event.eventId, envelopeCid);
     } else for (const root of event.roots) retain(event.eventId, root);
   }
   return retained.sort((a, b) => cmp(a.eventId, b.eventId) || cmp(a.root, b.root));
@@ -78,9 +56,9 @@ export function retainedRoots(set: VaultEventSet, outbound: OutboundFold, erasur
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Every root the event set holds: what collection must keep. */
-export function heldRoots(set: VaultEventSet, outbound: OutboundFold, erasures: Erasures = foldErasures(set)): Set<Cid> {
+export function heldRoots(set: VaultEventSet, erasures: Erasures = foldErasures(set)): Set<Cid> {
   const held = new Set<Cid>();
-  for (const { root } of retainedRoots(set, outbound, erasures)) held.add(root);
+  for (const { root } of retainedRoots(set, erasures)) held.add(root);
   return held;
 }
 

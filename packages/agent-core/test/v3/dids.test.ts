@@ -87,12 +87,11 @@ describe("disclosure", () => {
     expect(oob.disclosed.data).toMatchObject({ didId: DID, as: "oob", uses: "one", goal: "Write to Alice" });
     expect(oob.invitation).toEqual({ type: OOB_INVITATION, id: oob.disclosed.data.oobId, typ: "application/didcomm-plain+json", from: minted.longFormDid, body: { goal_code: "connect", goal: "Write to Alice", accept: ["didcomm/v2"] } });
     expect(parseInvitation(invitationUrl("https://estoc.net/i", oob.invitation!))).toEqual(oob.invitation);
-    const profile = await disclose(null, runtime, keys, DID, { as: "profile", uses: "many" });
-    expect(profile.disclosed.data).toEqual({ didId: DID, as: "profile", uses: "many", oobId: null, goal: null });
-    expect(profile.invitation).toBeNull();
+    const direct = await disclose(null, runtime, keys, DID, { as: "direct", uses: "many" });
+    expect(direct.disclosed.data).toEqual({ didId: DID, as: "direct", uses: "many", oobId: null, goal: null });
+    expect(direct.invitation).toBeNull();
     const fold = await scanVault(runtime.vault, keys);
     expect(fold.routes.dids.get(DID)?.disclosures).toHaveLength(2);
-    expect(fold.invitations.invitations.size).toBe(1);
     await runtime.close();
   });
 

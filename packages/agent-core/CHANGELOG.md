@@ -24,6 +24,14 @@
   disclosed only once its registration is verified, an `oob` disclosure
   carried by an invitation with the long form. The shared protocol
   constants gain `RECIPIENT_QUERY` and `RECIPIENT`.
+- **Realigned to the channel model** with `@estoc/vault/v3`: `send`,
+  `prepare`, `submit`, the `Outbox`, the acceptance ledger and the
+  receive gate, receiver and resolution accounting were built on
+  relationships and are removed, to be rebuilt on channels;
+  `pinnedResolution` goes with the relationship fold it read;
+  `knownLongForms` collects long forms from what peers presented, what
+  intents are addressed to and the vault's own entities and mediation
+  identities; a disclosure is `oob` or `direct`.
 - **The mediator's word is only what it sealed.** Both links, the v2
   `MediatorLink` and the v3 one, accept a ritual's answer or a socket
   frame only when the envelope was authenticated encryption from the

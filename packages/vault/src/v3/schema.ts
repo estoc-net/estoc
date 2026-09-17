@@ -10,25 +10,13 @@
 import { isEventId, isJsonObject, isRawCid, type Draft, type Event } from "@estoc/event-store/v3";
 
 import { InvalidIdentifier, InvalidPayload, InvalidPlaintext, InvalidPublicKey } from "./errors.js";
-import { automaticMessageId, didKeyName, effectKey, inboundMessageId, mediationKeyName, parseDecimalOrdinal } from "./ids.js";
+import { anonymousMessageId, automaticMessageId, compareChannels, didKeyName, effectKey, mediationKeyName } from "./ids.js";
 import { messageRoots } from "./document.js";
 import { checkHeaders } from "./projection.js";
 import { parsePublicKey } from "./public-key.js";
-import {
-  isCompactJwt,
-  isDerivedId,
-  isDid,
-  isDidUrl,
-  isEntityId,
-  isEpochSeconds,
-  isKeyName,
-  isMessageHash,
-  isMintedId,
-  isPeer4Long,
-  isPeer4Short,
-  isReceiptOrdinal,
-} from "./syntax.js";
+import { isCompactJwt, isDerivedId, isDid, isDidUrl, isEntityId, isEpochSeconds, isKeyName, isMessageHash, isMintedId, isPeer4Long, isPeer4Short, isReceiptOrdinal } from "./syntax.js";
 import type {
+  Channel,
   Cid,
   ContactId,
   Did,
@@ -43,7 +31,6 @@ import type {
   PackageId,
   PublicKey,
   ReceiptOrdinal,
-  RelationshipId,
   RouteId,
   VaultData,
   VaultEventType,
@@ -71,6 +58,10 @@ const count: Check<number> = (value, at) => (Number.isSafeInteger(value) && (val
 const did: Check<Did> = (value, at) => (isDid(value) ? (value as Did) : fail(at, "a DID"));
 /** A DID as folds compare it: a did:peer:4 is its short form. */
 const canonicalDid: Check<Did> = (value, at) => (isDid(value) && (!value.startsWith("did:peer:4") || isPeer4Short(value)) ? (value as Did) : fail(at, "a canonical DID"));
+/** A channel endpoint: a did:peer:4 short form, the only kind of DID a channel is made of. */
+const channelDid: Check<Did> = (value, at) => (isPeer4Short(value) ? (value as Did) : fail(at, "a did:peer:4 short form"));
+/** A peer address as a message names it: a did:peer:4 under either spelling. */
+const peerDid: Check<Did> = (value, at) => (isPeer4Short(value) || isPeer4Long(value) ? (value as Did) : fail(at, "a did:peer:4 short or long form"));
 const didUrl: Check<DidUrl> = (value, at) => (isDidUrl(value) ? (value as DidUrl) : fail(at, "a DID URL"));
 const keyName: Check<KeyName> = (value, at) => (isKeyName(value) ? (value as KeyName) : fail(at, "a vault key name"));
 const publicKey: Check<PublicKey> = (value, at) => {
@@ -162,8 +153,7 @@ const idMembers = {
   mediationId: minted<MediationId>(),
   routeId: minted<RouteId>(),
   didId: entity<DidId>(),
-  contactId: entity<ContactId>(),
-  relationshipId: derived<RelationshipId>(),
+  contactId: minted<ContactId>(),
   packageId: minted<PackageId>(),
 };
 
@@ -181,11 +171,32 @@ function expiryAfterCreation(data: { createdTime: number | null; expiresTime: nu
   }
 }
 
+/** A spelling is the short form itself or a long form of it. */
+function spellingOf(spelling: string, shortForm: string): boolean {
+  return spelling === shortForm || spelling.startsWith(`${shortForm}:`);
+}
+
+const channel: Check<Channel> = shape({ localDid: channelDid, peerDid: channelDid });
+
+/** A channel selector as a selection stores it: two distinct canonical endpoints. */
+const distinctChannel: Check<Channel> = checked(channel, (data) => {
+  if (data.localDid === data.peerDid) throw new Fault("localDid and peerDid are two DIDs");
+});
+
+/** A selected set of channels: no duplicate, in canonical order. */
+const channelSet: Check<Channel[]> = checked(arrayOf(distinctChannel), (channels) => {
+  for (let i = 1; i < channels.length; i++) {
+    const order = compareChannels(channels[i - 1] as Channel, channels[i] as Channel);
+    if (order === 0) throw new Fault(`channels[${i}] repeats channels[${i - 1}]`);
+    if (order > 0) throw new Fault("channels are sorted by their canonical pair encoding");
+  }
+});
+
 const messageOut = checked(
   shape({
     messageId: entity<MessageId>(),
-    relationshipId: idMembers.relationshipId,
-    birth: nullable(shape({ localDidId: idMembers.didId, peerDid: did })),
+    senderDidId: idMembers.didId,
+    recipientDid: peerDid,
     msgType: nonEmpty,
     thid: nullable(nonEmpty),
     pthid: nullable(nonEmpty),
@@ -194,28 +205,23 @@ const messageOut = checked(
     attachmentCids: arrayOf(cid, { distinct: true }),
     intentHash: hash,
     executionId: nullable(derived<ExecutionId>()),
-    handlerId: nullable(nonEmpty),
-    effectKind: nullable(nonEmpty),
-    ordinal: nullable(text),
+    effectType: nullable(nonEmpty),
     effectKey: nullable(text),
+    sourceEventId: nullable(ref<"message.in">()),
+    rotationEventId: nullable(ref<"did.rotationSelected">()),
   }),
   (data) => {
     expiryAfterCreation(data);
-    const effect = [data.executionId, data.handlerId, data.effectKind, data.ordinal, data.effectKey];
+    const effect = [data.executionId, data.effectType, data.effectKey];
     const present = effect.filter((member) => member !== null).length;
+    if (present !== 0 && present !== effect.length) throw new Fault("executionId, effectType and effectKey are all null or all present");
+    if ((data.sourceEventId !== null) !== (present !== 0)) throw new Fault("sourceEventId is present exactly for an effect derived from an observation");
     if (present === 0) {
       if (!isMintedId(data.messageId)) throw new Fault("a locally initiated send mints a UUIDv7 messageId");
       if (data.ack.length > 0) throw new Fault("a locally initiated send has ack []");
       return;
     }
-    if (present !== effect.length) throw new Fault("executionId, handlerId, effectKind, ordinal and effectKey are all null or all present");
-    const tuple = {
-      executionId: data.executionId as ExecutionId,
-      handlerId: data.handlerId as string,
-      effectKind: data.effectKind as string,
-      ordinal: parseDecimalOrdinal(data.ordinal as string),
-    };
-    const key = effectKey(tuple);
+    const key = effectKey(data.executionId as ExecutionId, data.effectType as string);
     if (data.effectKey !== key) throw new Fault(`effectKey is not the key of the producing tuple, ${key}`);
     const messageId = automaticMessageId(key);
     if (data.messageId !== messageId) throw new Fault(`an automatic effect's messageId is derived from its key: ${messageId}`);
@@ -232,18 +238,15 @@ const messageIn = checked(
     localKeyName: keyName,
     msgType: nonEmpty,
     peerResolutionEventId: nullable(ref<"peer.resolved">()),
-    relationshipBindingEventId: nullable(ref<"relationship.bound">()),
-    peerTransitionEventId: nullable(ref<"relationship.peerTransitioned">()),
-    presentedDid: nullable(did),
-    did: nullable(canonicalDid),
+    presentedDid: nullable(peerDid),
+    did: nullable(channelDid),
     thid: nullable(nonEmpty),
     pthid: nullable(nonEmpty),
     ...timing,
-    fromPrior: nullable(compactJwt),
+    fromPrior: nullable(text),
     bodyCid: cid,
     attachmentCids: arrayOf(cid, { distinct: true }),
     bytes: count,
-    signedBy: nullable(nonEmpty),
     receivedVia: shape({ mediationId: nullable(idMembers.mediationId), deliveryId: nullable(nonEmpty) }),
   }),
   (data) => {
@@ -253,17 +256,11 @@ const messageIn = checked(
       throw new Fault("peerResolutionEventId, did and presentedDid are null together, for an anonymous observation");
     }
     if (anonymous) {
-      if (data.signedBy !== null) throw new Fault("a signed sender has resolution evidence");
-      if (data.relationshipBindingEventId !== null || data.peerTransitionEventId !== null) throw new Fault("an anonymous observation has no relationship evidence");
-      const messageId = inboundMessageId({ localKeyName: data.localKeyName }, data.wireMessageId);
+      const messageId = anonymousMessageId(data.localKeyName, data.wireMessageId);
       if (data.messageId !== messageId) throw new Fault(`an anonymous observation's messageId is derived from its local key and wire ID: ${messageId}`);
       return;
     }
-    if (data.fromPrior === null) {
-      if (data.relationshipBindingEventId === null) throw new Fault("an authenticated proof-free observation keeps its relationship binding");
-    } else if (data.peerTransitionEventId !== null) {
-      throw new Fault("a carried proof is the transition evidence itself and names no peer transition");
-    }
+    if (!spellingOf(data.presentedDid as string, data.did as string)) throw new Fault("presentedDid is a spelling of did");
   }
 ) as Check<VaultData["message.in"]>;
 
@@ -328,50 +325,31 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
   "route.configured": schema(routeConfigured, none),
   "route.retired": schema(shape({ routeId: idMembers.routeId, because: nonEmpty }), none),
   "did.disclosed": schema(
-    checked(shape({ didId: idMembers.didId, as: oneOf(["oob", "profile", "direct"]), uses: oneOf(["one", "many"]), oobId: nullable(nonEmpty), goal: nullable(text) }), (data) => {
+    checked(shape({ didId: idMembers.didId, as: oneOf(["oob", "direct"]), uses: oneOf(["one", "many"]), oobId: nullable(nonEmpty), goal: nullable(text) }), (data) => {
       if ((data.as === "oob") !== (data.oobId !== null)) throw new Fault("oobId is present exactly for an oob disclosure");
+      if (data.as === "direct" && data.uses !== "many") throw new Fault("a direct disclosure is for many uses");
     }),
     none
   ),
   "did.retired": schema(shape({ didId: idMembers.didId, because: nonEmpty }), none),
-  "relationship.bound": schema(shape({ relationshipId: idMembers.relationshipId, localDidId: idMembers.didId, peerResolutionEventId: ref<"peer.resolved">() }), none),
-  "relationship.contactAssigned": schema(shape({ relationshipId: idMembers.relationshipId, contactId: idMembers.contactId }), none),
-  "relationship.peerTransitioned": schema(
-    checked(
-      shape({
-        relationshipId: idMembers.relationshipId,
-        localKeyName: keyName,
-        peerPublicKey: publicKey,
-        fromDid: canonicalDid,
-        presentedFromDid: did,
-        toDid: canonicalDid,
-        presentedToDid: did,
-        fromPrior: compactJwt,
-        priorResolutionEventId: ref<"peer.resolved">(),
-        peerResolutionEventId: ref<"peer.resolved">(),
-        messageId: derived<MessageId>(),
-      }),
-      (data) => {
-        if (data.fromDid === data.toDid) throw new Fault("fromDid and toDid differ: a transition moves to another DID");
-      }
-    ),
+  "invitation.consumed": schema(shape({ disclosureEventId: ref<"did.disclosed">(), sourceEventId: ref<"message.in">() }), none),
+  "did.rotationSelected": schema(
+    checked(shape({ fromDidId: idMembers.didId, peerDid: channelDid, toDidId: idMembers.didId, sourceEventId: nullable(ref<"message.in">()), fromPrior: compactJwt }), (data) => {
+      if (data.fromDidId === data.toDidId) throw new Fault("fromDidId and toDidId differ: a rotation moves to another DID entity");
+    }),
     none
   ),
-  "relationship.localTransitioned": schema(
-    checked(
-      shape({ relationshipId: idMembers.relationshipId, fromDidId: idMembers.didId, toDidId: idMembers.didId, fromPrior: compactJwt, triggerEventId: nullable(ref<"message.in">()) }),
-      (data) => {
-        if (data.fromDidId === data.toDidId) throw new Fault("fromDidId and toDidId differ: a transition moves to another DID entity");
-      }
-    ),
+  "channel.blocked": schema(
+    checked(shape({ localDid: channelDid, peerDid: channelDid, includeSuccessors: bool }), (data) => {
+      if (data.localDid === data.peerDid) throw new Fault("localDid and peerDid are two DIDs");
+    }),
     none
   ),
   "contact.created": schema(shape({ contactId: idMembers.contactId, because: oneOf(["user", "automatic"]) }), none),
   "contact.petname": schema(shape({ contactId: idMembers.contactId, name: text }), none),
   "contact.flag": schema(shape({ contactId: idMembers.contactId, flag: nonEmpty, value: bool }), none),
   "contact.useDid": schema(shape({ contactId: idMembers.contactId, didId: idMembers.didId, because: nonEmpty }), none),
-  "contact.peerDidAdded": schema(shape({ contactId: idMembers.contactId, did, because: nonEmpty }), none),
-  "contact.peerDidRemoved": schema(shape({ contactId: idMembers.contactId, addEventId: ref<"contact.peerDidAdded">() }), none),
+  "contact.channelsSet": schema(shape({ contactId: idMembers.contactId, channels: channelSet }), none),
   "contact.merged": schema(
     checked(shape({ contactId: idMembers.contactId, fromContactId: idMembers.contactId }), (data) => {
       if (data.contactId === data.fromContactId) throw new Fault("contactId and fromContactId are two contacts");
@@ -379,8 +357,6 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
     none
   ),
   "contact.deleted": schema(shape({ contactId: idMembers.contactId }), none),
-  "profile.nameClaimed": schema(shape({ relationshipId: idMembers.relationshipId, sourceEventId: ref<"message.in">(), name: text }), none),
-  "profile.shared": schema(shape({ relationshipId: idMembers.relationshipId, sourceEventId: ref<"message.out">() }), none),
   "message.out": schema(messageOut, contentRoots),
   "message.prepared": schema(
     checked(
@@ -389,7 +365,7 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
         packageId: idMembers.packageId,
         senderDidId: idMembers.didId,
         localKeyName: keyName,
-        recipientDid: did,
+        recipientDid: peerDid,
         peerResolutionEventId: ref<"peer.resolved">(),
         fromPrior: nullable(compactJwt),
         intentHash: hash,
@@ -403,19 +379,8 @@ const SCHEMAS: { [T in VaultEventType]: Schema<T> } = {
     ),
     (data) => [data.envelopeCid]
   ),
-  "message.packageRetired": schema(
-    shape({ messageId: entity<MessageId>(), packageId: idMembers.packageId, because: nonEmpty, replacementPackageId: nullable(idMembers.packageId) }),
-    none
-  ),
   "delivery.submitted": schema(shape({ messageId: entity<MessageId>(), packageId: idMembers.packageId }), none),
-  "delivery.failed": schema(
-    checked(shape({ messageId: entity<MessageId>(), scope: oneOf(["package", "message"]), packageId: nullable(idMembers.packageId), code: nonEmpty }), (data) => {
-      if (data.scope === "package" && data.packageId === null) throw new Fault("a package-scoped failure names its package");
-      if ((data.code === "expired" || data.code === "peer-key-changed") && data.scope !== "message") throw new Fault(`${data.code} is message-scoped`);
-      if (data.code === "peer-key-changed" && data.packageId !== null) throw new Fault("peer-key-changed happens before any package");
-    }),
-    none
-  ),
+  "delivery.failed": schema(shape({ messageId: entity<MessageId>(), code: oneOf(["expired", "cancelled"]) }), none),
   "delivery.acknowledged": schema(
     shape({
       messageId: entity<MessageId>(),

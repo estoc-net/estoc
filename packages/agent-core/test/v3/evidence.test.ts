@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { longToShort, resolveDIDCommDoc, toDIDCommDIDDoc } from "@estoc/did-peer";
 import { MemoryVault } from "@estoc/event-store/v3";
-import { didKeyName, objectReader, peerResolution, relationshipId, scanVault, vaultDraft, type Did, type DidId, type PublicKey, type RouteId } from "@estoc/vault/v3";
+import { didKeyName, objectReader, peerResolution, scanVault, type Did, type DidId, type PublicKey, type RouteId } from "@estoc/vault/v3";
 
 import { secretsResolverFor } from "../../src/index.js";
-import { Keyring, UnauthorizedKey, authorizedKeys, commitResolution, configureRoute, createDid, didcommDocumentOf, knownLongForms, pinnedResolution, pinnedResolver, readResolution, resolve, type Resolution } from "../../src/v3/index.js";
+import { Keyring, UnauthorizedKey, authorizedKeys, commitResolution, configureRoute, createDid, didcommDocumentOf, knownLongForms, pinnedResolver, readResolution, resolve, type Resolution } from "../../src/v3/index.js";
 import { didcomm, freshVault, json, newMediator, webFetch, webIdentity, type Fresh, type WebIdentity } from "./helpers.js";
 
 const BOB = "did:web:bob.example";
@@ -123,21 +123,6 @@ describe("peer.resolved", () => {
     expect(fromShort?.document).toEqual(fromLong?.document);
     expect(fromShort?.document["id"]).toBe(peer.did);
     expect(fromShort?.bytes).toEqual(peerResolution(peer.did).bytes);
-    await a.runtime.close();
-  });
-
-  it("the snapshot a relationship pinned is read back as the resolution it was", async () => {
-    const a = await alice();
-    const resolution = await webResolution(await webIdentity(BOB));
-    const event = await commitResolution(a.runtime, { resolution, localKeyName: LOCAL_KEY, peerPublicKey: keyAgreementKey(resolution) });
-    const R = relationshipId(a.did, BOB as Did);
-    await a.runtime.vault.commit([], [vaultDraft("relationship.bound", { relationshipId: R, localDidId: DID, peerResolutionEventId: event.eventId as never })]);
-    const fold = await scanVault(a.runtime.vault, a.keys);
-    expect(fold.relationships.relationships.get(R)?.peerChain.map((node) => node.did)).toEqual([BOB]);
-    const read = objectReader(a.runtime.vault.objects);
-    expect(await pinnedResolution(fold, read, R, BOB as Did)).toEqual(resolution);
-    expect(await pinnedResolution(fold, read, R, "did:web:carol.example" as Did)).toBeNull();
-    expect(await pinnedResolution(fold, read, relationshipId(a.did, "did:web:carol.example" as Did), BOB as Did)).toBeNull();
     await a.runtime.close();
   });
 });

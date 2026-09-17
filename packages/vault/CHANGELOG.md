@@ -338,6 +338,37 @@
   types the application names, erases owed and deletions unfinished —
   from the fold and never from a queue. `UnknownContact` is thrown for
   a contact ID no event names.
+- **Realigned to the channel model.** The unit of scope is now the
+  channel, an ordered `{localDid, peerDid}` pair of canonical did:peer:4
+  short forms (`Channel`, `channelOf`, `channelKey`, `compareChannels`,
+  `sameChannel`), and nothing is derived from a relationship any more:
+  `relationshipId`, `contactIdOf`, `earlyPrivateDidId` and their three
+  namespaces are gone, `inboundMessageId(sender, recipient, wire)` and
+  `executionId(sender, recipient, wire)` hash the two canonical DIDs
+  (`anonymousMessageId(localKeyName, wire)` for input without a sender),
+  and `effectKey(executionId, effectType)` hashes the operation's URI in
+  place of the handler tuple, each checked against the published
+  vectors. The event set is 28 types: the four `relationship.*`, the
+  two `profile.*`, `contact.peerDidAdded` / `Removed` and
+  `message.packageRetired` are gone; `invitation.consumed`,
+  `did.rotationSelected`, `contact.channelsSet` and `channel.blocked`
+  are new; `message.out` is fixed to `senderDidId` / `recipientDid` and
+  carries `executionId` / `effectType` / `effectKey` with
+  `sourceEventId` and `rotationEventId`; `message.in` drops its
+  relationship references and `signedBy` and keeps `fromPrior` as the
+  original string, JWT or not (`readPlaintext` reads `from_prior` the
+  same way); `delivery.failed` is `{ messageId, code }` with `expired`
+  or `cancelled`; a disclosure is `oob` or `direct`. Receipt eligibility
+  no longer asks which retired addresses a relationship retains: a
+  retired entity keeps receiving while its route is not terminal
+  (`receipt(didId)`, `requiredReceivingSet(mediations, routes)`). The
+  relationship, invitation, contact, inbound, outbound and profile folds
+  and the procedures over them are removed, to be rebuilt on channels;
+  `verifyResolutions`, `ReadObject` and `EvidenceCheck` move to
+  `fold/evidence.ts` with `resolvedDocumentOf`; `foldVault` composes
+  what is left — label, authors, mediations, routes, erasures, retention
+  — and holds a prepared envelope until its message erases it;
+  `eraseMessage` / `closeErasures` erase by message ID alone.
 - The outbound fold takes the erasures: an erased message has no work,
   whatever bytes another event keeps, and neither has a deleted
   contact's.
