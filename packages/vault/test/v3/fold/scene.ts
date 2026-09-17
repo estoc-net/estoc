@@ -184,6 +184,16 @@ export async function rotation(scene: Scene, keys: Keys, r: Rotation, options: E
   );
 }
 
+/** One of our DIDs disclosed as a one-use invitation under a fresh OOB ID unless one is given. */
+export function invitation(scene: Scene, local: Local, oobId = uuidv7(), overrides: Partial<VaultData["did.disclosed"]> = {}, options: EventOptions = {}): VaultEvent<"did.disclosed"> {
+  return scene.add("did.disclosed", { didId: local.didId, as: "oob", uses: "one", oobId, goal: null, ...overrides }, options);
+}
+
+/** The record that a receipt consumed an invitation. */
+export function consumed(scene: Scene, disclosure: VaultEvent<"did.disclosed">, source: VaultEvent<"message.in">, options: EventOptions = {}): VaultEvent<"invitation.consumed"> {
+  return scene.add("invitation.consumed", { disclosureEventId: ref(disclosure), sourceEventId: ref(source) }, options);
+}
+
 /** Our permanent denial of a channel, with or without its verified successors. */
 export function blocked(scene: Scene, local: { did: Did }, peer: { did: Did }, includeSuccessors = false): VaultEvent<"channel.blocked"> {
   return scene.add("channel.blocked", { localDid: local.did, peerDid: peer.did, includeSuccessors });

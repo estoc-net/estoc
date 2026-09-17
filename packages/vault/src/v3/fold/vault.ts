@@ -15,9 +15,11 @@ import type { Keys } from "../identity.js";
 import type { Cid, DidId, EventId, MediationId } from "../types.js";
 import { foldAuthors, foldLabel, type AuthorActivity } from "./author.js";
 import { foldChannelEvidence, verifyProofs, type ChannelEvidence } from "./channels.js";
+import { foldContacts, type ContactFold } from "./contacts.js";
 import { foldContinuity, type Continuity } from "./continuity.js";
 import { verifyResolutions, type EvidenceCheck, type ReadObject } from "./evidence.js";
 import { foldErasures, heldRoots, retainedRoots, type Erasures } from "./held.js";
+import { foldInvitations, type InvitationFold } from "./invitations.js";
 import { foldMediations, verifyMediationKeys, type KeyCheck, type MediationFold } from "./mediation.js";
 import { foldRoutes, verifyDidKeys, type RouteFold } from "./routes.js";
 import { VaultEventSet } from "./set.js";
@@ -39,6 +41,8 @@ export interface VaultFold {
   readonly routes: RouteFold;
   readonly channels: ChannelEvidence;
   readonly continuity: Continuity;
+  readonly invitations: InvitationFold;
+  readonly contacts: ContactFold;
   readonly erasures: Erasures;
   /** each accepted event with each root it still retains */
   readonly retained: readonly Retained[];
@@ -56,6 +60,7 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
   const mediations = foldMediations(set, { keyChecks: all.mediationKeys });
   const routes = foldRoutes(set, mediations, { keyChecks: all.didKeys });
   const channels = foldChannelEvidence(set, routes, all);
+  const continuity = foldContinuity(set, channels);
   const erasures = foldErasures(set);
   return {
     set,
@@ -65,7 +70,9 @@ export function foldVault(set: VaultEventSet, checks: VaultChecks = {}): VaultFo
     mediations,
     routes,
     channels,
-    continuity: foldContinuity(set, channels),
+    continuity,
+    invitations: foldInvitations(set, routes, channels, continuity, erasures),
+    contacts: foldContacts(set),
     erasures,
     retained: retainedRoots(set, erasures),
     held: heldRoots(set, erasures),
